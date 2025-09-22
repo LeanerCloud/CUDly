@@ -705,6 +705,86 @@ func TestServiceProcessor_DiscoverRegions_Mock(t *testing.T) {
 	assert.NotNil(t, processor.discoverRegionsForService)
 }
 
+func TestServiceProcessor_ApplyCoverage(t *testing.T) {
+	cfg := aws.Config{Region: "us-east-1"}
+	processor := NewServiceProcessor(cfg, ProcessorConfig{
+		Services: []ServiceType{ServiceRDS},
+		Coverage: 75.0,
+	})
+
+	recs := []Recommendation{
+		{Count: 10, EstimatedCost: 1000},
+		{Count: 4, EstimatedCost: 400},
+	}
+
+	filtered := processor.applyCoverage(recs)
+
+	assert.Len(t, filtered, 2)
+	assert.Equal(t, int32(7), filtered[0].Count) // 10 * 0.75 = 7.5 -> 7
+	assert.Equal(t, int32(3), filtered[1].Count) // 4 * 0.75 = 3
+}
+
+func TestServiceProcessor_CalculateServiceStats(t *testing.T) {
+	cfg := aws.Config{Region: "us-east-1"}
+	processor := NewServiceProcessor(cfg, ProcessorConfig{
+		Services: []ServiceType{ServiceRDS},
+		Coverage: 80.0,
+	})
+
+	recs := []Recommendation{
+		{Service: ServiceRDS, Region: "us-east-1", Count: 5, EstimatedCost: 500},
+		{Service: ServiceRDS, Region: "us-west-2", Count: 3, EstimatedCost: 300},
+		{Service: ServiceRDS, Region: "us-east-1", Count: 2, EstimatedCost: 200},
+	}
+
+	results := []PurchaseResult{
+		{Success: true, Config: recs[0]},
+		{Success: false, Config: recs[1]},
+		{Success: true, Config: recs[2]},
+	}
+
+	stats := processor.calculateServiceStats(ServiceRDS, recs, results)
+
+	assert.Equal(t, ServiceRDS, stats.Service)
+	assert.Equal(t, 2, stats.RegionsProcessed) // us-east-1, us-west-2
+	assert.Equal(t, 3, stats.RecommendationsFound)
+	assert.Equal(t, 3, stats.RecommendationsSelected)
+	assert.Equal(t, int32(10), stats.InstancesProcessed) // 5+3+2
+	assert.Equal(t, 2, stats.SuccessfulPurchases)
+	assert.Equal(t, 1, stats.FailedPurchases)
+	assert.Equal(t, 1000.0, stats.TotalEstimatedSavings) // 500+300+200
+}
+
+func TestServiceProcessor_PrintServiceSummary(t *testing.T) {
+	cfg := aws.Config{Region: "us-east-1"}
+	processor := NewServiceProcessor(cfg, ProcessorConfig{
+		Services: []ServiceType{ServiceRDS},
+		Coverage: 80.0,
+	})
+
+	stats := ServiceStats{
+		Service:                 ServiceRDS,
+		RegionsProcessed:        2,
+		RecommendationsSelected: 5,
+		InstancesProcessed:      15,
+		SuccessfulPurchases:     4,
+		FailedPurchases:         1,
+		TotalEstimatedSavings:   750.0,
+	}
+
+	// This mainly tests that the function doesn't panic
+	// The actual output is printed to stdout
+	assert.NotPanics(t, func() {
+		processor.printServiceSummary(ServiceRDS, stats)
+	})
+
+	// Test with zero savings
+	stats.TotalEstimatedSavings = 0
+	assert.NotPanics(t, func() {
+		processor.printServiceSummary(ServiceRDS, stats)
+	})
+}
+
 // Benchmark tests
 func BenchmarkApplyCoverage(b *testing.B) {
 	recs := make([]Recommendation, 100)
