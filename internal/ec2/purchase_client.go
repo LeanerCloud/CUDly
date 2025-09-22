@@ -13,7 +13,7 @@ import (
 
 // PurchaseClient wraps the AWS EC2 client for purchasing Reserved Instances
 type PurchaseClient struct {
-	client *ec2.Client
+	client EC2API
 	common.BasePurchaseClient
 }
 
@@ -211,6 +211,11 @@ func (c *PurchaseClient) BatchPurchase(ctx context.Context, recommendations []co
 	return c.BasePurchaseClient.BatchPurchase(ctx, c, recommendations, delayBetweenPurchases)
 }
 
+// GetServiceType returns the service type for EC2
+func (c *PurchaseClient) GetServiceType() common.ServiceType {
+	return common.ServiceEC2
+}
+
 // getDurationValue converts term months to seconds for EC2 API
 func (c *PurchaseClient) getDurationValue(termMonths int) int64 {
 	switch termMonths {
@@ -226,15 +231,25 @@ func (c *PurchaseClient) getDurationValue(termMonths int) int64 {
 // getOfferingClass converts payment option to EC2 offering class
 func (c *PurchaseClient) getOfferingClass(paymentOption string) string {
 	// EC2 uses different terminology than other services
-	// This is simplified - actual mapping might be more complex
+	// For simplicity, return convertible for all-upfront, standard for others
 	switch paymentOption {
 	case "all-upfront":
-		return "standard"
-	case "partial-upfront":
-		return "standard"
-	case "no-upfront":
-		return "standard"
+		return "convertible"
 	default:
 		return "standard"
+	}
+}
+
+// getOfferingType converts payment option to EC2 offering type
+func (c *PurchaseClient) getOfferingType(paymentOption string) types.OfferingTypeValues {
+	switch paymentOption {
+	case "all-upfront":
+		return types.OfferingTypeValuesAllUpfront
+	case "partial-upfront":
+		return types.OfferingTypeValuesPartialUpfront
+	case "no-upfront":
+		return types.OfferingTypeValuesNoUpfront
+	default:
+		return types.OfferingTypeValuesPartialUpfront
 	}
 }
