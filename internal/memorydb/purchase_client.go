@@ -13,7 +13,7 @@ import (
 
 // PurchaseClient wraps the AWS MemoryDB client for purchasing Reserved Nodes
 type PurchaseClient struct {
-	client *memorydb.Client
+	client MemoryDBAPI
 	common.BasePurchaseClient
 }
 
@@ -208,6 +208,11 @@ func (c *PurchaseClient) GetOfferingDetails(ctx context.Context, rec common.Reco
 // BatchPurchase purchases multiple MemoryDB Reserved Nodes with error handling and rate limiting
 func (c *PurchaseClient) BatchPurchase(ctx context.Context, recommendations []common.Recommendation, delayBetweenPurchases time.Duration) []common.PurchaseResult {
 	return c.BasePurchaseClient.BatchPurchase(ctx, c, recommendations, delayBetweenPurchases)
+}
+
+// GetServiceType returns the service type for MemoryDB
+func (c *PurchaseClient) GetServiceType() common.ServiceType {
+	return common.ServiceMemoryDB
 }
 
 // createPurchaseTags creates standard tags for the purchase
