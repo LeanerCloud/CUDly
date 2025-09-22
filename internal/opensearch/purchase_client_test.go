@@ -2,12 +2,716 @@ package opensearch
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/rds-ri-purchase-tool/internal/common"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/opensearch"
+	"github.com/aws/aws-sdk-go-v2/service/opensearch/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
+
+// MockOpenSearchClient is a mock implementation of OpenSearchAPI
+type MockOpenSearchClient struct {
+	mock.Mock
+}
+
+func (m *MockOpenSearchClient) PurchaseReservedInstanceOffering(ctx context.Context, params *opensearch.PurchaseReservedInstanceOfferingInput, optFns ...func(*opensearch.Options)) (*opensearch.PurchaseReservedInstanceOfferingOutput, error) {
+	args := m.Called(ctx, params)
+	if output := args.Get(0); output != nil {
+		return output.(*opensearch.PurchaseReservedInstanceOfferingOutput), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockOpenSearchClient) DescribeReservedInstanceOfferings(ctx context.Context, params *opensearch.DescribeReservedInstanceOfferingsInput, optFns ...func(*opensearch.Options)) (*opensearch.DescribeReservedInstanceOfferingsOutput, error) {
+	args := m.Called(ctx, params)
+	if output := args.Get(0); output != nil {
+		return output.(*opensearch.DescribeReservedInstanceOfferingsOutput), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func TestPurchaseClient_PurchaseRI(t *testing.T) {
+	tests := []struct {
+		name           string
+		rec            common.Recommendation
+		mockSetup      func(*MockOpenSearchClient)
+		expectedResult common.PurchaseResult
+	}{
+		{
+			name: "successful purchase",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				Count:         2,
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 2,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				// Mock describe offerings
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.MatchedBy(func(input *opensearch.DescribeReservedInstanceOfferingsInput) bool {
+					return input.MaxResults == 100
+				})).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000, // 1 year in seconds
+						},
+					},
+				}, nil)
+
+				// Mock purchase
+				m.On("PurchaseReservedInstanceOffering", mock.Anything, mock.MatchedBy(func(input *opensearch.PurchaseReservedInstanceOfferingInput) bool {
+					return *input.ReservedInstanceOfferingId == "offering-123" && *input.InstanceCount == 2
+				})).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+					ReservedInstanceId: aws.String("ri-123"),
+					ReservationName:    aws.String("opensearch-ri-us-west-2-123"),
+				}, nil)
+			},
+			expectedResult: common.PurchaseResult{
+				Success:       true,
+				PurchaseID:    "ri-123",
+				ReservationID: "opensearch-ri-us-west-2-123",
+				Message:       "Successfully purchased 2 OpenSearch instances",
+			},
+		},
+		{
+			name: "elasticsearch service type",
+			rec: common.Recommendation{
+				Service:       common.ServiceElasticsearch,
+				Region:        "us-west-2",
+				Count:         1,
+				PaymentOption: "partial-upfront",
+				Term:          36,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "t3.small.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-456"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeT3SmallSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionPartialUpfront,
+							Duration:                   94608000, // 3 years in seconds
+						},
+					},
+				}, nil)
+
+				m.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+					ReservedInstanceId: aws.String("ri-456"),
+					ReservationName:    aws.String("opensearch-ri-us-west-2-456"),
+				}, nil)
+			},
+			expectedResult: common.PurchaseResult{
+				Success:       true,
+				PurchaseID:    "ri-456",
+				ReservationID: "opensearch-ri-us-west-2-456",
+				Message:       "Successfully purchased 1 OpenSearch instances",
+			},
+		},
+		{
+			name: "invalid service type",
+			rec: common.Recommendation{
+				Service: common.ServiceRDS,
+				Region:  "us-west-2",
+				ServiceDetails: &common.RDSDetails{
+					Engine: "mysql",
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Invalid service type for OpenSearch purchase",
+			},
+		},
+		{
+			name: "no matching offering found",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				Count:         1,
+				PaymentOption: "no-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m6g.xlarge.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-789"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil)
+			},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Failed to find offering: no offerings found for m6g.xlarge.search",
+			},
+		},
+		{
+			name: "describe offerings error",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				Count:         1,
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(
+					nil, fmt.Errorf("API error"))
+			},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Failed to find offering: failed to describe offerings: API error",
+			},
+		},
+		{
+			name: "purchase error",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				Count:         1,
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil)
+
+				m.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).Return(
+					nil, fmt.Errorf("purchase failed"))
+			},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Failed to purchase OpenSearch RI: purchase failed",
+			},
+		},
+		{
+			name: "empty purchase response",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				Count:         1,
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil)
+
+				m.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).Return(
+					&opensearch.PurchaseReservedInstanceOfferingOutput{}, nil)
+			},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Purchase response was empty",
+			},
+		},
+		{
+			name: "invalid service details type",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				Count:         1,
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.RDSDetails{
+					Engine: "mysql",
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Failed to find offering: invalid service details for OpenSearch",
+			},
+		},
+		{
+			name: "with master nodes configuration",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				Count:         3,
+				PaymentOption: "no-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:    "r5.large.search",
+					InstanceCount:   3,
+					MasterEnabled:   true,
+					MasterType:      "c5.large.search",
+					MasterCount:     3,
+					DataNodeStorage: 100,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-master"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeR5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionNoUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil)
+
+				m.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+					ReservedInstanceId: aws.String("ri-master"),
+					ReservationName:    aws.String("opensearch-ri-us-west-2-master"),
+				}, nil)
+			},
+			expectedResult: common.PurchaseResult{
+				Success:       true,
+				PurchaseID:    "ri-master",
+				ReservationID: "opensearch-ri-us-west-2-master",
+				Message:       "Successfully purchased 3 OpenSearch instances",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockOpenSearchClient)
+			tt.mockSetup(mockClient)
+
+			client := &PurchaseClient{
+				client: mockClient,
+				BasePurchaseClient: common.BasePurchaseClient{
+					Region: "us-west-2",
+				},
+			}
+
+			result := client.PurchaseRI(context.Background(), tt.rec)
+
+			assert.Equal(t, tt.expectedResult.Success, result.Success)
+			assert.Equal(t, tt.expectedResult.Message, result.Message)
+			if tt.expectedResult.Success {
+				assert.Equal(t, tt.expectedResult.PurchaseID, result.PurchaseID)
+				assert.Equal(t, tt.expectedResult.ReservationID, result.ReservationID)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestPurchaseClient_ValidateOffering(t *testing.T) {
+	tests := []struct {
+		name      string
+		rec       common.Recommendation
+		mockSetup func(*MockOpenSearchClient)
+		wantErr   bool
+	}{
+		{
+			name: "valid offering exists",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 2,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "offering not found",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				PaymentOption: "no-upfront",
+				Term:          36,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "t3.medium.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
+				}, nil)
+			},
+			wantErr: true,
+		},
+		{
+			name: "API error",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(
+					nil, fmt.Errorf("API error"))
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockOpenSearchClient)
+			tt.mockSetup(mockClient)
+
+			client := &PurchaseClient{
+				client: mockClient,
+			}
+
+			err := client.ValidateOffering(context.Background(), tt.rec)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestPurchaseClient_GetOfferingDetails(t *testing.T) {
+	tests := []struct {
+		name           string
+		rec            common.Recommendation
+		mockSetup      func(*MockOpenSearchClient)
+		expectedResult *common.OfferingDetails
+		wantErr        bool
+	}{
+		{
+			name: "successful details retrieval",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 2,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				// First call to find offering ID
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.MatchedBy(func(input *opensearch.DescribeReservedInstanceOfferingsInput) bool {
+					return input.MaxResults == 100
+				})).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil).Once()
+
+				// Second call to get specific offering details
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.MatchedBy(func(input *opensearch.DescribeReservedInstanceOfferingsInput) bool {
+					return input.ReservedInstanceOfferingId != nil && *input.ReservedInstanceOfferingId == "offering-123"
+				})).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+							FixedPrice:                 aws.Float64(1000.0),
+							UsagePrice:                 aws.Float64(0.05),
+							CurrencyCode:               aws.String("USD"),
+						},
+					},
+				}, nil).Once()
+			},
+			expectedResult: &common.OfferingDetails{
+				OfferingID:    "offering-123",
+				InstanceType:  "m5.large.search",
+				Engine:        "OpenSearch",
+				Duration:      "31536000",
+				PaymentOption: "ALL_UPFRONT",
+				FixedPrice:    1000.0,
+				UsagePrice:    0.05,
+				CurrencyCode:  "USD",
+				OfferingType:  "m5.large.search-2-nodes",
+			},
+			wantErr: false,
+		},
+		{
+			name: "offering not found in details call",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				// First call succeeds
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.MatchedBy(func(input *opensearch.DescribeReservedInstanceOfferingsInput) bool {
+					return input.MaxResults == 100
+				})).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil)
+
+				// Second call returns empty
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.MatchedBy(func(input *opensearch.DescribeReservedInstanceOfferingsInput) bool {
+					return input.ReservedInstanceOfferingId != nil
+				})).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
+				}, nil)
+			},
+			expectedResult: nil,
+			wantErr:        true,
+		},
+		{
+			name: "API error in details call",
+			rec: common.Recommendation{
+				Service:       common.ServiceOpenSearch,
+				Region:        "us-west-2",
+				PaymentOption: "all-upfront",
+				Term:          12,
+				ServiceDetails: &common.OpenSearchDetails{
+					InstanceType:  "m5.large.search",
+					InstanceCount: 1,
+				},
+			},
+			mockSetup: func(m *MockOpenSearchClient) {
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.MatchedBy(func(input *opensearch.DescribeReservedInstanceOfferingsInput) bool {
+					return input.MaxResults == 100
+				})).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+					ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+						{
+							ReservedInstanceOfferingId: aws.String("offering-123"),
+							InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+							PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+							Duration:                   31536000,
+						},
+					},
+				}, nil)
+
+				m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.MatchedBy(func(input *opensearch.DescribeReservedInstanceOfferingsInput) bool {
+					return input.ReservedInstanceOfferingId != nil
+				})).Return(nil, fmt.Errorf("API error"))
+			},
+			expectedResult: nil,
+			wantErr:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockOpenSearchClient)
+			tt.mockSetup(mockClient)
+
+			client := &PurchaseClient{
+				client: mockClient,
+			}
+
+			result, err := client.GetOfferingDetails(context.Background(), tt.rec)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedResult, result)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestPurchaseClient_BatchPurchase(t *testing.T) {
+	mockClient := new(MockOpenSearchClient)
+	client := &PurchaseClient{
+		client: mockClient,
+		BasePurchaseClient: common.BasePurchaseClient{
+			Region: "us-west-2",
+		},
+	}
+
+	recommendations := []common.Recommendation{
+		{
+			Service:       common.ServiceOpenSearch,
+			Region:        "us-west-2",
+			Count:         1,
+			PaymentOption: "all-upfront",
+			Term:          12,
+			ServiceDetails: &common.OpenSearchDetails{
+				InstanceType:  "m5.large.search",
+				InstanceCount: 1,
+			},
+		},
+		{
+			Service:       common.ServiceOpenSearch,
+			Region:        "us-west-2",
+			Count:         2,
+			PaymentOption: "partial-upfront",
+			Term:          36,
+			ServiceDetails: &common.OpenSearchDetails{
+				InstanceType:  "t3.small.search",
+				InstanceCount: 2,
+			},
+		},
+	}
+
+	// Set up mocks for first purchase
+	mockClient.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+		ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+			{
+				ReservedInstanceOfferingId: aws.String("offering-1"),
+				InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+				PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+				Duration:                   31536000,
+			},
+		},
+	}, nil).Once()
+
+	mockClient.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+		ReservedInstanceId: aws.String("ri-1"),
+		ReservationName:    aws.String("reservation-1"),
+	}, nil).Once()
+
+	// Set up mocks for second purchase - no matching offering
+	mockClient.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+		ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
+	}, nil).Once()
+
+	results := client.BatchPurchase(context.Background(), recommendations, 100*time.Millisecond)
+
+	assert.Len(t, results, 2)
+	assert.True(t, results[0].Success)
+	assert.False(t, results[1].Success)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestPurchaseClient_GetServiceType(t *testing.T) {
+	client := &PurchaseClient{}
+	assert.Equal(t, common.ServiceOpenSearch, client.GetServiceType())
+}
+
+func TestPurchaseClient_matchesPaymentOption(t *testing.T) {
+	client := &PurchaseClient{}
+
+	tests := []struct {
+		name     string
+		offering types.ReservedInstancePaymentOption
+		required string
+		expected bool
+	}{
+		{"all-upfront match", types.ReservedInstancePaymentOptionAllUpfront, "all-upfront", true},
+		{"partial-upfront match", types.ReservedInstancePaymentOptionPartialUpfront, "partial-upfront", true},
+		{"no-upfront match", types.ReservedInstancePaymentOptionNoUpfront, "no-upfront", true},
+		{"no match", types.ReservedInstancePaymentOptionAllUpfront, "no-upfront", false},
+		{"invalid option", types.ReservedInstancePaymentOptionAllUpfront, "invalid", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := client.matchesPaymentOption(tt.offering, tt.required)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestPurchaseClient_matchesDuration(t *testing.T) {
+	client := &PurchaseClient{}
+
+	tests := []struct {
+		name             string
+		offeringDuration int32
+		requiredMonths   int
+		expected         bool
+	}{
+		{"1 year exact", 31536000, 12, true},
+		{"1 year with tolerance", 31104000, 12, true}, // slightly less
+		{"3 years exact", 94608000, 36, true},
+		{"3 years with tolerance", 93312000, 36, true}, // slightly less
+		{"no match - too short", 15552000, 12, false},  // 6 months
+		{"no match - too long", 63072000, 12, false},   // 2 years
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := client.matchesDuration(tt.offeringDuration, tt.requiredMonths)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
 
 func TestNewPurchaseClient(t *testing.T) {
 	cfg := aws.Config{
@@ -21,89 +725,49 @@ func TestNewPurchaseClient(t *testing.T) {
 	assert.Equal(t, "us-west-2", client.Region)
 }
 
-func TestPurchaseClient_ValidateRecommendation(t *testing.T) {
-	tests := []struct {
-		name        string
-		rec         common.Recommendation
-		expectValid bool
-		expectError string
-	}{
-		{
-			name: "valid OpenSearch recommendation with master",
-			rec: common.Recommendation{
-				Service:      common.ServiceOpenSearch,
-				InstanceType: "r5.large.search",
-				ServiceDetails: &common.OpenSearchDetails{
-					InstanceType:    "r5.large.search",
-					InstanceCount:   3,
-					MasterEnabled:   true,
-					MasterType:      "c5.large.search",
-					MasterCount:     3,
-					DataNodeStorage: 100,
-				},
-			},
-			expectValid: true,
-		},
-		{
-			name: "valid OpenSearch recommendation without master",
-			rec: common.Recommendation{
-				Service:      common.ServiceOpenSearch,
-				InstanceType: "r5.large.search",
-				ServiceDetails: &common.OpenSearchDetails{
-					InstanceType:    "r5.large.search",
-					InstanceCount:   2,
-					MasterEnabled:   false,
-					DataNodeStorage: 50,
-				},
-			},
-			expectValid: true,
-		},
-		{
-			name: "wrong service type",
-			rec: common.Recommendation{
-				Service:      common.ServiceRDS,
-				InstanceType: "db.t4g.medium",
-			},
-			expectValid: false,
-			expectError: "Invalid service type for OpenSearch purchase",
-		},
-		{
-			name: "missing service details",
-			rec: common.Recommendation{
-				Service:      common.ServiceOpenSearch,
-				InstanceType: "r5.large.search",
-			},
-			expectValid: false,
-			expectError: "Invalid service details for OpenSearch",
+func TestPurchaseClient_ElasticsearchLegacySupport(t *testing.T) {
+	mockClient := new(MockOpenSearchClient)
+	client := &PurchaseClient{
+		client: mockClient,
+		BasePurchaseClient: common.BasePurchaseClient{
+			Region: "us-west-2",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test validation in PurchaseRI method
-			result := common.PurchaseResult{
-				Config: tt.rec,
-			}
-
-			// Validate the recommendation type
-			if tt.rec.Service != common.ServiceOpenSearch {
-				result.Success = false
-				result.Message = "Invalid service type for OpenSearch purchase"
-			} else if _, ok := tt.rec.ServiceDetails.(*common.OpenSearchDetails); !ok || tt.rec.ServiceDetails == nil {
-				result.Success = false
-				result.Message = "Invalid service details for OpenSearch"
-			} else {
-				result.Success = true
-			}
-
-			if tt.expectValid {
-				assert.True(t, result.Success)
-			} else {
-				assert.False(t, result.Success)
-				assert.Contains(t, result.Message, tt.expectError)
-			}
-		})
+	rec := common.Recommendation{
+		Service:       common.ServiceElasticsearch,
+		Region:        "us-west-2",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          12,
+		ServiceDetails: &common.OpenSearchDetails{
+			InstanceType:  "m5.large.search",
+			InstanceCount: 1,
+		},
 	}
+
+	mockClient.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+		ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+			{
+				ReservedInstanceOfferingId: aws.String("es-offering"),
+				InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+				PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+				Duration:                   31536000,
+			},
+		},
+	}, nil)
+
+	mockClient.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+		ReservedInstanceId: aws.String("es-ri"),
+		ReservationName:    aws.String("es-reservation"),
+	}, nil)
+
+	result := client.PurchaseRI(context.Background(), rec)
+
+	assert.True(t, result.Success)
+	assert.Equal(t, "es-ri", result.PurchaseID)
+
+	mockClient.AssertExpectations(t)
 }
 
 func TestPurchaseClient_MasterNodeConfiguration(t *testing.T) {
@@ -151,167 +815,6 @@ func TestPurchaseClient_MasterNodeConfiguration(t *testing.T) {
 	}
 }
 
-func TestPurchaseClient_InstanceTypes(t *testing.T) {
-	tests := []struct {
-		name         string
-		instanceType string
-		isValid      bool
-	}{
-		{
-			name:         "r5 large search",
-			instanceType: "r5.large.search",
-			isValid:      true,
-		},
-		{
-			name:         "c5 xlarge search",
-			instanceType: "c5.xlarge.search",
-			isValid:      true,
-		},
-		{
-			name:         "m5 2xlarge search",
-			instanceType: "m5.2xlarge.search",
-			isValid:      true,
-		},
-		{
-			name:         "r6g large search",
-			instanceType: "r6g.large.search",
-			isValid:      true,
-		},
-		{
-			name:         "t3 small search",
-			instanceType: "t3.small.search",
-			isValid:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			details := &common.OpenSearchDetails{
-				InstanceType:  tt.instanceType,
-				InstanceCount: 1,
-			}
-
-			assert.Equal(t, common.ServiceOpenSearch, details.GetServiceType())
-			assert.Contains(t, details.GetDetailDescription(), tt.instanceType)
-		})
-	}
-}
-
-func TestPurchaseClient_DataNodeStorage(t *testing.T) {
-	tests := []struct {
-		name            string
-		dataNodeStorage int32
-	}{
-		{
-			name:            "small storage",
-			dataNodeStorage: 10,
-		},
-		{
-			name:            "medium storage",
-			dataNodeStorage: 100,
-		},
-		{
-			name:            "large storage",
-			dataNodeStorage: 1000,
-		},
-		{
-			name:            "very large storage",
-			dataNodeStorage: 10000,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			details := &common.OpenSearchDetails{
-				InstanceType:    "r5.large.search",
-				InstanceCount:   2,
-				DataNodeStorage: tt.dataNodeStorage,
-			}
-
-			assert.Equal(t, tt.dataNodeStorage, details.DataNodeStorage)
-		})
-	}
-}
-
-func TestPurchaseClient_CreatePurchaseTags(t *testing.T) {
-	rec := common.Recommendation{
-		Service:       common.ServiceOpenSearch,
-		Region:        "us-east-1",
-		InstanceType:  "r5.large.search",
-		PaymentOption: "no-upfront",
-		Term:          36,
-		ServiceDetails: &common.OpenSearchDetails{
-			InstanceType:    "r5.large.search",
-			InstanceCount:   3,
-			MasterEnabled:   true,
-			MasterType:      "c5.large.search",
-			MasterCount:     3,
-			DataNodeStorage: 500,
-		},
-	}
-
-	// Verify recommendation has required fields for tagging
-	assert.Equal(t, common.ServiceOpenSearch, rec.Service)
-	assert.Equal(t, "us-east-1", rec.Region)
-	assert.Equal(t, "r5.large.search", rec.InstanceType)
-	assert.Equal(t, "no-upfront", rec.PaymentOption)
-	assert.Equal(t, 36, rec.Term)
-
-	details := rec.ServiceDetails.(*common.OpenSearchDetails)
-	assert.Equal(t, "r5.large.search", details.InstanceType)
-	assert.Equal(t, int32(3), details.InstanceCount)
-	assert.True(t, details.MasterEnabled)
-	assert.Equal(t, "c5.large.search", details.MasterType)
-	assert.Equal(t, int32(3), details.MasterCount)
-}
-
-func TestPurchaseClient_ElasticsearchLegacySupport(t *testing.T) {
-	// Test that Elasticsearch (legacy) service is handled correctly
-	rec := common.Recommendation{
-		Service:      common.ServiceElasticsearch,
-		InstanceType: "m4.large.elasticsearch",
-		ServiceDetails: &common.OpenSearchDetails{
-			InstanceType:  "m4.large.elasticsearch",
-			InstanceCount: 2,
-		},
-	}
-
-	// Should be recognized as OpenSearch internally
-	details := rec.ServiceDetails.(*common.OpenSearchDetails)
-	assert.Equal(t, common.ServiceOpenSearch, details.GetServiceType())
-}
-
-func TestPurchaseClient_Integration(t *testing.T) {
-	// Skip if not running integration tests
-	if testing.Short() {
-		t.Skip("Skipping integration test")
-	}
-
-	ctx := context.Background()
-	cfg := aws.Config{
-		Region: "us-east-1",
-	}
-
-	client := NewPurchaseClient(cfg)
-
-	// Test ValidateOffering with a sample recommendation
-	rec := common.Recommendation{
-		Service:       common.ServiceOpenSearch,
-		InstanceType:  "t3.small.search",
-		PaymentOption: "no-upfront",
-		Term:          12,
-		ServiceDetails: &common.OpenSearchDetails{
-			InstanceType:  "t3.small.search",
-			InstanceCount: 1,
-		},
-	}
-
-	// This will fail in dry-run mode but validates the API call structure
-	err := client.ValidateOffering(ctx, rec)
-	// We expect an error since we're not actually finding real offerings
-	assert.Error(t, err) // Expected to not find offerings in test environment
-}
-
 // Benchmark tests
 func BenchmarkPurchaseClient_Creation(b *testing.B) {
 	cfg := aws.Config{
@@ -336,9 +839,7 @@ func BenchmarkPurchaseClient_Validation(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		result := common.PurchaseResult{
-			Config: rec,
-		}
+		result := common.PurchaseResult{}
 
 		if rec.Service != common.ServiceOpenSearch {
 			result.Success = false
@@ -347,5 +848,6 @@ func BenchmarkPurchaseClient_Validation(b *testing.B) {
 		} else {
 			result.Success = true
 		}
+		_ = result.Success // Use the result to avoid compiler warning
 	}
 }

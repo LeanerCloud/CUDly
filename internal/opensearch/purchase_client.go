@@ -13,7 +13,7 @@ import (
 
 // PurchaseClient wraps the AWS OpenSearch client for purchasing Reserved Instances
 type PurchaseClient struct {
-	client *opensearch.Client
+	client OpenSearchAPI
 	common.BasePurchaseClient
 }
 
@@ -184,4 +184,9 @@ func (c *PurchaseClient) GetOfferingDetails(ctx context.Context, rec common.Reco
 // BatchPurchase purchases multiple OpenSearch RIs with error handling and rate limiting
 func (c *PurchaseClient) BatchPurchase(ctx context.Context, recommendations []common.Recommendation, delayBetweenPurchases time.Duration) []common.PurchaseResult {
 	return c.BasePurchaseClient.BatchPurchase(ctx, c, recommendations, delayBetweenPurchases)
+}
+
+// GetServiceType returns the service type for OpenSearch
+func (c *PurchaseClient) GetServiceType() common.ServiceType {
+	return common.ServiceOpenSearch
 }

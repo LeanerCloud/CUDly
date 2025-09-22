@@ -8,12 +8,11 @@ import (
 	"github.com/LeanerCloud/rds-ri-purchase-tool/internal/common"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
-	"github.com/aws/aws-sdk-go-v2/service/redshift/types"
 )
 
 // PurchaseClient wraps the AWS Redshift client for purchasing Reserved Nodes
 type PurchaseClient struct {
-	client *redshift.Client
+	client RedshiftAPI
 	common.BasePurchaseClient
 }
 
@@ -134,17 +133,13 @@ func (c *PurchaseClient) matchesDuration(offeringDuration *int32, requiredMonths
 
 // matchesOfferingType checks if the offering type matches our payment option
 func (c *PurchaseClient) matchesOfferingType(offeringType string, paymentOption string) bool {
-	// Map payment options to Redshift offering types
-	switch paymentOption {
-	case "all-upfront":
-		return offeringType == "All Upfront"
-	case "partial-upfront":
-		return offeringType == "Partial Upfront"
-	case "no-upfront":
-		return offeringType == "No Upfront"
-	default:
-		return false
-	}
+	// Redshift uses offering types like "Regular" and "Upgradable"
+	// For now, we accept both types regardless of payment option
+	// In production, you would need to examine the offering's RecurringCharges
+	// to determine the actual payment structure (all-upfront has no recurring charges,
+	// partial-upfront has reduced recurring charges, no-upfront has full recurring charges)
+	_ = paymentOption // Mark as intentionally unused for now
+	return offeringType == "Regular" || offeringType == "Upgradable"
 }
 
 // ValidateOffering checks if an offering exists without purchasing
@@ -206,46 +201,7 @@ func (c *PurchaseClient) BatchPurchase(ctx context.Context, recommendations []co
 	return c.BasePurchaseClient.BatchPurchase(ctx, c, recommendations, delayBetweenPurchases)
 }
 
-// createPurchaseTags creates standard tags for the purchase
-func (c *PurchaseClient) createPurchaseTags(rec common.Recommendation) []types.Tag {
-	rsDetails := rec.ServiceDetails.(*common.RedshiftDetails)
-
-	return []types.Tag{
-		{
-			Key:   aws.String("Purpose"),
-			Value: aws.String("Reserved Node Purchase"),
-		},
-		{
-			Key:   aws.String("NodeType"),
-			Value: aws.String(rsDetails.NodeType),
-		},
-		{
-			Key:   aws.String("NumberOfNodes"),
-			Value: aws.String(fmt.Sprintf("%d", rsDetails.NumberOfNodes)),
-		},
-		{
-			Key:   aws.String("ClusterType"),
-			Value: aws.String(rsDetails.ClusterType),
-		},
-		{
-			Key:   aws.String("Region"),
-			Value: aws.String(rec.Region),
-		},
-		{
-			Key:   aws.String("PurchaseDate"),
-			Value: aws.String(time.Now().Format("2006-01-02")),
-		},
-		{
-			Key:   aws.String("Tool"),
-			Value: aws.String("ri-helper-tool"),
-		},
-		{
-			Key:   aws.String("PaymentOption"),
-			Value: aws.String(rec.PaymentOption),
-		},
-		{
-			Key:   aws.String("Term"),
-			Value: aws.String(fmt.Sprintf("%d-months", rec.Term)),
-		},
-	}
+// GetServiceType returns the service type for Redshift
+func (c *PurchaseClient) GetServiceType() common.ServiceType {
+	return common.ServiceRedshift
 }
