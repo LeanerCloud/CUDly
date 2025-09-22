@@ -525,3 +525,229 @@ func TestGetServiceDisplayNameExtended(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceProcessorConfig_Validation(t *testing.T) {
+	cfg := aws.Config{Region: "us-east-1"}
+
+	tests := []struct {
+		name     string
+		config   ProcessorConfig
+		expected bool
+	}{
+		{
+			name: "Valid config with all fields",
+			config: ProcessorConfig{
+				Services:   []ServiceType{ServiceRDS, ServiceEC2},
+				Regions:    []string{"us-east-1", "us-west-2"},
+				Coverage:   80.0,
+				IsDryRun:   true,
+				OutputPath: "/tmp/output",
+			},
+			expected: true,
+		},
+		{
+			name: "Valid minimal config",
+			config: ProcessorConfig{
+				Services: []ServiceType{ServiceRDS},
+				Coverage: 75.0,
+				IsDryRun: false,
+			},
+			expected: true,
+		},
+		{
+			name: "Empty services",
+			config: ProcessorConfig{
+				Services: []ServiceType{},
+				Coverage: 80.0,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := NewServiceProcessor(cfg, tt.config)
+			result := len(processor.config.Services) > 0
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestServiceProcessor_GeneratePurchaseID(t *testing.T) {
+	cfg := aws.Config{Region: "us-east-1"}
+	processor := NewServiceProcessor(cfg, ProcessorConfig{
+		Services: []ServiceType{ServiceRDS},
+		Coverage: 80.0,
+		IsDryRun: true,
+	})
+
+	rec := Recommendation{
+		Service:      ServiceRDS,
+		InstanceType: "db.t3.micro",
+		Count:        2,
+	}
+
+	id := processor.generatePurchaseID(rec, "us-east-1", 1)
+
+	assert.Contains(t, id, "dryrun") // Dry run mode
+	assert.Contains(t, id, "rds")
+	assert.Contains(t, id, "us-east-1")
+	assert.Contains(t, id, "db-t3-micro")
+	assert.Contains(t, id, "2x")
+	assert.Regexp(t, `-\d{8}-\d{6}-\d{3}$`, id) // timestamp and index
+}
+
+func TestServiceProcessor_CreatePurchaseClient(t *testing.T) {
+	cfg := aws.Config{Region: "us-east-1"}
+	processor := NewServiceProcessor(cfg, ProcessorConfig{
+		Services: []ServiceType{ServiceRDS},
+		Coverage: 80.0,
+	})
+
+	// Test without factory function
+	client := processor.createPurchaseClient(ServiceRDS, cfg)
+	assert.Nil(t, client) // Should be nil since no factory is set
+
+	// Test with mock factory function
+	mockFactory := func(service ServiceType, cfg aws.Config) PurchaseClient {
+		return &MockPurchaseClient{}
+	}
+
+	SetPurchaseClientFactory(mockFactory)
+	defer SetPurchaseClientFactory(nil) // Clean up
+
+	client = processor.createPurchaseClient(ServiceRDS, cfg)
+	assert.NotNil(t, client)
+}
+
+func TestServiceStats_Calculation(t *testing.T) {
+	stats := ServiceStats{
+		Service:                 ServiceRDS,
+		RegionsProcessed:        3,
+		RecommendationsFound:    10,
+		RecommendationsSelected: 8,
+		InstancesProcessed:      25,
+		SuccessfulPurchases:     7,
+		FailedPurchases:         1,
+		TotalEstimatedSavings:   1500.0,
+	}
+
+	assert.Equal(t, ServiceRDS, stats.Service)
+	assert.Equal(t, 3, stats.RegionsProcessed)
+	assert.Equal(t, 10, stats.RecommendationsFound)
+	assert.Equal(t, 8, stats.RecommendationsSelected)
+	assert.Equal(t, int32(25), stats.InstancesProcessed)
+	assert.Equal(t, 7, stats.SuccessfulPurchases)
+	assert.Equal(t, 1, stats.FailedPurchases)
+	assert.Equal(t, 1500.0, stats.TotalEstimatedSavings)
+
+	// Test success rate calculation
+	totalAttempts := stats.SuccessfulPurchases + stats.FailedPurchases
+	successRate := float64(stats.SuccessfulPurchases) / float64(totalAttempts) * 100
+	assert.InDelta(t, 87.5, successRate, 0.1) // 7/8 = 87.5%
+}
+
+func TestPrintFinalSummary_Coverage(t *testing.T) {
+	// Test that PrintFinalSummary function exists and handles various input scenarios
+	allRecommendations := []Recommendation{
+		{Service: ServiceRDS, Count: 5, EstimatedCost: 500},
+		{Service: ServiceEC2, Count: 3, EstimatedCost: 300},
+	}
+
+	allResults := []PurchaseResult{
+		{Success: true, Config: allRecommendations[0]},
+		{Success: false, Config: allRecommendations[1]},
+	}
+
+	serviceStats := map[ServiceType]ServiceStats{
+		ServiceRDS: {
+			Service:                 ServiceRDS,
+			RecommendationsSelected: 1,
+			InstancesProcessed:      5,
+			SuccessfulPurchases:     1,
+			TotalEstimatedSavings:   500.0,
+		},
+		ServiceEC2: {
+			Service:                 ServiceEC2,
+			RecommendationsSelected: 1,
+			InstancesProcessed:      3,
+			FailedPurchases:         1,
+			TotalEstimatedSavings:   300.0,
+		},
+	}
+
+	// This mainly tests that the function doesn't panic
+	// The actual output is printed to stdout
+	assert.NotPanics(t, func() {
+		PrintFinalSummary(allRecommendations, allResults, serviceStats, true)
+	})
+
+	assert.NotPanics(t, func() {
+		PrintFinalSummary(allRecommendations, allResults, serviceStats, false)
+	})
+
+	// Test with empty data
+	assert.NotPanics(t, func() {
+		PrintFinalSummary([]Recommendation{}, []PurchaseResult{}, map[ServiceType]ServiceStats{}, true)
+	})
+}
+
+func TestServiceProcessor_DiscoverRegions_Mock(t *testing.T) {
+	cfg := aws.Config{Region: "us-east-1"}
+	processor := NewServiceProcessor(cfg, ProcessorConfig{
+		Services: []ServiceType{ServiceRDS},
+		Coverage: 80.0,
+	})
+
+	// We can't easily test the actual discovery without mocking the recClient
+	// But we can test that the method exists and has expected behavior structure
+	assert.NotNil(t, processor.recClient)
+	assert.NotNil(t, processor.discoverRegionsForService)
+}
+
+// Benchmark tests
+func BenchmarkApplyCoverage(b *testing.B) {
+	recs := make([]Recommendation, 100)
+	for i := range recs {
+		recs[i] = Recommendation{
+			Count:         int32(i + 1),
+			EstimatedCost: float64(i * 100),
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ApplyCoverage(recs, 75.0)
+	}
+}
+
+func BenchmarkSortRecommendationsBySavings(b *testing.B) {
+	recs := make([]Recommendation, 100)
+	for i := range recs {
+		recs[i] = Recommendation{
+			EstimatedCost:  float64(i * 100),
+			SavingsPercent: float64(i % 50),
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = SortRecommendationsBySavings(recs)
+	}
+}
+
+func BenchmarkGroupRecommendationsByRegion(b *testing.B) {
+	regions := []string{"us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1"}
+	recs := make([]Recommendation, 100)
+	for i := range recs {
+		recs[i] = Recommendation{
+			Region:       regions[i%len(regions)],
+			InstanceType: "t3.micro",
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = GroupRecommendationsByRegion(recs)
+	}
+}

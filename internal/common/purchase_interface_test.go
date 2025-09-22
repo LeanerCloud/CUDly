@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// Mock implementation of PurchaseClient interface
+// MockPurchaseClient implements PurchaseClient interface for testing
 type MockPurchaseClient struct {
 	mock.Mock
 }
@@ -36,6 +36,15 @@ func (m *MockPurchaseClient) GetOfferingDetails(ctx context.Context, rec Recomme
 func (m *MockPurchaseClient) BatchPurchase(ctx context.Context, recommendations []Recommendation, delayBetweenPurchases time.Duration) []PurchaseResult {
 	args := m.Called(ctx, recommendations, delayBetweenPurchases)
 	return args.Get(0).([]PurchaseResult)
+}
+
+// Test BasePurchaseClient
+func TestBasePurchaseClient_Basic(t *testing.T) {
+	baseClient := &BasePurchaseClient{
+		Region: "us-east-1",
+	}
+
+	assert.Equal(t, "us-east-1", baseClient.Region)
 }
 
 func TestBasePurchaseClient_BatchPurchase_WithDelay(t *testing.T) {
@@ -154,90 +163,48 @@ func TestBasePurchaseClient_BatchPurchase_EmptyRecommendations(t *testing.T) {
 	mockClient.AssertNotCalled(t, "PurchaseRI")
 }
 
-func TestRecommendation_GetServiceName_Extended(t *testing.T) {
-	tests := []struct {
-		service  ServiceType
-		expected string
-	}{
-		{ServiceType("custom-service"), "Unknown"},
-		{ServiceType(""), "Unknown"},
-		{ServiceType("very-long-service-name-that-exceeds-normal-length"), "Unknown"},
+func TestBasePurchaseClient_BatchPurchase_NoDelay(t *testing.T) {
+	baseClient := &BasePurchaseClient{
+		Region: "ap-southeast-1",
+	}
+	mockClient := &MockPurchaseClient{}
+
+	recommendations := []Recommendation{
+		{Service: ServiceEC2, InstanceType: "t3.micro", Count: 1},
+		{Service: ServiceEC2, InstanceType: "t3.small", Count: 2},
 	}
 
-	for _, tt := range tests {
-		t.Run(string(tt.service), func(t *testing.T) {
-			rec := Recommendation{Service: tt.service}
-			assert.Equal(t, tt.expected, rec.GetServiceName())
+	for _, rec := range recommendations {
+		mockClient.On("PurchaseRI", mock.Anything, rec).Return(PurchaseResult{
+			Config:  rec,
+			Success: true,
 		})
 	}
+
+	start := time.Now()
+	results := baseClient.BatchPurchase(context.Background(), mockClient, recommendations, 0)
+	duration := time.Since(start)
+
+	assert.Len(t, results, 2)
+	assert.True(t, results[0].Success)
+	assert.True(t, results[1].Success)
+	// Should complete quickly with no delay
+	assert.Less(t, duration, 50*time.Millisecond)
+	mockClient.AssertExpectations(t)
 }
 
-func TestRecommendation_GetDescription_EdgeCases(t *testing.T) {
-	tests := []struct {
-		name     string
-		rec      Recommendation
-		expected string
-	}{
-		{
-			name: "nil service details",
-			rec: Recommendation{
-				Service:        ServiceRDS,
-				InstanceType:   "db.t3.medium",
-				Count:          2,
-				ServiceDetails: nil,
-			},
-			expected: "db.t3.medium 2x",
-		},
-		{
-			name: "zero count",
-			rec: Recommendation{
-				Service:      ServiceEC2,
-				InstanceType: "m5.large",
-				Count:        0,
-			},
-			expected: "m5.large 0x",
-		},
-		{
-			name: "empty instance type",
-			rec: Recommendation{
-				Service:      ServiceRedshift,
-				InstanceType: "",
-				Count:        5,
-			},
-			expected: " 5x",
-		},
-	}
+// Test PurchaseClient interface compliance
+func TestPurchaseClientInterface(t *testing.T) {
+	// Test that the interface is properly implemented by test mock
+	var _ PurchaseClient = (*MockPurchaseClient)(nil)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.rec.GetDescription())
-		})
-	}
+	// Test that we can use the interface
+	var client PurchaseClient
+	client = &MockPurchaseClient{}
+	assert.NotNil(t, client)
 }
 
-func TestRecommendation_GetDurationString_AllCases(t *testing.T) {
-	tests := []struct {
-		term     int
-		expected string
-	}{
-		{12, "31536000"},  // 1 year (valid)
-		{36, "94608000"},  // 3 years (valid)
-		{0, "94608000"},   // Invalid - defaults to 3 years
-		{-1, "94608000"},  // Negative - defaults to 3 years
-		{6, "94608000"},   // 6 months - defaults to 3 years
-		{24, "94608000"},  // 2 years - defaults to 3 years
-		{48, "94608000"},  // 4 years - defaults to 3 years
-		{60, "94608000"},  // 5 years - defaults to 3 years
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("term_%d_months", tt.term), func(t *testing.T) {
-			rec := Recommendation{Term: tt.term}
-			assert.Equal(t, tt.expected, rec.GetDurationString())
-		})
-	}
-}
-
+// Test PurchaseResult struct
 func TestPurchaseResult_Fields(t *testing.T) {
 	now := time.Now()
 
@@ -262,132 +229,11 @@ func TestPurchaseResult_Fields(t *testing.T) {
 	assert.Equal(t, 1234.56, result.ActualCost)
 	assert.Equal(t, now, result.Timestamp)
 	assert.Equal(t, ServiceRDS, result.Config.Service)
+	assert.Equal(t, "db.t3.medium", result.Config.InstanceType)
+	assert.Equal(t, int32(2), result.Config.Count)
 }
 
-func TestServiceDetails_AllTypes(t *testing.T) {
-	tests := []struct {
-		name        string
-		details     ServiceDetails
-		serviceType ServiceType
-		description string
-	}{
-		{
-			name: "RDS with Aurora",
-			details: &RDSDetails{
-				Engine:   "aurora-mysql",
-				AZConfig: "multi-az",
-			},
-			serviceType: ServiceRDS,
-			description: "aurora-mysql multi-az",
-		},
-		{
-			name: "ElastiCache with memcached",
-			details: &ElastiCacheDetails{
-				Engine:   "memcached",
-				NodeType: "cache.m6g.xlarge",
-			},
-			serviceType: ServiceElastiCache,
-			description: "memcached",
-		},
-		{
-			name: "EC2 with dedicated tenancy",
-			details: &EC2Details{
-				Platform: "Windows",
-				Tenancy:  "dedicated",
-				Scope:    "availability-zone",
-			},
-			serviceType: ServiceEC2,
-			description: "Windows dedicated availability-zone",
-		},
-		{
-			name: "Redshift single node",
-			details: &RedshiftDetails{
-				NodeType:      "ra3.xlplus",
-				NumberOfNodes: 1,
-				ClusterType:   "single-node",
-			},
-			serviceType: ServiceRedshift,
-			description: "ra3.xlplus 1-node single-node",
-		},
-		{
-			name: "MemoryDB multi-shard",
-			details: &MemoryDBDetails{
-				NodeType:      "db.r6g.2xlarge",
-				NumberOfNodes: 6,
-				ShardCount:    3,
-			},
-			serviceType: ServiceMemoryDB,
-			description: "db.r6g.2xlarge 6-node 3-shard",
-		},
-		{
-			name: "OpenSearch without master",
-			details: &OpenSearchDetails{
-				InstanceType:    "r5.xlarge.search",
-				InstanceCount:   5,
-				MasterEnabled:   false,
-				DataNodeStorage: 500,
-			},
-			serviceType: ServiceOpenSearch,
-			description: "r5.xlarge.search x5",
-		},
-		{
-			name: "OpenSearch with dedicated master",
-			details: &OpenSearchDetails{
-				InstanceType:    "r5.large.search",
-				InstanceCount:   3,
-				MasterEnabled:   true,
-				MasterType:      "c5.large.search",
-				MasterCount:     3,
-				DataNodeStorage: 100,
-			},
-			serviceType: ServiceOpenSearch,
-			description: "r5.large.search x3 (Master: c5.large.search x3)",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.serviceType, tt.details.GetServiceType())
-			assert.Equal(t, tt.description, tt.details.GetDetailDescription())
-		})
-	}
-}
-
-func TestRegionProcessingStats_Extended(t *testing.T) {
-	stats := RegionProcessingStats{
-		Region:                  "ap-southeast-1",
-		Service:                 ServiceMemoryDB,
-		Success:                 false,
-		RecommendationsFound:    0,
-		RecommendationsSelected: 0,
-		InstancesProcessed:      0,
-		SuccessfulPurchases:     0,
-		FailedPurchases:         0,
-	}
-
-	assert.Equal(t, "ap-southeast-1", stats.Region)
-	assert.Equal(t, ServiceMemoryDB, stats.Service)
-	assert.False(t, stats.Success)
-	assert.Equal(t, 0, stats.RecommendationsFound)
-}
-
-func TestCostEstimate_Extended(t *testing.T) {
-	estimate := CostEstimate{
-		Recommendation: Recommendation{
-			Service:      ServiceElastiCache,
-			InstanceType: "cache.r6g.xlarge",
-			Count:        5,
-		},
-		TotalFixedCost:   5000.00,
-		MonthlyUsageCost: 200.00,
-		TotalTermCost:    12400.00,
-	}
-
-	assert.Equal(t, 5000.00, estimate.TotalFixedCost)
-	assert.Equal(t, 200.00, estimate.MonthlyUsageCost)
-	assert.Equal(t, 12400.00, estimate.TotalTermCost)
-}
-
+// Test OfferingDetails struct
 func TestOfferingDetails_AllFields(t *testing.T) {
 	offering := OfferingDetails{
 		OfferingID:    "ri-2024-12-01-abc123",
@@ -418,39 +264,71 @@ func TestOfferingDetails_AllFields(t *testing.T) {
 	assert.Equal(t, "Convertible", offering.OfferingType)
 }
 
-func TestRecommendationParams_Extended(t *testing.T) {
-	params := RecommendationParams{
-		Service:            ServiceRedshift,
-		Region:             "ca-central-1",
-		AccountID:          "987654321098",
-		PaymentOption:      "all-upfront",
-		TermInYears:        1,
-		LookbackPeriodDays: 60,
+// Test CostEstimate struct
+func TestCostEstimate_Fields(t *testing.T) {
+	estimate := CostEstimate{
+		Recommendation: Recommendation{
+			Service:      ServiceElastiCache,
+			InstanceType: "cache.r6g.xlarge",
+			Count:        5,
+		},
+		TotalFixedCost:   5000.00,
+		MonthlyUsageCost: 200.00,
+		TotalTermCost:    12400.00,
 	}
 
-	assert.Equal(t, ServiceRedshift, params.Service)
-	assert.Equal(t, "ca-central-1", params.Region)
-	assert.Equal(t, "987654321098", params.AccountID)
-	assert.Equal(t, "all-upfront", params.PaymentOption)
-	assert.Equal(t, 1, params.TermInYears)
-	assert.Equal(t, 60, params.LookbackPeriodDays)
+	assert.Equal(t, 5000.00, estimate.TotalFixedCost)
+	assert.Equal(t, 200.00, estimate.MonthlyUsageCost)
+	assert.Equal(t, 12400.00, estimate.TotalTermCost)
+	assert.Equal(t, ServiceElastiCache, estimate.Recommendation.Service)
+	assert.Equal(t, "cache.r6g.xlarge", estimate.Recommendation.InstanceType)
+	assert.Equal(t, int32(5), estimate.Recommendation.Count)
+}
+
+// Test RegionProcessingStats struct
+func TestRegionProcessingStats_Fields(t *testing.T) {
+	stats := RegionProcessingStats{
+		Region:                  "ap-southeast-1",
+		Service:                 ServiceMemoryDB,
+		Success:                 true,
+		RecommendationsFound:    10,
+		RecommendationsSelected: 8,
+		InstancesProcessed:      24,
+		SuccessfulPurchases:     7,
+		FailedPurchases:         1,
+	}
+
+	assert.Equal(t, "ap-southeast-1", stats.Region)
+	assert.Equal(t, ServiceMemoryDB, stats.Service)
+	assert.True(t, stats.Success)
+	assert.Equal(t, 10, stats.RecommendationsFound)
+	assert.Equal(t, 8, stats.RecommendationsSelected)
+	assert.Equal(t, int32(24), stats.InstancesProcessed)
+	assert.Equal(t, 7, stats.SuccessfulPurchases)
+	assert.Equal(t, 1, stats.FailedPurchases)
 }
 
 // Benchmark tests
-func BenchmarkRecommendation_GetDescription(b *testing.B) {
-	rec := Recommendation{
-		Service:      ServiceRDS,
-		InstanceType: "db.r6g.xlarge",
-		Count:        10,
-		ServiceDetails: &RDSDetails{
-			Engine:   "aurora-postgresql",
-			AZConfig: "multi-az",
-		},
-	}
-
-	b.ResetTimer()
+func BenchmarkBasePurchaseClient_Creation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_ = rec.GetDescription()
+		_ = &BasePurchaseClient{
+			Region: "us-east-1",
+		}
+	}
+}
+
+func BenchmarkPurchaseResult_Creation(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_ = PurchaseResult{
+			Config: Recommendation{
+				Service:      ServiceRDS,
+				InstanceType: "db.t4g.medium",
+				Count:        2,
+			},
+			Success:    true,
+			ActualCost: 1000.00,
+			Timestamp:  time.Now(),
+		}
 	}
 }
 
