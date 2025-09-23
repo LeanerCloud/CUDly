@@ -38,6 +38,14 @@ func (m *MockPurchaseClient) BatchPurchase(ctx context.Context, recommendations 
 	return args.Get(0).([]PurchaseResult)
 }
 
+func (m *MockPurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]ExistingRI, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]ExistingRI), args.Error(1)
+}
+
 // Test BasePurchaseClient
 func TestBasePurchaseClient_Basic(t *testing.T) {
 	baseClient := &BasePurchaseClient{
@@ -82,7 +90,7 @@ func TestBasePurchaseClient_BatchPurchase_WithDelay(t *testing.T) {
 
 	// Test with delay
 	start := time.Now()
-	results := baseClient.BatchPurchase(context.Background(), mockClient, recommendations, 100*time.Millisecond)
+	results := baseClient.BatchPurchase(context.Background(), mockClient, recommendations, 10*time.Millisecond)
 	duration := time.Since(start)
 
 	assert.Len(t, results, 3)
@@ -91,8 +99,8 @@ func TestBasePurchaseClient_BatchPurchase_WithDelay(t *testing.T) {
 		assert.Equal(t, recommendations[i].InstanceType, result.Config.InstanceType)
 	}
 
-	// Should have at least 200ms delay (2 delays between 3 purchases)
-	assert.GreaterOrEqual(t, duration, 200*time.Millisecond)
+	// Should have at least 20ms delay (2 delays between 3 purchases)
+	assert.GreaterOrEqual(t, duration, 20*time.Millisecond)
 	mockClient.AssertExpectations(t)
 }
 

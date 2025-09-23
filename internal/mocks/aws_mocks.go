@@ -52,6 +52,14 @@ func (m *MockRDSClient) PurchaseReservedDBInstancesOffering(ctx context.Context,
 	return args.Get(0).(*rds.PurchaseReservedDBInstancesOfferingOutput), args.Error(1)
 }
 
+func (m *MockRDSClient) DescribeReservedDBInstances(ctx context.Context, params *rds.DescribeReservedDBInstancesInput, optFns ...func(*rds.Options)) (*rds.DescribeReservedDBInstancesOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*rds.DescribeReservedDBInstancesOutput), args.Error(1)
+}
+
 // MockElastiCacheClient mocks the ElastiCache client
 type MockElastiCacheClient struct {
 	mock.Mock
@@ -73,6 +81,14 @@ func (m *MockElastiCacheClient) PurchaseReservedCacheNodesOffering(ctx context.C
 	return args.Get(0).(*elasticache.PurchaseReservedCacheNodesOfferingOutput), args.Error(1)
 }
 
+func (m *MockElastiCacheClient) DescribeReservedCacheNodes(ctx context.Context, params *elasticache.DescribeReservedCacheNodesInput, optFns ...func(*elasticache.Options)) (*elasticache.DescribeReservedCacheNodesOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*elasticache.DescribeReservedCacheNodesOutput), args.Error(1)
+}
+
 // MockEC2Client mocks the EC2 client
 type MockEC2Client struct {
 	mock.Mock
@@ -92,6 +108,14 @@ func (m *MockEC2Client) PurchaseReservedInstancesOffering(ctx context.Context, p
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*ec2.PurchaseReservedInstancesOfferingOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) DescribeReservedInstances(ctx context.Context, params *ec2.DescribeReservedInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.DescribeReservedInstancesOutput), args.Error(1)
 }
 
 func (m *MockEC2Client) DescribeRegions(ctx context.Context, params *ec2.DescribeRegionsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRegionsOutput, error) {

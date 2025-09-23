@@ -36,6 +36,14 @@ func (m *MockEC2Client) DescribeReservedInstancesOfferings(ctx context.Context, 
 	return args.Get(0).(*ec2.DescribeReservedInstancesOfferingsOutput), args.Error(1)
 }
 
+func (m *MockEC2Client) DescribeReservedInstances(ctx context.Context, params *ec2.DescribeReservedInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOutput, error) {
+	args := m.Called(ctx, params, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.DescribeReservedInstancesOutput), args.Error(1)
+}
+
 func TestNewPurchaseClientExtended(t *testing.T) {
 	cfg := aws.Config{
 		Region: "us-east-1",
@@ -561,7 +569,7 @@ func TestPurchaseClient_BatchPurchase(t *testing.T) {
 			}, nil).Once()
 	}
 
-	results := client.BatchPurchase(context.Background(), recs, 100*time.Millisecond)
+	results := client.BatchPurchase(context.Background(), recs, 5*time.Millisecond)
 
 	assert.Len(t, results, 2)
 	for i, result := range results {

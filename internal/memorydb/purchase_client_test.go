@@ -794,7 +794,7 @@ func TestPurchaseClient_BatchPurchase(t *testing.T) {
 			ReservedNodesOfferings: []types.ReservedNodesOffering{}, // No matching offerings
 		}, nil).Once()
 
-	results := client.BatchPurchase(context.Background(), recs, 100*time.Millisecond)
+	results := client.BatchPurchase(context.Background(), recs, 5*time.Millisecond)
 
 	assert.Len(t, results, 2)
 

@@ -328,13 +328,13 @@ func TestBatchPurchase(t *testing.T) {
 
 	// Test with delay
 	startTime := time.Now()
-	results := client.BatchPurchase(ctx, recommendations, 100*time.Millisecond)
+	results := client.BatchPurchase(ctx, recommendations, 5*time.Millisecond)
 	duration := time.Since(startTime)
 
 	assert.Len(t, results, 2)
 	assert.True(t, results[0].Success)
 	assert.False(t, results[1].Success)
-	assert.GreaterOrEqual(t, duration, 100*time.Millisecond) // Should have delay
+	assert.GreaterOrEqual(t, duration, 5*time.Millisecond) // Should have delay
 
 	mockRDS.AssertExpectations(t)
 

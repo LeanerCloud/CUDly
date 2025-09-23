@@ -650,7 +650,7 @@ func TestPurchaseClient_BatchPurchase(t *testing.T) {
 		ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
 	}, nil).Once()
 
-	results := client.BatchPurchase(context.Background(), recommendations, 100*time.Millisecond)
+	results := client.BatchPurchase(context.Background(), recommendations, 5*time.Millisecond)
 
 	assert.Len(t, results, 2)
 	assert.True(t, results[0].Success)
