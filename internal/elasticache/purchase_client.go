@@ -3,7 +3,7 @@ package elasticache
 import (
 	"context"
 	"fmt"
-	"strings"
+	"sort"
 	"time"
 
 	"github.com/LeanerCloud/rds-ri-purchase-tool/internal/common"
@@ -54,11 +54,9 @@ func (c *PurchaseClient) PurchaseRI(ctx context.Context, rec common.Recommendati
 	details, _ := rec.ServiceDetails.(*common.ElastiCacheDetails)
 	engine := "unknown"
 	if details != nil {
-		engine = strings.ToLower(details.Engine)
+		engine = details.Engine
 	}
-	instanceType := strings.ReplaceAll(rec.InstanceType, ".", "-")
-	timestamp := time.Now().Format("20060102-150405")
-	reservationID := fmt.Sprintf("elasticache-%s-%s-%s-%dx-%s", engine, instanceType, rec.Region, rec.Count, timestamp)
+	reservationID := common.GenerateReservationID("elasticache", rec.AccountName, engine, rec.InstanceType, rec.Region, rec.Count, rec.Coverage)
 
 	// Create the purchase request
 	input := &elasticache.PurchaseReservedCacheNodesOfferingInput{
@@ -292,4 +290,45 @@ func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]co
 	}
 
 	return existingRIs, nil
+}
+// GetValidInstanceTypes returns a list of valid instance types for ElastiCache by querying offerings
+func (c *PurchaseClient) GetValidInstanceTypes(ctx context.Context) ([]string, error) {
+	instanceTypesMap := make(map[string]bool)
+	var marker *string
+
+	// Query all available ElastiCache reserved node offerings to extract instance types
+	for {
+		input := &elasticache.DescribeReservedCacheNodesOfferingsInput{
+			Marker:     marker,
+			MaxRecords: aws.Int32(100),
+		}
+
+		result, err := c.client.DescribeReservedCacheNodesOfferings(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe ElastiCache offerings: %w", err)
+		}
+
+		// Extract unique instance types
+		for _, offering := range result.ReservedCacheNodesOfferings {
+			if offering.CacheNodeType != nil {
+				instanceTypesMap[*offering.CacheNodeType] = true
+			}
+		}
+
+		// Check if there are more results
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+			break
+		}
+		marker = result.Marker
+	}
+
+	// Convert map to sorted slice
+	instanceTypes := make([]string, 0, len(instanceTypesMap))
+	for instanceType := range instanceTypesMap {
+		instanceTypes = append(instanceTypes, instanceType)
+	}
+
+	// Sort for consistent output
+	sort.Strings(instanceTypes)
+	return instanceTypes, nil
 }
