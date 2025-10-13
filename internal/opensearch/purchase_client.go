@@ -50,7 +50,12 @@ func (c *PurchaseClient) PurchaseRI(ctx context.Context, rec common.Recommendati
 	}
 
 	// Create a unique reservation ID for tracking
-	reservationID := fmt.Sprintf("opensearch-ri-%s-%d", rec.Region, time.Now().Unix())
+	osDetails, _ := rec.ServiceDetails.(*common.OpenSearchDetails)
+	engine := "opensearch"
+	if osDetails != nil {
+		engine = "opensearch"
+	}
+	reservationID := common.GenerateReservationID("opensearch", rec.AccountName, engine, rec.InstanceType, rec.Region, rec.Count, rec.Coverage)
 
 	// Create the purchase request
 	input := &opensearch.PurchaseReservedInstanceOfferingInput{
@@ -197,4 +202,9 @@ func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]co
 	// It uses Reserved Instance pricing but not actual Reserved Instance purchases
 	// Return empty for now
 	return []common.ExistingRI{}, nil
+}
+// GetValidInstanceTypes returns the static list of valid instance types for opensearch
+func (c *PurchaseClient) GetValidInstanceTypes(ctx context.Context) ([]string, error) {
+	// Return static list as these services don't have a describe offerings API that's as comprehensive
+	return common.GetStaticInstanceTypes(common.ServiceOpenSearch), nil
 }

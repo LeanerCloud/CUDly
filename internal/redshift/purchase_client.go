@@ -212,3 +212,8 @@ func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]co
 	// Redshift has reserved nodes similar to ElastiCache
 	return []common.ExistingRI{}, nil
 }
+// GetValidInstanceTypes returns the static list of valid instance types for redshift
+func (c *PurchaseClient) GetValidInstanceTypes(ctx context.Context) ([]string, error) {
+	// Return static list as these services don't have a describe offerings API that's as comprehensive
+	return common.GetStaticInstanceTypes(common.ServiceRedshift), nil
+}

@@ -57,7 +57,7 @@ func (c *PurchaseClient) PurchaseRI(ctx context.Context, rec common.Recommendati
 	}
 
 	// Create a unique reservation ID for tracking
-	reservationID := fmt.Sprintf("memorydb-ri-%s-%d", rec.Region, time.Now().Unix())
+	reservationID := common.GenerateReservationID("memorydb", rec.AccountName, "memorydb", rec.InstanceType, rec.Region, rec.Count, rec.Coverage)
 
 	// Create the purchase request
 	input := &memorydb.PurchaseReservedNodesOfferingInput{
@@ -264,4 +264,9 @@ func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]co
 	// TODO: Implement for MemoryDB using DescribeReservedNodes
 	// MemoryDB has reserved nodes similar to ElastiCache
 	return []common.ExistingRI{}, nil
+}
+// GetValidInstanceTypes returns the static list of valid instance types for memorydb
+func (c *PurchaseClient) GetValidInstanceTypes(ctx context.Context) ([]string, error) {
+	// Return static list as these services don't have a describe offerings API that's as comprehensive
+	return common.GetStaticInstanceTypes(common.ServiceMemoryDB), nil
 }
