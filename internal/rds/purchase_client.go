@@ -3,7 +3,9 @@ package rds
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/rds-ri-purchase-tool/internal/common"
@@ -50,12 +52,24 @@ func (c *PurchaseClient) PurchaseRI(ctx context.Context, rec common.Recommendati
 		return result
 	}
 
+	// Create a descriptive reservation ID with account alias
+	rdsDetails, _ := rec.ServiceDetails.(*common.RDSDetails)
+	engine := "unknown"
+	if rdsDetails != nil {
+		engine = rdsDetails.Engine
+	}
+	reservationID := common.GenerateReservationID("rds", rec.AccountName, engine, rec.InstanceType, rec.Region, rec.Count, rec.Coverage)
+
 	// Create the purchase request
 	input := &rds.PurchaseReservedDBInstancesOfferingInput{
 		ReservedDBInstancesOfferingId: aws.String(offeringID),
+		ReservedDBInstanceId:          aws.String(reservationID),
 		DBInstanceCount:               aws.Int32(rec.Count),
 		Tags:                          c.createPurchaseTags(rec),
 	}
+
+	// Log what we're about to purchase
+	common.AppLogger.Printf("    🔸 RDS API Call: Purchasing %d instances (OfferingID: %s, ReservationID: %s)\n", rec.Count, offeringID, reservationID)
 
 	// Execute the purchase
 	response, err := c.client.PurchaseReservedDBInstancesOffering(ctx, input)
@@ -99,9 +113,12 @@ func (c *PurchaseClient) findOfferingID(ctx context.Context, rec common.Recommen
 		return "", fmt.Errorf("invalid payment option: %w", err)
 	}
 
+	// Normalize engine name for AWS API
+	normalizedEngine := c.normalizeEngineName(rdsDetails.Engine)
+
 	input := &rds.DescribeReservedDBInstancesOfferingsInput{
 		DBInstanceClass:    aws.String(rec.InstanceType),
-		ProductDescription: aws.String(rdsDetails.Engine),
+		ProductDescription: aws.String(normalizedEngine),
 		MultiAZ:            aws.Bool(multiAZ),
 		Duration:           aws.String(duration),
 		OfferingType:       aws.String(offeringType),
@@ -208,6 +225,43 @@ func (c *PurchaseClient) convertPaymentOption(option string) (string, error) {
 	}
 }
 
+// normalizeEngineName converts human-readable engine names to AWS API format
+func (c *PurchaseClient) normalizeEngineName(engine string) string {
+	// Convert to lowercase for comparison
+	engineLower := strings.ToLower(engine)
+
+	// Handle Aurora variants
+	if strings.Contains(engineLower, "aurora") {
+		if strings.Contains(engineLower, "mysql") {
+			return "aurora-mysql"
+		}
+		if strings.Contains(engineLower, "postgres") {
+			return "aurora-postgresql"
+		}
+		return "aurora-mysql" // Default Aurora to MySQL
+	}
+
+	// Handle standard RDS engines
+	if strings.Contains(engineLower, "mysql") {
+		return "mysql"
+	}
+	if strings.Contains(engineLower, "postgres") {
+		return "postgresql"
+	}
+	if strings.Contains(engineLower, "mariadb") {
+		return "mariadb"
+	}
+	if strings.Contains(engineLower, "oracle") {
+		return "oracle-se2" // Most common Oracle edition
+	}
+	if strings.Contains(engineLower, "sqlserver") || strings.Contains(engineLower, "sql-server") {
+		return "sqlserver-se" // Standard edition by default
+	}
+
+	// If already in correct format, return as-is
+	return engineLower
+}
+
 // createPurchaseTags creates standard tags for the purchase
 func (c *PurchaseClient) createPurchaseTags(rec common.Recommendation) []types.Tag {
 	rdsDetails := rec.ServiceDetails.(*common.RDSDetails)
@@ -311,4 +365,46 @@ func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]co
 	}
 
 	return existingRIs, nil
+}
+
+// GetValidInstanceTypes returns a list of valid instance types for RDS by querying offerings
+func (c *PurchaseClient) GetValidInstanceTypes(ctx context.Context) ([]string, error) {
+	instanceTypesMap := make(map[string]bool)
+	var marker *string
+
+	// Query all available RDS reserved instance offerings to extract instance types
+	for {
+		input := &rds.DescribeReservedDBInstancesOfferingsInput{
+			Marker:     marker,
+			MaxRecords: aws.Int32(100),
+		}
+
+		result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe RDS offerings: %w", err)
+		}
+
+		// Extract unique instance types
+		for _, offering := range result.ReservedDBInstancesOfferings {
+			if offering.DBInstanceClass != nil {
+				instanceTypesMap[*offering.DBInstanceClass] = true
+			}
+		}
+
+		// Check if there are more results
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+			break
+		}
+		marker = result.Marker
+	}
+
+	// Convert map to sorted slice
+	instanceTypes := make([]string, 0, len(instanceTypesMap))
+	for instanceType := range instanceTypesMap {
+		instanceTypes = append(instanceTypes, instanceType)
+	}
+
+	// Sort for consistent output
+	sort.Strings(instanceTypes)
+	return instanceTypes, nil
 }
