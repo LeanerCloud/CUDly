@@ -120,18 +120,18 @@ func TestWriterResultToRow(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			row := w.resultToRow(tt.result)
 
-			// The row should have 21 columns based on the header
-			assert.Len(t, row, 21)
+			// The row should have 23 columns based on the header (added Account ID and Account Name)
+			assert.Len(t, row, 23)
 
 			// Check specific values
 			// Note: These indices correspond to the column positions in the header
-			assert.Equal(t, tt.expected["RI Monthly Cost"], row[12], "RI Monthly Cost mismatch")
-			assert.Contains(t, row[13], tt.expected["On-Demand Hourly"][:5], "On-Demand Hourly mismatch")
-			assert.Contains(t, row[14], tt.expected["RI Hourly"][:5], "RI Hourly mismatch")
-			assert.Equal(t, tt.expected["Upfront Cost (per instance)"], row[15], "Upfront per instance mismatch")
-			assert.Equal(t, tt.expected["Total Upfront"], row[16], "Total Upfront mismatch")
-			assert.Contains(t, row[17], tt.expected["Amortized Hourly"][:5], "Amortized Hourly mismatch")
-			assert.Equal(t, tt.expected["Savings Percent"], row[18], "Savings Percent mismatch")
+			assert.Equal(t, tt.expected["RI Monthly Cost"], row[14], "RI Monthly Cost mismatch")
+			assert.Contains(t, row[15], tt.expected["On-Demand Hourly"][:5], "On-Demand Hourly mismatch")
+			assert.Contains(t, row[16], tt.expected["RI Hourly"][:5], "RI Hourly mismatch")
+			assert.Equal(t, tt.expected["Upfront Cost (per instance)"], row[17], "Upfront per instance mismatch")
+			assert.Equal(t, tt.expected["Total Upfront"], row[18], "Total Upfront mismatch")
+			assert.Contains(t, row[19], tt.expected["Amortized Hourly"][:5], "Amortized Hourly mismatch")
+			assert.Equal(t, tt.expected["Savings Percent"], row[20], "Savings Percent mismatch")
 		})
 	}
 }
@@ -239,8 +239,8 @@ func TestWriterPricingCalculations(t *testing.T) {
 
 			row := w.resultToRow(result)
 
-			// Extract and verify the RI Monthly Cost (column 12)
-			riMonthlyCost := row[12]
+			// Extract and verify the RI Monthly Cost (column 14)
+			riMonthlyCost := row[14]
 			assert.Contains(t, riMonthlyCost, fmt.Sprintf("%.2f", tt.expectedRI))
 		})
 	}
@@ -259,4 +259,117 @@ func TestWriterErrorCases(t *testing.T) {
 		err := w.WriteResults([]purchase.Result{}, "/invalid/path/test.csv")
 		assert.Error(t, err)
 	})
+}
+
+func TestNewWriterWithDelimiter(t *testing.T) {
+	w := NewWriterWithDelimiter(';')
+	assert.NotNil(t, w)
+}
+
+func TestWriteCostEstimates(t *testing.T) {
+	tempDir := t.TempDir()
+	filename := filepath.Join(tempDir, "cost_estimates.csv")
+
+	w := NewWriter()
+	estimates := []purchase.CostEstimate{
+		{
+			Recommendation: recommendations.Recommendation{
+				Region:       "us-east-1",
+				InstanceType: "db.t3.micro",
+				Count:        2,
+				PaymentOption: "partial-upfront",
+				Term:         36,
+			},
+			TotalFixedCost:   500.0,
+			MonthlyUsageCost: 50.0,
+			TotalTermCost:    2300.0,
+		},
+	}
+
+	err := w.WriteCostEstimates(estimates, filename)
+	assert.NoError(t, err)
+
+	// Verify file was created
+	_, err = os.Stat(filename)
+	assert.NoError(t, err)
+}
+
+func TestWritePurchaseStats(t *testing.T) {
+	tempDir := t.TempDir()
+	filename := filepath.Join(tempDir, "purchase_stats.csv")
+
+	w := NewWriter()
+	stats := purchase.PurchaseStats{
+		ByEngine: map[string]purchase.EngineStats{
+			"mysql": {
+				TotalPurchases:      10,
+				SuccessfulPurchases: 10,
+				TotalInstances:      20,
+				TotalCost:           1000.0,
+				SuccessRate:         100.0,
+			},
+		},
+		ByRegion: map[string]purchase.RegionStats{
+			"us-east-1": {
+				TotalPurchases:      10,
+				SuccessfulPurchases: 10,
+				TotalInstances:      20,
+				TotalCost:           1000.0,
+				SuccessRate:         100.0,
+			},
+		},
+		ByPayment: map[string]purchase.PaymentStats{
+			"partial-upfront": {
+				TotalPurchases:      10,
+				SuccessfulPurchases: 10,
+				TotalInstances:      20,
+				TotalCost:           1000.0,
+				SuccessRate:         100.0,
+			},
+		},
+		ByInstanceType: map[string]purchase.InstanceStats{
+			"db.t3.micro": {
+				TotalPurchases:      10,
+				SuccessfulPurchases: 10,
+				TotalInstances:      20,
+				TotalCost:           1000.0,
+				SuccessRate:         100.0,
+			},
+		},
+		TotalStats: purchase.TotalStats{
+			TotalPurchases:      10,
+			SuccessfulPurchases: 10,
+			TotalInstances:      20,
+			TotalCost:           1000.0,
+		},
+	}
+
+	err := w.WritePurchaseStats(stats, filename)
+	assert.NoError(t, err)
+
+	// Verify file was created
+	_, err = os.Stat(filename)
+	assert.NoError(t, err)
+}
+
+func TestValidateCSVPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+	}{
+		{"Valid path with .csv extension", "test.csv", false},
+		{"Empty path returns error", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateCSVPath(tt.path)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

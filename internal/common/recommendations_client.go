@@ -69,6 +69,7 @@ func (c *RecommendationsClient) GetRecommendations(ctx context.Context, params R
 		PaymentOption:        ConvertPaymentOption(params.PaymentOption),
 		TermInYears:          ConvertTermInYears(params.TermInYears),
 		LookbackPeriodInDays: ConvertLookbackPeriod(params.LookbackPeriodDays),
+		AccountScope:         types.AccountScopeLinked, // Get recommendations broken down by linked account
 	}
 
 	// Add account ID filter if specified
@@ -162,6 +163,11 @@ func (c *RecommendationsClient) parseRecommendationDetail(awsRec types.Reservati
 		if onDemand, err := strconv.ParseFloat(*details.EstimatedMonthlyOnDemandCost, 64); err == nil {
 			rec.EstimatedMonthlyOnDemand = onDemand
 		}
+	}
+
+	// Extract account ID if available (from linked account recommendations)
+	if details.AccountId != nil {
+		rec.AccountID = aws.ToString(details.AccountId)
 	}
 
 	// Parse service-specific details
@@ -429,6 +435,7 @@ func (c *RecommendationsClient) GetRecommendationsForDiscovery(ctx context.Conte
 		PaymentOption:      "partial-upfront",
 		TermInYears:        3,
 		LookbackPeriodDays: 7,
+		Region:             "", // Don't filter by region for discovery
 	}
 
 	return c.GetRecommendations(ctx, params)

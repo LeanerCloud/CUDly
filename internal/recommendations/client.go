@@ -223,6 +223,12 @@ func (c *Client) parseRecommendationDetail(awsRec types.ReservationPurchaseRecom
 		return nil, fmt.Errorf("failed to parse cost information: %w", err)
 	}
 
+	// Extract account ID if available (from organization-level recommendations)
+	accountID := ""
+	if details.AccountId != nil {
+		accountID = aws.ToString(details.AccountId)
+	}
+
 	rec := &Recommendation{
 		Region:         region,
 		InstanceType:   instanceType,
@@ -234,6 +240,7 @@ func (c *Client) parseRecommendationDetail(awsRec types.ReservationPurchaseRecom
 		EstimatedCost:  estimatedCost,
 		SavingsPercent: savingsPercent,
 		Timestamp:      time.Now(),
+		AccountID:      accountID,
 	}
 
 	rec.Description = rec.GenerateDescription()

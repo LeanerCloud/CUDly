@@ -19,6 +19,8 @@ type Recommendation struct {
 	SavingsPercent float64   `json:"savings_percent"`
 	Description    string    `json:"description"`
 	Timestamp      time.Time `json:"timestamp"`
+	AccountID      string    `json:"account_id,omitempty"`
+	AccountName    string    `json:"account_name,omitempty"`
 
 	// AWS-provided cost details
 	UpfrontCost               float64 `json:"upfront_cost"`
