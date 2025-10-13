@@ -2,14 +2,56 @@ package ec2
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/rds-ri-purchase-tool/internal/common"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// MockEC2Client mocks the EC2 client
+type MockEC2Client struct {
+	mock.Mock
+}
+
+func (m *MockEC2Client) PurchaseReservedInstancesOffering(ctx context.Context, params *ec2.PurchaseReservedInstancesOfferingInput, optFns ...func(*ec2.Options)) (*ec2.PurchaseReservedInstancesOfferingOutput, error) {
+	args := m.Called(ctx, params, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.PurchaseReservedInstancesOfferingOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) DescribeReservedInstancesOfferings(ctx context.Context, params *ec2.DescribeReservedInstancesOfferingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOfferingsOutput, error) {
+	args := m.Called(ctx, params, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.DescribeReservedInstancesOfferingsOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) DescribeReservedInstances(ctx context.Context, params *ec2.DescribeReservedInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOutput, error) {
+	args := m.Called(ctx, params, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.DescribeReservedInstancesOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) DescribeInstanceTypeOfferings(ctx context.Context, params *ec2.DescribeInstanceTypeOfferingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstanceTypeOfferingsOutput, error) {
+	args := m.Called(ctx, params, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.DescribeInstanceTypeOfferingsOutput), args.Error(1)
+}
 
 func TestNewPurchaseClient(t *testing.T) {
 	cfg := aws.Config{
@@ -23,86 +65,545 @@ func TestNewPurchaseClient(t *testing.T) {
 	assert.Equal(t, "us-east-1", client.Region)
 }
 
-func TestPurchaseClient_ValidateRecommendation(t *testing.T) {
+func TestPurchaseClient_PurchaseRI(t *testing.T) {
 	tests := []struct {
-		name        string
-		rec         common.Recommendation
-		expectValid bool
-		expectError string
+		name           string
+		recommendation common.Recommendation
+		setupMocks     func(*MockEC2Client)
+		expectedResult common.PurchaseResult
 	}{
 		{
-			name: "valid EC2 recommendation",
-			rec: common.Recommendation{
-				Service:      common.ServiceEC2,
-				InstanceType: "m5.large",
+			name: "successful purchase",
+			recommendation: common.Recommendation{
+				Service:       common.ServiceEC2,
+				Region:        "us-east-1",
+				InstanceType:  "t3.micro",
+				Count:         2,
+				PaymentOption: "partial-upfront",
+				Term:          36,
 				ServiceDetails: &common.EC2Details{
 					Platform: "Linux/UNIX",
-					Tenancy:  "shared",
+					Tenancy:  "default",
 					Scope:    "region",
 				},
 			},
-			expectValid: true,
+			setupMocks: func(m *MockEC2Client) {
+				// Mock finding offering
+				m.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+						ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+							{
+								ReservedInstancesOfferingId: aws.String("test-offering-123"),
+								InstanceType:                types.InstanceTypeT3Micro,
+								InstanceTenancy:             types.TenancyDefault,
+								ProductDescription:          types.RIProductDescriptionLinuxUnix,
+							},
+						},
+					}, nil)
+
+				// Mock purchase
+				m.On("PurchaseReservedInstancesOffering", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.PurchaseReservedInstancesOfferingOutput{
+						ReservedInstancesId: aws.String("ri-12345678"),
+					}, nil)
+			},
+			expectedResult: common.PurchaseResult{
+				Success:       true,
+				PurchaseID:    "ri-12345678",
+				ReservationID: "ri-12345678",
+				Message:       "Successfully purchased 2 EC2 instances",
+			},
 		},
 		{
-			name: "wrong service type",
-			rec: common.Recommendation{
+			name: "invalid service type",
+			recommendation: common.Recommendation{
 				Service:      common.ServiceRDS,
-				InstanceType: "db.t4g.medium",
+				Region:       "us-east-1",
+				InstanceType: "db.t3.micro",
 			},
-			expectValid: false,
-			expectError: "Invalid service type for EC2 purchase",
+			setupMocks: func(m *MockEC2Client) {},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Invalid service type for EC2 purchase",
+			},
 		},
 		{
-			name: "missing service details",
-			rec: common.Recommendation{
-				Service:      common.ServiceEC2,
-				InstanceType: "m5.large",
-			},
-			expectValid: false,
-			expectError: "Invalid service details for EC2",
-		},
-		{
-			name: "wrong service details type",
-			rec: common.Recommendation{
-				Service:      common.ServiceEC2,
-				InstanceType: "m5.large",
-				ServiceDetails: &common.RDSDetails{
-					Engine: "mysql",
+			name: "offering not found",
+			recommendation: common.Recommendation{
+				Service:       common.ServiceEC2,
+				Region:        "us-east-1",
+				InstanceType:  "t3.micro",
+				Count:         1,
+				PaymentOption: "partial-upfront",
+				Term:          36,
+				ServiceDetails: &common.EC2Details{
+					Platform: "Linux/UNIX",
+					Tenancy:  "default",
+					Scope:    "region",
 				},
 			},
-			expectValid: false,
-			expectError: "Invalid service details for EC2",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+						ReservedInstancesOfferings: []types.ReservedInstancesOffering{},
+					}, nil)
+			},
+			expectedResult: common.PurchaseResult{
+				Success: false,
+				Message: "Failed to find offering: no offerings found for t3.micro Linux/UNIX default",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Validate the recommendation type without creating client
+			mockClient := &MockEC2Client{}
+			tt.setupMocks(mockClient)
 
-			// Test validation in PurchaseRI method
-			result := common.PurchaseResult{
-				Config: tt.rec,
+			client := &PurchaseClient{
+				client: mockClient,
+				BasePurchaseClient: common.BasePurchaseClient{
+					Region: "us-east-1",
+				},
 			}
 
-			// Validate the recommendation type
-			if tt.rec.Service != common.ServiceEC2 {
-				result.Success = false
-				result.Message = "Invalid service type for EC2 purchase"
-			} else if _, ok := tt.rec.ServiceDetails.(*common.EC2Details); !ok {
-				result.Success = false
-				result.Message = "Invalid service details for EC2"
-			} else {
-				result.Success = true
+			result := client.PurchaseRI(context.Background(), tt.recommendation)
+
+			assert.Equal(t, tt.expectedResult.Success, result.Success)
+			assert.Equal(t, tt.expectedResult.Message, result.Message)
+			if tt.expectedResult.Success {
+				assert.Equal(t, tt.expectedResult.PurchaseID, result.PurchaseID)
+				assert.Equal(t, tt.expectedResult.ReservationID, result.ReservationID)
 			}
 
-			if tt.expectValid {
-				assert.True(t, result.Success)
-			} else {
-				assert.False(t, result.Success)
-				assert.Contains(t, result.Message, tt.expectError)
-			}
+			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+func TestPurchaseClient_ValidateOffering(t *testing.T) {
+	mockClient := &MockEC2Client{}
+	client := &PurchaseClient{
+		client: mockClient,
+	}
+
+	rec := common.Recommendation{
+		InstanceType: "t3.micro",
+		ServiceDetails: &common.EC2Details{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "region",
+		},
+	}
+
+	// Test successful validation
+	mockClient.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+				{ReservedInstancesOfferingId: aws.String("test-123")},
+			},
+		}, nil).Once()
+
+	err := client.ValidateOffering(context.Background(), rec)
+	assert.NoError(t, err)
+
+	// Test failed validation
+	mockClient.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{},
+		}, nil).Once()
+
+	err = client.ValidateOffering(context.Background(), rec)
+	assert.Error(t, err)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestPurchaseClient_GetValidInstanceTypes(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupMocks    func(*MockEC2Client)
+		expectedTypes []string
+		expectError   bool
+	}{
+		{
+			name: "successful retrieval single page",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeInstanceTypeOfferings", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.DescribeInstanceTypeOfferingsOutput{
+						InstanceTypeOfferings: []types.InstanceTypeOffering{
+							{InstanceType: types.InstanceTypeT3Micro},
+							{InstanceType: types.InstanceTypeT3Small},
+							{InstanceType: types.InstanceTypeM5Large},
+						},
+						NextToken: nil,
+					}, nil).Once()
+			},
+			expectedTypes: []string{"m5.large", "t3.micro", "t3.small"},
+			expectError:   false,
+		},
+		{
+			name: "successful retrieval multiple pages",
+			setupMocks: func(m *MockEC2Client) {
+				// First page
+				m.On("DescribeInstanceTypeOfferings", mock.Anything, mock.MatchedBy(func(input *ec2.DescribeInstanceTypeOfferingsInput) bool {
+					return input.NextToken == nil
+				}), mock.Anything).
+					Return(&ec2.DescribeInstanceTypeOfferingsOutput{
+						InstanceTypeOfferings: []types.InstanceTypeOffering{
+							{InstanceType: types.InstanceTypeT3Micro},
+							{InstanceType: types.InstanceTypeT3Small},
+						},
+						NextToken: aws.String("page2"),
+					}, nil).Once()
+
+				// Second page
+				m.On("DescribeInstanceTypeOfferings", mock.Anything, mock.MatchedBy(func(input *ec2.DescribeInstanceTypeOfferingsInput) bool {
+					return input.NextToken != nil && *input.NextToken == "page2"
+				}), mock.Anything).
+					Return(&ec2.DescribeInstanceTypeOfferingsOutput{
+						InstanceTypeOfferings: []types.InstanceTypeOffering{
+							{InstanceType: types.InstanceTypeM5Large},
+							{InstanceType: types.InstanceTypeC5Xlarge},
+						},
+						NextToken: nil,
+					}, nil).Once()
+			},
+			expectedTypes: []string{"c5.xlarge", "m5.large", "t3.micro", "t3.small"},
+			expectError:   false,
+		},
+		{
+			name: "API error",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeInstanceTypeOfferings", mock.Anything, mock.Anything, mock.Anything).
+					Return(nil, fmt.Errorf("API error")).Once()
+			},
+			expectedTypes: nil,
+			expectError:   true,
+		},
+		{
+			name: "empty result",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeInstanceTypeOfferings", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.DescribeInstanceTypeOfferingsOutput{
+						InstanceTypeOfferings: []types.InstanceTypeOffering{},
+						NextToken:             nil,
+					}, nil).Once()
+			},
+			expectedTypes: []string{},
+			expectError:   false,
+		},
+		{
+			name: "duplicate instance types",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeInstanceTypeOfferings", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.DescribeInstanceTypeOfferingsOutput{
+						InstanceTypeOfferings: []types.InstanceTypeOffering{
+							{InstanceType: types.InstanceTypeT3Micro},
+							{InstanceType: types.InstanceTypeT3Small},
+							{InstanceType: types.InstanceTypeT3Micro}, // Duplicate
+						},
+						NextToken: nil,
+					}, nil).Once()
+			},
+			expectedTypes: []string{"t3.micro", "t3.small"}, // Should deduplicate
+			expectError:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := &MockEC2Client{}
+			tt.setupMocks(mockClient)
+
+			client := &PurchaseClient{
+				client: mockClient,
+				BasePurchaseClient: common.BasePurchaseClient{
+					Region: "us-east-1",
+				},
+			}
+
+			result, err := client.GetValidInstanceTypes(context.Background())
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedTypes, result)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestPurchaseClient_GetExistingReservedInstances(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMocks  func(*MockEC2Client)
+		expectedRIs int
+		expectError bool
+	}{
+		{
+			name: "successful retrieval with active instances",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeReservedInstances", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.DescribeReservedInstancesOutput{
+						ReservedInstances: []types.ReservedInstances{
+							{
+								ReservedInstancesId: aws.String("ri-123"),
+								InstanceType:        types.InstanceTypeT3Micro,
+								InstanceCount:       aws.Int32(2),
+								ProductDescription:  types.RIProductDescriptionLinuxUnix,
+								State:               types.ReservedInstanceStateActive,
+								Duration:            aws.Int64(31536000), // 1 year
+								Start:               aws.Time(time.Now()),
+								End:                 aws.Time(time.Now().AddDate(1, 0, 0)),
+								OfferingType:        types.OfferingTypeValuesPartialUpfront,
+							},
+							{
+								ReservedInstancesId: aws.String("ri-456"),
+								InstanceType:        types.InstanceTypeM5Large,
+								InstanceCount:       aws.Int32(1),
+								ProductDescription:  types.RIProductDescriptionLinuxUnix,
+								State:               types.ReservedInstanceStatePaymentPending,
+								Duration:            aws.Int64(94608000), // 3 years
+								Start:               aws.Time(time.Now()),
+								End:                 aws.Time(time.Now().AddDate(3, 0, 0)),
+								OfferingType:        types.OfferingTypeValuesAllUpfront,
+							},
+						},
+					}, nil).Once()
+			},
+			expectedRIs: 2,
+			expectError: false,
+		},
+		{
+			name: "API error",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeReservedInstances", mock.Anything, mock.Anything, mock.Anything).
+					Return(nil, fmt.Errorf("API error")).Once()
+			},
+			expectedRIs: 0,
+			expectError: true,
+		},
+		{
+			name: "empty result",
+			setupMocks: func(m *MockEC2Client) {
+				m.On("DescribeReservedInstances", mock.Anything, mock.Anything, mock.Anything).
+					Return(&ec2.DescribeReservedInstancesOutput{
+						ReservedInstances: []types.ReservedInstances{},
+					}, nil).Once()
+			},
+			expectedRIs: 0,
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := &MockEC2Client{}
+			tt.setupMocks(mockClient)
+
+			client := &PurchaseClient{
+				client: mockClient,
+				BasePurchaseClient: common.BasePurchaseClient{
+					Region: "us-east-1",
+				},
+			}
+
+			result, err := client.GetExistingReservedInstances(context.Background())
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, result, tt.expectedRIs)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestPurchaseClient_GetServiceType(t *testing.T) {
+	client := &PurchaseClient{
+		BasePurchaseClient: common.BasePurchaseClient{
+			Region: "us-east-1",
+		},
+	}
+
+	assert.Equal(t, common.ServiceEC2, client.GetServiceType())
+}
+
+func TestPurchaseClient_getOfferingType(t *testing.T) {
+	client := &PurchaseClient{}
+
+	tests := []struct {
+		name          string
+		paymentOption string
+		expected      types.OfferingTypeValues
+	}{
+		{"All upfront", "all-upfront", types.OfferingTypeValuesAllUpfront},
+		{"Partial upfront", "partial-upfront", types.OfferingTypeValuesPartialUpfront},
+		{"No upfront", "no-upfront", types.OfferingTypeValuesNoUpfront},
+		{"Default (unknown)", "unknown", types.OfferingTypeValuesPartialUpfront},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := client.getOfferingType(tt.paymentOption)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestPurchaseClient_GetOfferingDetails(t *testing.T) {
+	mockClient := &MockEC2Client{}
+	client := &PurchaseClient{
+		client: mockClient,
+		BasePurchaseClient: common.BasePurchaseClient{
+			Region: "us-east-1",
+		},
+	}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceEC2,
+		InstanceType:  "t3.micro",
+		PaymentOption: "partial-upfront",
+		Term:          36,
+		Count:         1,
+		ServiceDetails: &common.EC2Details{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "region",
+		},
+	}
+
+	// Mock the first call to find the offering ID
+	mockClient.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+				{
+					ReservedInstancesOfferingId: aws.String("offering-123"),
+					InstanceType:                types.InstanceTypeT3Micro,
+					ProductDescription:          types.RIProductDescriptionLinuxUnix,
+					InstanceTenancy:             types.TenancyDefault,
+					OfferingType:                types.OfferingTypeValuesPartialUpfront,
+					Duration:                    aws.Int64(94608000),
+					UsagePrice:                  aws.Float32(0.05),
+					PricingDetails: []types.PricingDetail{
+						{Price: aws.Float64(100.0)},
+					},
+					CurrencyCode: types.CurrencyCodeValuesUsd,
+				},
+			},
+		}, nil).Once()
+
+	// Mock the second call to get offering details
+	mockClient.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+				{
+					ReservedInstancesOfferingId: aws.String("offering-123"),
+					InstanceType:                types.InstanceTypeT3Micro,
+					ProductDescription:          types.RIProductDescriptionLinuxUnix,
+					InstanceTenancy:             types.TenancyDefault,
+					OfferingType:                types.OfferingTypeValuesPartialUpfront,
+					Duration:                    aws.Int64(94608000),
+					UsagePrice:                  aws.Float32(0.05),
+					PricingDetails: []types.PricingDetail{
+						{Price: aws.Float64(100.0)},
+					},
+					CurrencyCode: types.CurrencyCodeValuesUsd,
+				},
+			},
+		}, nil).Once()
+
+	details, err := client.GetOfferingDetails(context.Background(), rec)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, details)
+	assert.Equal(t, "offering-123", details.OfferingID)
+	assert.Equal(t, "t3.micro", details.InstanceType)
+	assert.Equal(t, "Linux/UNIX", details.Platform)
+	assert.Equal(t, 100.0, details.FixedPrice)
+	assert.InDelta(t, 0.05, details.UsagePrice, 0.01)
+	mockClient.AssertExpectations(t)
+}
+
+func TestPurchaseClient_BatchPurchase(t *testing.T) {
+	mockClient := &MockEC2Client{}
+	client := &PurchaseClient{
+		client: mockClient,
+		BasePurchaseClient: common.BasePurchaseClient{
+			Region: "us-east-1",
+		},
+	}
+
+	recs := []common.Recommendation{
+		{
+			Service:      common.ServiceEC2,
+			InstanceType: "t3.micro",
+			Count:        1,
+			ServiceDetails: &common.EC2Details{
+				Platform: "Linux/UNIX",
+				Tenancy:  "default",
+				Scope:    "region",
+			},
+		},
+		{
+			Service:      common.ServiceEC2,
+			InstanceType: "t3.small",
+			Count:        2,
+			ServiceDetails: &common.EC2Details{
+				Platform: "Linux/UNIX",
+				Tenancy:  "default",
+				Scope:    "region",
+			},
+		},
+	}
+
+	// Setup mocks for both purchases
+	for i, rec := range recs {
+		offeringID := fmt.Sprintf("offering-%d", i)
+		riID := fmt.Sprintf("ri-%d", i)
+
+		// Mock finding offering
+		mockClient.On("DescribeReservedInstancesOfferings", mock.Anything, mock.MatchedBy(func(input *ec2.DescribeReservedInstancesOfferingsInput) bool {
+			for _, filter := range input.Filters {
+				if aws.ToString(filter.Name) == "instance-type" {
+					return filter.Values[0] == rec.InstanceType
+				}
+			}
+			return false
+		}), mock.Anything).
+			Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+				ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+					{
+						ReservedInstancesOfferingId: aws.String(offeringID),
+					},
+				},
+			}, nil).Once()
+
+		// Mock purchase
+		mockClient.On("PurchaseReservedInstancesOffering", mock.Anything, mock.MatchedBy(func(input *ec2.PurchaseReservedInstancesOfferingInput) bool {
+			return aws.ToString(input.ReservedInstancesOfferingId) == offeringID
+		}), mock.Anything).
+			Return(&ec2.PurchaseReservedInstancesOfferingOutput{
+				ReservedInstancesId: aws.String(riID),
+			}, nil).Once()
+	}
+
+	results := client.BatchPurchase(context.Background(), recs, 5*time.Millisecond)
+
+	assert.Len(t, results, 2)
+	for i, result := range results {
+		assert.True(t, result.Success)
+		assert.Equal(t, fmt.Sprintf("ri-%d", i), result.PurchaseID)
+	}
+
+	mockClient.AssertExpectations(t)
 }
 
 func TestPurchaseClient_ScopeValidation(t *testing.T) {
@@ -149,122 +650,6 @@ func TestPurchaseClient_ScopeValidation(t *testing.T) {
 	}
 }
 
-func TestPurchaseClient_OfferingClassValidation(t *testing.T) {
-	tests := []struct {
-		name          string
-		paymentOption string
-		expected      string
-	}{
-		{
-			name:          "all upfront",
-			paymentOption: "all-upfront",
-			expected:      "convertible",
-		},
-		{
-			name:          "partial upfront",
-			paymentOption: "partial-upfront",
-			expected:      "convertible",
-		},
-		{
-			name:          "no upfront",
-			paymentOption: "no-upfront",
-			expected:      "convertible",
-		},
-		{
-			name:          "unknown",
-			paymentOption: "unknown",
-			expected:      "standard",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test offering class logic
-			result := "standard"
-			if tt.paymentOption == "all-upfront" || tt.paymentOption == "partial-upfront" || tt.paymentOption == "no-upfront" {
-				result = "convertible"
-			}
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestPurchaseClient_TagCreation(t *testing.T) {
-	rec := common.Recommendation{
-		Service:       common.ServiceEC2,
-		Region:        "us-west-2",
-		InstanceType:  "m5.large",
-		PaymentOption: "no-upfront",
-		Term:          36,
-		ServiceDetails: &common.EC2Details{
-			Platform: "Windows",
-			Tenancy:  "dedicated",
-			Scope:    "availability-zone",
-		},
-	}
-
-	// Verify recommendation has required fields for tagging
-	assert.Equal(t, common.ServiceEC2, rec.Service)
-	assert.Equal(t, "us-west-2", rec.Region)
-	assert.Equal(t, "m5.large", rec.InstanceType)
-	assert.Equal(t, "no-upfront", rec.PaymentOption)
-	assert.Equal(t, 36, rec.Term)
-
-	details := rec.ServiceDetails.(*common.EC2Details)
-	assert.Equal(t, "Windows", details.Platform)
-	assert.Equal(t, "dedicated", details.Tenancy)
-	assert.Equal(t, "availability-zone", details.Scope)
-}
-
-func TestPurchaseClient_PlatformNormalization(t *testing.T) {
-	tests := []struct {
-		name     string
-		platform string
-		expected string
-	}{
-		{
-			name:     "Linux UNIX",
-			platform: "Linux/UNIX",
-			expected: "Linux/UNIX",
-		},
-		{
-			name:     "Windows",
-			platform: "Windows",
-			expected: "Windows",
-		},
-		{
-			name:     "Windows with VPC",
-			platform: "Windows (Amazon VPC)",
-			expected: "Windows",
-		},
-		{
-			name:     "RHEL",
-			platform: "Red Hat Enterprise Linux",
-			expected: "RHEL",
-		},
-		{
-			name:     "SUSE",
-			platform: "SUSE Linux",
-			expected: "SUSE",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test platform normalization logic
-			result := tt.platform
-			if tt.platform == "Windows (Amazon VPC)" {
-				result = "Windows"
-			} else if tt.platform == "Red Hat Enterprise Linux" {
-				result = "RHEL"
-			} else if tt.platform == "SUSE Linux" {
-				result = "SUSE"
-			}
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestPurchaseClient_Integration(t *testing.T) {
 	// Skip if not running integration tests
 	if testing.Short() {
@@ -295,42 +680,6 @@ func TestPurchaseClient_Integration(t *testing.T) {
 	// We expect an error since we're not actually finding real offerings
 	// but the test validates that the method works
 	assert.Error(t, err) // Expected to not find offerings in test environment
-}
-
-func TestPurchaseClient_AZFilter(t *testing.T) {
-	tests := []struct {
-		name     string
-		scope    string
-		hasAZ    bool
-	}{
-		{
-			name:  "region scope - no AZ",
-			scope: "region",
-			hasAZ: false,
-		},
-		{
-			name:  "AZ scope - has AZ",
-			scope: "availability-zone",
-			hasAZ: true,
-		},
-		{
-			name:  "empty scope - defaults to region",
-			scope: "",
-			hasAZ: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-
-			// Test if AZ would be included in the purchase
-			if tt.hasAZ {
-				assert.Equal(t, "availability-zone", tt.scope)
-			} else {
-				assert.NotEqual(t, "availability-zone", tt.scope)
-			}
-		})
-	}
 }
 
 // Benchmark tests

@@ -3,6 +3,7 @@ package ec2
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/LeanerCloud/rds-ri-purchase-tool/internal/common"
@@ -300,4 +301,44 @@ func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]co
 	}
 
 	return existingRIs, nil
+}
+// GetValidInstanceTypes returns a list of valid instance types for EC2 using the DescribeInstanceTypeOfferings API
+func (c *PurchaseClient) GetValidInstanceTypes(ctx context.Context) ([]string, error) {
+	instanceTypesMap := make(map[string]bool)
+	var nextToken *string
+
+	// Query all available EC2 instance types
+	for {
+		input := &ec2.DescribeInstanceTypeOfferingsInput{
+			LocationType: types.LocationTypeRegion,
+			NextToken:    nextToken,
+			MaxResults:   aws.Int32(1000),
+		}
+
+		result, err := c.client.DescribeInstanceTypeOfferings(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe EC2 instance type offerings: %w", err)
+		}
+
+		// Extract unique instance types
+		for _, offering := range result.InstanceTypeOfferings {
+			instanceTypesMap[string(offering.InstanceType)] = true
+		}
+
+		// Check if there are more results
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		nextToken = result.NextToken
+	}
+
+	// Convert map to sorted slice
+	instanceTypes := make([]string, 0, len(instanceTypesMap))
+	for instanceType := range instanceTypesMap {
+		instanceTypes = append(instanceTypes, instanceType)
+	}
+
+	// Sort for consistent output
+	sort.Strings(instanceTypes)
+	return instanceTypes, nil
 }
