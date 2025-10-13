@@ -105,7 +105,10 @@ func (dc *DuplicateChecker) isMatchingRI(rec Recommendation, ri ExistingRI) bool
 
 	// Match on engine (for services that have engines)
 	if recEngine != "" && ri.Engine != "" {
-		if !strings.EqualFold(recEngine, ri.Engine) {
+		// Normalize engine names for comparison (handle "Aurora MySQL" vs "aurora-mysql")
+		normalizedRecEngine := normalizeEngineName(recEngine)
+		normalizedRiEngine := normalizeEngineName(ri.Engine)
+		if !strings.EqualFold(normalizedRecEngine, normalizedRiEngine) {
 			return false
 		}
 	}
@@ -130,6 +133,16 @@ func (dc *DuplicateChecker) isMatchingRI(rec Recommendation, ri ExistingRI) bool
 func normalizePaymentOption(payment string) string {
 	// Remove spaces and hyphens, convert to lowercase
 	normalized := strings.ToLower(payment)
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	return normalized
+}
+
+// normalizeEngineName normalizes engine names for comparison
+// Handles variations like "Aurora MySQL" vs "aurora-mysql"
+func normalizeEngineName(engine string) string {
+	// Remove spaces and hyphens, convert to lowercase
+	normalized := strings.ToLower(engine)
 	normalized = strings.ReplaceAll(normalized, " ", "")
 	normalized = strings.ReplaceAll(normalized, "-", "")
 	return normalized
