@@ -37,7 +37,10 @@ type Recommendation struct {
 	PaymentOption  string  // Alias for PaymentType for backward compatibility
 	PaymentType    string  // Preferred: all-upfront, partial-upfront, no-upfront
 	Term           int     // in months (12 or 36)
-	EstimatedCost  float64 // Estimated RI cost
+	// EstimatedCost represents the estimated monthly SAVINGS (not cost) from this recommendation.
+	// This is the amount you would save per month by purchasing this commitment.
+	// For example, if EstimatedCost is 100.0, you would save $100/month by purchasing this RI.
+	EstimatedCost  float64
 	CurrentCost    float64 // Current on-demand cost
 	EstimatedSavings float64 // Savings amount
 	SavingsPercent float64 // Savings percentage (0-100)

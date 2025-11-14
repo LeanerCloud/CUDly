@@ -230,11 +230,7 @@ func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]co
 			}
 
 			// Calculate term in months from duration (in seconds)
-			duration := aws.ToInt32(node.Duration)
-			termMonths := 12
-			if duration == 94608000 { // 3 years in seconds
-				termMonths = 36
-			}
+			termMonths := common.GetTermMonthsFromDuration(aws.ToInt32(node.Duration))
 
 			existingRI := common.ExistingRI{
 				ReservationID: aws.ToString(node.ReservedNodeId),
