@@ -36,6 +36,14 @@ func (m *MockMemoryDBClient) DescribeReservedNodesOfferings(ctx context.Context,
 	return args.Get(0).(*memorydb.DescribeReservedNodesOfferingsOutput), args.Error(1)
 }
 
+func (m *MockMemoryDBClient) DescribeReservedNodes(ctx context.Context, params *memorydb.DescribeReservedNodesInput, optFns ...func(*memorydb.Options)) (*memorydb.DescribeReservedNodesOutput, error) {
+	args := m.Called(ctx, params, optFns)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*memorydb.DescribeReservedNodesOutput), args.Error(1)
+}
+
 func TestNewPurchaseClient(t *testing.T) {
 	cfg := aws.Config{
 		Region: "us-east-1",

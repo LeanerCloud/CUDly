@@ -35,6 +35,14 @@ func (m *MockOpenSearchClient) DescribeReservedInstanceOfferings(ctx context.Con
 	return nil, args.Error(1)
 }
 
+func (m *MockOpenSearchClient) DescribeReservedInstances(ctx context.Context, params *opensearch.DescribeReservedInstancesInput, optFns ...func(*opensearch.Options)) (*opensearch.DescribeReservedInstancesOutput, error) {
+	args := m.Called(ctx, params)
+	if output := args.Get(0); output != nil {
+		return output.(*opensearch.DescribeReservedInstancesOutput), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 func TestPurchaseClient_PurchaseRI(t *testing.T) {
 	tests := []struct {
 		name           string

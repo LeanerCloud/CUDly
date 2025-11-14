@@ -35,6 +35,14 @@ func (m *MockRedshiftClient) DescribeReservedNodeOfferings(ctx context.Context, 
 	return nil, args.Error(1)
 }
 
+func (m *MockRedshiftClient) DescribeReservedNodes(ctx context.Context, params *redshift.DescribeReservedNodesInput, optFns ...func(*redshift.Options)) (*redshift.DescribeReservedNodesOutput, error) {
+	args := m.Called(ctx, params)
+	if output := args.Get(0); output != nil {
+		return output.(*redshift.DescribeReservedNodesOutput), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 func TestPurchaseClient_PurchaseRI(t *testing.T) {
 	tests := []struct {
 		name           string

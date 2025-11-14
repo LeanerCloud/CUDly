@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -30,7 +31,7 @@ func (c *AccountAliasCache) GetAccountAlias(ctx context.Context, accountID strin
 		return ""
 	}
 
-	// Check cache first
+	// Check cache first with read lock
 	c.mu.RLock()
 	if alias, ok := c.cache[accountID]; ok {
 		c.mu.RUnlock()
@@ -38,13 +39,20 @@ func (c *AccountAliasCache) GetAccountAlias(ctx context.Context, accountID strin
 	}
 	c.mu.RUnlock()
 
+	// Acquire write lock for fetch operation
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Double-check: another goroutine may have populated the cache
+	if alias, ok := c.cache[accountID]; ok {
+		return alias
+	}
+
 	// Fetch from AWS Organizations
 	alias := c.fetchAccountAlias(ctx, accountID)
 
 	// Cache the result
-	c.mu.Lock()
 	c.cache[accountID] = alias
-	c.mu.Unlock()
 
 	return alias
 }
@@ -96,16 +104,17 @@ func (c *AccountAliasCache) GetAccountAliasShort(ctx context.Context, accountID 
 
 // sanitizeForReservationID makes a string safe for use in reservation IDs
 func sanitizeForReservationID(s string) string {
-	// Replace spaces and special characters
-	safe := ""
+	// Replace spaces and special characters using efficient string building
+	var sb strings.Builder
+	sb.Grow(len(s)) // Pre-allocate for efficiency
 	for _, r := range s {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			safe += string(r)
+			sb.WriteRune(r)
 		} else if r == ' ' || r == '_' || r == '.' {
-			safe += "-"
+			sb.WriteRune('-')
 		}
 	}
-	return safe
+	return sb.String()
 }
 
 // PreloadAccountAliases preloads aliases for a list of account IDs

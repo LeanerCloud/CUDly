@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
@@ -321,16 +322,12 @@ func SortRecommendationsBySavings(recs []Recommendation) []Recommendation {
 	sorted := make([]Recommendation, len(recs))
 	copy(sorted, recs)
 
-	// Sort by savings in descending order
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			savingsI := sorted[i].EstimatedCost * (sorted[i].SavingsPercent / 100.0)
-			savingsJ := sorted[j].EstimatedCost * (sorted[j].SavingsPercent / 100.0)
-			if savingsJ > savingsI {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	// Sort by savings in descending order using standard library
+	sort.Slice(sorted, func(i, j int) bool {
+		savingsI := sorted[i].EstimatedCost * (sorted[i].SavingsPercent / 100.0)
+		savingsJ := sorted[j].EstimatedCost * (sorted[j].SavingsPercent / 100.0)
+		return savingsJ < savingsI // Descending order
+	})
 	return sorted
 }
 
