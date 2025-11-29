@@ -15,11 +15,61 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
+// STSClient interface for STS operations (enables mocking)
+type STSClient interface {
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
+}
+
+// OrganizationsClient interface for Organizations operations (enables mocking)
+type OrganizationsClient interface {
+	ListAccounts(ctx context.Context, params *organizations.ListAccountsInput, optFns ...func(*organizations.Options)) (*organizations.ListAccountsOutput, error)
+}
+
+// EC2Client interface for EC2 operations (enables mocking)
+type EC2Client interface {
+	DescribeRegions(ctx context.Context, params *ec2.DescribeRegionsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeRegionsOutput, error)
+}
+
+// ConfigLoader interface for loading AWS config (enables mocking)
+type ConfigLoader interface {
+	LoadDefaultConfig(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error)
+}
+
+// realConfigLoader implements ConfigLoader using the real AWS SDK
+type realConfigLoader struct{}
+
+func (r *realConfigLoader) LoadDefaultConfig(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
+	return config.LoadDefaultConfig(ctx, optFns...)
+}
+
+// OrganizationsPaginator interface for Organizations pagination (enables mocking)
+type OrganizationsPaginator interface {
+	HasMorePages() bool
+	NextPage(ctx context.Context, optFns ...func(*organizations.Options)) (*organizations.ListAccountsOutput, error)
+}
+
+// realOrganizationsPaginator wraps the real paginator
+type realOrganizationsPaginator struct {
+	paginator *organizations.ListAccountsPaginator
+}
+
+func (r *realOrganizationsPaginator) HasMorePages() bool {
+	return r.paginator.HasMorePages()
+}
+
+func (r *realOrganizationsPaginator) NextPage(ctx context.Context, optFns ...func(*organizations.Options)) (*organizations.ListAccountsOutput, error) {
+	return r.paginator.NextPage(ctx, optFns...)
+}
+
 // AWSProvider implements the Provider interface for AWS
 type AWSProvider struct {
-	cfg     aws.Config
-	profile string
-	region  string
+	cfg          aws.Config
+	profile      string
+	region       string
+	configLoader ConfigLoader
+	stsClient    STSClient
+	ec2Client    EC2Client
+	orgPaginator OrganizationsPaginator
 }
 
 // NewAWSProvider creates a new AWS provider instance
@@ -32,6 +82,26 @@ func NewAWSProvider(config *provider.ProviderConfig) (*AWSProvider, error) {
 	}
 
 	return p, nil
+}
+
+// SetConfigLoader sets the config loader (for testing)
+func (p *AWSProvider) SetConfigLoader(loader ConfigLoader) {
+	p.configLoader = loader
+}
+
+// SetSTSClient sets the STS client (for testing)
+func (p *AWSProvider) SetSTSClient(client STSClient) {
+	p.stsClient = client
+}
+
+// SetEC2Client sets the EC2 client (for testing)
+func (p *AWSProvider) SetEC2Client(client EC2Client) {
+	p.ec2Client = client
+}
+
+// SetOrganizationsPaginator sets the organizations paginator (for testing)
+func (p *AWSProvider) SetOrganizationsPaginator(paginator OrganizationsPaginator) {
+	p.orgPaginator = paginator
 }
 
 // Name returns the provider name
@@ -59,7 +129,15 @@ func (p *AWSProvider) IsConfigured() bool {
 		opts = append(opts, config.WithRegion(p.region))
 	}
 
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	// Use injected config loader if available (for testing)
+	var loader ConfigLoader
+	if p.configLoader != nil {
+		loader = p.configLoader
+	} else {
+		loader = &realConfigLoader{}
+	}
+
+	cfg, err := loader.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return false
 	}
@@ -101,8 +179,14 @@ func (p *AWSProvider) ValidateCredentials(ctx context.Context) error {
 		return fmt.Errorf("AWS is not configured")
 	}
 
-	// Use STS GetCallerIdentity to validate credentials
-	stsClient := sts.NewFromConfig(p.cfg)
+	// Use injected STS client if available (for testing)
+	var stsClient STSClient
+	if p.stsClient != nil {
+		stsClient = p.stsClient
+	} else {
+		stsClient = sts.NewFromConfig(p.cfg)
+	}
+
 	_, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return fmt.Errorf("AWS credentials validation failed: %w", err)
@@ -113,13 +197,17 @@ func (p *AWSProvider) ValidateCredentials(ctx context.Context) error {
 
 // GetAccounts returns all accessible AWS accounts
 func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
-	// Try to get organization accounts
-	orgClient := organizations.NewFromConfig(p.cfg)
-
 	accounts := make([]common.Account, 0)
 
+	// Use injected STS client if available (for testing)
+	var stsClient STSClient
+	if p.stsClient != nil {
+		stsClient = p.stsClient
+	} else {
+		stsClient = sts.NewFromConfig(p.cfg)
+	}
+
 	// Get current account
-	stsClient := sts.NewFromConfig(p.cfg)
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current account: %w", err)
@@ -134,8 +222,18 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 		IsDefault:   true,
 	})
 
+	// Use injected paginator if available (for testing), otherwise create real paginator
+	var paginator OrganizationsPaginator
+	if p.orgPaginator != nil {
+		paginator = p.orgPaginator
+	} else {
+		orgClient := organizations.NewFromConfig(p.cfg)
+		paginator = &realOrganizationsPaginator{
+			paginator: organizations.NewListAccountsPaginator(orgClient, &organizations.ListAccountsInput{}),
+		}
+	}
+
 	// Try to list organization accounts
-	paginator := organizations.NewListAccountsPaginator(orgClient, &organizations.ListAccountsInput{})
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
@@ -164,10 +262,15 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 
 // GetRegions returns all available AWS regions using EC2 DescribeRegions API
 func (p *AWSProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
-	// Use EC2 DescribeRegions to get dynamic list of regions
-	ec2Client := ec2.NewFromConfig(p.cfg)
+	// Use injected EC2 client if available (for testing)
+	var client EC2Client
+	if p.ec2Client != nil {
+		client = p.ec2Client
+	} else {
+		client = ec2.NewFromConfig(p.cfg)
+	}
 
-	result, err := ec2Client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{
+	result, err := client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{
 		AllRegions: aws.Bool(false), // Only return enabled regions
 	})
 	if err != nil {

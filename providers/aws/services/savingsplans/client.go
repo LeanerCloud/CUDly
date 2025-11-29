@@ -10,10 +10,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/savingsplans"
 	"github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 
-	internalCommon "github.com/LeanerCloud/CUDly/internal/common"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// SavingsPlansAPI defines the interface for Savings Plans operations
+// SavingsPlansAPI defines the interface for Savings Plans operations (enables mocking)
 type SavingsPlansAPI interface {
 	CreateSavingsPlan(ctx context.Context, params *savingsplans.CreateSavingsPlanInput, optFns ...func(*savingsplans.Options)) (*savingsplans.CreateSavingsPlanOutput, error)
 	DescribeSavingsPlans(ctx context.Context, params *savingsplans.DescribeSavingsPlansInput, optFns ...func(*savingsplans.Options)) (*savingsplans.DescribeSavingsPlansOutput, error)
@@ -21,52 +21,111 @@ type SavingsPlansAPI interface {
 	DescribeSavingsPlansOfferingRates(ctx context.Context, params *savingsplans.DescribeSavingsPlansOfferingRatesInput, optFns ...func(*savingsplans.Options)) (*savingsplans.DescribeSavingsPlansOfferingRatesOutput, error)
 }
 
-// PurchaseClient wraps the AWS Savings Plans client
-type PurchaseClient struct {
+// Client handles AWS Savings Plans
+type Client struct {
 	client SavingsPlansAPI
-	internalCommon.BasePurchaseClient
+	region string
 }
 
-// NewPurchaseClient creates a new Savings Plans purchase client
-func NewPurchaseClient(cfg aws.Config) *PurchaseClient {
-	return &PurchaseClient{
+// NewClient creates a new Savings Plans client
+func NewClient(cfg aws.Config) *Client {
+	return &Client{
 		client: savingsplans.NewFromConfig(cfg),
-		BasePurchaseClient: internalCommon.BasePurchaseClient{
-			Region: cfg.Region,
+		region: cfg.Region,
+	}
+}
+
+// SetSavingsPlansAPI sets a custom Savings Plans API client (for testing)
+func (c *Client) SetSavingsPlansAPI(api SavingsPlansAPI) {
+	c.client = api
+}
+
+// GetServiceType returns the service type
+func (c *Client) GetServiceType() common.ServiceType {
+	return common.ServiceSavingsPlans
+}
+
+// GetRegion returns the region
+func (c *Client) GetRegion() string {
+	return c.region
+}
+
+// GetRecommendations returns empty as Savings Plans uses centralized Cost Explorer recommendations
+func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+	return []common.Recommendation{}, nil
+}
+
+// GetExistingCommitments retrieves existing Savings Plans
+func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
+	input := &savingsplans.DescribeSavingsPlansInput{
+		States: []types.SavingsPlanState{
+			types.SavingsPlanStateActive,
+			types.SavingsPlanStatePendingReturn,
+			types.SavingsPlanStateQueued,
 		},
 	}
+
+	result, err := c.client.DescribeSavingsPlans(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe Savings Plans: %w", err)
+	}
+
+	commitments := make([]common.Commitment, 0, len(result.SavingsPlans))
+
+	for _, sp := range result.SavingsPlans {
+		if sp.SavingsPlanId == nil {
+			continue
+		}
+
+		commitment := common.Commitment{
+			Provider:       common.ProviderAWS,
+			CommitmentID:   *sp.SavingsPlanId,
+			CommitmentType: common.CommitmentSavingsPlan,
+			Service:        common.ServiceSavingsPlans,
+			Region:         aws.ToString(sp.Region),
+			ResourceType:   string(sp.SavingsPlanType),
+			Count:          1, // Savings Plans don't have a count
+			State:          string(sp.State),
+		}
+
+		if sp.Start != nil {
+			if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
+				commitment.StartDate = startTime
+			}
+		}
+		if sp.End != nil {
+			if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
+				commitment.EndDate = endTime
+			}
+		}
+
+		commitments = append(commitments, commitment)
+	}
+
+	return commitments, nil
 }
 
-// PurchaseRI attempts to purchase a Savings Plan (implements the PurchaseClient interface)
-func (c *PurchaseClient) PurchaseRI(ctx context.Context, rec internalCommon.Recommendation) internalCommon.PurchaseResult {
-	result := internalCommon.PurchaseResult{
-		Config:    rec,
-		Timestamp: time.Now(),
+// PurchaseCommitment purchases a Savings Plan
+func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+	result := common.PurchaseResult{
+		Recommendation: rec,
+		DryRun:         false,
+		Success:        false,
+		Timestamp:      time.Now(),
 	}
 
-	// Validate it's a Savings Plans recommendation
-	if rec.Service != internalCommon.ServiceSavingsPlans {
-		result.Success = false
-		result.Message = "Invalid service type for Savings Plans purchase"
-		return result
-	}
-
-	spDetails, ok := rec.ServiceDetails.(*internalCommon.SavingsPlanDetails)
+	spDetails, ok := rec.Details.(common.SavingsPlanDetails)
 	if !ok {
-		result.Success = false
-		result.Message = "Invalid service details for Savings Plans"
-		return result
+		result.Error = fmt.Errorf("invalid service details for Savings Plans")
+		return result, result.Error
 	}
 
-	// Find the offering ID
 	offeringID, err := c.findOfferingID(ctx, rec)
 	if err != nil {
-		result.Success = false
-		result.Message = fmt.Sprintf("Failed to find Savings Plans offering: %v", err)
-		return result
+		result.Error = fmt.Errorf("failed to find Savings Plans offering: %w", err)
+		return result, result.Error
 	}
 
-	// Create the Savings Plan purchase request
 	input := &savingsplans.CreateSavingsPlanInput{
 		SavingsPlanOfferingId: aws.String(offeringID),
 		Commitment:            aws.String(fmt.Sprintf("%.2f", spDetails.HourlyCommitment)),
@@ -74,31 +133,26 @@ func (c *PurchaseClient) PurchaseRI(ctx context.Context, rec internalCommon.Reco
 		PurchaseTime:          aws.Time(time.Now()),
 	}
 
-	// Execute the purchase
 	response, err := c.client.CreateSavingsPlan(ctx, input)
 	if err != nil {
-		result.Success = false
-		result.Message = fmt.Sprintf("Failed to purchase Savings Plan: %v", err)
-		return result
+		result.Error = fmt.Errorf("failed to purchase Savings Plan: %w", err)
+		return result, result.Error
 	}
 
-	// Extract purchase information
 	if response.SavingsPlanId != nil {
 		result.Success = true
-		result.PurchaseID = *response.SavingsPlanId
-		result.ReservationID = *response.SavingsPlanId
-		result.Message = fmt.Sprintf("Successfully purchased Savings Plan with commitment $%.2f/hour", spDetails.HourlyCommitment)
+		result.CommitmentID = *response.SavingsPlanId
 	} else {
-		result.Success = false
-		result.Message = "Purchase response was empty"
+		result.Error = fmt.Errorf("purchase response was empty")
+		return result, result.Error
 	}
 
-	return result
+	return result, nil
 }
 
 // findOfferingID finds the appropriate Savings Plans offering ID
-func (c *PurchaseClient) findOfferingID(ctx context.Context, rec internalCommon.Recommendation) (string, error) {
-	spDetails, ok := rec.ServiceDetails.(*internalCommon.SavingsPlanDetails)
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+	spDetails, ok := rec.Details.(common.SavingsPlanDetails)
 	if !ok {
 		return "", fmt.Errorf("invalid service details for Savings Plans")
 	}
@@ -116,15 +170,15 @@ func (c *PurchaseClient) findOfferingID(ctx context.Context, rec internalCommon.
 		return "", fmt.Errorf("unsupported Savings Plan type: %s", spDetails.PlanType)
 	}
 
-	// Convert term to months (Term is in months in the internal struct)
+	// Convert term to months
 	termMonths := int64(12)
-	if rec.Term >= 36 {
+	if rec.Term == "3yr" || rec.Term == "3" {
 		termMonths = 36
 	}
 
 	// Convert payment option
 	paymentOption := types.SavingsPlanPaymentOptionAllUpfront
-	switch rec.PaymentType {
+	switch rec.PaymentOption {
 	case "All Upfront", "all-upfront":
 		paymentOption = types.SavingsPlanPaymentOptionAllUpfront
 	case "Partial Upfront", "partial-upfront":
@@ -133,7 +187,6 @@ func (c *PurchaseClient) findOfferingID(ctx context.Context, rec internalCommon.
 		paymentOption = types.SavingsPlanPaymentOptionNoUpfront
 	}
 
-	// Search for offerings
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
 		Durations:      []int64{termMonths},
@@ -149,24 +202,23 @@ func (c *PurchaseClient) findOfferingID(ctx context.Context, rec internalCommon.
 		return "", fmt.Errorf("no Savings Plans offerings found matching criteria")
 	}
 
-	// Return the first matching offering
 	return *result.SearchResults[0].OfferingId, nil
 }
 
 // ValidateOffering checks if a Savings Plans offering exists
-func (c *PurchaseClient) ValidateOffering(ctx context.Context, rec internalCommon.Recommendation) error {
+func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
 	_, err := c.findOfferingID(ctx, rec)
 	return err
 }
 
-// GetOfferingDetails retrieves detailed information about a Savings Plans offering
-func (c *PurchaseClient) GetOfferingDetails(ctx context.Context, rec internalCommon.Recommendation) (*internalCommon.OfferingDetails, error) {
+// GetOfferingDetails retrieves offering details
+func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
 	offeringID, err := c.findOfferingID(ctx, rec)
 	if err != nil {
 		return nil, err
 	}
 
-	spDetails, ok := rec.ServiceDetails.(*internalCommon.SavingsPlanDetails)
+	spDetails, ok := rec.Details.(common.SavingsPlanDetails)
 	if !ok {
 		return nil, fmt.Errorf("invalid service details for Savings Plans")
 	}
@@ -184,36 +236,35 @@ func (c *PurchaseClient) GetOfferingDetails(ctx context.Context, rec internalCom
 	// Calculate costs based on payment option
 	var upfrontCost, recurringCost, totalCost float64
 
-	// Total cost is hourly commitment * hours in term (Term is in months)
-	hoursInTerm := 8760.0 // 1 year (12 months)
-	if rec.Term >= 36 {
-		hoursInTerm = 26280.0 // 3 years (36 months)
+	// Total cost is hourly commitment * hours in term
+	hoursInTerm := 8760.0 // 1 year
+	if rec.Term == "3yr" || rec.Term == "3" {
+		hoursInTerm = 26280.0 // 3 years
 	}
 	totalCost = spDetails.HourlyCommitment * hoursInTerm
 
-	switch rec.PaymentType {
+	switch rec.PaymentOption {
 	case "All Upfront", "all-upfront":
 		upfrontCost = totalCost
 		recurringCost = 0
 	case "Partial Upfront", "partial-upfront":
-		upfrontCost = totalCost * 0.5 // Approximation
+		upfrontCost = totalCost * 0.5
 		recurringCost = (totalCost * 0.5) / hoursInTerm
 	case "No Upfront", "no-upfront":
 		upfrontCost = 0
 		recurringCost = totalCost / hoursInTerm
 	}
 
-	// Convert term months to string
 	termStr := "1yr"
-	if rec.Term >= 36 {
+	if rec.Term == "3yr" || rec.Term == "3" {
 		termStr = "3yr"
 	}
 
-	return &internalCommon.OfferingDetails{
+	return &common.OfferingDetails{
 		OfferingID:          offeringID,
-		InstanceType:        spDetails.PlanType,
+		ResourceType:        spDetails.PlanType,
 		Term:                termStr,
-		PaymentOption:       rec.PaymentType,
+		PaymentOption:       rec.PaymentOption,
 		UpfrontCost:         upfrontCost,
 		RecurringCost:       recurringCost,
 		TotalCost:           totalCost,
@@ -222,62 +273,8 @@ func (c *PurchaseClient) GetOfferingDetails(ctx context.Context, rec internalCom
 	}, nil
 }
 
-// BatchPurchase purchases multiple Savings Plans with rate limiting
-func (c *PurchaseClient) BatchPurchase(ctx context.Context, recommendations []internalCommon.Recommendation, delayBetweenPurchases time.Duration) []internalCommon.PurchaseResult {
-	return c.BasePurchaseClient.BatchPurchase(ctx, c, recommendations, delayBetweenPurchases)
-}
-
-// GetExistingReservedInstances retrieves existing Savings Plans (implements PurchaseClient interface)
-func (c *PurchaseClient) GetExistingReservedInstances(ctx context.Context) ([]internalCommon.ExistingRI, error) {
-	// List all Savings Plans
-	input := &savingsplans.DescribeSavingsPlansInput{
-		States: []types.SavingsPlanState{
-			types.SavingsPlanStateActive,
-			types.SavingsPlanStatePendingReturn,
-			types.SavingsPlanStateQueued,
-		},
-	}
-
-	result, err := c.client.DescribeSavingsPlans(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe Savings Plans: %w", err)
-	}
-
-	existingPlans := make([]internalCommon.ExistingRI, 0, len(result.SavingsPlans))
-
-	for _, sp := range result.SavingsPlans {
-		if sp.SavingsPlanId == nil {
-			continue
-		}
-
-		existingPlan := internalCommon.ExistingRI{
-			ReservationID: *sp.SavingsPlanId,
-			Service:       internalCommon.ServiceSavingsPlans,
-			Region:        aws.ToString(sp.Region),
-			InstanceType:  string(sp.SavingsPlanType),
-			Count:         1, // Savings Plans don't have a count
-			State:         string(sp.State),
-		}
-
-		if sp.Start != nil {
-			if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
-				existingPlan.StartDate = startTime
-			}
-		}
-		if sp.End != nil {
-			if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
-				existingPlan.EndDate = endTime
-			}
-		}
-
-		existingPlans = append(existingPlans, existingPlan)
-	}
-
-	return existingPlans, nil
-}
-
-// GetValidInstanceTypes returns valid Savings Plan types
-func (c *PurchaseClient) GetValidInstanceTypes(ctx context.Context) ([]string, error) {
+// GetValidResourceTypes returns valid Savings Plan types
+func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	return []string{
 		"Compute",
 		"EC2Instance",
