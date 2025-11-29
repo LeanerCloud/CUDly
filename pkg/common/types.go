@@ -29,6 +29,7 @@ const (
 	// Database
 	ServiceRelationalDB ServiceType = "relational-db" // RDS, Azure SQL, Cloud SQL
 	ServiceNoSQL        ServiceType = "nosql"         // DynamoDB, CosmosDB, Firestore
+	ServiceNoSQLDB      ServiceType = "nosql"         // Alias for ServiceNoSQL
 
 	// Cache
 	ServiceCache ServiceType = "cache" // ElastiCache, Azure Cache, Memorystore
@@ -46,13 +47,17 @@ const (
 	ServiceSavingsPlans ServiceType = "savings-plans" // AWS Savings Plans
 	ServiceCommitments  ServiceType = "commitments"   // Generic commitments
 
+	// Other
+	ServiceOther ServiceType = "other" // Catch-all for unclassified services
+
 	// Legacy AWS service types (for backward compatibility)
-	ServiceEC2         ServiceType = "ec2"
-	ServiceRDS         ServiceType = "rds"
-	ServiceElastiCache ServiceType = "elasticache"
-	ServiceOpenSearch  ServiceType = "opensearch"
-	ServiceRedshift    ServiceType = "redshift"
-	ServiceMemoryDB    ServiceType = "memorydb"
+	ServiceEC2           ServiceType = "ec2"
+	ServiceRDS           ServiceType = "rds"
+	ServiceElastiCache   ServiceType = "elasticache"
+	ServiceOpenSearch    ServiceType = "opensearch"
+	ServiceElasticsearch ServiceType = "opensearch" // Alias for ServiceOpenSearch (AWS rebranded)
+	ServiceRedshift      ServiceType = "redshift"
+	ServiceMemoryDB      ServiceType = "memorydb"
 )
 
 // String returns the string representation of the service type
@@ -135,6 +140,7 @@ type Commitment struct {
 	Service        ServiceType    `json:"service"`
 	Region         string         `json:"region"`
 	ResourceType   string         `json:"resource_type"`
+	Engine         string         `json:"engine,omitempty"` // Database engine for RDS/ElastiCache (e.g., "mysql", "aurora-postgresql")
 	Count          int            `json:"count"`
 	StartDate      time.Time      `json:"start_date"`
 	EndDate        time.Time      `json:"end_date"`
