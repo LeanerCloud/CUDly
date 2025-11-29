@@ -19,12 +19,38 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
+// HTTPClient interface for HTTP operations (enables mocking)
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// RecommendationsPager interface for recommendations pager (enables mocking)
+type RecommendationsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationRecommendationsClientListResponse, error)
+}
+
+// ReservationsDetailsPager interface for reservations details pager (enables mocking)
+type ReservationsDetailsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+}
+
+// RedisCachesPager interface for Redis caches pager (enables mocking)
+type RedisCachesPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armredis.ClientListBySubscriptionResponse, error)
+}
+
 // CacheClient handles Azure Cache for Redis Reserved Capacity
 type CacheClient struct {
-	cred           azcore.TokenCredential
-	subscriptionID string
-	region         string
-	httpClient     *http.Client
+	cred                 azcore.TokenCredential
+	subscriptionID       string
+	region               string
+	httpClient           HTTPClient
+	recommendationsPager RecommendationsPager
+	reservationsPager    ReservationsDetailsPager
+	redisCachesPager     RedisCachesPager
 }
 
 // NewClient creates a new Azure Cache client
@@ -35,6 +61,31 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Cach
 		region:         region,
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// NewClientWithHTTP creates a new Azure Cache client with a custom HTTP client (for testing)
+func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *CacheClient {
+	return &CacheClient{
+		cred:           cred,
+		subscriptionID: subscriptionID,
+		region:         region,
+		httpClient:     httpClient,
+	}
+}
+
+// SetRecommendationsPager sets the recommendations pager (for testing)
+func (c *CacheClient) SetRecommendationsPager(pager RecommendationsPager) {
+	c.recommendationsPager = pager
+}
+
+// SetReservationsPager sets the reservations pager (for testing)
+func (c *CacheClient) SetReservationsPager(pager ReservationsDetailsPager) {
+	c.reservationsPager = pager
+}
+
+// SetRedisCachesPager sets the Redis caches pager (for testing)
+func (c *CacheClient) SetRedisCachesPager(pager RedisCachesPager) {
+	c.redisCachesPager = pager
 }
 
 // GetServiceType returns the service type
@@ -67,15 +118,20 @@ type AzureRetailPrice struct {
 
 // GetRecommendations gets Redis Cache reservation recommendations from Azure Consumption API
 func (c *CacheClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create consumption client: %w", err)
-	}
-
 	recommendations := make([]common.Recommendation, 0)
-	filter := "properties/scope eq 'Shared' and properties/resourceType eq 'RedisCache'"
 
-	pager := client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+	// Use injected pager if available (for testing)
+	var pager RecommendationsPager
+	if c.recommendationsPager != nil {
+		pager = c.recommendationsPager
+	} else {
+		client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create consumption client: %w", err)
+		}
+		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'RedisCache'"
+		pager = client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -98,14 +154,18 @@ func (c *CacheClient) GetRecommendations(ctx context.Context, params common.Reco
 func (c *CacheClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-	if err != nil {
-		return commitments, nil
+	// Use injected pager if available (for testing)
+	var pager ReservationsDetailsPager
+	if c.reservationsPager != nil {
+		pager = c.reservationsPager
+	} else {
+		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+		if err != nil {
+			return commitments, nil
+		}
+		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 	}
-
-	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-
-	pager := client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -281,14 +341,20 @@ func (c *CacheClient) GetOfferingDetails(ctx context.Context, rec common.Recomme
 
 // GetValidResourceTypes returns valid Redis Cache SKUs from Azure API
 func (c *CacheClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	client, err := armredis.NewClient(c.subscriptionID, c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create redis client: %w", err)
-	}
-
-	// Get all Redis caches in the subscription to discover SKUs
-	pager := client.NewListBySubscriptionPager(nil)
 	skuSet := make(map[string]bool)
+
+	// Use injected pager if available (for testing)
+	var pager RedisCachesPager
+	if c.redisCachesPager != nil {
+		pager = c.redisCachesPager
+	} else {
+		client, err := armredis.NewClient(c.subscriptionID, c.cred, nil)
+		if err != nil {
+			// Fall back to common SKUs if we can't create client
+			return c.getCommonSKUs(), nil
+		}
+		pager = client.NewListBySubscriptionPager(nil)
+	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -323,8 +389,12 @@ func (c *CacheClient) GetValidResourceTypes(ctx context.Context) ([]string, erro
 	}
 
 	// Otherwise, return common SKU families that support reservations
-	// These are the standard Redis Cache SKUs available for reservations
-	commonSKUs := []string{
+	return c.getCommonSKUs(), nil
+}
+
+// getCommonSKUs returns common Redis Cache SKUs
+func (c *CacheClient) getCommonSKUs() []string {
+	return []string{
 		// Basic tier
 		"Basic_C0", "Basic_C1", "Basic_C2", "Basic_C3", "Basic_C4", "Basic_C5", "Basic_C6",
 		// Standard tier
@@ -332,8 +402,6 @@ func (c *CacheClient) GetValidResourceTypes(ctx context.Context) ([]string, erro
 		// Premium tier (most commonly reserved)
 		"Premium_P1", "Premium_P2", "Premium_P3", "Premium_P4", "Premium_P5",
 	}
-
-	return commonSKUs, nil
 }
 
 // RedisPricing contains pricing information for Redis Cache

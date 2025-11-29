@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
 
@@ -13,11 +14,82 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
+// SubscriptionsClient interface for subscription operations (enables mocking)
+type SubscriptionsClient interface {
+	NewListPager(options *armsubscriptions.ClientListOptions) SubscriptionsPager
+	NewListLocationsPager(subscriptionID string, options *armsubscriptions.ClientListLocationsOptions) LocationsPager
+}
+
+// SubscriptionsPager interface for subscription pagination (enables mocking)
+type SubscriptionsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armsubscriptions.ClientListResponse, error)
+}
+
+// LocationsPager interface for locations pagination (enables mocking)
+type LocationsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armsubscriptions.ClientListLocationsResponse, error)
+}
+
+// CredentialProvider interface for credential creation (enables mocking)
+type CredentialProvider interface {
+	NewDefaultAzureCredential() (azcore.TokenCredential, error)
+}
+
+// realSubscriptionsClient wraps the real armsubscriptions.Client
+type realSubscriptionsClient struct {
+	client *armsubscriptions.Client
+}
+
+func (r *realSubscriptionsClient) NewListPager(options *armsubscriptions.ClientListOptions) SubscriptionsPager {
+	return &realSubscriptionsPager{pager: r.client.NewListPager(options)}
+}
+
+func (r *realSubscriptionsClient) NewListLocationsPager(subscriptionID string, options *armsubscriptions.ClientListLocationsOptions) LocationsPager {
+	return &realLocationsPager{pager: r.client.NewListLocationsPager(subscriptionID, options)}
+}
+
+// realSubscriptionsPager wraps the real subscription pager
+type realSubscriptionsPager struct {
+	pager *runtime.Pager[armsubscriptions.ClientListResponse]
+}
+
+func (r *realSubscriptionsPager) More() bool {
+	return r.pager.More()
+}
+
+func (r *realSubscriptionsPager) NextPage(ctx context.Context) (armsubscriptions.ClientListResponse, error) {
+	return r.pager.NextPage(ctx)
+}
+
+// realLocationsPager wraps the real locations pager
+type realLocationsPager struct {
+	pager *runtime.Pager[armsubscriptions.ClientListLocationsResponse]
+}
+
+func (r *realLocationsPager) More() bool {
+	return r.pager.More()
+}
+
+func (r *realLocationsPager) NextPage(ctx context.Context) (armsubscriptions.ClientListLocationsResponse, error) {
+	return r.pager.NextPage(ctx)
+}
+
+// realCredentialProvider provides real Azure credentials
+type realCredentialProvider struct{}
+
+func (r *realCredentialProvider) NewDefaultAzureCredential() (azcore.TokenCredential, error) {
+	return azidentity.NewDefaultAzureCredential(nil)
+}
+
 // AzureProvider implements the Provider interface for Azure
 type AzureProvider struct {
-	cred           azcore.TokenCredential
-	subscriptionID string
-	region         string // Default region for operations
+	cred               azcore.TokenCredential
+	subscriptionID     string
+	region             string // Default region for operations
+	subscriptionsClient SubscriptionsClient
+	credProvider       CredentialProvider
 }
 
 // NewAzureProvider creates a new Azure provider instance
@@ -33,6 +105,21 @@ func NewAzureProvider(config *provider.ProviderConfig) (*AzureProvider, error) {
 	return p, nil
 }
 
+// SetSubscriptionsClient sets the subscriptions client (for testing)
+func (p *AzureProvider) SetSubscriptionsClient(client SubscriptionsClient) {
+	p.subscriptionsClient = client
+}
+
+// SetCredentialProvider sets the credential provider (for testing)
+func (p *AzureProvider) SetCredentialProvider(credProvider CredentialProvider) {
+	p.credProvider = credProvider
+}
+
+// SetCredential sets the credential directly (for testing)
+func (p *AzureProvider) SetCredential(cred azcore.TokenCredential) {
+	p.cred = cred
+}
+
 // Name returns the provider name
 func (p *AzureProvider) Name() string {
 	return "azure"
@@ -45,8 +132,21 @@ func (p *AzureProvider) DisplayName() string {
 
 // IsConfigured checks if Azure credentials are available
 func (p *AzureProvider) IsConfigured() bool {
+	// If credential is already set, we're configured
+	if p.cred != nil {
+		return true
+	}
+
+	// Use injected credential provider if available (for testing)
+	var credProvider CredentialProvider
+	if p.credProvider != nil {
+		credProvider = p.credProvider
+	} else {
+		credProvider = &realCredentialProvider{}
+	}
+
 	// Try to create default Azure credential
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := credProvider.NewDefaultAzureCredential()
 	if err != nil {
 		return false
 	}
@@ -76,14 +176,20 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 		return fmt.Errorf("Azure is not configured")
 	}
 
-	// Try to list subscriptions to validate credentials
-	client, err := armsubscriptions.NewClient(p.cred, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create subscriptions client: %w", err)
+	// Use injected client if available (for testing)
+	var subClient SubscriptionsClient
+	if p.subscriptionsClient != nil {
+		subClient = p.subscriptionsClient
+	} else {
+		client, err := armsubscriptions.NewClient(p.cred, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create subscriptions client: %w", err)
+		}
+		subClient = &realSubscriptionsClient{client: client}
 	}
 
-	pager := client.NewListPager(nil)
-	_, err = pager.NextPage(ctx)
+	pager := subClient.NewListPager(nil)
+	_, err := pager.NextPage(ctx)
 	if err != nil {
 		return fmt.Errorf("Azure credentials validation failed: %w", err)
 	}
@@ -93,13 +199,20 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 
 // GetAccounts returns all accessible Azure subscriptions
 func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
-	client, err := armsubscriptions.NewClient(p.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
+	// Use injected client if available (for testing)
+	var subClient SubscriptionsClient
+	if p.subscriptionsClient != nil {
+		subClient = p.subscriptionsClient
+	} else {
+		client, err := armsubscriptions.NewClient(p.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
+		}
+		subClient = &realSubscriptionsClient{client: client}
 	}
 
 	accounts := make([]common.Account, 0)
-	pager := client.NewListPager(nil)
+	pager := subClient.NewListPager(nil)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -118,8 +231,8 @@ func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, erro
 				Name:        *sub.DisplayName,
 				DisplayName: *sub.DisplayName,
 				// Azure doesn't have a clear "default" subscription concept
-			// Users can set AZURE_SUBSCRIPTION_ID environment variable to specify which to use
-			IsDefault:   false,
+				// Users can set AZURE_SUBSCRIPTION_ID environment variable to specify which to use
+				IsDefault: false,
 			})
 		}
 	}
@@ -137,13 +250,20 @@ func (p *AzureProvider) GetRegions(ctx context.Context) ([]common.Region, error)
 
 	subscriptionID := accounts[0].ID
 
-	client, err := armsubscriptions.NewClient(p.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
+	// Use injected client if available (for testing)
+	var subClient SubscriptionsClient
+	if p.subscriptionsClient != nil {
+		subClient = p.subscriptionsClient
+	} else {
+		client, err := armsubscriptions.NewClient(p.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
+		}
+		subClient = &realSubscriptionsClient{client: client}
 	}
 
 	regions := make([]common.Region, 0)
-	pager := client.NewListLocationsPager(subscriptionID, nil)
+	pager := subClient.NewListLocationsPager(subscriptionID, nil)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)

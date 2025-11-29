@@ -19,12 +19,38 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
+// HTTPClient interface for HTTP operations (enables mocking)
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// RecommendationsPager interface for recommendations pager (enables mocking)
+type RecommendationsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationRecommendationsClientListResponse, error)
+}
+
+// ReservationsDetailsPager interface for reservations details pager (enables mocking)
+type ReservationsDetailsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+}
+
+// SearchServicesPager interface for search services pager (enables mocking)
+type SearchServicesPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armsearch.ServicesClientListBySubscriptionResponse, error)
+}
+
 // SearchClient handles Azure Cognitive Search Reserved Capacity
 type SearchClient struct {
-	cred           azcore.TokenCredential
-	subscriptionID string
-	region         string
-	httpClient     *http.Client
+	cred                 azcore.TokenCredential
+	subscriptionID       string
+	region               string
+	httpClient           HTTPClient
+	recommendationsPager RecommendationsPager
+	reservationsPager    ReservationsDetailsPager
+	searchServicesPager  SearchServicesPager
 }
 
 // NewClient creates a new Azure Search client
@@ -35,6 +61,31 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Sear
 		region:         region,
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// NewClientWithHTTP creates a new Azure Search client with a custom HTTP client (for testing)
+func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *SearchClient {
+	return &SearchClient{
+		cred:           cred,
+		subscriptionID: subscriptionID,
+		region:         region,
+		httpClient:     httpClient,
+	}
+}
+
+// SetRecommendationsPager sets the recommendations pager (for testing)
+func (c *SearchClient) SetRecommendationsPager(pager RecommendationsPager) {
+	c.recommendationsPager = pager
+}
+
+// SetReservationsPager sets the reservations pager (for testing)
+func (c *SearchClient) SetReservationsPager(pager ReservationsDetailsPager) {
+	c.reservationsPager = pager
+}
+
+// SetSearchServicesPager sets the search services pager (for testing)
+func (c *SearchClient) SetSearchServicesPager(pager SearchServicesPager) {
+	c.searchServicesPager = pager
 }
 
 // GetServiceType returns the service type
@@ -67,15 +118,20 @@ type AzureRetailPrice struct {
 
 // GetRecommendations gets Azure Search reservation recommendations from Azure Consumption API
 func (c *SearchClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create consumption client: %w", err)
-	}
-
 	recommendations := make([]common.Recommendation, 0)
-	filter := "properties/scope eq 'Shared'"
 
-	pager := client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+	// Use injected pager if available (for testing)
+	var pager RecommendationsPager
+	if c.recommendationsPager != nil {
+		pager = c.recommendationsPager
+	} else {
+		client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create consumption client: %w", err)
+		}
+		filter := "properties/scope eq 'Shared'"
+		pager = client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -98,14 +154,18 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 func (c *SearchClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-	if err != nil {
-		return commitments, nil
+	// Use injected pager if available (for testing)
+	var pager ReservationsDetailsPager
+	if c.reservationsPager != nil {
+		pager = c.reservationsPager
+	} else {
+		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+		if err != nil {
+			return commitments, nil
+		}
+		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 	}
-
-	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-
-	pager := client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -281,14 +341,19 @@ func (c *SearchClient) GetOfferingDetails(ctx context.Context, rec common.Recomm
 
 // GetValidResourceTypes returns valid Search SKUs from Azure API
 func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	client, err := armsearch.NewServicesClient(c.subscriptionID, c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create search client: %w", err)
-	}
-
-	// Get all Search services in the subscription to discover SKUs
-	pager := client.NewListBySubscriptionPager(nil)
 	skuSet := make(map[string]bool)
+
+	// Use injected pager if available (for testing)
+	var pager SearchServicesPager
+	if c.searchServicesPager != nil {
+		pager = c.searchServicesPager
+	} else {
+		client, err := armsearch.NewServicesClient(c.subscriptionID, c.cred, nil)
+		if err != nil {
+			return c.getCommonSKUs(), nil
+		}
+		pager = client.NewListBySubscriptionPager(nil, nil)
+	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -315,7 +380,12 @@ func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, err
 	}
 
 	// Otherwise, return common SKU tiers that support reservations
-	commonSKUs := []string{
+	return c.getCommonSKUs(), nil
+}
+
+// getCommonSKUs returns common Search SKUs
+func (c *SearchClient) getCommonSKUs() []string {
+	return []string{
 		"basic",
 		"standard",
 		"standard2",
@@ -323,8 +393,6 @@ func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, err
 		"storage_optimized_l1",
 		"storage_optimized_l2",
 	}
-
-	return commonSKUs, nil
 }
 
 // SearchPricing contains pricing information for Azure Search

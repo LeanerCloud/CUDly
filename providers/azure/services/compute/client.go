@@ -19,12 +19,40 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
+// RecommendationsPager defines the interface for paging through recommendations
+type RecommendationsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationRecommendationsClientListResponse, error)
+}
+
+// ReservationsDetailsPager defines the interface for paging through reservation details
+type ReservationsDetailsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+}
+
+// ResourceSKUsPager defines the interface for paging through resource SKUs
+type ResourceSKUsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armcompute.ResourceSKUsClientListResponse, error)
+}
+
+// HTTPClient defines the interface for making HTTP requests
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
 // ComputeClient handles Azure VM Reserved Instances
 type ComputeClient struct {
 	cred           azcore.TokenCredential
 	subscriptionID string
 	region         string
-	httpClient     *http.Client
+	httpClient     HTTPClient
+
+	// For testing - these can be set to mock implementations
+	recommendationsPager   RecommendationsPager
+	reservationsPager      ReservationsDetailsPager
+	resourceSKUsPager      ResourceSKUsPager
 }
 
 // NewClient creates a new Azure Compute client
@@ -35,6 +63,31 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Comp
 		region:         region,
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// NewClientWithHTTP creates a new Azure Compute client with a custom HTTP client (for testing)
+func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *ComputeClient {
+	return &ComputeClient{
+		cred:           cred,
+		subscriptionID: subscriptionID,
+		region:         region,
+		httpClient:     httpClient,
+	}
+}
+
+// SetRecommendationsPager sets a mock pager for recommendations (for testing)
+func (c *ComputeClient) SetRecommendationsPager(pager RecommendationsPager) {
+	c.recommendationsPager = pager
+}
+
+// SetReservationsPager sets a mock pager for reservations details (for testing)
+func (c *ComputeClient) SetReservationsPager(pager ReservationsDetailsPager) {
+	c.reservationsPager = pager
+}
+
+// SetResourceSKUsPager sets a mock pager for resource SKUs (for testing)
+func (c *ComputeClient) SetResourceSKUsPager(pager ResourceSKUsPager) {
+	c.resourceSKUsPager = pager
 }
 
 // GetServiceType returns the service type
@@ -64,17 +117,21 @@ type AzureRetailPrice struct {
 
 // GetRecommendations gets VM RI recommendations from Azure Consumption API
 func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create consumption client: %w", err)
-	}
-
 	recommendations := make([]common.Recommendation, 0)
-	filter := "properties/scope eq 'Shared' and properties/resourceType eq 'VirtualMachines'"
 
-	pager := client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{
-		
-	})
+	// Use injected pager if available (for testing)
+	var pager RecommendationsPager
+	if c.recommendationsPager != nil {
+		pager = c.recommendationsPager
+	} else {
+		client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create consumption client: %w", err)
+		}
+
+		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'VirtualMachines'"
+		pager = client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -97,14 +154,19 @@ func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.Re
 func (c *ComputeClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-	if err != nil {
-		return commitments, nil
+	// Use injected pager if available (for testing)
+	var pager ReservationsDetailsPager
+	if c.reservationsPager != nil {
+		pager = c.reservationsPager
+	} else {
+		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+		if err != nil {
+			return commitments, nil
+		}
+
+		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 	}
-
-	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-
-	pager := client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -280,15 +342,22 @@ func (c *ComputeClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 
 // GetValidResourceTypes returns valid VM sizes from Azure Compute API
 func (c *ComputeClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	client, err := armcompute.NewResourceSKUsClient(c.subscriptionID, c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource SKUs client: %w", err)
-	}
-
 	vmSizes := make([]string, 0)
-	pager := client.NewListPager(&armcompute.ResourceSKUsClientListOptions{
-		Filter: nil,
-	})
+
+	// Use injected pager if available (for testing)
+	var pager ResourceSKUsPager
+	if c.resourceSKUsPager != nil {
+		pager = c.resourceSKUsPager
+	} else {
+		client, err := armcompute.NewResourceSKUsClient(c.subscriptionID, c.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create resource SKUs client: %w", err)
+		}
+
+		pager = client.NewListPager(&armcompute.ResourceSKUsClientListOptions{
+			Filter: nil,
+		})
+	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)

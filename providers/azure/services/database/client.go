@@ -19,12 +19,37 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
+// HTTPClient interface for HTTP operations (enables mocking)
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// RecommendationsPager interface for recommendations pager (enables mocking)
+type RecommendationsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationRecommendationsClientListResponse, error)
+}
+
+// ReservationsDetailsPager interface for reservations details pager (enables mocking)
+type ReservationsDetailsPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+}
+
+// CapabilitiesClient interface for SQL capabilities (enables mocking)
+type CapabilitiesClient interface {
+	ListByLocation(ctx context.Context, locationName string, options *armsql.CapabilitiesClientListByLocationOptions) (armsql.CapabilitiesClientListByLocationResponse, error)
+}
+
 // DatabaseClient handles Azure SQL Database Reserved Capacity
 type DatabaseClient struct {
-	cred           azcore.TokenCredential
-	subscriptionID string
-	region         string
-	httpClient     *http.Client
+	cred                 azcore.TokenCredential
+	subscriptionID       string
+	region               string
+	httpClient           HTTPClient
+	recommendationsPager RecommendationsPager
+	reservationsPager    ReservationsDetailsPager
+	capabilitiesClient   CapabilitiesClient
 }
 
 // NewClient creates a new Azure Database client
@@ -35,6 +60,31 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Data
 		region:         region,
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// NewClientWithHTTP creates a new Azure Database client with a custom HTTP client (for testing)
+func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *DatabaseClient {
+	return &DatabaseClient{
+		cred:           cred,
+		subscriptionID: subscriptionID,
+		region:         region,
+		httpClient:     httpClient,
+	}
+}
+
+// SetRecommendationsPager sets the recommendations pager (for testing)
+func (c *DatabaseClient) SetRecommendationsPager(pager RecommendationsPager) {
+	c.recommendationsPager = pager
+}
+
+// SetReservationsPager sets the reservations pager (for testing)
+func (c *DatabaseClient) SetReservationsPager(pager ReservationsDetailsPager) {
+	c.reservationsPager = pager
+}
+
+// SetCapabilitiesClient sets the capabilities client (for testing)
+func (c *DatabaseClient) SetCapabilitiesClient(client CapabilitiesClient) {
+	c.capabilitiesClient = client
 }
 
 // GetServiceType returns the service type
@@ -70,17 +120,20 @@ type AzureRetailPrice struct {
 
 // GetRecommendations gets SQL Database reservation recommendations from Azure Consumption API
 func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create consumption client: %w", err)
-	}
-
 	recommendations := make([]common.Recommendation, 0)
-	filter := "properties/scope eq 'Shared' and properties/resourceType eq 'SqlDatabase'"
 
-	pager := client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{
-		
-	})
+	// Use injected pager if available (for testing)
+	var pager RecommendationsPager
+	if c.recommendationsPager != nil {
+		pager = c.recommendationsPager
+	} else {
+		client, err := armconsumption.NewReservationRecommendationsClient(c.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create consumption client: %w", err)
+		}
+		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'SqlDatabase'"
+		pager = client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -103,17 +156,18 @@ func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.R
 func (c *DatabaseClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	// Query Azure for existing SQL reservations via consumption API
-	// This uses the Reservations Details API to get actual reservations
-	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-	if err != nil {
-		return commitments, nil // Return empty on error rather than failing
+	// Use injected pager if available (for testing)
+	var pager ReservationsDetailsPager
+	if c.reservationsPager != nil {
+		pager = c.reservationsPager
+	} else {
+		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+		if err != nil {
+			return commitments, nil // Return empty on error rather than failing
+		}
+		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 	}
-
-	// Get reservation details for the subscription
-	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-
-	pager := client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -293,12 +347,19 @@ func (c *DatabaseClient) GetOfferingDetails(ctx context.Context, rec common.Reco
 
 // GetValidResourceTypes returns valid SQL Database SKUs from Azure API
 func (c *DatabaseClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	client, err := armsql.NewCapabilitiesClient(c.subscriptionID, c.cred, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create capabilities client: %w", err)
+	// Use injected client if available (for testing)
+	var capClient CapabilitiesClient
+	if c.capabilitiesClient != nil {
+		capClient = c.capabilitiesClient
+	} else {
+		client, err := armsql.NewCapabilitiesClient(c.subscriptionID, c.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create capabilities client: %w", err)
+		}
+		capClient = client
 	}
 
-	capabilities, err := client.ListByLocation(ctx, c.region, &armsql.CapabilitiesClientListByLocationOptions{
+	capabilities, err := capClient.ListByLocation(ctx, c.region, &armsql.CapabilitiesClientListByLocationOptions{
 		Include: nil,
 	})
 	if err != nil {
