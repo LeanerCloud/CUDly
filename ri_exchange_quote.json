@@ -1,0 +1,13 @@
+{
+  "mode": "dry-run",
+  "region": "us-east-1",
+  "expected_account": "816582314462",
+  "reserved_instance_ids": [
+    "ri-xxxxxxxx",
+    "ri-yyyyyyyy"
+  ],
+  "target_offering_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "target_count": 1,
+  "quote": null,
+  "error": "operation error EC2: GetReservedInstancesExchangeQuote, https response error StatusCode: 400, RequestID: 7a1f89d5-b524-4bde-abb2-1b1063ef0ecf, api error InvalidReservedInstancesID.NotFound: The reserved-instances ID 'ri-xxxxxxxx' is malformed"
+}
