@@ -1,0 +1,47 @@
+{
+  "run_id": "aws-1770194887",
+  "cloud": "aws",
+  "mode": "dry-run",
+  "started_at": "2026-02-04T08:48:07.469412215Z",
+  "ended_at": "2026-02-04T08:48:16.042457402Z",
+  "results": [
+    {
+      "name": "sts:GetCallerIdentity",
+      "status": "PASS",
+      "details": {
+        "account": "816582314462",
+        "arn": "arn:aws:iam::816582314462:user/cris-open",
+        "user_id": "AIDA34IAZJHPPYVORASPA"
+      },
+      "started_at": "2026-02-04T08:48:07.469490632Z",
+      "ended_at": "2026-02-04T08:48:09.559287687Z"
+    },
+    {
+      "name": "ec2:DescribeRegions",
+      "status": "PASS",
+      "details": {
+        "regions_count": "17"
+      },
+      "started_at": "2026-02-04T08:48:09.559288471Z",
+      "ended_at": "2026-02-04T08:48:11.676737663Z"
+    },
+    {
+      "name": "ec2:DescribeInstances (sample)",
+      "status": "PASS",
+      "details": {
+        "instances_seen": "0"
+      },
+      "started_at": "2026-02-04T08:48:11.676740056Z",
+      "ended_at": "2026-02-04T08:48:13.765217718Z"
+    },
+    {
+      "name": "rds:DescribeDBInstances (sample)",
+      "status": "PASS",
+      "details": {
+        "db_instances_seen": "1"
+      },
+      "started_at": "2026-02-04T08:48:13.765219328Z",
+      "ended_at": "2026-02-04T08:48:16.04245683Z"
+    }
+  ]
+}
