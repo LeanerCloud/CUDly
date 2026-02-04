@@ -363,69 +363,27 @@ type RedisPricing struct {
 
 // getRedisPricing gets pricing from GCP Cloud Billing Catalog API
 func (c *MemorystoreClient) getRedisPricing(ctx context.Context, tier, region string, termYears int) (*RedisPricing, error) {
-	billingSvc := c.billingService
-	if billingSvc == nil {
-		service, err := cloudbilling.NewService(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create billing service: %w", err)
-		}
-		billingSvc = &realBillingService{service: service}
+	billingSvc, err := c.getOrCreateBillingService(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// Memorystore Redis service ID
-	serviceID := "services/D559-82DA-3A56"
-	skus, err := billingSvc.ListSKUs(serviceID)
+	skus, err := billingSvc.ListSKUs("services/D559-82DA-3A56")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list SKUs: %w", err)
 	}
 
-	var onDemandPrice, commitmentPrice float64
-	currency := "USD"
-
-	// Search for pricing for the specific tier and region
-	for _, sku := range skus.Skus {
-		if !skuMatchesTier(sku, tier, region) {
-			continue
-		}
-
-		if len(sku.PricingInfo) > 0 {
-			pricingInfo := sku.PricingInfo[0]
-			if pricingInfo.PricingExpression != nil && len(pricingInfo.PricingExpression.TieredRates) > 0 {
-				rate := pricingInfo.PricingExpression.TieredRates[0]
-				if rate.UnitPrice != nil {
-					price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
-
-					if rate.UnitPrice.CurrencyCode != "" {
-						currency = rate.UnitPrice.CurrencyCode
-					}
-
-					// Check if this is a commitment or on-demand price
-					if strings.Contains(strings.ToLower(sku.Description), "commitment") {
-						commitmentPrice = price
-					} else {
-						onDemandPrice = price
-					}
-				}
-			}
-		}
-	}
-
+	onDemandPrice, commitmentPrice, currency := extractPricingFromSKUs(skus.Skus, tier, region)
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no pricing found for Memorystore tier %s", tier)
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
-	// GCP Memorystore commitments typically offer 25-35% savings
 	if commitmentPrice == 0 {
-		discount := 0.70 // 30% savings
-		if termYears == 3 {
-			discount = 0.65 // 35% savings
-		}
-		onDemandTotal := onDemandPrice * hoursInTerm
-		commitmentPrice = onDemandTotal * discount
+		commitmentPrice = estimateCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
 	}
 
-	savingsPercentage := ((onDemandPrice*hoursInTerm - commitmentPrice) / (onDemandPrice * hoursInTerm)) * 100
+	savingsPercentage := calculateSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
 
 	return &RedisPricing{
 		HourlyRate:        commitmentPrice / hoursInTerm,
@@ -434,6 +392,83 @@ func (c *MemorystoreClient) getRedisPricing(ctx context.Context, tier, region st
 		Currency:          currency,
 		SavingsPercentage: savingsPercentage,
 	}, nil
+}
+
+// getOrCreateBillingService returns the billing service, creating it if needed
+func (c *MemorystoreClient) getOrCreateBillingService(ctx context.Context) (BillingService, error) {
+	if c.billingService != nil {
+		return c.billingService, nil
+	}
+
+	service, err := cloudbilling.NewService(ctx, c.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing service: %w", err)
+	}
+
+	return &realBillingService{service: service}, nil
+}
+
+// extractPricingFromSKUs extracts on-demand and commitment pricing from SKU list
+func extractPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (onDemand, commitment float64, currency string) {
+	currency = "USD"
+
+	for _, sku := range skus {
+		if !skuMatchesTier(sku, tier, region) {
+			continue
+		}
+
+		price, curr := extractPriceFromSKU(sku)
+		if price == 0 {
+			continue
+		}
+
+		if curr != "" {
+			currency = curr
+		}
+
+		if strings.Contains(strings.ToLower(sku.Description), "commitment") {
+			commitment = price
+		} else {
+			onDemand = price
+		}
+	}
+
+	return onDemand, commitment, currency
+}
+
+// extractPriceFromSKU extracts the unit price from a SKU
+func extractPriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
+	if len(sku.PricingInfo) == 0 {
+		return 0, ""
+	}
+
+	pricingInfo := sku.PricingInfo[0]
+	if pricingInfo.PricingExpression == nil || len(pricingInfo.PricingExpression.TieredRates) == 0 {
+		return 0, ""
+	}
+
+	rate := pricingInfo.PricingExpression.TieredRates[0]
+	if rate.UnitPrice == nil {
+		return 0, ""
+	}
+
+	price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
+	return price, rate.UnitPrice.CurrencyCode
+}
+
+// estimateCommitmentPrice estimates commitment price based on typical GCP savings
+func estimateCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
+	discount := 0.70 // 30% savings for 1 year
+	if termYears == 3 {
+		discount = 0.65 // 35% savings for 3 years
+	}
+	return onDemandPrice * hoursInTerm * discount
+}
+
+// calculateSavingsPercentage calculates the savings percentage
+func calculateSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	return ((onDemandTotal - commitmentPrice) / onDemandTotal) * 100
 }
 
 // skuMatchesTier checks if a SKU matches the tier and region

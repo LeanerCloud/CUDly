@@ -289,19 +289,38 @@ func (p *GCPProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 
 // GetRegions returns all available GCP regions using Compute Engine API
 func (p *GCPProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
-	// Use injected client if available (for testing)
-	var regClient RegionsClient
-	if p.regionsClient != nil {
-		regClient = p.regionsClient
-	} else {
-		client, err := compute.NewRegionsRESTClient(ctx, p.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create compute client: %w", err)
-		}
-		regClient = &realRegionsClient{client: client}
+	regClient, err := p.createRegionsClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 	defer regClient.Close()
 
+	regions, err := p.collectActiveRegions(ctx, regClient)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(regions) == 0 {
+		return nil, fmt.Errorf("no active regions found for project %s", p.projectID)
+	}
+
+	return regions, nil
+}
+
+func (p *GCPProvider) createRegionsClient(ctx context.Context) (RegionsClient, error) {
+	// Use injected client if available (for testing)
+	if p.regionsClient != nil {
+		return p.regionsClient, nil
+	}
+
+	client, err := compute.NewRegionsRESTClient(ctx, p.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create compute client: %w", err)
+	}
+	return &realRegionsClient{client: client}, nil
+}
+
+func (p *GCPProvider) collectActiveRegions(ctx context.Context, regClient RegionsClient) ([]common.Region, error) {
 	req := &computepb.ListRegionsRequest{
 		Project: p.projectID,
 	}
@@ -318,24 +337,28 @@ func (p *GCPProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
 			return nil, fmt.Errorf("failed to list regions: %w", err)
 		}
 
-		if region.Name != nil && region.Status != nil && *region.Status == "UP" {
-			displayName := *region.Name
-			if region.Description != nil {
-				displayName = *region.Description
-			}
-
-			regions = append(regions, common.Region{
-				ID:          *region.Name,
-				DisplayName: displayName,
-			})
+		if convertedRegion := convertGCPRegion(region); convertedRegion != nil {
+			regions = append(regions, *convertedRegion)
 		}
 	}
 
-	if len(regions) == 0 {
-		return nil, fmt.Errorf("no active regions found for project %s", p.projectID)
+	return regions, nil
+}
+
+func convertGCPRegion(region *computepb.Region) *common.Region {
+	if region.Name == nil || region.Status == nil || *region.Status != "UP" {
+		return nil
 	}
 
-	return regions, nil
+	displayName := *region.Name
+	if region.Description != nil {
+		displayName = *region.Description
+	}
+
+	return &common.Region{
+		ID:          *region.Name,
+		DisplayName: displayName,
+	}
 }
 
 // GetSupportedServices returns the list of supported GCP services

@@ -381,76 +381,106 @@ type SQLPricing struct {
 
 // getSQLPricing gets pricing from GCP Cloud Billing Catalog API
 func (c *CloudSQLClient) getSQLPricing(ctx context.Context, tier, region string, termYears int) (*SQLPricing, error) {
-	// Use injected service if available (for testing)
-	var svc BillingService
-	if c.billingService != nil {
-		svc = c.billingService
-	} else {
-		service, err := cloudbilling.NewService(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create billing service: %w", err)
-		}
-		svc = &realBillingService{service: service}
+	svc, err := c.getOrCreateBillingService(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// Cloud SQL service ID
-	serviceID := "services/9662-B51E-5089"
-	skus, err := svc.ListSKUs(serviceID)
+	skus, err := svc.ListSKUs("services/9662-B51E-5089")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list SKUs: %w", err)
 	}
 
-	var onDemandPrice, commitmentPrice float64
-	currency := "USD"
-
-	// Search for pricing for the specific tier and region
-	for _, sku := range skus.Skus {
-		if !skuMatchesTier(sku, tier, region) {
-			continue
-		}
-
-		if len(sku.PricingInfo) > 0 {
-			pricingInfo := sku.PricingInfo[0]
-			if pricingInfo.PricingExpression != nil && len(pricingInfo.PricingExpression.TieredRates) > 0 {
-				rate := pricingInfo.PricingExpression.TieredRates[0]
-				if rate.UnitPrice != nil {
-					price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
-
-					if rate.UnitPrice.CurrencyCode != "" {
-						currency = rate.UnitPrice.CurrencyCode
-					}
-
-					// Cloud SQL doesn't have separate commitment pricing in the API
-					// The package plan is billed differently
-					onDemandPrice = price
-				}
-			}
-		}
-	}
-
+	onDemandPrice, currency := extractSQLPricingFromSKUs(skus.Skus, tier, region)
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no pricing found for Cloud SQL tier %s", tier)
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
-	// Cloud SQL package plans typically offer 15-20% savings
-	discount := 0.85 // 15% savings
-	if termYears == 3 {
-		discount = 0.80 // 20% savings
-	}
-
-	onDemandTotal := onDemandPrice * hoursInTerm
-	commitmentPrice = onDemandTotal * discount
-
-	savingsPercentage := ((onDemandTotal - commitmentPrice) / onDemandTotal) * 100
+	commitmentPrice := estimateSQLCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
+	savingsPercentage := calculateSQLSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
 
 	return &SQLPricing{
 		HourlyRate:        commitmentPrice / hoursInTerm,
 		CommitmentPrice:   commitmentPrice,
-		OnDemandPrice:     onDemandTotal,
+		OnDemandPrice:     onDemandPrice * hoursInTerm,
 		Currency:          currency,
 		SavingsPercentage: savingsPercentage,
 	}, nil
+}
+
+// getOrCreateBillingService returns the billing service, creating it if needed
+func (c *CloudSQLClient) getOrCreateBillingService(ctx context.Context) (BillingService, error) {
+	if c.billingService != nil {
+		return c.billingService, nil
+	}
+
+	service, err := cloudbilling.NewService(ctx, c.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing service: %w", err)
+	}
+
+	return &realBillingService{service: service}, nil
+}
+
+// extractSQLPricingFromSKUs extracts on-demand pricing from SKU list
+func extractSQLPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (onDemand float64, currency string) {
+	currency = "USD"
+
+	for _, sku := range skus {
+		if !skuMatchesTier(sku, tier, region) {
+			continue
+		}
+
+		price, curr := extractSQLPriceFromSKU(sku)
+		if price == 0 {
+			continue
+		}
+
+		if curr != "" {
+			currency = curr
+		}
+
+		// Cloud SQL doesn't have separate commitment pricing in the API
+		onDemand = price
+	}
+
+	return onDemand, currency
+}
+
+// extractSQLPriceFromSKU extracts the unit price from a SKU
+func extractSQLPriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
+	if len(sku.PricingInfo) == 0 {
+		return 0, ""
+	}
+
+	pricingInfo := sku.PricingInfo[0]
+	if pricingInfo.PricingExpression == nil || len(pricingInfo.PricingExpression.TieredRates) == 0 {
+		return 0, ""
+	}
+
+	rate := pricingInfo.PricingExpression.TieredRates[0]
+	if rate.UnitPrice == nil {
+		return 0, ""
+	}
+
+	price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
+	return price, rate.UnitPrice.CurrencyCode
+}
+
+// estimateSQLCommitmentPrice estimates commitment price based on GCP SQL package savings
+func estimateSQLCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
+	discount := 0.85 // 15% savings for 1 year
+	if termYears == 3 {
+		discount = 0.80 // 20% savings for 3 years
+	}
+	return onDemandPrice * hoursInTerm * discount
+}
+
+// calculateSQLSavingsPercentage calculates the savings percentage
+func calculateSQLSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	return ((onDemandTotal - commitmentPrice) / onDemandTotal) * 100
 }
 
 // skuMatchesTier checks if a SKU matches the tier and region

@@ -223,18 +223,9 @@ func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params com
 
 // GetExistingCommitments retrieves existing Compute Engine CUDs
 func (c *ComputeEngineClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected service if available (for testing)
-	var svc CommitmentsService
-	if c.commitmentsService != nil {
-		svc = c.commitmentsService
-	} else {
-		client, err := compute.NewRegionCommitmentsRESTClient(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create commitments client: %w", err)
-		}
-		svc = &realCommitmentsService{client: client}
+	svc, err := c.createCommitmentsService(ctx)
+	if err != nil {
+		return nil, err
 	}
 	defer svc.Close()
 
@@ -242,6 +233,28 @@ func (c *ComputeEngineClient) GetExistingCommitments(ctx context.Context) ([]com
 		Project: c.projectID,
 		Region:  c.region,
 	}
+
+	return c.collectCommitments(ctx, svc, req)
+}
+
+// createCommitmentsService creates a commitments service client
+func (c *ComputeEngineClient) createCommitmentsService(ctx context.Context) (CommitmentsService, error) {
+	// Use injected service if available (for testing)
+	if c.commitmentsService != nil {
+		return c.commitmentsService, nil
+	}
+
+	client, err := compute.NewRegionCommitmentsRESTClient(ctx, c.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create commitments client: %w", err)
+	}
+
+	return &realCommitmentsService{client: client}, nil
+}
+
+// collectCommitments iterates through commitments and converts them to common format
+func (c *ComputeEngineClient) collectCommitments(ctx context.Context, svc CommitmentsService, req *computepb.ListRegionCommitmentsRequest) ([]common.Commitment, error) {
+	commitments := make([]common.Commitment, 0)
 
 	it := svc.List(ctx, req)
 	for {
@@ -257,38 +270,44 @@ func (c *ComputeEngineClient) GetExistingCommitments(ctx context.Context) ([]com
 			continue
 		}
 
-		status := "unknown"
-		if commitment.Status != nil {
-			status = strings.ToLower(*commitment.Status)
-		}
-
-		commitmentType := common.CommitmentCUD
-		if commitment.Type != nil && *commitment.Type == "GENERAL_PURPOSE" {
-			commitmentType = common.CommitmentCUD
-		}
-
-		com := common.Commitment{
-			Provider:       common.ProviderGCP,
-			Account:        c.projectID,
-			CommitmentType: commitmentType,
-			Service:        common.ServiceCompute,
-			Region:         c.region,
-			CommitmentID:   *commitment.Name,
-			State:          status,
-		}
-
-		// Extract resource type from commitment resources
-		if len(commitment.Resources) > 0 {
-			resource := commitment.Resources[0]
-			if resource.Type != nil {
-				com.ResourceType = *resource.Type
-			}
-		}
-
+		com := c.convertGCPCommitmentToCommon(commitment)
 		commitments = append(commitments, com)
 	}
 
 	return commitments, nil
+}
+
+// convertGCPCommitmentToCommon converts a GCP commitment to common format
+func (c *ComputeEngineClient) convertGCPCommitmentToCommon(commitment *computepb.Commitment) common.Commitment {
+	status := "unknown"
+	if commitment.Status != nil {
+		status = strings.ToLower(*commitment.Status)
+	}
+
+	commitmentType := common.CommitmentCUD
+	if commitment.Type != nil && *commitment.Type == "GENERAL_PURPOSE" {
+		commitmentType = common.CommitmentCUD
+	}
+
+	com := common.Commitment{
+		Provider:       common.ProviderGCP,
+		Account:        c.projectID,
+		CommitmentType: commitmentType,
+		Service:        common.ServiceCompute,
+		Region:         c.region,
+		CommitmentID:   *commitment.Name,
+		State:          status,
+	}
+
+	// Extract resource type from commitment resources
+	if len(commitment.Resources) > 0 {
+		resource := commitment.Resources[0]
+		if resource.Type != nil {
+			com.ResourceType = *resource.Type
+		}
+	}
+
+	return com
 }
 
 // PurchaseCommitment purchases a Compute Engine CUD
@@ -469,73 +488,27 @@ type ComputePricing struct {
 
 // getComputePricing gets pricing from GCP Cloud Billing Catalog API
 func (c *ComputeEngineClient) getComputePricing(ctx context.Context, machineType, region string, termYears int) (*ComputePricing, error) {
-	// Use injected service if available (for testing)
-	var svc BillingService
-	if c.billingService != nil {
-		svc = c.billingService
-	} else {
-		service, err := cloudbilling.NewService(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create billing service: %w", err)
-		}
-		svc = &realBillingService{service: service}
+	svc, err := c.getOrCreateBillingService(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// List SKUs for Compute Engine
 	skus, err := svc.ListSKUs("services/6F81-5844-456A")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list SKUs: %w", err)
 	}
 
-	var onDemandPrice, commitmentPrice float64
-	currency := "USD"
-
-	// Search for pricing for the specific machine type and region
-	for _, sku := range skus.Skus {
-		// Check if this SKU matches our machine type and region
-		if !skuMatchesMachineType(sku, machineType, region) {
-			continue
-		}
-
-		if len(sku.PricingInfo) > 0 {
-			pricingInfo := sku.PricingInfo[0]
-			if pricingInfo.PricingExpression != nil && len(pricingInfo.PricingExpression.TieredRates) > 0 {
-				rate := pricingInfo.PricingExpression.TieredRates[0]
-				if rate.UnitPrice != nil {
-					price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
-
-					if rate.UnitPrice.CurrencyCode != "" {
-						currency = rate.UnitPrice.CurrencyCode
-					}
-
-					// Check if this is a commitment or on-demand price
-					if strings.Contains(strings.ToLower(sku.Description), "commitment") {
-						commitmentPrice = price
-					} else {
-						onDemandPrice = price
-					}
-				}
-			}
-		}
-	}
-
-	// If we couldn't find specific prices, estimate based on typical GCP CUD discounts
+	onDemandPrice, commitmentPrice, currency := extractComputePricingFromSKUs(skus.Skus, machineType, region)
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no on-demand pricing found for machine type %s", machineType)
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
 	if commitmentPrice == 0 {
-		// GCP Compute CUDs typically offer 37% discount for 1-year, 55% for 3-year
-		discount := 0.63 // 37% savings
-		if termYears == 3 {
-			discount = 0.45 // 55% savings
-		}
-		onDemandTotal := onDemandPrice * hoursInTerm
-		commitmentPrice = onDemandTotal * discount
+		commitmentPrice = estimateComputeCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
 	}
 
-	savingsPercentage := ((onDemandPrice*hoursInTerm - commitmentPrice) / (onDemandPrice * hoursInTerm)) * 100
+	savingsPercentage := calculateComputeSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
 
 	return &ComputePricing{
 		HourlyRate:        commitmentPrice / hoursInTerm,
@@ -544,6 +517,83 @@ func (c *ComputeEngineClient) getComputePricing(ctx context.Context, machineType
 		Currency:          currency,
 		SavingsPercentage: savingsPercentage,
 	}, nil
+}
+
+// getOrCreateBillingService returns the billing service, creating it if needed
+func (c *ComputeEngineClient) getOrCreateBillingService(ctx context.Context) (BillingService, error) {
+	if c.billingService != nil {
+		return c.billingService, nil
+	}
+
+	service, err := cloudbilling.NewService(ctx, c.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing service: %w", err)
+	}
+
+	return &realBillingService{service: service}, nil
+}
+
+// extractComputePricingFromSKUs extracts on-demand and commitment pricing from SKU list
+func extractComputePricingFromSKUs(skus []*cloudbilling.Sku, machineType, region string) (onDemand, commitment float64, currency string) {
+	currency = "USD"
+
+	for _, sku := range skus {
+		if !skuMatchesMachineType(sku, machineType, region) {
+			continue
+		}
+
+		price, curr := extractComputePriceFromSKU(sku)
+		if price == 0 {
+			continue
+		}
+
+		if curr != "" {
+			currency = curr
+		}
+
+		if strings.Contains(strings.ToLower(sku.Description), "commitment") {
+			commitment = price
+		} else {
+			onDemand = price
+		}
+	}
+
+	return onDemand, commitment, currency
+}
+
+// extractComputePriceFromSKU extracts the unit price from a SKU
+func extractComputePriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
+	if len(sku.PricingInfo) == 0 {
+		return 0, ""
+	}
+
+	pricingInfo := sku.PricingInfo[0]
+	if pricingInfo.PricingExpression == nil || len(pricingInfo.PricingExpression.TieredRates) == 0 {
+		return 0, ""
+	}
+
+	rate := pricingInfo.PricingExpression.TieredRates[0]
+	if rate.UnitPrice == nil {
+		return 0, ""
+	}
+
+	price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
+	return price, rate.UnitPrice.CurrencyCode
+}
+
+// estimateComputeCommitmentPrice estimates commitment price based on GCP CUD discounts
+func estimateComputeCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
+	discount := 0.63 // 37% savings for 1 year
+	if termYears == 3 {
+		discount = 0.45 // 55% savings for 3 years
+	}
+	return onDemandPrice * hoursInTerm * discount
+}
+
+// calculateComputeSavingsPercentage calculates the savings percentage
+func calculateComputeSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	return ((onDemandTotal - commitmentPrice) / onDemandTotal) * 100
 }
 
 // skuMatchesMachineType checks if a SKU matches the machine type and region
@@ -579,37 +629,57 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 		PaymentOption:  "upfront",
 	}
 
-	// Extract resource type and cost savings from recommendation content
-	if gcpRec.Content != nil {
-		if gcpRec.Content.OperationGroups != nil {
-			for _, opGroup := range gcpRec.Content.OperationGroups {
-				for _, op := range opGroup.Operations {
-					if op.Resource != "" {
-						// Extract machine type from resource path
-						parts := strings.Split(op.Resource, "/")
-						if len(parts) > 0 {
-							rec.ResourceType = parts[len(parts)-1]
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Extract cost impact
-	if gcpRec.PrimaryImpact != nil {
-		// Use GetCostProjection() method to access the cost projection
-		if costProj := gcpRec.PrimaryImpact.GetCostProjection(); costProj != nil && costProj.Cost != nil {
-			// Cost savings is negative of cost projection
-			cost := costProj.Cost
-			if cost.Units != 0 || cost.Nanos != 0 {
-				savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
-				rec.EstimatedSavings = savings
-			}
-		}
-	}
+	extractResourceTypeFromRecommendation(gcpRec, rec)
+	extractCostImpactFromRecommendation(gcpRec, rec)
 
 	return rec
+}
+
+// extractResourceTypeFromRecommendation extracts the resource type from a GCP recommendation
+func extractResourceTypeFromRecommendation(gcpRec *recommenderpb.Recommendation, rec *common.Recommendation) {
+	if gcpRec.Content == nil || gcpRec.Content.OperationGroups == nil {
+		return
+	}
+
+	for _, opGroup := range gcpRec.Content.OperationGroups {
+		if resourceType := extractResourceTypeFromOperations(opGroup.Operations); resourceType != "" {
+			rec.ResourceType = resourceType
+			return
+		}
+	}
+}
+
+// extractResourceTypeFromOperations extracts resource type from operation list
+func extractResourceTypeFromOperations(operations []*recommenderpb.Operation) string {
+	for _, op := range operations {
+		if op.Resource != "" {
+			// Extract machine type from resource path
+			parts := strings.Split(op.Resource, "/")
+			if len(parts) > 0 {
+				return parts[len(parts)-1]
+			}
+		}
+	}
+	return ""
+}
+
+// extractCostImpactFromRecommendation extracts the cost impact from a GCP recommendation
+func extractCostImpactFromRecommendation(gcpRec *recommenderpb.Recommendation, rec *common.Recommendation) {
+	if gcpRec.PrimaryImpact == nil {
+		return
+	}
+
+	costProj := gcpRec.PrimaryImpact.GetCostProjection()
+	if costProj == nil || costProj.Cost == nil {
+		return
+	}
+
+	cost := costProj.Cost
+	if cost.Units != 0 || cost.Nanos != 0 {
+		// Cost savings is negative of cost projection
+		savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
+		rec.EstimatedSavings = savings
+	}
 }
 
 // Helper functions
