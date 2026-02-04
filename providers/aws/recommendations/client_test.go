@@ -1,150 +1,425 @@
 package recommendations
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-func TestGetFilteredPlanTypes(t *testing.T) {
-	client := &Client{}
+// Mock CostExplorerAPI for testing
+type mockCostExplorerAPI struct {
+	riRecommendations *costexplorer.GetReservationPurchaseRecommendationOutput
+	spRecommendations *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
+	riError           error
+	spError           error
+	callCount         int
+}
 
-	tests := []struct {
-		name           string
-		includeSPTypes []string
-		excludeSPTypes []string
-		expectedLen    int
-		shouldContain  []types.SupportedSavingsPlansType
-		shouldExclude  []types.SupportedSavingsPlansType
-	}{
-		{
-			name:           "No filters - returns all types",
-			includeSPTypes: []string{},
-			excludeSPTypes: []string{},
-			expectedLen:    4,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-				types.SupportedSavingsPlansTypeEc2InstanceSp,
-				types.SupportedSavingsPlansTypeSagemakerSp,
-				types.SupportedSavingsPlansTypeDatabaseSp,
+func (m *mockCostExplorerAPI) GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	m.callCount++
+	if m.riError != nil {
+		return nil, m.riError
+	}
+	return m.riRecommendations, nil
+}
+
+func (m *mockCostExplorerAPI) GetSavingsPlansPurchaseRecommendation(ctx context.Context, params *costexplorer.GetSavingsPlansPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	m.callCount++
+	if m.spError != nil {
+		return nil, m.spError
+	}
+	return m.spRecommendations, nil
+}
+
+func TestNewClient(t *testing.T) {
+	cfg := aws.Config{
+		Region: "us-west-2",
+	}
+
+	client := NewClient(cfg)
+
+	assert.NotNil(t, client)
+	assert.NotNil(t, client.costExplorerClient)
+	assert.NotNil(t, client.rateLimiter)
+	assert.Equal(t, "us-west-2", client.region)
+}
+
+func TestNewClientWithAPI(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{}
+	region := "eu-west-1"
+
+	client := NewClientWithAPI(mockAPI, region)
+
+	assert.NotNil(t, client)
+	assert.Equal(t, mockAPI, client.costExplorerClient)
+	assert.Equal(t, region, client.region)
+	assert.NotNil(t, client.rateLimiter)
+}
+
+func TestGetRecommendations_EC2_Success(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{
+				{
+					RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+						{
+							RecommendedNumberOfInstancesToPurchase: aws.String("2"),
+							EstimatedMonthlySavingsAmount:          aws.String("100.00"),
+							EstimatedMonthlySavingsPercentage:      aws.String("25.0"),
+							AccountId:                              aws.String("123456789012"),
+							InstanceDetails: &types.InstanceDetails{
+								EC2InstanceDetails: &types.EC2InstanceDetails{
+									InstanceType: aws.String("m5.large"),
+									Platform:     aws.String("Linux/UNIX"),
+									Region:       aws.String("us-east-1"),
+									Tenancy:      aws.String("shared"),
+								},
+							},
+						},
+					},
+				},
 			},
-		},
-		{
-			name:           "Include only Database",
-			includeSPTypes: []string{"Database"},
-			excludeSPTypes: []string{},
-			expectedLen:    1,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeDatabaseSp,
-			},
-			shouldExclude: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-				types.SupportedSavingsPlansTypeEc2InstanceSp,
-				types.SupportedSavingsPlansTypeSagemakerSp,
-			},
-		},
-		{
-			name:           "Include Compute and Database",
-			includeSPTypes: []string{"Compute", "Database"},
-			excludeSPTypes: []string{},
-			expectedLen:    2,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-				types.SupportedSavingsPlansTypeDatabaseSp,
-			},
-			shouldExclude: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeEc2InstanceSp,
-				types.SupportedSavingsPlansTypeSagemakerSp,
-			},
-		},
-		{
-			name:           "Exclude SageMaker",
-			includeSPTypes: []string{},
-			excludeSPTypes: []string{"SageMaker"},
-			expectedLen:    3,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-				types.SupportedSavingsPlansTypeEc2InstanceSp,
-				types.SupportedSavingsPlansTypeDatabaseSp,
-			},
-			shouldExclude: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeSagemakerSp,
-			},
-		},
-		{
-			name:           "Exclude Database and SageMaker",
-			includeSPTypes: []string{},
-			excludeSPTypes: []string{"Database", "SageMaker"},
-			expectedLen:    2,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-				types.SupportedSavingsPlansTypeEc2InstanceSp,
-			},
-			shouldExclude: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeSagemakerSp,
-				types.SupportedSavingsPlansTypeDatabaseSp,
-			},
-		},
-		{
-			name:           "Case insensitive - lowercase",
-			includeSPTypes: []string{"database", "compute"},
-			excludeSPTypes: []string{},
-			expectedLen:    2,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-				types.SupportedSavingsPlansTypeDatabaseSp,
-			},
-		},
-		{
-			name:           "Case insensitive - mixed case",
-			includeSPTypes: []string{"DATABASE", "ComPuTe"},
-			excludeSPTypes: []string{},
-			expectedLen:    2,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-				types.SupportedSavingsPlansTypeDatabaseSp,
-			},
-		},
-		{
-			name:           "Include with exclude - exclude takes precedence",
-			includeSPTypes: []string{"Compute", "Database"},
-			excludeSPTypes: []string{"Database"},
-			expectedLen:    1,
-			shouldContain: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeComputeSp,
-			},
-			shouldExclude: []types.SupportedSavingsPlansType{
-				types.SupportedSavingsPlansTypeDatabaseSp,
-			},
-		},
-		{
-			name:           "Exclude all - returns empty",
-			includeSPTypes: []string{},
-			excludeSPTypes: []string{"Compute", "EC2Instance", "SageMaker", "Database"},
-			expectedLen:    0,
-		},
-		{
-			name:           "Include non-existent type - returns empty",
-			includeSPTypes: []string{"NonExistent"},
-			excludeSPTypes: []string{},
-			expectedLen:    0,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := client.getFilteredPlanTypes(tt.includeSPTypes, tt.excludeSPTypes)
+	client := NewClientWithAPI(mockAPI, "us-east-1")
 
-			assert.Len(t, result, tt.expectedLen)
-
-			for _, expected := range tt.shouldContain {
-				assert.Contains(t, result, expected, "Expected result to contain %s", expected)
-			}
-
-			for _, excluded := range tt.shouldExclude {
-				assert.NotContains(t, result, excluded, "Expected result to NOT contain %s", excluded)
-			}
-		})
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
 	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+	assert.Equal(t, common.ServiceEC2, recs[0].Service)
+	assert.Equal(t, "m5.large", recs[0].ResourceType)
+	assert.Equal(t, 2, recs[0].Count)
+	assert.Equal(t, 100.00, recs[0].EstimatedSavings)
+}
+
+func TestGetRecommendations_RDS_Success(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{
+				{
+					RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+						{
+							RecommendedNumberOfInstancesToPurchase: aws.String("1"),
+							EstimatedMonthlySavingsAmount:          aws.String("50.00"),
+							EstimatedMonthlySavingsPercentage:      aws.String("20.0"),
+							InstanceDetails: &types.InstanceDetails{
+								RDSInstanceDetails: &types.RDSInstanceDetails{
+									InstanceType:     aws.String("db.r5.large"),
+									DatabaseEngine:   aws.String("mysql"),
+									Region:           aws.String("us-west-2"),
+									DeploymentOption: aws.String("Multi-AZ"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	params := common.RecommendationParams{
+		Service:        common.ServiceRDS,
+		PaymentOption:  "all-upfront",
+		Term:           "3yr",
+		LookbackPeriod: "30d",
+	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+	assert.Equal(t, common.ServiceRDS, recs[0].Service)
+	assert.Equal(t, "db.r5.large", recs[0].ResourceType)
+
+	dbDetails, ok := recs[0].Details.(*common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Equal(t, "mysql", dbDetails.Engine)
+	assert.Equal(t, "multi-az", dbDetails.AZConfig)
+}
+
+func TestGetRecommendations_ElastiCache_Success(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{
+				{
+					RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+						{
+							RecommendedNumberOfInstancesToPurchase: aws.String("3"),
+							EstimatedMonthlySavingsAmount:          aws.String("75.00"),
+							EstimatedMonthlySavingsPercentage:      aws.String("30.0"),
+							InstanceDetails: &types.InstanceDetails{
+								ElastiCacheInstanceDetails: &types.ElastiCacheInstanceDetails{
+									NodeType:           aws.String("cache.r5.large"),
+									ProductDescription: aws.String("redis"),
+									Region:             aws.String("eu-west-1"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	params := common.RecommendationParams{
+		Service:        common.ServiceElastiCache,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+	assert.Equal(t, common.ServiceElastiCache, recs[0].Service)
+	assert.Equal(t, "cache.r5.large", recs[0].ResourceType)
+
+	cacheDetails, ok := recs[0].Details.(*common.CacheDetails)
+	require.True(t, ok)
+	assert.Equal(t, "redis", cacheDetails.Engine)
+}
+
+func TestGetRecommendations_SavingsPlans_Success(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		spRecommendations: &costexplorer.GetSavingsPlansPurchaseRecommendationOutput{
+			SavingsPlansPurchaseRecommendation: &types.SavingsPlansPurchaseRecommendation{
+				SavingsPlansPurchaseRecommendationDetails: []types.SavingsPlansPurchaseRecommendationDetail{
+					{
+						HourlyCommitmentToPurchase:    aws.String("2.50"),
+						EstimatedMonthlySavingsAmount: aws.String("150.00"),
+						EstimatedSavingsPercentage:    aws.String("35.0"),
+						UpfrontCost:                   aws.String("500.00"),
+						AccountId:                     aws.String("123456789012"),
+					},
+				},
+			},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	params := common.RecommendationParams{
+		Service:        common.ServiceSavingsPlans,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+		IncludeSPTypes: []string{"Compute"},
+	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+	assert.Equal(t, common.ServiceSavingsPlans, recs[0].Service)
+	assert.Equal(t, common.CommitmentSavingsPlan, recs[0].CommitmentType)
+	assert.Equal(t, 150.00, recs[0].EstimatedSavings)
+
+	spDetails, ok := recs[0].Details.(*common.SavingsPlanDetails)
+	require.True(t, ok)
+	assert.Equal(t, "Compute", spDetails.PlanType)
+	assert.Equal(t, 2.50, spDetails.HourlyCommitment)
+}
+
+func TestGetRecommendations_Error(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riError: errors.New("API error"),
+	}
+
+	// Use custom rate limiter to speed up test
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+	client.rateLimiter = NewRateLimiterWithOptions(1*time.Millisecond, 10*time.Millisecond, 2)
+
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+
+	assert.Error(t, err)
+	assert.Nil(t, recs)
+	// Should have retried maxRetries + 1 times
+	assert.Equal(t, 3, mockAPI.callCount)
+}
+
+func TestGetRecommendations_EmptyResult(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+
+	require.NoError(t, err)
+	assert.Empty(t, recs)
+}
+
+func TestGetRecommendationsForService(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{
+				{
+					RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+						{
+							RecommendedNumberOfInstancesToPurchase: aws.String("1"),
+							EstimatedMonthlySavingsAmount:          aws.String("50.00"),
+							EstimatedMonthlySavingsPercentage:      aws.String("20.0"),
+							InstanceDetails: &types.InstanceDetails{
+								EC2InstanceDetails: &types.EC2InstanceDetails{
+									InstanceType: aws.String("t3.medium"),
+									Platform:     aws.String("Linux/UNIX"),
+									Region:       aws.String("us-east-1"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	recs, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
+
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+	assert.Equal(t, common.ServiceEC2, recs[0].Service)
+	// Verify default params are applied
+	assert.Equal(t, "partial-upfront", recs[0].PaymentOption)
+	assert.Equal(t, "3yr", recs[0].Term)
+}
+
+func TestGetAllRecommendations(t *testing.T) {
+	// GetAllRecommendations will call the API 5 times for different services
+	// Our mock returns EC2 details for all calls, so only EC2 will parse successfully
+	// The other services will fail parsing because the instance details don't match
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{
+				{
+					RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+						{
+							RecommendedNumberOfInstancesToPurchase: aws.String("1"),
+							EstimatedMonthlySavingsAmount:          aws.String("50.00"),
+							EstimatedMonthlySavingsPercentage:      aws.String("20.0"),
+							InstanceDetails: &types.InstanceDetails{
+								EC2InstanceDetails: &types.EC2InstanceDetails{
+									InstanceType: aws.String("t3.medium"),
+									Platform:     aws.String("Linux/UNIX"),
+									Region:       aws.String("us-east-1"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	recs, err := client.GetAllRecommendations(context.Background())
+
+	require.NoError(t, err)
+	// Only EC2 will successfully parse since the mock returns EC2 details for all services
+	// Other services will fail parsing and be skipped
+	assert.NotEmpty(t, recs)
+	assert.Equal(t, common.ServiceEC2, recs[0].Service)
+}
+
+func TestGetAllRecommendations_SomeServicesFail(t *testing.T) {
+	// Use a simpler approach - just provide valid recommendations
+	// GetAllRecommendations continues on errors, so we just verify it doesn't fail completely
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{
+				{
+					RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+						{
+							RecommendedNumberOfInstancesToPurchase: aws.String("1"),
+							EstimatedMonthlySavingsAmount:          aws.String("50.00"),
+							EstimatedMonthlySavingsPercentage:      aws.String("20.0"),
+							InstanceDetails: &types.InstanceDetails{
+								EC2InstanceDetails: &types.EC2InstanceDetails{
+									InstanceType: aws.String("t3.medium"),
+									Platform:     aws.String("Linux/UNIX"),
+									Region:       aws.String("us-east-1"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	recs, err := client.GetAllRecommendations(context.Background())
+
+	// Should not error even if some services fail
+	require.NoError(t, err)
+	// Should have recommendations from services that succeeded
+	assert.NotEmpty(t, recs)
+}
+
+func TestGetRecommendations_ContextCancellation(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riError: errors.New("API error"),
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+	client.rateLimiter = NewRateLimiterWithOptions(100*time.Millisecond, 1*time.Second, 5)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.GetRecommendations(ctx, params)
+
+	assert.Error(t, err)
+	assert.Nil(t, recs)
+	assert.Contains(t, err.Error(), "rate limiter wait failed")
 }

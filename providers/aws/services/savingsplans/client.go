@@ -157,37 +157,13 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		return "", fmt.Errorf("invalid service details for Savings Plans")
 	}
 
-	// Convert plan type
-	var planType types.SavingsPlanType
-	switch spDetails.PlanType {
-	case "Compute":
-		planType = types.SavingsPlanTypeCompute
-	case "EC2Instance":
-		planType = types.SavingsPlanTypeEc2Instance
-	case "SageMaker", "Sagemaker":
-		planType = types.SavingsPlanTypeSagemaker
-	case "Database":
-		planType = types.SavingsPlanTypeDatabase
-	default:
-		return "", fmt.Errorf("unsupported Savings Plan type: %s", spDetails.PlanType)
+	planType, err := convertPlanType(spDetails.PlanType)
+	if err != nil {
+		return "", err
 	}
 
-	// Convert term to months
-	termMonths := int64(12)
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termMonths = 36
-	}
-
-	// Convert payment option
-	paymentOption := types.SavingsPlanPaymentOptionAllUpfront
-	switch rec.PaymentOption {
-	case "All Upfront", "all-upfront":
-		paymentOption = types.SavingsPlanPaymentOptionAllUpfront
-	case "Partial Upfront", "partial-upfront":
-		paymentOption = types.SavingsPlanPaymentOptionPartialUpfront
-	case "No Upfront", "no-upfront":
-		paymentOption = types.SavingsPlanPaymentOptionNoUpfront
-	}
+	termMonths := convertTermToMonths(rec.Term)
+	paymentOption := convertPaymentOption(rec.PaymentOption)
 
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
@@ -195,6 +171,49 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
 	}
 
+	return c.lookupOfferingID(ctx, input)
+}
+
+// convertPlanType converts a plan type string to AWS SDK type
+func convertPlanType(planType string) (types.SavingsPlanType, error) {
+	switch planType {
+	case "Compute":
+		return types.SavingsPlanTypeCompute, nil
+	case "EC2Instance":
+		return types.SavingsPlanTypeEc2Instance, nil
+	case "SageMaker", "Sagemaker":
+		return types.SavingsPlanTypeSagemaker, nil
+	case "Database":
+		return types.SavingsPlanTypeDatabase, nil
+	default:
+		return "", fmt.Errorf("unsupported Savings Plan type: %s", planType)
+	}
+}
+
+// convertTermToMonths converts a term string to months
+func convertTermToMonths(term string) int64 {
+	if term == "3yr" || term == "3" {
+		return 36
+	}
+	return 12
+}
+
+// convertPaymentOption converts a payment option string to AWS SDK type
+func convertPaymentOption(paymentOption string) types.SavingsPlanPaymentOption {
+	switch paymentOption {
+	case "All Upfront", "all-upfront":
+		return types.SavingsPlanPaymentOptionAllUpfront
+	case "Partial Upfront", "partial-upfront":
+		return types.SavingsPlanPaymentOptionPartialUpfront
+	case "No Upfront", "no-upfront":
+		return types.SavingsPlanPaymentOptionNoUpfront
+	default:
+		return types.SavingsPlanPaymentOptionAllUpfront
+	}
+}
+
+// lookupOfferingID performs the actual API call to find the offering ID
+func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput) (string, error) {
 	result, err := c.client.DescribeSavingsPlansOfferings(ctx, input)
 	if err != nil {
 		return "", fmt.Errorf("failed to describe Savings Plans offerings: %w", err)
@@ -225,47 +244,18 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 		return nil, fmt.Errorf("invalid service details for Savings Plans")
 	}
 
-	// Get offering rates
-	input := &savingsplans.DescribeSavingsPlansOfferingRatesInput{
-		SavingsPlanOfferingIds: []string{offeringID},
+	if err := c.validateOffering(ctx, offeringID); err != nil {
+		return nil, err
 	}
 
-	_, err = c.client.DescribeSavingsPlansOfferingRates(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get offering rates: %w", err)
-	}
-
-	// Calculate costs based on payment option
-	var upfrontCost, recurringCost, totalCost float64
-
-	// Total cost is hourly commitment * hours in term
-	hoursInTerm := 8760.0 // 1 year
-	if rec.Term == "3yr" || rec.Term == "3" {
-		hoursInTerm = 26280.0 // 3 years
-	}
-	totalCost = spDetails.HourlyCommitment * hoursInTerm
-
-	switch rec.PaymentOption {
-	case "All Upfront", "all-upfront":
-		upfrontCost = totalCost
-		recurringCost = 0
-	case "Partial Upfront", "partial-upfront":
-		upfrontCost = totalCost * 0.5
-		recurringCost = (totalCost * 0.5) / hoursInTerm
-	case "No Upfront", "no-upfront":
-		upfrontCost = 0
-		recurringCost = totalCost / hoursInTerm
-	}
-
-	termStr := "1yr"
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termStr = "3yr"
-	}
+	hoursInTerm := calculateHoursInTerm(rec.Term)
+	totalCost := spDetails.HourlyCommitment * hoursInTerm
+	upfrontCost, recurringCost := calculatePaymentBreakdown(rec.PaymentOption, totalCost, hoursInTerm)
 
 	return &common.OfferingDetails{
 		OfferingID:          offeringID,
 		ResourceType:        spDetails.PlanType,
-		Term:                termStr,
+		Term:                normalizeTermString(rec.Term),
 		PaymentOption:       rec.PaymentOption,
 		UpfrontCost:         upfrontCost,
 		RecurringCost:       recurringCost,
@@ -273,6 +263,50 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 		EffectiveHourlyRate: spDetails.HourlyCommitment,
 		Currency:            "USD",
 	}, nil
+}
+
+// validateOffering validates that the offering exists
+func (c *Client) validateOffering(ctx context.Context, offeringID string) error {
+	input := &savingsplans.DescribeSavingsPlansOfferingRatesInput{
+		SavingsPlanOfferingIds: []string{offeringID},
+	}
+
+	_, err := c.client.DescribeSavingsPlansOfferingRates(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to get offering rates: %w", err)
+	}
+
+	return nil
+}
+
+// calculateHoursInTerm calculates the number of hours in a commitment term
+func calculateHoursInTerm(term string) float64 {
+	if term == "3yr" || term == "3" {
+		return 26280.0 // 3 years
+	}
+	return 8760.0 // 1 year
+}
+
+// calculatePaymentBreakdown calculates upfront and recurring costs based on payment option
+func calculatePaymentBreakdown(paymentOption string, totalCost, hoursInTerm float64) (upfrontCost, recurringCost float64) {
+	switch paymentOption {
+	case "All Upfront", "all-upfront":
+		return totalCost, 0
+	case "Partial Upfront", "partial-upfront":
+		return totalCost * 0.5, (totalCost * 0.5) / hoursInTerm
+	case "No Upfront", "no-upfront":
+		return 0, totalCost / hoursInTerm
+	default:
+		return totalCost, 0
+	}
+}
+
+// normalizeTermString normalizes a term string to standard format
+func normalizeTermString(term string) string {
+	if term == "3yr" || term == "3" {
+		return "3yr"
+	}
+	return "1yr"
 }
 
 // GetValidResourceTypes returns valid Savings Plan types

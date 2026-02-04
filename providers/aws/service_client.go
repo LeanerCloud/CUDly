@@ -73,50 +73,76 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		return nil, err
 	}
 
-	// Apply filters
+	recs = applyRecommendationFilters(recs, params)
+	return recs, nil
+}
+
+// applyRecommendationFilters applies account and region filters to recommendations
+func applyRecommendationFilters(recs []common.Recommendation, params common.RecommendationParams) []common.Recommendation {
 	if len(params.AccountFilter) > 0 {
-		filtered := make([]common.Recommendation, 0)
-		accountMap := make(map[string]bool)
-		for _, acc := range params.AccountFilter {
-			accountMap[acc] = true
-		}
-		for _, rec := range recs {
-			if accountMap[rec.Account] {
-				filtered = append(filtered, rec)
-			}
-		}
-		recs = filtered
+		recs = filterByAccounts(recs, params.AccountFilter)
 	}
 
 	if len(params.IncludeRegions) > 0 {
-		filtered := make([]common.Recommendation, 0)
-		regionMap := make(map[string]bool)
-		for _, region := range params.IncludeRegions {
-			regionMap[region] = true
-		}
-		for _, rec := range recs {
-			if regionMap[rec.Region] {
-				filtered = append(filtered, rec)
-			}
-		}
-		recs = filtered
+		recs = filterByIncludedRegions(recs, params.IncludeRegions)
 	}
 
 	if len(params.ExcludeRegions) > 0 {
-		regionMap := make(map[string]bool)
-		for _, region := range params.ExcludeRegions {
-			regionMap[region] = true
-		}
-		filtered := make([]common.Recommendation, 0)
-		for _, rec := range recs {
-			if !regionMap[rec.Region] {
-				filtered = append(filtered, rec)
-			}
-		}
-		recs = filtered
+		recs = filterByExcludedRegions(recs, params.ExcludeRegions)
 	}
 
-	return recs, nil
+	return recs
+}
+
+// filterByAccounts filters recommendations by account IDs
+func filterByAccounts(recs []common.Recommendation, accounts []string) []common.Recommendation {
+	accountMap := make(map[string]bool)
+	for _, acc := range accounts {
+		accountMap[acc] = true
+	}
+
+	filtered := make([]common.Recommendation, 0, len(recs))
+	for _, rec := range recs {
+		if accountMap[rec.Account] {
+			filtered = append(filtered, rec)
+		}
+	}
+
+	return filtered
+}
+
+// filterByIncludedRegions filters recommendations to only included regions
+func filterByIncludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
+	regionMap := make(map[string]bool)
+	for _, region := range regions {
+		regionMap[region] = true
+	}
+
+	filtered := make([]common.Recommendation, 0, len(recs))
+	for _, rec := range recs {
+		if regionMap[rec.Region] {
+			filtered = append(filtered, rec)
+		}
+	}
+
+	return filtered
+}
+
+// filterByExcludedRegions filters out recommendations from excluded regions
+func filterByExcludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
+	regionMap := make(map[string]bool)
+	for _, region := range regions {
+		regionMap[region] = true
+	}
+
+	filtered := make([]common.Recommendation, 0, len(recs))
+	for _, rec := range recs {
+		if !regionMap[rec.Region] {
+			filtered = append(filtered, rec)
+		}
+	}
+
+	return filtered
 }
 
 // GetRecommendationsForService gets recommendations for a specific service
