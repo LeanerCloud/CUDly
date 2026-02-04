@@ -154,56 +154,78 @@ func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.R
 
 // GetExistingCommitments retrieves existing SQL Database reserved capacity using Azure Resource Graph
 func (c *DatabaseClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected pager if available (for testing)
-	var pager ReservationsDetailsPager
-	if c.reservationsPager != nil {
-		pager = c.reservationsPager
-	} else {
-		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-		if err != nil {
-			return commitments, nil // Return empty on error rather than failing
-		}
-		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
+	pager, err := c.createReservationsPager()
+	if err != nil {
+		return []common.Commitment{}, nil
 	}
+
+	return c.collectSQLReservations(ctx, pager), nil
+}
+
+// createReservationsPager creates a pager for listing reservations
+func (c *DatabaseClient) createReservationsPager() (ReservationsDetailsPager, error) {
+	// Use injected pager if available (for testing)
+	if c.reservationsPager != nil {
+		return c.reservationsPager, nil
+	}
+
+	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+}
+
+// collectSQLReservations collects SQL Database reservations from the pager
+func (c *DatabaseClient) collectSQLReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break // Continue with what we have
+			break
 		}
 
 		for _, detail := range page.Value {
-			if detail.Properties == nil {
-				continue
-			}
-
-			props := detail.Properties
-			if props.SKUName != nil && strings.Contains(strings.ToLower(*props.SKUName), "sql") {
-				commitment := common.Commitment{
-					Provider:       common.ProviderAzure,
-					Account:        c.subscriptionID,
-					CommitmentType: common.CommitmentReservedInstance,
-					Service:        common.ServiceRelationalDB,
-					Region:         c.region,
-					State:          "active",
-				}
-
-				if props.ReservationID != nil {
-					commitment.CommitmentID = *props.ReservationID
-				}
-				if props.SKUName != nil {
-					commitment.ResourceType = *props.SKUName
-				}
-
-				commitments = append(commitments, commitment)
+			if commitment := c.convertSQLReservation(detail); commitment != nil {
+				commitments = append(commitments, *commitment)
 			}
 		}
 	}
 
-	return commitments, nil
+	return commitments
+}
+
+// convertSQLReservation converts a reservation detail to a commitment if it's a SQL reservation
+func (c *DatabaseClient) convertSQLReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
+	if detail.Properties == nil {
+		return nil
+	}
+
+	props := detail.Properties
+	if props.SKUName == nil || !strings.Contains(strings.ToLower(*props.SKUName), "sql") {
+		return nil
+	}
+
+	commitment := &common.Commitment{
+		Provider:       common.ProviderAzure,
+		Account:        c.subscriptionID,
+		CommitmentType: common.CommitmentReservedInstance,
+		Service:        common.ServiceRelationalDB,
+		Region:         c.region,
+		State:          "active",
+	}
+
+	if props.ReservationID != nil {
+		commitment.CommitmentID = *props.ReservationID
+	}
+	if props.SKUName != nil {
+		commitment.ResourceType = *props.SKUName
+	}
+
+	return commitment
 }
 
 // PurchaseCommitment purchases SQL Database reserved capacity via Azure Reservations API
@@ -347,16 +369,9 @@ func (c *DatabaseClient) GetOfferingDetails(ctx context.Context, rec common.Reco
 
 // GetValidResourceTypes returns valid SQL Database SKUs from Azure API
 func (c *DatabaseClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	// Use injected client if available (for testing)
-	var capClient CapabilitiesClient
-	if c.capabilitiesClient != nil {
-		capClient = c.capabilitiesClient
-	} else {
-		client, err := armsql.NewCapabilitiesClient(c.subscriptionID, c.cred, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create capabilities client: %w", err)
-		}
-		capClient = client
+	capClient, err := c.getOrCreateCapabilitiesClient()
+	if err != nil {
+		return nil, err
 	}
 
 	capabilities, err := capClient.ListByLocation(ctx, c.region, &armsql.CapabilitiesClientListByLocationOptions{
@@ -369,36 +384,10 @@ func (c *DatabaseClient) GetValidResourceTypes(ctx context.Context) ([]string, e
 	skuSet := make(map[string]bool)
 
 	// Extract SKUs from server capabilities
-	if capabilities.SupportedServerVersions != nil {
-		for _, version := range capabilities.SupportedServerVersions {
-			if version.SupportedEditions != nil {
-				for _, edition := range version.SupportedEditions {
-					if edition.SupportedServiceLevelObjectives != nil {
-						for _, slo := range edition.SupportedServiceLevelObjectives {
-							if slo.SKU != nil && slo.SKU.Name != nil {
-								skuSet[*slo.SKU.Name] = true
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	c.extractServerSKUs(capabilities.LocationCapabilities, skuSet)
 
 	// Extract SKUs from managed instance capabilities
-	if capabilities.SupportedManagedInstanceVersions != nil {
-		for _, version := range capabilities.SupportedManagedInstanceVersions {
-			if version.SupportedEditions != nil {
-				for _, edition := range version.SupportedEditions {
-					// Managed instance capabilities have a different structure
-					// Just use the edition name as a SKU if available
-					if edition.Name != nil {
-						skuSet[*edition.Name] = true
-					}
-				}
-			}
-		}
-	}
+	c.extractManagedInstanceSKUs(capabilities.LocationCapabilities, skuSet)
 
 	skus := make([]string, 0, len(skuSet))
 	for sku := range skuSet {
@@ -412,6 +401,64 @@ func (c *DatabaseClient) GetValidResourceTypes(ctx context.Context) ([]string, e
 	return skus, nil
 }
 
+// getOrCreateCapabilitiesClient returns the injected client or creates a new one
+func (c *DatabaseClient) getOrCreateCapabilitiesClient() (CapabilitiesClient, error) {
+	if c.capabilitiesClient != nil {
+		return c.capabilitiesClient, nil
+	}
+
+	client, err := armsql.NewCapabilitiesClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create capabilities client: %w", err)
+	}
+
+	return client, nil
+}
+
+// extractServerSKUs extracts SKUs from server version capabilities
+func (c *DatabaseClient) extractServerSKUs(capabilities armsql.LocationCapabilities, skuSet map[string]bool) {
+	if capabilities.SupportedServerVersions == nil {
+		return
+	}
+
+	for _, version := range capabilities.SupportedServerVersions {
+		if version.SupportedEditions == nil {
+			continue
+		}
+
+		for _, edition := range version.SupportedEditions {
+			if edition.SupportedServiceLevelObjectives == nil {
+				continue
+			}
+
+			for _, slo := range edition.SupportedServiceLevelObjectives {
+				if slo.SKU != nil && slo.SKU.Name != nil {
+					skuSet[*slo.SKU.Name] = true
+				}
+			}
+		}
+	}
+}
+
+// extractManagedInstanceSKUs extracts SKUs from managed instance capabilities
+func (c *DatabaseClient) extractManagedInstanceSKUs(capabilities armsql.LocationCapabilities, skuSet map[string]bool) {
+	if capabilities.SupportedManagedInstanceVersions == nil {
+		return
+	}
+
+	for _, version := range capabilities.SupportedManagedInstanceVersions {
+		if version.SupportedEditions == nil {
+			continue
+		}
+
+		for _, edition := range version.SupportedEditions {
+			if edition.Name != nil {
+				skuSet[*edition.Name] = true
+			}
+		}
+	}
+}
+
 // SQLPricing contains pricing information for SQL Database
 type SQLPricing struct {
 	HourlyRate        float64
@@ -423,16 +470,46 @@ type SQLPricing struct {
 
 // getSQLPricing gets real pricing from Azure Retail Prices API
 func (c *DatabaseClient) getSQLPricing(ctx context.Context, sku, region string, termYears int) (*SQLPricing, error) {
-	baseURL := "https://prices.azure.com/api/retail/prices"
-
 	filter := fmt.Sprintf("serviceName eq 'SQL Database' and armRegionName eq '%s' and armSkuName eq '%s'",
 		region, sku)
 
+	priceData, err := c.fetchAzurePricing(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(priceData.Items) == 0 {
+		return nil, fmt.Errorf("no pricing data found for SKU %s in region %s", sku, region)
+	}
+
+	onDemandPrice, reservationPrice, currency := extractSQLPricing(priceData.Items, termYears)
+	if onDemandPrice == 0 {
+		return nil, fmt.Errorf("no on-demand pricing found for SKU %s", sku)
+	}
+
+	hoursInTerm := 8760.0 * float64(termYears)
+	if reservationPrice == 0 {
+		reservationPrice = onDemandPrice * hoursInTerm * 0.65
+	}
+
+	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
+
+	return &SQLPricing{
+		HourlyRate:        reservationPrice / hoursInTerm,
+		ReservationPrice:  reservationPrice,
+		OnDemandPrice:     onDemandPrice * hoursInTerm,
+		Currency:          currency,
+		SavingsPercentage: savingsPercentage,
+	}, nil
+}
+
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+func (c *DatabaseClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	fullURL := baseURL + "?" + params.Encode()
+	fullURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
 	if err != nil {
@@ -455,47 +532,41 @@ func (c *DatabaseClient) getSQLPricing(ctx context.Context, sku, region string, 
 		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
 	}
 
-	if len(priceData.Items) == 0 {
-		return nil, fmt.Errorf("no pricing data found for SKU %s in region %s", sku, region)
-	}
+	return &priceData, nil
+}
 
-	var onDemandPrice, reservationPrice float64
-	var currency string = "USD"
+// extractSQLPricing extracts on-demand and reservation pricing from price items
+func extractSQLPricing(items []struct {
+	CurrencyCode         string  `json:"currencyCode"`
+	RetailPrice          float64 `json:"retailPrice"`
+	UnitPrice            float64 `json:"unitPrice"`
+	ArmRegionName        string  `json:"armRegionName"`
+	Location             string  `json:"location"`
+	MeterName            string  `json:"meterName"`
+	SKUName              string  `json:"skuName"`
+	ProductName          string  `json:"productName"`
+	ServiceName          string  `json:"serviceName"`
+	UnitOfMeasure        string  `json:"unitOfMeasure"`
+	Type                 string  `json:"type"`
+	ArmSKUName           string  `json:"armSkuName"`
+	ReservationTerm      string  `json:"reservationTerm"`
+}, termYears int) (onDemand, reservation float64, currency string) {
+	currency = "USD"
+	termStr := fmt.Sprintf("%d Years", termYears)
 
-	for _, item := range priceData.Items {
+	for _, item := range items {
 		if item.CurrencyCode != "" {
 			currency = item.CurrencyCode
 		}
 
-		if item.ReservationTerm != "" {
-			termStr := fmt.Sprintf("%d Years", termYears)
-			if item.ReservationTerm == termStr {
-				reservationPrice = item.RetailPrice
-			}
+		if item.ReservationTerm == termStr {
+			reservation = item.RetailPrice
 		} else if item.Type == "Consumption" {
-			onDemandPrice = item.UnitPrice
+			onDemand = item.UnitPrice
 		}
 	}
 
-	if onDemandPrice == 0 {
-		return nil, fmt.Errorf("no on-demand pricing found for SKU %s", sku)
-	}
-
-	hoursInTerm := 8760.0 * float64(termYears)
-	if reservationPrice == 0 {
-		onDemandTotal := onDemandPrice * hoursInTerm
-		reservationPrice = onDemandTotal * 0.65
-	}
-
-	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
-
-	return &SQLPricing{
-		HourlyRate:        reservationPrice / hoursInTerm,
-		ReservationPrice:  reservationPrice,
-		OnDemandPrice:     onDemandPrice * hoursInTerm,
-		Currency:          currency,
-		SavingsPercentage: savingsPercentage,
-	}, nil
+	return onDemand, reservation, currency
 }
 
 // convertAzureSQLRecommendation converts Azure SQL reservation recommendation to common format

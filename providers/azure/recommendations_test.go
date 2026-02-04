@@ -175,11 +175,9 @@ func TestRecommendationsClientAdapter_GetRecommendationsForService(t *testing.T)
 	}
 
 	// This will try to make API calls which will fail without real credentials,
-	// but we test the wiring is correct
-	_, err := adapter.GetRecommendationsForService(context.Background(), common.ServiceCompute)
-	// Error is expected since we don't have real Azure credentials
-	// The important thing is the function is wired correctly
-	_ = err
+	// but we test the wiring is correct. Error is expected since we don't have
+	// real Azure credentials - the important thing is the function is wired correctly.
+	_, _ = adapter.GetRecommendationsForService(context.Background(), common.ServiceCompute)
 }
 
 func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
@@ -189,9 +187,8 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 	}
 
 	// This will try to make API calls which will fail without real credentials,
-	// but we test the wiring is correct
-	_, err := adapter.GetAllRecommendations(context.Background())
-	_ = err
+	// but we test the wiring is correct. Error is expected - we just verify the function is callable.
+	_, _ = adapter.GetAllRecommendations(context.Background())
 }
 
 func TestExtractServiceType(t *testing.T) {

@@ -152,20 +152,33 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 
 // GetExistingCommitments retrieves existing Search reserved capacity
 func (c *SearchClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected pager if available (for testing)
-	var pager ReservationsDetailsPager
-	if c.reservationsPager != nil {
-		pager = c.reservationsPager
-	} else {
-		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-		if err != nil {
-			return commitments, nil
-		}
-		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
+	pager, err := c.createReservationsPager()
+	if err != nil {
+		return []common.Commitment{}, nil
 	}
+
+	return c.collectSearchReservations(ctx, pager), nil
+}
+
+// createReservationsPager creates a pager for listing reservations
+func (c *SearchClient) createReservationsPager() (ReservationsDetailsPager, error) {
+	// Use injected pager if available (for testing)
+	if c.reservationsPager != nil {
+		return c.reservationsPager, nil
+	}
+
+	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+}
+
+// collectSearchReservations collects Search reservations from the pager
+func (c *SearchClient) collectSearchReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -174,35 +187,43 @@ func (c *SearchClient) GetExistingCommitments(ctx context.Context) ([]common.Com
 		}
 
 		for _, detail := range page.Value {
-			if detail.Properties == nil {
-				continue
-			}
-
-			props := detail.Properties
-			// Filter for Search reservations - check SKU name
-			if props.SKUName != nil && strings.Contains(strings.ToLower(*props.SKUName), "search") {
-				commitment := common.Commitment{
-					Provider:       common.ProviderAzure,
-					Account:        c.subscriptionID,
-					CommitmentType: common.CommitmentReservedInstance,
-					Service:        common.ServiceOther,
-					Region:         c.region,
-					State:          "active",
-				}
-
-				if props.ReservationID != nil {
-					commitment.CommitmentID = *props.ReservationID
-				}
-				if props.SKUName != nil {
-					commitment.ResourceType = *props.SKUName
-				}
-
-				commitments = append(commitments, commitment)
+			if commitment := c.convertSearchReservation(detail); commitment != nil {
+				commitments = append(commitments, *commitment)
 			}
 		}
 	}
 
-	return commitments, nil
+	return commitments
+}
+
+// convertSearchReservation converts a reservation detail to a commitment if it's a Search reservation
+func (c *SearchClient) convertSearchReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
+	if detail.Properties == nil {
+		return nil
+	}
+
+	props := detail.Properties
+	if props.SKUName == nil || !strings.Contains(strings.ToLower(*props.SKUName), "search") {
+		return nil
+	}
+
+	commitment := &common.Commitment{
+		Provider:       common.ProviderAzure,
+		Account:        c.subscriptionID,
+		CommitmentType: common.CommitmentReservedInstance,
+		Service:        common.ServiceOther,
+		Region:         c.region,
+		State:          "active",
+	}
+
+	if props.ReservationID != nil {
+		commitment.CommitmentID = *props.ReservationID
+	}
+	if props.SKUName != nil {
+		commitment.ResourceType = *props.SKUName
+	}
+
+	return commitment
 }
 
 // PurchaseCommitment purchases Search reserved capacity via Azure Reservations API
@@ -406,11 +427,41 @@ type SearchPricing struct {
 
 // getSearchPricing gets real pricing from Azure Retail Prices API
 func (c *SearchClient) getSearchPricing(ctx context.Context, sku, region string, termYears int) (*SearchPricing, error) {
+	filter := fmt.Sprintf("serviceName eq 'Azure Cognitive Search' and armRegionName eq '%s'", region)
+
+	priceData, err := c.fetchAzurePricing(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(priceData.Items) == 0 {
+		return nil, fmt.Errorf("no pricing data found for Azure Search in region %s", region)
+	}
+
+	onDemandPrice, reservationPrice, currency := extractSearchPricing(priceData.Items, termYears)
+	if onDemandPrice == 0 {
+		return nil, fmt.Errorf("no on-demand pricing found for Azure Search")
+	}
+
+	hoursInTerm := 8760.0 * float64(termYears)
+	if reservationPrice == 0 {
+		reservationPrice = estimateSearchReservationPrice(onDemandPrice, hoursInTerm)
+	}
+
+	savingsPercentage := calculateSearchSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice)
+
+	return &SearchPricing{
+		HourlyRate:        reservationPrice / hoursInTerm,
+		ReservationPrice:  reservationPrice,
+		OnDemandPrice:     onDemandPrice * hoursInTerm,
+		Currency:          currency,
+		SavingsPercentage: savingsPercentage,
+	}, nil
+}
+
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+func (c *SearchClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	baseURL := "https://prices.azure.com/api/retail/prices"
-
-	filter := fmt.Sprintf("serviceName eq 'Azure Cognitive Search' and armRegionName eq '%s'",
-		region)
-
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
@@ -438,48 +489,51 @@ func (c *SearchClient) getSearchPricing(ctx context.Context, sku, region string,
 		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
 	}
 
-	if len(priceData.Items) == 0 {
-		return nil, fmt.Errorf("no pricing data found for Azure Search in region %s", region)
-	}
+	return &priceData, nil
+}
 
-	var onDemandPrice, reservationPrice float64
-	var currency string = "USD"
+// extractSearchPricing extracts on-demand and reservation pricing from price items
+func extractSearchPricing(items []struct {
+	CurrencyCode    string  `json:"currencyCode"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
+	ArmRegionName   string  `json:"armRegionName"`
+	ProductName     string  `json:"productName"`
+	ServiceName     string  `json:"serviceName"`
+	ArmSKUName      string  `json:"armSkuName"`
+	MeterName       string  `json:"meterName"`
+	ReservationTerm string  `json:"reservationTerm"`
+	Type            string  `json:"type"`
+}, termYears int) (onDemand, reservation float64, currency string) {
+	currency = "USD"
+	termStr := fmt.Sprintf("%d Years", termYears)
 
-	for _, item := range priceData.Items {
+	for _, item := range items {
 		if item.CurrencyCode != "" {
 			currency = item.CurrencyCode
 		}
 
-		if item.ReservationTerm != "" {
-			termStr := fmt.Sprintf("%d Years", termYears)
-			if item.ReservationTerm == termStr {
-				reservationPrice = item.RetailPrice
-			}
+		if item.ReservationTerm != "" && item.ReservationTerm == termStr {
+			reservation = item.RetailPrice
 		} else if item.Type == "Consumption" {
-			onDemandPrice = item.UnitPrice
+			onDemand = item.UnitPrice
 		}
 	}
 
-	if onDemandPrice == 0 {
-		return nil, fmt.Errorf("no on-demand pricing found for Azure Search")
-	}
+	return onDemand, reservation, currency
+}
 
-	hoursInTerm := 8760.0 * float64(termYears)
-	if reservationPrice == 0 {
-		onDemandTotal := onDemandPrice * hoursInTerm
-		// Azure Search reservations typically offer 30-40% savings
-		reservationPrice = onDemandTotal * 0.65
-	}
+// estimateSearchReservationPrice estimates reservation price when not available
+func estimateSearchReservationPrice(onDemandPrice, hoursInTerm float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	// Azure Search reservations typically offer 30-40% savings
+	return onDemandTotal * 0.65
+}
 
-	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
-
-	return &SearchPricing{
-		HourlyRate:        reservationPrice / hoursInTerm,
-		ReservationPrice:  reservationPrice,
-		OnDemandPrice:     onDemandPrice * hoursInTerm,
-		Currency:          currency,
-		SavingsPercentage: savingsPercentage,
-	}, nil
+// calculateSearchSavingsPercentage calculates the savings percentage
+func calculateSearchSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	return ((onDemandTotal - reservationPrice) / onDemandTotal) * 100
 }
 
 // convertAzureSearchRecommendation converts Azure Search reservation recommendation to common format

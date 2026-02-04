@@ -146,17 +146,7 @@ func TestVMPricingStructure(t *testing.T) {
 
 func TestAzureRetailPriceStructure(t *testing.T) {
 	price := AzureRetailPrice{
-		Items: []struct {
-			CurrencyCode    string  `json:"currencyCode"`
-			RetailPrice     float64 `json:"retailPrice"`
-			UnitPrice       float64 `json:"unitPrice"`
-			ArmRegionName   string  `json:"armRegionName"`
-			ProductName     string  `json:"productName"`
-			ServiceName     string  `json:"serviceName"`
-			ArmSKUName      string  `json:"armSkuName"`
-			ReservationTerm string  `json:"reservationTerm"`
-			Type            string  `json:"type"`
-		}{
+		Items: []AzureRetailPriceItem{
 			{
 				CurrencyCode:    "USD",
 				RetailPrice:     0.10,

@@ -152,20 +152,33 @@ func (c *CacheClient) GetRecommendations(ctx context.Context, params common.Reco
 
 // GetExistingCommitments retrieves existing Redis Cache reserved capacity
 func (c *CacheClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected pager if available (for testing)
-	var pager ReservationsDetailsPager
-	if c.reservationsPager != nil {
-		pager = c.reservationsPager
-	} else {
-		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-		if err != nil {
-			return commitments, nil
-		}
-		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
+	pager, err := c.createReservationsPager()
+	if err != nil {
+		return []common.Commitment{}, nil
 	}
+
+	return c.collectRedisReservations(ctx, pager), nil
+}
+
+// createReservationsPager creates a pager for listing reservations
+func (c *CacheClient) createReservationsPager() (ReservationsDetailsPager, error) {
+	// Use injected pager if available (for testing)
+	if c.reservationsPager != nil {
+		return c.reservationsPager, nil
+	}
+
+	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+}
+
+// collectRedisReservations collects Redis reservations from the pager
+func (c *CacheClient) collectRedisReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -174,35 +187,44 @@ func (c *CacheClient) GetExistingCommitments(ctx context.Context) ([]common.Comm
 		}
 
 		for _, detail := range page.Value {
-			if detail.Properties == nil {
-				continue
-			}
-
-			props := detail.Properties
-			// Filter for Redis reservations - check SKU name since ReservedResourceType may not be available
-			if props.SKUName != nil && strings.Contains(strings.ToLower(*props.SKUName), "redis") {
-				commitment := common.Commitment{
-					Provider:       common.ProviderAzure,
-					Account:        c.subscriptionID,
-					CommitmentType: common.CommitmentReservedInstance,
-					Service:        common.ServiceCache,
-					Region:         c.region,
-					State:          "active",
-				}
-
-				if props.ReservationID != nil {
-					commitment.CommitmentID = *props.ReservationID
-				}
-				if props.SKUName != nil {
-					commitment.ResourceType = *props.SKUName
-				}
-
-				commitments = append(commitments, commitment)
+			if commitment := c.convertRedisReservation(detail); commitment != nil {
+				commitments = append(commitments, *commitment)
 			}
 		}
 	}
 
-	return commitments, nil
+	return commitments
+}
+
+// convertRedisReservation converts a reservation detail to a commitment if it's a Redis reservation
+func (c *CacheClient) convertRedisReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
+	if detail.Properties == nil {
+		return nil
+	}
+
+	props := detail.Properties
+	// Filter for Redis reservations - check SKU name since ReservedResourceType may not be available
+	if props.SKUName == nil || !strings.Contains(strings.ToLower(*props.SKUName), "redis") {
+		return nil
+	}
+
+	commitment := &common.Commitment{
+		Provider:       common.ProviderAzure,
+		Account:        c.subscriptionID,
+		CommitmentType: common.CommitmentReservedInstance,
+		Service:        common.ServiceCache,
+		Region:         c.region,
+		State:          "active",
+	}
+
+	if props.ReservationID != nil {
+		commitment.CommitmentID = *props.ReservationID
+	}
+	if props.SKUName != nil {
+		commitment.ResourceType = *props.SKUName
+	}
+
+	return commitment
 }
 
 // PurchaseCommitment purchases Redis Cache reserved capacity via Azure Reservations API
@@ -341,20 +363,41 @@ func (c *CacheClient) GetOfferingDetails(ctx context.Context, rec common.Recomme
 
 // GetValidResourceTypes returns valid Redis Cache SKUs from Azure API
 func (c *CacheClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	skuSet := make(map[string]bool)
-
-	// Use injected pager if available (for testing)
-	var pager RedisCachesPager
-	if c.redisCachesPager != nil {
-		pager = c.redisCachesPager
-	} else {
-		client, err := armredis.NewClient(c.subscriptionID, c.cred, nil)
-		if err != nil {
-			// Fall back to common SKUs if we can't create client
-			return c.getCommonSKUs(), nil
-		}
-		pager = client.NewListBySubscriptionPager(nil)
+	pager, err := c.createRedisCachesPager()
+	if err != nil {
+		// Fall back to common SKUs if we can't create client
+		return c.getCommonSKUs(), nil
 	}
+
+	skuSet := c.collectSKUsFromCaches(ctx, pager)
+
+	// If we found SKUs from existing caches, use those
+	if len(skuSet) > 0 {
+		return convertSKUSetToSlice(skuSet), nil
+	}
+
+	// Otherwise, return common SKU families that support reservations
+	return c.getCommonSKUs(), nil
+}
+
+// createRedisCachesPager creates a pager for listing Redis caches
+func (c *CacheClient) createRedisCachesPager() (RedisCachesPager, error) {
+	// Use injected pager if available (for testing)
+	if c.redisCachesPager != nil {
+		return c.redisCachesPager, nil
+	}
+
+	client, err := armredis.NewClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return client.NewListBySubscriptionPager(nil), nil
+}
+
+// collectSKUsFromCaches collects SKUs from existing Redis caches
+func (c *CacheClient) collectSKUsFromCaches(ctx context.Context, pager RedisCachesPager) map[string]bool {
+	skuSet := make(map[string]bool)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -364,32 +407,41 @@ func (c *CacheClient) GetValidResourceTypes(ctx context.Context) ([]string, erro
 		}
 
 		for _, cache := range page.Value {
-			if cache.Properties != nil && cache.Properties.SKU != nil && cache.Properties.SKU.Name != nil {
-				skuName := string(*cache.Properties.SKU.Name)
-				if cache.Properties.SKU.Family != nil {
-					family := string(*cache.Properties.SKU.Family)
-					if cache.Properties.SKU.Capacity != nil {
-						capacity := *cache.Properties.SKU.Capacity
-						// Build full SKU name like "Premium_P1"
-						fullSKU := fmt.Sprintf("%s_%s%d", skuName, family, capacity)
-						skuSet[fullSKU] = true
-					}
-				}
+			if fullSKU := extractSKUFromCache(cache); fullSKU != "" {
+				skuSet[fullSKU] = true
 			}
 		}
 	}
 
-	// If we found SKUs from existing caches, use those
-	if len(skuSet) > 0 {
-		skus := make([]string, 0, len(skuSet))
-		for sku := range skuSet {
-			skus = append(skus, sku)
-		}
-		return skus, nil
+	return skuSet
+}
+
+// extractSKUFromCache extracts the full SKU name from a cache resource
+func extractSKUFromCache(cache *armredis.ResourceInfo) string {
+	if cache.Properties == nil || cache.Properties.SKU == nil {
+		return ""
 	}
 
-	// Otherwise, return common SKU families that support reservations
-	return c.getCommonSKUs(), nil
+	sku := cache.Properties.SKU
+	if sku.Name == nil || sku.Family == nil || sku.Capacity == nil {
+		return ""
+	}
+
+	skuName := string(*sku.Name)
+	family := string(*sku.Family)
+	capacity := *sku.Capacity
+
+	// Build full SKU name like "Premium_P1"
+	return fmt.Sprintf("%s_%s%d", skuName, family, capacity)
+}
+
+// convertSKUSetToSlice converts a map of SKUs to a sorted slice
+func convertSKUSetToSlice(skuSet map[string]bool) []string {
+	skus := make([]string, 0, len(skuSet))
+	for sku := range skuSet {
+		skus = append(skus, sku)
+	}
+	return skus
 }
 
 // getCommonSKUs returns common Redis Cache SKUs
@@ -415,16 +467,46 @@ type RedisPricing struct {
 
 // getRedisPricing gets real pricing from Azure Retail Prices API
 func (c *CacheClient) getRedisPricing(ctx context.Context, sku, region string, termYears int) (*RedisPricing, error) {
-	baseURL := "https://prices.azure.com/api/retail/prices"
+	priceData, err := c.fetchAzurePricing(ctx, "Azure Cache for Redis", sku, region)
+	if err != nil {
+		return nil, err
+	}
 
-	filter := fmt.Sprintf("serviceName eq 'Azure Cache for Redis' and armRegionName eq '%s' and contains(armSkuName, '%s')",
-		region, sku)
+	if len(priceData.Items) == 0 {
+		return nil, fmt.Errorf("no pricing data found for Redis Cache SKU %s in region %s", sku, region)
+	}
+
+	onDemandPrice, reservationPrice, currency := extractRedisPricing(priceData.Items, termYears)
+	if onDemandPrice == 0 {
+		return nil, fmt.Errorf("no on-demand pricing found for Redis Cache SKU %s", sku)
+	}
+
+	hoursInTerm := 8760.0 * float64(termYears)
+	if reservationPrice == 0 {
+		reservationPrice = onDemandPrice * hoursInTerm * 0.45 // 55% savings
+	}
+
+	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
+
+	return &RedisPricing{
+		HourlyRate:        reservationPrice / hoursInTerm,
+		ReservationPrice:  reservationPrice,
+		OnDemandPrice:     onDemandPrice * hoursInTerm,
+		Currency:          currency,
+		SavingsPercentage: savingsPercentage,
+	}, nil
+}
+
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+func (c *CacheClient) fetchAzurePricing(ctx context.Context, serviceName, sku, region string) (*AzureRetailPrice, error) {
+	filter := fmt.Sprintf("serviceName eq '%s' and armRegionName eq '%s' and contains(armSkuName, '%s')",
+		serviceName, region, sku)
 
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	fullURL := baseURL + "?" + params.Encode()
+	fullURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
 	if err != nil {
@@ -447,48 +529,38 @@ func (c *CacheClient) getRedisPricing(ctx context.Context, sku, region string, t
 		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
 	}
 
-	if len(priceData.Items) == 0 {
-		return nil, fmt.Errorf("no pricing data found for Redis Cache SKU %s in region %s", sku, region)
-	}
+	return &priceData, nil
+}
 
-	var onDemandPrice, reservationPrice float64
-	var currency string = "USD"
+// extractRedisPricing extracts on-demand and reservation pricing from price items
+func extractRedisPricing(items []struct {
+	CurrencyCode    string  `json:"currencyCode"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
+	ArmRegionName   string  `json:"armRegionName"`
+	ProductName     string  `json:"productName"`
+	ServiceName     string  `json:"serviceName"`
+	ArmSKUName      string  `json:"armSkuName"`
+	MeterName       string  `json:"meterName"`
+	ReservationTerm string  `json:"reservationTerm"`
+	Type            string  `json:"type"`
+}, termYears int) (onDemand, reservation float64, currency string) {
+	currency = "USD"
+	termStr := fmt.Sprintf("%d Years", termYears)
 
-	for _, item := range priceData.Items {
+	for _, item := range items {
 		if item.CurrencyCode != "" {
 			currency = item.CurrencyCode
 		}
 
-		if item.ReservationTerm != "" {
-			termStr := fmt.Sprintf("%d Years", termYears)
-			if item.ReservationTerm == termStr {
-				reservationPrice = item.RetailPrice
-			}
+		if item.ReservationTerm == termStr {
+			reservation = item.RetailPrice
 		} else if item.Type == "Consumption" {
-			onDemandPrice = item.UnitPrice
+			onDemand = item.UnitPrice
 		}
 	}
 
-	if onDemandPrice == 0 {
-		return nil, fmt.Errorf("no on-demand pricing found for Redis Cache SKU %s", sku)
-	}
-
-	hoursInTerm := 8760.0 * float64(termYears)
-	if reservationPrice == 0 {
-		onDemandTotal := onDemandPrice * hoursInTerm
-		// Azure Redis Cache reservations typically offer 55% savings
-		reservationPrice = onDemandTotal * 0.45
-	}
-
-	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
-
-	return &RedisPricing{
-		HourlyRate:        reservationPrice / hoursInTerm,
-		ReservationPrice:  reservationPrice,
-		OnDemandPrice:     onDemandPrice * hoursInTerm,
-		Currency:          currency,
-		SavingsPercentage: savingsPercentage,
-	}, nil
+	return onDemand, reservation, currency
 }
 
 // convertAzureRedisRecommendation converts Azure Redis Cache reservation recommendation to common format

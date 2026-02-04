@@ -155,56 +155,78 @@ func (c *CosmosDBClient) GetRecommendations(ctx context.Context, params common.R
 
 // GetExistingCommitments retrieves existing Cosmos DB reserved capacity using Azure Resource Graph
 func (c *CosmosDBClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected pager if available (for testing)
-	var pager ReservationsDetailsPager
-	if c.reservationsPager != nil {
-		pager = c.reservationsPager
-	} else {
-		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-		if err != nil {
-			return commitments, nil // Return empty on error rather than failing
-		}
-		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
+	pager, err := c.createReservationsPager()
+	if err != nil {
+		return []common.Commitment{}, nil
 	}
+
+	return c.collectCosmosReservations(ctx, pager), nil
+}
+
+// createReservationsPager creates a pager for listing reservations
+func (c *CosmosDBClient) createReservationsPager() (ReservationsDetailsPager, error) {
+	// Use injected pager if available (for testing)
+	if c.reservationsPager != nil {
+		return c.reservationsPager, nil
+	}
+
+	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+}
+
+// collectCosmosReservations collects Cosmos DB reservations from the pager
+func (c *CosmosDBClient) collectCosmosReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break // Continue with what we have
+			break
 		}
 
 		for _, detail := range page.Value {
-			if detail.Properties == nil {
-				continue
-			}
-
-			props := detail.Properties
-			if props.SKUName != nil && strings.Contains(strings.ToLower(*props.SKUName), "cosmos") {
-				commitment := common.Commitment{
-					Provider:       common.ProviderAzure,
-					Account:        c.subscriptionID,
-					CommitmentType: common.CommitmentReservedInstance,
-					Service:        common.ServiceNoSQLDB,
-					Region:         c.region,
-					State:          "active",
-				}
-
-				if props.ReservationID != nil {
-					commitment.CommitmentID = *props.ReservationID
-				}
-				if props.SKUName != nil {
-					commitment.ResourceType = *props.SKUName
-				}
-
-				commitments = append(commitments, commitment)
+			if commitment := c.convertCosmosReservation(detail); commitment != nil {
+				commitments = append(commitments, *commitment)
 			}
 		}
 	}
 
-	return commitments, nil
+	return commitments
+}
+
+// convertCosmosReservation converts a reservation detail to a commitment if it's a Cosmos DB reservation
+func (c *CosmosDBClient) convertCosmosReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
+	if detail.Properties == nil {
+		return nil
+	}
+
+	props := detail.Properties
+	if props.SKUName == nil || !strings.Contains(strings.ToLower(*props.SKUName), "cosmos") {
+		return nil
+	}
+
+	commitment := &common.Commitment{
+		Provider:       common.ProviderAzure,
+		Account:        c.subscriptionID,
+		CommitmentType: common.CommitmentReservedInstance,
+		Service:        common.ServiceNoSQLDB,
+		Region:         c.region,
+		State:          "active",
+	}
+
+	if props.ReservationID != nil {
+		commitment.CommitmentID = *props.ReservationID
+	}
+	if props.SKUName != nil {
+		commitment.ResourceType = *props.SKUName
+	}
+
+	return commitment
 }
 
 // PurchaseCommitment purchases Cosmos DB reserved capacity via Azure Reservations API
@@ -347,19 +369,40 @@ func (c *CosmosDBClient) GetOfferingDetails(ctx context.Context, rec common.Reco
 
 // GetValidResourceTypes returns valid Cosmos DB SKUs from Azure API
 func (c *CosmosDBClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	skuSet := make(map[string]bool)
-
-	// Use injected pager if available (for testing)
-	var pager CosmosAccountsPager
-	if c.cosmosAccountsPager != nil {
-		pager = c.cosmosAccountsPager
-	} else {
-		client, err := armcosmos.NewDatabaseAccountsClient(c.subscriptionID, c.cred, nil)
-		if err != nil {
-			return c.getCommonSKUs(), nil
-		}
-		pager = client.NewListPager(nil)
+	pager, err := c.createCosmosAccountsPager()
+	if err != nil {
+		return c.getCommonSKUs(), nil
 	}
+
+	skuSet := c.collectCapabilitiesFromAccounts(ctx, pager)
+
+	// If we found SKUs from existing accounts, use those
+	if len(skuSet) > 0 {
+		return convertCapabilitySetToSlice(skuSet), nil
+	}
+
+	// Otherwise, return common SKU types that support reservations
+	return c.getCommonSKUs(), nil
+}
+
+// createCosmosAccountsPager creates a pager for listing Cosmos DB accounts
+func (c *CosmosDBClient) createCosmosAccountsPager() (CosmosAccountsPager, error) {
+	// Use injected pager if available (for testing)
+	if c.cosmosAccountsPager != nil {
+		return c.cosmosAccountsPager, nil
+	}
+
+	client, err := armcosmos.NewDatabaseAccountsClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return client.NewListPager(nil), nil
+}
+
+// collectCapabilitiesFromAccounts collects capabilities from existing Cosmos DB accounts
+func (c *CosmosDBClient) collectCapabilitiesFromAccounts(ctx context.Context, pager CosmosAccountsPager) map[string]bool {
+	skuSet := make(map[string]bool)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -369,27 +412,39 @@ func (c *CosmosDBClient) GetValidResourceTypes(ctx context.Context) ([]string, e
 		}
 
 		for _, account := range page.Value {
-			if account.Properties != nil && account.Properties.Capabilities != nil {
-				for _, capability := range account.Properties.Capabilities {
-					if capability.Name != nil {
-						skuSet[*capability.Name] = true
-					}
-				}
+			capabilities := extractCapabilitiesFromAccount(account)
+			for _, capability := range capabilities {
+				skuSet[capability] = true
 			}
 		}
 	}
 
-	// If we found SKUs from existing accounts, use those
-	if len(skuSet) > 0 {
-		skus := make([]string, 0, len(skuSet))
-		for sku := range skuSet {
-			skus = append(skus, sku)
-		}
-		return skus, nil
+	return skuSet
+}
+
+// extractCapabilitiesFromAccount extracts capability names from a Cosmos DB account
+func extractCapabilitiesFromAccount(account *armcosmos.DatabaseAccountGetResults) []string {
+	if account.Properties == nil || account.Properties.Capabilities == nil {
+		return nil
 	}
 
-	// Otherwise, return common SKU types that support reservations
-	return c.getCommonSKUs(), nil
+	capabilities := make([]string, 0, len(account.Properties.Capabilities))
+	for _, capability := range account.Properties.Capabilities {
+		if capability.Name != nil {
+			capabilities = append(capabilities, *capability.Name)
+		}
+	}
+
+	return capabilities
+}
+
+// convertCapabilitySetToSlice converts a map of capabilities to a slice
+func convertCapabilitySetToSlice(skuSet map[string]bool) []string {
+	skus := make([]string, 0, len(skuSet))
+	for sku := range skuSet {
+		skus = append(skus, sku)
+	}
+	return skus
 }
 
 // getCommonSKUs returns common Cosmos DB SKUs
@@ -415,11 +470,41 @@ type CosmosPricing struct {
 
 // getCosmosPricing gets real pricing from Azure Retail Prices API
 func (c *CosmosDBClient) getCosmosPricing(ctx context.Context, sku, region string, termYears int) (*CosmosPricing, error) {
+	filter := fmt.Sprintf("serviceName eq 'Azure Cosmos DB' and armRegionName eq '%s'", region)
+
+	priceData, err := c.fetchAzurePricing(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(priceData.Items) == 0 {
+		return nil, fmt.Errorf("no pricing data found for Cosmos DB in region %s", region)
+	}
+
+	onDemandPrice, reservationPrice, currency := extractCosmosPricing(priceData.Items, termYears)
+	if onDemandPrice == 0 {
+		return nil, fmt.Errorf("no on-demand pricing found for Cosmos DB")
+	}
+
+	hoursInTerm := 8760.0 * float64(termYears)
+	if reservationPrice == 0 {
+		reservationPrice = estimateCosmosReservationPrice(onDemandPrice, hoursInTerm)
+	}
+
+	savingsPercentage := calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice)
+
+	return &CosmosPricing{
+		HourlyRate:        reservationPrice / hoursInTerm,
+		ReservationPrice:  reservationPrice,
+		OnDemandPrice:     onDemandPrice * hoursInTerm,
+		Currency:          currency,
+		SavingsPercentage: savingsPercentage,
+	}, nil
+}
+
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+func (c *CosmosDBClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	baseURL := "https://prices.azure.com/api/retail/prices"
-
-	filter := fmt.Sprintf("serviceName eq 'Azure Cosmos DB' and armRegionName eq '%s'",
-		region)
-
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
@@ -447,48 +532,54 @@ func (c *CosmosDBClient) getCosmosPricing(ctx context.Context, sku, region strin
 		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
 	}
 
-	if len(priceData.Items) == 0 {
-		return nil, fmt.Errorf("no pricing data found for Cosmos DB in region %s", region)
-	}
+	return &priceData, nil
+}
 
-	var onDemandPrice, reservationPrice float64
-	var currency string = "USD"
+// extractCosmosPricing extracts on-demand and reservation pricing from price items
+func extractCosmosPricing(items []struct {
+	CurrencyCode         string  `json:"currencyCode"`
+	RetailPrice          float64 `json:"retailPrice"`
+	UnitPrice            float64 `json:"unitPrice"`
+	ArmRegionName        string  `json:"armRegionName"`
+	Location             string  `json:"location"`
+	MeterName            string  `json:"meterName"`
+	SKUName              string  `json:"skuName"`
+	ProductName          string  `json:"productName"`
+	ServiceName          string  `json:"serviceName"`
+	UnitOfMeasure        string  `json:"unitOfMeasure"`
+	Type                 string  `json:"type"`
+	ArmSKUName           string  `json:"armSkuName"`
+	ReservationTerm      string  `json:"reservationTerm"`
+}, termYears int) (onDemand, reservation float64, currency string) {
+	currency = "USD"
+	termStr := fmt.Sprintf("%d Years", termYears)
 
-	for _, item := range priceData.Items {
+	for _, item := range items {
 		if item.CurrencyCode != "" {
 			currency = item.CurrencyCode
 		}
 
-		if item.ReservationTerm != "" {
-			termStr := fmt.Sprintf("%d Years", termYears)
-			if item.ReservationTerm == termStr {
-				reservationPrice = item.RetailPrice
-			}
+		if item.ReservationTerm != "" && item.ReservationTerm == termStr {
+			reservation = item.RetailPrice
 		} else if item.Type == "Consumption" {
-			onDemandPrice = item.UnitPrice
+			onDemand = item.UnitPrice
 		}
 	}
 
-	if onDemandPrice == 0 {
-		return nil, fmt.Errorf("no on-demand pricing found for Cosmos DB")
-	}
+	return onDemand, reservation, currency
+}
 
-	hoursInTerm := 8760.0 * float64(termYears)
-	if reservationPrice == 0 {
-		onDemandTotal := onDemandPrice * hoursInTerm
-		// Azure Cosmos DB reservations typically offer 65% savings
-		reservationPrice = onDemandTotal * 0.35
-	}
+// estimateCosmosReservationPrice estimates reservation price when not available
+func estimateCosmosReservationPrice(onDemandPrice, hoursInTerm float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	// Azure Cosmos DB reservations typically offer 65% savings
+	return onDemandTotal * 0.35
+}
 
-	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
-
-	return &CosmosPricing{
-		HourlyRate:        reservationPrice / hoursInTerm,
-		ReservationPrice:  reservationPrice,
-		OnDemandPrice:     onDemandPrice * hoursInTerm,
-		Currency:          currency,
-		SavingsPercentage: savingsPercentage,
-	}, nil
+// calculateCosmosSavingsPercentage calculates the savings percentage
+func calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	return ((onDemandTotal - reservationPrice) / onDemandTotal) * 100
 }
 
 // convertAzureCosmosRecommendation converts Azure Cosmos DB reservation recommendation to common format

@@ -101,18 +101,20 @@ func (c *ComputeClient) GetRegion() string {
 }
 
 // AzureRetailPrice represents pricing from Azure Retail Prices API
+type AzureRetailPriceItem struct {
+	CurrencyCode    string  `json:"currencyCode"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
+	ArmRegionName   string  `json:"armRegionName"`
+	ProductName     string  `json:"productName"`
+	ServiceName     string  `json:"serviceName"`
+	ArmSKUName      string  `json:"armSkuName"`
+	ReservationTerm string  `json:"reservationTerm"`
+	Type            string  `json:"type"`
+}
+
 type AzureRetailPrice struct {
-	Items []struct {
-		CurrencyCode    string  `json:"currencyCode"`
-		RetailPrice     float64 `json:"retailPrice"`
-		UnitPrice       float64 `json:"unitPrice"`
-		ArmRegionName   string  `json:"armRegionName"`
-		ProductName     string  `json:"productName"`
-		ServiceName     string  `json:"serviceName"`
-		ArmSKUName      string  `json:"armSkuName"`
-		ReservationTerm string  `json:"reservationTerm"`
-		Type            string  `json:"type"`
-	} `json:"Items"`
+	Items []AzureRetailPriceItem `json:"Items"`
 }
 
 // GetRecommendations gets VM RI recommendations from Azure Consumption API
@@ -152,21 +154,33 @@ func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.Re
 
 // GetExistingCommitments retrieves existing VM Reserved Instances
 func (c *ComputeClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected pager if available (for testing)
-	var pager ReservationsDetailsPager
-	if c.reservationsPager != nil {
-		pager = c.reservationsPager
-	} else {
-		client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
-		if err != nil {
-			return commitments, nil
-		}
-
-		scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-		pager = client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{})
+	pager, err := c.createReservationsPager()
+	if err != nil {
+		return []common.Commitment{}, nil
 	}
+
+	return c.collectVMReservations(ctx, pager), nil
+}
+
+// createReservationsPager creates a pager for listing reservations
+func (c *ComputeClient) createReservationsPager() (ReservationsDetailsPager, error) {
+	// Use injected pager if available (for testing)
+	if c.reservationsPager != nil {
+		return c.reservationsPager, nil
+	}
+
+	client, err := armconsumption.NewReservationsDetailsClient(c.cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
+	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+}
+
+// collectVMReservations collects VM reservations from the pager
+func (c *ComputeClient) collectVMReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -175,34 +189,43 @@ func (c *ComputeClient) GetExistingCommitments(ctx context.Context) ([]common.Co
 		}
 
 		for _, detail := range page.Value {
-			if detail.Properties == nil {
-				continue
-			}
-
-			props := detail.Properties
-			if props.SKUName != nil && strings.Contains(strings.ToLower(*props.SKUName), "virtualmachines") {
-				commitment := common.Commitment{
-					Provider:       common.ProviderAzure,
-					Account:        c.subscriptionID,
-					CommitmentType: common.CommitmentReservedInstance,
-					Service:        common.ServiceCompute,
-					Region:         c.region,
-					State:          "active",
-				}
-
-				if props.ReservationID != nil {
-					commitment.CommitmentID = *props.ReservationID
-				}
-				if props.SKUName != nil {
-					commitment.ResourceType = *props.SKUName
-				}
-
-				commitments = append(commitments, commitment)
+			if commitment := c.convertVMReservation(detail); commitment != nil {
+				commitments = append(commitments, *commitment)
 			}
 		}
 	}
 
-	return commitments, nil
+	return commitments
+}
+
+// convertVMReservation converts a reservation detail to a commitment if it's a VM reservation
+func (c *ComputeClient) convertVMReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
+	if detail.Properties == nil {
+		return nil
+	}
+
+	props := detail.Properties
+	if props.SKUName == nil || !strings.Contains(strings.ToLower(*props.SKUName), "virtualmachines") {
+		return nil
+	}
+
+	commitment := &common.Commitment{
+		Provider:       common.ProviderAzure,
+		Account:        c.subscriptionID,
+		CommitmentType: common.CommitmentReservedInstance,
+		Service:        common.ServiceCompute,
+		Region:         c.region,
+		State:          "active",
+	}
+
+	if props.ReservationID != nil {
+		commitment.CommitmentID = *props.ReservationID
+	}
+	if props.SKUName != nil {
+		commitment.ResourceType = *props.SKUName
+	}
+
+	return commitment
 }
 
 // PurchaseCommitment purchases a VM Reserved Instance
@@ -342,22 +365,41 @@ func (c *ComputeClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 
 // GetValidResourceTypes returns valid VM sizes from Azure Compute API
 func (c *ComputeClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	vmSizes := make([]string, 0)
-
-	// Use injected pager if available (for testing)
-	var pager ResourceSKUsPager
-	if c.resourceSKUsPager != nil {
-		pager = c.resourceSKUsPager
-	} else {
-		client, err := armcompute.NewResourceSKUsClient(c.subscriptionID, c.cred, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create resource SKUs client: %w", err)
-		}
-
-		pager = client.NewListPager(&armcompute.ResourceSKUsClientListOptions{
-			Filter: nil,
-		})
+	pager, err := c.createResourceSKUsPager()
+	if err != nil {
+		return nil, err
 	}
+
+	vmSizes, err := c.collectVMSizesFromSKUs(ctx, pager)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(vmSizes) == 0 {
+		return nil, fmt.Errorf("no VM sizes found for region %s", c.region)
+	}
+
+	return vmSizes, nil
+}
+
+// createResourceSKUsPager creates a pager for listing resource SKUs
+func (c *ComputeClient) createResourceSKUsPager() (ResourceSKUsPager, error) {
+	// Use injected pager if available (for testing)
+	if c.resourceSKUsPager != nil {
+		return c.resourceSKUsPager, nil
+	}
+
+	client, err := armcompute.NewResourceSKUsClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource SKUs client: %w", err)
+	}
+
+	return client.NewListPager(&armcompute.ResourceSKUsClientListOptions{Filter: nil}), nil
+}
+
+// collectVMSizesFromSKUs collects VM sizes from the resource SKUs pager
+func (c *ComputeClient) collectVMSizesFromSKUs(ctx context.Context, pager ResourceSKUsPager) ([]string, error) {
+	vmSizes := make([]string, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -366,20 +408,26 @@ func (c *ComputeClient) GetValidResourceTypes(ctx context.Context) ([]string, er
 		}
 
 		for _, sku := range page.Value {
-			if sku.Name != nil && sku.ResourceType != nil && *sku.ResourceType == "virtualMachines" {
-				// Check if available in the region
-				if c.isAvailableInRegion(sku, c.region) {
-					vmSizes = append(vmSizes, *sku.Name)
-				}
+			if vmSize := c.extractVMSizeIfValid(sku); vmSize != "" {
+				vmSizes = append(vmSizes, vmSize)
 			}
 		}
 	}
 
-	if len(vmSizes) == 0 {
-		return nil, fmt.Errorf("no VM sizes found for region %s", c.region)
+	return vmSizes, nil
+}
+
+// extractVMSizeIfValid extracts the VM size name if it's a valid VM in the region
+func (c *ComputeClient) extractVMSizeIfValid(sku *armcompute.ResourceSKU) string {
+	if sku.Name == nil || sku.ResourceType == nil || *sku.ResourceType != "virtualMachines" {
+		return ""
 	}
 
-	return vmSizes, nil
+	if !c.isAvailableInRegion(sku, c.region) {
+		return ""
+	}
+
+	return *sku.Name
 }
 
 // isAvailableInRegion checks if a SKU is available in the specified region
@@ -408,16 +456,46 @@ type VMPricing struct {
 
 // getVMPricing gets real VM pricing from Azure Retail Prices API
 func (c *ComputeClient) getVMPricing(ctx context.Context, vmSize, region string, termYears int) (*VMPricing, error) {
-	baseURL := "https://prices.azure.com/api/retail/prices"
-
 	filter := fmt.Sprintf("serviceName eq 'Virtual Machines' and armRegionName eq '%s' and armSkuName eq '%s'",
 		region, vmSize)
 
+	priceData, err := c.fetchAzurePricing(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(priceData.Items) == 0 {
+		return nil, fmt.Errorf("no pricing data found for VM size %s in region %s", vmSize, region)
+	}
+
+	onDemandPrice, reservationPrice, currency := extractVMPricing(priceData.Items, termYears)
+	if onDemandPrice == 0 {
+		return nil, fmt.Errorf("no on-demand pricing found for VM size %s", vmSize)
+	}
+
+	hoursInTerm := 8760.0 * float64(termYears)
+	if reservationPrice == 0 {
+		reservationPrice = onDemandPrice * hoursInTerm * 0.62 // Azure VMs typically 38% discount
+	}
+
+	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
+
+	return &VMPricing{
+		HourlyRate:        reservationPrice / hoursInTerm,
+		ReservationPrice:  reservationPrice,
+		OnDemandPrice:     onDemandPrice * hoursInTerm,
+		Currency:          currency,
+		SavingsPercentage: savingsPercentage,
+	}, nil
+}
+
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+func (c *ComputeClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	fullURL := baseURL + "?" + params.Encode()
+	fullURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
 	if err != nil {
@@ -440,47 +518,27 @@ func (c *ComputeClient) getVMPricing(ctx context.Context, vmSize, region string,
 		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
 	}
 
-	if len(priceData.Items) == 0 {
-		return nil, fmt.Errorf("no pricing data found for VM size %s in region %s", vmSize, region)
-	}
+	return &priceData, nil
+}
 
-	var onDemandPrice, reservationPrice float64
-	var currency string = "USD"
+// extractVMPricing extracts on-demand and reservation pricing from price items
+func extractVMPricing(items []AzureRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
+	currency = "USD"
+	termStr := fmt.Sprintf("%d Years", termYears)
 
-	for _, item := range priceData.Items {
+	for _, item := range items {
 		if item.CurrencyCode != "" {
 			currency = item.CurrencyCode
 		}
 
-		if item.ReservationTerm != "" {
-			termStr := fmt.Sprintf("%d Years", termYears)
-			if item.ReservationTerm == termStr {
-				reservationPrice = item.RetailPrice
-			}
+		if item.ReservationTerm == termStr {
+			reservation = item.RetailPrice
 		} else if item.Type == "Consumption" {
-			onDemandPrice = item.UnitPrice
+			onDemand = item.UnitPrice
 		}
 	}
 
-	if onDemandPrice == 0 {
-		return nil, fmt.Errorf("no on-demand pricing found for VM size %s", vmSize)
-	}
-
-	hoursInTerm := 8760.0 * float64(termYears)
-	if reservationPrice == 0 {
-		onDemandTotal := onDemandPrice * hoursInTerm
-		reservationPrice = onDemandTotal * 0.62 // Azure VMs typically 38% discount
-	}
-
-	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
-
-	return &VMPricing{
-		HourlyRate:        reservationPrice / hoursInTerm,
-		ReservationPrice:  reservationPrice,
-		OnDemandPrice:     onDemandPrice * hoursInTerm,
-		Currency:          currency,
-		SavingsPercentage: savingsPercentage,
-	}, nil
+	return onDemand, reservation, currency
 }
 
 // convertAzureVMRecommendation converts Azure VM reservation recommendation to common format
