@@ -322,7 +322,14 @@ func (c *Client) parseOpenSearchDetails(rec *common.Recommendation, details *typ
 	osInfo := &common.SearchDetails{}
 
 	if esDetails.InstanceClass != nil && esDetails.InstanceSize != nil {
-		rec.ResourceType = fmt.Sprintf("%s.%s", *esDetails.InstanceClass, *esDetails.InstanceSize)
+		instanceSize := *esDetails.InstanceSize
+		// Cost Explorer may return InstanceSize as the full type (e.g. "t3.medium.search");
+		// concatenating with InstanceClass would duplicate (e.g. "t3.medium.t3.medium.search").
+		if strings.HasSuffix(instanceSize, ".search") {
+			rec.ResourceType = instanceSize
+		} else {
+			rec.ResourceType = fmt.Sprintf("%s.%s.search", *esDetails.InstanceClass, instanceSize)
+		}
 		osInfo.InstanceType = rec.ResourceType
 	}
 	if esDetails.Region != nil {

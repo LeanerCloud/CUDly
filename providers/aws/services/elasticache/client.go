@@ -123,7 +123,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	reservationID := fmt.Sprintf("elasticache-%s-%d", rec.ResourceType, time.Now().Unix())
+	reservationID := common.SanitizeReservationID(fmt.Sprintf("elasticache-%s-%d", rec.ResourceType, time.Now().Unix()), "elasticache-reserved-")
 
 	input := &elasticache.PurchaseReservedCacheNodesOfferingInput{
 		ReservedCacheNodesOfferingId: aws.String(offeringID),
@@ -154,8 +154,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 // findOfferingID finds the appropriate Reserved Cache Node offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	details, ok := rec.Details.(common.CacheDetails)
-	if !ok {
+	details, ok := rec.Details.(*common.CacheDetails)
+	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for ElastiCache")
 	}
 

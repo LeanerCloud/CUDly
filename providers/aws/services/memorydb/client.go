@@ -118,7 +118,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	reservationID := fmt.Sprintf("memorydb-%s-%d", rec.ResourceType, time.Now().Unix())
+	reservationID := common.SanitizeReservationID(fmt.Sprintf("memorydb-%s-%d", rec.ResourceType, time.Now().Unix()), "memorydb-reserved-")
 
 	input := &memorydb.PurchaseReservedNodesOfferingInput{
 		ReservedNodesOfferingId: aws.String(offeringID),

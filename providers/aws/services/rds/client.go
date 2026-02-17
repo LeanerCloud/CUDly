@@ -127,8 +127,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	// Generate reservation ID
-	reservationID := fmt.Sprintf("rds-%s-%d", rec.ResourceType, time.Now().Unix())
+	// Generate reservation ID (letters, digits, hyphens only; no leading/trailing/double hyphen)
+	reservationID := common.SanitizeReservationID(fmt.Sprintf("rds-%s-%d", rec.ResourceType, time.Now().Unix()), "rds-reserved-")
 
 	// Create the purchase request
 	input := &rds.PurchaseReservedDBInstancesOfferingInput{
@@ -160,8 +160,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 // findOfferingID finds the appropriate RDS Reserved Instance offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	details, ok := rec.Details.(common.DatabaseDetails)
-	if !ok {
+	details, ok := rec.Details.(*common.DatabaseDetails)
+	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for RDS")
 	}
 

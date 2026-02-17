@@ -150,8 +150,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 // findOfferingID finds the appropriate EC2 Reserved Instance offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	details, ok := rec.Details.(common.ComputeDetails)
-	if !ok {
+	details, ok := rec.Details.(*common.ComputeDetails)
+	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for EC2")
 	}
 

@@ -264,7 +264,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 		ResourceType:  "t3.micro",
 		PaymentOption: "partial-upfront",
 		Term:          "3yr",
-		Details: common.ComputeDetails{
+		Details: &common.ComputeDetails{
 			Platform: "Linux/UNIX",
 			Tenancy:  "default",
 			Scope:    "Region",
@@ -303,7 +303,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 		Count:         2,
 		PaymentOption: "partial-upfront",
 		Term:          "3yr",
-		Details: common.ComputeDetails{
+		Details: &common.ComputeDetails{
 			Platform: "Linux/UNIX",
 			Tenancy:  "default",
 			Scope:    "Region",
@@ -351,7 +351,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 		PaymentOption: "partial-upfront",
 		Term:          "3yr",
 		Count:         1,
-		Details: common.ComputeDetails{
+		Details: &common.ComputeDetails{
 			Platform: "Linux/UNIX",
 			Tenancy:  "default",
 			Scope:    "Region",

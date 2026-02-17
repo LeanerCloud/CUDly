@@ -118,7 +118,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	reservationID := fmt.Sprintf("opensearch-%s-%d", rec.ResourceType, time.Now().Unix())
+	reservationID := common.SanitizeReservationID(fmt.Sprintf("opensearch-%s-%d", rec.ResourceType, time.Now().Unix()), "opensearch-reserved-")
 
 	input := &opensearch.PurchaseReservedInstanceOfferingInput{
 		ReservedInstanceOfferingId: aws.String(offeringID),
@@ -145,22 +145,31 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 // findOfferingID finds the appropriate Reserved Instance offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	input := &opensearch.DescribeReservedInstanceOfferingsInput{
-		MaxResults: 100,
-	}
+	var nextToken *string
+	for {
+		input := &opensearch.DescribeReservedInstanceOfferingsInput{
+			MaxResults: 100,
+			NextToken:  nextToken,
+		}
 
-	result, err := c.client.DescribeReservedInstanceOfferings(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe offerings: %w", err)
-	}
+		result, err := c.client.DescribeReservedInstanceOfferings(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("failed to describe offerings: %w", err)
+		}
 
-	for _, offering := range result.ReservedInstanceOfferings {
-		if string(offering.InstanceType) == rec.ResourceType {
-			if c.matchesPaymentOption(offering.PaymentOption, rec.PaymentOption) &&
-				c.matchesDuration(offering.Duration, rec.Term) {
-				return aws.ToString(offering.ReservedInstanceOfferingId), nil
+		for _, offering := range result.ReservedInstanceOfferings {
+			if string(offering.InstanceType) == rec.ResourceType {
+				if c.matchesPaymentOption(offering.PaymentOption, rec.PaymentOption) &&
+					c.matchesDuration(offering.Duration, rec.Term) {
+					return aws.ToString(offering.ReservedInstanceOfferingId), nil
+				}
 			}
 		}
+
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		nextToken = result.NextToken
 	}
 
 	return "", fmt.Errorf("no offerings found for %s", rec.ResourceType)

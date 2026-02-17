@@ -274,7 +274,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 		ResourceType:  "db.t3.medium",
 		PaymentOption: "no-upfront",
 		Term:          "3yr",
-		Details: common.DatabaseDetails{
+		Details: &common.DatabaseDetails{
 			Engine:   "mysql",
 			AZConfig: "multi-az",
 		},
@@ -311,7 +311,7 @@ func TestClient_ValidateOffering_NotFound(t *testing.T) {
 		ResourceType:  "db.t3.medium",
 		PaymentOption: "no-upfront",
 		Term:          "3yr",
-		Details: common.DatabaseDetails{
+		Details: &common.DatabaseDetails{
 			Engine:   "mysql",
 			AZConfig: "multi-az",
 		},
@@ -341,7 +341,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 		Count:         2,
 		PaymentOption: "partial-upfront",
 		Term:          "3yr",
-		Details: common.DatabaseDetails{
+		Details: &common.DatabaseDetails{
 			Engine:   "aurora-mysql",
 			AZConfig: "multi-az",
 		},
@@ -396,7 +396,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 		Count:         1,
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
-		Details: common.DatabaseDetails{
+		Details: &common.DatabaseDetails{
 			Engine:   "mysql",
 			AZConfig: "single-az",
 		},
@@ -441,7 +441,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 		ResourceType:  "db.m6g.large",
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
-		Details: common.DatabaseDetails{
+		Details: &common.DatabaseDetails{
 			Engine:   "postgres",
 			AZConfig: "multi-az",
 		},

@@ -246,7 +246,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 		ResourceType:  "cache.r6g.large",
 		PaymentOption: "no-upfront",
 		Term:          "3yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "cache.r6g.large",
 		},
@@ -283,7 +283,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 		Count:         3,
 		PaymentOption: "partial-upfront",
 		Term:          "3yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "cache.m6g.xlarge",
 		},
@@ -336,7 +336,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 		ResourceType:  "cache.r6g.xlarge",
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
-		Details: common.CacheDetails{
+		Details: &common.CacheDetails{
 			Engine:   "redis",
 			NodeType: "cache.r6g.xlarge",
 		},
