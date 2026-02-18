@@ -1,14 +1,17 @@
 # Terraform Profiles
 
-This directory contains deployment profiles for different environments and cloud providers.
+This directory contains deployment profiles for different
+environments and cloud providers.
 
 ## What Are Profiles?
 
-Profiles are pre-configured Terraform variable files (`.tfvars`) that define environment-specific settings. Think of them as deployment presets.
+Profiles are pre-configured Terraform variable files (`.tfvars`)
+that define environment-specific settings. Think of them as
+deployment presets.
 
 ## Directory Structure
 
-```
+```text
 profiles/
 ├── aws/
 │   ├── dev.tfvars           # AWS development environment
@@ -238,7 +241,6 @@ terraform apply -var-file="../../../profiles/aws/dev.tfvars"
 cat > profiles/aws/secrets.tfvars <<EOF
 database_password = "secret123"
 admin_email       = "admin@example.com"
-admin_password    = "admin456"
 EOF
 
 # Use both profile and secrets
@@ -246,6 +248,14 @@ terraform apply \
   -var-file="../../../profiles/aws/dev.tfvars" \
   -var-file="../../../profiles/aws/secrets.tfvars"
 ```
+
+> **Note:** Admin setup does not use a password variable.
+> After deployment, the admin account is bootstrapped through
+> the UI using an API key (stored in AWS Secrets Manager)
+> and the `/auth/setup-admin` endpoint. Alternatively, the
+> admin is created with the `ADMIN_EMAIL` env var during
+> database migration with no password set, requiring a
+> "Forgot Password" flow to set the initial password.
 
 ### Using Secret Manager
 
@@ -271,7 +281,7 @@ terraform plan -var-file="../../../profiles/aws/dev.tfvars"
 
 ### 1. Use Consistent Naming
 
-```
+```text
 {provider}/{environment}.tfvars
   aws/dev.tfvars
   aws/staging.tfvars
@@ -314,7 +324,7 @@ echo "profiles/**/secrets.tfvars" >> .gitignore
 
 ### 5. Use Profile for Each Environment
 
-```
+```text
 profiles/
 ├── aws/
 │   ├── dev.tfvars        ← John's development
@@ -402,4 +412,4 @@ echo "✅ Profile created: profiles/${provider}/${profile_name}.tfvars"
 
 - [Docker Build Module](../modules/build/README.md)
 - [Environment Setup](../environments/README.md)
-- [Deployment Guide](../../DEPLOYMENT_GUIDE.md)
+- [Deployment Guide](../../docs/DEPLOYMENT.md)

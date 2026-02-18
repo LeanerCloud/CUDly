@@ -31,7 +31,6 @@ type Config struct {
 	ImageTag          string
 	CORSAllowedOrigin string
 	AdminEmail        string
-	AdminPassword     string
 }
 
 // ECRClient interface for ECR operations.

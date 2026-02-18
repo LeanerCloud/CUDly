@@ -30,7 +30,6 @@ type ProfileConfig struct {
 	ImageTag          string  `yaml:"image_tag,omitempty"`
 	CORSAllowedOrigin string  `yaml:"cors_allowed_origin,omitempty"`
 	AdminEmail        string  `yaml:"admin_email,omitempty"`
-	AdminPassword     string  `yaml:"admin_password,omitempty"`
 }
 
 // DeploymentConfig holds all deployment profiles
