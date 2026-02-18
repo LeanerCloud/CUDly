@@ -7,6 +7,23 @@ import * as state from './state';
 import { formatCurrency, escapeHtml } from './utils';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 
+// Module state for current purchase modal recommendations
+let currentPurchaseRecommendations: LocalRecommendation[] = [];
+
+/**
+ * Get the recommendations currently loaded in the purchase modal
+ */
+export function getPurchaseModalRecommendations(): LocalRecommendation[] {
+  return [...currentPurchaseRecommendations];
+}
+
+/**
+ * Clear purchase modal recommendations (called when modal closes)
+ */
+export function clearPurchaseModalRecommendations(): void {
+  currentPurchaseRecommendations = [];
+}
+
 /**
  * Setup recommendations event handlers
  */
@@ -218,13 +235,14 @@ function populateRegionFilter(regions: string[]): void {
 
   const currentValue = select.value;
   select.innerHTML = '<option value="">All Regions</option>' +
-    regions.map(r => `<option value="${r}" ${r === currentValue ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('');
+    regions.map(r => `<option value="${escapeHtml(r)}" ${r === currentValue ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('');
 }
 
 /**
  * Open purchase modal
  */
 export function openPurchaseModal(recommendations: LocalRecommendation[]): void {
+  currentPurchaseRecommendations = recommendations;
   const container = document.getElementById('purchase-details');
   if (!container) return;
 

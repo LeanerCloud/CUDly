@@ -4,6 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
+import { escapeHtml } from './utils';
 
 // Login rate limiting
 let lastLoginAttempt = 0;
@@ -103,11 +104,11 @@ export async function showResetPasswordModal(token: string): Promise<void> {
   }
 
   // Add password visibility toggle
-  setupPasswordToggle();
+  setupPasswordToggle(modal);
 }
 
-function setupPasswordToggle(): void {
-  const toggleButtons = document.querySelectorAll('.toggle-password');
+function setupPasswordToggle(container: HTMLElement | Document = document): void {
+  const toggleButtons = container.querySelectorAll('.toggle-password');
 
   toggleButtons.forEach(button => {
     button.addEventListener('click', () => {
@@ -144,7 +145,7 @@ function setupPasswordToggle(): void {
   });
 }
 
-function updatePasswordRequirements(password: string): void {
+function updatePasswordRequirements(password: string, prefix = 'req-'): void {
   const requirements = {
     length: password.length >= 8,
     uppercase: /[A-Z]/.test(password),
@@ -154,11 +155,11 @@ function updatePasswordRequirements(password: string): void {
   };
 
   // Update each requirement indicator
-  updateRequirement('req-length', requirements.length);
-  updateRequirement('req-uppercase', requirements.uppercase);
-  updateRequirement('req-lowercase', requirements.lowercase);
-  updateRequirement('req-number', requirements.number);
-  updateRequirement('req-special', requirements.special);
+  updateRequirement(`${prefix}length`, requirements.length);
+  updateRequirement(`${prefix}uppercase`, requirements.uppercase);
+  updateRequirement(`${prefix}lowercase`, requirements.lowercase);
+  updateRequirement(`${prefix}number`, requirements.number);
+  updateRequirement(`${prefix}special`, requirements.special);
 }
 
 function updateRequirement(id: string, isMet: boolean): void {
@@ -247,6 +248,174 @@ async function handleResetPasswordSubmit(e: Event, token: string): Promise<void>
 }
 
 /**
+ * Show admin setup modal (first-time bootstrap)
+ */
+export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
+  // Remove any existing modal to prevent duplicates
+  document.getElementById('admin-setup-modal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'admin-setup-modal';
+  modal.innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-content">
+        <h2>Welcome to CUDly</h2>
+        <p>No admin account exists yet. Set up the first admin to get started.</p>
+        ${apiKeyHint ? `<p class="help-text">API Key can be found at: <code>${escapeHtml(apiKeyHint)}</code></p>` : ''}
+
+        <form id="admin-setup-form">
+          <label>API Key:
+            <input type="password" id="setup-api-key" placeholder="Enter your API key" autocomplete="off" required>
+          </label>
+          <label>Admin Email:
+            <input type="email" id="setup-email" placeholder="admin@example.com" autocomplete="email" required>
+          </label>
+          <label>Password:
+            <div class="password-input-wrapper">
+              <input type="password" id="setup-password" placeholder="Enter password" autocomplete="new-password" required minlength="8">
+              <button type="button" class="toggle-password" data-target="setup-password" aria-label="Show password">
+                <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
+          </label>
+
+          <div id="setup-password-requirements" class="password-requirements">
+            <div class="requirement" id="setup-req-length">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">At least 8 characters</span>
+            </div>
+            <div class="requirement" id="setup-req-uppercase">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One uppercase letter (A-Z)</span>
+            </div>
+            <div class="requirement" id="setup-req-lowercase">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One lowercase letter (a-z)</span>
+            </div>
+            <div class="requirement" id="setup-req-number">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One number (0-9)</span>
+            </div>
+            <div class="requirement" id="setup-req-special">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One special character (!@#$%^&*)</span>
+            </div>
+          </div>
+
+          <label>Confirm Password:
+            <div class="password-input-wrapper">
+              <input type="password" id="setup-confirm-password" placeholder="Confirm password" autocomplete="new-password" required minlength="8">
+              <button type="button" class="toggle-password" data-target="setup-confirm-password" aria-label="Show password">
+                <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
+          </label>
+
+          <div id="setup-error" class="error-message hidden"></div>
+          <button type="submit" class="primary">Create Admin Account</button>
+        </form>
+        <p class="help-text"><a href="#" id="admin-setup-login-link">Already have an account? Log in</a></p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const form = document.getElementById('admin-setup-form');
+  const passwordInput = document.getElementById('setup-password') as HTMLInputElement;
+
+  if (form) {
+    form.addEventListener('submit', (e) => void handleAdminSetupSubmit(e));
+  }
+
+  if (passwordInput) {
+    passwordInput.addEventListener('input', () => {
+      updatePasswordRequirements(passwordInput.value, 'setup-req-');
+    });
+  }
+
+  const loginLink = document.getElementById('admin-setup-login-link');
+  if (loginLink) {
+    loginLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      modal.remove();
+      void showLoginModal();
+    });
+  }
+
+  setupPasswordToggle(modal);
+}
+
+async function handleAdminSetupSubmit(e: Event): Promise<void> {
+  e.preventDefault();
+
+  const errorDiv = document.getElementById('setup-error');
+  errorDiv?.classList.add('hidden');
+
+  const apiKey = (document.getElementById('setup-api-key') as HTMLInputElement)?.value.trim() || '';
+  const email = (document.getElementById('setup-email') as HTMLInputElement)?.value.trim() || '';
+  const password = (document.getElementById('setup-password') as HTMLInputElement)?.value || '';
+  const confirmPassword = (document.getElementById('setup-confirm-password') as HTMLInputElement)?.value || '';
+
+  if (password.length < 8) {
+    if (errorDiv) {
+      errorDiv.textContent = 'Password must be at least 8 characters long';
+      errorDiv.classList.remove('hidden');
+    }
+    return;
+  }
+
+  const hasUppercase = /[A-Z]/.test(password);
+  const hasLowercase = /[a-z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+
+  if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
+    if (errorDiv) {
+      errorDiv.textContent = 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character';
+      errorDiv.classList.remove('hidden');
+    }
+    return;
+  }
+
+  if (password !== confirmPassword) {
+    if (errorDiv) {
+      errorDiv.textContent = 'Passwords do not match';
+      errorDiv.classList.remove('hidden');
+    }
+    return;
+  }
+
+  const submitBtn = document.querySelector('#admin-setup-form button[type="submit"]') as HTMLButtonElement | null;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Creating...';
+  }
+
+  try {
+    await api.setupAdmin(apiKey, email, password);
+    document.getElementById('admin-setup-modal')?.remove();
+    location.reload();
+  } catch (error) {
+    const err = error as Error;
+    if (errorDiv) {
+      errorDiv.textContent = err.message || 'Failed to create admin account';
+      errorDiv.classList.remove('hidden');
+    }
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Create Admin Account';
+    }
+  }
+}
+
+/**
  * Show login modal
  */
 export async function showLoginModal(): Promise<void> {
@@ -305,7 +474,7 @@ function setupLoginModalHandlers(modal: HTMLElement): void {
   }
 
   // Setup password toggle
-  setupPasswordToggle();
+  setupPasswordToggle(modal);
 }
 
 async function handleLogin(e: Event): Promise<void> {
@@ -392,13 +561,28 @@ export function updateUserUI(): void {
   const userInfoEl = document.getElementById('user-info');
   const logoutBtn = document.getElementById('logout-btn');
 
+  const roleEl = document.getElementById('user-role-display');
+
   if (currentUser) {
     // Update the user email display with click-to-edit functionality
     if (userEmailEl) {
       userEmailEl.textContent = currentUser.email;
       userEmailEl.title = 'Click to edit your profile';
       userEmailEl.style.cursor = 'pointer';
-      userEmailEl.addEventListener('click', () => void openProfileModal());
+      // Replace element to avoid duplicate listeners on repeated calls
+      const freshEmailEl = userEmailEl.cloneNode(true) as HTMLElement;
+      userEmailEl.parentNode?.replaceChild(freshEmailEl, userEmailEl);
+      freshEmailEl.addEventListener('click', () => void openProfileModal());
+    }
+    // Show role badge for admin users
+    if (roleEl) {
+      if (currentUser.role === 'admin') {
+        roleEl.textContent = '(admin)';
+        roleEl.style.display = '';
+      } else {
+        roleEl.textContent = '';
+        roleEl.style.display = 'none';
+      }
     }
     // Show the user info section
     if (userInfoEl) {
@@ -413,6 +597,9 @@ export function updateUserUI(): void {
     // Hide user info when not logged in
     if (userInfoEl) {
       userInfoEl.style.display = 'none';
+    }
+    if (roleEl) {
+      roleEl.style.display = 'none';
     }
   }
 
@@ -493,7 +680,7 @@ async function openProfileModal(): Promise<void> {
     document.getElementById('profile-form')?.addEventListener('submit', (e) => void saveProfile(e));
 
     // Setup password toggle
-    setupPasswordToggle();
+    setupPasswordToggle(modal);
   }
 
   // Populate with current values

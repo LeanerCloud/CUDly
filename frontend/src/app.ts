@@ -4,9 +4,9 @@
 
 import * as api from './api';
 import * as state from './state';
-import { showLoginModal, showResetPasswordModal, updateUserUI, logout } from './auth';
+import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI, logout } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
-import { setupRecommendationsHandlers, refreshRecommendations } from './recommendations';
+import { setupRecommendationsHandlers, refreshRecommendations, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
 import { switchTab } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings, closeAzureCredsModal, closeGCPCredsModal, copyToClipboard } from './settings';
@@ -30,6 +30,15 @@ export async function init(): Promise<void> {
   }
 
   if (!api.isAuthenticated()) {
+    try {
+      const publicInfo = await api.getPublicInfo();
+      if (!publicInfo.admin_exists) {
+        await showAdminSetupModal(publicInfo.api_key_secret_url);
+        return;
+      }
+    } catch {
+      // If public info fails, fall through to login
+    }
     await showLoginModal();
     return;
   }
@@ -139,15 +148,15 @@ function setupButtonHandlers(): void {
   // Purchase modal buttons
   const closePurchaseBtn = document.getElementById('close-purchase-modal-btn');
   if (closePurchaseBtn) {
-    closePurchaseBtn.addEventListener('click', () => closePurchaseModal());
+    closePurchaseBtn.addEventListener('click', () => {
+      closePurchaseModal();
+      clearPurchaseModalRecommendations();
+    });
   }
 
   const executePurchaseBtn = document.getElementById('execute-purchase-btn');
   if (executePurchaseBtn) {
-    // Note: executePurchase is handled internally by plans.ts - this button may be dynamically added
-    executePurchaseBtn.addEventListener('click', () => {
-      console.log('Execute purchase clicked');
-    });
+    executePurchaseBtn.addEventListener('click', () => void handleExecutePurchase());
   }
 
   // Recommendation selection modal buttons - these may be dynamically added
@@ -225,6 +234,64 @@ function setupButtonHandlers(): void {
     const newLogoutBtn = logoutBtn.cloneNode(true) as HTMLButtonElement;
     logoutBtn.parentNode?.replaceChild(newLogoutBtn, logoutBtn);
     newLogoutBtn.addEventListener('click', () => void logout());
+  }
+}
+
+/**
+ * Handle execute purchase button click
+ */
+async function handleExecutePurchase(): Promise<void> {
+  const localRecs = getPurchaseModalRecommendations();
+  if (localRecs.length === 0) {
+    alert('No recommendations selected for purchase.');
+    return;
+  }
+
+  if (!confirm(`Are you sure you want to execute ${localRecs.length} purchase(s)? This action will purchase cloud commitments.`)) {
+    return;
+  }
+
+  // Map LocalRecommendation to API Recommendation format
+  const apiRecs: api.Recommendation[] = localRecs.map((r, i) => ({
+    id: `rec-${i}`,
+    provider: r.provider,
+    service: r.service,
+    region: r.region,
+    instance_type: r.resource_type,
+    current_cost: 0,
+    recommended_cost: 0,
+    estimated_savings: r.monthly_savings,
+    term_years: r.term,
+    payment_option: 'all-upfront' as api.PaymentOption,
+    coverage: 100,
+    description: `${r.service} ${r.resource_type} in ${r.region} x${r.count}`
+  }));
+
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn) {
+    executeBtn.disabled = true;
+    executeBtn.textContent = 'Executing...';
+  }
+
+  try {
+    const result = await api.executePurchase(apiRecs);
+    closePurchaseModal();
+    clearPurchaseModalRecommendations();
+
+    if (result.status === 'completed') {
+      alert('Purchase executed successfully!');
+    } else {
+      alert(`Purchase submitted. Status: ${result.status}. Execution ID: ${result.execution_id}`);
+    }
+    await loadDashboard();
+  } catch (error) {
+    const err = error as Error;
+    alert(`Failed to execute purchase: ${err.message}`);
+  } finally {
+    if (executeBtn) {
+      executeBtn.disabled = false;
+      executeBtn.textContent = 'Execute Purchase';
+    }
   }
 }
 

@@ -280,7 +280,11 @@ describe('Dashboard Module', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(api.getPurchaseDetails).toHaveBeenCalledWith('exec-123');
-      expect(window.alert).toHaveBeenCalledWith('Purchase: exec-123\nStatus: pending');
+      // Modal should be rendered in the DOM instead of alert
+      const modal = document.getElementById('purchase-details-modal');
+      expect(modal).toBeTruthy();
+      expect(modal?.textContent).toContain('exec-123');
+      expect(modal?.textContent).toContain('pending');
     });
 
     test('view purchase button shows error on failure', async () => {

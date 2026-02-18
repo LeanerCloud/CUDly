@@ -268,6 +268,37 @@ button.danger:hover {
     opacity: 1;
 }
 
+/* Role badge */
+.role-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.9);
+}
+
+/* Purchase detail status badges */
+.status-badge.completed {
+    background: #e6f4ea;
+    color: #137333;
+}
+
+.status-badge.pending {
+    background: #e8f0fe;
+    color: #1a73e8;
+}
+
+.status-badge.failed {
+    background: #fce8e6;
+    color: #c5221f;
+}
+
+.status-badge.running {
+    background: #fff3e0;
+    color: #e65100;
+}
+
 /* Copy button */
 .copy-btn {
     background: none;

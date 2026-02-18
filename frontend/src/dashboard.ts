@@ -182,7 +182,73 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
 async function viewPurchaseDetails(executionId: string): Promise<void> {
   try {
     const purchase = await api.getPurchaseDetails(executionId);
-    alert(`Purchase: ${purchase.execution_id}\nStatus: ${purchase.status}`);
+
+    // Remove any existing details modal
+    document.getElementById('purchase-details-modal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'purchase-details-modal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-content modal-wide">
+        <h2>Purchase Details</h2>
+        <div class="form-section">
+          <h3>Execution Info</h3>
+          <table>
+            <tbody>
+              <tr><td><strong>Execution ID</strong></td><td>${escapeHtml(purchase.execution_id)}</td></tr>
+              <tr><td><strong>Status</strong></td><td><span class="status-badge ${purchase.status.toLowerCase().replace(/[^a-z-]/g, '')}">${escapeHtml(purchase.status)}</span></td></tr>
+              <tr><td><strong>Created</strong></td><td>${escapeHtml(purchase.created_at)}</td></tr>
+              ${purchase.completed_at ? `<tr><td><strong>Completed</strong></td><td>${escapeHtml(purchase.completed_at)}</td></tr>` : ''}
+            </tbody>
+          </table>
+        </div>
+        ${purchase.results && purchase.results.length > 0 ? `
+        <div class="form-section">
+          <h3>Results</h3>
+          <table>
+            <thead>
+              <tr><th>Recommendation ID</th><th>Status</th><th>Confirmation ID</th><th>Error</th></tr>
+            </thead>
+            <tbody>
+              ${purchase.results.map(r => `
+                <tr>
+                  <td>${escapeHtml(r.recommendation_id)}</td>
+                  <td><span class="status-badge ${r.status.toLowerCase().replace(/[^a-z-]/g, '')}">${escapeHtml(r.status)}</span></td>
+                  <td>${r.confirmation_id ? escapeHtml(r.confirmation_id) : '-'}</td>
+                  <td>${r.error ? escapeHtml(r.error) : '-'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        ` : ''}
+        <div class="modal-buttons">
+          ${purchase.status === 'pending' ? '<button type="button" id="cancel-purchase-detail-btn" class="danger">Cancel Purchase</button>' : ''}
+          <button type="button" id="close-purchase-details-btn">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    modal.querySelector('#close-purchase-details-btn')?.addEventListener('click', () => {
+      modal.remove();
+    });
+
+    const cancelBtn = modal.querySelector('#cancel-purchase-detail-btn') as HTMLButtonElement | null;
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to cancel this purchase?')) return;
+        try {
+          await api.cancelPurchase(executionId);
+          modal.remove();
+          await loadDashboard();
+        } catch (cancelError) {
+          console.error('Failed to cancel purchase:', cancelError);
+          alert('Failed to cancel purchase');
+        }
+      });
+    }
   } catch (error) {
     console.error('Failed to load purchase details:', error);
     const err = error as Error;
