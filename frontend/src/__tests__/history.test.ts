@@ -50,17 +50,16 @@ describe('History Module', () => {
       expect(startInput.value).toBeTruthy();
       expect(endInput.value).toBeTruthy();
 
-      const startDate = new Date(startInput.value);
-      const endDate = new Date(endInput.value);
-
-      // End date should be today (or close to it)
+      // End date should be today in UTC (code uses toISOString which is UTC)
       const today = new Date();
-      expect(endDate.toDateString()).toBe(today.toDateString());
+      const todayUTC = today.toISOString().split('T')[0] || '';
+      expect(endInput.value).toBe(todayUTC);
 
-      // Start date should be about 3 months ago
+      // Start date should be about 3 months ago (UTC)
       const expectedStart = new Date();
       expectedStart.setMonth(expectedStart.getMonth() - 3);
-      expect(startDate.getMonth()).toBe(expectedStart.getMonth());
+      const expectedStartUTC = expectedStart.toISOString().split('T')[0] || '';
+      expect(startInput.value).toBe(expectedStartUTC);
     });
 
     test('does not overwrite existing values', () => {
