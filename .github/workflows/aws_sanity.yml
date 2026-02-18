@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   sanity:
+    if: ${{ secrets.AWS_CICD_READONLY_ROLE_ARN != '' && secrets.AWS_EXPECTED_ACCOUNT_ID != '' }}
     runs-on: ubuntu-latest
     env:
       AWS_REGION: us-east-1

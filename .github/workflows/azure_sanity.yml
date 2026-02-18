@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   sanity:
+    if: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' }}
     runs-on: ubuntu-latest
     env:
       REPORT_PATH: azure_sanity_report.json
