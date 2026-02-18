@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,17 @@ type Options struct {
 	ExpectedTenantID string // optional
 	ExpectedSubID    string // optional
 	Timeout          time.Duration
+}
+
+type azAccountShow struct {
+	ID       string `json:"id"`
+	TenantID string `json:"tenantId"`
+	Name     string `json:"name"`
+	State    string `json:"state"`
+	User     struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	} `json:"user"`
 }
 
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
@@ -39,7 +51,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 		StartedAt: time.Now().UTC(),
 	}
 
-	runCmd := func(name string, args ...string) report.CheckResult {
+	runCmd := func(name string, args ...string) ([]byte, report.CheckResult) {
 		start := time.Now().UTC()
 		cmd := exec.CommandContext(rctx, "az", args...)
 		out, err := cmd.CombinedOutput()
@@ -60,62 +72,73 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 		} else {
 			cr.Status = report.StatusPass
 		}
-		return cr
+		return out, cr
 	}
 
 	// Ensure subscription context (read-only)
-	rep.Add(runCmd("azure:account:set", "account", "set", "--subscription", opts.SubscriptionID))
+	_, cr := runCmd("azure:account:set", "account", "set", "--subscription", opts.SubscriptionID)
+	rep.Add(cr)
 
-	// Read-only identity/subscription info
-	rep.Add(runCmd("azure:account:show", "account", "show", "-o", "json"))
+	// Read-only identity/subscription info (only call once; reuse output)
+	accountOut, cr := runCmd("azure:account:show", "account", "show", "-o", "json")
+	rep.Add(cr)
 
-	// Optional tenant/subscription checks (portable): read from az account show output
-	// We do it by re-running az account show and parsing minimally (string contains checks).
-	// (Keeps dependencies minimal.)
+	// Robust expected checks via JSON parsing (no fragile string matching)
 	if opts.ExpectedSubID != "" || opts.ExpectedTenantID != "" {
 		start := time.Now().UTC()
-		cmd := exec.CommandContext(rctx, "az", "account", "show", "-o", "json")
-		out, err := cmd.CombinedOutput()
-		end := time.Now().UTC()
-
-		cr := report.CheckResult{
+		check := report.CheckResult{
 			Name:      "azure:account:expected_checks",
 			StartedAt: start,
-			EndedAt:   end,
-			Details: map[string]string{
-				"output": string(out),
-			},
+			Details:   map[string]string{},
 		}
+
+		var a azAccountShow
+		err := json.Unmarshal(accountOut, &a)
+		end := time.Now().UTC()
+		check.EndedAt = end
+
 		if err != nil {
-			cr.Status = report.StatusFail
-			cr.Message = err.Error()
+			check.Status = report.StatusFail
+			check.Message = fmt.Sprintf("failed to parse az account show JSON: %v", err)
+			check.Details["raw"] = string(accountOut)
+			rep.Add(check)
 		} else {
-			// very lightweight checks (no JSON lib needed)
+			check.Details["id"] = a.ID
+			check.Details["tenantId"] = a.TenantID
+			check.Details["name"] = a.Name
+			check.Details["state"] = a.State
+			check.Details["user"] = a.User.Name
+
 			ok := true
-			if opts.ExpectedSubID != "" && !strings.Contains(string(out), fmt.Sprintf(`"id": "%s"`, opts.ExpectedSubID)) {
+			msg := ""
+
+			if opts.ExpectedSubID != "" && a.ID != opts.ExpectedSubID {
 				ok = false
-				cr.Message = fmt.Sprintf("expected subscription %s not found in az account show output", opts.ExpectedSubID)
+				msg += fmt.Sprintf("unexpected subscription: got %s want %s; ", a.ID, opts.ExpectedSubID)
 			}
-			if opts.ExpectedTenantID != "" && !strings.Contains(string(out), fmt.Sprintf(`"tenantId": "%s"`, opts.ExpectedTenantID)) {
+			if opts.ExpectedTenantID != "" && a.TenantID != opts.ExpectedTenantID {
 				ok = false
-				if cr.Message == "" {
-					cr.Message = fmt.Sprintf("expected tenant %s not found in az account show output", opts.ExpectedTenantID)
-				} else {
-					cr.Message += "; " + fmt.Sprintf("expected tenant %s not found", opts.ExpectedTenantID)
-				}
+				msg += fmt.Sprintf("unexpected tenant: got %s want %s; ", a.TenantID, opts.ExpectedTenantID)
 			}
+
 			if ok {
-				cr.Status = report.StatusPass
+				check.Status = report.StatusPass
 			} else {
-				cr.Status = report.StatusFail
+				check.Status = report.StatusFail
+				check.Message = strings.TrimSpace(msg)
 			}
+			rep.Add(check)
 		}
-		rep.Add(cr)
 	}
 
 	// Read-only lists (sample)
-	rep.Add(runCmd("azure:group:list(sample)", "group", "list", "--query", "[0:10].{name:name, location:location}", "-o", "json"))
-	rep.Add(runCmd("azure:vm:list(sample)", "vm", "list", "--query", "[0:10].{name:name, resourceGroup:resourceGroup, location:location}", "-o", "json"))
+	_, cr = runCmd("azure:group:list(sample)", "group", "list",
+		"--query", "[0:10].{name:name, location:location}", "-o", "json")
+	rep.Add(cr)
+
+	_, cr = runCmd("azure:vm:list(sample)", "vm", "list",
+		"--query", "[0:10].{name:name, resourceGroup:resourceGroup, location:location}", "-o", "json")
+	rep.Add(cr)
 
 	rep.EndedAt = time.Now().UTC()
 	return rep, nil
