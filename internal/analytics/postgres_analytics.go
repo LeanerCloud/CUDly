@@ -97,7 +97,7 @@ func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapsh
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		},
-		pgx.CopyFromSlice(len(snapshots), func(i int) ([]interface{}, error) {
+		pgx.CopyFromSlice(len(snapshots), func(i int) ([]any, error) {
 			snapshot := snapshots[i]
 
 			// Generate UUID if not provided
@@ -106,12 +106,16 @@ func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapsh
 			}
 
 			// Marshal metadata
-			var metadataJSON interface{}
+			var metadataJSON any
 			if snapshot.Metadata != nil {
-				metadataJSON, _ = json.Marshal(snapshot.Metadata)
+				data, err := json.Marshal(snapshot.Metadata)
+				if err != nil {
+					return nil, fmt.Errorf("failed to marshal metadata for snapshot %d: %w", i, err)
+				}
+				metadataJSON = data
 			}
 
-			return []interface{}{
+			return []any{
 				snapshot.ID,
 				snapshot.AccountID,
 				snapshot.Timestamp,
@@ -148,7 +152,7 @@ func (s *PostgresAnalyticsStore) QuerySavings(ctx context.Context, req QueryRequ
 		  AND timestamp <= $3
 	`
 
-	args := []interface{}{req.AccountID, req.StartDate, req.EndDate}
+	args := []any{req.AccountID, req.StartDate, req.EndDate}
 	argIndex := 4
 
 	// Add optional filters
