@@ -2,7 +2,6 @@ package recommendations
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -245,7 +244,7 @@ func TestGetRecommendations_SavingsPlans_Success(t *testing.T) {
 
 func TestGetRecommendations_Error(t *testing.T) {
 	mockAPI := &mockCostExplorerAPI{
-		riError: errors.New("API error"),
+		riError: newThrottleError(),
 	}
 
 	// Use custom rate limiter to speed up test
@@ -401,7 +400,7 @@ func TestGetAllRecommendations_SomeServicesFail(t *testing.T) {
 
 func TestGetRecommendations_ContextCancellation(t *testing.T) {
 	mockAPI := &mockCostExplorerAPI{
-		riError: errors.New("API error"),
+		riError: newThrottleError(),
 	}
 
 	client := NewClientWithAPI(mockAPI, "us-east-1")

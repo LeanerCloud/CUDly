@@ -2,9 +2,27 @@ package recommendations
 
 import (
 	"context"
+	"errors"
 	"math"
+	"strings"
 	"time"
 )
+
+// throttleErrorCodes contains AWS API error codes that indicate throttling
+var throttleErrorCodes = map[string]struct{}{
+	"Throttling":                             {},
+	"ThrottlingException":                    {},
+	"ThrottledException":                     {},
+	"RequestThrottledException":              {},
+	"TooManyRequestsException":               {},
+	"ProvisionedThroughputExceededException": {},
+	"RequestLimitExceeded":                   {},
+	"BandwidthLimitExceeded":                 {},
+	"LimitExceededException":                 {},
+	"RequestThrottled":                       {},
+	"SlowDown":                               {},
+	"EC2ThrottledException":                  {},
+}
 
 // RateLimiter provides rate limiting with exponential backoff
 type RateLimiter struct {
@@ -69,7 +87,8 @@ func (r *RateLimiter) Wait(ctx context.Context) error {
 	}
 }
 
-// ShouldRetry checks if we should retry based on error and retry count
+// ShouldRetry checks if we should retry based on error type and retry count.
+// Only throttling and transient errors are retried.
 func (r *RateLimiter) ShouldRetry(err error) bool {
 	if err == nil {
 		r.Reset()
@@ -81,10 +100,32 @@ func (r *RateLimiter) ShouldRetry(err error) bool {
 		return false
 	}
 
-	// Check for retryable errors (you can expand this based on AWS error types)
-	// For now, we'll retry on any error
-	r.retryCount++
-	return true
+	// Only retry on throttling or transient errors
+	if isThrottleError(err) {
+		r.retryCount++
+		return true
+	}
+
+	return false
+}
+
+// isThrottleError checks if an error is an AWS throttling error
+func isThrottleError(err error) bool {
+	// Check for AWS API errors that implement ErrorCode()
+	type errorCoder interface {
+		ErrorCode() string
+	}
+	var apiErr errorCoder
+	if errors.As(err, &apiErr) {
+		_, isThrottle := throttleErrorCodes[apiErr.ErrorCode()]
+		return isThrottle
+	}
+
+	// Fallback: check error message for common throttle indicators
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "Throttling") ||
+		strings.Contains(errMsg, "Rate exceeded") ||
+		strings.Contains(errMsg, "TooManyRequests")
 }
 
 // Reset resets the retry counter

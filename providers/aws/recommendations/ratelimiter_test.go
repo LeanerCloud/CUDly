@@ -3,12 +3,30 @@ package recommendations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// throttleError implements the errorCoder interface used by isThrottleError
+type throttleError struct {
+	code string
+	msg  string
+}
+
+func (e *throttleError) Error() string     { return e.msg }
+func (e *throttleError) ErrorCode() string { return e.code }
+
+func newThrottleError() error {
+	return &throttleError{code: "Throttling", msg: "rate exceeded"}
+}
+
+func newWrappedThrottleError() error {
+	return fmt.Errorf("wrapped: %w", newThrottleError())
+}
 
 func TestNewRateLimiter(t *testing.T) {
 	limiter := NewRateLimiter()
@@ -117,9 +135,29 @@ func TestShouldRetry_NoError(t *testing.T) {
 	assert.Equal(t, 0, limiter.retryCount)
 }
 
-func TestShouldRetry_WithError(t *testing.T) {
+func TestShouldRetry_NonThrottleError(t *testing.T) {
 	limiter := NewRateLimiter()
-	err := errors.New("some error")
+	err := errors.New("some non-throttle error")
+
+	shouldRetry := limiter.ShouldRetry(err)
+
+	assert.False(t, shouldRetry)
+	assert.Equal(t, 0, limiter.retryCount)
+}
+
+func TestShouldRetry_ThrottleError(t *testing.T) {
+	limiter := NewRateLimiter()
+	err := newThrottleError()
+
+	shouldRetry := limiter.ShouldRetry(err)
+
+	assert.True(t, shouldRetry)
+	assert.Equal(t, 1, limiter.retryCount)
+}
+
+func TestShouldRetry_WrappedThrottleError(t *testing.T) {
+	limiter := NewRateLimiter()
+	err := newWrappedThrottleError()
 
 	shouldRetry := limiter.ShouldRetry(err)
 
@@ -129,7 +167,7 @@ func TestShouldRetry_WithError(t *testing.T) {
 
 func TestShouldRetry_MaxRetriesExceeded(t *testing.T) {
 	limiter := NewRateLimiterWithOptions(100*time.Millisecond, 30*time.Second, 3)
-	err := errors.New("some error")
+	err := newThrottleError()
 
 	// First 3 retries should succeed
 	for i := 0; i < 3; i++ {
@@ -146,7 +184,7 @@ func TestShouldRetry_MaxRetriesExceeded(t *testing.T) {
 
 func TestShouldRetry_ResetsOnSuccess(t *testing.T) {
 	limiter := NewRateLimiter()
-	err := errors.New("some error")
+	err := newThrottleError()
 
 	// Trigger a few retries
 	limiter.ShouldRetry(err)
@@ -161,7 +199,7 @@ func TestShouldRetry_ResetsOnSuccess(t *testing.T) {
 
 func TestReset(t *testing.T) {
 	limiter := NewRateLimiter()
-	err := errors.New("some error")
+	err := newThrottleError()
 
 	// Trigger some retries
 	limiter.ShouldRetry(err)
@@ -176,7 +214,7 @@ func TestReset(t *testing.T) {
 
 func TestGetRetryCount(t *testing.T) {
 	limiter := NewRateLimiter()
-	err := errors.New("some error")
+	err := newThrottleError()
 
 	assert.Equal(t, 0, limiter.GetRetryCount())
 
@@ -193,7 +231,7 @@ func TestGetRetryCount(t *testing.T) {
 func TestRateLimiter_FullRetryFlow(t *testing.T) {
 	limiter := NewRateLimiterWithOptions(10*time.Millisecond, 100*time.Millisecond, 3)
 	ctx := context.Background()
-	err := errors.New("transient error")
+	throttleErr := newThrottleError()
 
 	attempts := 0
 	for {
@@ -206,7 +244,7 @@ func TestRateLimiter_FullRetryFlow(t *testing.T) {
 		// Simulate an API call that might fail
 		var callErr error
 		if attempts < 3 {
-			callErr = err // Fail first 2 attempts
+			callErr = throttleErr // Fail first 2 attempts with throttle
 		} else {
 			callErr = nil // Succeed on 3rd attempt
 		}
@@ -224,7 +262,7 @@ func TestRateLimiter_FullRetryFlow(t *testing.T) {
 func TestRateLimiter_ExhaustsRetries(t *testing.T) {
 	limiter := NewRateLimiterWithOptions(10*time.Millisecond, 100*time.Millisecond, 2)
 	ctx := context.Background()
-	err := errors.New("persistent error")
+	throttleErr := newThrottleError()
 
 	attempts := 0
 	var lastErr error
@@ -235,8 +273,8 @@ func TestRateLimiter_ExhaustsRetries(t *testing.T) {
 		waitErr := limiter.Wait(ctx)
 		require.NoError(t, waitErr)
 
-		// Simulate an API call that always fails
-		lastErr = err
+		// Simulate an API call that always fails with throttling
+		lastErr = throttleErr
 
 		// Check if we should retry
 		if !limiter.ShouldRetry(lastErr) {
