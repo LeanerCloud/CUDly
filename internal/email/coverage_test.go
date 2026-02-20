@@ -204,7 +204,7 @@ func TestRenderFunctions_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("RenderWelcomeEmail with empty fields", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("", "")
+		result, err := RenderWelcomeEmail("", "", "")
 		require.NoError(t, err)
 		assert.Contains(t, result, "Welcome")
 	})
@@ -408,9 +408,9 @@ func TestWelcomeUserData_AllFields(t *testing.T) {
 	assert.Equal(t, "operator", data.Role)
 }
 
-// TestWelcomeEmailData_Fields tests WelcomeEmailData structure
-func TestWelcomeEmailData_AllFields(t *testing.T) {
-	data := WelcomeEmailData{
+// TestWelcomeUserData_ViewerRole tests WelcomeUserData with viewer role
+func TestWelcomeUserData_ViewerRole(t *testing.T) {
+	data := WelcomeUserData{
 		Email:        "test@example.com",
 		DashboardURL: "https://dashboard.test.com",
 		Role:         "viewer",
@@ -436,13 +436,13 @@ func TestProviderTypes_Values(t *testing.T) {
 // TestFactoryConfig_AllFields tests all FactoryConfig fields
 func TestFactoryConfig_AllFields(t *testing.T) {
 	cfg := FactoryConfig{
-		FromEmail:             "noreply@example.com",
-		Provider:              ProviderAWS,
-		TopicARN:              "arn:aws:sns:us-east-1:123456789012:notifications",
-		EmailAddress:          "admin@example.com",
-		SendGridAPIKey:        "SG.xxxxxxxxxxxxx",
-		AzureConnectionString: "Endpoint=sb://xxx.servicebus.windows.net/",
-		AzureSenderAddress:    "DoNotReply@acs.example.com",
+		FromEmail:         "noreply@example.com",
+		Provider:          ProviderAWS,
+		TopicARN:          "arn:aws:sns:us-east-1:123456789012:notifications",
+		EmailAddress:      "admin@example.com",
+		SendGridAPIKey:    "SG.xxxxxxxxxxxxx",
+		AzureSMTPUsername: "azure_user",
+		AzureSMTPPassword: "azure_pass",
 	}
 
 	assert.Equal(t, "noreply@example.com", cfg.FromEmail)
@@ -450,8 +450,8 @@ func TestFactoryConfig_AllFields(t *testing.T) {
 	assert.Equal(t, "arn:aws:sns:us-east-1:123456789012:notifications", cfg.TopicARN)
 	assert.Equal(t, "admin@example.com", cfg.EmailAddress)
 	assert.Equal(t, "SG.xxxxxxxxxxxxx", cfg.SendGridAPIKey)
-	assert.Equal(t, "Endpoint=sb://xxx.servicebus.windows.net/", cfg.AzureConnectionString)
-	assert.Equal(t, "DoNotReply@acs.example.com", cfg.AzureSenderAddress)
+	assert.Equal(t, "azure_user", cfg.AzureSMTPUsername)
+	assert.Equal(t, "azure_pass", cfg.AzureSMTPPassword)
 }
 
 // TestSMTPSender_TLSBehavior tests TLS configuration behavior
@@ -1110,19 +1110,19 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 
 	// Test RenderWelcomeEmail with various inputs
 	t.Run("Welcome_admin", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("https://dashboard.com", "admin")
+		result, err := RenderWelcomeEmail("admin@test.com", "https://dashboard.com", "admin")
 		require.NoError(t, err)
 		assert.NotEmpty(t, result)
 	})
 
 	t.Run("Welcome_user", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("https://dashboard.com", "user")
+		result, err := RenderWelcomeEmail("user@test.com", "https://dashboard.com", "user")
 		require.NoError(t, err)
 		assert.NotEmpty(t, result)
 	})
 
 	t.Run("Welcome_operator", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("https://dashboard.com", "operator")
+		result, err := RenderWelcomeEmail("op@test.com", "https://dashboard.com", "operator")
 		require.NoError(t, err)
 		assert.NotEmpty(t, result)
 	})

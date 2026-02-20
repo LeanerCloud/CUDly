@@ -3,19 +3,20 @@ package email
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"text/template"
 )
 
-// RenderPasswordResetEmail renders the password reset email template
-func RenderPasswordResetEmail(email, resetURL string) (string, error) {
-	tmpl, err := template.New("reset").Parse(passwordResetTemplate)
+// templateFuncs provides common functions available in email templates.
+var templateFuncs = template.FuncMap{
+	"urlquery": url.QueryEscape,
+}
+
+// renderTemplate parses and executes a named template with the given data.
+func renderTemplate(name, tmplText string, data any) (string, error) {
+	tmpl, err := template.New(name).Funcs(templateFuncs).Parse(tmplText)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	data := PasswordResetData{
-		Email:    email,
-		ResetURL: resetURL,
 	}
 
 	var buf bytes.Buffer
@@ -26,89 +27,39 @@ func RenderPasswordResetEmail(email, resetURL string) (string, error) {
 	return buf.String(), nil
 }
 
-// WelcomeEmailData holds data for welcome emails
-type WelcomeEmailData struct {
-	Email        string
-	DashboardURL string
-	Role         string
+// RenderPasswordResetEmail renders the password reset email template
+func RenderPasswordResetEmail(email, resetURL string) (string, error) {
+	return renderTemplate("reset", passwordResetTemplate, PasswordResetData{
+		Email:    email,
+		ResetURL: resetURL,
+	})
 }
 
 // RenderWelcomeEmail renders the welcome email template
-func RenderWelcomeEmail(dashboardURL, role string) (string, error) {
-	tmpl, err := template.New("welcome").Parse(welcomeUserTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	data := WelcomeEmailData{
+func RenderWelcomeEmail(email, dashboardURL, role string) (string, error) {
+	return renderTemplate("welcome", welcomeUserTemplate, WelcomeUserData{
+		Email:        email,
 		DashboardURL: dashboardURL,
 		Role:         role,
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.String(), nil
+	})
 }
 
 // RenderNewRecommendationsEmail renders the new recommendations email template
 func RenderNewRecommendationsEmail(data NotificationData) (string, error) {
-	tmpl, err := template.New("recommendations").Parse(newRecommendationsTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.String(), nil
+	return renderTemplate("recommendations", newRecommendationsTemplate, data)
 }
 
 // RenderScheduledPurchaseEmail renders the scheduled purchase email template
 func RenderScheduledPurchaseEmail(data NotificationData) (string, error) {
-	tmpl, err := template.New("scheduled").Parse(scheduledPurchaseTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.String(), nil
+	return renderTemplate("scheduled", scheduledPurchaseTemplate, data)
 }
 
 // RenderPurchaseConfirmationEmail renders the purchase confirmation email template
 func RenderPurchaseConfirmationEmail(data NotificationData) (string, error) {
-	tmpl, err := template.New("confirmation").Parse(purchaseConfirmationTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.String(), nil
+	return renderTemplate("confirmation", purchaseConfirmationTemplate, data)
 }
 
 // RenderPurchaseFailedEmail renders the purchase failed email template
 func RenderPurchaseFailedEmail(data NotificationData) (string, error) {
-	tmpl, err := template.New("failed").Parse(purchaseFailedTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.String(), nil
+	return renderTemplate("failed", purchaseFailedTemplate, data)
 }

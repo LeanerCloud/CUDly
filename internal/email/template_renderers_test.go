@@ -21,10 +21,11 @@ func TestRenderPasswordResetEmail(t *testing.T) {
 }
 
 func TestRenderWelcomeEmail(t *testing.T) {
+	email := "user@example.com"
 	dashboardURL := "https://dashboard.example.com"
 	role := "admin"
 
-	result, err := RenderWelcomeEmail(dashboardURL, role)
+	result, err := RenderWelcomeEmail(email, dashboardURL, role)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, dashboardURL)
@@ -235,8 +236,8 @@ func TestRenderPurchaseConfirmationEmail_NoUpfrontCost(t *testing.T) {
 	// Should not contain upfront cost line when it's 0
 }
 
-func TestWelcomeEmailData_Structure(t *testing.T) {
-	data := WelcomeEmailData{
+func TestWelcomeUserData_Structure(t *testing.T) {
+	data := WelcomeUserData{
 		Email:        "user@example.com",
 		DashboardURL: "https://dashboard.example.com",
 		Role:         "admin",

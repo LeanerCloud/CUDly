@@ -1,10 +1,8 @@
 package email
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"text/template"
 )
 
 // Email templates
@@ -48,11 +46,11 @@ Estimated Monthly Savings: ${{printf "%.2f" .TotalSavings}}
 
 Actions:
 --------
-[Review & Edit] {{.DashboardURL}}?action=edit&token={{.ApprovalToken}}
+[Review & Edit] {{.DashboardURL}}?action=edit&token={{urlquery .ApprovalToken}}
 
-[Pause Plan] {{.DashboardURL}}?action=pause&token={{.ApprovalToken}}
+[Pause Plan] {{.DashboardURL}}?action=pause&token={{urlquery .ApprovalToken}}
 
-[Cancel This Purchase] {{.DashboardURL}}?action=cancel&token={{.ApprovalToken}}
+[Cancel This Purchase] {{.DashboardURL}}?action=cancel&token={{urlquery .ApprovalToken}}
 
 You have {{.DaysUntilPurchase}} days to modify or cancel before automatic execution.
 
@@ -134,66 +132,46 @@ This is an automated message from CUDly.
 
 // SendNewRecommendationsNotification sends an email about new recommendations
 func (s *Sender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error {
-	tmpl, err := template.New("recommendations").Parse(newRecommendationsTemplate)
+	body, err := RenderNewRecommendationsEmail(data)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
+		return fmt.Errorf("failed to render new recommendations email: %w", err)
 	}
 
 	subject := fmt.Sprintf("CUDly - New Recommendations: $%.0f/month potential savings", data.TotalSavings)
-	return s.SendNotification(ctx, subject, buf.String())
+	return s.SendNotification(ctx, subject, body)
 }
 
 // SendScheduledPurchaseNotification sends a notification about upcoming automated purchase
 func (s *Sender) SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error {
-	tmpl, err := template.New("scheduled").Parse(scheduledPurchaseTemplate)
+	body, err := RenderScheduledPurchaseEmail(data)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
+		return fmt.Errorf("failed to render scheduled purchase email: %w", err)
 	}
 
 	subject := fmt.Sprintf("CUDly - Scheduled Purchase in %d Days: %s", data.DaysUntilPurchase, data.PlanName)
-	return s.SendNotification(ctx, subject, buf.String())
+	return s.SendNotification(ctx, subject, body)
 }
 
 // SendPurchaseConfirmation sends a confirmation after successful purchases
 func (s *Sender) SendPurchaseConfirmation(ctx context.Context, data NotificationData) error {
-	tmpl, err := template.New("confirmation").Parse(purchaseConfirmationTemplate)
+	body, err := RenderPurchaseConfirmationEmail(data)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
+		return fmt.Errorf("failed to render purchase confirmation email: %w", err)
 	}
 
 	subject := fmt.Sprintf("CUDly - Purchases Completed: $%.0f/month in savings", data.TotalSavings)
-	return s.SendNotification(ctx, subject, buf.String())
+	return s.SendNotification(ctx, subject, body)
 }
 
 // SendPurchaseFailedNotification sends a notification when purchases fail
 func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error {
-	tmpl, err := template.New("failed").Parse(purchaseFailedTemplate)
+	body, err := RenderPurchaseFailedEmail(data)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
+		return fmt.Errorf("failed to render purchase failed email: %w", err)
 	}
 
 	subject := "CUDly - Purchase Failed - Action Required"
-	return s.SendNotification(ctx, subject, buf.String())
+	return s.SendNotification(ctx, subject, body)
 }
 
 // PasswordResetData holds data for password reset emails
@@ -204,22 +182,12 @@ type PasswordResetData struct {
 
 // SendPasswordResetEmail sends a password reset email
 func (s *Sender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error {
-	tmpl, err := template.New("reset").Parse(passwordResetTemplate)
+	body, err := RenderPasswordResetEmail(email, resetURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
+		return fmt.Errorf("failed to render password reset email: %w", err)
 	}
 
-	data := PasswordResetData{
-		Email:    email,
-		ResetURL: resetURL,
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return s.SendToEmail(ctx, email, "CUDly - Password Reset Request", buf.String())
+	return s.SendToEmail(ctx, email, "CUDly - Password Reset Request", body)
 }
 
 // WelcomeUserData holds data for welcome emails
@@ -231,21 +199,10 @@ type WelcomeUserData struct {
 
 // SendWelcomeEmail sends a welcome email to a new user
 func (s *Sender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	tmpl, err := template.New("welcome").Parse(welcomeUserTemplate)
+	body, err := RenderWelcomeEmail(email, dashboardURL, role)
 	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
+		return fmt.Errorf("failed to render welcome email: %w", err)
 	}
 
-	data := WelcomeUserData{
-		Email:        email,
-		DashboardURL: dashboardURL,
-		Role:         role,
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return s.SendToEmail(ctx, email, "Welcome to CUDly", buf.String())
+	return s.SendToEmail(ctx, email, "Welcome to CUDly", body)
 }
