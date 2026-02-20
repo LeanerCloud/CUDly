@@ -492,8 +492,7 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("GetAPIKeyByID", mock.Anything, "key-1").Return(apiKeyRecord, nil).Maybe()
-		mockStore.On("UpdateAPIKey", mock.Anything, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil).Maybe()
+		mockStore.On("UpdateAPIKeyLastUsed", mock.Anything, "key-1").Return(nil).Maybe()
 
 		resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
 
@@ -643,14 +642,7 @@ func TestService_UpdateLastUsed(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
 
-		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(&UserAPIKey{
-			ID:       "key-1",
-			UserID:   "user-123",
-			IsActive: true,
-		}, nil)
-		mockStore.On("UpdateAPIKey", ctx, mock.MatchedBy(func(key *UserAPIKey) bool {
-			return key.ID == "key-1" && key.LastUsedAt != nil
-		})).Return(nil)
+		mockStore.On("UpdateAPIKeyLastUsed", ctx, "key-1").Return(nil)
 
 		err := service.UpdateLastUsed(ctx, "key-1")
 
@@ -658,28 +650,11 @@ func TestService_UpdateLastUsed(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("return error when GetAPIKeyByID fails", func(t *testing.T) {
-		mockStore := new(MockStore)
-		service := &Service{store: mockStore}
-
-		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(nil, assert.AnError)
-
-		err := service.UpdateLastUsed(ctx, "key-1")
-
-		assert.Error(t, err)
-		mockStore.AssertExpectations(t)
-	})
-
 	t.Run("return error when update fails", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
 
-		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(&UserAPIKey{
-			ID:       "key-1",
-			UserID:   "user-123",
-			IsActive: true,
-		}, nil)
-		mockStore.On("UpdateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(assert.AnError)
+		mockStore.On("UpdateAPIKeyLastUsed", ctx, "key-1").Return(assert.AnError)
 
 		err := service.UpdateLastUsed(ctx, "key-1")
 

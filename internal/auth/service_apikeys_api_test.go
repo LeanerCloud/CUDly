@@ -293,8 +293,7 @@ func TestService_ValidateUserAPIKeyAPI(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("GetAPIKeyByID", mock.Anything, "key-1").Return(apiKeyRecord, nil).Maybe()
-		mockStore.On("UpdateAPIKey", mock.Anything, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil).Maybe()
+		mockStore.On("UpdateAPIKeyLastUsed", mock.Anything, "key-1").Return(nil).Maybe()
 
 		resultKey, resultUser, err := service.ValidateUserAPIKeyAPI(ctx, apiKey)
 

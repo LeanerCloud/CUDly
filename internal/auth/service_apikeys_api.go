@@ -41,7 +41,7 @@ type APIListAPIKeysResponse struct {
 }
 
 // CreateAPIKeyAPI creates a new API key and returns API-friendly response
-func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
+func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
 	// Type assert the request
 	createReq, ok := req.(APICreateAPIKeyRequest)
 	if !ok {
@@ -72,7 +72,7 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req interf
 }
 
 // ListUserAPIKeysAPI lists all API keys for a user and returns API-friendly response
-func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (interface{}, error) {
+func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error) {
 	keys, err := s.ListUserAPIKeys(ctx, userID)
 	if err != nil {
 		return nil, err

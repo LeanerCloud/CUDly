@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/pkg/errors"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
 )
@@ -20,6 +19,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID, name string, permiss
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return "", nil, fmt.Errorf("user not found")
 	}
 	if !user.Active {
 		return "", nil, fmt.Errorf("user account is not active")
@@ -53,7 +55,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID, name string, permiss
 
 	// Create UserAPIKey record
 	now := time.Now()
-	keyID := fmt.Sprintf("APIKEY#%s", uuid.New().String())
+	keyID := uuid.New().String()
 
 	userAPIKey := &UserAPIKey{
 		ID:          keyID,
@@ -104,8 +106,12 @@ func (s *Service) validateAPIKeyPermissions(ctx context.Context, user *User, per
 // ListUserAPIKeys retrieves all API keys for a user
 func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAPIKey, error) {
 	// Validate user exists
-	if _, err := s.store.GetUserByID(ctx, userID); err != nil {
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return nil, fmt.Errorf("user not found")
 	}
 
 	keys, err := s.store.ListAPIKeysByUser(ctx, userID)
@@ -133,11 +139,17 @@ func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error 
 	if err != nil {
 		return fmt.Errorf("failed to get API key: %w", err)
 	}
+	if key == nil {
+		return fmt.Errorf("API key not found")
+	}
 
 	// Verify ownership (unless admin)
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return fmt.Errorf("user not found")
 	}
 
 	if key.UserID != userID && user.Role != RoleAdmin {
@@ -162,11 +174,17 @@ func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error 
 	if err != nil {
 		return fmt.Errorf("failed to get API key: %w", err)
 	}
+	if key == nil {
+		return fmt.Errorf("API key not found")
+	}
 
 	// Verify ownership (unless admin)
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return fmt.Errorf("user not found")
 	}
 
 	if key.UserID != userID && user.Role != RoleAdmin {
@@ -192,10 +210,10 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	// Look up the key by hash
 	key, err := s.GetAPIKeyByHash(ctx, keyHash)
 	if err != nil {
-		if errors.IsNotFoundError(err) {
-			return nil, nil, fmt.Errorf("invalid API key")
-		}
 		return nil, nil, fmt.Errorf("failed to validate API key: %w", err)
+	}
+	if key == nil {
+		return nil, nil, fmt.Errorf("invalid API key")
 	}
 
 	// Check if key is active
@@ -212,6 +230,9 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	user, err := s.store.GetUserByID(ctx, key.UserID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return nil, nil, fmt.Errorf("user account not found")
 	}
 
 	// Check if user is active
@@ -231,21 +252,9 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	return key, user, nil
 }
 
-// UpdateLastUsed updates the last used timestamp for an API key
+// UpdateLastUsed updates the last used timestamp for an API key atomically
 func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
-	key, err := s.store.GetAPIKeyByID(ctx, keyID)
-	if err != nil {
-		return fmt.Errorf("failed to get API key: %w", err)
-	}
-
-	now := time.Now()
-	key.LastUsedAt = &now
-
-	if err := s.store.UpdateAPIKey(ctx, key); err != nil {
-		return fmt.Errorf("failed to update API key: %w", err)
-	}
-
-	return nil
+	return s.store.UpdateAPIKeyLastUsed(ctx, keyID)
 }
 
 // ComputeEffectivePermissions computes the intersection of API key permissions and user permissions
