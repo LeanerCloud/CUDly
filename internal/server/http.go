@@ -120,11 +120,13 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	// Return result as JSON
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "success",
 		"task":   taskTypeStr,
 		"result": result,
-	})
+	}); err != nil {
+		log.Printf("Failed to encode scheduled task response: %v", err)
+	}
 }
 
 // httpToLambdaRequest converts a standard HTTP request to Lambda Function URL request format
@@ -192,9 +194,9 @@ var safeHeaderNames = map[string]bool{
 	"content-length":   true,
 	"content-encoding": true,
 	// Caching headers
-	"cache-control":  true,
-	"etag":           true,
-	"last-modified":  true,
+	"cache-control": true,
+	"etag":          true,
+	"last-modified": true,
 	// Request tracking headers
 	"x-request-id":     true,
 	"x-correlation-id": true,

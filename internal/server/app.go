@@ -269,6 +269,8 @@ func (app *Application) ensureDB(ctx context.Context) error {
 
 		if err := migrations.RunMigrations(ctx, dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail); err != nil {
 			log.Printf("Migration failed: %v", err)
+			dbConn.Close()
+			app.DB = nil
 			return fmt.Errorf("failed to run migrations: %w", err)
 		}
 		log.Println("Database migrations completed successfully")
@@ -276,6 +278,8 @@ func (app *Application) ensureDB(ctx context.Context) error {
 
 	// Re-initialize all stores and services with the live DB connection
 	if err := app.reinitializeAfterConnect(dbConn); err != nil {
+		dbConn.Close()
+		app.DB = nil
 		return fmt.Errorf("failed to reinitialize after DB connect: %w", err)
 	}
 	app.dbConnected = true
