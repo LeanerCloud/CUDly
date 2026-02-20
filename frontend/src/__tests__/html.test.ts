@@ -1,0 +1,614 @@
+/**
+ * HTML structure validation tests
+ * These tests verify that the HTML structure is correct and accessible
+ */
+import fs from 'fs';
+import path from 'path';
+
+// Read HTML content once at module load
+const htmlPath = path.join(__dirname, '..', 'index.html');
+const htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+// Extract head and body content using regex
+const headMatch = htmlContent.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+const headContent = headMatch?.[1] || '';
+const bodyContent = bodyMatch?.[1] || '';
+
+describe('HTML Structure', () => {
+  beforeEach(() => {
+    // Restore HTML content before each test (since afterEach in setup clears it)
+    document.head.innerHTML = headContent;
+    document.body.innerHTML = bodyContent;
+
+    // Set lang attribute
+    const langMatch = htmlContent.match(/<html[^>]+lang=["']([^"']+)["']/i);
+    if (langMatch && langMatch[1]) {
+      document.documentElement.setAttribute('lang', langMatch[1]);
+    }
+  });
+
+  describe('Document Structure', () => {
+    test('has DOCTYPE declaration', () => {
+      expect(htmlContent).toMatch(/<!DOCTYPE html>/i);
+    });
+
+    test('has html lang attribute', () => {
+      expect(htmlContent).toMatch(/<html[^>]+lang=["']en["']/);
+    });
+
+    test('has head element', () => {
+      expect(document.head).toBeTruthy();
+    });
+
+    test('has body element', () => {
+      expect(document.body).toBeTruthy();
+    });
+
+    test('has meta charset', () => {
+      const charset = document.querySelector('meta[charset]');
+      expect(charset).toBeTruthy();
+      expect(charset?.getAttribute('charset')?.toLowerCase()).toBe('utf-8');
+    });
+
+    test('has viewport meta tag', () => {
+      const viewport = document.querySelector('meta[name="viewport"]');
+      expect(viewport).toBeTruthy();
+      expect(viewport?.getAttribute('content')).toContain('width=device-width');
+    });
+
+    test('has title containing CUDly', () => {
+      expect(htmlContent).toMatch(/<title>[^<]*CUDly[^<]*<\/title>/);
+    });
+  });
+
+  describe('Main Layout', () => {
+    test('has app container', () => {
+      const app = document.getElementById('app');
+      expect(app).toBeTruthy();
+    });
+
+    test('has header', () => {
+      const header = document.querySelector('header');
+      expect(header).toBeTruthy();
+    });
+
+    test('has main content area', () => {
+      const main = document.querySelector('main');
+      expect(main).toBeTruthy();
+    });
+
+    test('has tab navigation', () => {
+      const tabs = document.querySelector('.tabs');
+      expect(tabs).toBeTruthy();
+    });
+  });
+
+  describe('Tab Structure', () => {
+    test('has tab buttons', () => {
+      const tabs = document.querySelectorAll('.tab-btn');
+      expect(tabs.length).toBeGreaterThan(0);
+    });
+
+    test('has dashboard tab button', () => {
+      const dashboardTab = document.querySelector('[data-tab="dashboard"]');
+      expect(dashboardTab).toBeTruthy();
+    });
+
+    test('has recommendations tab button', () => {
+      const recsTab = document.querySelector('[data-tab="recommendations"]');
+      expect(recsTab).toBeTruthy();
+    });
+
+    test('has plans tab button', () => {
+      const plansTab = document.querySelector('[data-tab="plans"]');
+      expect(plansTab).toBeTruthy();
+    });
+
+    test('has history tab button', () => {
+      const historyTab = document.querySelector('[data-tab="history"]');
+      expect(historyTab).toBeTruthy();
+    });
+
+    test('has settings tab button', () => {
+      const settingsTab = document.querySelector('[data-tab="settings"]');
+      expect(settingsTab).toBeTruthy();
+    });
+
+    test('has tab content for each tab', () => {
+      const tabContents = document.querySelectorAll('.tab-content');
+      expect(tabContents.length).toBe(5);
+    });
+  });
+
+  describe('Dashboard Tab', () => {
+    test('has summary section', () => {
+      const summary = document.getElementById('summary');
+      expect(summary).toBeTruthy();
+    });
+
+    test('has savings chart section', () => {
+      const chartSection = document.getElementById('savings-chart-section');
+      expect(chartSection).toBeTruthy();
+    });
+
+    test('has savings chart canvas', () => {
+      const canvas = document.getElementById('savings-chart');
+      expect(canvas).toBeTruthy();
+      expect(canvas?.tagName.toLowerCase()).toBe('canvas');
+    });
+
+    test('has upcoming purchases section', () => {
+      const upcoming = document.getElementById('upcoming-purchases');
+      expect(upcoming).toBeTruthy();
+    });
+  });
+
+  describe('Recommendations Tab', () => {
+    test('has recommendations controls', () => {
+      const controls = document.getElementById('recommendations-controls');
+      expect(controls).toBeTruthy();
+    });
+
+    test('has service filter', () => {
+      const filter = document.getElementById('service-filter');
+      expect(filter).toBeTruthy();
+      expect(filter?.tagName.toLowerCase()).toBe('select');
+    });
+
+    test('has region filter', () => {
+      const filter = document.getElementById('region-filter');
+      expect(filter).toBeTruthy();
+    });
+
+    test('has min savings filter', () => {
+      const filter = document.getElementById('min-savings-filter') as HTMLInputElement | null;
+      expect(filter).toBeTruthy();
+      expect(filter?.getAttribute('type')).toBe('number');
+    });
+
+    test('has recommendations list container', () => {
+      const list = document.getElementById('recommendations-list');
+      expect(list).toBeTruthy();
+    });
+  });
+
+  describe('Plans Tab', () => {
+    test('has plans header', () => {
+      const header = document.getElementById('plans-header');
+      expect(header).toBeTruthy();
+    });
+
+    test('has plans list container', () => {
+      const list = document.getElementById('plans-list');
+      expect(list).toBeTruthy();
+    });
+  });
+
+  describe('History Tab', () => {
+    test('has history controls', () => {
+      const controls = document.getElementById('history-controls');
+      expect(controls).toBeTruthy();
+    });
+
+    test('has date range inputs', () => {
+      const startDate = document.getElementById('history-start') as HTMLInputElement | null;
+      const endDate = document.getElementById('history-end') as HTMLInputElement | null;
+      expect(startDate).toBeTruthy();
+      expect(endDate).toBeTruthy();
+      expect(startDate?.getAttribute('type')).toBe('date');
+      expect(endDate?.getAttribute('type')).toBe('date');
+    });
+
+    test('has provider filter', () => {
+      const filter = document.getElementById('history-provider-filter');
+      expect(filter).toBeTruthy();
+    });
+
+    test('has history list container', () => {
+      const list = document.getElementById('history-list');
+      expect(list).toBeTruthy();
+    });
+  });
+
+  describe('Settings Tab', () => {
+    test('has settings section', () => {
+      const section = document.getElementById('settings-section');
+      expect(section).toBeTruthy();
+    });
+
+    test('has settings form', () => {
+      const form = document.getElementById('global-settings-form');
+      expect(form).toBeTruthy();
+    });
+
+    test('has provider checkboxes', () => {
+      const awsCheck = document.getElementById('provider-aws');
+      const azureCheck = document.getElementById('provider-azure');
+      const gcpCheck = document.getElementById('provider-gcp');
+      expect(awsCheck).toBeTruthy();
+      expect(azureCheck).toBeTruthy();
+      expect(gcpCheck).toBeTruthy();
+    });
+
+    test('has notification email input', () => {
+      const email = document.getElementById('setting-notification-email') as HTMLInputElement | null;
+      expect(email).toBeTruthy();
+      expect(email?.getAttribute('type')).toBe('email');
+    });
+
+    test('has default term select', () => {
+      const term = document.getElementById('setting-default-term');
+      expect(term).toBeTruthy();
+    });
+
+    test('has default payment select', () => {
+      const payment = document.getElementById('setting-default-payment');
+      expect(payment).toBeTruthy();
+    });
+  });
+
+  describe('Modals', () => {
+    test('has plan modal', () => {
+      const modal = document.getElementById('plan-modal');
+      expect(modal).toBeTruthy();
+      expect(modal?.classList.contains('hidden')).toBe(true);
+    });
+
+    test('has plan form', () => {
+      const form = document.getElementById('plan-form');
+      expect(form).toBeTruthy();
+    });
+
+    test('has purchase modal', () => {
+      const modal = document.getElementById('purchase-modal');
+      expect(modal).toBeTruthy();
+    });
+
+    test('has recommendations selection modal', () => {
+      const modal = document.getElementById('select-recommendations-modal');
+      expect(modal).toBeTruthy();
+    });
+  });
+
+  describe('Form Elements', () => {
+    test('plan name input exists', () => {
+      const input = document.getElementById('plan-name') as HTMLInputElement | null;
+      expect(input).toBeTruthy();
+      expect(input?.hasAttribute('required')).toBe(true);
+    });
+
+    test('plan provider select exists', () => {
+      const select = document.getElementById('plan-provider');
+      expect(select).toBeTruthy();
+      expect(select?.querySelectorAll('option').length).toBeGreaterThan(0);
+    });
+
+    test('plan service select exists', () => {
+      const select = document.getElementById('plan-service');
+      expect(select).toBeTruthy();
+    });
+
+    test('ramp schedule options exist', () => {
+      const radios = document.querySelectorAll('input[name="ramp-schedule"]');
+      expect(radios.length).toBe(4);
+    });
+  });
+
+  describe('Accessibility', () => {
+    test('buttons have text content', () => {
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(button => {
+        const hasText = (button.textContent?.trim().length ?? 0) > 0;
+        const hasAriaLabel = button.hasAttribute('aria-label');
+        expect(hasText || hasAriaLabel).toBe(true);
+      });
+    });
+
+    test('images have alt attributes', () => {
+      const images = document.querySelectorAll('img');
+      images.forEach(img => {
+        expect(img.hasAttribute('alt')).toBe(true);
+      });
+    });
+
+    test('links have href attributes', () => {
+      const links = document.querySelectorAll('a');
+      links.forEach(link => {
+        const href = link.getAttribute('href');
+        expect(href).toBeTruthy();
+      });
+    });
+  });
+
+  describe('Select Options', () => {
+    test('dashboard provider filter has correct options', () => {
+      const selector = document.getElementById('dashboard-provider-filter');
+      const options = selector?.querySelectorAll('option') ?? [];
+      const values = Array.from(options).map(o => o.value);
+
+      expect(values).toContain('');
+      expect(values).toContain('aws');
+      expect(values).toContain('azure');
+      expect(values).toContain('gcp');
+    });
+
+    test('service filter has correct options', () => {
+      const selector = document.getElementById('service-filter');
+      const options = selector?.querySelectorAll('option') ?? [];
+      const values = Array.from(options).map(o => o.value);
+
+      expect(values).toContain('');
+      expect(values).toContain('ec2');
+      expect(values).toContain('rds');
+    });
+
+    test('term select has 1 and 3 year options', () => {
+      const selector = document.getElementById('setting-default-term');
+      const options = selector?.querySelectorAll('option') ?? [];
+      const values = Array.from(options).map(o => o.value);
+
+      expect(values).toContain('1');
+      expect(values).toContain('3');
+    });
+
+    test('payment select has all options', () => {
+      const selector = document.getElementById('setting-default-payment');
+      const options = selector?.querySelectorAll('option') ?? [];
+      const values = Array.from(options).map(o => o.value);
+
+      expect(values).toContain('no-upfront');
+      expect(values).toContain('partial-upfront');
+      expect(values).toContain('all-upfront');
+    });
+
+    test('service filter has optgroups for each provider', () => {
+      const selector = document.getElementById('service-filter');
+      const optgroups = selector?.querySelectorAll('optgroup') ?? [];
+      const labels = Array.from(optgroups).map(og => og.getAttribute('label'));
+
+      expect(labels).toContain('AWS');
+      expect(labels).toContain('Azure');
+      expect(labels).toContain('GCP');
+    });
+  });
+
+  describe('Security Headers', () => {
+    test('has Content Security Policy meta tag', () => {
+      const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+      expect(csp).toBeTruthy();
+      expect(csp?.getAttribute('content')).toContain("default-src 'self'");
+    });
+
+    test('has referrer policy meta tag', () => {
+      const referrer = document.querySelector('meta[name="referrer"]');
+      expect(referrer).toBeTruthy();
+      expect(referrer?.getAttribute('content')).toBe('strict-origin-when-cross-origin');
+    });
+  });
+
+  describe('Admin-Only Sections', () => {
+    test('has API keys section', () => {
+      const section = document.getElementById('apikeys-section');
+      expect(section).toBeTruthy();
+      expect(section?.classList.contains('admin-only')).toBe(true);
+    });
+
+    test('has users management section', () => {
+      const section = document.getElementById('users-section');
+      expect(section).toBeTruthy();
+      expect(section?.classList.contains('admin-only')).toBe(true);
+    });
+
+    test('has create user button', () => {
+      const btn = document.getElementById('create-user-btn');
+      expect(btn).toBeTruthy();
+    });
+
+    test('has create group button', () => {
+      const btn = document.getElementById('create-group-btn');
+      expect(btn).toBeTruthy();
+    });
+
+    test('has create API key button', () => {
+      const btn = document.getElementById('create-apikey-btn');
+      expect(btn).toBeTruthy();
+    });
+  });
+
+  describe('User Management Modal', () => {
+    test('has user modal', () => {
+      const modal = document.getElementById('user-modal');
+      expect(modal).toBeTruthy();
+      expect(modal?.classList.contains('hidden')).toBe(true);
+    });
+
+    test('has user form with email field', () => {
+      const email = document.getElementById('user-email') as HTMLInputElement | null;
+      expect(email).toBeTruthy();
+      expect(email?.getAttribute('type')).toBe('email');
+      expect(email?.hasAttribute('required')).toBe(true);
+    });
+
+    test('has user role select', () => {
+      const role = document.getElementById('user-role') as HTMLSelectElement | null;
+      expect(role).toBeTruthy();
+      const options = Array.from(role?.querySelectorAll('option') ?? []).map(o => o.value);
+      expect(options).toContain('viewer');
+      expect(options).toContain('editor');
+      expect(options).toContain('admin');
+    });
+
+    test('has user groups multi-select', () => {
+      const groups = document.getElementById('user-groups') as HTMLSelectElement | null;
+      expect(groups).toBeTruthy();
+      expect(groups?.hasAttribute('multiple')).toBe(true);
+    });
+  });
+
+  describe('Group Management Modal', () => {
+    test('has group modal', () => {
+      const modal = document.getElementById('group-modal');
+      expect(modal).toBeTruthy();
+    });
+
+    test('has group form with name field', () => {
+      const name = document.getElementById('group-name') as HTMLInputElement | null;
+      expect(name).toBeTruthy();
+      expect(name?.hasAttribute('required')).toBe(true);
+    });
+
+    test('has group description textarea', () => {
+      const desc = document.getElementById('group-description');
+      expect(desc).toBeTruthy();
+      expect(desc?.tagName.toLowerCase()).toBe('textarea');
+    });
+
+    test('has permissions list container', () => {
+      const list = document.getElementById('permissions-list');
+      expect(list).toBeTruthy();
+    });
+  });
+
+  describe('API Key Modal', () => {
+    test('has create API key modal', () => {
+      const modal = document.getElementById('create-apikey-modal');
+      expect(modal).toBeTruthy();
+    });
+
+    test('has API key name input', () => {
+      const input = document.getElementById('apikey-name') as HTMLInputElement | null;
+      expect(input).toBeTruthy();
+      expect(input?.hasAttribute('required')).toBe(true);
+    });
+
+    test('has expiration checkbox', () => {
+      const checkbox = document.getElementById('apikey-expires');
+      expect(checkbox).toBeTruthy();
+    });
+
+    test('has expiration date field (hidden by default)', () => {
+      const field = document.getElementById('apikey-expires-at-field');
+      expect(field).toBeTruthy();
+      expect(field?.classList.contains('hidden')).toBe(true);
+    });
+  });
+
+  describe('Savings History Section', () => {
+    test('has savings history section', () => {
+      const section = document.getElementById('savings-history-section');
+      expect(section).toBeTruthy();
+    });
+
+    test('has savings period selector', () => {
+      const select = document.getElementById('savings-period') as HTMLSelectElement | null;
+      expect(select).toBeTruthy();
+      const options = Array.from(select?.querySelectorAll('option') ?? []).map(o => o.value);
+      expect(options).toContain('24h');
+      expect(options).toContain('7d');
+      expect(options).toContain('30d');
+      expect(options).toContain('90d');
+    });
+
+    test('has savings stats cards', () => {
+      const statsGrid = document.getElementById('savings-stats');
+      expect(statsGrid).toBeTruthy();
+      const statCards = statsGrid?.querySelectorAll('.stat-card');
+      expect(statCards?.length).toBeGreaterThanOrEqual(3);
+    });
+
+    test('has savings history chart canvas', () => {
+      const canvas = document.getElementById('savings-history-chart');
+      expect(canvas).toBeTruthy();
+      expect(canvas?.tagName.toLowerCase()).toBe('canvas');
+    });
+
+    test('has empty state for savings history', () => {
+      const empty = document.getElementById('savings-history-empty');
+      expect(empty).toBeTruthy();
+      expect(empty?.classList.contains('hidden')).toBe(true);
+    });
+  });
+
+  describe('Credential Configuration Modals', () => {
+    test('has Azure credentials modal', () => {
+      const modal = document.getElementById('azure-creds-modal');
+      expect(modal).toBeTruthy();
+    });
+
+    test('has Azure credential form fields', () => {
+      expect(document.getElementById('azure-tenant-id')).toBeTruthy();
+      expect(document.getElementById('azure-client-id')).toBeTruthy();
+      expect(document.getElementById('azure-client-secret')).toBeTruthy();
+      expect(document.getElementById('azure-subscription-id')).toBeTruthy();
+    });
+
+    test('has GCP credentials modal', () => {
+      const modal = document.getElementById('gcp-creds-modal');
+      expect(modal).toBeTruthy();
+    });
+
+    test('has GCP service account JSON textarea', () => {
+      const textarea = document.getElementById('gcp-service-account-json');
+      expect(textarea).toBeTruthy();
+      expect(textarea?.tagName.toLowerCase()).toBe('textarea');
+    });
+  });
+
+  describe('Planned Purchases Section', () => {
+    test('has planned purchases header', () => {
+      const header = document.getElementById('planned-purchases-header');
+      expect(header).toBeTruthy();
+    });
+
+    test('has planned purchases list container', () => {
+      const list = document.getElementById('planned-purchases-list');
+      expect(list).toBeTruthy();
+    });
+  });
+
+  describe('Header Elements', () => {
+    test('has user info container', () => {
+      const userInfo = document.getElementById('user-info');
+      expect(userInfo).toBeTruthy();
+    });
+
+    test('has user email span', () => {
+      const email = document.getElementById('user-email');
+      expect(email).toBeTruthy();
+    });
+
+    test('has logout button', () => {
+      const btn = document.getElementById('logout-btn');
+      expect(btn).toBeTruthy();
+    });
+
+    test('has API docs link', () => {
+      const link = document.querySelector('a[href="/docs/"]');
+      expect(link).toBeTruthy();
+      expect(link?.getAttribute('target')).toBe('_blank');
+    });
+
+    test('has feedback link', () => {
+      const link = document.getElementById('feedback-link');
+      expect(link).toBeTruthy();
+    });
+  });
+
+  describe('Form Validation Attributes', () => {
+    test('number inputs have min/max constraints', () => {
+      const coverage = document.getElementById('setting-default-coverage') as HTMLInputElement | null;
+      expect(coverage?.getAttribute('min')).toBe('0');
+      expect(coverage?.getAttribute('max')).toBe('100');
+
+      const notifyDays = document.getElementById('setting-notification-days') as HTMLInputElement | null;
+      expect(notifyDays?.getAttribute('min')).toBe('1');
+      expect(notifyDays?.getAttribute('max')).toBe('30');
+    });
+
+    test('password inputs have minlength', () => {
+      const password = document.getElementById('user-password') as HTMLInputElement | null;
+      expect(password?.getAttribute('minlength')).toBe('8');
+    });
+  });
+});
