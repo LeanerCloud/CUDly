@@ -1,0 +1,43 @@
+# Development Dockerfile with hot reload using Air
+FROM golang:1.25-alpine AS development
+
+# Install development tools and Air for hot reload
+RUN apk add --no-cache \
+    git \
+    postgresql-client \
+    curl \
+    build-base && \
+    go install github.com/air-verse/air@v1.61.7
+
+# Set shell with pipefail for safer pipe operations
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+
+# Install golang-migrate for database migrations
+RUN curl -L "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz" | tar xvz && \
+    mv migrate /usr/local/bin/migrate && \
+    chmod +x /usr/local/bin/migrate
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Copy provider and pkg go.mod files (multi-module setup)
+COPY pkg/go.mod pkg/go.sum ./pkg/
+COPY providers/aws/go.mod providers/aws/go.sum providers/aws/
+COPY providers/azure/go.mod providers/azure/go.sum providers/azure/
+COPY providers/gcp/go.mod providers/gcp/go.sum providers/gcp/
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Create Air configuration if it doesn't exist
+RUN if [ ! -f .air.toml ]; then air init; fi
+
+EXPOSE 8080
+
+# Start with Air for hot reload
+CMD ["air", "-c", ".air.toml"]
