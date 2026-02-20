@@ -1,0 +1,155 @@
+/* Tables styling */
+table {
+    width: 100%;
+    background: white;
+    border-radius: 8px;
+    overflow: visible;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-collapse: collapse;
+}
+
+th, td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+    font-size: 0.9rem;
+}
+
+th {
+    background: #f8f9fa;
+    font-weight: 600;
+}
+
+tr:hover {
+    background: #f1f3f4;
+}
+
+/* Recommendation row highlighting */
+tr.high-savings {
+    border-left: 3px solid #34a853;
+}
+
+tr.medium-savings {
+    border-left: 3px solid #fbbc04;
+}
+
+/* Summary sections */
+#recommendations-summary,
+#history-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+/* Planned Purchases Section */
+#planned-purchases-header {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid #e0e0e0;
+}
+
+#planned-purchases-header h2 {
+    margin-bottom: 0.5rem;
+}
+
+#planned-purchases-header .help-text {
+    color: #666;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.planned-purchases-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.planned-purchases-table th,
+.planned-purchases-table td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.planned-purchases-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: #555;
+}
+
+.planned-purchases-table tbody tr:hover {
+    background: #f8f9fa;
+}
+
+.planned-purchase-row .plan-name {
+    font-weight: 500;
+    display: block;
+}
+
+.planned-purchase-row .step-info {
+    font-size: 0.8rem;
+    color: #888;
+}
+
+.planned-purchase-row .actions {
+    white-space: nowrap;
+}
+
+/* Planned purchase status badges */
+.status-pending {
+    color: #fbbc04;
+}
+
+.status-paused {
+    color: #9e9e9e;
+}
+
+.status-running {
+    color: #1a73e8;
+}
+
+.status-completed {
+    color: #34a853;
+}
+
+.status-failed {
+    color: #ea4335;
+}
+
+.planned-purchases-table .status-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.planned-purchases-table .status-badge.status-pending {
+    background: #fef3cd;
+    color: #856404;
+}
+
+.planned-purchases-table .status-badge.status-paused {
+    background: #e9ecef;
+    color: #495057;
+}
+
+.planned-purchases-table .status-badge.status-running {
+    background: #cce5ff;
+    color: #004085;
+}
+
+.planned-purchases-table .status-badge.status-completed {
+    background: #d4edda;
+    color: #155724;
+}
+
+.planned-purchases-table .status-badge.status-failed {
+    background: #f8d7da;
+    color: #721c24;
+}

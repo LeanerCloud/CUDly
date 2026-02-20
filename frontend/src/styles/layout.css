@@ -1,0 +1,101 @@
+/* Layout: Header, main, grid, containers */
+header {
+    background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%);
+    color: white;
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    font-size: 1.5rem;
+}
+
+#user-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+#user-email {
+    font-size: 0.9rem;
+    opacity: 0.9;
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    transition: background-color 0.2s, opacity 0.2s;
+}
+
+#user-email:hover {
+    background: rgba(255,255,255,0.15);
+    opacity: 1;
+}
+
+#logout-btn {
+    padding: 0.4rem 0.8rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.5);
+    background: transparent;
+    color: white;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+#logout-btn:hover {
+    background: rgba(255,255,255,0.1);
+    border-color: white;
+}
+
+.header-link {
+    color: white;
+    text-decoration: none;
+    padding: 0.4rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    transition: background-color 0.2s;
+}
+
+.header-link:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+main {
+    padding: 2rem;
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+#summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+/* Footer */
+footer {
+    margin-top: 2rem;
+    padding: 1.5rem 2rem;
+    border-top: 1px solid #e0e0e0;
+    text-align: center;
+    background: #f8f9fa;
+}
+
+footer a {
+    color: #1a73e8;
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+
+/* Section header with title and action buttons */
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}

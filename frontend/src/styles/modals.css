@@ -1,0 +1,154 @@
+/* Modal styling */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    width: 500px;
+    max-width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-wide {
+    width: 800px;
+    max-width: 95vw;
+}
+
+.modal-content h2 {
+    margin-bottom: 1.5rem;
+    color: #333;
+}
+
+.modal-content label {
+    display: block;
+    margin-bottom: 1rem;
+    color: #333;
+}
+
+.modal-content input[type="text"],
+.modal-content input[type="email"],
+.modal-content input[type="number"],
+.modal-content select,
+.modal-content textarea {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-top: 0.25rem;
+    font-size: 0.9rem;
+}
+
+.modal-content textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #eee;
+}
+
+/* Modal description */
+.modal-description {
+    color: #666;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+/* Modal overlay */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-hint {
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    margin-bottom: 1.5rem;
+}
+
+.modal-hint a {
+    color: #1a73e8;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.modal-hint a:hover {
+    text-decoration: underline;
+}
+
+/* Modal step headers */
+.modal-content h4 {
+    color: #333;
+    font-size: 0.95rem;
+    margin: 0 0 0.75rem 0;
+}
+
+/* Prerequisite section in modals */
+.prereq-section {
+    background: #f0f7ff;
+    border: 1px solid #b3d4fc;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.prereq-section h4 {
+    margin: 0 0 0.5rem 0;
+    color: #1a73e8;
+    font-size: 0.95rem;
+}
+
+.prereq-description {
+    color: #555;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+}
+
+.prereq-section .cli-command {
+    margin-bottom: 0.5rem;
+}
+
+.prereq-section .cli-command code {
+    font-size: 0.8rem;
+    word-break: break-all;
+}
+
+.prereq-hint {
+    color: #666;
+    font-size: 0.8rem;
+    font-style: italic;
+    margin-top: 0.75rem;
+    margin-bottom: 0;
+}

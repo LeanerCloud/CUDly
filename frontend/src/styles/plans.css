@@ -1,0 +1,194 @@
+/* Plans and purchases styling */
+
+/* Plans header */
+#plans-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+#plans-header h2 {
+    margin: 0;
+}
+
+/* Plan cards */
+.plan-card {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 1rem;
+    overflow: hidden;
+}
+
+.plan-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    background: #f8f9fa;
+    border-bottom: 1px solid #eee;
+}
+
+.plan-header h3 {
+    margin: 0;
+    color: #333;
+}
+
+.plan-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.plan-body {
+    padding: 1.5rem;
+}
+
+.plan-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.plan-detail {
+    display: flex;
+    flex-direction: column;
+}
+
+.plan-detail-label {
+    font-size: 0.8rem;
+    color: #666;
+    margin-bottom: 0.25rem;
+}
+
+.plan-detail-value {
+    font-weight: 600;
+    color: #333;
+}
+
+.plan-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #eee;
+}
+
+/* Upcoming purchases */
+#upcoming-purchases {
+    margin-top: 2rem;
+}
+
+#upcoming-purchases h2 {
+    margin-bottom: 1rem;
+}
+
+.upcoming-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: white;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 0.75rem;
+    border-left: 4px solid #1a73e8;
+}
+
+.upcoming-info {
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+}
+
+.upcoming-date {
+    text-align: center;
+    min-width: 80px;
+}
+
+.upcoming-date .day {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #1a73e8;
+}
+
+.upcoming-date .month {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.upcoming-details h4 {
+    margin: 0 0 0.25rem 0;
+    color: #333;
+}
+
+.upcoming-details p {
+    margin: 0;
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.upcoming-savings {
+    text-align: right;
+}
+
+.upcoming-savings .amount {
+    font-size: 1.25rem;
+    font-weight: bold;
+    color: #34a853;
+}
+
+.upcoming-savings .label {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Ramp schedule options */
+.ramp-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.ramp-option {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.ramp-option:hover {
+    border-color: #1a73e8;
+}
+
+.ramp-option input[type="radio"] {
+    display: none;
+}
+
+.ramp-option:has(input:checked) {
+    border-color: #1a73e8;
+    background: #e8f0fe;
+}
+
+.ramp-label {
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 0.25rem;
+}
+
+.ramp-desc {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+#custom-ramp-config {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+}

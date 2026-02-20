@@ -1,0 +1,49 @@
+/* Charts containers */
+.chart-section {
+    margin-bottom: 2rem;
+}
+
+.chart-section h3 {
+    margin-bottom: 1rem;
+    color: #333;
+}
+
+.chart-section canvas {
+    max-height: 300px;
+}
+
+/* Chart container */
+.chart-container {
+    position: relative;
+    width: 100%;
+    min-height: 250px;
+    margin-top: 1rem;
+}
+
+/* Stats grid for savings history */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.stat-card {
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.stat-card h4 {
+    font-size: 0.75rem;
+    color: #666;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #1a73e8;
+}
