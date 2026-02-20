@@ -72,7 +72,7 @@ type PermissionConstraints struct {
 
 // UserAPIKey represents a personal API key for a user with scoped permissions
 type UserAPIKey struct {
-	ID          string       `json:"id" dynamodbav:"PK"`                             // Format: APIKEY#<keyHash>
+	ID          string       `json:"id" dynamodbav:"PK"`                             // UUID string
 	UserID      string       `json:"user_id" dynamodbav:"UserID"`                    // User who owns this key
 	Name        string       `json:"name" dynamodbav:"Name"`                         // Human-readable name
 	KeyPrefix   string       `json:"key_prefix" dynamodbav:"KeyPrefix"`              // First 8 chars for display

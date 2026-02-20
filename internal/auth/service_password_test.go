@@ -285,8 +285,8 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		// Token is hashed before lookup, use mock.Anything to match the hash
 		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).Return(testUser, nil).Once()
 		mockStore.On("DeleteUserSessions", ctx, "user-123").Return(nil).Once()
-		// UpdateUser is called twice: once to invalidate the token (security fix) and once to save the new password
-		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Twice()
+		// UpdateUser is called once: password change + token invalidation in single call
+		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
 		req := PasswordResetConfirm{
 			Token:       "valid-reset-token",
@@ -364,7 +364,7 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 
 		// Token is hashed before lookup
 		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).Return(testUser, nil).Once()
-		// UpdateUser is called to invalidate the token (security fix: one-time use)
+		// Token is invalidated even on password validation failure (one-time use)
 		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
 		req := PasswordResetConfirm{
@@ -397,6 +397,7 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).Return(testUser, nil).Once()
+		// Token is invalidated even on password validation failure (one-time use)
 		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
 		// Try to reuse a password from history
@@ -465,22 +466,20 @@ func TestValidatePassword(t *testing.T) {
 			errMsg:   "special character",
 		},
 		{
-			name:     "contains common password - password",
-			password: "MyPassword123!",
+			name:     "common password is rejected by other rules first",
+			password: "password",
 			wantErr:  true,
-			errMsg:   "too common",
+			errMsg:   "", // fails length/complexity before reaching common check
 		},
 		{
-			name:     "contains qwerty",
+			name:     "qwerty substring is now allowed",
 			password: "MyQwerty123!",
-			wantErr:  true,
-			errMsg:   "too common",
+			wantErr:  false,
 		},
 		{
-			name:     "contains admin",
+			name:     "admin substring is now allowed",
 			password: "MyAdmin@12345678",
-			wantErr:  true,
-			errMsg:   "too common",
+			wantErr:  false,
 		},
 		{
 			name:     "sequential identical chars - aaa",
@@ -530,6 +529,20 @@ func TestValidatePassword(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test checkCommonPasswords uses exact match (not substring)
+func TestCheckCommonPasswords(t *testing.T) {
+	service := &Service{}
+
+	// Exact common password should be rejected
+	assert.Error(t, service.checkCommonPasswords("password"))
+	assert.Error(t, service.checkCommonPasswords("PASSWORD")) // case insensitive
+	assert.Error(t, service.checkCommonPasswords("admin123"))
+
+	// Passwords containing common words as substrings should be allowed
+	assert.NoError(t, service.checkCommonPasswords("MyPassword123!"))
+	assert.NoError(t, service.checkCommonPasswords("SuperAdmin2024"))
 }
 
 // Test containsSequentialChars function

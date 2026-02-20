@@ -36,6 +36,7 @@ type StoreInterface interface {
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPIKey, error)
 	ListAPIKeysByUser(ctx context.Context, userID string) ([]*UserAPIKey, error)
 	UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
+	UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error
 	DeleteAPIKey(ctx context.Context, keyID string) error
 
 	// Health check

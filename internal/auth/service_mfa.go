@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/subtle"
+	"encoding/base32"
 	"fmt"
 	"strings"
 	"time"
@@ -65,32 +66,12 @@ func generateTOTP(secret string, counter int64) string {
 	return fmt.Sprintf("%06d", otp)
 }
 
-// base32Decode decodes a base32 string (RFC 4648)
+// base32Decode decodes a base32 string (RFC 4648) using the stdlib encoder.
 func base32Decode(s string) ([]byte, error) {
-	// Remove padding and convert to uppercase
-	s = strings.TrimRight(strings.ToUpper(s), "=")
-
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-	var bits uint64
-	var bitCount uint
-
-	result := make([]byte, 0, len(s)*5/8)
-
-	for _, c := range s {
-		idx := strings.IndexRune(alphabet, c)
-		if idx < 0 {
-			return nil, fmt.Errorf("invalid base32 character: %c", c)
-		}
-
-		bits = (bits << 5) | uint64(idx)
-		bitCount += 5
-
-		if bitCount >= 8 {
-			bitCount -= 8
-			result = append(result, byte(bits>>bitCount))
-			bits &= (1 << bitCount) - 1
-		}
+	// Normalize: uppercase and add padding if needed
+	s = strings.ToUpper(s)
+	if m := len(s) % 8; m != 0 {
+		s += strings.Repeat("=", 8-m)
 	}
-
-	return result, nil
+	return base32.StdEncoding.DecodeString(s)
 }

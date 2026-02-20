@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"time"
 )
@@ -25,7 +24,7 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		return nil, err
 	}
 
-	// Hash the token for secure storage in DynamoDB
+	// Hash the token for secure storage
 	// The raw token is returned to the client; only the hash is stored
 	hashedToken := hashSessionToken(rawToken)
 
@@ -68,15 +67,6 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 	return clientSession, nil
 }
 
-// generateSalt generates a cryptographically secure random salt
-func generateSalt() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(bytes), nil
-}
-
 // generateToken generates a cryptographically secure random token
 func generateToken() (string, error) {
 	bytes := make([]byte, 32)
@@ -85,12 +75,6 @@ func generateToken() (string, error) {
 	}
 	hash := sha256.Sum256(bytes)
 	return hex.EncodeToString(hash[:]), nil
-}
-
-// hashToken creates a SHA-256 hash of a token for secure storage
-func hashToken(token string) string {
-	hash := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(hash[:])
 }
 
 // containsAny checks if any element from requested is in allowed

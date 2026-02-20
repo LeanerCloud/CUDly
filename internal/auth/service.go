@@ -67,8 +67,20 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 }
 
+// ensureStore returns an error if the auth store is not initialized
+func (s *Service) ensureStore() error {
+	if s.store == nil {
+		return fmt.Errorf("auth store not initialized")
+	}
+	return nil
+}
+
 // Login authenticates a user and creates a session
 func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
+	if err := s.ensureStore(); err != nil {
+		return nil, err
+	}
+
 	if _, err := mail.ParseAddress(req.Email); err != nil {
 		return nil, fmt.Errorf("invalid email format")
 	}
@@ -96,7 +108,7 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 	}
 
 	if !user.Active {
-		return nil, fmt.Errorf("account is disabled")
+		return nil, fmt.Errorf("invalid email or password")
 	}
 
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
@@ -167,14 +179,19 @@ func (s *Service) completeSuccessfulLogin(ctx context.Context, user *User) (*Log
 
 // Logout invalidates a session
 func (s *Service) Logout(ctx context.Context, token string) error {
-	// Hash the token to match what's stored in DynamoDB
+	if err := s.ensureStore(); err != nil {
+		return err
+	}
 	hashedToken := hashSessionToken(token)
 	return s.store.DeleteSession(ctx, hashedToken)
 }
 
 // ValidateSession checks if a session is valid and returns user info
 func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, error) {
-	// Hash the token to match what's stored in DynamoDB
+	if err := s.ensureStore(); err != nil {
+		return nil, err
+	}
+
 	hashedToken := hashSessionToken(token)
 
 	session, err := s.store.GetSession(ctx, hashedToken)

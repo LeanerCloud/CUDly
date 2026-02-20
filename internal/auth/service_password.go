@@ -173,7 +173,7 @@ func validateCharacterRequirements(hasUpper, hasLower, hasNumber, hasSpecial boo
 func (s *Service) checkCommonPasswords(password string) error {
 	lowerPass := strings.ToLower(password)
 	for _, common := range commonPasswords {
-		if strings.Contains(lowerPass, common) {
+		if lowerPass == common {
 			return fmt.Errorf("password is too common, please choose a stronger password")
 		}
 	}
@@ -245,7 +245,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 	}
 
 	// Hash the token before storing (security best practice)
-	tokenHash := hashToken(token)
+	tokenHash := hashSessionToken(token)
 
 	// Set expiry based on configured duration
 	expiry := time.Now().Add(PasswordResetExpiry)
@@ -273,12 +273,21 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetCon
 		return err
 	}
 
-	if err := s.invalidateResetToken(ctx, user); err != nil {
+	// Invalidate the reset token before processing to ensure one-time use
+	user.PasswordResetToken = ""
+	user.PasswordResetExpiry = nil
+
+	if err := s.processPasswordReset(user, req.NewPassword); err != nil {
+		// Token is consumed even on validation failure (one-time use)
+		if updateErr := s.store.UpdateUser(ctx, user); updateErr != nil {
+			logging.Warnf("Failed to invalidate reset token after password validation failure: %v", updateErr)
+		}
 		return err
 	}
 
-	if err := s.processPasswordReset(user, req.NewPassword); err != nil {
-		return err
+	// Activate user on first password set (admin bootstrap flow)
+	if !user.Active {
+		user.Active = true
 	}
 
 	if err := s.store.DeleteUserSessions(ctx, user.ID); err != nil {
@@ -289,7 +298,7 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetCon
 }
 
 func (s *Service) validateResetToken(ctx context.Context, token string) (*User, error) {
-	tokenHash := hashToken(token)
+	tokenHash := hashSessionToken(token)
 
 	user, err := s.store.GetUserByResetToken(ctx, tokenHash)
 	if err != nil {
@@ -304,15 +313,6 @@ func (s *Service) validateResetToken(ctx context.Context, token string) (*User, 
 	}
 
 	return user, nil
-}
-
-func (s *Service) invalidateResetToken(ctx context.Context, user *User) error {
-	user.PasswordResetToken = ""
-	user.PasswordResetExpiry = nil
-	if err := s.store.UpdateUser(ctx, user); err != nil {
-		return fmt.Errorf("failed to invalidate reset token: %w", err)
-	}
-	return nil
 }
 
 func (s *Service) processPasswordReset(user *User, newPassword string) error {

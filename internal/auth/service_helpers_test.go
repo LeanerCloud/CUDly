@@ -8,16 +8,6 @@ import (
 )
 
 func TestHelperFunctions(t *testing.T) {
-	t.Run("generateSalt returns unique values", func(t *testing.T) {
-		salt1, err := generateSalt()
-		require.NoError(t, err)
-		assert.NotEmpty(t, salt1)
-
-		salt2, err := generateSalt()
-		require.NoError(t, err)
-		assert.NotEqual(t, salt1, salt2, "salts should be unique")
-	})
-
 	t.Run("generateToken returns unique values", func(t *testing.T) {
 		token1, err := generateToken()
 		require.NoError(t, err)

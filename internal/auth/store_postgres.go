@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,9 +16,9 @@ import (
 
 // DBConnection defines the interface for database operations needed by PostgresStore
 type DBConnection interface {
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Ping(ctx context.Context) error
 }
 
@@ -112,10 +113,22 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 	)
 
 	if err != nil {
+		if isDuplicateKeyError(err) {
+			return fmt.Errorf("email already in use")
+		}
 		return fmt.Errorf("failed to create user: %w", err)
 	}
 
 	return nil
+}
+
+// isDuplicateKeyError checks if the error is a PostgreSQL unique constraint violation (code 23505)
+func isDuplicateKeyError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }
 
 // UpdateUser updates an existing user
@@ -626,6 +639,16 @@ func (s *PostgresStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 	return nil
 }
 
+// UpdateAPIKeyLastUsed atomically updates the last_used_at timestamp for an API key
+func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
+	query := `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`
+	_, err := s.db.Exec(ctx, query, keyID)
+	if err != nil {
+		return fmt.Errorf("failed to update API key last used: %w", err)
+	}
+	return nil
+}
+
 // DeleteAPIKey deletes an API key
 func (s *PostgresStore) DeleteAPIKey(ctx context.Context, keyID string) error {
 	query := `DELETE FROM api_keys WHERE id = $1`
@@ -648,7 +671,7 @@ func (s *PostgresStore) DeleteAPIKey(ctx context.Context, keyID string) error {
 
 // Scanner interface for both Row and Rows
 type Scanner interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }
 
 // scanUser scans a user from a database row
@@ -681,7 +704,7 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("user not found")
+			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to scan user: %w", err)
 	}
@@ -731,7 +754,7 @@ func (s *PostgresStore) scanGroup(scanner Scanner) (*Group, error) {
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("group not found")
+			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to scan group: %w", err)
 	}
@@ -771,7 +794,7 @@ func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("API key not found")
+			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to scan API key: %w", err)
 	}

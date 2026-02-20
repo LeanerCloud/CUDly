@@ -195,11 +195,12 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email st
 		return fmt.Errorf("current password is incorrect")
 	}
 
-	if err := s.updateUserEmail(user, email); err != nil {
+	if err := s.updateUserEmail(ctx, user, email); err != nil {
 		return err
 	}
 
-	if err := s.updateUserPassword(user, newPassword); err != nil {
+	passwordChanged, err := s.updateUserPassword(user, newPassword)
+	if err != nil {
 		return err
 	}
 
@@ -208,37 +209,62 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email st
 		return fmt.Errorf("failed to update user: %w", err)
 	}
 
+	// Invalidate sessions when password changes
+	if passwordChanged {
+		if err := s.store.DeleteUserSessions(ctx, userID); err != nil {
+			logging.Warnf("Failed to delete sessions for user %s during profile update: %v", userID, err)
+		}
+	}
+
 	logging.Infof("User profile updated: id=%s", user.ID)
 	return nil
 }
 
-func (s *Service) updateUserEmail(user *User, email string) error {
+func (s *Service) updateUserEmail(ctx context.Context, user *User, email string) error {
 	if email != "" && email != user.Email {
 		if _, err := mail.ParseAddress(email); err != nil {
 			return fmt.Errorf("invalid email format")
+		}
+		// Check email uniqueness
+		existing, err := s.store.GetUserByEmail(ctx, email)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			return fmt.Errorf("email already in use")
 		}
 		user.Email = email
 	}
 	return nil
 }
 
-func (s *Service) updateUserPassword(user *User, newPassword string) error {
+func (s *Service) updateUserPassword(user *User, newPassword string) (bool, error) {
 	if newPassword == "" {
-		return nil
+		return false, nil
 	}
 
 	if err := s.validatePassword(newPassword); err != nil {
-		return err
+		return false, err
+	}
+
+	// Check password history to prevent reuse
+	if err := s.checkPasswordHistory(newPassword, user.PasswordHash, user.PasswordHistory); err != nil {
+		return false, err
 	}
 
 	hash, err := s.hashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("failed to hash password: %w", err)
+		return false, fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Update password history
+	if user.PasswordHash != "" {
+		user.PasswordHistory = addToPasswordHistory(user.PasswordHash, user.PasswordHistory)
 	}
 
 	user.Salt = ""
 	user.PasswordHash = hash
-	return nil
+	return true, nil
 }
 
 // ListUsers returns all users (admin only)
