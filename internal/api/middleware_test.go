@@ -87,12 +87,13 @@ func TestHandler_authenticate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
 			handler := &Handler{apiKey: tt.apiKey}
 			req := &events.LambdaFunctionURLRequest{
 				Headers:               tt.headers,
 				QueryStringParameters: tt.params,
 			}
-			result := handler.authenticate(req)
+			result := handler.authenticate(ctx, req)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -185,7 +186,7 @@ func TestHandler_authenticate_BearerToken(t *testing.T) {
 			"Authorization": "Bearer valid-token",
 		},
 	}
-	assert.True(t, handler.authenticate(req))
+	assert.True(t, handler.authenticate(ctx, req))
 
 	// Test invalid token - invalid bearer token denies access
 	req = &events.LambdaFunctionURLRequest{
@@ -194,7 +195,7 @@ func TestHandler_authenticate_BearerToken(t *testing.T) {
 		},
 	}
 	// Should be false because token is invalid and no API key provided
-	assert.False(t, handler.authenticate(req))
+	assert.False(t, handler.authenticate(ctx, req))
 }
 
 func TestHandler_authenticate_BearerTokenWithAPIKey(t *testing.T) {
@@ -218,7 +219,7 @@ func TestHandler_authenticate_BearerTokenWithAPIKey(t *testing.T) {
 			"Authorization": "Bearer valid-token",
 		},
 	}
-	assert.True(t, handler.authenticate(req))
+	assert.True(t, handler.authenticate(ctx, req))
 
 	// Test invalid bearer token when API key is configured
 	req = &events.LambdaFunctionURLRequest{
@@ -227,5 +228,5 @@ func TestHandler_authenticate_BearerTokenWithAPIKey(t *testing.T) {
 		},
 	}
 	// Should be false because API key is configured and bearer token is invalid
-	assert.False(t, handler.authenticate(req))
+	assert.False(t, handler.authenticate(ctx, req))
 }

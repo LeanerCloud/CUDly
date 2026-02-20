@@ -162,7 +162,7 @@ func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFuncti
 		return nil
 	}
 
-	if !h.authenticate(req) {
+	if !h.authenticate(ctx, req) {
 		resp, _ := h.buildResponse(401, corsHeaders, map[string]string{"error": "Unauthorized"}, nil)
 		return resp
 	}
@@ -197,7 +197,7 @@ func (h *Handler) handleRequestError(err error) (int, interface{}) {
 	}
 
 	logging.Errorf("API error: %v", err)
-	return 500, map[string]string{"error": err.Error()}
+	return 500, map[string]string{"error": "Internal server error"}
 }
 
 // buildResponse creates a Lambda Function URL response

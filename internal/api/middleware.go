@@ -34,18 +34,18 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 }
 
 // authenticate checks authentication via admin API key, user API key, or Bearer token
-func (h *Handler) authenticate(req *events.LambdaFunctionURLRequest) bool {
+func (h *Handler) authenticate(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
 	apiKey := extractAPIKey(req)
 
 	if h.checkAdminAPIKey(apiKey) {
 		return true
 	}
 
-	if h.checkUserAPIKey(apiKey) {
+	if h.checkUserAPIKey(ctx, apiKey) {
 		return true
 	}
 
-	return h.checkBearerToken(req)
+	return h.checkBearerToken(ctx, req)
 }
 
 func extractAPIKey(req *events.LambdaFunctionURLRequest) string {
@@ -63,9 +63,9 @@ func (h *Handler) checkAdminAPIKey(apiKey string) bool {
 	return false
 }
 
-func (h *Handler) checkUserAPIKey(apiKey string) bool {
+func (h *Handler) checkUserAPIKey(ctx context.Context, apiKey string) bool {
 	if apiKey != "" && h.auth != nil {
-		_, _, err := h.auth.ValidateUserAPIKeyAPI(context.Background(), apiKey)
+		_, _, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
 		if err == nil {
 			return true
 		}
@@ -74,10 +74,10 @@ func (h *Handler) checkUserAPIKey(apiKey string) bool {
 	return false
 }
 
-func (h *Handler) checkBearerToken(req *events.LambdaFunctionURLRequest) bool {
+func (h *Handler) checkBearerToken(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
 	token := h.extractBearerToken(req)
 	if token != "" && h.auth != nil {
-		_, err := h.auth.ValidateSession(context.Background(), token)
+		_, err := h.auth.ValidateSession(ctx, token)
 		if err == nil {
 			return true
 		}

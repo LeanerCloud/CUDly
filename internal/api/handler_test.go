@@ -682,7 +682,7 @@ func TestHandler_HandleRequest_Error(t *testing.T) {
 	var body map[string]string
 	err = json.Unmarshal([]byte(resp.Body), &body)
 	require.NoError(t, err)
-	assert.Contains(t, body["error"], "assert.AnError")
+	assert.Equal(t, "Internal server error", body["error"])
 }
 
 // Integration tests for dashboard endpoints
@@ -1069,7 +1069,7 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 
 	var body map[string]string
 	_ = json.Unmarshal([]byte(resp.Body), &body)
-	assert.Contains(t, body["error"], "cannot delete your own account")
+	assert.Equal(t, "Internal server error", body["error"])
 }
 
 // Test for listPlans error case

@@ -3,12 +3,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -81,7 +83,7 @@ func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string)
 		id,
 	).Scan(&count, &existingResetTime)
 
-	if err != nil && err.Error() == "no rows in result set" {
+	if errors.Is(err, pgx.ErrNoRows) {
 		// No existing entry, create a new one
 		_, err = tx.Exec(ctx,
 			`INSERT INTO rate_limits (id, count, reset_time, created_at, updated_at)
