@@ -25,7 +25,8 @@ lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 30
 lambda_enable_function_url    = true
 lambda_function_url_auth_type = "NONE"
-lambda_allowed_origins        = ["*"]
+# TODO: restrict to actual production domain, e.g. ["https://cudly.example.com"]
+lambda_allowed_origins = ["*"]
 
 # Fargate Configuration (when compute_platform = "fargate")
 fargate_cpu           = 1024
