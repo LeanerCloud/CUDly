@@ -35,7 +35,7 @@ BEGIN
             '',  -- Empty password - user must reset to login
             '',  -- Empty salt
             'admin',
-            true,
+            false,  -- Inactive until password is set via reset flow
             NOW(),
             NOW()
         );

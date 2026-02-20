@@ -33,12 +33,12 @@ BEGIN
             '',  -- Empty password - user must reset to login
             '',  -- Empty salt
             'admin',
-            true,
+            false,  -- Inactive until password is set via reset flow
             NOW(),
             NOW()
         );
 
-        RAISE NOTICE 'Admin user created (no password set): %', admin_email;
+        RAISE NOTICE 'Admin user created (inactive, no password set): %', admin_email;
     ELSE
         RAISE NOTICE 'Admin user already exists: %', admin_email;
     END IF;
