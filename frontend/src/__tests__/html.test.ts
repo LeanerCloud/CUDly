@@ -608,7 +608,7 @@ describe('HTML Structure', () => {
 
     test('password inputs have minlength', () => {
       const password = document.getElementById('user-password') as HTMLInputElement | null;
-      expect(password?.getAttribute('minlength')).toBe('8');
+      expect(password?.getAttribute('minlength')).toBe('12');
     });
   });
 });
