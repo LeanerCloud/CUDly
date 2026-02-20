@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -100,19 +101,19 @@ func (c *DatabaseClient) GetRegion() string {
 // AzureRetailPrice represents pricing information from Azure Retail Prices API
 type AzureRetailPrice struct {
 	Items []struct {
-		CurrencyCode         string  `json:"currencyCode"`
-		RetailPrice          float64 `json:"retailPrice"`
-		UnitPrice            float64 `json:"unitPrice"`
-		ArmRegionName        string  `json:"armRegionName"`
-		Location             string  `json:"location"`
-		MeterName            string  `json:"meterName"`
-		SKUName              string  `json:"skuName"`
-		ProductName          string  `json:"productName"`
-		ServiceName          string  `json:"serviceName"`
-		UnitOfMeasure        string  `json:"unitOfMeasure"`
-		Type                 string  `json:"type"`
-		ArmSKUName           string  `json:"armSkuName"`
-		ReservationTerm      string  `json:"reservationTerm"`
+		CurrencyCode    string  `json:"currencyCode"`
+		RetailPrice     float64 `json:"retailPrice"`
+		UnitPrice       float64 `json:"unitPrice"`
+		ArmRegionName   string  `json:"armRegionName"`
+		Location        string  `json:"location"`
+		MeterName       string  `json:"meterName"`
+		SKUName         string  `json:"skuName"`
+		ProductName     string  `json:"productName"`
+		ServiceName     string  `json:"serviceName"`
+		UnitOfMeasure   string  `json:"unitOfMeasure"`
+		Type            string  `json:"type"`
+		ArmSKUName      string  `json:"armSkuName"`
+		ReservationTerm string  `json:"reservationTerm"`
 	} `json:"Items"`
 	NextPageLink string `json:"NextPageLink"`
 	Count        int    `json:"Count"`
@@ -156,6 +157,7 @@ func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.R
 func (c *DatabaseClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	pager, err := c.createReservationsPager()
 	if err != nil {
+		log.Printf("WARNING: failed to create SQL reservations pager: %v", err)
 		return []common.Commitment{}, nil
 	}
 
@@ -338,7 +340,6 @@ func (c *DatabaseClient) GetOfferingDetails(ctx context.Context, rec common.Reco
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pricing: %w", err)
 	}
-
 
 	var upfrontCost, recurringCost float64
 	totalCost := pricing.ReservationPrice
@@ -537,19 +538,19 @@ func (c *DatabaseClient) fetchAzurePricing(ctx context.Context, filter string) (
 
 // extractSQLPricing extracts on-demand and reservation pricing from price items
 func extractSQLPricing(items []struct {
-	CurrencyCode         string  `json:"currencyCode"`
-	RetailPrice          float64 `json:"retailPrice"`
-	UnitPrice            float64 `json:"unitPrice"`
-	ArmRegionName        string  `json:"armRegionName"`
-	Location             string  `json:"location"`
-	MeterName            string  `json:"meterName"`
-	SKUName              string  `json:"skuName"`
-	ProductName          string  `json:"productName"`
-	ServiceName          string  `json:"serviceName"`
-	UnitOfMeasure        string  `json:"unitOfMeasure"`
-	Type                 string  `json:"type"`
-	ArmSKUName           string  `json:"armSkuName"`
-	ReservationTerm      string  `json:"reservationTerm"`
+	CurrencyCode    string  `json:"currencyCode"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
+	ArmRegionName   string  `json:"armRegionName"`
+	Location        string  `json:"location"`
+	MeterName       string  `json:"meterName"`
+	SKUName         string  `json:"skuName"`
+	ProductName     string  `json:"productName"`
+	ServiceName     string  `json:"serviceName"`
+	UnitOfMeasure   string  `json:"unitOfMeasure"`
+	Type            string  `json:"type"`
+	ArmSKUName      string  `json:"armSkuName"`
+	ReservationTerm string  `json:"reservationTerm"`
 }, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := fmt.Sprintf("%d Years", termYears)

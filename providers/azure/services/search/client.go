@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -154,6 +155,7 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 func (c *SearchClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	pager, err := c.createReservationsPager()
 	if err != nil {
+		log.Printf("WARNING: failed to create Search reservations pager: %v", err)
 		return []common.Commitment{}, nil
 	}
 

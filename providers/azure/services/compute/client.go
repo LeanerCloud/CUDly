@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -50,9 +51,9 @@ type ComputeClient struct {
 	httpClient     HTTPClient
 
 	// For testing - these can be set to mock implementations
-	recommendationsPager   RecommendationsPager
-	reservationsPager      ReservationsDetailsPager
-	resourceSKUsPager      ResourceSKUsPager
+	recommendationsPager RecommendationsPager
+	reservationsPager    ReservationsDetailsPager
+	resourceSKUsPager    ResourceSKUsPager
 }
 
 // NewClient creates a new Azure Compute client
@@ -156,6 +157,7 @@ func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.Re
 func (c *ComputeClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	pager, err := c.createReservationsPager()
 	if err != nil {
+		log.Printf("WARNING: failed to create VM reservations pager: %v", err)
 		return []common.Commitment{}, nil
 	}
 
@@ -334,7 +336,6 @@ func (c *ComputeClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pricing: %w", err)
 	}
-
 
 	var upfrontCost, recurringCost float64
 	totalCost := pricing.ReservationPrice
