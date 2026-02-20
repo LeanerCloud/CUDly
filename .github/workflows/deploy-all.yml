@@ -1,0 +1,252 @@
+# Deploy to All Cloud Providers in Parallel
+#
+# This workflow orchestrates deployment to multiple cloud providers simultaneously.
+# Useful for disaster recovery, multi-cloud redundancy, or testing across platforms.
+#
+# Required GitHub Secrets:
+#   - All secrets from individual deployment workflows (AWS, GCP, Azure)
+#
+# Required GitHub Variables:
+#   - All variables from individual deployment workflows
+#
+# Triggered by:
+#   - Manual workflow dispatch
+#   - Release creation (deploys to prod across all clouds)
+
+name: Deploy to All Clouds
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      deploy_to:
+        description: 'Cloud providers to deploy to'
+        required: true
+        type: choice
+        options:
+          - all
+          - aws-only
+          - gcp-only
+          - azure-only
+          - aws-gcp
+          - aws-azure
+          - gcp-azure
+  release:
+    types: [created]
+
+jobs:
+  # Determine deployment strategy
+  determine-deployment:
+    name: Determine Deployment Strategy
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      deploy-aws-lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}
+      deploy-aws-fargate: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}
+      deploy-gcp: ${{ steps.set-clouds.outputs.deploy-gcp }}
+      deploy-azure: ${{ steps.set-clouds.outputs.deploy-azure }}
+
+    steps:
+      - name: Set environment
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set cloud providers
+        id: set-clouds
+        run: |
+          DEPLOY_TO="${{ inputs.deploy_to || 'all' }}"
+
+          # AWS Lambda
+          if [[ "$DEPLOY_TO" == "all" ]] || \
+             [[ "$DEPLOY_TO" == "aws-only" ]] || \
+             [[ "$DEPLOY_TO" == "aws-gcp" ]] || \
+             [[ "$DEPLOY_TO" == "aws-azure" ]]; then
+            echo "deploy-aws-lambda=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy-aws-lambda=false" >> $GITHUB_OUTPUT
+          fi
+
+          # AWS Fargate (optional, can be enabled separately)
+          echo "deploy-aws-fargate=false" >> $GITHUB_OUTPUT
+
+          # GCP
+          if [[ "$DEPLOY_TO" == "all" ]] || \
+             [[ "$DEPLOY_TO" == "gcp-only" ]] || \
+             [[ "$DEPLOY_TO" == "aws-gcp" ]] || \
+             [[ "$DEPLOY_TO" == "gcp-azure" ]]; then
+            echo "deploy-gcp=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy-gcp=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Azure
+          if [[ "$DEPLOY_TO" == "all" ]] || \
+             [[ "$DEPLOY_TO" == "azure-only" ]] || \
+             [[ "$DEPLOY_TO" == "aws-azure" ]] || \
+             [[ "$DEPLOY_TO" == "gcp-azure" ]]; then
+            echo "deploy-azure=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy-azure=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Display deployment plan
+        run: |
+          echo "## Deployment Plan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ steps.set-env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deploy Strategy:** ${{ inputs.deploy_to || 'all' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Clouds" >> $GITHUB_STEP_SUMMARY
+          echo "- AWS Lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}" >> $GITHUB_STEP_SUMMARY
+          echo "- AWS Fargate: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}" >> $GITHUB_STEP_SUMMARY
+          echo "- GCP Cloud Run: ${{ steps.set-clouds.outputs.deploy-gcp }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Azure Container Apps: ${{ steps.set-clouds.outputs.deploy-azure }}" >> $GITHUB_STEP_SUMMARY
+
+  # Deploy to AWS Lambda
+  deploy-aws-lambda:
+    name: Deploy AWS Lambda
+    needs: determine-deployment
+    if: needs.determine-deployment.outputs.deploy-aws-lambda == 'true'
+    uses: ./.github/workflows/deploy-aws-lambda.yml
+    with:
+      environment: ${{ needs.determine-deployment.outputs.environment }}
+    secrets: inherit
+
+  # Deploy to AWS Fargate
+  deploy-aws-fargate:
+    name: Deploy AWS Fargate
+    needs: determine-deployment
+    if: needs.determine-deployment.outputs.deploy-aws-fargate == 'true'
+    uses: ./.github/workflows/deploy-aws-fargate.yml
+    with:
+      environment: ${{ needs.determine-deployment.outputs.environment }}
+    secrets: inherit
+
+  # Deploy to GCP Cloud Run
+  deploy-gcp:
+    name: Deploy GCP Cloud Run
+    needs: determine-deployment
+    if: needs.determine-deployment.outputs.deploy-gcp == 'true'
+    uses: ./.github/workflows/deploy-gcp.yml
+    with:
+      environment: ${{ needs.determine-deployment.outputs.environment }}
+    secrets: inherit
+
+  # Deploy to Azure Container Apps
+  deploy-azure:
+    name: Deploy Azure Container Apps
+    needs: determine-deployment
+    if: needs.determine-deployment.outputs.deploy-azure == 'true'
+    uses: ./.github/workflows/deploy-azure.yml
+    with:
+      environment: ${{ needs.determine-deployment.outputs.environment }}
+    secrets: inherit
+
+  # Aggregate results and notify
+  notify:
+    name: Deployment Results
+    needs:
+      - determine-deployment
+      - deploy-aws-lambda
+      - deploy-aws-fargate
+      - deploy-gcp
+      - deploy-azure
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Aggregate results
+        run: |
+          echo "## Multi-Cloud Deployment Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.determine-deployment.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # AWS Lambda
+          if [[ "${{ needs.determine-deployment.outputs.deploy-aws-lambda }}" == "true" ]]; then
+            if [[ "${{ needs.deploy-aws-lambda.result }}" == "success" ]]; then
+              echo "- ✅ AWS Lambda: Success" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- ❌ AWS Lambda: ${{ needs.deploy-aws-lambda.result }}" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- ⏭️ AWS Lambda: Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # AWS Fargate
+          if [[ "${{ needs.determine-deployment.outputs.deploy-aws-fargate }}" == "true" ]]; then
+            if [[ "${{ needs.deploy-aws-fargate.result }}" == "success" ]]; then
+              echo "- ✅ AWS Fargate: Success" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- ❌ AWS Fargate: ${{ needs.deploy-aws-fargate.result }}" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- ⏭️ AWS Fargate: Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # GCP
+          if [[ "${{ needs.determine-deployment.outputs.deploy-gcp }}" == "true" ]]; then
+            if [[ "${{ needs.deploy-gcp.result }}" == "success" ]]; then
+              echo "- ✅ GCP Cloud Run: Success" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- ❌ GCP Cloud Run: ${{ needs.deploy-gcp.result }}" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- ⏭️ GCP Cloud Run: Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Azure
+          if [[ "${{ needs.determine-deployment.outputs.deploy-azure }}" == "true" ]]; then
+            if [[ "${{ needs.deploy-azure.result }}" == "success" ]]; then
+              echo "- ✅ Azure Container Apps: Success" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- ❌ Azure Container Apps: ${{ needs.deploy-azure.result }}" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- ⏭️ Azure Container Apps: Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check for failures
+        run: |
+          FAILED=false
+
+          if [[ "${{ needs.deploy-aws-lambda.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-aws-fargate.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-gcp.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-azure.result }}" == "failure" ]]; then
+            FAILED=true
+          fi
+
+          if [ "$FAILED" = true ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **One or more deployments failed. Check individual job logs.**" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **All deployments completed successfully!**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Optional: Send notification to Slack, Discord, email, etc.
+      # - name: Send notification
+      #   if: always()
+      #   uses: 8398a7/action-slack@v3
+      #   with:
+      #     status: ${{ job.status }}
+      #     text: Multi-cloud deployment to ${{ needs.determine-deployment.outputs.environment }} completed
+      #     webhook_url: ${{ secrets.SLACK_WEBHOOK }}

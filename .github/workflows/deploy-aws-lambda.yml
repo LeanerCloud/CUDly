@@ -1,0 +1,349 @@
+# Deploy to AWS Lambda
+#
+# This workflow deploys the CUDly application to AWS Lambda with Function URL.
+# It builds a Docker image, pushes to ECR, and deploys via Terraform.
+#
+# Required GitHub Secrets:
+#   - AWS_ACCESS_KEY_ID: AWS access key for deployment
+#   - AWS_SECRET_ACCESS_KEY: AWS secret access key
+#   - ADMIN_EMAIL: Admin email for notifications
+#
+# Required GitHub Variables:
+#   - AWS_REGION: AWS region (e.g., us-east-1)
+#   - AWS_ACCOUNT_ID: AWS account ID
+#   - ECR_REPOSITORY: ECR repository name (default: cudly)
+#
+# Triggered by:
+#   - Pushes to main branch (auto-deploy to staging)
+#   - Manual workflow dispatch with environment selection
+#   - Release creation (auto-deploy to prod)
+#   - Workflow call from other workflows
+
+name: Deploy to AWS Lambda
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'providers/**'
+      - 'Dockerfile'
+      - 'terraform/modules/compute/aws/lambda/**'
+      - 'terraform/modules/database/aws/**'
+      - 'terraform/modules/secrets/aws/**'
+      - 'terraform/modules/networking/aws/**'
+      - 'terraform/environments/aws/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+  release:
+    types: [created]
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      image_uri:
+        required: false
+        type: string
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'cudly' }}
+  TF_VERSION: '1.6.0'
+
+jobs:
+  # Determine deployment environment
+  prepare:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      image_tag: ${{ steps.set-tag.outputs.tag }}
+
+    steps:
+      - name: Determine environment
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_call" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set image tag
+        id: set-tag
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+  # Build and push Docker image to ECR
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: prepare
+    if: inputs.image_uri == ''
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.prepare.outputs.image_tag }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.image_tag }}
+
+      - name: Set image URI output
+        id: set-uri
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.prepare.outputs.image_tag }}"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+  # Deploy infrastructure with Terraform
+  deploy:
+    name: Deploy with Terraform
+    runs-on: ubuntu-latest
+    needs: [prepare, build-and-push]
+    if: always() && !cancelled() && !failure()
+    environment:
+      name: aws-lambda-${{ needs.prepare.outputs.environment }}
+      url: ${{ steps.outputs.outputs.function_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/aws
+          terraform init
+
+      - name: Terraform Plan
+        id: plan
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/aws
+          terraform plan \
+            -var-file="github-${{ needs.prepare.outputs.environment }}.tfvars" \
+            -var="image_uri=${{ needs.build-and-push.outputs.image_uri || inputs.image_uri }}" \
+            -var="compute_platform=lambda" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/aws
+          terraform apply -auto-approve tfplan
+
+      - name: Get Terraform outputs
+        id: outputs
+        run: |
+          cd terraform/environments/aws
+          echo "function_url=$(terraform output -raw lambda_function_url 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+          echo "function_name=$(terraform output -raw lambda_function_name 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+          echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+
+      - name: Save deployment info
+        run: |
+          cat <<EOF > deployment-info.json
+          {
+            "environment": "${{ needs.prepare.outputs.environment }}",
+            "image_tag": "${{ needs.prepare.outputs.image_tag }}",
+            "image_uri": "${{ needs.build-and-push.outputs.image_uri || inputs.image_uri }}",
+            "function_url": "${{ steps.outputs.outputs.function_url }}",
+            "function_name": "${{ steps.outputs.outputs.function_name }}",
+            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "deployed_by": "${{ github.actor }}",
+            "commit": "${{ github.sha }}"
+          }
+          EOF
+          cat deployment-info.json
+
+      - name: Upload deployment info
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-info-${{ needs.prepare.outputs.environment }}
+          path: deployment-info.json
+          retention-days: 90
+
+  # Test the deployment
+  test-deployment:
+    name: Test Deployment
+    runs-on: ubuntu-latest
+    needs: [prepare, deploy]
+    if: always() && needs.deploy.result == 'success'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/aws
+          terraform init
+
+      - name: Get Function URL
+        id: get-url
+        run: |
+          cd terraform/environments/aws
+          FUNCTION_URL=$(terraform output -raw lambda_function_url 2>/dev/null || echo "")
+          if [ -z "$FUNCTION_URL" ]; then
+            echo "Failed to get function URL from Terraform outputs"
+            exit 1
+          fi
+          echo "url=$FUNCTION_URL" >> $GITHUB_OUTPUT
+
+      - name: Wait for Lambda to be ready
+        run: |
+          echo "Waiting 30 seconds for Lambda to be fully ready..."
+          sleep 30
+
+      - name: Test health endpoint
+        run: |
+          URL="${{ steps.get-url.outputs.url }}"
+          echo "Testing health endpoint: $URL/health"
+
+          for i in {1..5}; do
+            if curl -f -s "$URL/health" > /dev/null; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+          done
+
+          echo "❌ Health check failed after 5 attempts"
+          exit 1
+
+      - name: Run smoke tests
+        run: |
+          URL="${{ steps.get-url.outputs.url }}"
+
+          # Test health endpoint response
+          echo "Testing health endpoint response..."
+          RESPONSE=$(curl -s "$URL/health")
+          echo "Response: $RESPONSE"
+
+          # Check if response contains expected fields
+          if echo "$RESPONSE" | grep -q '"status"'; then
+            echo "✅ Health endpoint returns valid JSON"
+          else
+            echo "❌ Health endpoint response is invalid"
+            exit 1
+          fi
+
+  # Post deployment summary
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [prepare, build-and-push, deploy, test-deployment]
+    if: always()
+
+    steps:
+      - name: Download deployment info
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-info-${{ needs.prepare.outputs.environment }}
+        continue-on-error: true
+
+      - name: Post summary
+        run: |
+          echo "## AWS Lambda Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ needs.prepare.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f deployment-info.json ]; then
+            echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat deployment-info.json >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Build: ${{ needs.build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy: ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Test: ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY

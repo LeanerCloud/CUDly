@@ -1,0 +1,346 @@
+# Run Database Migrations
+#
+# This workflow manages database schema migrations across all cloud providers.
+# It can run migrations up (apply) or down (rollback) with safety checks.
+#
+# Required GitHub Secrets:
+#   - DB_PASSWORD_AWS: Database password for AWS Aurora
+#   - DB_PASSWORD_GCP: Database password for GCP Cloud SQL
+#   - DB_PASSWORD_AZURE: Database password for Azure Flexible Server
+#   - AWS_ACCESS_KEY_ID: AWS credentials (for bastion/VPN access)
+#   - AWS_SECRET_ACCESS_KEY: AWS secret key
+#   - GCP_SA_KEY: GCP service account key
+#   - AZURE_CREDENTIALS: Azure credentials
+#
+# Required GitHub Variables:
+#   - DB_HOST_AWS_DEV: Aurora endpoint (dev)
+#   - DB_HOST_AWS_STAGING: Aurora endpoint (staging)
+#   - DB_HOST_AWS_PROD: Aurora endpoint (prod)
+#   - (Similar for GCP and Azure)
+#
+# Triggered by:
+#   - Manual workflow dispatch
+#   - Before deployment workflows (optional)
+
+name: Database Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Cloud provider'
+        required: true
+        type: choice
+        options: [aws, gcp, azure, all]
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+      direction:
+        description: 'Migration direction'
+        required: true
+        type: choice
+        options: [up, down]
+        default: up
+      steps:
+        description: 'Number of migrations to apply/rollback (0 = all)'
+        required: false
+        type: number
+        default: 0
+  workflow_call:
+    inputs:
+      cloud:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      direction:
+        required: false
+        type: string
+        default: up
+
+env:
+  MIGRATIONS_PATH: internal/database/postgres/migrations
+
+jobs:
+  # Validate migration request
+  validate:
+    name: Validate Migration Request
+    runs-on: ubuntu-latest
+    outputs:
+      is_safe: ${{ steps.check.outputs.is_safe }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Safety checks
+        id: check
+        run: |
+          IS_SAFE=true
+
+          # Check if migrations directory exists
+          if [ ! -d "${{ env.MIGRATIONS_PATH }}" ]; then
+            echo "❌ Migrations directory not found: ${{ env.MIGRATIONS_PATH }}"
+            IS_SAFE=false
+          fi
+
+          # Warn on production down migrations
+          if [[ "${{ inputs.environment }}" == "prod" ]] && [[ "${{ inputs.direction }}" == "down" ]]; then
+            echo "⚠️ WARNING: Attempting to rollback migrations on PRODUCTION"
+            echo "This operation is destructive and may cause data loss!"
+            # For production, we don't auto-fail, but require manual confirmation
+          fi
+
+          # Check migration files
+          if [ -d "${{ env.MIGRATIONS_PATH }}" ]; then
+            UP_COUNT=$(ls -1 ${{ env.MIGRATIONS_PATH }}/*.up.sql 2>/dev/null | wc -l)
+            DOWN_COUNT=$(ls -1 ${{ env.MIGRATIONS_PATH }}/*.down.sql 2>/dev/null | wc -l)
+
+            echo "Migration files found:"
+            echo "  Up migrations: $UP_COUNT"
+            echo "  Down migrations: $DOWN_COUNT"
+
+            if [ $UP_COUNT -eq 0 ]; then
+              echo "❌ No migration files found"
+              IS_SAFE=false
+            fi
+          fi
+
+          echo "is_safe=$IS_SAFE" >> $GITHUB_OUTPUT
+
+      - name: Display migration plan
+        run: |
+          echo "## Database Migration Plan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Cloud:** ${{ inputs.cloud }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Direction:** ${{ inputs.direction }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Steps:** ${{ inputs.steps || 'all' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ inputs.environment }}" == "prod" ]] && [[ "${{ inputs.direction }}" == "down" ]]; then
+            echo "⚠️ **WARNING:** This will rollback migrations on PRODUCTION!" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Run AWS migrations
+  migrate-aws:
+    name: Migrate AWS Database
+    runs-on: ubuntu-latest
+    needs: validate
+    if: |
+      needs.validate.outputs.is_safe == 'true' &&
+      (inputs.cloud == 'aws' || inputs.cloud == 'all')
+    environment:
+      name: aws-db-${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Get database endpoint from Terraform
+        id: get-endpoint
+        run: |
+          cd terraform/environments/aws
+          terraform init
+          DB_ENDPOINT=$(terraform output -raw database_proxy_endpoint 2>/dev/null || echo "")
+          if [ -z "$DB_ENDPOINT" ]; then
+            echo "Failed to get database endpoint"
+            exit 1
+          fi
+          echo "endpoint=$DB_ENDPOINT" >> $GITHUB_OUTPUT
+
+      - name: Run migrations
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
+        run: |
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
+
+          if [[ "${{ inputs.direction }}" == "up" ]]; then
+            if [[ "${{ inputs.steps }}" == "0" ]]; then
+              echo "Applying all pending migrations..."
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up
+            else
+              echo "Applying ${{ inputs.steps }} migration(s)..."
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up ${{ inputs.steps }}
+            fi
+          else
+            if [[ "${{ inputs.steps }}" == "0" ]]; then
+              echo "Rolling back all migrations..."
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down -all
+            else
+              echo "Rolling back ${{ inputs.steps }} migration(s)..."
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down ${{ inputs.steps }}
+            fi
+          fi
+
+      - name: Get migration version
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
+        run: |
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
+          VERSION=$(migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" version 2>&1 || echo "unknown")
+          echo "Current migration version: $VERSION"
+          echo "MIGRATION_VERSION=$VERSION" >> $GITHUB_ENV
+
+  # Run GCP migrations
+  migrate-gcp:
+    name: Migrate GCP Database
+    runs-on: ubuntu-latest
+    needs: validate
+    if: |
+      needs.validate.outputs.is_safe == 'true' &&
+      (inputs.cloud == 'gcp' || inputs.cloud == 'all')
+    environment:
+      name: gcp-db-${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get database endpoint from Terraform
+        id: get-endpoint
+        run: |
+          cd terraform/environments/gcp
+          terraform init
+          DB_ENDPOINT=$(terraform output -raw database_private_ip 2>/dev/null || echo "")
+          if [ -z "$DB_ENDPOINT" ]; then
+            echo "Failed to get database endpoint"
+            exit 1
+          fi
+          echo "endpoint=$DB_ENDPOINT" >> $GITHUB_OUTPUT
+
+      - name: Run migrations
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD_GCP }}
+        run: |
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
+
+          if [[ "${{ inputs.direction }}" == "up" ]]; then
+            if [[ "${{ inputs.steps }}" == "0" ]]; then
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up
+            else
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up ${{ inputs.steps }}
+            fi
+          else
+            if [[ "${{ inputs.steps }}" == "0" ]]; then
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down -all
+            else
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down ${{ inputs.steps }}
+            fi
+          fi
+
+  # Run Azure migrations
+  migrate-azure:
+    name: Migrate Azure Database
+    runs-on: ubuntu-latest
+    needs: validate
+    if: |
+      needs.validate.outputs.is_safe == 'true' &&
+      (inputs.cloud == 'azure' || inputs.cloud == 'all')
+    environment:
+      name: azure-db-${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get database endpoint from Terraform
+        id: get-endpoint
+        run: |
+          cd terraform/environments/azure
+          terraform init
+          DB_ENDPOINT=$(terraform output -raw database_fqdn 2>/dev/null || echo "")
+          if [ -z "$DB_ENDPOINT" ]; then
+            echo "Failed to get database endpoint"
+            exit 1
+          fi
+          echo "endpoint=$DB_ENDPOINT" >> $GITHUB_OUTPUT
+
+      - name: Run migrations
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD_AZURE }}
+        run: |
+          DB_URL="postgresql://cudly:${DB_PASSWORD}@${{ steps.get-endpoint.outputs.endpoint }}:5432/cudly?sslmode=require"
+
+          if [[ "${{ inputs.direction }}" == "up" ]]; then
+            if [[ "${{ inputs.steps }}" == "0" ]]; then
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up
+            else
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" up ${{ inputs.steps }}
+            fi
+          else
+            if [[ "${{ inputs.steps }}" == "0" ]]; then
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down -all
+            else
+              migrate -path ${{ env.MIGRATIONS_PATH }} -database "$DB_URL" down ${{ inputs.steps }}
+            fi
+          fi
+
+  # Summary
+  summary:
+    name: Migration Summary
+    runs-on: ubuntu-latest
+    needs: [validate, migrate-aws, migrate-gcp, migrate-azure]
+    if: always()
+
+    steps:
+      - name: Post summary
+        run: |
+          echo "## Database Migration Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Cloud:** ${{ inputs.cloud }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Direction:** ${{ inputs.direction }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ inputs.cloud }}" == "aws" ]] || [[ "${{ inputs.cloud }}" == "all" ]]; then
+            echo "- AWS: ${{ needs.migrate-aws.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ inputs.cloud }}" == "gcp" ]] || [[ "${{ inputs.cloud }}" == "all" ]]; then
+            echo "- GCP: ${{ needs.migrate-gcp.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ inputs.cloud }}" == "azure" ]] || [[ "${{ inputs.cloud }}" == "all" ]]; then
+            echo "- Azure: ${{ needs.migrate-azure.result }}" >> $GITHUB_STEP_SUMMARY
+          fi

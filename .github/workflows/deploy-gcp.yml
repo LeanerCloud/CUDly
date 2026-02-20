@@ -1,0 +1,269 @@
+# Deploy to GCP Cloud Run
+#
+# This workflow deploys the CUDly application to GCP Cloud Run.
+# Serverless container platform with automatic scaling.
+#
+# Required GitHub Secrets:
+#   - GCP_SA_KEY: GCP Service Account JSON key with permissions:
+#       * Artifact Registry Writer
+#       * Cloud Run Admin
+#       * Service Account User
+#       * Compute Network Admin (for VPC connector)
+#   - GCP_PROJECT_ID: GCP project ID
+#   - ADMIN_EMAIL: Admin email for notifications
+#
+# Required GitHub Variables:
+#   - GCP_REGION: GCP region (e.g., us-central1)
+#   - ARTIFACT_REGISTRY_REPO: Artifact Registry repository name (default: cudly)
+#
+# Triggered by:
+#   - Manual workflow dispatch
+#   - Workflow call from deploy-all.yml
+
+name: Deploy to GCP Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+env:
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'cudly' }}
+  TF_VERSION: '1.6.0'
+
+jobs:
+  # Build and push Docker image to Artifact Registry
+  build-and-deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: gcp-${{ inputs.environment }}
+      url: ${{ steps.deploy.outputs.service_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/cudly:${{ github.sha }}"
+          echo "Building image: $IMAGE_URI"
+
+          # GCP Cloud Run uses x86_64 (amd64) architecture
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg VERSION=${{ github.sha }} \
+            -t $IMAGE_URI \
+            --push \
+            .
+
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/gcp
+          terraform init
+
+      - name: Terraform Plan
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/gcp
+          terraform plan \
+            -var-file="github-${{ inputs.environment }}.tfvars" \
+            -var="image_uri=${{ env.IMAGE_URI }}" \
+            -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        id: deploy
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/gcp
+          terraform apply -auto-approve tfplan
+
+          # Get service URL
+          SERVICE_URL=$(terraform output -raw service_url 2>/dev/null || echo "")
+          echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Save deployment info
+        run: |
+          cat <<EOF > deployment-info.json
+          {
+            "environment": "${{ inputs.environment }}",
+            "image_uri": "${{ env.IMAGE_URI }}",
+            "service_url": "${{ steps.deploy.outputs.service_url }}",
+            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "deployed_by": "${{ github.actor }}",
+            "commit": "${{ github.sha }}"
+          }
+          EOF
+          cat deployment-info.json
+
+      - name: Upload deployment info
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-info-gcp-${{ inputs.environment }}
+          path: deployment-info.json
+          retention-days: 90
+
+  # Test the deployment
+  test-deployment:
+    name: Test Deployment
+    runs-on: ubuntu-latest
+    needs: build-and-deploy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/gcp
+          terraform init
+
+      - name: Get Service URL
+        id: get-url
+        run: |
+          cd terraform/environments/gcp
+          SERVICE_URL=$(terraform output -raw service_url 2>/dev/null || echo "")
+          if [ -z "$SERVICE_URL" ]; then
+            echo "Failed to get service URL"
+            exit 1
+          fi
+          echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Wait for Cloud Run to be ready
+        run: |
+          echo "Waiting 30 seconds for Cloud Run to be ready..."
+          sleep 30
+
+      - name: Test health endpoint
+        run: |
+          URL="${{ steps.get-url.outputs.url }}"
+          echo "Testing health endpoint: $URL/health"
+
+          for i in {1..5}; do
+            if curl -f -s "$URL/health" > /dev/null; then
+              echo "✅ Health check passed!"
+
+              # Test response content
+              RESPONSE=$(curl -s "$URL/health")
+              echo "Response: $RESPONSE"
+
+              if echo "$RESPONSE" | grep -q '"status"'; then
+                echo "✅ Health endpoint returns valid JSON"
+                exit 0
+              fi
+            fi
+            echo "Attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+          done
+
+          echo "❌ Health check failed after 5 attempts"
+          exit 1
+
+      - name: Run smoke tests
+        run: |
+          URL="${{ steps.get-url.outputs.url }}"
+
+          echo "Running basic smoke tests..."
+
+          # Test health endpoint multiple times
+          for i in {1..3}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health")
+            if [ "$STATUS" -eq 200 ]; then
+              echo "✅ Health check $i: passed (HTTP $STATUS)"
+            else
+              echo "❌ Health check $i: failed (HTTP $STATUS)"
+              exit 1
+            fi
+          done
+
+          echo "✅ All smoke tests passed!"
+
+  # Post deployment summary
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [build-and-deploy, test-deployment]
+    if: always()
+
+    steps:
+      - name: Download deployment info
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-info-gcp-${{ inputs.environment }}
+        continue-on-error: true
+
+      - name: Post summary
+        run: |
+          echo "## GCP Cloud Run Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.GCP_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f deployment-info.json ]; then
+            echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat deployment-info.json >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy: ${{ needs.build-and-deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Test: ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Deployment successful!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Deployment failed. Check logs for details.**" >> $GITHUB_STEP_SUMMARY
+          fi

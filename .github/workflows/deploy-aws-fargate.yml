@@ -1,0 +1,220 @@
+# Deploy to AWS ECS Fargate
+#
+# This workflow deploys the CUDly application to AWS ECS Fargate with ALB.
+# Alternative to Lambda for always-on containerized workloads.
+#
+# Required GitHub Secrets:
+#   - AWS_ACCESS_KEY_ID: AWS access key
+#   - AWS_SECRET_ACCESS_KEY: AWS secret access key
+#   - ADMIN_EMAIL: Admin email for notifications
+#
+# Required GitHub Variables:
+#   - AWS_REGION: AWS region
+#   - AWS_ACCOUNT_ID: AWS account ID
+#   - ECR_REPOSITORY: ECR repository name
+#
+# Triggered by:
+#   - Manual workflow dispatch
+#   - Workflow call from deploy-all.yml
+
+name: Deploy to AWS Fargate
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      image_uri:
+        required: false
+        type: string
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'cudly' }}
+  TF_VERSION: '1.6.0'
+
+jobs:
+  # Build and push Docker image if not provided
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    if: inputs.image_uri == ''
+    outputs:
+      image_uri: ${{ steps.set-uri.outputs.image_uri }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=sha,prefix=${{ inputs.environment }}-
+            type=raw,value=${{ inputs.environment }}-latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ github.sha }}
+
+      - name: Set image URI output
+        id: set-uri
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ inputs.environment }}-${{ github.sha }}"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+  # Deploy with Terraform
+  deploy:
+    name: Deploy to Fargate
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: always() && !cancelled() && !failure()
+    environment:
+      name: aws-fargate-${{ inputs.environment }}
+      url: ${{ steps.outputs.outputs.alb_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/aws
+          terraform init
+
+      - name: Terraform Plan
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/aws
+          terraform plan \
+            -var-file="github-${{ inputs.environment }}.tfvars" \
+            -var="image_uri=${{ needs.build-and-push.outputs.image_uri || inputs.image_uri }}" \
+            -var="compute_platform=fargate" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/aws
+          terraform apply -auto-approve tfplan
+
+      - name: Get outputs
+        id: outputs
+        run: |
+          cd terraform/environments/aws
+          echo "alb_url=$(terraform output -raw alb_dns_name 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+          echo "service_name=$(terraform output -raw ecs_service_name 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+
+  # Test deployment
+  test-deployment:
+    name: Test Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/aws
+          terraform init
+
+      - name: Wait for deployment
+        run: |
+          echo "Waiting 60 seconds for ECS service to stabilize..."
+          sleep 60
+
+      - name: Test health endpoint
+        run: |
+          cd terraform/environments/aws
+          ALB_URL=$(terraform output -raw alb_dns_name 2>/dev/null)
+
+          echo "Testing health endpoint: http://$ALB_URL/health"
+
+          for i in {1..10}; do
+            if curl -f -s "http://$ALB_URL/health" > /dev/null; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10 seconds..."
+            sleep 10
+          done
+
+          echo "❌ Health check failed after 10 attempts"
+          exit 1
+
+  # Summary
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy, test-deployment]
+    if: always()
+
+    steps:
+      - name: Post summary
+        run: |
+          echo "## AWS Fargate Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deploy Status:** ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Status:** ${{ needs.test-deployment.result }}" >> $GITHUB_STEP_SUMMARY
