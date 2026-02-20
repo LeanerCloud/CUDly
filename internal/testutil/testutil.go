@@ -68,7 +68,7 @@ func AssertError(t *testing.T, err error) {
 }
 
 // AssertEqual fails the test if expected != actual
-func AssertEqual(t *testing.T, expected, actual interface{}) {
+func AssertEqual(t *testing.T, expected, actual any) {
 	t.Helper()
 	if expected != actual {
 		t.Fatalf("Expected %v, got %v", expected, actual)
@@ -76,7 +76,7 @@ func AssertEqual(t *testing.T, expected, actual interface{}) {
 }
 
 // AssertNotEqual fails the test if expected == actual
-func AssertNotEqual(t *testing.T, expected, actual interface{}) {
+func AssertNotEqual(t *testing.T, expected, actual any) {
 	t.Helper()
 	if expected == actual {
 		t.Fatalf("Expected values to be different, but both were %v", expected)
