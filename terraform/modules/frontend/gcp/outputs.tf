@@ -1,0 +1,51 @@
+# GCP Frontend Module Outputs
+
+output "bucket_name" {
+  description = "Cloud Storage bucket name"
+  value       = google_storage_bucket.frontend.name
+}
+
+output "bucket_url" {
+  description = "Cloud Storage bucket URL"
+  value       = google_storage_bucket.frontend.url
+}
+
+output "load_balancer_ip" {
+  description = "Global load balancer IP address"
+  value       = google_compute_global_address.frontend.address
+}
+
+output "frontend_url" {
+  description = "Frontend URL (load balancer or custom domain)"
+  value       = length(var.domain_names) > 0 ? "https://${var.domain_names[0]}" : "https://${google_compute_global_address.frontend.address}"
+}
+
+output "backend_bucket_id" {
+  description = "Backend bucket ID"
+  value       = google_compute_backend_bucket.frontend.id
+}
+
+output "backend_service_id" {
+  description = "API backend service ID"
+  value       = google_compute_backend_service.api.id
+}
+
+output "cdn_enabled" {
+  description = "Whether CDN is enabled"
+  value       = true
+}
+
+output "ssl_certificate_id" {
+  description = "SSL certificate ID (if custom domain provided)"
+  value       = length(var.domain_names) > 0 ? google_compute_managed_ssl_certificate.frontend[0].id : ""
+}
+
+output "subdomain_zone_name" {
+  description = "Cloud DNS managed zone name for subdomain"
+  value       = var.subdomain_zone_name != "" ? google_dns_managed_zone.subdomain[0].name : ""
+}
+
+output "subdomain_zone_nameservers" {
+  description = "Nameservers for subdomain zone (add these as NS records in parent zone)"
+  value       = var.subdomain_zone_name != "" ? google_dns_managed_zone.subdomain[0].name_servers : []
+}
