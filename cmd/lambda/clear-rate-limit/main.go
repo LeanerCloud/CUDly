@@ -2,71 +2,67 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"os"
+	"log"
 
+	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/aws/aws-lambda-go/lambda"
-	_ "github.com/lib/pq"
 )
 
 type Response struct {
-	Message         string `json:"message"`
-	DeletedCount    int    `json:"deleted_count"`
-	RemainingCount  int    `json:"remaining_count"`
+	Message        string `json:"message"`
+	DeletedCount   int    `json:"deleted_count"`
+	RemainingCount int    `json:"remaining_count"`
 }
 
 func clearRateLimit(ctx context.Context) (Response, error) {
-	// Get database connection details from environment
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	dbName := os.Getenv("DB_NAME")
-	dbUser := os.Getenv("DB_USER")
-	dbPassword := os.Getenv("DB_PASSWORD")
-
-	if dbHost == "" || dbName == "" || dbUser == "" || dbPassword == "" {
-		return Response{}, fmt.Errorf("missing required environment variables")
+	// Initialize database connection with secret resolution
+	dbConfig, err := database.LoadFromEnv()
+	if err != nil {
+		return Response{}, fmt.Errorf("failed to load database config: %w", err)
 	}
 
-	if dbPort == "" {
-		dbPort = "5432"
+	// Create secret resolver if password secret is specified
+	var secretResolver database.SecretResolver
+	if dbConfig.PasswordSecret != "" {
+		secretConfig := secrets.LoadConfigFromEnv()
+		resolver, err := secrets.NewResolver(ctx, secretConfig)
+		if err != nil {
+			return Response{}, fmt.Errorf("failed to create secret resolver: %w", err)
+		}
+		defer resolver.Close()
+		secretResolver = resolver
 	}
 
-	// Connect to database
-	connStr := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=require",
-		dbHost, dbPort, dbName, dbUser, dbPassword)
-
-	db, err := sql.Open("postgres", connStr)
+	db, err := database.NewConnection(ctx, dbConfig, secretResolver)
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer db.Close()
 
-	// Test connection
-	if err := db.PingContext(ctx); err != nil {
-		return Response{}, fmt.Errorf("failed to ping database: %w", err)
-	}
-
 	// Clear rate limits for forgot_password endpoint
-	result, err := db.ExecContext(ctx,
+	tag, err := db.Exec(ctx,
 		"DELETE FROM rate_limits WHERE id LIKE 'EMAIL#%@leanercloud.com#ENDPOINT#forgot_password'")
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to delete rate limits: %w", err)
 	}
 
-	deletedCount, _ := result.RowsAffected()
+	deletedCount := tag.RowsAffected()
 
 	// Get remaining count
-	var remainingCount int
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM rate_limits").Scan(&remainingCount)
+	var remainingCount int64
+	err = db.QueryRow(ctx, "SELECT COUNT(*) FROM rate_limits").Scan(&remainingCount)
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to count remaining rate limits: %w", err)
 	}
 
+	log.Printf("Successfully cleared %d rate limit(s), %d remaining", deletedCount, remainingCount)
+
 	return Response{
 		Message:        fmt.Sprintf("Successfully cleared %d rate limit(s)", deletedCount),
 		DeletedCount:   int(deletedCount),
-		RemainingCount: remainingCount,
+		RemainingCount: int(remainingCount),
 	}, nil
 }
 
