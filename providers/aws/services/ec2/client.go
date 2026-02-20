@@ -79,7 +79,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 		// Calculate term in months
 		duration := aws.ToInt64(ri.Duration)
 		termMonths := 12
-		if duration == 94608000 { // 3 years in seconds
+		if duration == ThreeYearSeconds {
 			termMonths = 36
 		}
 
@@ -307,12 +307,18 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	return instanceTypes, nil
 }
 
+// Duration constants for RI term calculations
+const (
+	OneYearSeconds   = 31536000 // 365 days in seconds
+	ThreeYearSeconds = 94608000 // 3 * 365 days in seconds
+)
+
 // getDurationValue converts term string to seconds for EC2 API
 func (c *Client) getDurationValue(term string) int64 {
 	if term == "3yr" || term == "3" {
-		return 94608000 // 3 years in seconds
+		return ThreeYearSeconds
 	}
-	return 31536000 // 1 year in seconds
+	return OneYearSeconds
 }
 
 // getOfferingClass converts payment option to EC2 offering class

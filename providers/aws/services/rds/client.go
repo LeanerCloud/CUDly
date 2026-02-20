@@ -81,7 +81,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 
 			duration := aws.ToInt32(instance.Duration)
 			termMonths := 12
-			if duration == 94608000 {
+			if duration == ThreeYearSeconds {
 				termMonths = 36
 			}
 
@@ -284,12 +284,18 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	return instanceTypes, nil
 }
 
+// Duration constants for RI term calculations
+const (
+	OneYearSeconds   = 31536000 // 365 days in seconds
+	ThreeYearSeconds = 94608000 // 3 * 365 days in seconds
+)
+
 // getDurationString converts term string to duration string for RDS API
 func (c *Client) getDurationString(term string) string {
 	if term == "3yr" || term == "3" {
-		return "94608000" // 3 years in seconds
+		return fmt.Sprintf("%d", ThreeYearSeconds)
 	}
-	return "31536000" // 1 year in seconds
+	return fmt.Sprintf("%d", OneYearSeconds)
 }
 
 // convertPaymentOption converts payment option to AWS string

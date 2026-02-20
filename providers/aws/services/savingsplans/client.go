@@ -4,6 +4,7 @@ package savingsplans
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -195,6 +196,9 @@ func convertTermToMonths(term string) int64 {
 	if term == "3yr" || term == "3" {
 		return 36
 	}
+	if term != "1yr" && term != "1" && term != "" {
+		log.Printf("WARNING: unknown Savings Plans term %q, defaulting to 12 months", term)
+	}
 	return 12
 }
 
@@ -208,6 +212,7 @@ func convertPaymentOption(paymentOption string) types.SavingsPlanPaymentOption {
 	case "No Upfront", "no-upfront":
 		return types.SavingsPlanPaymentOptionNoUpfront
 	default:
+		log.Printf("WARNING: unknown Savings Plans payment option %q, defaulting to AllUpfront", paymentOption)
 		return types.SavingsPlanPaymentOptionAllUpfront
 	}
 }
@@ -279,12 +284,13 @@ func (c *Client) validateOffering(ctx context.Context, offeringID string) error 
 	return nil
 }
 
-// calculateHoursInTerm calculates the number of hours in a commitment term
+// calculateHoursInTerm calculates the number of hours in a commitment term.
+// Uses 365 days/year to match AWS billing conventions for RIs and Savings Plans.
 func calculateHoursInTerm(term string) float64 {
 	if term == "3yr" || term == "3" {
-		return 26280.0 // 3 years
+		return 3 * 365 * 24 // 3 years (26280 hours)
 	}
-	return 8760.0 // 1 year
+	return 365 * 24 // 1 year (8760 hours)
 }
 
 // calculatePaymentBreakdown calculates upfront and recurring costs based on payment option
