@@ -1,0 +1,17 @@
+# Azure Terraform Backend Configuration
+# Copy to <env>.tfbackend (e.g. dev.tfbackend) and customize with your values
+#
+# Usage:
+#   terraform init -backend-config=backends/dev.tfbackend
+
+resource_group_name  = "your-cudly-terraform-state"
+storage_account_name = "yourcudlytfstatedev"
+container_name       = "tfstate"
+key                  = "dev.terraform.tfstate"
+
+# Note: Create the storage account before first use:
+#   az group create --name your-cudly-terraform-state --location eastus
+#   az storage account create --name yourcudlytfstatedev \
+#     --resource-group your-cudly-terraform-state --sku Standard_LRS
+#   az storage container create --name tfstate \
+#     --account-name yourcudlytfstatedev
