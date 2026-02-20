@@ -196,6 +196,20 @@ output "frontend_bucket" {
 }
 
 # ==============================================
+# DNS Outputs
+# ==============================================
+
+output "subdomain_zone_nameservers" {
+  description = "Nameservers for subdomain zone (add these as NS records in parent zone)"
+  value       = local.subdomain_zone_nameservers
+}
+
+output "subdomain_zone_id" {
+  description = "Route53 zone ID for subdomain"
+  value       = local.subdomain_zone_id
+}
+
+# ==============================================
 # Quick Start Commands
 # ==============================================
 

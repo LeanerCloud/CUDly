@@ -30,14 +30,3 @@ locals {
     var.create_subdomain_zone ? aws_route53_zone.subdomain[0].name_servers : data.aws_route53_zone.subdomain[0].name_servers
   ) : []
 }
-
-# Output the nameservers for delegation in parent zone
-output "subdomain_zone_nameservers" {
-  description = "Nameservers for subdomain zone (add these as NS records in parent zone)"
-  value       = local.subdomain_zone_nameservers
-}
-
-output "subdomain_zone_id" {
-  description = "Route53 zone ID for subdomain"
-  value       = local.subdomain_zone_id
-}
