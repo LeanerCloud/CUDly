@@ -1,0 +1,100 @@
+# GCP Development Environment Variables
+# Copy to dev.tfvars and customize with your values
+
+# ==============================================
+# Project Settings
+# ==============================================
+
+project_name = "cudly"
+environment  = "dev"
+
+# ==============================================
+# GCP Configuration
+# ==============================================
+
+project_id = "your-gcp-project-id"  # REQUIRED
+region     = "us-central1"
+
+# ==============================================
+# Compute Platform
+# ==============================================
+
+# Options: "cloud-run" (serverless) or "gke" (kubernetes)
+compute_platform = "cloud-run"
+
+# Cloud Run settings
+cloud_run_cpu             = "1"
+cloud_run_memory          = "512Mi"
+cloud_run_min_instances   = 0
+cloud_run_max_instances   = 10
+cloud_run_timeout_seconds = 300
+cloud_run_concurrency     = 80
+
+# GKE settings (when compute_platform = "gke")
+# gke_node_count = 1
+# gke_machine_type = "e2-small"
+
+# ==============================================
+# Database (Cloud SQL PostgreSQL)
+# ==============================================
+
+database_name     = "cudly"
+database_username = "cudly"
+database_version  = "POSTGRES_16"
+database_tier     = "db-f1-micro"  # Smallest tier for dev
+
+database_high_availability  = false
+database_backup_enabled     = true
+database_backup_start_time  = "02:00"
+database_deletion_protection = false
+database_auto_migrate       = true
+
+# ==============================================
+# Networking
+# ==============================================
+
+network_cidr    = "10.0.0.0/16"
+enable_nat      = true
+enable_flow_logs = false
+
+# ==============================================
+# Secrets
+# ==============================================
+
+# Secrets are stored in Google Secret Manager
+# secret_prefix = "cudly-dev"
+
+# ==============================================
+# Frontend (Cloud Storage + Cloud CDN)
+# ==============================================
+
+enable_frontend_build = true
+# frontend_domain = "app.example.com"
+# frontend_ssl_certificate = "projects/.../global/sslCertificates/..."
+
+# ==============================================
+# Scheduled Tasks
+# ==============================================
+
+enable_scheduled_tasks  = true
+recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM
+
+# ==============================================
+# Docker Build
+# ==============================================
+
+enable_docker_build = true
+# image_uri = "us-central1-docker.pkg.dev/project-id/cudly/cudly:latest"
+
+# ==============================================
+# Admin
+# ==============================================
+
+admin_email = "admin@example.com"
+
+# ==============================================
+# Monitoring
+# ==============================================
+
+enable_monitoring = false
+# alert_notification_emails = ["ops@example.com"]
