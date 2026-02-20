@@ -32,8 +32,9 @@ type FactoryConfig struct {
 	SendGridAPIKey string
 
 	// Azure-specific
-	AzureConnectionString string
-	AzureSenderAddress    string
+	AzureSMTPUsername string
+	AzureSMTPPassword string
+	AzureSMTPHost     string // Defaults to "smtp.azurecomm.net" if empty
 }
 
 // NewSenderFromEnvironment creates an email sender based on environment variables
@@ -125,18 +126,18 @@ func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterfac
 		})
 
 	case ProviderAzure:
-		// For Azure, we expect SMTP credentials in the connection string format
-		// Connection string should contain username and password
-		if cfg.AzureConnectionString == "" {
-			return nil, fmt.Errorf("Azure SMTP credentials required for Azure email")
+		if cfg.AzureSMTPUsername == "" || cfg.AzureSMTPPassword == "" {
+			return nil, fmt.Errorf("AzureSMTPUsername and AzureSMTPPassword required for Azure email")
 		}
-		// Parse connection string to extract username/password
-		// Format: "username=xxx;password=yyy" or just use separate fields
+		host := cfg.AzureSMTPHost
+		if host == "" {
+			host = "smtp.azurecomm.net"
+		}
 		return NewSMTPSender(SMTPConfig{
-			Host:      "smtp.azurecomm.net",
+			Host:      host,
 			Port:      587,
-			Username:  cfg.AzureConnectionString, // Simplified - in production, parse this
-			Password:  cfg.AzureSenderAddress,    // Simplified - in production, parse this
+			Username:  cfg.AzureSMTPUsername,
+			Password:  cfg.AzureSMTPPassword,
 			FromEmail: cfg.FromEmail,
 			FromName:  "CUDly",
 			UseTLS:    true,

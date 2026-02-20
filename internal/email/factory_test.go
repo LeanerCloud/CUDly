@@ -17,13 +17,13 @@ func TestProviderTypeConstants(t *testing.T) {
 
 func TestFactoryConfig(t *testing.T) {
 	cfg := FactoryConfig{
-		FromEmail:             "test@example.com",
-		Provider:              ProviderAWS,
-		TopicARN:              "arn:aws:sns:us-east-1:123456789012:topic",
-		EmailAddress:          "admin@example.com",
-		SendGridAPIKey:        "sg_api_key",
-		AzureConnectionString: "azure_conn_string",
-		AzureSenderAddress:    "sender@azure.com",
+		FromEmail:         "test@example.com",
+		Provider:          ProviderAWS,
+		TopicARN:          "arn:aws:sns:us-east-1:123456789012:topic",
+		EmailAddress:      "admin@example.com",
+		SendGridAPIKey:    "sg_api_key",
+		AzureSMTPUsername: "azure_user",
+		AzureSMTPPassword: "azure_pass",
 	}
 
 	assert.Equal(t, "test@example.com", cfg.FromEmail)
@@ -31,8 +31,8 @@ func TestFactoryConfig(t *testing.T) {
 	assert.Equal(t, "arn:aws:sns:us-east-1:123456789012:topic", cfg.TopicARN)
 	assert.Equal(t, "admin@example.com", cfg.EmailAddress)
 	assert.Equal(t, "sg_api_key", cfg.SendGridAPIKey)
-	assert.Equal(t, "azure_conn_string", cfg.AzureConnectionString)
-	assert.Equal(t, "sender@azure.com", cfg.AzureSenderAddress)
+	assert.Equal(t, "azure_user", cfg.AzureSMTPUsername)
+	assert.Equal(t, "azure_pass", cfg.AzureSMTPPassword)
 }
 
 func TestNewSenderFromEnvironment_AWS_Default(t *testing.T) {
@@ -260,22 +260,22 @@ func TestNewSenderWithConfig_Azure_MissingCredentials(t *testing.T) {
 	cfg := FactoryConfig{
 		Provider:  ProviderAzure,
 		FromEmail: "noreply@example.com",
-		// AzureConnectionString intentionally not set
+		// AzureSMTPUsername/Password intentionally not set
 	}
 
 	ctx := context.Background()
 	_, err := NewSenderWithConfig(ctx, cfg)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Azure SMTP credentials required")
+	assert.Contains(t, err.Error(), "AzureSMTPUsername and AzureSMTPPassword required")
 }
 
 func TestNewSenderWithConfig_Azure_WithCredentials(t *testing.T) {
 	cfg := FactoryConfig{
-		Provider:              ProviderAzure,
-		FromEmail:             "noreply@example.com",
-		AzureConnectionString: "azure_username",
-		AzureSenderAddress:    "azure_password",
+		Provider:          ProviderAzure,
+		FromEmail:         "noreply@example.com",
+		AzureSMTPUsername: "azure_username",
+		AzureSMTPPassword: "azure_password",
 	}
 
 	ctx := context.Background()
