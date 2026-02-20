@@ -1,0 +1,15 @@
+Issues to fix in service_apikeys_test.go:
+1. Line 120: Remove unused apiKey variable  
+2. Lines 259, 271, 290: RevokeAPIKey needs (ctx, userID, keyID) not (ctx, keyID)
+3. Lines 306, 318: DeleteAPIKey needs (ctx, userID, keyID) not (ctx, keyID)
+4. Lines 333, 368, 385, 410, 437, 462: Use hashToken() not computeKeyHash()
+5. Lines 507, 526: UpdateLastUsed takes keyID string not *UserAPIKey
+6. Lines 555, 580: ComputeEffectivePermissions(ctx, apiKey, user) returns ([]Permission, error)
+7. ValidateUserAPIKey returns (*UserAPIKey, *User, error) not (*User, *UserAPIKey, error)
+8. Line 577: ResourcePurchases should be ResourcePurchase
+
+Issues to fix in service_apikeys_api_test.go:
+1. Lines 43-46, 74: resp is interface{}, need type assertion to *APICreateAPIKeyResponse
+2. Line 103: Remove unused service variable
+3. Lines 111, 117, 123: CreateAPIKeyRequest has no Validate() method, remove those tests
+4. Line 161: resp needs type assertion to *APIListAPIKeysResponse, field is APIKeys not Keys
