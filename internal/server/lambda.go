@@ -13,15 +13,15 @@ import (
 // StartLambdaHandler starts the AWS Lambda handler
 func StartLambdaHandler(app *Application) {
 	log.Println("Starting Lambda handler mode...")
-	lambda.Start(func(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
+	lambda.Start(func(ctx context.Context, rawEvent json.RawMessage) (any, error) {
 		return app.HandleLambdaEvent(ctx, rawEvent)
 	})
 }
 
 // HandleLambdaEvent processes any Lambda event type
-func (app *Application) HandleLambdaEvent(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
+func (app *Application) HandleLambdaEvent(ctx context.Context, rawEvent json.RawMessage) (any, error) {
 	// Ensure database connection is established (lazy initialization)
-	// This is safe to call on every request - sync.Once ensures it only connects once
+	// Safe to call on every request - mutex guards connection and allows retry on transient failures
 	if err := app.ensureDB(ctx); err != nil {
 		log.Printf("Failed to establish database connection: %v", err)
 		return nil, fmt.Errorf("database connection failed: %w", err)
@@ -105,7 +105,7 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 }
 
 // handleLambdaSQSEvent processes SQS messages (for async purchase processing)
-func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
+func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.RawMessage) (any, error) {
 	var sqsEvent events.SQSEvent
 	if err := json.Unmarshal(rawEvent, &sqsEvent); err != nil {
 		log.Printf("Failed to parse SQS event: %v", err)
@@ -129,7 +129,7 @@ func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.
 }
 
 // handleLambdaScheduledEvent processes scheduled/cron events
-func (app *Application) handleLambdaScheduledEvent(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
+func (app *Application) handleLambdaScheduledEvent(ctx context.Context, rawEvent json.RawMessage) (any, error) {
 	taskType, err := ParseScheduledEvent(rawEvent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse scheduled event: %w", err)

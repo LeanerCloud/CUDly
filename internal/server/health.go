@@ -34,7 +34,7 @@ func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request
 		Checks:    make(map[string]CheckResult),
 	}
 
-	// Check configuration store (DynamoDB or PostgreSQL)
+	// Check configuration store
 	health.Checks["config_store"] = app.checkConfigStore(ctx)
 	if health.Checks["config_store"].Status != "healthy" {
 		health.Status = "degraded"
