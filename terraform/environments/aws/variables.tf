@@ -140,24 +140,6 @@ variable "database_backup_retention_days" {
   default     = 7
 }
 
-variable "database_backup_window" {
-  description = "Preferred backup window (UTC)"
-  type        = string
-  default     = "03:00-04:00"
-}
-
-variable "database_maintenance_window" {
-  description = "Preferred maintenance window (UTC)"
-  type        = string
-  default     = "sun:04:00-sun:05:00"
-}
-
-variable "database_cloudwatch_logs" {
-  description = "CloudWatch log types to enable"
-  type        = list(string)
-  default     = ["postgresql"]
-}
-
 variable "database_performance_insights" {
   description = "Enable Performance Insights"
   type        = bool
@@ -180,12 +162,6 @@ variable "database_auto_migrate" {
   description = "Automatically run migrations on Lambda cold start"
   type        = bool
   default     = true
-}
-
-variable "additional_database_allowed_cidrs" {
-  description = "Additional CIDR blocks allowed to access database"
-  type        = list(string)
-  default     = []
 }
 
 variable "admin_email" {
