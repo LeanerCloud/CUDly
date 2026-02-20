@@ -165,6 +165,11 @@ func (m *MockStore) DeleteAPIKey(ctx context.Context, keyID string) error {
 	return args.Error(0)
 }
 
+func (m *MockStore) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 // MockEmailSender is a mock implementation of the email sender for testing
 type MockEmailSender struct {
 	mock.Mock

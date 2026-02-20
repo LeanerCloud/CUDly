@@ -148,6 +148,11 @@ func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
 }
 
+func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
+	args := m.Called(ctx, retentionDays)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // MockEmailSender is a mock implementation of email.Sender
 type MockEmailSender struct {
 	mock.Mock

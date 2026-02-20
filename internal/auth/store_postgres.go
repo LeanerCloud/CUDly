@@ -18,6 +18,7 @@ type DBConnection interface {
 	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
 	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
+	Ping(ctx context.Context) error
 }
 
 // PostgresStore implements StoreInterface using PostgreSQL
@@ -791,4 +792,9 @@ func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 	}
 
 	return &key, nil
+}
+
+// Ping checks the database connection health
+func (s *PostgresStore) Ping(ctx context.Context) error {
+	return s.db.Ping(ctx)
 }

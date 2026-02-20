@@ -72,25 +72,38 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string) erro
 		return nil
 	}
 
-	// Create admin user with empty password
-	_, err = pool.Exec(ctx, `
+	// Create admin user with no password - account is inactive until password is set via reset flow
+	// Use ON CONFLICT to prevent race conditions when multiple instances run migrations
+	result, err := pool.Exec(ctx, `
 		INSERT INTO users (
 			id, email, password_hash, salt, role, active, created_at, updated_at
 		) VALUES (
-			gen_random_uuid(), $1, '', '', 'admin', true, NOW(), NOW()
+			gen_random_uuid(), $1, '', '', 'admin', false, NOW(), NOW()
 		)
+		ON CONFLICT (email) DO NOTHING
 	`, email)
 
 	if err != nil {
 		return fmt.Errorf("failed to insert admin user: %w", err)
 	}
 
-	fmt.Printf("✅ Admin user created: %s (password not set - user must reset)\n", email)
+	if result.RowsAffected() > 0 {
+		fmt.Printf("✅ Admin user created: %s (password not set - user must reset)\n", email)
+	} else {
+		fmt.Printf("Admin user already exists (concurrent creation): %s\n", email)
+	}
 	return nil
 }
 
 // RollbackMigrations rolls back N migrations
 func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, steps int) error {
+	if steps <= 0 {
+		return fmt.Errorf("rollback steps must be positive, got %d", steps)
+	}
+	if steps > 10 {
+		return fmt.Errorf("refusing to rollback more than 10 migrations at once (requested %d); use multiple calls for safety", steps)
+	}
+
 	dsn := buildMigrateDSN(pool.Config(), "")
 
 	m, err := migrate.New(
@@ -101,6 +114,10 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 		return fmt.Errorf("failed to create migrator: %w", err)
 	}
 	defer m.Close()
+
+	// Log current version before rollback
+	currentVersion, _, _ := m.Version()
+	fmt.Printf("Rolling back %d migration(s) from version %d...\n", steps, currentVersion)
 
 	// Rollback steps
 	if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {
@@ -155,15 +172,23 @@ func buildMigrateDSN(config *pgxpool.Config, adminEmail string) string {
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
 
+	// Determine SSL mode from connection config or default to require for production safety
+	sslMode := "require"
+	if tlsConfig := config.ConnConfig.TLSConfig; tlsConfig == nil {
+		// If TLS is not configured, use disable (for test containers)
+		sslMode = "disable"
+	}
+
 	// Build DSN (golang-migrate uses postgres:// format)
 	// Don't add connection options - RDS Proxy doesn't support them
 	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslmode=require",
+		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		encodedUser,
 		encodedPassword,
 		host,
 		port,
 		database,
+		sslMode,
 	)
 }
 

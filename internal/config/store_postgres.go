@@ -686,6 +686,22 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 	return executions, rows.Err()
 }
 
+// CleanupOldExecutions deletes purchase executions older than retentionDays
+func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
+	query := `
+		DELETE FROM purchase_executions
+		WHERE scheduled_date < NOW() - INTERVAL '1 day' * $1
+		AND status IN ('completed', 'cancelled', 'expired')
+	`
+
+	result, err := s.db.Exec(ctx, query, retentionDays)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup old executions: %w", err)
+	}
+
+	return result.RowsAffected(), nil
+}
+
 // ==========================================
 // PURCHASE HISTORY
 // ==========================================

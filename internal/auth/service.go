@@ -222,3 +222,19 @@ func (s *Service) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken
 
 	return nil
 }
+
+// CleanupExpiredSessions removes expired sessions from the store
+func (s *Service) CleanupExpiredSessions(ctx context.Context) error {
+	if s.store == nil {
+		return fmt.Errorf("auth store not initialized")
+	}
+	return s.store.CleanupExpiredSessions(ctx)
+}
+
+// Ping checks the health of the auth store database connection
+func (s *Service) Ping(ctx context.Context) error {
+	if s.store == nil {
+		return fmt.Errorf("auth store not initialized")
+	}
+	return s.store.Ping(ctx)
+}

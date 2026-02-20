@@ -37,6 +37,11 @@ func (m *MockDBConnection) Exec(ctx context.Context, sql string, args ...interfa
 	return mockArgs.Get(0).(pgconn.CommandTag), mockArgs.Error(1)
 }
 
+func (m *MockDBConnection) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 // MockRow mocks pgx.Row
 type MockRow struct {
 	mock.Mock

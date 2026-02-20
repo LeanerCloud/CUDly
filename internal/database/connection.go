@@ -228,6 +228,11 @@ func (c *Connection) Exec(ctx context.Context, sql string, args ...interface{}) 
 	return c.pool.Exec(ctx, sql, args...)
 }
 
+// Ping checks the database connection
+func (c *Connection) Ping(ctx context.Context) error {
+	return c.pool.Ping(ctx)
+}
+
 // parseLogLevel converts string log level to pgx tracelog level
 func parseLogLevel(level string) tracelog.LogLevel {
 	switch level {

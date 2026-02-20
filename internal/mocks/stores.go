@@ -279,3 +279,9 @@ func (m *MockAuthStore) CleanupExpiredSessions(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
 }
+
+// Ping mocks the Ping operation
+func (m *MockAuthStore) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}

@@ -37,6 +37,9 @@ type StoreInterface interface {
 	ListAPIKeysByUser(ctx context.Context, userID string) ([]*UserAPIKey, error)
 	UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 	DeleteAPIKey(ctx context.Context, keyID string) error
+
+	// Health check
+	Ping(ctx context.Context) error
 }
 
 // EmailSenderInterface defines the methods required for sending emails

@@ -28,6 +28,7 @@ type StoreInterface interface {
 	GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error)
 	GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error)
 	GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error)
+	CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error)
 
 	// Purchase history
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error

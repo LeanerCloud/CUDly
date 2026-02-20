@@ -182,6 +182,10 @@ func (m *mockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	return nil, nil
 }
 
+func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
+	return 0, nil
+}
+
 // TestNewCollector tests the NewCollector function
 func TestNewCollector(t *testing.T) {
 	t.Run("returns error when analytics store is nil", func(t *testing.T) {
