@@ -1,0 +1,96 @@
+package secrets
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
+	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	"google.golang.org/api/iterator"
+)
+
+// GCPResolver implements Resolver for GCP Secret Manager
+type GCPResolver struct {
+	client    *secretmanager.Client
+	projectID string
+}
+
+// NewGCPResolver creates a new GCP Secret Manager resolver
+func NewGCPResolver(ctx context.Context, projectID string) (*GCPResolver, error) {
+	// Create Secret Manager client
+	client, err := secretmanager.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCP Secret Manager client: %w", err)
+	}
+
+	return &GCPResolver{
+		client:    client,
+		projectID: projectID,
+	}, nil
+}
+
+// GetSecret retrieves a secret from GCP Secret Manager
+func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, error) {
+	// Build the resource name for the latest version
+	name := fmt.Sprintf("projects/%s/secrets/%s/versions/latest", r.projectID, secretID)
+
+	// Access the secret version
+	req := &secretmanagerpb.AccessSecretVersionRequest{
+		Name: name,
+	}
+
+	result, err := r.client.AccessSecretVersion(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("failed to access secret %s: %w", secretID, err)
+	}
+
+	return string(result.Payload.Data), nil
+}
+
+// GetSecretJSON retrieves and parses a JSON secret
+func (r *GCPResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]interface{}, error) {
+	secretString, err := r.GetSecret(ctx, secretID)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(secretString), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse secret as JSON: %w", err)
+	}
+
+	return result, nil
+}
+
+// ListSecrets lists secrets in GCP Secret Manager
+func (r *GCPResolver) ListSecrets(ctx context.Context, filter string) ([]string, error) {
+	req := &secretmanagerpb.ListSecretsRequest{
+		Parent: fmt.Sprintf("projects/%s", r.projectID),
+		Filter: filter,
+	}
+
+	it := r.client.ListSecrets(ctx, req)
+	secrets := make([]string, 0)
+
+	for {
+		secret, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to list secrets: %w", err)
+		}
+
+		// Extract secret name from full resource path
+		// Format: projects/{project}/secrets/{secret}
+		secrets = append(secrets, secret.Name)
+	}
+
+	return secrets, nil
+}
+
+// Close cleans up resources
+func (r *GCPResolver) Close() error {
+	return r.client.Close()
+}
