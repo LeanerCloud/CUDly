@@ -280,8 +280,64 @@ func (m *MockAuthStore) CleanupExpiredSessions(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// API Key operations
+
+// CreateAPIKey mocks the CreateAPIKey operation
+func (m *MockAuthStore) CreateAPIKey(ctx context.Context, key *auth.UserAPIKey) error {
+	args := m.Called(ctx, key)
+	return args.Error(0)
+}
+
+// GetAPIKeyByID mocks the GetAPIKeyByID operation
+func (m *MockAuthStore) GetAPIKeyByID(ctx context.Context, keyID string) (*auth.UserAPIKey, error) {
+	args := m.Called(ctx, keyID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*auth.UserAPIKey), args.Error(1)
+}
+
+// GetAPIKeyByHash mocks the GetAPIKeyByHash operation
+func (m *MockAuthStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*auth.UserAPIKey, error) {
+	args := m.Called(ctx, keyHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*auth.UserAPIKey), args.Error(1)
+}
+
+// ListAPIKeysByUser mocks the ListAPIKeysByUser operation
+func (m *MockAuthStore) ListAPIKeysByUser(ctx context.Context, userID string) ([]*auth.UserAPIKey, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*auth.UserAPIKey), args.Error(1)
+}
+
+// UpdateAPIKey mocks the UpdateAPIKey operation
+func (m *MockAuthStore) UpdateAPIKey(ctx context.Context, key *auth.UserAPIKey) error {
+	args := m.Called(ctx, key)
+	return args.Error(0)
+}
+
+// UpdateAPIKeyLastUsed mocks the UpdateAPIKeyLastUsed operation
+func (m *MockAuthStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
+	args := m.Called(ctx, keyID)
+	return args.Error(0)
+}
+
+// DeleteAPIKey mocks the DeleteAPIKey operation
+func (m *MockAuthStore) DeleteAPIKey(ctx context.Context, keyID string) error {
+	args := m.Called(ctx, keyID)
+	return args.Error(0)
+}
+
 // Ping mocks the Ping operation
 func (m *MockAuthStore) Ping(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
 }
+
+// Compile-time interface compliance check
+var _ auth.StoreInterface = (*MockAuthStore)(nil)
