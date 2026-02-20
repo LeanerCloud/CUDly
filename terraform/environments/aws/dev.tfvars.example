@@ -1,0 +1,116 @@
+# AWS Development Environment Variables
+# Copy to dev.tfvars and customize with your values
+
+# ==============================================
+# Project Settings
+# ==============================================
+
+project_name = "cudly"
+environment  = "dev"
+stack_name   = "cudly-dev"
+
+# ==============================================
+# AWS Configuration
+# ==============================================
+
+region      = "us-east-1"
+aws_profile = "default"  # Your AWS CLI profile name
+
+# ==============================================
+# Compute Platform
+# ==============================================
+
+# Options: "lambda" (serverless) or "fargate" (containers)
+compute_platform = "lambda"
+
+# Lambda settings (when compute_platform = "lambda")
+lambda_architecture     = "arm64"  # arm64 for Graviton (cheaper)
+lambda_memory_size      = 512
+lambda_timeout          = 60       # Seconds
+lambda_reserved_concurrency = -1   # -1 = no limit
+lambda_log_retention_days   = 30
+
+# Lambda Function URL
+lambda_enable_function_url    = true
+lambda_function_url_auth_type = "NONE"
+lambda_allowed_origins        = ["*"]
+
+# Fargate settings (when compute_platform = "fargate")
+fargate_cpu           = 512
+fargate_memory        = 1024
+fargate_desired_count = 1
+fargate_min_capacity  = 1
+fargate_max_capacity  = 10
+fargate_enable_https  = false
+# fargate_certificate_arn = "arn:aws:acm:..."
+
+# ==============================================
+# Database (Aurora Serverless v2)
+# ==============================================
+
+database_name            = "cudly"
+database_username        = "cudly"
+database_engine_version  = "16.4"
+database_min_capacity    = 0.5   # ACUs (0.5 = minimum)
+database_max_capacity    = 2.0   # ACUs (scale up to 2)
+database_backup_retention_days = 7
+database_deletion_protection   = false  # Allow deletion in dev
+database_skip_final_snapshot   = true   # Skip in dev
+database_performance_insights  = false
+database_auto_migrate          = true   # Auto-run migrations
+
+# ==============================================
+# Networking
+# ==============================================
+
+vpc_cidr = "10.0.0.0/16"
+az_count = 2
+
+enable_flow_logs          = false
+flow_logs_retention_days  = 14
+
+# ==============================================
+# Secrets
+# ==============================================
+
+secret_recovery_window_days = 7
+additional_secrets = {}
+
+# ==============================================
+# Frontend (CloudFront + S3)
+# ==============================================
+
+enable_frontend_build = true
+frontend_price_class  = "PriceClass_100"  # US, Canada, Europe
+
+# Custom domain (optional)
+# frontend_domain_names = ["app.example.com"]
+# frontend_route53_zone_id = "Z..."
+# frontend_acm_certificate_arn = "arn:aws:acm:..."
+# subdomain_zone_name = ""
+
+# ==============================================
+# Scheduled Tasks
+# ==============================================
+
+enable_scheduled_tasks  = true
+recommendation_schedule = "rate(24 hours)"
+
+# ==============================================
+# Docker Build
+# ==============================================
+
+enable_docker_build = true
+# image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/cudly:latest"
+
+# ==============================================
+# Admin
+# ==============================================
+
+admin_email = "admin@example.com"
+
+# ==============================================
+# Additional Environment Variables
+# ==============================================
+
+additional_env_vars = {}
