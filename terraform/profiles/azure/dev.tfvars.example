@@ -1,0 +1,38 @@
+# Azure Development Environment Profile
+# Copy to dev.tfvars and customize with your values
+
+# Project identification
+app_name    = "cudly"
+environment = "dev"
+
+# Azure configuration
+subscription_id = "your-subscription-id"  # REQUIRED: Your Azure subscription ID
+location        = "eastus"
+
+# Compute platform
+compute_platform = "container-apps"
+
+# Container Apps settings
+container_apps_cpu    = "0.5"
+container_apps_memory = "1Gi"
+container_apps_min_replicas = 0
+container_apps_max_replicas = 10
+
+# Database
+database_name     = "cudly"
+database_username = "cudly"
+database_sku      = "B_Standard_B1ms"  # Basic tier for dev
+database_storage_mb = 32768
+
+# Networking
+vnet_cidr = "10.0.0.0/16"
+
+# Admin
+admin_email = "admin@example.com"
+
+# Features
+enable_scheduled_tasks = true
+enable_frontend_build  = true
+
+# Monitoring
+enable_monitoring = false  # Reduced monitoring in dev
