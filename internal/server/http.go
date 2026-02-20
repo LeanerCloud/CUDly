@@ -120,7 +120,7 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	// Return result as JSON
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"status": "success",
 		"task":   taskTypeStr,
 		"result": result,
@@ -223,6 +223,20 @@ func isSafeHeaderValue(value string) bool {
 
 // lambdaResponseToHTTP converts a Lambda Function URL response to standard HTTP response
 func lambdaResponseToHTTP(w http.ResponseWriter, lambdaResp *events.LambdaFunctionURLResponse) {
+	// Decode body before writing headers/status to avoid double WriteHeader on error
+	var body []byte
+	if lambdaResp.IsBase64Encoded {
+		decoded, err := base64.StdEncoding.DecodeString(lambdaResp.Body)
+		if err != nil {
+			log.Printf("Error decoding base64 response body: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		body = decoded
+	} else {
+		body = []byte(lambdaResp.Body)
+	}
+
 	// Set headers with validation to prevent header injection
 	for key, value := range lambdaResp.Headers {
 		lowerKey := strings.ToLower(key)
@@ -246,21 +260,7 @@ func lambdaResponseToHTTP(w http.ResponseWriter, lambdaResp *events.LambdaFuncti
 		w.Header().Add("Set-Cookie", cookie)
 	}
 
-	// Set status code
+	// Set status code and write body
 	w.WriteHeader(lambdaResp.StatusCode)
-
-	// Write body
-	if lambdaResp.IsBase64Encoded {
-		// Decode base64-encoded response body (e.g., for binary responses)
-		decoded, err := base64.StdEncoding.DecodeString(lambdaResp.Body)
-		if err != nil {
-			log.Printf("Error decoding base64 response body: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("Internal server error"))
-			return
-		}
-		w.Write(decoded)
-	} else {
-		w.Write([]byte(lambdaResp.Body))
-	}
+	w.Write(body)
 }
