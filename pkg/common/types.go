@@ -29,7 +29,6 @@ const (
 	// Database
 	ServiceRelationalDB ServiceType = "relational-db" // RDS, Azure SQL, Cloud SQL
 	ServiceNoSQL        ServiceType = "nosql"         // DynamoDB, CosmosDB, Firestore
-	ServiceNoSQLDB      ServiceType = "nosql"         // Alias for ServiceNoSQL
 
 	// Cache
 	ServiceCache ServiceType = "cache" // ElastiCache, Azure Cache, Memorystore
@@ -228,7 +227,7 @@ func (d DatabaseDetails) GetDetailDescription() string {
 
 // CacheDetails represents cache-specific details (ElastiCache, Azure Cache, Memorystore)
 type CacheDetails struct {
-	Engine   string `json:"engine"`    // redis, memcached
+	Engine   string `json:"engine"` // redis, memcached
 	NodeType string `json:"node_type"`
 	Shards   int    `json:"shards,omitempty"`
 }
@@ -273,7 +272,7 @@ func (d DataWarehouseDetails) GetDetailDescription() string {
 
 // SavingsPlanDetails represents AWS Savings Plans specific details
 type SavingsPlanDetails struct {
-	PlanType         string  `json:"plan_type"`        // Compute, EC2Instance, SageMaker
+	PlanType         string  `json:"plan_type"` // Compute, EC2Instance, SageMaker
 	HourlyCommitment float64 `json:"hourly_commitment"`
 	Coverage         string  `json:"coverage,omitempty"`
 }

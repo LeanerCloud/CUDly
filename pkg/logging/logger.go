@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -122,9 +123,15 @@ func (l *Logger) formatMessage(msg string) string {
 		return msg
 	}
 
+	keys := make([]string, 0, len(l.metadata))
+	for k := range l.metadata {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var pairs []string
-	for k, v := range l.metadata {
-		pairs = append(pairs, fmt.Sprintf("%s=%v", k, v))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%v", k, l.metadata[k]))
 	}
 	return fmt.Sprintf("%s [%s]", msg, strings.Join(pairs, " "))
 }
