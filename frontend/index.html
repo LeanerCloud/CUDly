@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CUDly - Cloud Commitment Optimizer</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>CUDly - Cloud Commitment Optimizer</h1>
+            <nav>
+                <a href="/docs/" target="_blank" style="color: white; margin-right: 1rem;">API Docs</a>
+                <div id="user-info" style="display: none; color: white; margin-right: 1rem;">
+                    <span id="user-email"></span>
+                    <button id="logout-btn" style="margin-left: 0.5rem;">Logout</button>
+                </div>
+            </nav>
+            <div id="provider-selector">
+                <label for="provider">Provider:</label>
+                <select id="provider">
+                    <option value="all">All Providers</option>
+                    <option value="aws">AWS</option>
+                    <option value="azure">Azure</option>
+                    <option value="gcp">GCP</option>
+                </select>
+            </div>
+        </header>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+            <button class="tab-btn" data-tab="recommendations">Recommendations</button>
+            <button class="tab-btn" data-tab="plans">Purchase Plans</button>
+            <button class="tab-btn" data-tab="history">Purchase History</button>
+            <button class="tab-btn" data-tab="settings">Settings</button>
+            <button class="tab-btn admin-only" data-tab="users">Users</button>
+        </div>
+        <main>
+            <!-- Dashboard Tab -->
+            <div id="dashboard-tab" class="tab-content active">
+                <section id="summary"></section>
+                <section id="savings-chart-section" class="card chart-section">
+                    <h3>Potential Savings by Service</h3>
+                    <canvas id="savings-chart"></canvas>
+                </section>
+                <section id="upcoming-purchases">
+                    <h2>Upcoming Scheduled Purchases</h2>
+                    <div id="upcoming-list"></div>
+                </section>
+            </div>
+
+            <!-- Recommendations Tab -->
+            <div id="recommendations-tab" class="tab-content">
+                <section id="recommendations-controls">
+                    <div class="controls-bar">
+                        <div class="filter-group">
+                            <label>Service:
+                                <select id="service-filter">
+                                    <option value="">All Services</option>
+                                    <option value="ec2">EC2</option>
+                                    <option value="rds">RDS</option>
+                                    <option value="elasticache">ElastiCache</option>
+                                    <option value="opensearch">OpenSearch</option>
+                                    <option value="memorydb">MemoryDB</option>
+                                    <option value="redshift">Redshift</option>
+                                    <option value="savingsplans">Savings Plans</option>
+                                </select>
+                            </label>
+                            <label>Region:
+                                <select id="region-filter">
+                                    <option value="">All Regions</option>
+                                </select>
+                            </label>
+                            <label>Min Savings:
+                                <input type="number" id="min-savings-filter" placeholder="$0" min="0">
+                            </label>
+                        </div>
+                        <div class="action-group">
+                            <button onclick="refreshRecommendations()">Refresh</button>
+                            <button onclick="openCreatePlanModal()" class="primary">Create Purchase Plan</button>
+                        </div>
+                    </div>
+                </section>
+                <section id="recommendations-summary"></section>
+                <section id="recommendations-list"></section>
+            </div>
+
+            <!-- Purchase Plans Tab -->
+            <div id="plans-tab" class="tab-content">
+                <section id="plans-header">
+                    <h2>Purchase Plans</h2>
+                    <button onclick="openNewPlanModal()" class="primary">New Plan</button>
+                </section>
+                <section id="plans-list"></section>
+            </div>
+
+            <!-- History Tab -->
+            <div id="history-tab" class="tab-content">
+                <section id="history-controls">
+                    <div class="date-range-picker">
+                        <label>From: <input type="date" id="history-start"></label>
+                        <label>To: <input type="date" id="history-end"></label>
+                        <label>Provider:
+                            <select id="history-provider-filter">
+                                <option value="">All Providers</option>
+                                <option value="aws">AWS</option>
+                                <option value="azure">Azure</option>
+                                <option value="gcp">GCP</option>
+                            </select>
+                        </label>
+                        <button onclick="loadHistory()">Load History</button>
+                    </div>
+                </section>
+                <section id="history-summary"></section>
+                <section id="history-list"></section>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings-tab" class="tab-content">
+                <section id="settings-section">
+                    <h2>Global Configuration</h2>
+                    <p class="settings-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
+                    <div id="settings-loading" class="loading">Loading settings...</div>
+                    <form id="global-settings-form" class="settings-form hidden">
+                        <fieldset class="settings-category">
+                            <legend>General Settings</legend>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-enabled-providers">Enabled Providers</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Select which cloud providers to monitor for commitment recommendations.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <label><input type="checkbox" id="provider-aws" value="aws" checked> AWS</label>
+                                    <label><input type="checkbox" id="provider-azure" value="azure"> Azure</label>
+                                    <label><input type="checkbox" id="provider-gcp" value="gcp"> GCP</label>
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-notification-email">Notification Email</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Email address for purchase notifications and approval requests.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <input type="email" id="setting-notification-email" placeholder="admin@example.com">
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-auto-collect">Auto-collect Recommendations</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Automatically fetch recommendations from cloud providers on a schedule.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" id="setting-auto-collect" checked>
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="settings-category">
+                            <legend>Purchase Defaults</legend>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-default-term">Default Term</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Default commitment term for new purchases.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <select id="setting-default-term">
+                                        <option value="1">1 Year</option>
+                                        <option value="3" selected>3 Years</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-default-payment">Default Payment Option</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Default payment option for Reserved Instances and Savings Plans.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <select id="setting-default-payment">
+                                        <option value="no-upfront">No Upfront</option>
+                                        <option value="partial-upfront">Partial Upfront</option>
+                                        <option value="all-upfront" selected>All Upfront</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-default-coverage">Target Coverage (%)</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Target percentage of on-demand usage to cover with commitments.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <input type="number" id="setting-default-coverage" value="80" min="0" max="100">
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-notification-days">Notification Days Before</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">How many days before a scheduled purchase to send email notification.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <input type="number" id="setting-notification-days" value="3" min="1" max="30">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="settings-category">
+                            <legend>Cloud Credentials</legend>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label>Azure Credentials</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <span class="credential-status" id="azure-creds-status">Not Configured</span>
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label>GCP Credentials</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <span class="credential-status" id="gcp-creds-status">Not Configured</span>
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <div class="settings-buttons">
+                            <button type="button" onclick="resetSettings()">Reset to Defaults</button>
+                            <button type="submit">Save Settings</button>
+                        </div>
+                    </form>
+                    <div id="settings-error" class="error-message hidden"></div>
+                </section>
+            </div>
+
+            <!-- Users Tab (Admin Only) -->
+            <div id="users-tab" class="tab-content">
+                <!-- User Statistics -->
+                <section id="user-stats" class="stats-section">
+                    <!-- Stats will be rendered by JavaScript -->
+                </section>
+
+                <!-- User Management Section -->
+                <section id="users-section">
+                    <div class="section-header">
+                        <h2>User Management</h2>
+                        <button onclick="openCreateUserModal()" class="primary">Add User</button>
+                    </div>
+
+                    <!-- Search and Filters -->
+                    <div class="filters-bar">
+                        <div class="search-box">
+                            <input type="search" id="user-search" placeholder="Search users by email..." />
+                        </div>
+                        <div class="filter-controls">
+                            <select id="user-role-filter">
+                                <option value="">All Roles</option>
+                                <option value="admin">Admin</option>
+                                <option value="user">User</option>
+                            </select>
+                            <select id="user-mfa-filter">
+                                <option value="">All MFA Status</option>
+                                <option value="enabled">MFA Enabled</option>
+                                <option value="disabled">MFA Disabled</option>
+                            </select>
+                            <select id="user-group-filter">
+                                <option value="">All Groups</option>
+                            </select>
+                            <button id="clear-filters-btn" class="btn-secondary">Clear Filters</button>
+                        </div>
+                    </div>
+
+                    <!-- Bulk Actions Bar (Hidden by default) -->
+                    <div id="bulk-actions-bar" class="bulk-actions-bar hidden">
+                        <div class="bulk-info">
+                            <strong><span id="selected-count">0</span></strong> user(s) selected
+                        </div>
+                        <div class="bulk-buttons">
+                            <button id="bulk-role-btn" class="btn-small">Change Role</button>
+                            <button id="bulk-group-btn" class="btn-small">Add to Group</button>
+                            <button id="bulk-delete-btn" class="btn-small btn-danger">Delete</button>
+                        </div>
+                    </div>
+
+                    <!-- Users List -->
+                    <div id="users-list"></div>
+                </section>
+
+                <!-- Group Management Section -->
+                <section id="groups-section">
+                    <div class="section-header">
+                        <h2>Group Management</h2>
+                        <button onclick="openCreateGroupModal()" class="primary">Add Group</button>
+                    </div>
+                    <div id="groups-list"></div>
+                </section>
+            </div>
+        </main>
+
+        <!-- Create/Edit Plan Modal -->
+        <div id="plan-modal" class="modal hidden">
+            <div class="modal-content modal-wide">
+                <h2 id="plan-modal-title">Create Purchase Plan</h2>
+                <form id="plan-form">
+                    <input type="hidden" id="plan-id">
+
+                    <div class="form-section">
+                        <h3>Plan Details</h3>
+                        <label>Plan Name: <input type="text" id="plan-name" required placeholder="Monthly EC2 RI Purchase"></label>
+                        <label>Description: <textarea id="plan-description" placeholder="Describe this purchase plan..."></textarea></label>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Purchase Configuration</h3>
+                        <div class="form-row">
+                            <label>Provider:
+                                <select id="plan-provider">
+                                    <option value="aws">AWS</option>
+                                    <option value="azure">Azure</option>
+                                    <option value="gcp">GCP</option>
+                                </select>
+                            </label>
+                            <label>Service:
+                                <select id="plan-service">
+                                    <option value="ec2">EC2</option>
+                                    <option value="rds">RDS</option>
+                                    <option value="elasticache">ElastiCache</option>
+                                    <option value="opensearch">OpenSearch</option>
+                                    <option value="memorydb">MemoryDB</option>
+                                    <option value="redshift">Redshift</option>
+                                    <option value="savingsplans">Savings Plans</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>Term:
+                                <select id="plan-term">
+                                    <option value="1">1 Year</option>
+                                    <option value="3" selected>3 Years</option>
+                                </select>
+                            </label>
+                            <label>Payment:
+                                <select id="plan-payment">
+                                    <option value="no-upfront">No Upfront</option>
+                                    <option value="partial-upfront">Partial Upfront</option>
+                                    <option value="all-upfront" selected>All Upfront</option>
+                                </select>
+                            </label>
+                        </div>
+                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="0" max="100"></label>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Ramp-up Schedule</h3>
+                        <p class="help-text">Choose how to phase in your commitment purchases over time.</p>
+                        <div class="ramp-options">
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="immediate" checked>
+                                <span class="ramp-label">Immediate</span>
+                                <span class="ramp-desc">Purchase full coverage immediately</span>
+                            </label>
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="weekly-25pct">
+                                <span class="ramp-label">Weekly 25%</span>
+                                <span class="ramp-desc">4 weeks to full coverage</span>
+                            </label>
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="monthly-10pct">
+                                <span class="ramp-label">Monthly 10%</span>
+                                <span class="ramp-desc">10 months to full coverage</span>
+                            </label>
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="custom">
+                                <span class="ramp-label">Custom</span>
+                                <span class="ramp-desc">Define your own schedule</span>
+                            </label>
+                        </div>
+                        <div id="custom-ramp-config" class="hidden">
+                            <div class="form-row">
+                                <label>Coverage Per Step (%): <input type="number" id="ramp-step-percent" value="20" min="1" max="100"></label>
+                                <label>Interval (Days): <input type="number" id="ramp-interval-days" value="7" min="1"></label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Automation Settings</h3>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="plan-auto-purchase">Auto-Purchase</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">Automatically execute purchases according to the schedule. You'll receive email notifications before each purchase.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="plan-auto-purchase">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="plan-notify-days">Notify Days Before</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">Send email notification this many days before each scheduled purchase.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="plan-notify-days" value="3" min="1" max="30">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="plan-enabled">Enabled</label>
+                            </div>
+                            <div class="setting-input">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="plan-enabled" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-buttons">
+                        <button type="button" onclick="closePlanModal()">Cancel</button>
+                        <button type="submit" class="primary">Save Plan</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Purchase Detail Modal -->
+        <div id="purchase-modal" class="modal hidden">
+            <div class="modal-content modal-wide">
+                <h2>Configure Purchase</h2>
+                <div id="purchase-details"></div>
+                <div class="modal-buttons">
+                    <button type="button" onclick="closePurchaseModal()">Cancel</button>
+                    <button type="button" onclick="executePurchase()" class="primary">Execute Purchase</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recommendation Selection Modal -->
+        <div id="select-recommendations-modal" class="modal hidden">
+            <div class="modal-content modal-wide">
+                <h2>Select Recommendations for Plan</h2>
+                <div id="selectable-recommendations"></div>
+                <div class="modal-buttons">
+                    <button type="button" onclick="closeSelectRecommendationsModal()">Cancel</button>
+                    <button type="button" onclick="confirmSelectedRecommendations()" class="primary">Add to Plan</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Modal -->
+        <div id="user-modal" class="modal hidden">
+            <div class="modal-content">
+                <h2 id="user-modal-title">Create User</h2>
+                <form id="user-form">
+                    <input type="hidden" id="user-id">
+                    <label>Email: <input type="email" id="user-email" required></label>
+                    <div id="password-fields">
+                        <label>Password: <input type="password" id="user-password" minlength="8"></label>
+                    </div>
+                    <label>Role:
+                        <select id="user-role">
+                            <option value="user">User</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </label>
+                    <label>Groups:
+                        <select id="user-groups" multiple></select>
+                    </label>
+                    <div class="modal-buttons">
+                        <button type="button" onclick="closeUserModal()">Cancel</button>
+                        <button type="submit" class="primary">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Group Modal -->
+        <div id="group-modal" class="modal hidden">
+            <div class="modal-content modal-wide">
+                <h2 id="group-modal-title">Create Group</h2>
+                <form id="group-form">
+                    <input type="hidden" id="group-id">
+                    <label>Name: <input type="text" id="group-name" required></label>
+                    <label>Description: <textarea id="group-description"></textarea></label>
+                    <div class="form-section">
+                        <h3>Permissions</h3>
+                        <div id="permissions-list"></div>
+                        <button type="button" onclick="addPermission()">Add Permission</button>
+                    </div>
+                    <div class="modal-buttons">
+                        <button type="button" onclick="closeGroupModal()">Cancel</button>
+                        <button type="submit" class="primary">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
