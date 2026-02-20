@@ -584,7 +584,7 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 		QueryStringParameters: map[string]string{"token": "token123"},
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
-				Method: "GET",
+				Method: "POST",
 				Path:   "/api/purchases/approve/12345678-1234-1234-1234-123456789abc",
 			},
 		},
@@ -612,7 +612,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 		QueryStringParameters: map[string]string{"token": "token456"},
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
-				Method: "GET",
+				Method: "POST",
 				Path:   "/api/purchases/cancel/45645645-6456-4564-5645-645645645645",
 			},
 		},

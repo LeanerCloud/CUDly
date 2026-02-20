@@ -267,3 +267,75 @@ func (h *Handler) updatePlanNextExecutionDate(ctx context.Context, plan *config.
 	}
 	return nil
 }
+
+// PatchPlanRequest represents a partial update request for plans
+type PatchPlanRequest struct {
+	Name                   *string `json:"name,omitempty"`
+	Enabled                *bool   `json:"enabled,omitempty"`
+	AutoPurchase           *bool   `json:"auto_purchase,omitempty"`
+	NotificationDaysBefore *int    `json:"notification_days_before,omitempty"`
+}
+
+// patchPlan handles partial updates to a plan (PATCH method)
+func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (interface{}, error) {
+	// Validate UUID format to prevent injection attacks
+	if err := validateUUID(planID); err != nil {
+		return nil, err
+	}
+
+	// Require admin access for patching plans
+	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+		return nil, err
+	}
+
+	var req PatchPlanRequest
+	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
+	}
+
+	// Fetch existing plan
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		return nil, fmt.Errorf("plan not found: %s", planID)
+	}
+	if plan == nil {
+		return nil, fmt.Errorf("plan not found: %s", planID)
+	}
+
+	// Apply only the fields that are present in the request, with validation
+	if req.Name != nil {
+		if len(*req.Name) == 0 {
+			return nil, fmt.Errorf("plan name cannot be empty")
+		}
+		if len(*req.Name) > 255 {
+			return nil, fmt.Errorf("plan name too long (max 255 characters)")
+		}
+		plan.Name = *req.Name
+	}
+	if req.Enabled != nil {
+		plan.Enabled = *req.Enabled
+	}
+	if req.AutoPurchase != nil {
+		plan.AutoPurchase = *req.AutoPurchase
+	}
+	if req.NotificationDaysBefore != nil {
+		if *req.NotificationDaysBefore < 0 || *req.NotificationDaysBefore > 30 {
+			return nil, fmt.Errorf("notification_days_before must be between 0 and 30")
+		}
+		plan.NotificationDaysBefore = *req.NotificationDaysBefore
+	}
+
+	// Update timestamp
+	plan.UpdatedAt = time.Now()
+
+	// Validate and save
+	if err := plan.Validate(); err != nil {
+		return nil, fmt.Errorf("validation error: %w", err)
+	}
+
+	if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
+		return nil, err
+	}
+
+	return plan, nil
+}

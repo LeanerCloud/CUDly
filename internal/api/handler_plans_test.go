@@ -430,3 +430,326 @@ func TestCalculateNextExecutionDate(t *testing.T) {
 		})
 	}
 }
+
+// Tests for patchPlan
+
+func TestHandler_patchPlan_Success(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	existingPlan := &config.PurchasePlan{
+		ID:                     "11111111-1111-1111-1111-111111111111",
+		Name:                   "Original Name",
+		Enabled:                false,
+		AutoPurchase:           false,
+		NotificationDaysBefore: 3,
+		CreatedAt:              time.Now().AddDate(0, -1, 0),
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
+		return p.Enabled == true && p.Name == "Original Name"
+	})).Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"enabled": true}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.NoError(t, err)
+
+	plan := result.(*config.PurchasePlan)
+	assert.Equal(t, true, plan.Enabled)
+	assert.Equal(t, "Original Name", plan.Name)
+}
+
+func TestHandler_patchPlan_UpdateMultipleFields(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	existingPlan := &config.PurchasePlan{
+		ID:                     "11111111-1111-1111-1111-111111111111",
+		Name:                   "Original Name",
+		Enabled:                false,
+		AutoPurchase:           false,
+		NotificationDaysBefore: 3,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
+		return p.Enabled == true && p.Name == "New Name" && p.AutoPurchase == true && p.NotificationDaysBefore == 5
+	})).Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"enabled": true, "name": "New Name", "auto_purchase": true, "notification_days_before": 5}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.NoError(t, err)
+
+	plan := result.(*config.PurchasePlan)
+	assert.Equal(t, true, plan.Enabled)
+	assert.Equal(t, "New Name", plan.Name)
+	assert.Equal(t, true, plan.AutoPurchase)
+	assert.Equal(t, 5, plan.NotificationDaysBefore)
+}
+
+func TestHandler_patchPlan_InvalidUUID(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	handler := &Handler{auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"enabled": true}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "invalid-uuid")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "invalid ID format")
+}
+
+func TestHandler_patchPlan_InvalidBody(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+
+	handler := &Handler{auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `invalid json`,
+	}
+	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "invalid request body")
+}
+
+func TestHandler_patchPlan_NotFound(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, errors.New("not found"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"enabled": true}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "99999999-9999-9999-9999-999999999999")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "plan not found")
+}
+
+func TestHandler_patchPlan_NilPlan(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"enabled": true}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "99999999-9999-9999-9999-999999999999")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "plan not found")
+}
+
+func TestHandler_patchPlan_EmptyName(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	existingPlan := &config.PurchasePlan{
+		ID:      "11111111-1111-1111-1111-111111111111",
+		Name:    "Test Plan",
+		Enabled: false,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"name": ""}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "cannot be empty")
+}
+
+func TestHandler_patchPlan_InvalidNotificationDays(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	existingPlan := &config.PurchasePlan{
+		ID:      "11111111-1111-1111-1111-111111111111",
+		Name:    "Test Plan",
+		Enabled: false,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"notification_days_before": 50}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "must be between 0 and 30")
+}
+
+func TestHandler_patchPlan_NegativeNotificationDays(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	existingPlan := &config.PurchasePlan{
+		ID:      "11111111-1111-1111-1111-111111111111",
+		Name:    "Test Plan",
+		Enabled: false,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"notification_days_before": -5}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "must be between 0 and 30")
+}
+
+func TestHandler_patchPlan_UpdateError(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	existingPlan := &config.PurchasePlan{
+		ID:      "11111111-1111-1111-1111-111111111111",
+		Name:    "Test Plan",
+		Enabled: false,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(errors.New("database error"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: `{"enabled": true}`,
+	}
+	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}

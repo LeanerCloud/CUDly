@@ -63,18 +63,23 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/plans/", PathSuffix: "/purchases", Method: "POST", Handler: r.createPlannedPurchasesHandler},
 		{PathPrefix: "/api/plans/", Method: "GET", Handler: r.getPlanHandler},
 		{PathPrefix: "/api/plans/", Method: "PUT", Handler: r.updatePlanHandler},
+		{PathPrefix: "/api/plans/", Method: "PATCH", Handler: r.patchPlanHandler},
 		{PathPrefix: "/api/plans/", Method: "DELETE", Handler: r.deletePlanHandler},
 
 		// Purchase actions
-		{PathPrefix: "/api/purchases/approve/", Handler: r.approvePurchaseHandler},
-		{PathPrefix: "/api/purchases/cancel/", Handler: r.cancelPurchaseHandler},
+		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler},
+		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler},
+		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler},
 
-		// Planned purchases endpoints
+		// Planned purchases endpoints (must come before generic /api/purchases/{id})
 		{ExactPath: "/api/purchases/planned", Method: "GET", Handler: r.getPlannedPurchasesHandler},
 		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/pause", Method: "POST", Handler: r.pausePlannedPurchaseHandler},
 		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/resume", Method: "POST", Handler: r.resumePlannedPurchaseHandler},
 		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/run", Method: "POST", Handler: r.runPlannedPurchaseHandler},
 		{PathPrefix: "/api/purchases/planned/", Method: "DELETE", Handler: r.deletePlannedPurchaseHandler},
+
+		// Generic purchase details (must come after more specific routes)
+		{PathPrefix: "/api/purchases/", Method: "GET", Handler: r.getPurchaseDetailsHandler},
 
 		// History endpoints
 		{ExactPath: "/api/history", Method: "GET", Handler: r.getHistoryHandler},
@@ -235,12 +240,24 @@ func (r *Router) updatePlanHandler(ctx context.Context, req *events.LambdaFuncti
 	return r.h.updatePlan(ctx, req, params["id"])
 }
 
+func (r *Router) patchPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+	return r.h.patchPlan(ctx, req, params["id"])
+}
+
 func (r *Router) deletePlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
 	return r.h.deletePlan(ctx, req, params["id"])
 }
 
 func (r *Router) createPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
 	return r.h.createPlannedPurchases(ctx, req, params["id"])
+}
+
+func (r *Router) executePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+	return r.h.executePurchase(ctx, req)
+}
+
+func (r *Router) getPurchaseDetailsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+	return r.h.getPurchaseDetails(ctx, req, params["id"])
 }
 
 func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
