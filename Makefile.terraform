@@ -1,0 +1,137 @@
+# Terraform Deployment Makefile
+# Simplified commands for common Terraform operations
+
+.PHONY: help deploy plan destroy profile-new profile-list clean
+
+# Default profile settings
+PROVIDER ?= aws
+PROFILE ?= dev
+ACTION ?= apply
+
+help: ## Show this help message
+	@echo "CUDly Terraform Deployment Commands"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "Quick Deploy:"
+	@echo "  make deploy              # Deploy to AWS dev (default)"
+	@echo "  make deploy PROFILE=prod # Deploy to AWS prod"
+	@echo "  make deploy PROVIDER=azure PROFILE=dev"
+	@echo ""
+	@echo "Planning:"
+	@echo "  make plan                # Plan AWS dev deployment"
+	@echo "  make plan PROFILE=prod   # Plan AWS prod deployment"
+	@echo ""
+	@echo "Profile Management:"
+	@echo "  make profile-new         # Create new profile interactively"
+	@echo "  make profile-list        # List all available profiles"
+	@echo "  make profile-show        # Show current profile contents"
+	@echo ""
+	@echo "Cleanup:"
+	@echo "  make destroy             # Destroy infrastructure (asks for confirmation)"
+	@echo "  make clean               # Clean Terraform cache files"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make deploy PROVIDER=aws PROFILE=staging"
+	@echo "  make plan PROVIDER=gcp PROFILE=prod"
+	@echo "  make destroy PROVIDER=azure PROFILE=dev"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+deploy: ## Deploy infrastructure (default: AWS dev)
+	@echo "🚀 Deploying to $(PROVIDER) $(PROFILE)..."
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply
+
+plan: ## Show deployment plan (default: AWS dev)
+	@echo "📋 Planning deployment to $(PROVIDER) $(PROFILE)..."
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) plan
+
+destroy: ## Destroy infrastructure (asks for confirmation)
+	@echo "⚠️  Destroying $(PROVIDER) $(PROFILE) infrastructure..."
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) destroy
+
+output: ## Show Terraform outputs
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) output
+
+profile-new: ## Create new profile interactively
+	@./scripts/generate-profile.sh
+
+profile-list: ## List all available profiles
+	@echo "Available Profiles:"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "AWS:"
+	@ls -1 terraform/profiles/aws/*.tfvars 2>/dev/null | xargs -n1 basename | sed 's/.tfvars$$/  /' | sed 's/^/  /' || echo "  (none)"
+	@echo ""
+	@echo "Azure:"
+	@ls -1 terraform/profiles/azure/*.tfvars 2>/dev/null | xargs -n1 basename | sed 's/.tfvars$$/  /' | sed 's/^/  /' || echo "  (none)"
+	@echo ""
+	@echo "GCP:"
+	@ls -1 terraform/profiles/gcp/*.tfvars 2>/dev/null | xargs -n1 basename | sed 's/.tfvars$$/  /' | sed 's/^/  /' || echo "  (none)"
+	@echo ""
+
+profile-show: ## Show current profile contents
+	@echo "Profile: $(PROVIDER)/$(PROFILE)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@cat terraform/profiles/$(PROVIDER)/$(PROFILE).tfvars 2>/dev/null || echo "Profile not found"
+
+clean: ## Clean Terraform cache and state files
+	@echo "🧹 Cleaning Terraform cache files..."
+	@find terraform/environments -name ".terraform" -type d -exec rm -rf {} + 2>/dev/null || true
+	@find terraform/environments -name "*.tfstate.backup" -type f -delete 2>/dev/null || true
+	@find terraform/environments -name ".terraform.lock.hcl" -type f -delete 2>/dev/null || true
+	@echo "✅ Clean complete"
+
+# Convenience shortcuts
+aws-dev: ## Deploy to AWS dev
+	@$(MAKE) deploy PROVIDER=aws PROFILE=dev
+
+aws-prod: ## Deploy to AWS prod
+	@$(MAKE) deploy PROVIDER=aws PROFILE=prod
+
+azure-dev: ## Deploy to Azure dev
+	@$(MAKE) deploy PROVIDER=azure PROFILE=dev
+
+gcp-dev: ## Deploy to GCP dev
+	@$(MAKE) deploy PROVIDER=gcp PROFILE=dev
+
+# Quick actions
+quick-plan: aws-dev-plan ## Quick plan for AWS dev
+aws-dev-plan:
+	@$(MAKE) plan PROVIDER=aws PROFILE=dev
+
+quick-deploy: aws-dev ## Quick deploy to AWS dev
+
+# Validation
+validate: ## Validate Terraform configuration
+	@echo "🔍 Validating Terraform configuration..."
+	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && terraform validate
+
+fmt: ## Format Terraform files
+	@echo "✨ Formatting Terraform files..."
+	@terraform fmt -recursive terraform/
+
+# State management
+state-list: ## List resources in Terraform state
+	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && terraform state list
+
+state-show: ## Show detailed state for a resource
+	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && terraform state show $(RESOURCE)
+
+# Docker operations
+docker-build: ## Build Docker image only
+	@echo "🔨 Building Docker image..."
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -var="skip_docker_push=true"
+
+docker-skip: ## Deploy without Docker build
+	@echo "⏭️  Deploying without Docker build..."
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -var="skip_docker_build=true"
+
+# Frontend operations
+frontend-only: ## Deploy frontend only
+	@echo "🎨 Deploying frontend..."
+	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && \
+		terraform apply -var-file="../../../profiles/$(PROVIDER)/$(PROFILE).tfvars" -target=module.frontend
+
+frontend-skip: ## Deploy without frontend
+	@echo "⏭️  Deploying without frontend..."
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -var="enable_frontend_build=false"
