@@ -432,7 +432,7 @@ func TestStdLoggerSensitiveDataFiltering(t *testing.T) {
 	logger := &stdLogger{}
 	ctx := context.Background()
 
-	sensitiveKeys := []string{"password", "secret", "token", "sql"}
+	sensitiveKeys := []string{"password", "secret", "token"}
 
 	for _, key := range sensitiveKeys {
 		t.Run("filters_"+key, func(t *testing.T) {

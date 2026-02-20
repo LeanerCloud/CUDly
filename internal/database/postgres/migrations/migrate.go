@@ -100,8 +100,9 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	if steps <= 0 {
 		return fmt.Errorf("rollback steps must be positive, got %d", steps)
 	}
-	if steps > 10 {
-		return fmt.Errorf("refusing to rollback more than 10 migrations at once (requested %d); use multiple calls for safety", steps)
+	const maxRollbackSteps = 10
+	if steps > maxRollbackSteps {
+		return fmt.Errorf("refusing to rollback more than %d migrations at once (requested %d); use multiple calls for safety", maxRollbackSteps, steps)
 	}
 
 	dsn := buildMigrateDSN(pool.Config(), "")
@@ -158,9 +159,9 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 	return version, dirty, nil
 }
 
-// buildMigrateDSN builds a connection string for golang-migrate from pgx config
-// Note: adminEmail parameter is kept for backward compatibility but ignored (RDS Proxy doesn't support options)
-func buildMigrateDSN(config *pgxpool.Config, adminEmail string) string {
+// buildMigrateDSN builds a connection string for golang-migrate from pgx config.
+// sslModeOverride, if non-empty, is used instead of inferring from TLSConfig.
+func buildMigrateDSN(config *pgxpool.Config, sslModeOverride string) string {
 	// Extract connection details from pgx config
 	host := config.ConnConfig.Host
 	port := config.ConnConfig.Port
@@ -172,11 +173,13 @@ func buildMigrateDSN(config *pgxpool.Config, adminEmail string) string {
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
 
-	// Determine SSL mode from connection config or default to require for production safety
-	sslMode := "require"
-	if tlsConfig := config.ConnConfig.TLSConfig; tlsConfig == nil {
-		// If TLS is not configured, use disable (for test containers)
-		sslMode = "disable"
+	// Use explicit sslmode if provided, otherwise infer from TLS config
+	sslMode := sslModeOverride
+	if sslMode == "" {
+		sslMode = "require"
+		if config.ConnConfig.TLSConfig == nil {
+			sslMode = "disable"
+		}
 	}
 
 	// Build DSN (golang-migrate uses postgres:// format)

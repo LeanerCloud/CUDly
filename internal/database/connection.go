@@ -38,7 +38,7 @@ func NewConnection(ctx context.Context, config *Config, secretResolver SecretRes
 
 		// Try to parse as JSON (for RDS Proxy format: {"username": "...", "password": "..."})
 		// If it's not JSON, use the raw string as the password
-		var secretData map[string]interface{}
+		var secretData map[string]any
 		if err := json.Unmarshal([]byte(secret), &secretData); err == nil {
 			// Successfully parsed as JSON, extract password field
 			if pwd, ok := secretData["password"].(string); ok {
@@ -214,17 +214,17 @@ func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.
 }
 
 // Query executes a query
-func (c *Connection) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+func (c *Connection) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	return c.pool.Query(ctx, sql, args...)
 }
 
 // QueryRow executes a query that returns at most one row
-func (c *Connection) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+func (c *Connection) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return c.pool.QueryRow(ctx, sql, args...)
 }
 
 // Exec executes a command
-func (c *Connection) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+func (c *Connection) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return c.pool.Exec(ctx, sql, args...)
 }
 
@@ -252,12 +252,12 @@ func parseLogLevel(level string) tracelog.LogLevel {
 // stdLogger implements pgx tracelog.Logger using the logging package
 type stdLogger struct{}
 
-func (l *stdLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string, data map[string]interface{}) {
+func (l *stdLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string, data map[string]any) {
 	// Filter out sensitive data from logs
-	safeData := make(map[string]interface{})
+	safeData := make(map[string]any)
 	for k, v := range data {
 		// Skip potentially sensitive fields
-		if k == "password" || k == "secret" || k == "token" || k == "sql" {
+		if k == "password" || k == "secret" || k == "token" {
 			continue
 		}
 		safeData[k] = v

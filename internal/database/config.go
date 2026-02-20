@@ -159,6 +159,19 @@ func (c *Config) DSN(passwordOverride string) string {
 	)
 }
 
+// RedactedDSN returns a DSN string with the password masked, safe for logging
+func (c *Config) RedactedDSN() string {
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=***** dbname=%s sslmode=%s connect_timeout=%d",
+		c.Host,
+		c.Port,
+		c.User,
+		c.Database,
+		c.SSLMode,
+		int(c.ConnectTimeout.Seconds()),
+	)
+}
+
 // Helper functions for environment variable parsing
 
 func getEnv(key, defaultValue string) string {

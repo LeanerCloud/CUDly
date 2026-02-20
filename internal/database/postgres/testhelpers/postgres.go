@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -96,7 +97,9 @@ func (c *PostgresContainer) Cleanup(ctx context.Context) error {
 // TruncateTables removes all data from tables (useful between tests)
 func (c *PostgresContainer) TruncateTables(ctx context.Context, tables ...string) error {
 	for _, table := range tables {
-		query := fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table)
+		// Use pgx.Identifier to safely quote table names and prevent SQL injection
+		ident := pgx.Identifier{table}
+		query := fmt.Sprintf("TRUNCATE TABLE %s CASCADE", ident.Sanitize())
 		if _, err := c.DB.Exec(ctx, query); err != nil {
 			return fmt.Errorf("failed to truncate table %s: %w", table, err)
 		}
