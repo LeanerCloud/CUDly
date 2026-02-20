@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -46,7 +47,8 @@ func (s *ECRService) EnsureRepository(ctx context.Context, repoName, accountID, 
 				ScanOnPush: true,
 			},
 		})
-		if err != nil && !strings.Contains(err.Error(), "RepositoryAlreadyExistsException") {
+		var repoExists *ecrtypes.RepositoryAlreadyExistsException
+		if err != nil && !errors.As(err, &repoExists) {
 			return "", fmt.Errorf("failed to create ECR repository: %w", err)
 		}
 	}
