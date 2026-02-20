@@ -224,7 +224,7 @@ async function viewPurchaseDetails(executionId: string): Promise<void> {
         </div>
         ` : ''}
         <div class="modal-buttons">
-          ${purchase.status === 'pending' ? '<button type="button" id="cancel-purchase-detail-btn" class="danger">Cancel Purchase</button>' : ''}
+          ${purchase.status.toLowerCase() === 'pending' ? '<button type="button" id="cancel-purchase-detail-btn" class="danger">Cancel Purchase</button>' : ''}
           <button type="button" id="close-purchase-details-btn">Close</button>
         </div>
       </div>

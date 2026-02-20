@@ -242,7 +242,7 @@ function populateRegionFilter(regions: string[]): void {
  * Open purchase modal
  */
 export function openPurchaseModal(recommendations: LocalRecommendation[]): void {
-  currentPurchaseRecommendations = recommendations;
+  currentPurchaseRecommendations = [...recommendations];
   const container = document.getElementById('purchase-details');
   if (!container) return;
 
