@@ -75,6 +75,8 @@ func determineRuntimeMode(modeFlag string) string {
 		switch runtimeMode {
 		case "lambda", "http":
 			return runtimeMode
+		default:
+			log.Printf("Warning: unrecognized RUNTIME_MODE %q, falling back to auto-detection", runtimeMode)
 		}
 	}
 
