@@ -1,0 +1,94 @@
+{
+  "name": "cudly-frontend",
+  "version": "1.0.0",
+  "description": "CUDly Cloud Commitment Optimizer Dashboard",
+  "private": true,
+  "scripts": {
+    "build": "webpack --mode production",
+    "build:dev": "webpack --mode development",
+    "watch": "webpack --mode development --watch",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0",
+    "@babel/preset-typescript": "^7.23.0",
+    "@testing-library/dom": "^9.3.0",
+    "@testing-library/jest-dom": "^6.1.0",
+    "@types/chart.js": "^2.9.41",
+    "@types/jest": "^29.5.0",
+    "@types/jsdom": "^21.1.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "babel-loader": "^9.1.0",
+    "copy-webpack-plugin": "^13.0.1",
+    "css-loader": "^6.8.0",
+    "css-minimizer-webpack-plugin": "^5.0.0",
+    "eslint": "^8.50.0",
+    "html-webpack-plugin": "^5.5.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "jsdom": "^22.1.0",
+    "mini-css-extract-plugin": "^2.7.0",
+    "style-loader": "^3.3.0",
+    "ts-jest": "^29.1.0",
+    "ts-loader": "^9.5.0",
+    "typescript": "^5.3.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0"
+  },
+  "dependencies": {
+    "chart.js": "^4.4.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "jsdom",
+    "setupFilesAfterEnv": [
+      "<rootDir>/src/__tests__/setup.ts"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.test.ts"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/src/__tests__/setup.ts",
+      "/src/__tests__/mocks/"
+    ],
+    "moduleNameMapper": {
+      "\\.(css|less|scss|sass)$": "<rootDir>/src/__tests__/mocks/styleMock.ts"
+    },
+    "collectCoverageFrom": [
+      "src/**/*.ts",
+      "!src/__tests__/**",
+      "!src/**/*.d.ts"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageThreshold": {
+      "global": {
+        "branches": 20,
+        "functions": 20,
+        "lines": 20,
+        "statements": 20
+      }
+    },
+    "transform": {
+      "^.+\\.tsx?$": "ts-jest"
+    },
+    "moduleFileExtensions": [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "json"
+    ]
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead"
+  ]
+}
