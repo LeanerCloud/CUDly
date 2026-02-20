@@ -49,13 +49,13 @@ func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, e
 }
 
 // GetSecretJSON retrieves and parses a JSON secret
-func (r *GCPResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]interface{}, error) {
+func (r *GCPResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(secretString), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse secret as JSON: %w", err)
 	}

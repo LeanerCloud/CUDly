@@ -13,7 +13,7 @@ type Resolver interface {
 	GetSecret(ctx context.Context, secretID string) (string, error)
 
 	// GetSecretJSON retrieves a secret and parses it as JSON
-	GetSecretJSON(ctx context.Context, secretID string) (map[string]interface{}, error)
+	GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error)
 
 	// ListSecrets lists available secrets (filtered by prefix if provided)
 	ListSecrets(ctx context.Context, filter string) ([]string, error)

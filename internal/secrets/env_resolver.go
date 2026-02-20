@@ -28,13 +28,13 @@ func (r *EnvResolver) GetSecret(ctx context.Context, secretID string) (string, e
 }
 
 // GetSecretJSON retrieves and parses a JSON secret from environment variable
-func (r *EnvResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]interface{}, error) {
+func (r *EnvResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(secretString), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse environment variable as JSON: %w", err)
 	}

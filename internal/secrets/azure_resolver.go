@@ -53,13 +53,13 @@ func (r *AzureResolver) GetSecret(ctx context.Context, secretID string) (string,
 }
 
 // GetSecretJSON retrieves and parses a JSON secret
-func (r *AzureResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]interface{}, error) {
+func (r *AzureResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)
 	if err != nil {
 		return nil, err
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(secretString), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse secret as JSON: %w", err)
 	}
