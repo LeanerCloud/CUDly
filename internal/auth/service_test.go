@@ -101,7 +101,7 @@ func TestService_Login(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "account is disabled")
+		assert.Contains(t, err.Error(), "invalid email or password")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -606,8 +606,8 @@ func TestService_ErrorPaths(t *testing.T) {
 
 		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).Return(testUser, nil).Once()
 		mockStore.On("DeleteUserSessions", ctx, "user-123").Return(fmt.Errorf("session error")).Once()
-		// UpdateUser is called twice: once to invalidate the token (security fix) and once to save the new password
-		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Twice()
+		// UpdateUser is called once: password change + token invalidation in single call
+		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
 		req := PasswordResetConfirm{
 			Token:       "valid-reset-token",

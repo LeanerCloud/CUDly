@@ -144,10 +144,10 @@ func apiPermissionToPermission(ap APIPermission) Permission {
 }
 
 // API adapter methods - these implement the AuthServiceInterface from handler.go
-// They use interface{} to avoid import cycles with the api package
+// They use any to avoid import cycles with the api package
 
 // CreateUserAPI creates a new user via the API
-func (s *Service) CreateUserAPI(ctx context.Context, reqInterface interface{}) (interface{}, error) {
+func (s *Service) CreateUserAPI(ctx context.Context, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APICreateUserRequest)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
@@ -166,7 +166,7 @@ func (s *Service) CreateUserAPI(ctx context.Context, reqInterface interface{}) (
 }
 
 // UpdateUserAPI updates a user via the API
-func (s *Service) UpdateUserAPI(ctx context.Context, userID string, reqInterface interface{}) (interface{}, error) {
+func (s *Service) UpdateUserAPI(ctx context.Context, userID string, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APIUpdateUserRequest)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
@@ -185,7 +185,7 @@ func (s *Service) UpdateUserAPI(ctx context.Context, userID string, reqInterface
 }
 
 // ListUsersAPI returns all users via the API
-func (s *Service) ListUsersAPI(ctx context.Context) (interface{}, error) {
+func (s *Service) ListUsersAPI(ctx context.Context) (any, error) {
 	users, err := s.ListUsers(ctx)
 	if err != nil {
 		return nil, err
@@ -207,7 +207,7 @@ func (s *Service) ChangePasswordAPI(ctx context.Context, userID, currentPassword
 }
 
 // CreateGroupAPI creates a new group via the API
-func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface interface{}) (interface{}, error) {
+func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APICreateGroupRequest)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
@@ -229,7 +229,7 @@ func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface interface{}) 
 }
 
 // UpdateGroupAPI updates a group via the API
-func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterface interface{}) (interface{}, error) {
+func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APIUpdateGroupRequest)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
@@ -264,16 +264,19 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterfa
 }
 
 // GetGroupAPI returns a group by ID via the API
-func (s *Service) GetGroupAPI(ctx context.Context, groupID string) (interface{}, error) {
+func (s *Service) GetGroupAPI(ctx context.Context, groupID string) (any, error) {
 	group, err := s.GetGroup(ctx, groupID)
 	if err != nil {
 		return nil, err
+	}
+	if group == nil {
+		return nil, fmt.Errorf("group not found")
 	}
 	return groupToAPIGroup(group), nil
 }
 
 // ListGroupsAPI returns all groups via the API
-func (s *Service) ListGroupsAPI(ctx context.Context) (interface{}, error) {
+func (s *Service) ListGroupsAPI(ctx context.Context) (any, error) {
 	groups, err := s.ListGroups(ctx)
 	if err != nil {
 		return nil, err

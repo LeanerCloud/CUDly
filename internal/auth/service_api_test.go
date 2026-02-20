@@ -438,7 +438,8 @@ func TestService_GetGroupAPI(t *testing.T) {
 		mockStore.On("GetGroup", ctx, "group-123").Return(nil, nil).Once()
 
 		result, err := service.GetGroupAPI(ctx, "group-123")
-		require.NoError(t, err)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "group not found")
 		assert.Nil(t, result)
 
 		mockStore.AssertExpectations(t)

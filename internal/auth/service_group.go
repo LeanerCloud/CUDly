@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
 )
 
@@ -64,7 +65,11 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 	// Add group permissions
 	for _, groupID := range user.GroupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
-		if err != nil || group == nil {
+		if err != nil {
+			logging.Warnf("Failed to fetch group %s: %v", groupID, err)
+			continue
+		}
+		if group == nil {
 			continue
 		}
 		permissions = append(permissions, group.Permissions...)
@@ -113,7 +118,11 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 
 	for _, groupID := range groupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
-		if err != nil || group == nil {
+		if err != nil {
+			logging.Warnf("Failed to fetch group %s: %v", groupID, err)
+			continue
+		}
+		if group == nil {
 			continue
 		}
 
