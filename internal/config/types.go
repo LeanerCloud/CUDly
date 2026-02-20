@@ -1,0 +1,173 @@
+// Package config provides configuration management for CUDly.
+package config
+
+import (
+	"time"
+)
+
+// GlobalConfig represents the global CUDly configuration
+type GlobalConfig struct {
+	EnabledProviders    []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
+	NotificationEmail   *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
+	ApprovalRequired    bool     `json:"approval_required" dynamodbav:"approval_required"`
+	DefaultTerm         int      `json:"default_term" dynamodbav:"default_term"`
+	DefaultPayment      string   `json:"default_payment" dynamodbav:"default_payment"`
+	DefaultCoverage     float64  `json:"default_coverage" dynamodbav:"default_coverage"`
+	DefaultRampSchedule string   `json:"default_ramp_schedule" dynamodbav:"default_ramp_schedule"`
+}
+
+// ServiceConfig represents per-service configuration
+type ServiceConfig struct {
+	Provider       string   `json:"provider" dynamodbav:"provider"`
+	Service        string   `json:"service" dynamodbav:"service"`
+	Enabled        bool     `json:"enabled" dynamodbav:"enabled"`
+	Term           int      `json:"term" dynamodbav:"term"`
+	Payment        string   `json:"payment" dynamodbav:"payment"`
+	Coverage       float64  `json:"coverage" dynamodbav:"coverage"`
+	RampSchedule   string   `json:"ramp_schedule" dynamodbav:"ramp_schedule"`
+	IncludeEngines []string `json:"include_engines,omitempty" dynamodbav:"include_engines,omitempty"`
+	ExcludeEngines []string `json:"exclude_engines,omitempty" dynamodbav:"exclude_engines,omitempty"`
+	IncludeRegions []string `json:"include_regions,omitempty" dynamodbav:"include_regions,omitempty"`
+	ExcludeRegions []string `json:"exclude_regions,omitempty" dynamodbav:"exclude_regions,omitempty"`
+	IncludeTypes   []string `json:"include_types,omitempty" dynamodbav:"include_types,omitempty"`
+	ExcludeTypes   []string `json:"exclude_types,omitempty" dynamodbav:"exclude_types,omitempty"`
+}
+
+// PurchasePlan represents a saved purchase plan for automated execution
+type PurchasePlan struct {
+	ID                     string                   `json:"id" dynamodbav:"id"`
+	Name                   string                   `json:"name" dynamodbav:"name"`
+	Enabled                bool                     `json:"enabled" dynamodbav:"enabled"`
+	AutoPurchase           bool                     `json:"auto_purchase" dynamodbav:"auto_purchase"`
+	NotificationDaysBefore int                      `json:"notification_days_before" dynamodbav:"notification_days_before"`
+	Services               map[string]ServiceConfig `json:"services" dynamodbav:"services"`
+	RampSchedule           RampSchedule             `json:"ramp_schedule" dynamodbav:"ramp_schedule"`
+	CreatedAt              time.Time                `json:"created_at" dynamodbav:"created_at"`
+	UpdatedAt              time.Time                `json:"updated_at" dynamodbav:"updated_at"`
+	NextExecutionDate      *time.Time               `json:"next_execution_date,omitempty" dynamodbav:"next_execution_date,omitempty"`
+	LastExecutionDate      *time.Time               `json:"last_execution_date,omitempty" dynamodbav:"last_execution_date,omitempty"`
+	LastNotificationSent   *time.Time               `json:"last_notification_sent,omitempty" dynamodbav:"last_notification_sent,omitempty"`
+}
+
+// RampSchedule defines how purchases are spread over time
+type RampSchedule struct {
+	Type             string    `json:"type" dynamodbav:"type"` // immediate, weekly, monthly, custom
+	PercentPerStep   float64   `json:"percent_per_step" dynamodbav:"percent_per_step"`
+	StepIntervalDays int       `json:"step_interval_days" dynamodbav:"step_interval_days"`
+	CurrentStep      int       `json:"current_step" dynamodbav:"current_step"`
+	TotalSteps       int       `json:"total_steps" dynamodbav:"total_steps"`
+	StartDate        time.Time `json:"start_date" dynamodbav:"start_date"`
+}
+
+// PresetRampSchedules provides common ramp-up configurations
+var PresetRampSchedules = map[string]RampSchedule{
+	"immediate": {
+		Type:           "immediate",
+		PercentPerStep: 100,
+		TotalSteps:     1,
+	},
+	"weekly-25pct": {
+		Type:             "weekly",
+		PercentPerStep:   25,
+		StepIntervalDays: 7,
+		TotalSteps:       4,
+	},
+	"monthly-10pct": {
+		Type:             "monthly",
+		PercentPerStep:   10,
+		StepIntervalDays: 30,
+		TotalSteps:       10,
+	},
+}
+
+// GetCurrentCoverage calculates the current effective coverage based on ramp progress
+func (r *RampSchedule) GetCurrentCoverage(baseCoverage float64) float64 {
+	if r.Type == "immediate" {
+		return baseCoverage
+	}
+	completedPercent := float64(r.CurrentStep) * r.PercentPerStep
+	if completedPercent > 100 {
+		completedPercent = 100
+	}
+	return baseCoverage * completedPercent / 100
+}
+
+// GetNextPurchaseDate calculates when the next purchase step should occur
+func (r *RampSchedule) GetNextPurchaseDate() time.Time {
+	if r.StartDate.IsZero() {
+		return time.Now()
+	}
+	return r.StartDate.AddDate(0, 0, r.CurrentStep*r.StepIntervalDays)
+}
+
+// IsComplete returns true if all ramp steps are done
+func (r *RampSchedule) IsComplete() bool {
+	return r.CurrentStep >= r.TotalSteps
+}
+
+// PurchaseExecution represents a single execution of a purchase plan
+type PurchaseExecution struct {
+	PlanID           string                 `json:"plan_id" dynamodbav:"plan_id"`
+	ExecutionID      string                 `json:"execution_id" dynamodbav:"execution_id"`
+	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, cancelled, completed, failed
+	StepNumber       int                    `json:"step_number" dynamodbav:"step_number"`
+	ScheduledDate    time.Time              `json:"scheduled_date" dynamodbav:"scheduled_date"`
+	NotificationSent *time.Time             `json:"notification_sent,omitempty" dynamodbav:"notification_sent,omitempty"`
+	ApprovalToken    string                 `json:"approval_token,omitempty" dynamodbav:"approval_token,omitempty"`
+	Recommendations  []RecommendationRecord `json:"recommendations" dynamodbav:"recommendations"`
+	TotalUpfrontCost float64                `json:"total_upfront_cost" dynamodbav:"total_upfront_cost"`
+	EstimatedSavings float64                `json:"estimated_savings" dynamodbav:"estimated_savings"`
+	CompletedAt      *time.Time             `json:"completed_at,omitempty" dynamodbav:"completed_at,omitempty"`
+	Error            string                 `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	TTL              int64                  `json:"ttl,omitempty" dynamodbav:"ttl,omitempty"`
+}
+
+// RecommendationRecord stores a recommendation with purchase status
+type RecommendationRecord struct {
+	ID           string  `json:"id" dynamodbav:"id"`
+	Provider     string  `json:"provider" dynamodbav:"provider"`
+	Service      string  `json:"service" dynamodbav:"service"`
+	Region       string  `json:"region" dynamodbav:"region"`
+	ResourceType string  `json:"resource_type" dynamodbav:"resource_type"`
+	Engine       string  `json:"engine,omitempty" dynamodbav:"engine,omitempty"`
+	Count        int     `json:"count" dynamodbav:"count"`
+	Term         int     `json:"term" dynamodbav:"term"`
+	Payment      string  `json:"payment" dynamodbav:"payment"`
+	UpfrontCost  float64 `json:"upfront_cost" dynamodbav:"upfront_cost"`
+	MonthlyCost  float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
+	Savings      float64 `json:"savings" dynamodbav:"savings"`
+	Selected     bool    `json:"selected" dynamodbav:"selected"`
+	Purchased    bool    `json:"purchased" dynamodbav:"purchased"`
+	PurchaseID   string  `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
+	Error        string  `json:"error,omitempty" dynamodbav:"error,omitempty"`
+}
+
+// PurchaseHistoryRecord stores completed purchase information
+type PurchaseHistoryRecord struct {
+	AccountID        string    `json:"account_id" dynamodbav:"account_id"`
+	PurchaseID       string    `json:"purchase_id" dynamodbav:"purchase_id"`
+	Timestamp        time.Time `json:"timestamp" dynamodbav:"timestamp"`
+	Provider         string    `json:"provider" dynamodbav:"provider"`
+	Service          string    `json:"service" dynamodbav:"service"`
+	Region           string    `json:"region" dynamodbav:"region"`
+	ResourceType     string    `json:"resource_type" dynamodbav:"resource_type"`
+	Count            int       `json:"count" dynamodbav:"count"`
+	Term             int       `json:"term" dynamodbav:"term"`
+	Payment          string    `json:"payment" dynamodbav:"payment"`
+	UpfrontCost      float64   `json:"upfront_cost" dynamodbav:"upfront_cost"`
+	MonthlyCost      float64   `json:"monthly_cost" dynamodbav:"monthly_cost"`
+	EstimatedSavings float64   `json:"estimated_savings" dynamodbav:"estimated_savings"`
+	PlanID           string    `json:"plan_id,omitempty" dynamodbav:"plan_id,omitempty"`
+	PlanName         string    `json:"plan_name,omitempty" dynamodbav:"plan_name,omitempty"`
+	RampStep         int       `json:"ramp_step,omitempty" dynamodbav:"ramp_step,omitempty"`
+}
+
+// ConfigSetting represents a configuration setting for the defaults system
+type ConfigSetting struct {
+	Key         string      `json:"key"`
+	Value       interface{} `json:"value"`
+	Type        string      `json:"type"` // int, float, bool, string, json
+	Category    string      `json:"category"`
+	Description string      `json:"description"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+}
