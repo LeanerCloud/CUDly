@@ -43,7 +43,7 @@ func TestPostgresStore_GlobalConfig(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, globalConfig)
 		assert.Equal(t, true, globalConfig.ApprovalRequired)
-		assert.Equal(t, 12, globalConfig.DefaultTerm)
+		assert.Equal(t, 3, globalConfig.DefaultTerm)
 	})
 
 	t.Run("Save and retrieve global config", func(t *testing.T) {

@@ -2079,7 +2079,7 @@ func TestGetGlobalConfig_NoRowsReturnsDefaults(t *testing.T) {
 	// Verify default values
 	assert.Empty(t, config.EnabledProviders)
 	assert.True(t, config.ApprovalRequired)
-	assert.Equal(t, 12, config.DefaultTerm)
+	assert.Equal(t, 3, config.DefaultTerm)
 	assert.Equal(t, "all-upfront", config.DefaultPayment)
 	assert.Equal(t, 80.0, config.DefaultCoverage)
 	assert.Equal(t, "immediate", config.DefaultRampSchedule)

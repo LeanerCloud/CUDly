@@ -102,7 +102,7 @@ func TestPostgresStoreDB_GlobalConfig(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, cfg)
 		assert.True(t, cfg.ApprovalRequired)
-		assert.Equal(t, 12, cfg.DefaultTerm)
+		assert.Equal(t, 3, cfg.DefaultTerm)
 		assert.Equal(t, "all-upfront", cfg.DefaultPayment)
 		assert.Equal(t, 80.0, cfg.DefaultCoverage)
 		assert.Equal(t, "immediate", cfg.DefaultRampSchedule)
@@ -157,7 +157,7 @@ func TestPostgresStoreDB_GlobalConfig(t *testing.T) {
 	t.Run("SaveGlobalConfig converts nil providers to empty slice", func(t *testing.T) {
 		cfg := &GlobalConfig{
 			EnabledProviders:    nil,
-			DefaultTerm:         12,
+			DefaultTerm:         3,
 			DefaultPayment:      "all-upfront",
 			DefaultCoverage:     80.0,
 			DefaultRampSchedule: "immediate",

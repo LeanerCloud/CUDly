@@ -1,4 +1,4 @@
-// Package config provides configuration management using DynamoDB.
+// Package config provides configuration management using PostgreSQL.
 package config
 
 import (

@@ -164,10 +164,10 @@ type PurchaseHistoryRecord struct {
 
 // ConfigSetting represents a configuration setting for the defaults system
 type ConfigSetting struct {
-	Key         string      `json:"key"`
-	Value       interface{} `json:"value"`
-	Type        string      `json:"type"` // int, float, bool, string, json
-	Category    string      `json:"category"`
-	Description string      `json:"description"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	Key         string    `json:"key"`
+	Value       any       `json:"value"`
+	Type        string    `json:"type"` // int, float, bool, string, json
+	Category    string    `json:"category"`
+	Description string    `json:"description"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

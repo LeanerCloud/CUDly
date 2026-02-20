@@ -328,7 +328,7 @@ var DefaultSettings = []ConfigSetting{
 }
 
 // GetDefaultValue returns the default value for a given key
-func GetDefaultValue(key string) interface{} {
+func GetDefaultValue(key string) any {
 	for _, setting := range DefaultSettings {
 		if setting.Key == key {
 			return setting.Value

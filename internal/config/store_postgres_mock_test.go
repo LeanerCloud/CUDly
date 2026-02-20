@@ -53,7 +53,7 @@ func (s *testablePostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalCon
 			return &GlobalConfig{
 				EnabledProviders:    []string{},
 				ApprovalRequired:    true,
-				DefaultTerm:         12,
+				DefaultTerm:         3,
 				DefaultPayment:      "all-upfront",
 				DefaultCoverage:     80.0,
 				DefaultRampSchedule: "immediate",
@@ -325,7 +325,7 @@ func TestGetGlobalConfig_NoRows(t *testing.T) {
 	assert.NotNil(t, config)
 	assert.Empty(t, config.EnabledProviders)
 	assert.True(t, config.ApprovalRequired)
-	assert.Equal(t, 12, config.DefaultTerm)
+	assert.Equal(t, 3, config.DefaultTerm)
 	assert.Equal(t, "all-upfront", config.DefaultPayment)
 	assert.Equal(t, 80.0, config.DefaultCoverage)
 	assert.Equal(t, "immediate", config.DefaultRampSchedule)

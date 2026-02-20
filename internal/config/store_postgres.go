@@ -57,7 +57,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 			return &GlobalConfig{
 				EnabledProviders:    []string{},
 				ApprovalRequired:    true,
-				DefaultTerm:         12,
+				DefaultTerm:         3,
 				DefaultPayment:      "all-upfront",
 				DefaultCoverage:     80.0,
 				DefaultRampSchedule: "immediate",
@@ -632,7 +632,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 }
 
 // queryExecutions is a helper to query and scan purchase executions
-func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args ...interface{}) ([]PurchaseExecution, error) {
+func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args ...any) ([]PurchaseExecution, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query executions: %w", err)
@@ -772,7 +772,7 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 }
 
 // queryPurchaseHistory is a helper to query and scan purchase history
-func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, args ...interface{}) ([]PurchaseHistoryRecord, error) {
+func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, args ...any) ([]PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query purchase history: %w", err)
@@ -825,7 +825,7 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 // ==========================================
 
 // timeFromTTL converts a Unix timestamp (TTL) to a nullable time.Time
-func timeFromTTL(ttl int64) interface{} {
+func timeFromTTL(ttl int64) any {
 	if ttl == 0 {
 		return nil
 	}

@@ -8,7 +8,7 @@ const (
 	// DefaultListLimit is the default number of items returned in list operations
 	DefaultListLimit = 100
 
-	// DefaultExecutionTTLDays is how long execution records are kept in DynamoDB
+	// DefaultExecutionTTLDays is how long execution records are kept
 	DefaultExecutionTTLDays = 30
 
 	// DefaultMaxRecommendationsInEmail is the max recommendations shown in email notifications
