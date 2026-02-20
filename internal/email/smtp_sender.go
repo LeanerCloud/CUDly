@@ -14,24 +14,26 @@ import (
 
 // SMTPConfig holds configuration for SMTP email sender
 type SMTPConfig struct {
-	Host      string // SMTP server host (e.g., "smtp.sendgrid.net" or "smtp.azurecomm.net")
-	Port      int    // SMTP server port (usually 587 for TLS, 465 for SSL)
-	Username  string // SMTP username (SendGrid API key or Azure connection username)
-	Password  string // SMTP password
-	FromEmail string
-	FromName  string
-	UseTLS    bool // Use STARTTLS (default true)
+	Host        string // SMTP server host (e.g., "smtp.sendgrid.net" or "smtp.azurecomm.net")
+	Port        int    // SMTP server port (usually 587 for TLS, 465 for SSL)
+	Username    string // SMTP username (SendGrid API key or Azure connection username)
+	Password    string // SMTP password
+	FromEmail   string
+	FromName    string
+	NotifyEmail string // Notification recipient email (defaults to FromEmail if empty)
+	UseTLS      bool   // Use STARTTLS (default true)
 }
 
 // SMTPSender handles sending email via SMTP (works for SendGrid, Azure ACS, and others)
 type SMTPSender struct {
-	host      string
-	port      int
-	username  string
-	password  string
-	fromEmail string
-	fromName  string
-	useTLS    bool
+	host        string
+	port        int
+	username    string
+	password    string
+	fromEmail   string
+	fromName    string
+	notifyEmail string
+	useTLS      bool
 }
 
 // NewSMTPSender creates a new SMTP email sender
@@ -51,14 +53,20 @@ func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) {
 		cfg.UseTLS = true // Enable TLS for port 587 by default
 	}
 
+	notifyEmail := cfg.NotifyEmail
+	if notifyEmail == "" {
+		notifyEmail = cfg.FromEmail
+	}
+
 	return &SMTPSender{
-		host:      cfg.Host,
-		port:      cfg.Port,
-		username:  cfg.Username,
-		password:  cfg.Password,
-		fromEmail: cfg.FromEmail,
-		fromName:  cfg.FromName,
-		useTLS:    cfg.UseTLS,
+		host:        cfg.Host,
+		port:        cfg.Port,
+		username:    cfg.Username,
+		password:    cfg.Password,
+		fromEmail:   cfg.FromEmail,
+		fromName:    cfg.FromName,
+		notifyEmail: notifyEmail,
+		useTLS:      cfg.UseTLS,
 	}, nil
 }
 
@@ -69,6 +77,11 @@ func (s *SMTPSender) SendNotification(ctx context.Context, subject, message stri
 	return nil
 }
 
+// sanitizeHeader strips CR and LF characters to prevent SMTP header injection.
+func sanitizeHeader(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
 // SendToEmail sends an email directly to a specific email address via SMTP
 func (s *SMTPSender) SendToEmail(ctx context.Context, toEmail, subject, body string) error {
 	if s.fromEmail == "" {
@@ -76,10 +89,14 @@ func (s *SMTPSender) SendToEmail(ctx context.Context, toEmail, subject, body str
 		return nil
 	}
 
+	// Sanitize header values to prevent SMTP header injection
+	toEmail = sanitizeHeader(toEmail)
+	subject = sanitizeHeader(subject)
+
 	// Build email message
 	from := s.fromEmail
 	if s.fromName != "" {
-		from = fmt.Sprintf("%s <%s>", s.fromName, s.fromEmail)
+		from = fmt.Sprintf("%s <%s>", sanitizeHeader(s.fromName), s.fromEmail)
 	}
 
 	msg := []byte(fmt.Sprintf("From: %s\r\n"+
@@ -126,21 +143,18 @@ func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []
 	}
 	defer c.Close()
 
-	// Start TLS
-	if s.useTLS {
-		// Get hostname from addr
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			return err
-		}
+	// Start TLS - this method is only called when useTLS is true
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
 
-		tlsConfig := &tls.Config{
-			ServerName: host,
-		}
+	tlsConfig := &tls.Config{
+		ServerName: host,
+	}
 
-		if err = c.StartTLS(tlsConfig); err != nil {
-			return err
-		}
+	if err = c.StartTLS(tlsConfig); err != nil {
+		return err
 	}
 
 	// Authenticate
@@ -195,7 +209,7 @@ func (s *SMTPSender) SendPasswordResetEmail(ctx context.Context, email, resetURL
 // SendWelcomeEmail sends a welcome email to new users
 func (s *SMTPSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
 	subject := "Welcome to CUDly!"
-	body, err := RenderWelcomeEmail(dashboardURL, role)
+	body, err := RenderWelcomeEmail(email, dashboardURL, role)
 	if err != nil {
 		return fmt.Errorf("failed to render welcome email: %w", err)
 	}
@@ -209,8 +223,7 @@ func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, dat
 	if err != nil {
 		return fmt.Errorf("failed to render new recommendations email: %w", err)
 	}
-	email := s.fromEmail
-	return s.SendToEmail(ctx, email, subject, body)
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
 // SendScheduledPurchaseNotification sends a notification about scheduled purchase
@@ -220,8 +233,7 @@ func (s *SMTPSender) SendScheduledPurchaseNotification(ctx context.Context, data
 	if err != nil {
 		return fmt.Errorf("failed to render scheduled purchase email: %w", err)
 	}
-	email := s.fromEmail
-	return s.SendToEmail(ctx, email, subject, body)
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
 // SendPurchaseConfirmation sends a confirmation email after successful purchase
@@ -231,8 +243,7 @@ func (s *SMTPSender) SendPurchaseConfirmation(ctx context.Context, data Notifica
 	if err != nil {
 		return fmt.Errorf("failed to render purchase confirmation email: %w", err)
 	}
-	email := s.fromEmail
-	return s.SendToEmail(ctx, email, subject, body)
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
 // SendPurchaseFailedNotification sends a notification when a purchase fails
@@ -242,8 +253,7 @@ func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data No
 	if err != nil {
 		return fmt.Errorf("failed to render purchase failed email: %w", err)
 	}
-	email := s.fromEmail
-	return s.SendToEmail(ctx, email, subject, body)
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
 // Verify that SMTPSender implements SenderInterface

@@ -352,7 +352,7 @@ func TestTemplateContents(t *testing.T) {
 
 	assert.Contains(t, scheduledPurchaseTemplate, ".DaysUntilPurchase")
 	assert.Contains(t, scheduledPurchaseTemplate, "{{.PlanName}}")
-	assert.Contains(t, scheduledPurchaseTemplate, "{{.ApprovalToken}}")
+	assert.Contains(t, scheduledPurchaseTemplate, "{{urlquery .ApprovalToken}}")
 
 	assert.Contains(t, purchaseConfirmationTemplate, ".TotalSavings")
 	assert.Contains(t, purchaseConfirmationTemplate, "Purchases Completed")
