@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -20,8 +21,8 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token strin
 		return fmt.Errorf("execution not found: %s", executionID)
 	}
 
-	// Validate token
-	if execution.ApprovalToken != token {
+	// Validate token using constant-time comparison to prevent timing attacks
+	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return fmt.Errorf("invalid approval token")
 	}
 
@@ -53,8 +54,8 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token string
 		return fmt.Errorf("execution not found: %s", executionID)
 	}
 
-	// Validate token
-	if execution.ApprovalToken != token {
+	// Validate token using constant-time comparison to prevent timing attacks
+	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return fmt.Errorf("invalid approval token")
 	}
 

@@ -45,7 +45,7 @@ func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan) bool {
 	}
 
 	daysUntil := int(time.Until(*plan.NextExecutionDate).Hours() / config.HoursPerDay)
-	if daysUntil > plan.NotificationDaysBefore {
+	if daysUntil < 0 || daysUntil > plan.NotificationDaysBefore {
 		return false
 	}
 
