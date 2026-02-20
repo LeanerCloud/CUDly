@@ -22,7 +22,7 @@ const (
 )
 
 // HandleScheduledTask processes a scheduled task by type
-func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (interface{}, error) {
+func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
 	log.Printf("Handling scheduled task: %s", taskType)
 
 	switch taskType {
@@ -112,10 +112,10 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 }
 
 // handleRefreshAnalytics refreshes materialized views and analytics data
-func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]interface{}, error) {
+func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"status":             "success",
 		"views_refreshed":    0,
 		"partitions_created": 0,

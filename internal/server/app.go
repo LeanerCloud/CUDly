@@ -513,6 +513,9 @@ func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.U
 	if err != nil {
 		return nil, err
 	}
+	if user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
 	return &api.User{
 		ID:         user.ID,
 		Email:      user.Email,
@@ -526,11 +529,11 @@ func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID strin
 }
 
 // User management methods - delegate to auth service API methods
-func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, req interface{}) (interface{}, error) {
+func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateUserAPI(ctx, req)
 }
 
-func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
+func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, userID string, req any) (any, error) {
 	return a.service.UpdateUserAPI(ctx, userID, req)
 }
 
@@ -538,7 +541,7 @@ func (a *authServiceAdapter) DeleteUser(ctx context.Context, userID string) erro
 	return a.service.DeleteUser(ctx, userID)
 }
 
-func (a *authServiceAdapter) ListUsersAPI(ctx context.Context) (interface{}, error) {
+func (a *authServiceAdapter) ListUsersAPI(ctx context.Context) (any, error) {
 	return a.service.ListUsersAPI(ctx)
 }
 
@@ -547,11 +550,11 @@ func (a *authServiceAdapter) ChangePasswordAPI(ctx context.Context, userID, curr
 }
 
 // Group management methods - delegate to auth service API methods
-func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, req interface{}) (interface{}, error) {
+func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateGroupAPI(ctx, req)
 }
 
-func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, groupID string, req interface{}) (interface{}, error) {
+func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, groupID string, req any) (any, error) {
 	return a.service.UpdateGroupAPI(ctx, groupID, req)
 }
 
@@ -559,11 +562,11 @@ func (a *authServiceAdapter) DeleteGroup(ctx context.Context, groupID string) er
 	return a.service.DeleteGroup(ctx, groupID)
 }
 
-func (a *authServiceAdapter) GetGroupAPI(ctx context.Context, groupID string) (interface{}, error) {
+func (a *authServiceAdapter) GetGroupAPI(ctx context.Context, groupID string) (any, error) {
 	return a.service.GetGroupAPI(ctx, groupID)
 }
 
-func (a *authServiceAdapter) ListGroupsAPI(ctx context.Context) (interface{}, error) {
+func (a *authServiceAdapter) ListGroupsAPI(ctx context.Context) (any, error) {
 	return a.service.ListGroupsAPI(ctx)
 }
 
@@ -578,11 +581,11 @@ func (a *authServiceAdapter) ValidateCSRFToken(ctx context.Context, sessionToken
 }
 
 // API Key management
-func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
+func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
 	return a.service.CreateAPIKeyAPI(ctx, userID, req)
 }
 
-func (a *authServiceAdapter) ListUserAPIKeysAPI(ctx context.Context, userID string) (interface{}, error) {
+func (a *authServiceAdapter) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error) {
 	return a.service.ListUserAPIKeysAPI(ctx, userID)
 }
 
@@ -594,6 +597,6 @@ func (a *authServiceAdapter) RevokeAPIKeyAPI(ctx context.Context, userID, keyID 
 	return a.service.RevokeAPIKeyAPI(ctx, userID, keyID)
 }
 
-func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (interface{}, interface{}, error) {
+func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) {
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
 }
