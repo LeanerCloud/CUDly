@@ -1,0 +1,97 @@
+# Azure Development Environment Variables
+# Copy to dev.tfvars and customize with your values
+
+# ==============================================
+# Project Settings
+# ==============================================
+
+app_name    = "cudly"
+environment = "dev"
+
+# ==============================================
+# Azure Configuration
+# ==============================================
+
+subscription_id = "your-subscription-id"  # REQUIRED
+location        = "eastus"
+# tenant_id     = "your-tenant-id"  # Optional, uses default
+
+# ==============================================
+# Compute Platform
+# ==============================================
+
+# Options: "container-apps" (serverless) or "aks" (kubernetes)
+compute_platform = "container-apps"
+
+# Container Apps settings
+container_apps_cpu         = "0.5"
+container_apps_memory      = "1Gi"
+container_apps_min_replicas = 0
+container_apps_max_replicas = 10
+
+# AKS settings (when compute_platform = "aks")
+# aks_node_count = 1
+# aks_vm_size = "Standard_B2s"
+
+# ==============================================
+# Database (Azure Flexible Server PostgreSQL)
+# ==============================================
+
+database_name        = "cudly"
+database_username    = "cudly"
+database_version     = "16"
+database_sku         = "B_Standard_B1ms"  # Basic tier for dev
+database_storage_mb  = 32768
+
+database_high_availability  = false
+database_backup_retention_days = 7
+database_geo_redundant_backup  = false
+database_auto_migrate         = true
+
+# ==============================================
+# Networking
+# ==============================================
+
+vnet_cidr = "10.0.0.0/16"
+enable_private_endpoints = true
+
+# ==============================================
+# Secrets
+# ==============================================
+
+# Secrets are stored in Azure Key Vault
+# key_vault_soft_delete_retention = 7
+
+# ==============================================
+# Frontend (Azure Storage + Front Door)
+# ==============================================
+
+enable_frontend_build = true
+# frontend_custom_domain = "app.example.com"
+
+# ==============================================
+# Scheduled Tasks (Logic Apps)
+# ==============================================
+
+enable_scheduled_tasks  = true
+recommendation_schedule = "0 0 2 * * *"  # Cron: Daily at 2 AM
+
+# ==============================================
+# Docker Build
+# ==============================================
+
+enable_docker_build = true
+# image_uri = "cudlyacr.azurecr.io/cudly:latest"
+
+# ==============================================
+# Admin
+# ==============================================
+
+admin_email = "admin@example.com"
+
+# ==============================================
+# Monitoring (Application Insights)
+# ==============================================
+
+enable_monitoring = false
+# alert_action_group_emails = ["ops@example.com"]
