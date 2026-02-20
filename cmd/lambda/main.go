@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/LeanerCloud/CUDly/internal/server"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -20,11 +21,17 @@ import (
 // Version is set at build time
 var Version = "dev"
 
-// app holds the initialized application
-var app *server.Application
+var (
+	app   *server.Application
+	appMu sync.Mutex
+)
 
-// initApp initializes the application using the unified server package
+// initApp initializes the application using the unified server package.
+// Uses a mutex to protect against concurrent initialization.
 func initApp(ctx context.Context) (*server.Application, error) {
+	appMu.Lock()
+	defer appMu.Unlock()
+
 	if app != nil {
 		return app, nil
 	}
