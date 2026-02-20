@@ -136,7 +136,7 @@ func (c *Collector) Collect(ctx context.Context) error {
 			TotalUsage:         0, // TODO: Can be calculated from CloudWatch if needed
 			TotalSavings:       agg.savings,
 			CoveragePercentage: 0, // TODO: Calculate from usage data if needed
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"active_purchases": agg.count,
 				"collection_time":  now.Format(time.RFC3339),
 			},

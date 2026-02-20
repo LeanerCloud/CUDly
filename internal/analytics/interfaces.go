@@ -7,18 +7,18 @@ import (
 
 // SavingsSnapshot represents a single savings data point
 type SavingsSnapshot struct {
-	ID                 string                 `json:"id"`
-	AccountID          string                 `json:"account_id"`
-	Timestamp          time.Time              `json:"timestamp"`
-	Provider           string                 `json:"provider"`
-	Service            string                 `json:"service"`
-	Region             string                 `json:"region"`
-	CommitmentType     string                 `json:"commitment_type"` // "RI" or "SavingsPlan"
-	TotalCommitment    float64                `json:"total_commitment"`
-	TotalUsage         float64                `json:"total_usage"`
-	TotalSavings       float64                `json:"total_savings"`
-	CoveragePercentage float64                `json:"coverage_percentage"`
-	Metadata           map[string]interface{} `json:"metadata,omitempty"`
+	ID                 string         `json:"id"`
+	AccountID          string         `json:"account_id"`
+	Timestamp          time.Time      `json:"timestamp"`
+	Provider           string         `json:"provider"`
+	Service            string         `json:"service"`
+	Region             string         `json:"region"`
+	CommitmentType     string         `json:"commitment_type"` // "RI" or "SavingsPlan"
+	TotalCommitment    float64        `json:"total_commitment"`
+	TotalUsage         float64        `json:"total_usage"`
+	TotalSavings       float64        `json:"total_savings"`
+	CoveragePercentage float64        `json:"coverage_percentage"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
 }
 
 // QueryRequest defines parameters for querying savings data
