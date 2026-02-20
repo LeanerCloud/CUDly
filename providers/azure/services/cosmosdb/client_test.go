@@ -169,7 +169,7 @@ func TestNewClientWithHTTP(t *testing.T) {
 
 func TestCosmosDBClient_GetServiceType(t *testing.T) {
 	client := NewClient(nil, "sub", "region")
-	assert.Equal(t, common.ServiceNoSQLDB, client.GetServiceType())
+	assert.Equal(t, common.ServiceNoSQL, client.GetServiceType())
 }
 
 func TestCosmosDBClient_GetRegion(t *testing.T) {
@@ -480,7 +480,7 @@ func TestCosmosDBClient_GetExistingCommitments_CosmosCommitments(t *testing.T) {
 	require.Len(t, commitments, 1)
 	assert.Equal(t, reservationID, commitments[0].CommitmentID)
 	assert.Equal(t, skuName, commitments[0].ResourceType)
-	assert.Equal(t, common.ServiceNoSQLDB, commitments[0].Service)
+	assert.Equal(t, common.ServiceNoSQL, commitments[0].Service)
 }
 
 func TestCosmosDBClient_GetExistingCommitments_PagerError(t *testing.T) {
@@ -847,7 +847,7 @@ func TestCosmosDBClient_ConvertAzureCosmosRecommendation(t *testing.T) {
 	rec := client.convertAzureCosmosRecommendation(ctx, nil)
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderAzure, rec.Provider)
-	assert.Equal(t, common.ServiceNoSQLDB, rec.Service)
+	assert.Equal(t, common.ServiceNoSQL, rec.Service)
 	assert.Equal(t, "test-subscription", rec.Account)
 	assert.Equal(t, "eastus", rec.Region)
 	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)

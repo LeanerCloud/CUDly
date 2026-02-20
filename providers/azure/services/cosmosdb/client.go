@@ -91,7 +91,7 @@ func (c *CosmosDBClient) SetCosmosAccountsPager(pager CosmosAccountsPager) {
 
 // GetServiceType returns the service type
 func (c *CosmosDBClient) GetServiceType() common.ServiceType {
-	return common.ServiceNoSQLDB
+	return common.ServiceNoSQL
 }
 
 // GetRegion returns the region
@@ -216,7 +216,7 @@ func (c *CosmosDBClient) convertCosmosReservation(detail *armconsumption.Reserva
 		Provider:       common.ProviderAzure,
 		Account:        c.subscriptionID,
 		CommitmentType: common.CommitmentReservedInstance,
-		Service:        common.ServiceNoSQLDB,
+		Service:        common.ServiceNoSQL,
 		Region:         c.region,
 		State:          "active",
 	}
@@ -588,7 +588,7 @@ func calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPri
 func (c *CosmosDBClient) convertAzureCosmosRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	rec := &common.Recommendation{
 		Provider:       common.ProviderAzure,
-		Service:        common.ServiceNoSQLDB,
+		Service:        common.ServiceNoSQL,
 		Account:        c.subscriptionID,
 		Region:         c.region,
 		CommitmentType: common.CommitmentReservedInstance,
