@@ -26,8 +26,8 @@ func (e *NotFoundError) Error() string {
 
 // Is implements error comparison
 func (e *NotFoundError) Is(target error) bool {
-	var notFound *NotFoundError
-	return errors.As(target, &notFound)
+	_, ok := target.(*NotFoundError)
+	return ok
 }
 
 // NewNotFoundError creates a new NotFoundError
@@ -67,8 +67,8 @@ func (e *ValidationError) Error() string {
 
 // Is implements error comparison
 func (e *ValidationError) Is(target error) bool {
-	var validationErr *ValidationError
-	return errors.As(target, &validationErr)
+	_, ok := target.(*ValidationError)
+	return ok
 }
 
 // NewValidationError creates a new ValidationError
@@ -100,8 +100,8 @@ func (e *AuthenticationError) Error() string {
 
 // Is implements error comparison
 func (e *AuthenticationError) Is(target error) bool {
-	var authErr *AuthenticationError
-	return errors.As(target, &authErr)
+	_, ok := target.(*AuthenticationError)
+	return ok
 }
 
 // NewAuthenticationError creates a new AuthenticationError
@@ -133,8 +133,8 @@ func (e *AuthorizationError) Error() string {
 
 // Is implements error comparison
 func (e *AuthorizationError) Is(target error) bool {
-	var authzErr *AuthorizationError
-	return errors.As(target, &authzErr)
+	_, ok := target.(*AuthorizationError)
+	return ok
 }
 
 // NewAuthorizationError creates a new AuthorizationError
@@ -171,8 +171,8 @@ func (e *ConflictError) Error() string {
 
 // Is implements error comparison
 func (e *ConflictError) Is(target error) bool {
-	var conflictErr *ConflictError
-	return errors.As(target, &conflictErr)
+	_, ok := target.(*ConflictError)
+	return ok
 }
 
 // NewConflictError creates a new ConflictError
@@ -204,8 +204,8 @@ func (e *RateLimitError) Error() string {
 
 // Is implements error comparison
 func (e *RateLimitError) Is(target error) bool {
-	var rateErr *RateLimitError
-	return errors.As(target, &rateErr)
+	_, ok := target.(*RateLimitError)
+	return ok
 }
 
 // NewRateLimitError creates a new RateLimitError
@@ -242,8 +242,8 @@ func (e *ServiceError) Unwrap() error {
 
 // Is implements error comparison
 func (e *ServiceError) Is(target error) bool {
-	var serviceErr *ServiceError
-	return errors.As(target, &serviceErr)
+	_, ok := target.(*ServiceError)
+	return ok
 }
 
 // NewServiceError creates a new ServiceError
