@@ -1,0 +1,2180 @@
+openapi: 3.1.0
+info:
+  title: CUDly API
+  description: |
+    CUDly (Committed Use Discounts Leverage & Yield) is a multi-cloud cost optimization tool
+    that automates the purchase of reserved instances and committed use discounts across
+    AWS, Azure, and GCP.
+
+    ## Authentication
+
+    Most endpoints require authentication via one of:
+    - **API Key**: Pass via `X-API-Key` header
+    - **Bearer Token**: Pass via `X-Authorization: Bearer <token>` header (for user sessions)
+
+    **Note**: We use `X-Authorization` instead of the standard `Authorization` header because
+    CloudFront Origin Access Control (OAC) signs requests with AWS SigV4, which overwrites
+    the standard `Authorization` header.
+
+    Public endpoints (no auth required):
+    - `/api/health`
+    - `/api/auth/login`
+    - `/api/auth/check-admin`
+    - `/api/auth/setup-admin`
+    - `/api/auth/forgot-password`
+    - `/api/auth/reset-password`
+    - `/api/purchases/approve/{executionId}` (uses token query parameter)
+    - `/api/purchases/cancel/{executionId}` (uses token query parameter)
+  version: 1.0.0
+  contact:
+    name: LeanerCloud
+    url: https://leanercloud.com
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: https://your-lambda-url.execute-api.region.amazonaws.com
+    description: AWS Lambda Function URL
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Dashboard
+    description: Dashboard summary and metrics
+  - name: Authentication
+    description: User authentication and session management
+  - name: Users
+    description: User management (admin only)
+  - name: Groups
+    description: Group and permission management (admin only)
+  - name: Configuration
+    description: Global and service-specific configuration
+  - name: Credentials
+    description: Cloud provider credential management
+  - name: Recommendations
+    description: Cloud provider cost optimization recommendations
+  - name: Plans
+    description: Purchase plan management
+  - name: Purchases
+    description: Purchase execution and approval workflow
+  - name: History
+    description: Purchase history and audit logs
+
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      description: Returns the health status of the API
+      operationId: healthCheck
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # Dashboard endpoints
+  /api/dashboard/summary:
+    get:
+      summary: Get dashboard summary
+      description: Returns summary metrics for the dashboard including total savings, active plans, and pending purchases
+      operationId: getDashboardSummary
+      tags:
+        - Dashboard
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: provider
+          in: query
+          schema:
+            type: string
+            enum: [all, aws, azure, gcp]
+            default: all
+          description: Filter by cloud provider
+      responses:
+        '200':
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/dashboard/upcoming:
+    get:
+      summary: Get upcoming purchases
+      description: Returns list of purchases scheduled for the near future
+      operationId: getUpcomingPurchases
+      tags:
+        - Dashboard
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Upcoming purchases
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  purchases:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlannedPurchase'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Authentication endpoints
+  /api/auth/login:
+    post:
+      summary: User login
+      description: Authenticates a user and returns a session token
+      operationId: login
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/logout:
+    post:
+      summary: User logout
+      description: Invalidates the current session
+      operationId: logout
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: logged out
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/me:
+    get:
+      summary: Get current user
+      description: Returns information about the currently authenticated user
+      operationId: getCurrentUser
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/check-admin:
+    get:
+      summary: Check if admin exists
+      description: Checks whether an admin user has been set up
+      operationId: checkAdminExists
+      tags:
+        - Authentication
+      responses:
+        '200':
+          description: Admin existence status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  admin_exists:
+                    type: boolean
+
+  /api/auth/setup-admin:
+    post:
+      summary: Setup admin user
+      description: Creates the initial admin user (only works if no admin exists)
+      operationId: setupAdmin
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupAdminRequest'
+      responses:
+        '200':
+          description: Admin created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Admin already exists or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/forgot-password:
+    post:
+      summary: Request password reset
+      description: Sends a password reset email to the specified address
+      operationId: forgotPassword
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Reset email sent (always returns success to prevent enumeration)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: if the email exists, a reset link has been sent
+
+  /api/auth/reset-password:
+    post:
+      summary: Reset password
+      description: Resets the user's password using a reset token
+      operationId: resetPassword
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+      responses:
+        '200':
+          description: Password reset successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: password reset successful
+        '400':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/profile:
+    put:
+      summary: Update user profile
+      description: Updates the current user's profile (email)
+      operationId: updateProfile
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                current_password:
+                  type: string
+                  description: Required to verify identity
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: profile updated
+        '401':
+          description: Unauthorized or incorrect password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/change-password:
+    post:
+      summary: Change password
+      description: Changes the current user's password
+      operationId: changePassword
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - current_password
+                - new_password
+              properties:
+                current_password:
+                  type: string
+                  description: Base64-encoded current password
+                new_password:
+                  type: string
+                  description: Base64-encoded new password
+      responses:
+        '200':
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: password changed
+        '401':
+          description: Unauthorized or incorrect current password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # User management endpoints (admin only)
+  /api/users:
+    get:
+      summary: List all users
+      description: Returns a list of all users (admin only)
+      operationId: listUsers
+      tags:
+        - Users
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - admin access required
+
+    post:
+      summary: Create a user
+      description: Creates a new user (admin only)
+      operationId: createUser
+      tags:
+        - Users
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - admin access required
+
+  /api/users/{userId}:
+    get:
+      summary: Get a user
+      description: Returns details of a specific user (admin only)
+      operationId: getUser
+      tags:
+        - Users
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+
+    put:
+      summary: Update a user
+      description: Updates a user's details (admin only)
+      operationId: updateUser
+      tags:
+        - Users
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+
+    delete:
+      summary: Delete a user
+      description: Deletes a user (admin only)
+      operationId: deleteUser
+      tags:
+        - Users
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User deleted
+        '404':
+          description: User not found
+
+  # Group management endpoints (admin only)
+  /api/groups:
+    get:
+      summary: List all groups
+      description: Returns a list of all groups (admin only)
+      operationId: listGroups
+      tags:
+        - Groups
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of groups
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Group'
+
+    post:
+      summary: Create a group
+      description: Creates a new permission group (admin only)
+      operationId: createGroup
+      tags:
+        - Groups
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGroupRequest'
+      responses:
+        '201':
+          description: Group created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+
+  /api/groups/{groupId}:
+    get:
+      summary: Get a group
+      description: Returns details of a specific group
+      operationId: getGroup
+      tags:
+        - Groups
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Group details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+
+    put:
+      summary: Update a group
+      description: Updates a group's details and permissions
+      operationId: updateGroup
+      tags:
+        - Groups
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGroupRequest'
+      responses:
+        '200':
+          description: Group updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+
+    delete:
+      summary: Delete a group
+      description: Deletes a permission group
+      operationId: deleteGroup
+      tags:
+        - Groups
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Group deleted
+
+  # Configuration endpoints
+  /api/config:
+    get:
+      summary: Get configuration
+      description: Returns the global configuration and all service configurations
+      operationId: getConfig
+      tags:
+        - Configuration
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  global:
+                    $ref: '#/components/schemas/GlobalConfig'
+                  services:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ServiceConfig'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update global configuration
+      description: Updates the global configuration settings
+      operationId: updateConfig
+      tags:
+        - Configuration
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlobalConfig'
+      responses:
+        '200':
+          description: Configuration updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: updated
+        '400':
+          description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/config/service/{provider}/{service}:
+    get:
+      summary: Get service configuration
+      description: Returns the configuration for a specific cloud provider service
+      operationId: getServiceConfig
+      tags:
+        - Configuration
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+          description: Cloud provider name
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Service name (e.g., ec2, rds, elasticache)
+      responses:
+        '200':
+          description: Service configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceConfig'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update service configuration
+      description: Updates the configuration for a specific cloud provider service
+      operationId: updateServiceConfig
+      tags:
+        - Configuration
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceConfig'
+      responses:
+        '200':
+          description: Service configuration updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: updated
+        '400':
+          description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Credentials endpoints
+  /api/credentials/azure:
+    post:
+      summary: Save Azure credentials
+      description: Saves Azure service principal credentials to Secrets Manager for multi-cloud support
+      operationId: saveAzureCredentials
+      tags:
+        - Credentials
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AzureCredentials'
+      responses:
+        '200':
+          description: Credentials saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: saved
+        '400':
+          description: Invalid credentials format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden - admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/credentials/gcp:
+    post:
+      summary: Save GCP credentials
+      description: Saves GCP service account credentials to Secrets Manager for multi-cloud support
+      operationId: saveGCPCredentials
+      tags:
+        - Credentials
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GCPCredentials'
+      responses:
+        '200':
+          description: Credentials saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: saved
+        '400':
+          description: Invalid credentials format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden - admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Recommendations endpoints
+  /api/recommendations:
+    get:
+      summary: Get recommendations
+      description: Fetches cost optimization recommendations from configured cloud providers
+      operationId: getRecommendations
+      tags:
+        - Recommendations
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: provider
+          in: query
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+          description: Filter by cloud provider
+        - name: service
+          in: query
+          schema:
+            type: string
+          description: Filter by service name
+        - name: region
+          in: query
+          schema:
+            type: string
+          description: Filter by region
+      responses:
+        '200':
+          description: Recommendations retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recommendations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RecommendationRecord'
+                  total_savings:
+                    type: number
+                    format: double
+                    description: Total potential monthly savings
+                  count:
+                    type: integer
+                    description: Number of recommendations
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/recommendations/refresh:
+    post:
+      summary: Refresh recommendations
+      description: Triggers a fresh collection of recommendations from all configured providers
+      operationId: refreshRecommendations
+      tags:
+        - Recommendations
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Recommendations refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectResult'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Failed to collect recommendations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Plans endpoints
+  /api/plans:
+    get:
+      summary: List purchase plans
+      description: Returns all configured purchase plans
+      operationId: listPlans
+      tags:
+        - Plans
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Plans retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PurchasePlan'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Create purchase plan
+      description: Creates a new purchase plan
+      operationId: createPlan
+      tags:
+        - Plans
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchasePlanCreate'
+      responses:
+        '200':
+          description: Plan created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchasePlan'
+        '400':
+          description: Invalid plan configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/plans/{planId}:
+    get:
+      summary: Get purchase plan
+      description: Returns a specific purchase plan by ID
+      operationId: getPlan
+      tags:
+        - Plans
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Plan retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchasePlan'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update purchase plan
+      description: Updates an existing purchase plan
+      operationId: updatePlan
+      tags:
+        - Plans
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchasePlanCreate'
+      responses:
+        '200':
+          description: Plan updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchasePlan'
+        '400':
+          description: Invalid plan configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete purchase plan
+      description: Deletes a purchase plan
+      operationId: deletePlan
+      tags:
+        - Plans
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Plan deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/plans/{planId}/purchases:
+    post:
+      summary: Execute plan purchases
+      description: Triggers immediate execution of all selected recommendations for a plan
+      operationId: executePlanPurchases
+      tags:
+        - Plans
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Purchases executed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executed:
+                    type: integer
+                    description: Number of purchases executed
+                  failed:
+                    type: integer
+                    description: Number of purchases that failed
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        recommendation_id:
+                          type: string
+                        status:
+                          type: string
+                          enum: [success, failed]
+                        error:
+                          type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # Purchase action endpoints
+  /api/purchases/approve/{executionId}:
+    post:
+      summary: Approve purchase execution
+      description: Approves a pending purchase execution using a token-based authentication
+      operationId: approvePurchase
+      tags:
+        - Purchases
+      parameters:
+        - name: executionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Approval token from the notification email
+      responses:
+        '200':
+          description: Purchase approved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: approved
+        '400':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Execution not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/purchases/cancel/{executionId}:
+    post:
+      summary: Cancel purchase execution
+      description: Cancels a pending purchase execution using a token-based authentication
+      operationId: cancelPurchase
+      tags:
+        - Purchases
+      parameters:
+        - name: executionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Cancellation token from the notification email
+      responses:
+        '200':
+          description: Purchase cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: cancelled
+        '400':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Execution not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/purchases/planned:
+    get:
+      summary: Get planned purchases
+      description: Returns all purchases scheduled for execution, including their ramp schedule status
+      operationId: getPlannedPurchases
+      tags:
+        - Purchases
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: plan_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter by plan ID
+        - name: provider
+          in: query
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+          description: Filter by cloud provider
+      responses:
+        '200':
+          description: Planned purchases retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  purchases:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlannedPurchase'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/purchases/planned/{purchaseId}:
+    delete:
+      summary: Delete planned purchase
+      description: Removes a planned purchase from the schedule
+      operationId: deletePlannedPurchase
+      tags:
+        - Purchases
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: purchaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Purchase deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+        '401':
+          description: Unauthorized
+        '404':
+          description: Purchase not found
+
+  /api/purchases/planned/{purchaseId}/pause:
+    post:
+      summary: Pause planned purchase
+      description: Temporarily pauses a planned purchase from being executed
+      operationId: pausePlannedPurchase
+      tags:
+        - Purchases
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: purchaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Purchase paused
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: paused
+        '401':
+          description: Unauthorized
+        '404':
+          description: Purchase not found
+
+  /api/purchases/planned/{purchaseId}/resume:
+    post:
+      summary: Resume planned purchase
+      description: Resumes a previously paused planned purchase
+      operationId: resumePlannedPurchase
+      tags:
+        - Purchases
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: purchaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Purchase resumed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: resumed
+        '401':
+          description: Unauthorized
+        '404':
+          description: Purchase not found
+
+  /api/purchases/planned/{purchaseId}/run:
+    post:
+      summary: Run planned purchase immediately
+      description: Executes a planned purchase immediately instead of waiting for the scheduled time
+      operationId: runPlannedPurchase
+      tags:
+        - Purchases
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: purchaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Purchase executed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: executed
+                  purchase_id:
+                    type: string
+                    description: ID of the completed purchase
+        '401':
+          description: Unauthorized
+        '404':
+          description: Purchase not found
+        '500':
+          description: Purchase execution failed
+
+  # History endpoints
+  /api/history:
+    get:
+      summary: Get purchase history
+      description: Returns the purchase history, optionally filtered by account
+      operationId: getHistory
+      tags:
+        - History
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: account_id
+          in: query
+          schema:
+            type: string
+          description: Filter by AWS account ID
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+          description: Maximum number of records to return
+      responses:
+        '200':
+          description: History retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PurchaseHistoryRecord'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for service-to-service authentication
+    BearerAuth:
+      type: apiKey
+      in: header
+      name: X-Authorization
+      description: |
+        JWT token from user login. Pass as: X-Authorization: Bearer <token>
+        Note: We use X-Authorization instead of Authorization because CloudFront OAC
+        overwrites the Authorization header with AWS SigV4 signature.
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+      required:
+        - error
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        mfa_code:
+          type: string
+          description: MFA code if MFA is enabled
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Session token
+        expires_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/UserInfo'
+
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user]
+        groups:
+          type: array
+          items:
+            type: string
+        mfa_enabled:
+          type: boolean
+
+    SetupAdminRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    PasswordResetConfirm:
+      type: object
+      required:
+        - token
+        - new_password
+      properties:
+        token:
+          type: string
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+
+    GlobalConfig:
+      type: object
+      properties:
+        enabled_providers:
+          type: array
+          items:
+            type: string
+            enum: [aws, azure, gcp]
+          description: List of enabled cloud providers
+        notification_email:
+          type: string
+          format: email
+          description: Email address for notifications
+        approval_required:
+          type: boolean
+          description: Whether manual approval is required for purchases
+        default_term:
+          type: integer
+          enum: [1, 3]
+          description: Default reservation term in years
+        default_payment:
+          type: string
+          enum: [no-upfront, partial-upfront, all-upfront]
+          description: Default payment option
+        default_coverage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Default coverage percentage
+        default_ramp_schedule:
+          type: string
+          enum: [immediate, weekly-25pct, monthly-10pct]
+          description: Default ramp-up schedule for purchases
+
+    ServiceConfig:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        service:
+          type: string
+          description: Service name (e.g., ec2, rds, compute)
+        enabled:
+          type: boolean
+        term:
+          type: integer
+          enum: [1, 3]
+        payment:
+          type: string
+          enum: [no-upfront, partial-upfront, all-upfront]
+        coverage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+        ramp_schedule:
+          type: string
+        include_engines:
+          type: array
+          items:
+            type: string
+          description: Include only these database engines (for RDS/Aurora)
+        exclude_engines:
+          type: array
+          items:
+            type: string
+          description: Exclude these database engines
+        include_regions:
+          type: array
+          items:
+            type: string
+          description: Include only these regions
+        exclude_regions:
+          type: array
+          items:
+            type: string
+          description: Exclude these regions
+        include_types:
+          type: array
+          items:
+            type: string
+          description: Include only these instance types
+        exclude_types:
+          type: array
+          items:
+            type: string
+          description: Exclude these instance types
+
+    RecommendationRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        service:
+          type: string
+        region:
+          type: string
+        resource_type:
+          type: string
+          description: Instance type or SKU
+        engine:
+          type: string
+          description: Database engine (for RDS/Aurora)
+        count:
+          type: integer
+          description: Number of instances to reserve
+        term:
+          type: integer
+          enum: [1, 3]
+        payment:
+          type: string
+          enum: [no-upfront, partial-upfront, all-upfront]
+        upfront_cost:
+          type: number
+          format: double
+        monthly_cost:
+          type: number
+          format: double
+        savings:
+          type: number
+          format: double
+          description: Estimated monthly savings
+        selected:
+          type: boolean
+          description: Whether this recommendation is selected for purchase
+        purchased:
+          type: boolean
+          description: Whether this has already been purchased
+        purchase_id:
+          type: string
+          description: ID of the purchase if already purchased
+        error:
+          type: string
+          description: Error message if purchase failed
+
+    CollectResult:
+      type: object
+      properties:
+        recommendations:
+          type: integer
+          description: Number of recommendations collected
+        total_savings:
+          type: number
+          format: double
+          description: Total potential monthly savings
+
+    RampSchedule:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [immediate, weekly, monthly, custom]
+        percent_per_step:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+        step_interval_days:
+          type: integer
+          minimum: 1
+        current_step:
+          type: integer
+          minimum: 0
+        total_steps:
+          type: integer
+          minimum: 1
+        start_date:
+          type: string
+          format: date-time
+
+    PurchasePlanCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Plan name
+        enabled:
+          type: boolean
+          default: true
+        auto_purchase:
+          type: boolean
+          default: false
+          description: Whether to automatically execute purchases
+        notification_days_before:
+          type: integer
+          default: 7
+          description: Days before execution to send notification
+        services:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ServiceConfig'
+        ramp_schedule:
+          $ref: '#/components/schemas/RampSchedule'
+
+    PurchasePlan:
+      allOf:
+        - $ref: '#/components/schemas/PurchasePlanCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+            next_execution_date:
+              type: string
+              format: date-time
+            last_execution_date:
+              type: string
+              format: date-time
+            last_notification_sent:
+              type: string
+              format: date-time
+
+    PurchaseHistoryRecord:
+      type: object
+      properties:
+        account_id:
+          type: string
+        purchase_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        service:
+          type: string
+        region:
+          type: string
+        resource_type:
+          type: string
+        count:
+          type: integer
+        term:
+          type: integer
+        payment:
+          type: string
+        upfront_cost:
+          type: number
+          format: double
+        monthly_cost:
+          type: number
+          format: double
+        estimated_savings:
+          type: number
+          format: double
+        plan_id:
+          type: string
+        plan_name:
+          type: string
+        ramp_step:
+          type: integer
+
+    DashboardSummary:
+      type: object
+      properties:
+        total_savings:
+          type: number
+          format: double
+          description: Total estimated monthly savings across all providers
+        total_upfront_cost:
+          type: number
+          format: double
+          description: Total upfront costs for all reservations
+        active_plans:
+          type: integer
+          description: Number of active purchase plans
+        pending_purchases:
+          type: integer
+          description: Number of purchases awaiting approval
+        recommendations_count:
+          type: integer
+          description: Total number of recommendations available
+        coverage:
+          type: object
+          properties:
+            aws:
+              type: number
+              format: double
+            azure:
+              type: number
+              format: double
+            gcp:
+              type: number
+              format: double
+        savings_by_provider:
+          type: object
+          properties:
+            aws:
+              type: number
+              format: double
+            azure:
+              type: number
+              format: double
+            gcp:
+              type: number
+              format: double
+
+    PlannedPurchase:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        plan_id:
+          type: string
+          format: uuid
+        plan_name:
+          type: string
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        service:
+          type: string
+        region:
+          type: string
+        resource_type:
+          type: string
+        count:
+          type: integer
+        term:
+          type: integer
+          enum: [1, 3]
+        payment:
+          type: string
+          enum: [no-upfront, partial-upfront, all-upfront]
+        upfront_cost:
+          type: number
+          format: double
+        monthly_cost:
+          type: number
+          format: double
+        savings:
+          type: number
+          format: double
+        scheduled_date:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, approved, executed, cancelled, failed]
+        ramp_step:
+          type: integer
+          description: Current step in the ramp schedule
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user]
+        groups:
+          type: array
+          items:
+            type: string
+        mfa_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time
+
+    CreateUserRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+        role:
+          type: string
+          enum: [admin, user]
+          default: user
+        groups:
+          type: array
+          items:
+            type: string
+          description: Group IDs to assign to the user
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user]
+        groups:
+          type: array
+          items:
+            type: string
+        mfa_enabled:
+          type: boolean
+
+    Group:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+            enum:
+              - read:recommendations
+              - write:recommendations
+              - read:plans
+              - write:plans
+              - read:config
+              - write:config
+              - read:history
+              - execute:purchases
+              - approve:purchases
+              - manage:users
+        member_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    CreateGroupRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+
+    UpdateGroupRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+
+    AzureCredentials:
+      type: object
+      required:
+        - tenant_id
+        - client_id
+        - client_secret
+        - subscription_id
+      properties:
+        tenant_id:
+          type: string
+          description: Azure Active Directory tenant ID
+        client_id:
+          type: string
+          description: Azure service principal application ID
+        client_secret:
+          type: string
+          format: password
+          description: Azure service principal secret
+        subscription_id:
+          type: string
+          description: Azure subscription ID
+
+    GCPCredentials:
+      type: object
+      required:
+        - type
+        - project_id
+        - private_key
+        - client_email
+      properties:
+        type:
+          type: string
+          enum: [service_account]
+        project_id:
+          type: string
+          description: GCP project ID
+        private_key_id:
+          type: string
+        private_key:
+          type: string
+          format: password
+          description: Private key in PEM format
+        client_email:
+          type: string
+          format: email
+          description: Service account email
+        client_id:
+          type: string
+        auth_uri:
+          type: string
+          format: uri
+        token_uri:
+          type: string
+          format: uri
+        auth_provider_x509_cert_url:
+          type: string
+          format: uri
+        client_x509_cert_url:
+          type: string
+          format: uri
+        universe_domain:
+          type: string
