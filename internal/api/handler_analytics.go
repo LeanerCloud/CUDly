@@ -25,7 +25,7 @@ type BreakdownResponse struct {
 }
 
 // getHistoryAnalytics handles GET /history/analytics
-func (h *Handler) getHistoryAnalytics(ctx context.Context, params map[string]string) (interface{}, error) {
+func (h *Handler) getHistoryAnalytics(ctx context.Context, params map[string]string) (any, error) {
 	// Check if analytics client is configured
 	if h.analyticsClient == nil {
 		return nil, fmt.Errorf("analytics not configured - S3/Athena backend required")
@@ -60,7 +60,7 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, params map[string]str
 }
 
 // getHistoryBreakdown handles GET /history/breakdown
-func (h *Handler) getHistoryBreakdown(ctx context.Context, params map[string]string) (interface{}, error) {
+func (h *Handler) getHistoryBreakdown(ctx context.Context, params map[string]string) (any, error) {
 	// Check if analytics client is configured
 	if h.analyticsClient == nil {
 		return nil, fmt.Errorf("analytics not configured - S3/Athena backend required")
@@ -95,7 +95,7 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, params map[string]str
 
 // triggerAnalyticsCollection handles POST /analytics/collect (admin only)
 // This can be used to manually trigger the hourly collection.
-func (h *Handler) triggerAnalyticsCollection(ctx context.Context, _ map[string]string) (interface{}, error) {
+func (h *Handler) triggerAnalyticsCollection(ctx context.Context, _ map[string]string) (any, error) {
 	if h.analyticsCollector == nil {
 		return nil, fmt.Errorf("analytics collector not configured")
 	}

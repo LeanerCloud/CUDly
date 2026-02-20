@@ -13,7 +13,7 @@ import (
 // API Key handlers
 
 // listAPIKeys handles GET /api/api-keys
-func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
@@ -39,7 +39,7 @@ func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURL
 }
 
 // createAPIKey handles POST /api/api-keys
-func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
@@ -81,7 +81,7 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 }
 
 // deleteAPIKey handles DELETE /api/api-keys/{id}
-func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
@@ -119,7 +119,7 @@ func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 }
 
 // revokeAPIKey handles POST /api/api-keys/{id}/revoke
-func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}

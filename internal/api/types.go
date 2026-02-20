@@ -12,7 +12,7 @@ import (
 
 // RateLimiter provides simple in-memory rate limiting for auth endpoints
 // Note: For Lambda, this only works within a single warm instance.
-// For production, use DynamoDB-based rate limiting.
+// For production, use database-backed rate limiting.
 type RateLimiter struct {
 	mu       sync.Mutex
 	attempts map[string]*rateLimitEntry
@@ -24,7 +24,7 @@ type rateLimitEntry struct {
 }
 
 // RateLimiterInterface defines the interface for rate limiting implementations
-// This allows for both in-memory and DynamoDB-backed rate limiters
+// This allows for both in-memory and database-backed rate limiters
 type RateLimiterInterface interface {
 	// Allow checks if a request should be allowed based on rate limits
 	// Returns (allowed bool, error)
@@ -123,25 +123,25 @@ type AuthServiceInterface interface {
 	GetUser(ctx context.Context, userID string) (*User, error)
 	UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error
 	// User management - uses auth.API* types
-	CreateUserAPI(ctx context.Context, req interface{}) (interface{}, error)
-	UpdateUserAPI(ctx context.Context, userID string, req interface{}) (interface{}, error)
+	CreateUserAPI(ctx context.Context, req any) (any, error)
+	UpdateUserAPI(ctx context.Context, userID string, req any) (any, error)
 	DeleteUser(ctx context.Context, userID string) error
-	ListUsersAPI(ctx context.Context) (interface{}, error)
+	ListUsersAPI(ctx context.Context) (any, error)
 	ChangePasswordAPI(ctx context.Context, userID, currentPassword, newPassword string) error
 	// Group management - uses auth.API* types
-	CreateGroupAPI(ctx context.Context, req interface{}) (interface{}, error)
-	UpdateGroupAPI(ctx context.Context, groupID string, req interface{}) (interface{}, error)
+	CreateGroupAPI(ctx context.Context, req any) (any, error)
+	UpdateGroupAPI(ctx context.Context, groupID string, req any) (any, error)
 	DeleteGroup(ctx context.Context, groupID string) error
-	GetGroupAPI(ctx context.Context, groupID string) (interface{}, error)
-	ListGroupsAPI(ctx context.Context) (interface{}, error)
+	GetGroupAPI(ctx context.Context, groupID string) (any, error)
+	ListGroupsAPI(ctx context.Context) (any, error)
 	// Permission checking
 	HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error)
 	// API Key management
-	CreateAPIKeyAPI(ctx context.Context, userID string, req interface{}) (interface{}, error)
-	ListUserAPIKeysAPI(ctx context.Context, userID string) (interface{}, error)
+	CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error)
+	ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error)
 	DeleteAPIKeyAPI(ctx context.Context, userID, keyID string) error
 	RevokeAPIKeyAPI(ctx context.Context, userID, keyID string) error
-	ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (interface{}, interface{}, error)
+	ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error)
 }
 
 // Auth request/response types (to avoid import cycle with auth package)

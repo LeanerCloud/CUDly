@@ -13,7 +13,7 @@ import (
 // Group management handlers
 
 // listGroups handles GET /api/groups
-func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
 	}
@@ -23,11 +23,11 @@ func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	return map[string]interface{}{"groups": groups}, nil
+	return map[string]any{"groups": groups}, nil
 }
 
 // createGroup handles POST /api/groups
-func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requireAdmin(ctx, req)
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 }
 
 // getGroup handles GET /api/groups/{id}
-func (h *Handler) getGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (interface{}, error) {
+func (h *Handler) getGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(groupID); err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func (h *Handler) getGroup(ctx context.Context, req *events.LambdaFunctionURLReq
 }
 
 // updateGroup handles PUT /api/groups/{id}
-func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (interface{}, error) {
+func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(groupID); err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURL
 }
 
 // deleteGroup handles DELETE /api/groups/{id}
-func (h *Handler) deleteGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (interface{}, error) {
+func (h *Handler) deleteGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(groupID); err != nil {
 		return nil, err

@@ -51,7 +51,7 @@ func calculateNextExecutionDate(plan *config.PurchasePlan, now time.Time) *time.
 	return &nextDate
 }
 
-func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (any, error) {
 	// Require admin access for creating plans
 	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 	return plan, nil
 }
 
-func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequest, planID string) (interface{}, error) {
+func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequest, planID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(planID); err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequ
 	return plan, nil
 }
 
-func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (interface{}, error) {
+func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(planID); err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 	return plan, nil
 }
 
-func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLRequest, planID string) (interface{}, error) {
+func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLRequest, planID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(planID); err != nil {
 		return nil, err
@@ -277,7 +277,7 @@ type PatchPlanRequest struct {
 }
 
 // patchPlan handles partial updates to a plan (PATCH method)
-func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (interface{}, error) {
+func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(planID); err != nil {
 		return nil, err

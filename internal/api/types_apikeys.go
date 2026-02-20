@@ -29,7 +29,7 @@ type APIKeyInfo struct {
 }
 
 // toAPIPermissions converts auth.Permission to api.Permission
-func toAPIPermissions(perms []interface{}) []Permission {
+func toAPIPermissions(perms []any) []Permission {
 	result := make([]Permission, 0, len(perms))
 	for _, p := range perms {
 		// Type assertion - in production this would use proper conversion

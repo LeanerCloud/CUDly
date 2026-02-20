@@ -9,7 +9,7 @@ import (
 )
 
 // History handlers
-func (h *Handler) getHistory(ctx context.Context, params map[string]string) (interface{}, error) {
+func (h *Handler) getHistory(ctx context.Context, params map[string]string) (any, error) {
 	accountID := params["account_id"]
 	limitStr := params["limit"]
 

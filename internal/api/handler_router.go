@@ -8,7 +8,7 @@ import (
 
 // routeRequest routes the request to the appropriate handler based on path and method
 // This function now delegates to the table-driven router for improved maintainability
-func (h *Handler) routeRequest(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) routeRequest(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (any, error) {
 	// Create a new router for each handler to avoid shared state in tests
 	r := NewRouter(h)
 	return r.Route(ctx, method, path, req)

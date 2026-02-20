@@ -9,7 +9,7 @@ import (
 )
 
 // RouteHandler is a function that handles a matched route
-type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error)
+type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error)
 
 // Route defines a routing rule
 type Route struct {
@@ -130,7 +130,7 @@ func (r *Router) registerRoutes() {
 }
 
 // Route finds and executes the matching route handler
-func (r *Router) Route(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (r *Router) Route(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (any, error) {
 	for _, route := range r.routes {
 		if r.matches(route, method, path) {
 			params := r.extractParams(route, path)
@@ -184,225 +184,225 @@ func (r *Router) extractParams(route Route, path string) map[string]string {
 
 // Handler wrappers that adapt the old handlers to the new RouteHandler signature
 
-func (r *Router) dashboardSummaryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) dashboardSummaryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getDashboardSummary(ctx, req.QueryStringParameters)
 }
 
-func (r *Router) upcomingPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) upcomingPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getUpcomingPurchases(ctx)
 }
 
-func (r *Router) getConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getConfig(ctx)
 }
 
-func (r *Router) updateConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) updateConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updateConfig(ctx, req)
 }
 
-func (r *Router) getServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getServiceConfig(ctx, params["id"])
 }
 
-func (r *Router) updateServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) updateServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updateServiceConfig(ctx, req, params["id"])
 }
 
-func (r *Router) saveAzureCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) saveAzureCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.saveAzureCredentials(ctx, req)
 }
 
-func (r *Router) saveGCPCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) saveGCPCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.saveGCPCredentials(ctx, req)
 }
 
-func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getRecommendations(ctx, req.QueryStringParameters)
 }
 
-func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.scheduler.CollectRecommendations(ctx)
 }
 
-func (r *Router) listPlansHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) listPlansHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listPlans(ctx, req)
 }
 
-func (r *Router) createPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) createPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.createPlan(ctx, req)
 }
 
-func (r *Router) getPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getPlan(ctx, req, params["id"])
 }
 
-func (r *Router) updatePlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) updatePlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updatePlan(ctx, req, params["id"])
 }
 
-func (r *Router) patchPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) patchPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.patchPlan(ctx, req, params["id"])
 }
 
-func (r *Router) deletePlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) deletePlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.deletePlan(ctx, req, params["id"])
 }
 
-func (r *Router) createPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) createPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.createPlannedPurchases(ctx, req, params["id"])
 }
 
-func (r *Router) executePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) executePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.executePurchase(ctx, req)
 }
 
-func (r *Router) getPurchaseDetailsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getPurchaseDetailsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getPurchaseDetails(ctx, req, params["id"])
 }
 
-func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	token := req.QueryStringParameters["token"]
 	return r.h.approvePurchase(ctx, params["id"], token)
 }
 
-func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	token := req.QueryStringParameters["token"]
 	return r.h.cancelPurchase(ctx, params["id"], token)
 }
 
-func (r *Router) getPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getPlannedPurchases(ctx, req)
 }
 
-func (r *Router) pausePlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) pausePlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.pausePlannedPurchase(ctx, req, params["id"])
 }
 
-func (r *Router) resumePlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) resumePlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.resumePlannedPurchase(ctx, req, params["id"])
 }
 
-func (r *Router) runPlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) runPlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.runPlannedPurchase(ctx, req, params["id"])
 }
 
-func (r *Router) deletePlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) deletePlannedPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.deletePlannedPurchase(ctx, req, params["id"])
 }
 
-func (r *Router) getHistoryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getHistoryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getHistory(ctx, req.QueryStringParameters)
 }
 
-func (r *Router) getHistoryAnalyticsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getHistoryAnalyticsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getHistoryAnalytics(ctx, req.QueryStringParameters)
 }
 
-func (r *Router) getHistoryBreakdownHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getHistoryBreakdownHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getHistoryBreakdown(ctx, req.QueryStringParameters)
 }
 
-func (r *Router) triggerAnalyticsCollectionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) triggerAnalyticsCollectionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.triggerAnalyticsCollection(ctx, req.QueryStringParameters)
 }
 
-func (r *Router) loginHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) loginHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.login(ctx, req)
 }
 
-func (r *Router) logoutHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) logoutHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.logout(ctx, req)
 }
 
-func (r *Router) getCurrentUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getCurrentUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getCurrentUser(ctx, req)
 }
 
-func (r *Router) checkAdminExistsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) checkAdminExistsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.checkAdminExists(ctx, req)
 }
 
-func (r *Router) setupAdminHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) setupAdminHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.setupAdmin(ctx, req)
 }
 
-func (r *Router) forgotPasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) forgotPasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.forgotPassword(ctx, req.Body)
 }
 
-func (r *Router) resetPasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) resetPasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.resetPassword(ctx, req.Body)
 }
 
-func (r *Router) updateProfileHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) updateProfileHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updateProfile(ctx, req)
 }
 
-func (r *Router) changePasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) changePasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.changePassword(ctx, req)
 }
 
-func (r *Router) listAPIKeysHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) listAPIKeysHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listAPIKeys(ctx, req)
 }
 
-func (r *Router) createAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) createAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.createAPIKey(ctx, req)
 }
 
-func (r *Router) revokeAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) revokeAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.revokeAPIKey(ctx, req)
 }
 
-func (r *Router) deleteAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) deleteAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.deleteAPIKey(ctx, req)
 }
 
-func (r *Router) listUsersHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) listUsersHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listUsers(ctx, req)
 }
 
-func (r *Router) createUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) createUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.createUser(ctx, req)
 }
 
-func (r *Router) getUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getUser(ctx, req, params["id"])
 }
 
-func (r *Router) updateUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) updateUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updateUser(ctx, req, params["id"])
 }
 
-func (r *Router) deleteUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) deleteUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.deleteUser(ctx, req, params["id"])
 }
 
-func (r *Router) listGroupsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) listGroupsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listGroups(ctx, req)
 }
 
-func (r *Router) createGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) createGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.createGroup(ctx, req)
 }
 
-func (r *Router) getGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getGroup(ctx, req, params["id"])
 }
 
-func (r *Router) updateGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) updateGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updateGroup(ctx, req, params["id"])
 }
 
-func (r *Router) deleteGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) deleteGroupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.deleteGroup(ctx, req, params["id"])
 }
 
-func (r *Router) healthCheckHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) healthCheckHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.GetHealth(ctx)
 }
 
-func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (interface{}, error) {
+func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getPublicInfo(ctx, req)
 }
 

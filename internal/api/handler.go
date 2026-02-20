@@ -191,7 +191,7 @@ func (h *Handler) executeRequest(ctx context.Context, method, path string, req *
 }
 
 // handleRequestError converts an error to status code and response
-func (h *Handler) handleRequestError(err error) (int, interface{}) {
+func (h *Handler) handleRequestError(err error) (int, any) {
 	if IsNotFoundError(err) {
 		return 404, map[string]string{"error": "Not found"}
 	}
@@ -201,7 +201,7 @@ func (h *Handler) handleRequestError(err error) (int, interface{}) {
 }
 
 // buildResponse creates a Lambda Function URL response
-func (h *Handler) buildResponse(statusCode int, headers map[string]string, body interface{}, err error) (*events.LambdaFunctionURLResponse, error) {
+func (h *Handler) buildResponse(statusCode int, headers map[string]string, body any, err error) (*events.LambdaFunctionURLResponse, error) {
 	if err != nil {
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 500,

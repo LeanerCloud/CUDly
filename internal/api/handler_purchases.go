@@ -140,7 +140,7 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	return &StatusResponse{Status: "resumed"}, nil
 }
 
-func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (interface{}, error) {
+func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
@@ -166,7 +166,7 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("failed to update execution: %w", err)
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"execution_id": executionID,
 		"status":       "running",
 		"message":      "Purchase execution initiated",
@@ -202,7 +202,7 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 }
 
 // Purchase action handlers
-func (h *Handler) approvePurchase(ctx context.Context, execID, token string) (interface{}, error) {
+func (h *Handler) approvePurchase(ctx context.Context, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func (h *Handler) approvePurchase(ctx context.Context, execID, token string) (in
 	return map[string]string{"status": "approved"}, nil
 }
 
-func (h *Handler) cancelPurchase(ctx context.Context, execID, token string) (interface{}, error) {
+func (h *Handler) cancelPurchase(ctx context.Context, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (h *Handler) cancelPurchase(ctx context.Context, execID, token string) (int
 }
 
 // getPurchaseDetails returns details about a specific purchase execution
-func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (interface{}, error) {
+func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
@@ -263,7 +263,7 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 	}
 
 	// Build response matching frontend expectations
-	response := map[string]interface{}{
+	response := map[string]any{
 		"execution_id":       execution.ExecutionID,
 		"plan_id":            execution.PlanID,
 		"plan_name":          planName,
@@ -294,7 +294,7 @@ type ExecutePurchaseRequest struct {
 }
 
 // executePurchase handles direct purchase execution from recommendations
-func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	// Require admin access for executing purchases
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
@@ -352,7 +352,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, fmt.Errorf("failed to save execution: %w", err)
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"execution_id":         executionID,
 		"status":               "pending",
 		"recommendation_count": len(execReq.Recommendations),

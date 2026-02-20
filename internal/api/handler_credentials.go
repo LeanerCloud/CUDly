@@ -113,7 +113,7 @@ func (h *Handler) updateSecretValue(ctx context.Context, secretARN, value string
 }
 
 // saveAzureCredentials handles POST /api/credentials/azure
-func (h *Handler) saveAzureCredentials(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) saveAzureCredentials(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	// Require admin access
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (h *Handler) saveAzureCredentials(ctx context.Context, req *events.LambdaFu
 }
 
 // saveGCPCredentials handles POST /api/credentials/gcp
-func (h *Handler) saveGCPCredentials(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) saveGCPCredentials(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	// Require admin access
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err

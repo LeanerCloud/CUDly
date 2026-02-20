@@ -13,7 +13,7 @@ import (
 // User management handlers
 
 // listUsers handles GET /api/users
-func (h *Handler) listUsers(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) listUsers(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
 	}
@@ -23,11 +23,11 @@ func (h *Handler) listUsers(ctx context.Context, req *events.LambdaFunctionURLRe
 		return nil, err
 	}
 
-	return map[string]interface{}{"users": users}, nil
+	return map[string]any{"users": users}, nil
 }
 
 // createUser handles POST /api/users
-func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requireAdmin(ctx, req)
 	if err != nil {
 		return nil, err
@@ -64,7 +64,7 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 }
 
 // getUser handles GET /api/users/{id}
-func (h *Handler) getUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (interface{}, error) {
+func (h *Handler) getUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(userID); err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func (h *Handler) getUser(ctx context.Context, req *events.LambdaFunctionURLRequ
 }
 
 // updateUser handles PUT /api/users/{id}
-func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (interface{}, error) {
+func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(userID); err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 }
 
 // deleteUser handles DELETE /api/users/{id}
-func (h *Handler) deleteUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (interface{}, error) {
+func (h *Handler) deleteUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(userID); err != nil {
 		return nil, err

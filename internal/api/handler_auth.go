@@ -12,7 +12,7 @@ import (
 
 // Auth handlers
 
-func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
@@ -42,7 +42,7 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 	return response, nil
 }
 
-func (h *Handler) logout(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) logout(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
@@ -178,7 +178,7 @@ func (h *Handler) resetPassword(ctx context.Context, body string) (any, error) {
 	return map[string]string{"status": "password reset successful"}, nil
 }
 
-func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
@@ -219,7 +219,7 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 }
 
 // changePassword handles POST /api/auth/change-password
-func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (interface{}, error) {
+func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}

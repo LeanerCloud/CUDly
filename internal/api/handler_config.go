@@ -74,7 +74,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	return &StatusResponse{Status: "updated"}, nil
 }
 
-func (h *Handler) getServiceConfig(ctx context.Context, service string) (interface{}, error) {
+func (h *Handler) getServiceConfig(ctx context.Context, service string) (any, error) {
 	// Validate for path traversal attacks
 	if err := validateServicePath(service); err != nil {
 		return nil, err
