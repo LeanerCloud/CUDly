@@ -109,8 +109,16 @@ export async function saveUser(e: Event): Promise<void> {
       showSuccess('User updated successfully');
     } else {
       // Create new user
-      if (!password || password.length < 8) {
-        showError('Password must be at least 8 characters');
+      if (!password || password.length < 12) {
+        showError('Password must be at least 12 characters');
+        return;
+      }
+      const hasUppercase = /[A-Z]/.test(password);
+      const hasLowercase = /[a-z]/.test(password);
+      const hasNumber = /[0-9]/.test(password);
+      const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+      if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
+        showError('Password must contain uppercase, lowercase, number, and special character');
         return;
       }
       await api.createUser({

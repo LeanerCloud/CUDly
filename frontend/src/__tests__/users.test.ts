@@ -1569,7 +1569,7 @@ describe('users/userModals', () => {
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
-      (document.getElementById('user-password') as HTMLInputElement).value = 'password123';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
       (document.getElementById('user-role') as HTMLSelectElement).value = 'user';
 
       const event = new Event('submit');
@@ -1579,7 +1579,7 @@ describe('users/userModals', () => {
 
       expect(api.createUser).toHaveBeenCalledWith({
         email: 'new@test.com',
-        password: 'password123',
+        password: 'SecurePass123!',
         role: 'user',
         groups: []
       });
@@ -1612,7 +1612,7 @@ describe('users/userModals', () => {
 
       userModals.openCreateUserModal();
       (document.getElementById('user-email') as HTMLInputElement).value = 'test@test.com';
-      (document.getElementById('user-password') as HTMLInputElement).value = 'password123';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
 
       await userModals.saveUser(event);
 
@@ -1654,7 +1654,7 @@ describe('users/userModals', () => {
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
-      (document.getElementById('user-password') as HTMLInputElement).value = 'password123';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1671,7 +1671,7 @@ describe('users/userModals', () => {
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
-      (document.getElementById('user-password') as HTMLInputElement).value = 'password123';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1687,7 +1687,7 @@ describe('users/userModals', () => {
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
-      (document.getElementById('user-password') as HTMLInputElement).value = 'password123';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1717,7 +1717,7 @@ describe('users/userModals', () => {
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
-      (document.getElementById('user-password') as HTMLInputElement).value = 'password123';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1733,7 +1733,7 @@ describe('users/userModals', () => {
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
-      (document.getElementById('user-password') as HTMLInputElement).value = 'password123';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
 
       const groupsSelect = document.getElementById('user-groups') as HTMLSelectElement;
       if (groupsSelect.options[0]) {
