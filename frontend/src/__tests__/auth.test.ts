@@ -443,8 +443,8 @@ describe('Auth Module', () => {
       const confirmPasswordInput = document.getElementById('profile-confirm-password') as HTMLInputElement;
 
       currentPasswordInput.value = 'oldpassword';
-      newPasswordInput.value = 'newpassword';
-      confirmPasswordInput.value = 'differentpassword';
+      newPasswordInput.value = 'NewPassword123!';
+      confirmPasswordInput.value = 'DifferentPass1!';
 
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -525,8 +525,8 @@ describe('Auth Module', () => {
 
       emailInput.value = 'test@example.com';
       currentPasswordInput.value = 'oldpassword';
-      newPasswordInput.value = 'newpassword';
-      confirmPasswordInput.value = 'newpassword';
+      newPasswordInput.value = 'NewPassword123!';
+      confirmPasswordInput.value = 'NewPassword123!';
 
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));

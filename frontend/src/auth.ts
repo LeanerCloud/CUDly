@@ -35,7 +35,7 @@ export async function showResetPasswordModal(token: string): Promise<void> {
         <form id="reset-password-form">
           <label>New Password:
             <div class="password-input-wrapper">
-              <input type="password" id="new-password" placeholder="Enter new password" autocomplete="new-password" required minlength="8">
+              <input type="password" id="new-password" placeholder="Enter new password" autocomplete="new-password" required minlength="12">
               <button type="button" class="toggle-password" data-target="new-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -48,7 +48,7 @@ export async function showResetPasswordModal(token: string): Promise<void> {
           <div id="password-requirements" class="password-requirements">
             <div class="requirement" id="req-length">
               <span class="req-icon">○</span>
-              <span class="req-text">At least 8 characters</span>
+              <span class="req-text">At least 12 characters</span>
             </div>
             <div class="requirement" id="req-uppercase">
               <span class="req-icon">○</span>
@@ -70,7 +70,7 @@ export async function showResetPasswordModal(token: string): Promise<void> {
 
           <label>Confirm Password:
             <div class="password-input-wrapper">
-              <input type="password" id="confirm-password" placeholder="Confirm new password" autocomplete="new-password" required minlength="8">
+              <input type="password" id="confirm-password" placeholder="Confirm new password" autocomplete="new-password" required minlength="12">
               <button type="button" class="toggle-password" data-target="confirm-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -147,7 +147,7 @@ function setupPasswordToggle(container: HTMLElement | Document = document): void
 
 function updatePasswordRequirements(password: string, prefix = 'req-'): void {
   const requirements = {
-    length: password.length >= 8,
+    length: password.length >= 12,
     uppercase: /[A-Z]/.test(password),
     lowercase: /[a-z]/.test(password),
     number: /[0-9]/.test(password),
@@ -193,9 +193,9 @@ async function handleResetPasswordSubmit(e: Event, token: string): Promise<void>
   const newPassword = newPasswordInput?.value || '';
   const confirmPassword = confirmPasswordInput?.value || '';
 
-  if (newPassword.length < 8) {
+  if (newPassword.length < 12) {
     if (errorDiv) {
-      errorDiv.textContent = 'Password must be at least 8 characters long';
+      errorDiv.textContent = 'Password must be at least 12 characters long';
       errorDiv.classList.remove('hidden');
     }
     return;
@@ -272,7 +272,7 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
           </label>
           <label>Password:
             <div class="password-input-wrapper">
-              <input type="password" id="setup-password" placeholder="Enter password" autocomplete="new-password" required minlength="8">
+              <input type="password" id="setup-password" placeholder="Enter password" autocomplete="new-password" required minlength="12">
               <button type="button" class="toggle-password" data-target="setup-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -285,7 +285,7 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
           <div id="setup-password-requirements" class="password-requirements">
             <div class="requirement" id="setup-req-length">
               <span class="req-icon">&#9675;</span>
-              <span class="req-text">At least 8 characters</span>
+              <span class="req-text">At least 12 characters</span>
             </div>
             <div class="requirement" id="setup-req-uppercase">
               <span class="req-icon">&#9675;</span>
@@ -307,7 +307,7 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
 
           <label>Confirm Password:
             <div class="password-input-wrapper">
-              <input type="password" id="setup-confirm-password" placeholder="Confirm password" autocomplete="new-password" required minlength="8">
+              <input type="password" id="setup-confirm-password" placeholder="Confirm password" autocomplete="new-password" required minlength="12">
               <button type="button" class="toggle-password" data-target="setup-confirm-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -362,9 +362,9 @@ async function handleAdminSetupSubmit(e: Event): Promise<void> {
   const password = (document.getElementById('setup-password') as HTMLInputElement)?.value || '';
   const confirmPassword = (document.getElementById('setup-confirm-password') as HTMLInputElement)?.value || '';
 
-  if (password.length < 8) {
+  if (password.length < 12) {
     if (errorDiv) {
-      errorDiv.textContent = 'Password must be at least 8 characters long';
+      errorDiv.textContent = 'Password must be at least 12 characters long';
       errorDiv.classList.remove('hidden');
     }
     return;
@@ -716,9 +716,23 @@ async function saveProfile(e: Event): Promise<void> {
     return;
   }
 
-  if (newPassword && newPassword !== confirmPassword) {
-    alert('New passwords do not match');
-    return;
+  if (newPassword) {
+    if (newPassword.length < 12) {
+      alert('New password must be at least 12 characters long');
+      return;
+    }
+    const hasUppercase = /[A-Z]/.test(newPassword);
+    const hasLowercase = /[a-z]/.test(newPassword);
+    const hasNumber = /[0-9]/.test(newPassword);
+    const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPassword);
+    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
+      alert('Password must contain uppercase, lowercase, number, and special character');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      alert('New passwords do not match');
+      return;
+    }
   }
 
   try {
