@@ -488,8 +488,8 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 						{
 							SubscriptionListResult: armsubscriptions.SubscriptionListResult{
 								Value: []*armsubscriptions.Subscription{
-									{SubscriptionID: nil, DisplayName: &validName},    // nil ID
-									{SubscriptionID: &validID, DisplayName: nil},       // nil name
+									{SubscriptionID: nil, DisplayName: &validName},      // nil ID
+									{SubscriptionID: &validID, DisplayName: nil},        // nil name
 									{SubscriptionID: &validID, DisplayName: &validName}, // valid
 								},
 							},

@@ -23,8 +23,8 @@ terraform {
 resource "random_password" "database" {
   count = var.database_password == null ? 1 : 0
 
-  length  = 32
-  special = true
+  length           = 32
+  special          = true
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 

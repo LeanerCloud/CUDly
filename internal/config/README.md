@@ -5,6 +5,7 @@ This package provides a DynamoDB-backed configuration database with caching for 
 ## Overview
 
 The configuration database provides:
+
 - **Type-safe configuration storage** with automatic type detection
 - **In-memory caching** with configurable TTL (default 5 minutes)
 - **Default settings** for all CUDly configuration categories
@@ -14,14 +15,17 @@ The configuration database provides:
 ## Files
 
 ### `configdb.go`
+
 Main implementation of the configuration database client.
 
 **Key Types:**
+
 - `ConfigDBClient` - Main client with caching support
 - `ConfigSetting` - Represents a single configuration key-value pair
 - `cachedSetting` - Internal type wrapping settings with cache timestamps
 
 **Key Methods:**
+
 ```go
 // Create new client
 func NewConfigDBClient(dynamodbClient DynamoDBClient, tableName string) *ConfigDBClient
@@ -45,9 +49,11 @@ func (c *ConfigDBClient) InvalidateCache()
 ```
 
 ### `defaults.go`
+
 Comprehensive default settings for all CUDly configuration categories.
 
 **Configuration Categories:**
+
 1. **purchase_defaults** - Default purchase settings (term, payment option, coverage, ramp schedule)
 2. **notification** - Email notification settings
 3. **providers** - Cloud provider enablement (AWS, Azure, GCP)
@@ -59,6 +65,7 @@ Comprehensive default settings for all CUDly configuration categories.
 9. **api** - API rate limiting and timeout settings
 
 **Helper Functions:**
+
 ```go
 func GetDefaultValue(key string) interface{}
 func GetDefaultSetting(key string) *ConfigSetting
@@ -67,11 +74,13 @@ func GetAllCategories() []string
 ```
 
 ### `configdb_test.go` & `defaults_test.go`
+
 Comprehensive test suites with 100% coverage of all functionality.
 
 ## DynamoDB Schema
 
 **Table Structure:**
+
 - **PK** (Partition Key): `"CONFIG"` (constant for all config items)
 - **SK** (Sort Key): Configuration key (e.g., `"purchase_defaults.term"`)
 - **Value**: The configuration value (supports multiple types)
@@ -148,23 +157,27 @@ purchaseDefaults := config.GetDefaultsByCategory("purchase_defaults")
 ## Default Settings Reference
 
 ### Purchase Defaults
+
 - `purchase_defaults.term`: `3` (int) - Commitment term in years
 - `purchase_defaults.payment_option`: `"no-upfront"` (string) - Payment option
 - `purchase_defaults.coverage`: `80.0` (float) - Coverage percentage
 - `purchase_defaults.ramp_schedule`: `"immediate"` (string) - Ramp schedule
 
 ### Notification Settings
+
 - `notification.days_before`: `3` (int) - Days before purchase to notify
 - `notification.email_enabled`: `true` (bool) - Enable email notifications
 - `notification.approval_required`: `true` (bool) - Require approval
 - `notification.email_from`: `"noreply@cudly.io"` (string) - Sender email
 
 ### Provider Settings
+
 - `providers.aws_enabled`: `true` (bool)
 - `providers.azure_enabled`: `false` (bool)
 - `providers.gcp_enabled`: `false` (bool)
 
 ### Security Settings
+
 - `security.session_duration_hours`: `24` (int)
 - `security.lockout_attempts`: `5` (int)
 - `security.lockout_duration_minutes`: `15` (int)
@@ -174,12 +187,14 @@ purchaseDefaults := config.GetDefaultsByCategory("purchase_defaults")
 - `security.password_require_uppercase`: `true` (bool)
 
 ### Scheduling Settings
+
 - `scheduling.auto_collect`: `false` (bool)
 - `scheduling.collect_schedule`: `"rate(1 day)"` (string)
 - `scheduling.auto_purchase`: `false` (bool)
 - `scheduling.purchase_schedule`: `"rate(1 day)"` (string)
 
 ### AWS-Specific Settings
+
 - `aws.rds.min_utilization_percent`: `50.0` (float)
 - `aws.elasticache.min_utilization_percent`: `50.0` (float)
 - `aws.opensearch.min_utilization_percent`: `50.0` (float)
@@ -189,16 +204,19 @@ purchaseDefaults := config.GetDefaultsByCategory("purchase_defaults")
 - `aws.savings_plans.sagemaker_enabled`: `true` (bool)
 
 ### Thresholds
+
 - `thresholds.min_monthly_savings`: `10.0` (float)
 - `thresholds.min_savings_percentage`: `5.0` (float)
 - `thresholds.max_upfront_cost`: `0.0` (float) - 0 = no limit
 
 ### Data Retention
+
 - `retention.purchase_history_days`: `1095` (int) - 3 years
 - `retention.execution_history_days`: `90` (int)
 - `retention.recommendation_cache_hours`: `24` (int)
 
 ### API Settings
+
 - `api.rate_limit_requests_per_minute`: `100` (int)
 - `api.rate_limit_enabled`: `true` (bool)
 - `api.timeout_seconds`: `30` (int)
@@ -214,16 +232,19 @@ purchaseDefaults := config.GetDefaultsByCategory("purchase_defaults")
 ## Testing
 
 Run tests:
+
 ```bash
 go test ./internal/config/...
 ```
 
 Run with coverage:
+
 ```bash
 go test -cover ./internal/config/...
 ```
 
 Test features:
+
 - Unit tests with mocked DynamoDB client
 - Cache behavior tests (hit, miss, expiration, invalidation)
 - Type conversion tests

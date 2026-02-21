@@ -55,10 +55,10 @@ func (m *mockEC2Client) DescribeRegions(ctx context.Context, params *ec2.Describ
 
 // mockOrganizationsPaginator implements OrganizationsPaginator for testing
 type mockOrganizationsPaginator struct {
-	pages      []*organizations.ListAccountsOutput
-	pageIdx    int
-	nextErr    error
-	errOnPage  int // which page to return error on (-1 for never)
+	pages     []*organizations.ListAccountsOutput
+	pageIdx   int
+	nextErr   error
+	errOnPage int // which page to return error on (-1 for never)
 }
 
 func (m *mockOrganizationsPaginator) HasMorePages() bool {

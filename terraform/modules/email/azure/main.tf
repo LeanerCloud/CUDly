@@ -135,7 +135,7 @@ resource "null_resource" "get_smtp_credentials" {
   triggers = {
     domain_id = var.use_azure_managed_domain ? (
       length(azurerm_email_communication_service_domain.managed) > 0 ? azurerm_email_communication_service_domain.managed[0].id : ""
-    ) : (
+      ) : (
       length(azurerm_email_communication_service_domain.custom) > 0 ? azurerm_email_communication_service_domain.custom[0].id : ""
     )
   }

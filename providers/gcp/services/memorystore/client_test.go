@@ -20,11 +20,11 @@ import (
 
 // MockRedisService implements RedisService for testing
 type MockRedisService struct {
-	instances      []*redispb.Instance
-	instancesErr   error
-	createResult   CreateInstanceOperation
-	createErr      error
-	closeCalled    bool
+	instances    []*redispb.Instance
+	instancesErr error
+	createResult CreateInstanceOperation
+	createErr    error
+	closeCalled  bool
 }
 
 func (m *MockRedisService) ListInstances(ctx context.Context, req *redispb.ListInstancesRequest) RedisIterator {
@@ -645,10 +645,10 @@ func TestMemorystoreClient_ConvertGCPRecommendation(t *testing.T) {
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
 	tests := []struct {
-		name           string
-		rec            *recommenderpb.Recommendation
-		wantResource   string
-		wantSavings    float64
+		name         string
+		rec          *recommenderpb.Recommendation
+		wantResource string
+		wantSavings  float64
 	}{
 		{
 			name: "basic recommendation conversion",

@@ -28,10 +28,10 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		{
 			name: "respects all env vars",
 			envVars: map[string]string{
-				"SECRET_PROVIDER":      "aws",
-				"AWS_REGION":           "eu-west-1",
-				"GCP_PROJECT_ID":       "my-gcp-project",
-				"AZURE_KEY_VAULT_URL":  "https://myvault.vault.azure.net/",
+				"SECRET_PROVIDER":     "aws",
+				"AWS_REGION":          "eu-west-1",
+				"GCP_PROJECT_ID":      "my-gcp-project",
+				"AZURE_KEY_VAULT_URL": "https://myvault.vault.azure.net/",
 			},
 			expectedConfig: &Config{
 				Provider:      "aws",

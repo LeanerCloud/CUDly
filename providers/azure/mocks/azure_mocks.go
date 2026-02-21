@@ -15,9 +15,9 @@ import (
 // MockRecommendationsPager mocks the recommendations pager
 type MockRecommendationsPager struct {
 	mock.Mock
-	Results    []armconsumption.ReservationRecommendationClassification
-	HasMore    bool
-	pageCount  int
+	Results   []armconsumption.ReservationRecommendationClassification
+	HasMore   bool
+	pageCount int
 }
 
 // More returns whether there are more pages

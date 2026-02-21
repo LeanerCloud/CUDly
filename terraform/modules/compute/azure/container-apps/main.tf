@@ -53,9 +53,9 @@ resource "azurerm_container_app_environment" "main" {
   # }
 
   tags = merge(var.tags, {
-    environment = var.environment
-    managed_by  = "terraform"
-    architecture = "x86_64"  # Explicit architecture tag
+    environment  = var.environment
+    managed_by   = "terraform"
+    architecture = "x86_64" # Explicit architecture tag
   })
 }
 
@@ -104,23 +104,23 @@ resource "azurerm_container_app" "main" {
       dynamic "env" {
         for_each = merge(
           {
-            ENVIRONMENT          = var.environment
-            RUNTIME_MODE         = "http"
-            DB_HOST              = var.database_host
-            DB_PORT              = "5432"
-            DB_NAME              = var.database_name
-            DB_USER              = var.database_username
-            DB_PASSWORD_SECRET   = var.database_password_secret_id
-            DB_SSL_MODE          = "require"
-            DB_CONNECT_TIMEOUT   = "8s"
-            DB_AUTO_MIGRATE      = tostring(var.auto_migrate)
-            DB_MIGRATIONS_PATH   = "/app/migrations"
-            ADMIN_EMAIL          = var.admin_email
-            SECRET_PROVIDER      = "azure"
-            AZURE_KEY_VAULT_URI  = var.key_vault_uri
-            AZURE_REGION         = var.location
-            PORT                 = "8080"
-            ALLOWED_ORIGINS      = join(",", var.allowed_origins)
+            ENVIRONMENT         = var.environment
+            RUNTIME_MODE        = "http"
+            DB_HOST             = var.database_host
+            DB_PORT             = "5432"
+            DB_NAME             = var.database_name
+            DB_USER             = var.database_username
+            DB_PASSWORD_SECRET  = var.database_password_secret_id
+            DB_SSL_MODE         = "require"
+            DB_CONNECT_TIMEOUT  = "8s"
+            DB_AUTO_MIGRATE     = tostring(var.auto_migrate)
+            DB_MIGRATIONS_PATH  = "/app/migrations"
+            ADMIN_EMAIL         = var.admin_email
+            SECRET_PROVIDER     = "azure"
+            AZURE_KEY_VAULT_URI = var.key_vault_uri
+            AZURE_REGION        = var.location
+            PORT                = "8080"
+            ALLOWED_ORIGINS     = join(",", var.allowed_origins)
           },
           var.additional_env_vars
         )
@@ -182,7 +182,7 @@ resource "azurerm_container_app" "main" {
     dynamic "custom_domain" {
       for_each = var.custom_domains
       content {
-        name          = custom_domain.value.name
+        name           = custom_domain.value.name
         certificate_id = custom_domain.value.certificate_id
       }
     }
@@ -198,9 +198,9 @@ resource "azurerm_container_app" "main" {
   }
 
   tags = merge(var.tags, {
-    environment = var.environment
-    managed_by  = "terraform"
-    architecture = "x86_64"  # Explicit architecture tag
+    environment  = var.environment
+    managed_by   = "terraform"
+    architecture = "x86_64" # Explicit architecture tag
   })
 }
 
@@ -237,23 +237,23 @@ resource "azurerm_container_app_job" "recommendations" {
       dynamic "env" {
         for_each = merge(
           {
-            ENVIRONMENT          = var.environment
-            RUNTIME_MODE         = "http"
-            DB_HOST              = var.database_host
-            DB_PORT              = "5432"
-            DB_NAME              = var.database_name
-            DB_USER              = var.database_username
-            DB_PASSWORD_SECRET   = var.database_password_secret_id
-            DB_SSL_MODE          = "require"
-            DB_CONNECT_TIMEOUT   = "8s"
-            DB_AUTO_MIGRATE      = "false" # Don't migrate in jobs
-            ADMIN_EMAIL          = var.admin_email
-            SECRET_PROVIDER      = "azure"
-            AZURE_KEY_VAULT_URI  = var.key_vault_uri
-            AZURE_REGION         = var.location
-            PORT                 = "8080"
-            ALLOWED_ORIGINS      = join(",", var.allowed_origins)
-            JOB_TYPE             = "recommendations"
+            ENVIRONMENT         = var.environment
+            RUNTIME_MODE        = "http"
+            DB_HOST             = var.database_host
+            DB_PORT             = "5432"
+            DB_NAME             = var.database_name
+            DB_USER             = var.database_username
+            DB_PASSWORD_SECRET  = var.database_password_secret_id
+            DB_SSL_MODE         = "require"
+            DB_CONNECT_TIMEOUT  = "8s"
+            DB_AUTO_MIGRATE     = "false" # Don't migrate in jobs
+            ADMIN_EMAIL         = var.admin_email
+            SECRET_PROVIDER     = "azure"
+            AZURE_KEY_VAULT_URI = var.key_vault_uri
+            AZURE_REGION        = var.location
+            PORT                = "8080"
+            ALLOWED_ORIGINS     = join(",", var.allowed_origins)
+            JOB_TYPE            = "recommendations"
           },
           var.additional_env_vars
         )

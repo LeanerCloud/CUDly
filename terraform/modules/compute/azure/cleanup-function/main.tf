@@ -130,17 +130,17 @@ resource "azurerm_linux_function_app" "cleanup" {
 
   # App settings (environment variables)
   app_settings = {
-    DB_HOST            = var.db_host
-    DB_PORT            = "5432"
-    DB_NAME            = "cudly"
-    DB_USER            = "cudly"
-    DB_PASSWORD_SECRET = var.db_password_secret_uri
-    DB_SSL_MODE        = "require"
-    SECRET_PROVIDER    = "azure"
+    DB_HOST             = var.db_host
+    DB_PORT             = "5432"
+    DB_NAME             = "cudly"
+    DB_USER             = "cudly"
+    DB_PASSWORD_SECRET  = var.db_password_secret_uri
+    DB_SSL_MODE         = "require"
+    SECRET_PROVIDER     = "azure"
     AZURE_KEY_VAULT_URL = replace(var.db_password_secret_uri, "/secrets/.*", "")
 
     # Function runtime settings
-    FUNCTIONS_WORKER_RUNTIME       = "custom"
+    FUNCTIONS_WORKER_RUNTIME            = "custom"
     WEBSITES_ENABLE_APP_SERVICE_STORAGE = "false"
   }
 
@@ -193,7 +193,7 @@ resource "azurerm_logic_app_action_http" "cleanup" {
   uri          = "https://${azurerm_linux_function_app.cleanup.default_hostname}/api/cleanup"
 
   headers = {
-    "Content-Type" = "application/json"
+    "Content-Type"    = "application/json"
     "x-functions-key" = "@listKeys('${azurerm_linux_function_app.cleanup.id}/host/default', '2022-03-01').functionKeys.default"
   }
 

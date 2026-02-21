@@ -26,6 +26,7 @@ module "networking" {
 ```
 
 **Features:**
+
 - New VPC with IPv6 support
 - Public and private subnets across multiple AZs
 - Internet Gateway and Egress-Only Internet Gateway
@@ -60,6 +61,7 @@ module "networking" {
 ```
 
 **Features:**
+
 - Uses your existing VPC
 - Requires you to specify subnet IDs
 - Can optionally add fck-nat for IPv4 egress (will be placed in first public subnet)
@@ -90,6 +92,7 @@ module "networking" {
 ```
 
 **Features:**
+
 - Automatically discovers and uses the default VPC
 - Uses all default subnets (typically all public)
 - Can optionally add fck-nat for IPv4 egress
@@ -99,12 +102,14 @@ module "networking" {
 ## IPv6 Support
 
 When creating a new VPC, IPv6 is automatically enabled. For existing VPCs:
+
 - If the VPC has IPv6 enabled, the module will use it
 - If not, IPv4-only configuration will be used
 
 ## fck-nat Instance
 
 The `enable_nat_gateway` option deploys a cost-effective NAT alternative:
+
 - t4g.nano ARM64 instance (~$3/month)
 - Provides IPv4 egress for services without IPv6 support (like AWS SES)
 - Automatically deployed in the first public subnet
@@ -113,6 +118,7 @@ The `enable_nat_gateway` option deploys a cost-effective NAT alternative:
 ## Security Groups
 
 The module creates:
+
 - **Database Security Group**: PostgreSQL access from VPC CIDR
 - **VPC Endpoints Security Group**: HTTPS access for VPC endpoints
 - **ALB Security Group** (optional): HTTP/HTTPS from internet
@@ -121,6 +127,7 @@ The module creates:
 ## Outputs
 
 The module outputs:
+
 - `vpc_id`: VPC ID
 - `vpc_cidr`: VPC CIDR block (IPv4)
 - `vpc_ipv6_cidr`: VPC CIDR block (IPv6, if available)
@@ -144,12 +151,14 @@ Compare to AWS NAT Gateway: ~$32/month + data transfer costs
 ## Examples
 
 ### Development Environment (Default VPC)
+
 ```hcl
 use_default_vpc    = true
 enable_nat_gateway = true  # For email sending via SES
 ```
 
 ### Production (New VPC with High Availability)
+
 ```hcl
 vpc_cidr           = "10.0.0.0/16"
 az_count           = 3
@@ -158,6 +167,7 @@ enable_flow_logs   = true
 ```
 
 ### Use Existing Corporate VPC
+
 ```hcl
 use_existing_vpc            = true
 existing_vpc_id             = "vpc-corporate"

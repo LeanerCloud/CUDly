@@ -5,6 +5,7 @@ Comprehensive monitoring infrastructure for CUDly across AWS, GCP, and Azure clo
 ## Overview
 
 These Terraform modules provide complete observability solutions including:
+
 - **Dashboards** - Visual representation of key metrics
 - **Alerts** - Proactive notifications for critical issues
 - **Log aggregation** - Centralized log collection and analysis
@@ -107,6 +108,7 @@ output "alarm_arns" {
 ### CloudWatch Insights Queries
 
 **Errors by Type:**
+
 ```
 fields @timestamp, @message
 | filter @message like /ERROR/
@@ -116,6 +118,7 @@ fields @timestamp, @message
 ```
 
 **Slow Requests:**
+
 ```
 fields @timestamp, @message, @duration
 | filter @type = "REPORT"
@@ -125,6 +128,7 @@ fields @timestamp, @message, @duration
 ```
 
 **Request Volume:**
+
 ```
 fields @timestamp
 | filter @type = "REPORT"
@@ -228,6 +232,7 @@ output "alert_policies" {
 ### Uptime Check
 
 The module creates an uptime check that:
+
 - Sends HTTPS GET requests to `/health` endpoint
 - Checks from 3 locations: Texas, Illinois, California
 - Runs every 60 seconds
@@ -343,6 +348,7 @@ output "alerts" {
 ### Availability Test
 
 The module creates an availability test that:
+
 - Sends HTTPS GET requests to `/health` endpoint
 - Checks from 3 Azure regions: Texas, Illinois, California
 - Runs every 5 minutes
@@ -353,6 +359,7 @@ The module creates an availability test that:
 ### Workbook Dashboard
 
 The workbook includes:
+
 - **Request Rate and Failures** - Total requests and failed requests over time
 - **Response Time** - P50/P95/P99 latency trends
 - **Database Performance** - CPU, memory, active connections
@@ -365,6 +372,7 @@ The workbook includes:
 ### Basic Configuration (All Clouds)
 
 **Minimal:**
+
 ```hcl
 module "monitoring" {
   source = "../../modules/monitoring/{aws|gcp|azure}"
@@ -382,6 +390,7 @@ module "monitoring" {
 ```
 
 **Recommended:**
+
 ```hcl
 module "monitoring" {
   source = "../../modules/monitoring/{aws|gcp|azure}"
@@ -414,6 +423,7 @@ module "monitoring" {
 Use Terraform workspaces or separate directories:
 
 **terraform/environments/aws/prod/main.tf:**
+
 ```hcl
 module "monitoring" {
   source = "../../../modules/monitoring/aws"
@@ -435,6 +445,7 @@ module "monitoring" {
 ```
 
 **terraform/environments/aws/dev/main.tf:**
+
 ```hcl
 module "monitoring" {
   source = "../../../modules/monitoring/aws"
@@ -461,6 +472,7 @@ module "monitoring" {
 ### AWS CloudWatch (Go)
 
 **Send custom metrics:**
+
 ```go
 import (
     "github.com/aws/aws-sdk-go-v2/service/cloudwatch"
@@ -484,6 +496,7 @@ func recordSavingsGenerated(ctx context.Context, amount float64) error {
 ```
 
 **Enable X-Ray tracing:**
+
 ```go
 import (
     "github.com/aws/aws-xray-sdk-go/xray"
@@ -507,6 +520,7 @@ func main() {
 ### GCP Cloud Logging (Go)
 
 **Structured logging:**
+
 ```go
 import (
     "cloud.google.com/go/logging"
@@ -537,6 +551,7 @@ func setupLogging(ctx context.Context, projectID string) (*logging.Client, error
 ### Azure Application Insights (Go)
 
 **Initialize Application Insights:**
+
 ```go
 import (
     "github.com/microsoft/ApplicationInsights-Go/appinsights"
@@ -573,16 +588,19 @@ func setupAppInsights(connectionString string) appinsights.TelemetryClient {
 ### AWS CloudWatch
 
 **Alarms not triggering:**
+
 - Check CloudWatch Logs for Lambda/Fargate errors
 - Verify SNS topic subscriptions are confirmed (check email)
 - Test SNS topic: `aws sns publish --topic-arn <arn> --message "Test"`
 
 **Missing metrics:**
+
 - Verify log metric filter patterns match log format
 - Check CloudWatch Logs Insights: Run test queries
 - Ensure application is logging in expected format
 
 **X-Ray not showing traces:**
+
 - Verify X-Ray SDK is imported in application
 - Check Lambda environment has `AWS_XRAY_TRACING_NAME` set
 - Review X-Ray sampling rate (default: 10%)
@@ -590,16 +608,19 @@ func setupAppInsights(connectionString string) appinsights.TelemetryClient {
 ### GCP Cloud Monitoring
 
 **Alert policies not firing:**
+
 - Check notification channel verification (email confirmation)
 - Test notification: `gcloud alpha monitoring policies test <policy-name>`
 - Verify metric exists: Use Metrics Explorer in console
 
 **Log-based metrics not working:**
+
 - Verify log filter matches log structure
 - Check Logs Explorer with same filter
 - Ensure logs have required JSON fields
 
 **Uptime check failing:**
+
 - Verify service URL is publicly accessible
 - Check `/health` endpoint returns 200 with "healthy"
 - Review uptime check configuration in console
@@ -607,18 +628,21 @@ func setupAppInsights(connectionString string) appinsights.TelemetryClient {
 ### Azure Application Insights
 
 **No telemetry data:**
+
 - Verify Application Insights connection string is set in app
 - Check instrumentation key is correct
 - Review Application Insights Live Metrics Stream
 - Verify app has internet access to Azure endpoints
 
 **Alerts not sending notifications:**
+
 - Check action group email addresses are verified
 - Test action group: Use "Test" button in Azure portal
 - Verify alert rule is enabled
 - Check alert rule query returns data
 
 **Availability test failing:**
+
 - Verify app URL is publicly accessible
 - Check app returns 200 status for `/health`
 - Ensure response body contains "healthy"
@@ -642,6 +666,7 @@ func setupAppInsights(connectionString string) appinsights.TelemetryClient {
 | **Total** | **~$27.25** |
 
 **Cost savings tips:**
+
 - Use log metric filters instead of custom metrics where possible
 - Reduce X-Ray sampling rate in non-production environments
 - Set appropriate log retention (default: 7 days for Lambda)
@@ -659,6 +684,7 @@ func setupAppInsights(connectionString string) appinsights.TelemetryClient {
 | **Total** | **~$2.50** |
 
 **Cost savings tips:**
+
 - Use log sinks to export logs to cheaper storage (GCS)
 - Set log retention to 30 days or less
 - Use log exclusion filters to drop noisy logs
@@ -675,6 +701,7 @@ func setupAppInsights(connectionString string) appinsights.TelemetryClient {
 | **Total** | **~$27.00** |
 
 **Cost savings tips:**
+
 - Use sampling to reduce telemetry volume
 - Set appropriate data retention (default: 90 days)
 - Use adaptive sampling in Application Insights SDK
@@ -755,6 +782,7 @@ func setupAppInsights(connectionString string) appinsights.TelemetryClient {
 7. **Analyze trends** to prevent issues before they occur
 
 For more information, see:
+
 - [AWS CloudWatch Documentation](https://docs.aws.amazon.com/cloudwatch/)
 - [GCP Cloud Monitoring Documentation](https://cloud.google.com/monitoring/docs)
 - [Azure Application Insights Documentation](https://docs.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)

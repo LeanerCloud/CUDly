@@ -102,7 +102,7 @@ resource "aws_cloudwatch_dashboard" "main" {
             view = "singleValue"
           }
         }
-      ] : [
+        ] : [
         # ECS Fargate metrics
         {
           type = "metric"

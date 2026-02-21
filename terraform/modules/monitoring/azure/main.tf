@@ -399,25 +399,25 @@ resource "azurerm_application_insights_workbook" "main" {
       {
         type = 10
         content = {
-          chartId          = "workbookRequestsChart"
-          version          = "MetricsItem/2.0"
-          size             = 0
-          chartType        = 2
-          resourceType     = "microsoft.insights/components"
-          metricScope      = 0
-          resourceIds      = [azurerm_application_insights.main.id]
+          chartId      = "workbookRequestsChart"
+          version      = "MetricsItem/2.0"
+          size         = 0
+          chartType    = 2
+          resourceType = "microsoft.insights/components"
+          metricScope  = 0
+          resourceIds  = [azurerm_application_insights.main.id]
           timeContext = {
             durationMs = 3600000
           }
           metrics = [
             {
-              namespace = "microsoft.insights/components"
-              metric    = "requests/count"
+              namespace   = "microsoft.insights/components"
+              metric      = "requests/count"
               aggregation = 7
             },
             {
-              namespace = "microsoft.insights/components"
-              metric    = "requests/failed"
+              namespace   = "microsoft.insights/components"
+              metric      = "requests/failed"
               aggregation = 7
             }
           ]
@@ -427,20 +427,20 @@ resource "azurerm_application_insights_workbook" "main" {
       {
         type = 10
         content = {
-          chartId          = "workbookLatencyChart"
-          version          = "MetricsItem/2.0"
-          size             = 0
-          chartType        = 2
-          resourceType     = "microsoft.insights/components"
-          metricScope      = 0
-          resourceIds      = [azurerm_application_insights.main.id]
+          chartId      = "workbookLatencyChart"
+          version      = "MetricsItem/2.0"
+          size         = 0
+          chartType    = 2
+          resourceType = "microsoft.insights/components"
+          metricScope  = 0
+          resourceIds  = [azurerm_application_insights.main.id]
           timeContext = {
             durationMs = 3600000
           }
           metrics = [
             {
-              namespace = "microsoft.insights/components"
-              metric    = "requests/duration"
+              namespace   = "microsoft.insights/components"
+              metric      = "requests/duration"
               aggregation = 4
             }
           ]
@@ -450,30 +450,30 @@ resource "azurerm_application_insights_workbook" "main" {
       {
         type = 10
         content = {
-          chartId          = "workbookDatabaseChart"
-          version          = "MetricsItem/2.0"
-          size             = 0
-          chartType        = 2
-          resourceType     = "microsoft.dbforpostgresql/flexibleservers"
-          metricScope      = 0
-          resourceIds      = [var.db_server_id]
+          chartId      = "workbookDatabaseChart"
+          version      = "MetricsItem/2.0"
+          size         = 0
+          chartType    = 2
+          resourceType = "microsoft.dbforpostgresql/flexibleservers"
+          metricScope  = 0
+          resourceIds  = [var.db_server_id]
           timeContext = {
             durationMs = 3600000
           }
           metrics = [
             {
-              namespace = "microsoft.dbforpostgresql/flexibleservers"
-              metric    = "cpu_percent"
+              namespace   = "microsoft.dbforpostgresql/flexibleservers"
+              metric      = "cpu_percent"
               aggregation = 4
             },
             {
-              namespace = "microsoft.dbforpostgresql/flexibleservers"
-              metric    = "memory_percent"
+              namespace   = "microsoft.dbforpostgresql/flexibleservers"
+              metric      = "memory_percent"
               aggregation = 4
             },
             {
-              namespace = "microsoft.dbforpostgresql/flexibleservers"
-              metric    = "active_connections"
+              namespace   = "microsoft.dbforpostgresql/flexibleservers"
+              metric      = "active_connections"
               aggregation = 4
             }
           ]
@@ -484,20 +484,20 @@ resource "azurerm_application_insights_workbook" "main" {
         type = 3
         content = {
           version = "KqlItem/1.0"
-          query = <<-QUERY
+          query   = <<-QUERY
             traces
             | where severityLevel >= 3
             | summarize count() by bin(timestamp, 5m), severityLevel
             | order by timestamp desc
           QUERY
-          size = 0
-          title = "Error Trend"
+          size    = 0
+          title   = "Error Trend"
           timeContext = {
             durationMs = 3600000
           }
-          queryType      = 0
-          resourceType   = "microsoft.insights/components"
-          visualization  = "timechart"
+          queryType     = 0
+          resourceType  = "microsoft.insights/components"
+          visualization = "timechart"
         }
       }
     ]

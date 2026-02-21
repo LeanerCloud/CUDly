@@ -1,6 +1,7 @@
 # Frontend Deployment Modules
 
 These Terraform modules handle **complete frontend deployment** including:
+
 1. Building the frontend (npm install + npm run build)
 2. Uploading static files to cloud storage (S3/Blob/Cloud Storage)
 3. Invalidating CDN cache (CloudFront/Azure CDN/Cloud CDN)
@@ -20,6 +21,7 @@ When you run `terraform apply`, the frontend modules automatically:
 ### Smart Rebuilding
 
 Frontend only rebuilds when:
+
 - `frontend/package.json` changes (dependencies updated)
 - Source files in `frontend/src/` change
 - Build output files are missing or changed
@@ -31,49 +33,58 @@ Infrastructure-only changes (scaling, IAM, etc.) won't trigger frontend rebuild.
 ### AWS (CloudFront + S3)
 
 **Resources Created:**
+
 - `terraform_data.frontend_build` - Runs npm build
 - `aws_s3_object.frontend_files` - Uploads each file individually to S3
 - `terraform_data.cloudfront_invalidation` - Invalidates CloudFront cache
 
 **File Upload Strategy:**
+
 - Uses `aws_s3_object` resource for each file (tracked in state)
 - Automatic MIME type detection
 - Cache headers: 1 year for assets, no-cache for HTML
 - Individual file etags for change detection
 
 **Requirements:**
+
 - AWS CLI configured (`aws configure` or environment variables)
 - Permissions: `s3:PutObject`, `cloudfront:CreateInvalidation`
 
 ### Azure (Azure CDN + Blob Storage)
 
 **Resources Created:**
+
 - `terraform_data.frontend_build` - Runs npm build
 - `terraform_data.frontend_upload` - Batch uploads to $web container
 - `terraform_data.cdn_purge` - Purges Azure CDN cache
 
 **File Upload Strategy:**
+
 - Uses `az storage blob upload-batch` for efficient batch upload
 - Separate batches for cached assets vs HTML files
 - Uploads to `$web` container (automatically created by static website)
 
 **Requirements:**
+
 - Azure CLI installed and authenticated (`az login`)
 - Permissions: Storage Blob Data Contributor, CDN Endpoint Contributor
 
 ### GCP (Cloud CDN + Cloud Storage)
 
 **Resources Created:**
+
 - `terraform_data.frontend_build` - Runs npm build
 - `terraform_data.frontend_upload` - Syncs files with gsutil
 - `terraform_data.cdn_invalidation` - Invalidates Cloud CDN
 
 **File Upload Strategy:**
+
 - Uses `gsutil rsync` for efficient sync (only uploads changed files)
 - Separate `setmeta` commands for cache control headers
 - Deletes removed files with `-d` flag
 
 **Requirements:**
+
 - gcloud CLI installed and authenticated (`gcloud auth login`)
 - Permissions: Storage Object Admin, Compute Load Balancer Admin
 
@@ -147,6 +158,7 @@ terraform apply
 ```
 
 Terraform will:
+
 - Detect source file changes via hash
 - Rebuild frontend
 - Upload changed files
@@ -193,13 +205,17 @@ Terraform will:
 ## Cache Strategy
 
 ### Static Assets (Long Cache)
+
 Files: `*.js`, `*.css`, `*.png`, `*.jpg`, `*.svg`, `*.woff*`, `*.ttf`
+
 - **Cache-Control**: `public, max-age=31536000, immutable`
 - **Why**: Content-hashed filenames mean these never change
 - **Benefit**: Reduced bandwidth, faster page loads
 
 ### HTML Files (No Cache)
+
 Files: `*.html`
+
 - **Cache-Control**: `no-cache, no-store, must-revalidate`
 - **Why**: Entry points that reference hashed assets
 - **Benefit**: Users always get latest version after deployment
@@ -227,18 +243,21 @@ npm --version
 ### Build Succeeds but Files Not Uploaded
 
 **AWS**: Check AWS credentials and S3 permissions
+
 ```bash
 aws sts get-caller-identity
 aws s3 ls s3://your-bucket-name/
 ```
 
 **Azure**: Check Azure CLI authentication
+
 ```bash
 az account show
 az storage account show --name your-storage-account
 ```
 
 **GCP**: Check gcloud authentication
+
 ```bash
 gcloud auth list
 gsutil ls gs://your-bucket-name/
@@ -247,16 +266,19 @@ gsutil ls gs://your-bucket-name/
 ### CDN Invalidation Fails
 
 **AWS CloudFront**: Check invalidation limit (1000 free per month)
+
 ```bash
 aws cloudfront list-invalidations --distribution-id YOUR_DIST_ID
 ```
 
 **Azure CDN**: May take 10-15 minutes to complete
+
 ```bash
 az cdn endpoint show --name your-endpoint --profile-name your-profile
 ```
 
 **GCP Cloud CDN**: Check URL map exists
+
 ```bash
 gcloud compute url-maps list
 ```
@@ -365,17 +387,20 @@ deploy-frontend:
 If you were using the `cudly deploy` CLI tool:
 
 **Before** (CLI tool):
+
 ```bash
 cudly deploy --profile aws-dev
 ```
 
 **After** (Pure Terraform):
+
 ```bash
 cd terraform/environments/aws/dev
 terraform apply
 ```
 
 **Benefits of Terraform Approach:**
+
 - ✅ Infrastructure and frontend in single command
 - ✅ Full state tracking for all resources
 - ✅ Rollback capability
@@ -383,6 +408,7 @@ terraform apply
 - ✅ No external dependencies (just Terraform)
 
 **CLI Tool Still Useful For:**
+
 - ❌ Guided setup for beginners
 - ❌ Profile management
 - ❌ Multi-cloud abstraction

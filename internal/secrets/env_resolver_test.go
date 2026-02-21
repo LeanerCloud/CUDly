@@ -183,10 +183,10 @@ func TestEnvResolver_ListSecrets(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name            string
-		filter          string
-		expectMinCount  int
-		expectContains  []string
+		name             string
+		filter           string
+		expectMinCount   int
+		expectContains   []string
 		expectNotContain []string
 	}{
 		{

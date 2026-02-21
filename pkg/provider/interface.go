@@ -14,16 +14,16 @@ type Provider interface {
 	DisplayName() string // "Amazon Web Services", "Microsoft Azure", "Google Cloud Platform"
 
 	// Authentication
-	IsConfigured() bool                                   // Check if credentials are available
-	GetCredentials() (Credentials, error)                 // Get current credentials
-	ValidateCredentials(ctx context.Context) error        // Validate credentials are working
+	IsConfigured() bool                            // Check if credentials are available
+	GetCredentials() (Credentials, error)          // Get current credentials
+	ValidateCredentials(ctx context.Context) error // Validate credentials are working
 
 	// Accounts/Projects/Subscriptions
 	GetAccounts(ctx context.Context) ([]common.Account, error) // List all accessible accounts
 
 	// Regions
 	GetRegions(ctx context.Context) ([]common.Region, error) // List all available regions
-	GetDefaultRegion() string                                 // Get default region for this provider
+	GetDefaultRegion() string                                // Get default region for this provider
 
 	// Services
 	GetSupportedServices() []common.ServiceType // List services supported by this provider
@@ -72,9 +72,9 @@ type Credentials interface {
 
 // ProviderConfig represents configuration for a provider
 type ProviderConfig struct {
-	Name          string
-	Profile       string
-	Region        string
+	Name           string
+	Profile        string
+	Region         string
 	CredentialPath string
-	Endpoint      string // For custom endpoints
+	Endpoint       string // For custom endpoints
 }

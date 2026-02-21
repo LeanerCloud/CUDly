@@ -4,9 +4,9 @@ package azure
 import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
-	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
 )
 
 // NewComputeClient creates a new Azure Compute (VM) client

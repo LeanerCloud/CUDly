@@ -37,12 +37,12 @@ output "password_secret_name" {
 output "connection_details" {
   description = "Database connection details"
   value = {
-    host              = azurerm_postgresql_flexible_server.main.fqdn
-    port              = 5432
-    database          = azurerm_postgresql_flexible_server_database.main.name
-    username          = azurerm_postgresql_flexible_server.main.administrator_login
+    host               = azurerm_postgresql_flexible_server.main.fqdn
+    port               = 5432
+    database           = azurerm_postgresql_flexible_server_database.main.name
+    username           = azurerm_postgresql_flexible_server.main.administrator_login
     password_secret_id = azurerm_key_vault_secret.db_password.id
-    ssl_mode          = "require"
+    ssl_mode           = "require"
   }
   sensitive = true
 }

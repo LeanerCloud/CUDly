@@ -13,17 +13,17 @@ import (
 
 // mockAnalyticsStore implements AnalyticsStore for testing
 type mockAnalyticsStore struct {
-	saveSnapshotFunc           func(ctx context.Context, snapshot *SavingsSnapshot) error
-	bulkInsertSnapshotsFunc    func(ctx context.Context, snapshots []SavingsSnapshot) error
-	querySavingsFunc           func(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error)
-	queryMonthlyTotalsFunc     func(ctx context.Context, accountID string, months int) ([]MonthlySummary, error)
-	queryByProviderFunc        func(ctx context.Context, accountID string, startDate, endDate time.Time) ([]ProviderBreakdown, error)
-	queryByServiceFunc         func(ctx context.Context, accountID string, provider string, startDate, endDate time.Time) ([]ServiceBreakdown, error)
-	createPartitionFunc        func(ctx context.Context, forMonth time.Time) error
-	dropOldPartitionsFunc      func(ctx context.Context, retentionMonths int) error
+	saveSnapshotFunc             func(ctx context.Context, snapshot *SavingsSnapshot) error
+	bulkInsertSnapshotsFunc      func(ctx context.Context, snapshots []SavingsSnapshot) error
+	querySavingsFunc             func(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error)
+	queryMonthlyTotalsFunc       func(ctx context.Context, accountID string, months int) ([]MonthlySummary, error)
+	queryByProviderFunc          func(ctx context.Context, accountID string, startDate, endDate time.Time) ([]ProviderBreakdown, error)
+	queryByServiceFunc           func(ctx context.Context, accountID string, provider string, startDate, endDate time.Time) ([]ServiceBreakdown, error)
+	createPartitionFunc          func(ctx context.Context, forMonth time.Time) error
+	dropOldPartitionsFunc        func(ctx context.Context, retentionMonths int) error
 	createPartitionsForRangeFunc func(ctx context.Context, startDate, endDate time.Time) error
 	refreshMaterializedViewsFunc func(ctx context.Context) error
-	closeFunc                  func() error
+	closeFunc                    func() error
 
 	savedSnapshots []SavingsSnapshot
 }
@@ -338,7 +338,7 @@ func TestCollectorCollect(t *testing.T) {
 						Service:          "rds",
 						Region:           "us-east-1",
 						ResourceType:     "db.m5.large",
-						Term:             1, // 1 year term
+						Term:             1,     // 1 year term
 						EstimatedSavings: 720.0, // Monthly savings
 						UpfrontCost:      1000.0,
 					},
@@ -643,7 +643,7 @@ func TestCollectorCollect(t *testing.T) {
 	t.Run("calculates hourly savings correctly", func(t *testing.T) {
 		analyticsStore := &mockAnalyticsStore{}
 		activeTime := time.Now().AddDate(0, -1, 0) // 1 month ago
-		monthlySavings := 720.0 // $720/month
+		monthlySavings := 720.0                    // $720/month
 		expectedHourlySavings := monthlySavings / HoursPerMonth
 
 		configStore := &mockConfigStore{

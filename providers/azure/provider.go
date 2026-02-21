@@ -85,11 +85,11 @@ func (r *realCredentialProvider) NewDefaultAzureCredential() (azcore.TokenCreden
 
 // AzureProvider implements the Provider interface for Azure
 type AzureProvider struct {
-	cred               azcore.TokenCredential
-	subscriptionID     string
-	region             string // Default region for operations
+	cred                azcore.TokenCredential
+	subscriptionID      string
+	region              string // Default region for operations
 	subscriptionsClient SubscriptionsClient
-	credProvider       CredentialProvider
+	credProvider        CredentialProvider
 }
 
 // NewAzureProvider creates a new Azure provider instance

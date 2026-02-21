@@ -146,7 +146,7 @@ resource "google_monitoring_dashboard" "main" {
                       }
                     }
                   }
-                  plotType = "LINE"
+                  plotType   = "LINE"
                   targetAxis = "Y1"
                 },
                 {
@@ -160,7 +160,7 @@ resource "google_monitoring_dashboard" "main" {
                       }
                     }
                   }
-                  plotType = "LINE"
+                  plotType   = "LINE"
                   targetAxis = "Y2"
                 }
               ]
@@ -241,7 +241,7 @@ resource "google_monitoring_dashboard" "main" {
                       }
                     }
                   }
-                  plotType = "LINE"
+                  plotType   = "LINE"
                   targetAxis = "Y1"
                 },
                 {
@@ -254,7 +254,7 @@ resource "google_monitoring_dashboard" "main" {
                       }
                     }
                   }
-                  plotType = "LINE"
+                  plotType   = "LINE"
                   targetAxis = "Y2"
                 }
               ]
@@ -279,7 +279,7 @@ resource "google_monitoring_dashboard" "main" {
                       }
                     }
                   }
-                  plotType = "LINE"
+                  plotType   = "LINE"
                   targetAxis = "Y1"
                 },
                 {
@@ -292,7 +292,7 @@ resource "google_monitoring_dashboard" "main" {
                       }
                     }
                   }
-                  plotType = "LINE"
+                  plotType   = "LINE"
                   targetAxis = "Y2"
                 }
               ]

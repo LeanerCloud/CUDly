@@ -15,8 +15,8 @@ locals {
   git_commit = var.skip_docker_build ? "skip" : trimspace(try(
     file("${path.root}/.git/HEAD") != "" ? (
       can(regex("^ref:", file("${path.root}/.git/HEAD"))) ?
-        substr(file("${path.root}/.git/${trimspace(replace(file("${path.root}/.git/HEAD"), "ref: ", ""))}"), 0, 7) :
-        substr(file("${path.root}/.git/HEAD"), 0, 7)
+      substr(file("${path.root}/.git/${trimspace(replace(file("${path.root}/.git/HEAD"), "ref: ", ""))}"), 0, 7) :
+      substr(file("${path.root}/.git/HEAD"), 0, 7)
     ) : "unknown",
     "unknown"
   ))
@@ -37,15 +37,15 @@ resource "terraform_data" "docker_build" {
 
   triggers_replace = {
     # Rebuild when source code changes
-    go_mod      = fileexists("${var.source_path}/go.mod") ? filemd5("${var.source_path}/go.mod") : "none"
-    go_sum      = fileexists("${var.source_path}/go.sum") ? filemd5("${var.source_path}/go.sum") : "none"
-    dockerfile  = fileexists("${var.source_path}/Dockerfile") ? filemd5("${var.source_path}/Dockerfile") : "none"
+    go_mod     = fileexists("${var.source_path}/go.mod") ? filemd5("${var.source_path}/go.mod") : "none"
+    go_sum     = fileexists("${var.source_path}/go.sum") ? filemd5("${var.source_path}/go.sum") : "none"
+    dockerfile = fileexists("${var.source_path}/Dockerfile") ? filemd5("${var.source_path}/Dockerfile") : "none"
     # Hash all Go files in cmd and pkg directories
-    cmd_files   = try(sha256(join("", [for f in fileset("${var.source_path}/cmd", "**/*.go") : filemd5("${var.source_path}/cmd/${f}")])), "none")
-    pkg_files   = try(sha256(join("", [for f in fileset("${var.source_path}/pkg", "**/*.go") : filemd5("${var.source_path}/pkg/${f}")])), "none")
+    cmd_files = try(sha256(join("", [for f in fileset("${var.source_path}/cmd", "**/*.go") : filemd5("${var.source_path}/cmd/${f}")])), "none")
+    pkg_files = try(sha256(join("", [for f in fileset("${var.source_path}/pkg", "**/*.go") : filemd5("${var.source_path}/pkg/${f}")])), "none")
 
     # Force rebuild with image tag
-    image_tag   = local.image_tag
+    image_tag = local.image_tag
   }
 
   provisioner "local-exec" {

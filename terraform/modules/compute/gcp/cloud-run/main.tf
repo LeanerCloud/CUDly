@@ -79,23 +79,23 @@ resource "google_cloud_run_v2_service" "main" {
       dynamic "env" {
         for_each = merge(
           {
-            ENVIRONMENT          = var.environment
-            RUNTIME_MODE         = "http"
-            DB_HOST              = var.database_host
-            DB_PORT              = "5432"
-            DB_NAME              = var.database_name
-            DB_USER              = var.database_username
-            DB_PASSWORD_SECRET   = var.database_password_secret_id
-            DB_SSL_MODE          = "require"
-            DB_CONNECT_TIMEOUT   = "8s"
-            DB_AUTO_MIGRATE      = tostring(var.auto_migrate)
-            DB_MIGRATIONS_PATH   = "/app/migrations"
-            ADMIN_EMAIL          = var.admin_email
-            SECRET_PROVIDER      = "gcp"
-            GCP_PROJECT_ID       = var.project_id
-            GCP_REGION           = var.region
-            PORT                 = "8080"
-            ALLOWED_ORIGINS      = join(",", var.allowed_origins)
+            ENVIRONMENT        = var.environment
+            RUNTIME_MODE       = "http"
+            DB_HOST            = var.database_host
+            DB_PORT            = "5432"
+            DB_NAME            = var.database_name
+            DB_USER            = var.database_username
+            DB_PASSWORD_SECRET = var.database_password_secret_id
+            DB_SSL_MODE        = "require"
+            DB_CONNECT_TIMEOUT = "8s"
+            DB_AUTO_MIGRATE    = tostring(var.auto_migrate)
+            DB_MIGRATIONS_PATH = "/app/migrations"
+            ADMIN_EMAIL        = var.admin_email
+            SECRET_PROVIDER    = "gcp"
+            GCP_PROJECT_ID     = var.project_id
+            GCP_REGION         = var.region
+            PORT               = "8080"
+            ALLOWED_ORIGINS    = join(",", var.allowed_origins)
           },
           var.additional_env_vars
         )
@@ -156,8 +156,8 @@ resource "google_cloud_run_v2_service" "main" {
   ingress = var.ingress
 
   labels = merge(var.labels, {
-    environment = var.environment
-    managed_by  = "terraform"
+    environment  = var.environment
+    managed_by   = "terraform"
     architecture = var.execution_environment == "EXECUTION_ENVIRONMENT_GEN2" ? "arm64-capable" : "x86_64"
   })
 }

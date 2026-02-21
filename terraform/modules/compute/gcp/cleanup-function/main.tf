@@ -81,8 +81,8 @@ resource "google_cloudfunctions2_function" "cleanup" {
   }
 
   service_config {
-    max_instance_count = 1
-    timeout_seconds    = 300
+    max_instance_count    = 1
+    timeout_seconds       = 300
     service_account_email = google_service_account.cleanup.email
 
     environment_variables = {
