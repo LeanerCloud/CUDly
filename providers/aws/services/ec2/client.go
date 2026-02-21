@@ -203,22 +203,31 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		Values: []string{offeringClass},
 	})
 
-	input := &ec2.DescribeReservedInstancesOfferingsInput{
-		Filters:            filters,
-		IncludeMarketplace: aws.Bool(false),
-		MaxResults:         aws.Int32(100),
+	var nextToken *string
+	for {
+		input := &ec2.DescribeReservedInstancesOfferingsInput{
+			Filters:            filters,
+			IncludeMarketplace: aws.Bool(false),
+			MaxResults:         aws.Int32(100),
+			NextToken:          nextToken,
+		}
+
+		result, err := c.client.DescribeReservedInstancesOfferings(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("failed to describe offerings: %w", err)
+		}
+
+		if len(result.ReservedInstancesOfferings) > 0 {
+			return aws.ToString(result.ReservedInstancesOfferings[0].ReservedInstancesOfferingId), nil
+		}
+
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		nextToken = result.NextToken
 	}
 
-	result, err := c.client.DescribeReservedInstancesOfferings(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe offerings: %w", err)
-	}
-
-	if len(result.ReservedInstancesOfferings) == 0 {
-		return "", fmt.Errorf("no offerings found for %s %s %s", rec.ResourceType, platform, tenancy)
-	}
-
-	return aws.ToString(result.ReservedInstancesOfferings[0].ReservedInstancesOfferingId), nil
+	return "", fmt.Errorf("no offerings found for %s %s %s", rec.ResourceType, platform, tenancy)
 }
 
 // ValidateOffering checks if an offering exists without purchasing

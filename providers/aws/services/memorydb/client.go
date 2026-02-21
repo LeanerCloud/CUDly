@@ -147,24 +147,34 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 // findOfferingID finds the appropriate Reserved Node offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	input := &memorydb.DescribeReservedNodesOfferingsInput{
-		NodeType:   aws.String(rec.ResourceType),
-		MaxResults: aws.Int32(100),
-	}
-
-	result, err := c.client.DescribeReservedNodesOfferings(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe offerings: %w", err)
-	}
-
 	requiredMonths := c.getTermMonthsFromString(rec.Term)
-	for _, offering := range result.ReservedNodesOfferings {
-		if offering.NodeType != nil && *offering.NodeType == rec.ResourceType {
-			if c.matchesDuration(offering.Duration, requiredMonths) &&
-				c.matchesOfferingType(offering.OfferingType, rec.PaymentOption) {
-				return aws.ToString(offering.ReservedNodesOfferingId), nil
+	var nextToken *string
+
+	for {
+		input := &memorydb.DescribeReservedNodesOfferingsInput{
+			NodeType:   aws.String(rec.ResourceType),
+			MaxResults: aws.Int32(100),
+			NextToken:  nextToken,
+		}
+
+		result, err := c.client.DescribeReservedNodesOfferings(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("failed to describe offerings: %w", err)
+		}
+
+		for _, offering := range result.ReservedNodesOfferings {
+			if offering.NodeType != nil && *offering.NodeType == rec.ResourceType {
+				if c.matchesDuration(offering.Duration, requiredMonths) &&
+					c.matchesOfferingType(offering.OfferingType, rec.PaymentOption) {
+					return aws.ToString(offering.ReservedNodesOfferingId), nil
+				}
 			}
 		}
+
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		nextToken = result.NextToken
 	}
 
 	return "", fmt.Errorf("no offerings found for %s", rec.ResourceType)

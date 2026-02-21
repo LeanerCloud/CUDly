@@ -144,22 +144,32 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 // findOfferingID finds the appropriate Reserved Node offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	input := &redshift.DescribeReservedNodeOfferingsInput{
-		MaxRecords: aws.Int32(100),
-	}
+	var marker *string
 
-	result, err := c.client.DescribeReservedNodeOfferings(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe offerings: %w", err)
-	}
+	for {
+		input := &redshift.DescribeReservedNodeOfferingsInput{
+			MaxRecords: aws.Int32(100),
+			Marker:     marker,
+		}
 
-	for _, offering := range result.ReservedNodeOfferings {
-		if offering.NodeType != nil && *offering.NodeType == rec.ResourceType {
-			if c.matchesDuration(offering.Duration, rec.Term) &&
-				c.matchesOfferingType(string(offering.ReservedNodeOfferingType), rec.PaymentOption) {
-				return aws.ToString(offering.ReservedNodeOfferingId), nil
+		result, err := c.client.DescribeReservedNodeOfferings(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("failed to describe offerings: %w", err)
+		}
+
+		for _, offering := range result.ReservedNodeOfferings {
+			if offering.NodeType != nil && *offering.NodeType == rec.ResourceType {
+				if c.matchesDuration(offering.Duration, rec.Term) &&
+					c.matchesOfferingType(string(offering.ReservedNodeOfferingType), rec.PaymentOption) {
+					return aws.ToString(offering.ReservedNodeOfferingId), nil
+				}
 			}
 		}
+
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+			break
+		}
+		marker = result.Marker
 	}
 
 	return "", fmt.Errorf("no offerings found for %s", rec.ResourceType)

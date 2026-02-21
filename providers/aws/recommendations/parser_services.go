@@ -2,6 +2,7 @@ package recommendations
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 
@@ -109,7 +110,13 @@ func (c *Client) parseOpenSearchDetails(rec *common.Recommendation, details *typ
 	osInfo := &common.SearchDetails{}
 
 	if esDetails.InstanceClass != nil && esDetails.InstanceSize != nil {
-		rec.ResourceType = fmt.Sprintf("%s.%s", *esDetails.InstanceClass, *esDetails.InstanceSize)
+		instanceClass := *esDetails.InstanceClass
+		instanceSize := *esDetails.InstanceSize
+		if strings.HasPrefix(instanceSize, instanceClass+".") {
+			rec.ResourceType = instanceSize
+		} else {
+			rec.ResourceType = fmt.Sprintf("%s.%s", instanceClass, instanceSize)
+		}
 		osInfo.InstanceType = rec.ResourceType
 	}
 	if esDetails.Region != nil {

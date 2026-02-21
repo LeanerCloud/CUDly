@@ -162,25 +162,34 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	duration := c.getDurationString(rec.Term)
 	offeringType := c.convertPaymentOption(rec.PaymentOption)
 
-	input := &elasticache.DescribeReservedCacheNodesOfferingsInput{
-		CacheNodeType:      aws.String(rec.ResourceType),
-		ProductDescription: aws.String(details.Engine),
-		Duration:           aws.String(duration),
-		OfferingType:       aws.String(offeringType),
-		MaxRecords:         aws.Int32(100),
+	var marker *string
+	for {
+		input := &elasticache.DescribeReservedCacheNodesOfferingsInput{
+			CacheNodeType:      aws.String(rec.ResourceType),
+			ProductDescription: aws.String(details.Engine),
+			Duration:           aws.String(duration),
+			OfferingType:       aws.String(offeringType),
+			MaxRecords:         aws.Int32(100),
+			Marker:             marker,
+		}
+
+		result, err := c.client.DescribeReservedCacheNodesOfferings(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("failed to describe offerings: %w", err)
+		}
+
+		if len(result.ReservedCacheNodesOfferings) > 0 {
+			return aws.ToString(result.ReservedCacheNodesOfferings[0].ReservedCacheNodesOfferingId), nil
+		}
+
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+			break
+		}
+		marker = result.Marker
 	}
 
-	result, err := c.client.DescribeReservedCacheNodesOfferings(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe offerings: %w", err)
-	}
-
-	if len(result.ReservedCacheNodesOfferings) == 0 {
-		return "", fmt.Errorf("no offerings found for %s %s %s",
-			rec.ResourceType, details.Engine, duration)
-	}
-
-	return aws.ToString(result.ReservedCacheNodesOfferings[0].ReservedCacheNodesOfferingId), nil
+	return "", fmt.Errorf("no offerings found for %s %s %s",
+		rec.ResourceType, details.Engine, duration)
 }
 
 // ValidateOffering checks if an offering exists without purchasing
