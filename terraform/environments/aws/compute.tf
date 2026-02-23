@@ -23,7 +23,8 @@ module "compute_lambda" {
   database_password_secret_arn = module.database.password_secret_arn
 
   # Admin user configuration
-  admin_email = module.database.admin_email
+  admin_email    = module.database.admin_email
+  admin_password = var.admin_password
 
   # Auto-migrate on cold start
   auto_migrate = var.database_auto_migrate
@@ -62,8 +63,8 @@ module "compute_lambda" {
   tags = local.common_tags
 
   # CRITICAL: Wait for resources before creating/updating Lambda
-  # Note: Build dependency is implicit via image_uri when enable_docker_build=true
-  depends_on = [module.networking, module.database, module.secrets]
+  # Build dependency must be explicit — image_uri is computed before docker push completes
+  depends_on = [module.networking, module.database, module.secrets, module.build]
 }
 
 # ==============================================
@@ -95,7 +96,8 @@ module "compute_fargate" {
   database_password_secret_arn = module.database.password_secret_arn
 
   # Admin user configuration
-  admin_email = var.admin_email
+  admin_email    = var.admin_email
+  admin_password = var.admin_password
 
   # Auto-migrate on startup
   auto_migrate = var.database_auto_migrate
@@ -106,9 +108,13 @@ module "compute_fargate" {
   public_subnet_ids     = module.networking.public_subnet_ids
   alb_security_group_id = module.networking.alb_security_group_id
 
-  # HTTPS (optional)
-  enable_https    = var.fargate_enable_https
-  certificate_arn = var.fargate_certificate_arn
+  # HTTPS - use wildcard cert for TLS on ALB
+  enable_https = length(var.frontend_domain_names) > 0 && var.subdomain_zone_name != ""
+  certificate_arn = (
+    length(aws_acm_certificate.frontend) > 0
+    ? aws_acm_certificate_validation.frontend[0].certificate_arn
+    : var.fargate_certificate_arn
+  )
 
   # Health checks
   health_check_path = "/health"
@@ -138,6 +144,6 @@ module "compute_fargate" {
   tags = local.common_tags
 
   # CRITICAL: Wait for resources before creating/updating Fargate
-  # Note: Build dependency is implicit via image_uri when enable_docker_build=true
-  depends_on = [module.networking, module.database, module.secrets]
+  # Build dependency must be explicit — image_uri is computed before docker push completes
+  depends_on = [module.networking, module.database, module.secrets, module.build]
 }

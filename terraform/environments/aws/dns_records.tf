@@ -16,3 +16,20 @@ resource "aws_route53_record" "frontend_alias" {
     module.frontend
   ]
 }
+
+# DNS record for Fargate ALB (enables HTTPS with wildcard cert)
+resource "aws_route53_record" "fargate_alb_alias" {
+  count = var.compute_platform == "fargate" && var.subdomain_zone_name != "" ? 1 : 0
+
+  zone_id = local.subdomain_zone_id
+  name    = "api-${var.environment}.${var.subdomain_zone_name}"
+  type    = "A"
+
+  alias {
+    name                   = module.compute_fargate[0].alb_dns_name
+    zone_id                = module.compute_fargate[0].alb_zone_id
+    evaluate_target_health = true
+  }
+
+  depends_on = [module.compute_fargate]
+}

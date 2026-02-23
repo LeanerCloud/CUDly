@@ -61,6 +61,13 @@ variable "admin_email" {
   type        = string
 }
 
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "auto_migrate" {
   description = "Automatically run database migrations on startup"
   type        = bool

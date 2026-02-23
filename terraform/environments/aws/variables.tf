@@ -169,6 +169,13 @@ variable "admin_email" {
   type        = string
 }
 
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # ==============================================
 # Lambda Configuration
 # ==============================================
@@ -279,12 +286,6 @@ variable "fargate_max_capacity" {
   description = "Maximum capacity for auto-scaling"
   type        = number
   default     = 10
-}
-
-variable "fargate_enable_https" {
-  description = "Enable HTTPS on Fargate ALB"
-  type        = bool
-  default     = false
 }
 
 variable "fargate_certificate_arn" {

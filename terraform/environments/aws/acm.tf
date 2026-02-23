@@ -2,9 +2,9 @@
 # Certificate must be in us-east-1 for CloudFront
 
 resource "aws_acm_certificate" "frontend" {
-  count = length(var.frontend_domain_names) > 0 ? 1 : 0
+  count = length(var.frontend_domain_names) > 0 && var.subdomain_zone_name != "" ? 1 : 0
 
-  domain_name       = var.frontend_domain_names[0]
+  domain_name       = "*.${var.subdomain_zone_name}"
   validation_method = "DNS"
 
   lifecycle {
@@ -36,7 +36,7 @@ resource "aws_route53_record" "acm_validation" {
 
 # Wait for certificate validation to complete
 resource "aws_acm_certificate_validation" "frontend" {
-  count = length(var.frontend_domain_names) > 0 ? 1 : 0
+  count = length(var.frontend_domain_names) > 0 && var.subdomain_zone_name != "" ? 1 : 0
 
   certificate_arn         = aws_acm_certificate.frontend[0].arn
   validation_record_fqdns = [for record in aws_route53_record.acm_validation : record.fqdn]

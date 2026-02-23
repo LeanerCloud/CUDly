@@ -19,11 +19,11 @@ module "frontend" {
   # S3 bucket for frontend files
   bucket_name = "${local.stack_name}-frontend"
 
-  # API endpoint - gets from Lambda Function URL or Fargate ALB
+  # API endpoint - Lambda Function URL or Fargate ALB CNAME (for TLS cert matching)
   api_domain_name = var.compute_platform == "lambda" ? (
     replace(replace(module.compute_lambda[0].function_url, "https://", ""), "/", "")
     ) : (
-    module.compute_fargate[0].alb_dns_name
+    "api-${var.environment}.${var.subdomain_zone_name}"
   )
 
   # CloudFront secret for origin verification
