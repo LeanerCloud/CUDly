@@ -399,6 +399,10 @@ resource "aws_ecs_task_definition" "main" {
             value = var.admin_email
           },
           {
+            name  = "ADMIN_PASSWORD"
+            value = var.admin_password
+          },
+          {
             name  = "SECRET_PROVIDER"
             value = "aws"
           },
@@ -413,6 +417,10 @@ resource "aws_ecs_task_definition" "main" {
           {
             name  = "ALLOWED_ORIGINS"
             value = join(",", var.allowed_origins)
+          },
+          {
+            name  = "CORS_ALLOWED_ORIGIN"
+            value = length(var.allowed_origins) > 0 ? var.allowed_origins[0] : "*"
           }
         ],
         [
@@ -426,7 +434,7 @@ resource "aws_ecs_task_definition" "main" {
       secrets = [
         {
           name      = "DB_PASSWORD"
-          valueFrom = var.database_password_secret_arn
+          valueFrom = "${var.database_password_secret_arn}:password::"
         }
       ]
 
