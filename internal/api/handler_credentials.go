@@ -125,12 +125,12 @@ func (h *Handler) saveAzureCredentials(ctx context.Context, req *events.LambdaFu
 
 	var creds AzureCredentialsRequest
 	if err := json.Unmarshal([]byte(req.Body), &creds); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Validate required fields
 	if creds.TenantID == "" || creds.ClientID == "" || creds.ClientSecret == "" || creds.SubscriptionID == "" {
-		return nil, fmt.Errorf("all fields are required: tenant_id, client_id, client_secret, subscription_id")
+		return nil, NewClientError(400, "all fields are required: tenant_id, client_id, client_secret, subscription_id")
 	}
 
 	// Store credentials
@@ -160,15 +160,15 @@ func (h *Handler) saveGCPCredentials(ctx context.Context, req *events.LambdaFunc
 
 	var creds GCPCredentialsRequest
 	if err := json.Unmarshal([]byte(req.Body), &creds); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Validate required fields
 	if creds.Type != "service_account" {
-		return nil, fmt.Errorf("invalid credentials: type must be 'service_account'")
+		return nil, NewClientError(400, "invalid credentials: type must be 'service_account'")
 	}
 	if creds.ProjectID == "" || creds.PrivateKey == "" || creds.ClientEmail == "" {
-		return nil, fmt.Errorf("required fields missing: project_id, private_key, client_email")
+		return nil, NewClientError(400, "required fields missing: project_id, private_key, client_email")
 	}
 
 	// Store credentials (preserve the original JSON format for GCP SDK compatibility)

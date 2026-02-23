@@ -24,7 +24,7 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 
 	var loginReq LoginRequest
 	if err := json.Unmarshal([]byte(req.Body), &loginReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Decode base64-encoded password
@@ -36,7 +36,7 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 
 	response, err := h.auth.Login(ctx, loginReq)
 	if err != nil {
-		return nil, err
+		return nil, NewClientError(401, err.Error())
 	}
 
 	return response, nil
@@ -50,11 +50,11 @@ func (h *Handler) logout(ctx context.Context, req *events.LambdaFunctionURLReque
 	// Get token from Authorization header
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	if err := h.auth.Logout(ctx, token); err != nil {
-		return nil, err
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	return map[string]string{"status": "logged out"}, nil
@@ -68,12 +68,12 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 	// Get token from Authorization header
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, err
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	user, err := h.auth.GetUser(ctx, session.UserID)
@@ -119,7 +119,7 @@ func (h *Handler) setupAdmin(ctx context.Context, req *events.LambdaFunctionURLR
 
 	var setupReq SetupAdminRequest
 	if err := json.Unmarshal([]byte(req.Body), &setupReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	response, err := h.auth.SetupAdmin(ctx, setupReq)
@@ -137,7 +137,7 @@ func (h *Handler) forgotPassword(ctx context.Context, body string) (any, error) 
 
 	var pwdReq PasswordResetRequest
 	if err := json.Unmarshal([]byte(body), &pwdReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Rate limiting: 3 attempts per email per hour to prevent enumeration attacks
@@ -168,7 +168,7 @@ func (h *Handler) resetPassword(ctx context.Context, body string) (any, error) {
 
 	var pwdResetReq PasswordResetConfirm
 	if err := json.Unmarshal([]byte(body), &pwdResetReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	if err := h.auth.ConfirmPasswordReset(ctx, pwdResetReq); err != nil {
@@ -186,18 +186,18 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 	// Get current user from token
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid session: %w", err)
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	// Parse request body
 	var profileReq ProfileUpdateRequest
 	if err := json.Unmarshal([]byte(req.Body), &profileReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Decode base64-encoded passwords
@@ -226,17 +226,17 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid session: %w", err)
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	var pwdReq ChangePasswordRequest
 	if err := json.Unmarshal([]byte(req.Body), &pwdReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Decode base64-encoded passwords

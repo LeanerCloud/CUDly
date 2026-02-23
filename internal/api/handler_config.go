@@ -42,12 +42,12 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 
 	var cfg config.GlobalConfig
 	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Validate the configuration
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("validation error: %w", err)
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
 	if err := h.config.SaveGlobalConfig(ctx, &cfg); err != nil {
@@ -82,7 +82,7 @@ func (h *Handler) getServiceConfig(ctx context.Context, service string) (any, er
 
 	parts := strings.SplitN(service, "/", 2)
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid service format, expected: provider/service")
+		return nil, NewClientError(400, "invalid service format, expected: provider/service")
 	}
 
 	// Validate provider
@@ -115,7 +115,7 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 
 	var cfg config.ServiceConfig
 	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	parts := strings.SplitN(service, "/", 2)

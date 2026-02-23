@@ -195,6 +195,9 @@ func (h *Handler) handleRequestError(err error) (int, any) {
 	if IsNotFoundError(err) {
 		return 404, map[string]string{"error": "Not found"}
 	}
+	if ce, ok := IsClientError(err); ok {
+		return ce.code, map[string]string{"error": ce.message}
+	}
 
 	logging.Errorf("API error: %v", err)
 	return 500, map[string]string{"error": "Internal server error"}

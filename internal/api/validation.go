@@ -40,7 +40,7 @@ var regionNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 // validateProvider checks if a provider value is valid
 func validateProvider(provider string) error {
 	if !validProviders[provider] {
-		return fmt.Errorf("invalid provider: must be aws, azure, gcp, or all")
+		return NewClientError(400, "invalid provider: must be aws, azure, gcp, or all")
 	}
 	return nil
 }
@@ -54,12 +54,12 @@ func validateServiceName(service string) error {
 
 	// Check length limits
 	if len(service) > 64 {
-		return fmt.Errorf("invalid service name: must be 1-64 characters")
+		return NewClientError(400, "invalid service name: must be 1-64 characters")
 	}
 
 	// Check pattern (now requires at least one character due to + quantifier)
 	if !serviceNameRegex.MatchString(service) {
-		return fmt.Errorf("invalid service name: must contain only alphanumeric characters and hyphens")
+		return NewClientError(400, "invalid service name: must contain only alphanumeric characters and hyphens")
 	}
 	return nil
 }
@@ -73,12 +73,12 @@ func validateRegion(region string) error {
 
 	// Check length limits
 	if len(region) > 64 {
-		return fmt.Errorf("invalid region: must be 1-64 characters")
+		return NewClientError(400, "invalid region: must be 1-64 characters")
 	}
 
 	// Check pattern (now requires at least one character due to + quantifier)
 	if !regionNameRegex.MatchString(region) {
-		return fmt.Errorf("invalid region: must contain only lowercase alphanumeric characters and hyphens")
+		return NewClientError(400, "invalid region: must contain only lowercase alphanumeric characters and hyphens")
 	}
 	return nil
 }
@@ -87,23 +87,23 @@ func validateRegion(region string) error {
 func validateServicePath(service string) error {
 	// Reject path traversal attempts
 	if strings.Contains(service, "..") {
-		return fmt.Errorf("invalid service path: path traversal not allowed")
+		return NewClientError(400, "invalid service path: path traversal not allowed")
 	}
 	if strings.Contains(service, "//") {
-		return fmt.Errorf("invalid service path: double slashes not allowed")
+		return NewClientError(400, "invalid service path: double slashes not allowed")
 	}
 
 	// Reject any non-alphanumeric except single slash and hyphen
 	for _, r := range service {
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '/' && r != '-' && r != '_' {
-			return fmt.Errorf("invalid service path: contains invalid characters")
+			return NewClientError(400, "invalid service path: contains invalid characters")
 		}
 	}
 
 	// Ensure format is "provider/service" only
 	parts := strings.Split(service, "/")
 	if len(parts) != 2 {
-		return fmt.Errorf("invalid service path: must be in format provider/service")
+		return NewClientError(400, "invalid service path: must be in format provider/service")
 	}
 
 	return nil
@@ -112,7 +112,7 @@ func validateServicePath(service string) error {
 // validateUUID checks if a string is a valid UUID
 func validateUUID(id string) error {
 	if !uuidRegex.MatchString(id) {
-		return fmt.Errorf("invalid ID format: must be a valid UUID")
+		return NewClientError(400, "invalid ID format: must be a valid UUID")
 	}
 	return nil
 }
@@ -137,7 +137,7 @@ func validateContentType(req *events.LambdaFunctionURLRequest) error {
 
 	// Accept application/json or form data
 	if contentType == "" {
-		return fmt.Errorf("Content-Type header is required for requests with a body")
+		return NewClientError(400, "Content-Type header is required for requests with a body")
 	}
 
 	// Check for valid content types (allowing charset suffixes)
@@ -148,13 +148,13 @@ func validateContentType(req *events.LambdaFunctionURLRequest) error {
 		}
 	}
 
-	return fmt.Errorf("unsupported Content-Type: must be application/json")
+	return NewClientError(400, "unsupported Content-Type: must be application/json")
 }
 
 // validateRequestBodySize checks if the request body is within allowed limits
 func validateRequestBodySize(body string) error {
 	if len(body) > MaxRequestBodySize {
-		return fmt.Errorf("request body too large: maximum size is %d bytes", MaxRequestBodySize)
+		return NewClientError(400, fmt.Sprintf("request body too large: maximum size is %d bytes", MaxRequestBodySize))
 	}
 	return nil
 }
@@ -168,7 +168,7 @@ func decodeBase64Password(encoded string) (string, error) {
 	}
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return "", fmt.Errorf("invalid password encoding")
+		return "", NewClientError(400, "invalid password encoding")
 	}
 	return string(decoded), nil
 }

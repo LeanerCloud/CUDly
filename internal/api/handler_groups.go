@@ -4,7 +4,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
@@ -39,13 +38,13 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 		if err != nil {
 			// Log but continue on rate limiter errors
 		} else if !allowed {
-			return nil, fmt.Errorf("too many requests, please slow down")
+			return nil, NewClientError(429, "too many requests, please slow down")
 		}
 	}
 
 	var createReq auth.APICreateGroupRequest
 	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	group, err := h.auth.CreateGroupAPI(ctx, createReq)
@@ -88,7 +87,7 @@ func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURL
 
 	var updateReq auth.APIUpdateGroupRequest
 	if err := json.Unmarshal([]byte(req.Body), &updateReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	group, err := h.auth.UpdateGroupAPI(ctx, groupID, updateReq)

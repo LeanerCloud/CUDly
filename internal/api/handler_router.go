@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -27,4 +28,26 @@ func (e *notFoundError) Error() string {
 func IsNotFoundError(err error) bool {
 	_, ok := err.(*notFoundError)
 	return ok
+}
+
+// clientError represents an error that should be returned to the client with a specific HTTP status code.
+type clientError struct {
+	message string
+	code    int
+}
+
+func (e *clientError) Error() string { return e.message }
+
+// NewClientError creates a new client-facing error with the given HTTP status code and message.
+func NewClientError(code int, message string) error {
+	return &clientError{message: message, code: code}
+}
+
+// IsClientError checks if the error is a client error and returns it.
+func IsClientError(err error) (*clientError, bool) {
+	var ce *clientError
+	if errors.As(err, &ce) {
+		return ce, true
+	}
+	return nil, false
 }

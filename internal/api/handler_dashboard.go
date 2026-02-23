@@ -105,7 +105,7 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 		if err != nil {
 			// Log but continue on rate limiter errors
 		} else if !allowed {
-			return nil, fmt.Errorf("too many requests, please try again later")
+			return nil, NewClientError(429, "too many requests, please try again later")
 		}
 	}
 

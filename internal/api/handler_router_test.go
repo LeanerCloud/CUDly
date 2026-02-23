@@ -116,3 +116,34 @@ func TestFormatNotFoundError(t *testing.T) {
 	assert.Contains(t, err.Error(), "/api/unknown")
 	assert.Contains(t, err.Error(), "not found")
 }
+
+// Tests for clientError type
+func TestClientError_Error(t *testing.T) {
+	err := &clientError{message: "bad request", code: 400}
+	assert.Equal(t, "bad request", err.Error())
+}
+
+func TestNewClientError(t *testing.T) {
+	err := NewClientError(401, "unauthorized")
+	assert.Error(t, err)
+	assert.Equal(t, "unauthorized", err.Error())
+
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+func TestIsClientError_True(t *testing.T) {
+	err := NewClientError(400, "bad request")
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Equal(t, "bad request", ce.message)
+}
+
+func TestIsClientError_False(t *testing.T) {
+	err := assert.AnError
+	ce, ok := IsClientError(err)
+	assert.False(t, ok)
+	assert.Nil(t, ce)
+}

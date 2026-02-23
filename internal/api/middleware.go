@@ -185,16 +185,16 @@ func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionUR
 
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid session: %w", err)
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	if session.Role != "admin" {
-		return nil, fmt.Errorf("admin access required")
+		return nil, NewClientError(403, "admin access required")
 	}
 
 	return session, nil
@@ -216,7 +216,7 @@ func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunction
 	}
 	if !allowed {
 		logging.Warnf("Rate limit exceeded for %s from IP: %s", endpoint, clientIP)
-		return fmt.Errorf("too many requests, please try again later")
+		return NewClientError(429, "too many requests, please try again later")
 	}
 	return nil
 }

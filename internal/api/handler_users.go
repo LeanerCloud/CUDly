@@ -4,7 +4,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
@@ -39,13 +38,13 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 		if err != nil {
 			// Log but continue on rate limiter errors
 		} else if !allowed {
-			return nil, fmt.Errorf("too many requests, please slow down")
+			return nil, NewClientError(429, "too many requests, please slow down")
 		}
 	}
 
 	var createReq auth.APICreateUserRequest
 	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Decode base64-encoded password
@@ -95,7 +94,7 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 
 	var updateReq auth.APIUpdateUserRequest
 	if err := json.Unmarshal([]byte(req.Body), &updateReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	user, err := h.auth.UpdateUserAPI(ctx, userID, updateReq)
@@ -120,7 +119,7 @@ func (h *Handler) deleteUser(ctx context.Context, req *events.LambdaFunctionURLR
 
 	// Prevent self-deletion
 	if session.UserID == userID {
-		return nil, fmt.Errorf("cannot delete your own account")
+		return nil, NewClientError(400, "cannot delete your own account")
 	}
 
 	if err := h.auth.DeleteUser(ctx, userID); err != nil {

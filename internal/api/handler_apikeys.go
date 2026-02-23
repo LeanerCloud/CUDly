@@ -21,12 +21,12 @@ func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURL
 	// Get current user from token
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid session: %w", err)
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	// List API keys for the current user - call service directly
@@ -47,12 +47,12 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	// Get current user from token
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid session: %w", err)
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	// Rate limiting: 30 admin operations per user per minute
@@ -61,14 +61,14 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		if err != nil {
 			// Log but continue on rate limiter errors
 		} else if !allowed {
-			return nil, fmt.Errorf("too many requests, please slow down")
+			return nil, NewClientError(429, "too many requests, please slow down")
 		}
 	}
 
 	// Parse request body
 	var createReq CreateAPIKeyRequest
 	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Create API key - call service directly
@@ -89,19 +89,19 @@ func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	// Get current user from token
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid session: %w", err)
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	// Extract key ID from path
 	path := req.RequestContext.HTTP.Path
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 3 {
-		return nil, fmt.Errorf("invalid path: missing key ID")
+		return nil, NewClientError(400, "invalid path: missing key ID")
 	}
 	keyID := parts[len(parts)-1]
 
@@ -127,19 +127,19 @@ func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	// Get current user from token
 	token := h.extractBearerToken(req)
 	if token == "" {
-		return nil, fmt.Errorf("no authorization token provided")
+		return nil, NewClientError(401, "no authorization token provided")
 	}
 
 	session, err := h.auth.ValidateSession(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid session: %w", err)
+		return nil, NewClientError(401, "invalid session")
 	}
 
 	// Extract key ID from path (format: /api/api-keys/{id}/revoke)
 	path := req.RequestContext.HTTP.Path
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 4 {
-		return nil, fmt.Errorf("invalid path: missing key ID")
+		return nil, NewClientError(400, "invalid path: missing key ID")
 	}
 	keyID := parts[len(parts)-2] // Second to last part (before "revoke")
 

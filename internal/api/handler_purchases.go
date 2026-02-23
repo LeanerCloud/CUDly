@@ -207,7 +207,7 @@ func (h *Handler) approvePurchase(ctx context.Context, execID, token string) (an
 		return nil, err
 	}
 	if token == "" {
-		return nil, fmt.Errorf("approval token is required")
+		return nil, NewClientError(400, "approval token is required")
 	}
 
 	if err := h.purchase.ApproveExecution(ctx, execID, token); err != nil {
@@ -222,7 +222,7 @@ func (h *Handler) cancelPurchase(ctx context.Context, execID, token string) (any
 		return nil, err
 	}
 	if token == "" {
-		return nil, fmt.Errorf("cancellation token is required")
+		return nil, NewClientError(400, "cancellation token is required")
 	}
 
 	if err := h.purchase.CancelExecution(ctx, execID, token); err != nil {
@@ -302,16 +302,16 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 
 	var execReq ExecutePurchaseRequest
 	if err := json.Unmarshal([]byte(req.Body), &execReq); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Validate recommendations count to prevent DoS
 	const maxRecommendations = 1000
 	if len(execReq.Recommendations) == 0 {
-		return nil, fmt.Errorf("no recommendations provided")
+		return nil, NewClientError(400, "no recommendations provided")
 	}
 	if len(execReq.Recommendations) > maxRecommendations {
-		return nil, fmt.Errorf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations)
+		return nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
 	}
 
 	// Create a new execution for these recommendations
@@ -323,19 +323,19 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	var totalUpfront, totalSavings float64
 	for i, rec := range execReq.Recommendations {
 		if rec.UpfrontCost < 0 {
-			return nil, fmt.Errorf("recommendation %d has negative upfront cost: %.2f", i, rec.UpfrontCost)
+			return nil, NewClientError(400, fmt.Sprintf("recommendation %d has negative upfront cost: %.2f", i, rec.UpfrontCost))
 		}
 		if rec.Savings < 0 {
-			return nil, fmt.Errorf("recommendation %d has negative savings: %.2f", i, rec.Savings)
+			return nil, NewClientError(400, fmt.Sprintf("recommendation %d has negative savings: %.2f", i, rec.Savings))
 		}
 		totalUpfront += rec.UpfrontCost
 		totalSavings += rec.Savings
 	}
 	if totalUpfront > maxAmount {
-		return nil, fmt.Errorf("total upfront cost %.2f exceeds maximum allowed (%.2f)", totalUpfront, float64(maxAmount))
+		return nil, NewClientError(400, fmt.Sprintf("total upfront cost %.2f exceeds maximum allowed (%.2f)", totalUpfront, float64(maxAmount)))
 	}
 	if totalSavings > maxAmount {
-		return nil, fmt.Errorf("total estimated savings %.2f exceeds maximum allowed (%.2f)", totalSavings, float64(maxAmount))
+		return nil, NewClientError(400, fmt.Sprintf("total estimated savings %.2f exceeds maximum allowed (%.2f)", totalSavings, float64(maxAmount)))
 	}
 
 	execution := &config.PurchaseExecution{

@@ -1064,12 +1064,11 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 
 	resp, err := handler.HandleRequest(ctx, req)
 	require.NoError(t, err)
-	// Handler returns 500 for all non-NotFound errors
-	assert.Equal(t, 500, resp.StatusCode)
+	assert.Equal(t, 400, resp.StatusCode)
 
 	var body map[string]string
 	_ = json.Unmarshal([]byte(resp.Body), &body)
-	assert.Equal(t, "Internal server error", body["error"])
+	assert.Equal(t, "cannot delete your own account", body["error"])
 }
 
 // Test for listPlans error case
@@ -1132,6 +1131,5 @@ func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 
 	resp, err := handler.HandleRequest(ctx, req)
 	require.NoError(t, err)
-	// Handler returns 500 for all non-NotFound errors including invalid JSON
-	assert.Equal(t, 500, resp.StatusCode)
+	assert.Equal(t, 400, resp.StatusCode)
 }

@@ -94,6 +94,11 @@ func TestHandler_login_AuthError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid credentials")
+
+	// Verify it's a 401 client error
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 401, ce.code)
 }
 
 func TestHandler_logout_Success(t *testing.T) {
@@ -165,7 +170,11 @@ func TestHandler_logout_Error(t *testing.T) {
 	result, err := handler.logout(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "session not found")
+	assert.Equal(t, "invalid session", err.Error())
+
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 401, ce.code)
 }
 
 func TestHandler_getCurrentUser_Success(t *testing.T) {

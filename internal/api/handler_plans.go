@@ -59,14 +59,14 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 
 	var req PlanRequest
 	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	plan := req.toPurchasePlan()
 
 	// Validate the plan
 	if err := plan.Validate(); err != nil {
-		return nil, fmt.Errorf("validation error: %w", err)
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
 	if err := h.config.CreatePurchasePlan(ctx, plan); err != nil {
@@ -113,7 +113,7 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 
 	var req PlanRequest
 	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Fetch existing plan to preserve data not sent in request
@@ -137,7 +137,7 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 
 	// Validate the plan
 	if err := plan.Validate(); err != nil {
-		return nil, fmt.Errorf("validation error: %w", err)
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
 	if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
@@ -200,16 +200,16 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 func (h *Handler) parseCreatePurchasesRequest(body string) (*CreatePlannedPurchasesRequest, time.Time, error) {
 	var req CreatePlannedPurchasesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
-		return nil, time.Time{}, fmt.Errorf("invalid request body: %w", err)
+		return nil, time.Time{}, NewClientError(400, "invalid request body")
 	}
 
 	if req.Count < 1 || req.Count > 52 {
-		return nil, time.Time{}, fmt.Errorf("count must be between 1 and 52")
+		return nil, time.Time{}, NewClientError(400, "count must be between 1 and 52")
 	}
 
 	startDate, err := time.Parse("2006-01-02", req.StartDate)
 	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("invalid start_date format, expected YYYY-MM-DD: %w", err)
+		return nil, time.Time{}, NewClientError(400, "invalid start_date format, expected YYYY-MM-DD")
 	}
 
 	return &req, startDate, nil
@@ -290,7 +290,7 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 
 	var req PatchPlanRequest
 	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
+		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Fetch existing plan
@@ -305,10 +305,10 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 	// Apply only the fields that are present in the request, with validation
 	if req.Name != nil {
 		if len(*req.Name) == 0 {
-			return nil, fmt.Errorf("plan name cannot be empty")
+			return nil, NewClientError(400, "plan name cannot be empty")
 		}
 		if len(*req.Name) > 255 {
-			return nil, fmt.Errorf("plan name too long (max 255 characters)")
+			return nil, NewClientError(400, "plan name too long (max 255 characters)")
 		}
 		plan.Name = *req.Name
 	}
@@ -320,7 +320,7 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 	}
 	if req.NotificationDaysBefore != nil {
 		if *req.NotificationDaysBefore < 0 || *req.NotificationDaysBefore > 30 {
-			return nil, fmt.Errorf("notification_days_before must be between 0 and 30")
+			return nil, NewClientError(400, "notification_days_before must be between 0 and 30")
 		}
 		plan.NotificationDaysBefore = *req.NotificationDaysBefore
 	}
@@ -330,7 +330,7 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 
 	// Validate and save
 	if err := plan.Validate(); err != nil {
-		return nil, fmt.Errorf("validation error: %w", err)
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
 	if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
