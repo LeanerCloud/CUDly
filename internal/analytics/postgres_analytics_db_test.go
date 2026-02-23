@@ -55,7 +55,7 @@ func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -139,7 +139,7 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -273,7 +273,7 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -351,7 +351,7 @@ func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -416,7 +416,7 @@ func TestPostgresAnalyticsStore_BulkInsertSnapshots_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -479,7 +479,7 @@ func TestPostgresAnalyticsStore_PartitionManagement_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -525,7 +525,7 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -585,7 +585,7 @@ func TestPostgresAnalyticsStore_RefreshMaterializedViews_DB(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store

@@ -10,11 +10,16 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres" // postgres driver
 	_ "github.com/golang-migrate/migrate/v4/source/file"       // file source
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// bcryptCost matches the cost used in internal/auth/service_password.go
+const bcryptCost = 12
 
 // RunMigrations runs database migrations using golang-migrate
 // adminEmail is optional - if provided, admin user will be created after migrations complete
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, adminEmail string) error {
+// adminPassword is optional - if provided, admin is created with hashed password and active=true
+func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, adminEmail string, adminPassword string) error {
 	// Get database connection string from pool config (without admin email parameter - RDS Proxy doesn't support options)
 	dsn := buildMigrateDSN(pool.Config(), "")
 
@@ -47,7 +52,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 
 	// Create admin user if email provided (after migrations complete)
 	if adminEmail != "" {
-		if err := ensureAdminUser(ctx, pool, adminEmail); err != nil {
+		if err := ensureAdminUser(ctx, pool, adminEmail, adminPassword); err != nil {
 			return fmt.Errorf("failed to create admin user: %w", err)
 		}
 	}
@@ -55,22 +60,15 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 	return nil
 }
 
-// ensureAdminUser creates the admin user if it doesn't exist
-// The admin user is created with an empty password and must use password reset to set initial password
-func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string) error {
+// ensureAdminUser creates the admin user if it doesn't exist.
+// When password is provided, the admin is created with a bcrypt-hashed password and active=true.
+// When password is empty, the admin is created inactive and must use password reset to log in.
+func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, password string) error {
+	if password != "" {
+		return ensureAdminUserWithPassword(ctx, pool, email, password)
+	}
+
 	fmt.Printf("Ensuring admin user exists: %s (user will need to reset password to login)\n", email)
-
-	// Check if user already exists
-	var exists bool
-	err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)", email).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("failed to check if user exists: %w", err)
-	}
-
-	if exists {
-		fmt.Printf("Admin user already exists: %s\n", email)
-		return nil
-	}
 
 	// Create admin user with no password - account is inactive until password is set via reset flow
 	// Use ON CONFLICT to prevent race conditions when multiple instances run migrations
@@ -88,9 +86,45 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string) erro
 	}
 
 	if result.RowsAffected() > 0 {
-		fmt.Printf("✅ Admin user created: %s (password not set - user must reset)\n", email)
+		fmt.Printf("Admin user created: %s (password not set - user must reset)\n", email)
 	} else {
-		fmt.Printf("Admin user already exists (concurrent creation): %s\n", email)
+		fmt.Printf("Admin user already exists: %s\n", email)
+	}
+	return nil
+}
+
+// ensureAdminUserWithPassword creates or updates the admin with a hashed password and active=true.
+// If the admin already exists with an empty password_hash, the password and active flag are updated.
+func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email string, password string) error {
+	fmt.Printf("Ensuring admin user exists with password: %s\n", email)
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash admin password: %w", err)
+	}
+
+	// Insert new admin or update existing one that has no password set yet.
+	// Only overwrite password_hash/active when the existing hash is empty,
+	// so we never clobber a password that was already set via the UI.
+	result, err := pool.Exec(ctx, `
+		INSERT INTO users (
+			id, email, password_hash, salt, role, active, created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), $1, $2, '', 'admin', true, NOW(), NOW()
+		)
+		ON CONFLICT (email) DO UPDATE
+			SET password_hash = $2, active = true, updated_at = NOW()
+			WHERE users.password_hash = ''
+	`, email, string(hashedPassword))
+
+	if err != nil {
+		return fmt.Errorf("failed to upsert admin user: %w", err)
+	}
+
+	if result.RowsAffected() > 0 {
+		fmt.Printf("Admin user created/activated with password: %s\n", email)
+	} else {
+		fmt.Printf("Admin user already has a password set: %s (skipping)\n", email)
 	}
 	return nil
 }

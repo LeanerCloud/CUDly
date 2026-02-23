@@ -32,7 +32,7 @@ func TestPostgresStore_GlobalConfig(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -83,7 +83,7 @@ func TestPostgresStore_ServiceConfig(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -144,7 +144,7 @@ func TestPostgresStore_PurchasePlans(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -280,7 +280,7 @@ func TestPostgresStore_PurchaseExecutions(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store
@@ -330,7 +330,7 @@ func TestPostgresStore_PurchaseHistory(t *testing.T) {
 	defer container.Cleanup(ctx)
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
 	require.NoError(t, err)
 
 	// Create store

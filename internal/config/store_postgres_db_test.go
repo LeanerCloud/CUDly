@@ -40,7 +40,7 @@ func setupTestContainerDB(t *testing.T) *database.Connection {
 	}
 
 	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "")
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", "")
 	if err != nil {
 		container.Cleanup(ctx)
 		t.Skipf("Skipping DB test: cannot run migrations: %v", err)

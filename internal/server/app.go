@@ -263,11 +263,13 @@ func (app *Application) ensureDB(ctx context.Context) error {
 	if app.dbConfig.AutoMigrate {
 		log.Println("Running database migrations...")
 
-		// Get admin email for migration (optional)
-		// Admin user will be created without a password and must use password reset
+		// Get admin email and optional password for migration
+		// When ADMIN_PASSWORD is set, admin is created with that password and active=true
+		// When unset, admin must use password reset email flow to log in
 		adminEmail := os.Getenv("ADMIN_EMAIL")
+		adminPassword := os.Getenv("ADMIN_PASSWORD")
 
-		if err := migrations.RunMigrations(ctx, dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail); err != nil {
+		if err := migrations.RunMigrations(ctx, dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword); err != nil {
 			log.Printf("Migration failed: %v", err)
 			dbConn.Close()
 			app.DB = nil
