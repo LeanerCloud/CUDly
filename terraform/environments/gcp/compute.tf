@@ -33,7 +33,8 @@ module "compute_cloud_run" {
   database_password_secret_id = module.secrets.database_password_secret_id
 
   # Admin email
-  admin_email = var.admin_email
+  admin_email    = var.admin_email
+  admin_password = var.admin_password
 
   # VPC Access (for Cloud SQL)
   vpc_connector_id = module.networking.vpc_connector_id
@@ -53,7 +54,7 @@ module "compute_cloud_run" {
 
   labels = local.common_labels
 
-  depends_on = [module.networking, module.database, module.secrets]
+  depends_on = [module.networking, module.database, module.secrets, module.build]
 }
 
 # ==============================================

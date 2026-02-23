@@ -1,18 +1,6 @@
 # Azure Logic Apps for scheduled tasks on Container Apps
 # This is the Azure equivalent of AWS EventBridge + Lambda or GCP Cloud Scheduler + Cloud Run
 
-variable "enable_scheduled_tasks" {
-  description = "Enable scheduled tasks via Logic Apps"
-  type        = bool
-  default     = true
-}
-
-variable "recommendations_schedule" {
-  description = "Cron schedule for recommendations refresh (default: daily at 2 AM UTC)"
-  type        = string
-  default     = "0 2 * * *"
-}
-
 # Parse cron schedule into Logic Apps recurrence format
 # Azure Logic Apps uses a different format than cron
 # Convert "0 2 * * *" to: frequency=Day, interval=1, startTime=02:00
@@ -119,20 +107,4 @@ resource "azurerm_logic_app_action_http" "call_cleanup" {
     dryRun = false
     source = "azure-logic-apps"
   })
-}
-
-# Outputs
-output "recommendations_workflow_id" {
-  description = "ID of the recommendations Logic App workflow"
-  value       = var.enable_scheduled_tasks ? azurerm_logic_app_workflow.recommendations[0].id : null
-}
-
-output "cleanup_workflow_id" {
-  description = "ID of the cleanup Logic App workflow"
-  value       = var.enable_scheduled_tasks ? azurerm_logic_app_workflow.cleanup[0].id : null
-}
-
-output "recommendations_schedule" {
-  description = "Schedule for recommendations workflow"
-  value       = var.enable_scheduled_tasks ? "Daily at ${local.schedule_hour}:00 UTC" : null
 }

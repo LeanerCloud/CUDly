@@ -116,6 +116,7 @@ resource "azurerm_container_app" "main" {
             DB_AUTO_MIGRATE     = tostring(var.auto_migrate)
             DB_MIGRATIONS_PATH  = "/app/migrations"
             ADMIN_EMAIL         = var.admin_email
+            ADMIN_PASSWORD      = var.admin_password
             SECRET_PROVIDER     = "azure"
             AZURE_KEY_VAULT_URI = var.key_vault_uri
             AZURE_REGION        = var.location
@@ -248,6 +249,7 @@ resource "azurerm_container_app_job" "recommendations" {
             DB_CONNECT_TIMEOUT  = "8s"
             DB_AUTO_MIGRATE     = "false" # Don't migrate in jobs
             ADMIN_EMAIL         = var.admin_email
+            ADMIN_PASSWORD      = var.admin_password
             SECRET_PROVIDER     = "azure"
             AZURE_KEY_VAULT_URI = var.key_vault_uri
             AZURE_REGION        = var.location

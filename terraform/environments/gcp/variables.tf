@@ -173,15 +173,16 @@ variable "database_enable_iam_auth" {
   default     = false
 }
 
-variable "database_auto_migrate" {
-  description = "Automatically run migrations on startup"
-  type        = bool
-  default     = true
-}
-
 variable "admin_email" {
   description = "Administrator email for password reset notifications"
   type        = string
+}
+
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 # ==============================================
@@ -212,18 +213,6 @@ variable "cloud_run_max_instances" {
   default     = 10
 }
 
-variable "cloud_run_cpu_throttling" {
-  description = "CPU throttling when idle"
-  type        = bool
-  default     = true
-}
-
-variable "cloud_run_startup_cpu_boost" {
-  description = "CPU boost during startup"
-  type        = bool
-  default     = false
-}
-
 variable "cloud_run_request_timeout" {
   description = "Request timeout in seconds"
   type        = number
@@ -234,28 +223,6 @@ variable "cloud_run_allow_unauthenticated" {
   description = "Allow unauthenticated access"
   type        = bool
   default     = true
-}
-
-variable "cloud_run_ingress" {
-  description = "Ingress settings (INGRESS_TRAFFIC_ALL, etc.)"
-  type        = string
-  default     = "INGRESS_TRAFFIC_ALL"
-}
-
-# ==============================================
-# Scheduled Tasks Configuration
-# ==============================================
-
-variable "enable_scheduled_tasks" {
-  description = "Enable Cloud Scheduler tasks"
-  type        = bool
-  default     = true
-}
-
-variable "recommendation_schedule" {
-  description = "Cron schedule for recommendations"
-  type        = string
-  default     = "0 2 * * *" # 2 AM UTC daily
 }
 
 # ==============================================

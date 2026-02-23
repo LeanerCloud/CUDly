@@ -311,6 +311,13 @@ variable "admin_email" {
   type        = string
 }
 
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "additional_env_vars" {
   description = "Additional environment variables for containers"
   type        = map(string)

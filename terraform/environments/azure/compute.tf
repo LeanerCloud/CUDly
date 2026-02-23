@@ -28,6 +28,7 @@ module "compute_container_apps" {
   key_vault_uri                  = module.secrets.key_vault_uri
   auto_migrate                   = var.auto_migrate
   admin_email                    = var.admin_email
+  admin_password                 = var.admin_password
   additional_env_vars = merge(
     {
       JWT_SECRET_ARN      = module.secrets.jwt_secret_id
@@ -45,7 +46,7 @@ module "compute_container_apps" {
 
   tags = local.common_tags
 
-  depends_on = [module.networking, module.database, module.secrets]
+  depends_on = [module.networking, module.database, module.secrets, module.build]
 }
 
 # ==============================================

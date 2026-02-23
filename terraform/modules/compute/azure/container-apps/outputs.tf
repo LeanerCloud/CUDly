@@ -47,3 +47,22 @@ output "ingress_fqdn" {
   description = "Ingress FQDN for external access"
   value       = azurerm_container_app.main.latest_revision_fqdn
 }
+
+# ==============================================
+# Scheduled Tasks (Logic Apps) Outputs
+# ==============================================
+
+output "recommendations_workflow_id" {
+  description = "ID of the recommendations Logic App workflow"
+  value       = var.enable_scheduled_tasks ? azurerm_logic_app_workflow.recommendations[0].id : null
+}
+
+output "cleanup_workflow_id" {
+  description = "ID of the cleanup Logic App workflow"
+  value       = var.enable_scheduled_tasks ? azurerm_logic_app_workflow.cleanup[0].id : null
+}
+
+output "recommendations_schedule" {
+  description = "Schedule for recommendations workflow"
+  value       = var.enable_scheduled_tasks ? "Daily at ${local.schedule_hour}:00 UTC" : null
+}

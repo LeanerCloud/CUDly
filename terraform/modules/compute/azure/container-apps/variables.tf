@@ -117,6 +117,13 @@ variable "admin_email" {
   type        = string
 }
 
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "allowed_origins" {
   description = "List of allowed CORS origins"
   type        = list(string)
@@ -163,4 +170,20 @@ variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)
   default     = {}
+}
+
+# ==============================================
+# Scheduled Tasks (Logic Apps) Configuration
+# ==============================================
+
+variable "enable_scheduled_tasks" {
+  description = "Enable scheduled tasks via Logic Apps"
+  type        = bool
+  default     = true
+}
+
+variable "recommendations_schedule" {
+  description = "Cron schedule for recommendations refresh (default: daily at 2 AM UTC)"
+  type        = string
+  default     = "0 2 * * *"
 }

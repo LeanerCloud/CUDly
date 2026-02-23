@@ -83,3 +83,13 @@ rule "terraform_standard_module_structure" {
 rule "terraform_workspace_remote" {
   enabled = true
 }
+
+# Disable azurerm rules that crash on sensitive for_each values
+# https://github.com/terraform-linters/tflint-ruleset-azurerm/issues/563
+rule "azurerm_key_vault_invalid_name" {
+  enabled = false
+}
+
+rule "azurerm_key_vault_invalid_sku_name" {
+  enabled = false
+}

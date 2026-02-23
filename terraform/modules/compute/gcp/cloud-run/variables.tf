@@ -119,6 +119,13 @@ variable "admin_email" {
   type        = string
 }
 
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "allowed_origins" {
   description = "List of allowed CORS origins"
   type        = list(string)

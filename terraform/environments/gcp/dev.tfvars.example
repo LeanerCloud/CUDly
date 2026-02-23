@@ -47,7 +47,6 @@ database_high_availability  = false
 database_backup_enabled     = true
 database_backup_start_time  = "02:00"
 database_deletion_protection = false
-database_auto_migrate       = true
 
 # ==============================================
 # Networking
@@ -71,13 +70,6 @@ enable_flow_logs = false
 enable_frontend_build = true
 # frontend_domain = "app.example.com"
 # frontend_ssl_certificate = "projects/.../global/sslCertificates/..."
-
-# ==============================================
-# Scheduled Tasks
-# ==============================================
-
-enable_scheduled_tasks  = true
-recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM
 
 # ==============================================
 # Docker Build

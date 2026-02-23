@@ -91,6 +91,7 @@ resource "google_cloud_run_v2_service" "main" {
             DB_AUTO_MIGRATE    = tostring(var.auto_migrate)
             DB_MIGRATIONS_PATH = "/app/migrations"
             ADMIN_EMAIL        = var.admin_email
+            ADMIN_PASSWORD     = var.admin_password
             SECRET_PROVIDER    = "gcp"
             GCP_PROJECT_ID     = var.project_id
             GCP_REGION         = var.region
