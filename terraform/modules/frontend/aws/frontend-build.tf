@@ -85,29 +85,3 @@ resource "terraform_data" "cloudfront_invalidation" {
 
   depends_on = [terraform_data.frontend_sync[0]]
 }
-
-# MIME type mappings for common file extensions
-locals {
-  mime_types = {
-    ".html"  = "text/html"
-    ".css"   = "text/css"
-    ".js"    = "application/javascript"
-    ".json"  = "application/json"
-    ".png"   = "image/png"
-    ".jpg"   = "image/jpeg"
-    ".jpeg"  = "image/jpeg"
-    ".gif"   = "image/gif"
-    ".svg"   = "image/svg+xml"
-    ".ico"   = "image/x-icon"
-    ".woff"  = "font/woff"
-    ".woff2" = "font/woff2"
-    ".ttf"   = "font/ttf"
-    ".eot"   = "application/vnd.ms-fontobject"
-    ".otf"   = "font/otf"
-    ".map"   = "application/json"
-    ".txt"   = "text/plain"
-    ".xml"   = "application/xml"
-    ".pdf"   = "application/pdf"
-    ".zip"   = "application/zip"
-  }
-}

@@ -20,6 +20,12 @@ variable "api_domain_name" {
   type        = string
 }
 
+variable "api_origin_protocol" {
+  description = "Protocol policy for the API origin (https-only for Lambda URLs, http-only for ALB)"
+  type        = string
+  default     = "https-only"
+}
+
 variable "cloudfront_secret" {
   description = "Secret header value to verify requests from CloudFront"
   type        = string
