@@ -59,7 +59,9 @@ if [ "$DB_AUTO_MIGRATE" = "true" ]; then
 
   if [ -n "$DB_PASSWORD" ]; then
     # Run migrations if password is available
-    DB_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSL_MODE}"
+    # URL-encode password to handle special characters (generated passwords contain =,[,$, etc.)
+    ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | awk 'BEGIN{split("",hex); for(i=0;i<256;i++){c=sprintf("%c",i); hex[c]=sprintf("%%%02X",i)}} {n=length($0); for(i=1;i<=n;i++){c=substr($0,i,1); if(c~/[A-Za-z0-9._~-]/)printf "%s",c; else printf "%s",hex[c]}}')
+    DB_URL="postgresql://${DB_USER}:${ENCODED_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSL_MODE}"
 
     if migrate -path "$DB_MIGRATIONS_PATH" -database "$DB_URL" up; then
       echo "   ✅ Migrations completed successfully"
