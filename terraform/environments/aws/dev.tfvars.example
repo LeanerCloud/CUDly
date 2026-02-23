@@ -41,8 +41,7 @@ fargate_memory        = 1024
 fargate_desired_count = 1
 fargate_min_capacity  = 1
 fargate_max_capacity  = 10
-fargate_enable_https  = false
-# fargate_certificate_arn = "arn:aws:acm:..."
+# fargate_certificate_arn = "arn:aws:acm:..."  # Only needed if not using subdomain_zone_name
 
 # ==============================================
 # Database (Aurora Serverless v2)

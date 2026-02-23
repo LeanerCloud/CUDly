@@ -1,0 +1,25 @@
+# Terraform state and providers
+**/.terraform
+*.tfstate
+*.tfstate.backup
+*.tfbackend
+
+# Frontend build artifacts and dependencies
+frontend/node_modules
+frontend/coverage
+frontend/dist
+
+# IDE and OS
+.idea
+.vscode
+.DS_Store
+
+# Git
+.git
+
+# Temporary files
+tmp/
+
+# Docker compose dev files
+docker-compose.yml
+Dockerfile.dev

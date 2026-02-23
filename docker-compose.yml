@@ -50,6 +50,10 @@ services:
       # Application settings
       ENVIRONMENT: development
       LOG_LEVEL: debug
+      CORS_ALLOWED_ORIGIN: http://localhost:3001
+
+      # Optional: set initial admin password (skips password reset)
+      # ADMIN_PASSWORD: "YourSecureP@ss1"
 
       # AWS configuration (if needed for testing)
       AWS_REGION: us-east-1

@@ -82,4 +82,6 @@ recommendation_schedule = "rate(1 day)"
 # Variables provided by GitHub Actions:
 #   TF_VAR_admin_email    = ${{ secrets.ADMIN_EMAIL }}
 #   TF_VAR_image_uri      = (from build step)
+#   TF_VAR_subdomain_zone_name    = cudly.leanercloud.com
+#   TF_VAR_frontend_domain_names  = ["lambda-dev.cudly.leanercloud.com"]
 # ==============================================
