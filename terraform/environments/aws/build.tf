@@ -13,7 +13,7 @@ module "build" {
 
   # Build configuration
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
-  platform    = "linux/arm64"           # Always use ARM64 for cost savings (Fargate Graviton + Lambda ARM64)
+  # platform defaults to native (arm64 on Apple Silicon, amd64 on x86). Set explicitly for cross-compilation in CI/CD.
 
   # Registry login for ECR
   registry_login_command = "aws ecr get-login-password --region ${var.region} --profile ${var.aws_profile != null ? var.aws_profile : "default"} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"

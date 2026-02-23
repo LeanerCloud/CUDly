@@ -17,9 +17,9 @@ variable "source_path" {
 }
 
 variable "platform" {
-  description = "Target platform for Docker build (linux/amd64 or linux/arm64)"
+  description = "Target platform for Docker build (e.g. linux/amd64, linux/arm64). Empty string uses native platform."
   type        = string
-  default     = "linux/arm64"
+  default     = ""
 }
 
 variable "custom_image_tag" {

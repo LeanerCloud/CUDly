@@ -11,12 +11,12 @@ resource "terraform_data" "image_tag" {
 }
 
 locals {
-  # Get git commit hash
+  # Get git commit hash (use source_path which points to the repo root, not path.root which is the terraform environment dir)
   git_commit = var.skip_docker_build ? "skip" : trimspace(try(
-    file("${path.root}/.git/HEAD") != "" ? (
-      can(regex("^ref:", file("${path.root}/.git/HEAD"))) ?
-      substr(file("${path.root}/.git/${trimspace(replace(file("${path.root}/.git/HEAD"), "ref: ", ""))}"), 0, 7) :
-      substr(file("${path.root}/.git/HEAD"), 0, 7)
+    file("${var.source_path}/.git/HEAD") != "" ? (
+      can(regex("^ref:", file("${var.source_path}/.git/HEAD"))) ?
+      substr(file("${var.source_path}/.git/${trimspace(replace(file("${var.source_path}/.git/HEAD"), "ref: ", ""))}"), 0, 7) :
+      substr(file("${var.source_path}/.git/HEAD"), 0, 7)
     ) : "unknown",
     "unknown"
   ))
@@ -53,11 +53,11 @@ resource "terraform_data" "docker_build" {
     command     = <<-EOT
       echo "🔨 Building Docker image..."
       echo "Image: ${local.image_uri}"
-      echo "Platform: ${var.platform}"
+      echo "Platform: ${var.platform != "" ? var.platform : "native"}"
       echo "Git commit: ${local.git_commit}"
 
       docker buildx build \
-        --platform ${var.platform} \
+        ${var.platform != "" ? "--platform ${var.platform}" : ""} \
         --tag ${local.image_uri} \
         --build-arg GIT_COMMIT=${local.git_commit} \
         --build-arg BUILD_DATE=${local.timestamp} \
