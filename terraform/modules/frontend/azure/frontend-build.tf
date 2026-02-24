@@ -8,7 +8,7 @@ resource "terraform_data" "frontend_build" {
   triggers_replace = {
     # Rebuild when package.json or source files change
     package_json = fileexists("${path.root}/${var.frontend_path}/package.json") ? filemd5("${path.root}/${var.frontend_path}/package.json") : "none"
-    src_hash     = fileexists("${path.root}/${var.frontend_path}/src") ? sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/src", "**") : filesha256("${path.root}/${var.frontend_path}/src/${f}")])) : "none"
+    src_hash     = try(sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/src", "**") : filesha256("${path.root}/${var.frontend_path}/src/${f}")])), "none")
   }
 
   provisioner "local-exec" {
@@ -29,7 +29,7 @@ resource "terraform_data" "frontend_upload" {
   triggers_replace = {
     # Re-upload when build changes
     build_hash = terraform_data.frontend_build[0].id
-    files_hash = fileexists("${path.root}/${var.frontend_path}/dist") ? sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/dist", "**") : filemd5("${path.root}/${var.frontend_path}/dist/${f}")])) : "none"
+    files_hash = try(sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/dist", "**") : filemd5("${path.root}/${var.frontend_path}/dist/${f}")])), "none")
   }
 
   provisioner "local-exec" {

@@ -16,7 +16,7 @@ module "frontend" {
 
   # API endpoint - gets from Container Apps
   api_hostname = var.compute_platform == "container-apps" ? (
-    length(module.compute_container_apps) > 0 ? module.compute_container_apps[0].fqdn : ""
+    length(module.compute_container_apps) > 0 ? module.compute_container_apps[0].container_app_fqdn : ""
   ) : ""
 
   # CDN configuration

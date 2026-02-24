@@ -50,15 +50,6 @@ resource "azurerm_storage_account" "frontend" {
   })
 }
 
-# $web container is automatically created by static_website
-# But we reference it for clarity
-data "azurerm_storage_container" "web" {
-  name                 = "$web"
-  storage_account_name = azurerm_storage_account.frontend.name
-
-  depends_on = [azurerm_storage_account.frontend]
-}
-
 # CDN profile
 resource "azurerm_cdn_profile" "frontend" {
   name                = "${var.project_name}-cdn-profile"
@@ -250,6 +241,7 @@ resource "azurerm_cdn_frontdoor_route" "frontend" {
 
 # Monitor for CDN health
 resource "azurerm_monitor_metric_alert" "cdn_errors" {
+  count               = var.action_group_id != "" ? 1 : 0
   name                = "${var.project_name}-cdn-errors"
   resource_group_name = var.resource_group_name
   scopes              = [azurerm_cdn_endpoint.frontend.id]
