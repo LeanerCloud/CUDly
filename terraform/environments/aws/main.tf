@@ -45,7 +45,8 @@ provider "aws" {
 # ==============================================
 
 locals {
-  stack_name = "${var.project_name}-${var.environment}"
+  stack_name    = "${var.project_name}-${var.environment}"
+  dashboard_url = length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" : ""
 
   common_tags = {
     Project     = var.project_name
