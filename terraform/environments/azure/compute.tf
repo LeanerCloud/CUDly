@@ -21,6 +21,7 @@ module "compute_container_apps" {
   infrastructure_subnet_id       = module.networking.container_apps_subnet_id
   internal_load_balancer_enabled = var.internal_load_balancer_enabled
   log_analytics_workspace_id     = module.networking.log_analytics_workspace_id
+  enable_diagnostics             = true
   database_host                  = module.database.server_fqdn
   database_name                  = module.database.database_name
   database_username              = module.database.administrator_login

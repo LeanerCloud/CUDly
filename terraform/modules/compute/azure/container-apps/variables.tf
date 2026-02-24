@@ -81,6 +81,12 @@ variable "log_analytics_workspace_id" {
   default     = null
 }
 
+variable "enable_diagnostics" {
+  description = "Enable diagnostic settings for Container App"
+  type        = bool
+  default     = false
+}
+
 variable "database_host" {
   description = "Database host (FQDN)"
   type        = string

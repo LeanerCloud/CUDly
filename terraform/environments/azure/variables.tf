@@ -130,16 +130,6 @@ variable "purge_protection_enabled" {
   default     = false
 }
 
-variable "key_vault_network_acl_action" {
-  description = "Key Vault default network ACL action"
-  type        = string
-  default     = "Deny"
-
-  validation {
-    condition     = contains(["Allow", "Deny"], var.key_vault_network_acl_action)
-    error_message = "Network ACL action must be 'Allow' or 'Deny'."
-  }
-}
 
 variable "allowed_ip_addresses" {
   description = "List of allowed IP addresses for Key Vault"

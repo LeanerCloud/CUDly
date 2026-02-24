@@ -282,7 +282,7 @@ resource "azurerm_container_app_job" "recommendations" {
 # ==============================================
 
 resource "azurerm_monitor_diagnostic_setting" "container_app" {
-  count = var.log_analytics_workspace_id != null ? 1 : 0
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "${var.app_name}-container-app-diag"
   target_resource_id         = azurerm_container_app.main.id
