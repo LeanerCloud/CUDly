@@ -421,6 +421,10 @@ resource "aws_ecs_task_definition" "main" {
           {
             name  = "CORS_ALLOWED_ORIGIN"
             value = length(var.allowed_origins) > 0 ? var.allowed_origins[0] : "*"
+          },
+          {
+            name  = "DB_PASSWORD_SECRET"
+            value = var.database_password_secret_arn
           }
         ],
         [
@@ -430,13 +434,6 @@ resource "aws_ecs_task_definition" "main" {
           }
         ]
       )
-
-      secrets = [
-        {
-          name      = "DB_PASSWORD"
-          valueFrom = "${var.database_password_secret_arn}:password::"
-        }
-      ]
 
       logConfiguration = {
         logDriver = "awslogs"
