@@ -21,7 +21,7 @@ module "build" {
   platform    = "linux/amd64"           # Azure Container Apps and AKS use amd64
 
   # Registry login for ACR using admin credentials
-  registry_login_command = "docker login ${azurerm_container_registry.main.login_server} -u ${azurerm_container_registry.main.admin_username} -p ${nonsensitive(azurerm_container_registry.main.admin_password)}"
+  registry_login_command = "echo '${nonsensitive(azurerm_container_registry.main.admin_password)}' | docker login ${azurerm_container_registry.main.login_server} -u ${azurerm_container_registry.main.admin_username} --password-stdin"
 
   # Build options
   skip_docker_build  = false
