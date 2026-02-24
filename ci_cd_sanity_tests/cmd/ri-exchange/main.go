@@ -159,6 +159,12 @@ func main() {
 }
 
 func write(v any, path string) {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	_ = os.WriteFile(path, b, 0644)
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to marshal json for %s: %v\n", path, err)
+		return
+	}
+	if err := os.WriteFile(path, b, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write %s: %v\n", path, err)
+	}
 }

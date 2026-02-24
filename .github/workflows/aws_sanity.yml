@@ -3,7 +3,7 @@ name: AWS Sanity (Read-only Dry Run)
 on:
   pull_request:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,8 @@ jobs:
     env:
       AWS_REGION: us-east-1
       REPORT_PATH: sanity_report.json
-      EXPECTED_ACCOUNT: ${{ secrets.AWS_EXPECTED_ACCOUNT_ID }} # change per test account
+      EXPECTED_ACCOUNT: ${{ secrets.AWS_EXPECTED_ACCOUNT_ID }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,10 +33,11 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_CICD_READONLY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cudly-sanity
 
       - name: Build
         run: |
-          go test ./... -count=1
+          go test ./ci_cd_sanity_tests/... -count=1
           go build -o sanity ./ci_cd_sanity_tests/cmd/sanity
 
       - name: Run sanity (read-only)
@@ -46,7 +48,9 @@ jobs:
             --out "${REPORT_PATH}"
 
       - name: Upload report artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: aws-sanity-report
           path: ${{ env.REPORT_PATH }}
+          if-no-files-found: ignore

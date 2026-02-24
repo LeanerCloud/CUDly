@@ -20,7 +20,7 @@ func main() {
 	)
 	flag.Parse()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec+30)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
 	defer cancel()
 
 	rep, err := azure.Run(ctx, azure.Options{

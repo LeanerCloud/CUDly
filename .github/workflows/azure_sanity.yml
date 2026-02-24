@@ -3,7 +3,7 @@ name: Azure Sanity (Read-only Dry Run)
 on:
   pull_request:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REPORT_PATH: azure_sanity_report.json
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,16 +36,20 @@ jobs:
       - name: Build + Run Azure sanity
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
-          go test ./... -count=1
+          go test ./ci_cd_sanity_tests/... -count=1
           go build -o azure-sanity ./ci_cd_sanity_tests/cmd/azure_sanity
           ./azure-sanity \
             --subscription-id "${AZURE_SUBSCRIPTION_ID}" \
             --expected-subscription "${AZURE_SUBSCRIPTION_ID}" \
+            --expected-tenant "${AZURE_TENANT_ID}" \
             --out "${REPORT_PATH}"
 
       - name: Upload report artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: azure-sanity-report
           path: ${{ env.REPORT_PATH }}
+          if-no-files-found: ignore

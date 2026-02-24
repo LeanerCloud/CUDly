@@ -30,6 +30,13 @@ type azAccountShow struct {
 	} `json:"user"`
 }
 
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
+}
+
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	if opts.SubscriptionID == "" {
 		opts.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
@@ -63,7 +70,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 			EndedAt:   end,
 			Details: map[string]string{
 				"cmd":    "az " + strings.Join(args, " "),
-				"output": string(out),
+				"output": truncate(string(out), 2048),
 			},
 		}
 		if err != nil {
