@@ -9,23 +9,7 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.0"
-    }
   }
-}
-
-# ==============================================
-# Database Password Generation
-# ==============================================
-
-resource "random_password" "database" {
-  count = var.administrator_password == null ? 1 : 0
-
-  length           = 32
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
 # ==============================================
@@ -42,7 +26,7 @@ resource "azurerm_postgresql_flexible_server" "main" {
 
   # Administrator credentials
   administrator_login    = var.administrator_login
-  administrator_password = var.administrator_password != null ? var.administrator_password : random_password.database[0].result
+  administrator_password = var.administrator_password
 
   # SKU (size)
   sku_name   = var.sku_name
@@ -124,26 +108,11 @@ resource "azurerm_postgresql_flexible_server_configuration" "config" {
 }
 
 # ==============================================
-# Key Vault Secret for Password
-# ==============================================
-
-resource "azurerm_key_vault_secret" "db_password" {
-  name         = "${var.app_name}-db-password"
-  value        = var.administrator_password != null ? var.administrator_password : random_password.database[0].result
-  key_vault_id = var.key_vault_id
-
-  tags = merge(var.tags, {
-    environment = var.environment
-    managed_by  = "terraform"
-  })
-}
-
-# ==============================================
 # Diagnostic Settings (Optional)
 # ==============================================
 
 resource "azurerm_monitor_diagnostic_setting" "postgres" {
-  count = var.log_analytics_workspace_id != null ? 1 : 0
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "${var.app_name}-postgres-diag"
   target_resource_id         = azurerm_postgresql_flexible_server.main.id

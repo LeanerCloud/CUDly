@@ -37,9 +37,8 @@ variable "administrator_login" {
 }
 
 variable "administrator_password" {
-  description = "Administrator password (if null, will be auto-generated)"
+  description = "Administrator password (provided by secrets module)"
   type        = string
-  default     = null
   sensitive   = true
 }
 
@@ -136,9 +135,10 @@ variable "server_parameters" {
   default     = {}
 }
 
-variable "key_vault_id" {
-  description = "Key Vault ID for storing password"
-  type        = string
+variable "enable_diagnostics" {
+  description = "Enable diagnostic settings (set to true when log_analytics_workspace_id is known)"
+  type        = bool
+  default     = false
 }
 
 variable "log_analytics_workspace_id" {

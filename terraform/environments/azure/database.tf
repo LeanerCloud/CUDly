@@ -21,7 +21,7 @@ module "database" {
   standby_availability_zone    = var.database_standby_availability_zone
   delegated_subnet_id          = module.networking.database_subnet_id
   private_dns_zone_id          = module.networking.postgres_private_dns_zone_id
-  key_vault_id                 = module.secrets.key_vault_id
+  enable_diagnostics           = true
   log_analytics_workspace_id   = module.networking.log_analytics_workspace_id
 
   tags = local.common_tags
