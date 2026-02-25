@@ -86,7 +86,7 @@ resource "google_cloud_run_v2_service" "main" {
             DB_NAME            = var.database_name
             DB_USER            = var.database_username
             DB_PASSWORD_SECRET = var.database_password_secret_id
-            DB_SSL_MODE        = "require"
+            DB_SSL_MODE        = "disable"
             DB_CONNECT_TIMEOUT = "8s"
             DB_AUTO_MIGRATE    = tostring(var.auto_migrate)
             DB_MIGRATIONS_PATH = "/app/migrations"
@@ -95,7 +95,6 @@ resource "google_cloud_run_v2_service" "main" {
             SECRET_PROVIDER    = "gcp"
             GCP_PROJECT_ID     = var.project_id
             GCP_REGION         = var.region
-            PORT               = "8080"
             ALLOWED_ORIGINS    = join(",", var.allowed_origins)
           },
           var.additional_env_vars
@@ -217,6 +216,10 @@ resource "google_cloud_scheduler_job" "recommendations" {
     http_method = "POST"
     uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/recommendations"
 
+    headers = {
+      "Authorization" = "Bearer ${var.scheduled_task_secret}"
+    }
+
     oidc_token {
       service_account_email = google_service_account.scheduler[0].email
     }
@@ -251,7 +254,7 @@ resource "google_cloud_run_service_iam_member" "scheduler_invoker" {
 # No explicit configuration needed, but we can set retention
 
 resource "google_logging_project_bucket_config" "cloud_run_logs" {
-  count = var.log_retention_days != null ? 1 : 0
+  count = var.manage_project_log_retention && var.log_retention_days != null ? 1 : 0
 
   project        = var.project_id
   location       = "global"

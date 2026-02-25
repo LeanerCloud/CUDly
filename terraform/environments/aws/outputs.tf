@@ -177,22 +177,22 @@ output "deployment_info" {
 
 output "frontend_url" {
   description = "Frontend URL"
-  value       = module.frontend.frontend_url
+  value       = var.enable_frontend ? module.frontend[0].frontend_url : null
 }
 
 output "cloudfront_distribution_id" {
   description = "CloudFront distribution ID for cache invalidation"
-  value       = module.frontend.cloudfront_distribution_id
+  value       = var.enable_frontend ? module.frontend[0].cloudfront_distribution_id : null
 }
 
 output "cloudfront_domain_name" {
   description = "CloudFront distribution domain name"
-  value       = module.frontend.cloudfront_domain_name
+  value       = var.enable_frontend ? module.frontend[0].cloudfront_domain_name : null
 }
 
 output "frontend_bucket" {
   description = "S3 bucket name for frontend files"
-  value       = module.frontend.s3_bucket_id
+  value       = var.enable_frontend ? module.frontend[0].s3_bucket_id : null
 }
 
 # ==============================================
@@ -217,7 +217,7 @@ output "quick_start_commands" {
   description = "Quick start commands for common operations"
   value       = <<-EOT
     # Access the frontend
-    open ${module.frontend.frontend_url}
+    ${var.enable_frontend ? "open ${module.frontend[0].frontend_url}" : "# Frontend not enabled"}
 
     # Test the API health check
     curl ${var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : "N/A"}/health
@@ -235,6 +235,6 @@ output "quick_start_commands" {
     ${var.compute_platform == "lambda" ? "aws lambda update-function-code --function-name ${module.compute_lambda[0].function_name} --image-uri NEW_IMAGE_URI" : "N/A"}
 
     # Deploy frontend
-    cd ../../../../frontend && ./deploy.sh -p aws -e ${var.environment} -b ${module.frontend.s3_bucket_id} -d ${module.frontend.cloudfront_distribution_id}
+    ${var.enable_frontend ? "cd ../../../../frontend && ./deploy.sh -p aws -e ${var.environment} -b ${module.frontend[0].s3_bucket_id} -d ${module.frontend[0].cloudfront_distribution_id}" : "# Frontend not enabled"}
   EOT
 }

@@ -3,16 +3,19 @@
 # ==============================================
 
 resource "random_password" "cloudfront_secret" {
+  count   = var.enable_frontend ? 1 : 0
   length  = 32
   special = true
 }
 
 resource "random_id" "frontend_bucket" {
+  count       = var.enable_frontend ? 1 : 0
   byte_length = 4
 }
 
 module "frontend" {
   source = "../../modules/frontend/aws"
+  count  = var.enable_frontend ? 1 : 0
 
   project_name = var.project_name
   environment  = var.environment
@@ -21,7 +24,7 @@ module "frontend" {
   enable_frontend_build = var.enable_frontend_build
 
   # S3 bucket for frontend files (random suffix avoids naming conflicts on destroy/recreate)
-  bucket_name = "${local.stack_name}-frontend-${random_id.frontend_bucket.hex}"
+  bucket_name = "${local.stack_name}-frontend-${random_id.frontend_bucket[0].hex}"
 
   # API endpoint - Lambda Function URL or Fargate ALB CNAME (for TLS cert matching)
   api_domain_name = var.compute_platform == "lambda" ? (
@@ -31,7 +34,7 @@ module "frontend" {
   )
 
   # CloudFront secret for origin verification
-  cloudfront_secret = random_password.cloudfront_secret.result
+  cloudfront_secret = random_password.cloudfront_secret[0].result
 
   # Optional: Custom domain
   domain_names = var.frontend_domain_names

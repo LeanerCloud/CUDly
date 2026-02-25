@@ -304,6 +304,12 @@ variable "fargate_enable_execute_command" {
 # Frontend Configuration
 # ==============================================
 
+variable "enable_frontend" {
+  description = "Enable frontend deployment (CloudFront + S3)"
+  type        = bool
+  default     = true
+}
+
 variable "enable_frontend_build" {
   description = "Enable frontend build and deployment"
   type        = bool

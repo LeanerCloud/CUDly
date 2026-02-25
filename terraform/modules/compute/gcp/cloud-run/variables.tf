@@ -156,10 +156,23 @@ variable "recommendation_schedule" {
   default     = "0 2 * * *"
 }
 
+variable "scheduled_task_secret" {
+  description = "Shared secret for authenticating scheduled task HTTP calls"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "log_retention_days" {
   description = "Log retention in days (null for default retention)"
   type        = number
   default     = null
+}
+
+variable "manage_project_log_retention" {
+  description = "Whether to manage the project-level _Default log bucket retention. WARNING: This modifies the project-wide log bucket, affecting all services in the project. Only enable if this module should own project-level log retention."
+  type        = bool
+  default     = false
 }
 
 variable "additional_env_vars" {
