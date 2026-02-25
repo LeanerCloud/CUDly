@@ -56,10 +56,10 @@ MYSQL*.md
 *_SUMMARY.md
 *_INDEX.md
 
-#build artifacts
-sanity
-azure-sanity
-ri-exchange
+#build artifacts (root-level binaries only)
+/sanity
+/azure-sanity
+/ri-exchange
 
 #sanity reports / artifacts
 *sanity_report.json
