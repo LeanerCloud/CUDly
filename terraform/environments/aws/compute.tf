@@ -54,8 +54,6 @@ module "compute_lambda" {
   # Additional environment variables
   additional_env_vars = merge(
     {
-      JWT_SECRET_ARN      = module.secrets.jwt_secret_arn
-      SESSION_SECRET_ARN  = module.secrets.session_secret_arn
       DASHBOARD_URL       = local.dashboard_url
       CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
       FROM_EMAIL          = "noreply@${var.subdomain_zone_name}"
@@ -138,8 +136,6 @@ module "compute_fargate" {
   # Additional environment variables
   additional_env_vars = merge(
     {
-      JWT_SECRET_ARN      = module.secrets.jwt_secret_arn
-      SESSION_SECRET_ARN  = module.secrets.session_secret_arn
       DASHBOARD_URL       = local.dashboard_url
       CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
       FROM_EMAIL          = "noreply@${var.subdomain_zone_name}"
