@@ -24,6 +24,10 @@ module "database" {
   enable_diagnostics           = true
   log_analytics_workspace_id   = module.networking.log_analytics_workspace_id
 
+  server_parameters = {
+    "azure.extensions" = "UUID-OSSP,PG_TRGM"
+  }
+
   tags = local.common_tags
 
   depends_on = [module.networking, module.secrets]
