@@ -98,7 +98,7 @@ resource "azurerm_cdn_endpoint" "frontend" {
 
   # Delivery rules for routing
   delivery_rule {
-    name  = "api-proxy"
+    name  = "apiproxy"
     order = 1
 
     url_path_condition {
@@ -117,7 +117,7 @@ resource "azurerm_cdn_endpoint" "frontend" {
 
   # SPA routing - redirect 404s to index.html
   delivery_rule {
-    name  = "spa-routing"
+    name  = "sparouting"
     order = 2
 
     request_uri_condition {
