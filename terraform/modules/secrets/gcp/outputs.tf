@@ -44,6 +44,17 @@ output "sendgrid_api_key_name" {
   value       = (var.sendgrid_api_key != null || var.create_sendgrid_secret) ? google_secret_manager_secret.sendgrid_api_key[0].name : null
 }
 
+output "scheduled_task_secret_value" {
+  description = "Scheduled task secret value (raw password for env var)"
+  value       = var.create_scheduled_task_secret ? random_password.scheduled_task_secret[0].result : null
+  sensitive   = true
+}
+
+output "scheduled_task_secret_id" {
+  description = "Secret Manager secret ID for scheduled task secret"
+  value       = var.create_scheduled_task_secret ? google_secret_manager_secret.scheduled_task_secret[0].secret_id : null
+}
+
 output "additional_secret_ids" {
   description = "Map of additional secret IDs"
   value       = { for k, v in google_secret_manager_secret.additional : k => v.secret_id }

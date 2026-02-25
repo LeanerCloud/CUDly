@@ -137,6 +137,23 @@ resource "azurerm_key_vault_secret" "session_secret" {
 # ==============================================
 # Azure Communication Services SMTP Secrets
 # ==============================================
+#
+# IMPORTANT: Azure Communication Services SMTP credentials cannot be auto-generated
+# via Terraform. These secrets are created with placeholder values that must be
+# replaced manually after deployment.
+#
+# To generate SMTP credentials:
+# 1. Go to Azure Portal -> Azure Communication Services -> your resource
+# 2. Navigate to "Email" -> "Try Email" or your connected email domain
+# 3. Go to "Settings" -> "Keys" to get the connection string
+# 4. Use the connection string to derive SMTP credentials:
+#    - Username: The full connection string (or the resource name + access key)
+#    - Password: The access key from the connection string
+# 5. Update the Key Vault secrets via Azure Portal or CLI:
+#    az keyvault secret set --vault-name <vault> --name azure-smtp-username --value <username>
+#    az keyvault secret set --vault-name <vault> --name azure-smtp-password --value <password>
+#
+# Alternatively, pass smtp_username and smtp_password variables during terraform apply.
 
 # SMTP Username (from Azure Communication Services)
 resource "azurerm_key_vault_secret" "smtp_username" {
@@ -164,6 +181,33 @@ resource "azurerm_key_vault_secret" "smtp_password" {
   key_vault_id = azurerm_key_vault.main.id
 
   content_type = "smtp-credential"
+
+  tags = merge(var.tags, {
+    environment = var.environment
+  })
+
+  depends_on = [azurerm_role_assignment.current_user_secrets_officer]
+}
+
+# ==============================================
+# Scheduled Task Secret
+# ==============================================
+
+resource "random_password" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  length  = 64
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  name         = "scheduled-task-secret"
+  value        = random_password.scheduled_task_secret[0].result
+  key_vault_id = azurerm_key_vault.main.id
+
+  content_type = "secret"
 
   tags = merge(var.tags, {
     environment = var.environment

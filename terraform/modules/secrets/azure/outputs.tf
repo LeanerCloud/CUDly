@@ -69,6 +69,17 @@ output "smtp_password_name" {
   value       = var.create_smtp_secrets ? azurerm_key_vault_secret.smtp_password[0].name : null
 }
 
+output "scheduled_task_secret_value" {
+  description = "Scheduled task secret value (raw password for env var)"
+  value       = var.create_scheduled_task_secret ? random_password.scheduled_task_secret[0].result : null
+  sensitive   = true
+}
+
+output "scheduled_task_secret_name" {
+  description = "Scheduled task secret Key Vault name"
+  value       = var.create_scheduled_task_secret ? azurerm_key_vault_secret.scheduled_task_secret[0].name : null
+}
+
 output "additional_secret_ids" {
   description = "Map of additional secret IDs"
   value       = { for k, v in azurerm_key_vault_secret.additional : k => v.id }

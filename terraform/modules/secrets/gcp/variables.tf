@@ -45,6 +45,12 @@ variable "create_sendgrid_secret" {
   default     = true
 }
 
+variable "create_scheduled_task_secret" {
+  description = "Create scheduled task authentication secret"
+  type        = bool
+  default     = true
+}
+
 variable "additional_secrets" {
   description = "Map of additional secret values to create (keys are not sensitive, values are)"
   type        = map(string)

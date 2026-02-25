@@ -138,6 +138,49 @@ resource "google_secret_manager_secret_version" "sendgrid_api_key" {
 }
 
 # ==============================================
+# Scheduled Task Secret
+# ==============================================
+
+resource "random_password" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  length  = 64
+  special = false
+}
+
+resource "google_secret_manager_secret" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  secret_id = "${var.service_name}-scheduled-task-secret"
+  project   = var.project_id
+
+  replication {
+    auto {}
+  }
+
+  labels = merge(var.labels, {
+    environment = var.environment
+    managed_by  = "terraform"
+  })
+}
+
+resource "google_secret_manager_secret_version" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  secret      = google_secret_manager_secret.scheduled_task_secret[0].id
+  secret_data = random_password.scheduled_task_secret[0].result
+}
+
+resource "google_secret_manager_secret_iam_member" "cloud_run_scheduled_task" {
+  count = var.create_scheduled_task_secret && var.cloud_run_service_account_email != null ? 1 : 0
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.scheduled_task_secret[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.cloud_run_service_account_email}"
+}
+
+# ==============================================
 # Additional Custom Secrets
 # ==============================================
 
