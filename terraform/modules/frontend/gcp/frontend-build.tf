@@ -8,7 +8,7 @@ resource "terraform_data" "frontend_build" {
   triggers_replace = {
     # Rebuild when package.json or source files change
     package_json = fileexists("${path.root}/${var.frontend_path}/package.json") ? filemd5("${path.root}/${var.frontend_path}/package.json") : "none"
-    src_hash     = fileexists("${path.root}/${var.frontend_path}/src") ? sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/src", "**") : filesha256("${path.root}/${var.frontend_path}/src/${f}")])) : "none"
+    src_hash     = length(fileset("${path.root}/${var.frontend_path}/src", "**")) > 0 ? sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/src", "**") : filesha256("${path.root}/${var.frontend_path}/src/${f}")])) : "none"
   }
 
   provisioner "local-exec" {
