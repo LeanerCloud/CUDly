@@ -50,6 +50,19 @@ connector_subnet_cidr = "10.9.0.0/28"
 enable_nat_logging    = false
 
 # ==============================================
+# Scheduled Tasks (Cloud Scheduler)
+# ==============================================
+
+enable_scheduled_tasks  = true
+recommendation_schedule = "0 2 * * *"
+
+# ==============================================
+# Database Migration
+# ==============================================
+
+auto_migrate = true
+
+# ==============================================
 # Frontend (Cloud CDN + Load Balancer)
 # ==============================================
 

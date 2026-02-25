@@ -36,6 +36,11 @@ output "database_private_ip" {
   value       = module.database.private_ip_address
 }
 
+output "database_name" {
+  description = "Database name"
+  value       = module.database.database_name
+}
+
 output "database_password_secret_id" {
   description = "Database password secret ID"
   value       = module.secrets.database_password_secret_id
