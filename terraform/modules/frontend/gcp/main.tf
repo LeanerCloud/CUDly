@@ -81,7 +81,7 @@ resource "google_compute_backend_bucket" "frontend" {
     client_ttl        = 3600
     default_ttl       = 3600
     max_ttl           = 86400
-    negative_caching  = true
+    negative_caching  = false
     serve_while_stale = 86400
 
     # Cache static assets aggressively
@@ -106,6 +106,8 @@ resource "google_compute_backend_service" "api" {
   }
 
   enable_cdn = false # No caching for API requests
+
+  security_policy = var.enable_cloud_armor ? google_compute_security_policy.frontend[0].id : null
 
   log_config {
     enable      = true
@@ -133,7 +135,7 @@ resource "google_compute_url_map" "frontend" {
   default_service = google_compute_backend_bucket.frontend.id
 
   host_rule {
-    hosts        = var.domain_names
+    hosts        = length(var.domain_names) > 0 ? var.domain_names : ["*"]
     path_matcher = "frontend-paths"
   }
 
@@ -167,17 +169,21 @@ resource "google_compute_managed_ssl_certificate" "frontend" {
   }
 }
 
-# HTTPS proxy
+# HTTPS proxy (only when custom domains with SSL cert are available)
 resource "google_compute_target_https_proxy" "frontend" {
+  count = length(var.domain_names) > 0 ? 1 : 0
+
   name    = "${var.project_name}-https-proxy"
   project = var.project_id
 
   url_map          = google_compute_url_map.frontend.id
-  ssl_certificates = length(var.domain_names) > 0 ? [google_compute_managed_ssl_certificate.frontend[0].id] : []
+  ssl_certificates = [google_compute_managed_ssl_certificate.frontend[0].id]
 }
 
-# HTTP to HTTPS redirect
+# HTTP to HTTPS redirect (only when custom domains with SSL cert are available)
 resource "google_compute_url_map" "http_redirect" {
+  count = length(var.domain_names) > 0 ? 1 : 0
+
   name    = "${var.project_name}-http-redirect"
   project = var.project_id
 
@@ -188,17 +194,20 @@ resource "google_compute_url_map" "http_redirect" {
   }
 }
 
+# HTTP proxy: redirects to HTTPS when custom domains exist, serves content directly otherwise
 resource "google_compute_target_http_proxy" "http_redirect" {
   name    = "${var.project_name}-http-proxy"
   project = var.project_id
-  url_map = google_compute_url_map.http_redirect.id
+  url_map = length(var.domain_names) > 0 ? google_compute_url_map.http_redirect[0].id : google_compute_url_map.frontend.id
 }
 
-# Global forwarding rule for HTTPS
+# Global forwarding rule for HTTPS (only when custom domains with SSL cert)
 resource "google_compute_global_forwarding_rule" "https" {
+  count = length(var.domain_names) > 0 ? 1 : 0
+
   name       = "${var.project_name}-https-rule"
   project    = var.project_id
-  target     = google_compute_target_https_proxy.frontend.id
+  target     = google_compute_target_https_proxy.frontend[0].id
   port_range = "443"
   ip_address = google_compute_global_address.frontend.address
 }
@@ -279,16 +288,6 @@ resource "google_compute_security_policy" "frontend" {
     description = "Block SQL injection"
   }
 }
-
-# Apply Cloud Armor to backend service
-# Note: This resource type requires Google provider >= 6.0
-# For now, security policy is attached in the backend service resource directly
-# resource "google_compute_backend_service_security_policy_attachment" "api" {
-#   count = var.enable_cloud_armor ? 1 : 0
-#
-#   backend_service = google_compute_backend_service.api.name
-#   security_policy = google_compute_security_policy.frontend[0].name
-# }
 
 # DNS record moved to dns.tf
 # This allows creating a new subdomain zone or using an existing one
