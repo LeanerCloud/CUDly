@@ -244,7 +244,7 @@ resource "aws_lb" "main" {
   security_groups    = [var.alb_security_group_id]
   subnets            = var.public_subnet_ids
 
-  enable_deletion_protection       = false
+  enable_deletion_protection       = var.enable_alb_deletion_protection
   enable_http2                     = true
   enable_cross_zone_load_balancing = true
 
@@ -489,16 +489,15 @@ resource "aws_ecs_service" "main" {
 
   enable_execute_command = var.enable_execute_command
 
-  # Deployment configuration is now part of the service block in AWS provider 5.x
-  # deployment_configuration {
-  #   maximum_percent         = 200
-  #   minimum_healthy_percent = 100
-  # }
-  #
-  # deployment_circuit_breaker {
-  #   enable   = true
-  #   rollback = true
-  # }
+  deployment_configuration {
+    maximum_percent         = 200
+    minimum_healthy_percent = 100
+
+    deployment_circuit_breaker {
+      enable   = true
+      rollback = true
+    }
+  }
 
   depends_on = [
     aws_lb_listener.http,
@@ -657,7 +656,10 @@ resource "aws_cloudwatch_event_target" "recommendations" {
   }
 
   input = jsonencode({
-    command = ["./cudly", "collect-recommendations"]
+    containerOverrides = [{
+      name    = "main"
+      command = ["./cudly", "--task", "collect_recommendations"]
+    }]
   })
 }
 

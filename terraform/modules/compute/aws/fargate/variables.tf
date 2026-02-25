@@ -186,6 +186,12 @@ variable "enable_execute_command" {
   default     = false
 }
 
+variable "enable_alb_deletion_protection" {
+  description = "Enable ALB deletion protection (recommended for production)"
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Additional tags for resources"
   type        = map(string)
