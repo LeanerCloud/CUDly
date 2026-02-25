@@ -102,6 +102,18 @@ locals {
 # Resource Group
 # ==============================================
 
+# ==============================================
+# Provider Registrations
+# ==============================================
+
+resource "azurerm_resource_provider_registration" "container_apps" {
+  name = "Microsoft.App"
+}
+
+# ==============================================
+# Resource Group
+# ==============================================
+
 resource "azurerm_resource_group" "main" {
   name     = "${local.app_name}-rg"
   location = var.location
