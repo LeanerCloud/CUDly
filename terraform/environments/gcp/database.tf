@@ -14,7 +14,8 @@ module "database" {
   database_version = var.database_version
   database_name    = var.database_name
   master_username  = var.database_username
-  master_password  = module.secrets.database_password_value
+  # TEMP: hardcoded during import, revert to module.secrets.database_password_value after
+  master_password = "IMPORT_PLACEHOLDER"
 
   # Cloud SQL configuration
   tier              = var.database_tier

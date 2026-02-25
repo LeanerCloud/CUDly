@@ -77,7 +77,7 @@ resource "google_sql_database_instance" "main" {
     ip_configuration {
       ipv4_enabled    = var.enable_public_ip
       private_network = var.vpc_network_id
-      require_ssl     = true
+      ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
 
       # Authorized networks (if public IP is enabled)
       dynamic "authorized_networks" {
@@ -150,29 +150,6 @@ resource "google_sql_user" "iam_service_account" {
 }
 
 # ==============================================
-# Secret Manager for Password Storage
-# ==============================================
-
-resource "google_secret_manager_secret" "db_password" {
-  secret_id = "${var.service_name}-db-password"
-  project   = var.project_id
-
-  replication {
-    auto {}
-  }
-
-  labels = merge(var.labels, {
-    environment = var.environment
-    managed_by  = "terraform"
-  })
-}
-
-resource "google_secret_manager_secret_version" "db_password" {
-  secret      = google_secret_manager_secret.db_password.id
-  secret_data = var.master_password != null ? var.master_password : random_password.database[0].result
-}
-
-# ==============================================
 # Read Replica (Optional)
 # ==============================================
 
@@ -199,7 +176,7 @@ resource "google_sql_database_instance" "read_replica" {
     ip_configuration {
       ipv4_enabled    = var.enable_public_ip
       private_network = var.vpc_network_id
-      require_ssl     = true
+      ssl_mode        = "ENCRYPTED_ONLY"
     }
 
     insights_config {

@@ -24,16 +24,6 @@ output "master_username" {
   sensitive   = true
 }
 
-output "password_secret_id" {
-  description = "Secret Manager secret ID for database password"
-  value       = google_secret_manager_secret.db_password.secret_id
-}
-
-output "password_secret_name" {
-  description = "Full secret name"
-  value       = google_secret_manager_secret.db_password.name
-}
-
 output "private_ip_address" {
   description = "Private IP address of the instance"
   value       = google_sql_database_instance.main.private_ip_address
@@ -57,13 +47,12 @@ output "read_replica_private_ip" {
 output "connection_details" {
   description = "Database connection details"
   value = {
-    host               = google_sql_database_instance.main.private_ip_address
-    connection_name    = google_sql_database_instance.main.connection_name
-    port               = 5432
-    database           = google_sql_database.main.name
-    username           = google_sql_user.main.name
-    password_secret_id = google_secret_manager_secret.db_password.secret_id
-    ssl_mode           = "require"
+    host            = google_sql_database_instance.main.private_ip_address
+    connection_name = google_sql_database_instance.main.connection_name
+    port            = 5432
+    database        = google_sql_database.main.name
+    username        = google_sql_user.main.name
+    ssl_mode        = "require"
   }
   sensitive = true
 }
