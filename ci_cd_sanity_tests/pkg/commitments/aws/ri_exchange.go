@@ -95,13 +95,6 @@ func assertAccount(ctx context.Context, cfg sdkaws.Config, expected string) erro
 }
 
 func GetExchangeQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
-	if len(req.ReservedIDs) == 0 {
-		return nil, fmt.Errorf("must provide at least one --ri-ids")
-	}
-	if strings.TrimSpace(req.TargetOfferingID) == "" {
-		return nil, fmt.Errorf("must provide --target-offering-id")
-	}
-
 	cfg, err := loadCfg(ctx, req.Region)
 	if err != nil {
 		return nil, err
@@ -109,11 +102,21 @@ func GetExchangeQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQ
 	if err := assertAccount(ctx, cfg, req.ExpectedAccount); err != nil {
 		return nil, err
 	}
+	return getQuoteWithClient(ctx, ec2.NewFromConfig(cfg), req)
+}
+
+// getQuoteWithClient performs the quote call using a pre-configured EC2 client,
+// allowing ExecuteExchange to reuse the same client for both quote and accept.
+func getQuoteWithClient(ctx context.Context, client *ec2.Client, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
+	if len(req.ReservedIDs) == 0 {
+		return nil, fmt.Errorf("must provide at least one --ri-ids")
+	}
+	if strings.TrimSpace(req.TargetOfferingID) == "" {
+		return nil, fmt.Errorf("must provide --target-offering-id")
+	}
 	if req.TargetCount <= 0 {
 		req.TargetCount = 1
 	}
-
-	client := ec2.NewFromConfig(cfg)
 
 	in := &ec2.GetReservedInstancesExchangeQuoteInput{
 		DryRun:              sdkaws.Bool(req.DryRun),
@@ -171,7 +174,17 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 		return "", nil, fmt.Errorf("refusing to execute without --max-payment-due-usd guardrail")
 	}
 
-	q, err := GetExchangeQuote(ctx, ExchangeQuoteRequest{
+	cfg, err := loadCfg(ctx, req.Region)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := assertAccount(ctx, cfg, req.ExpectedAccount); err != nil {
+		return "", nil, err
+	}
+
+	client := ec2.NewFromConfig(cfg)
+
+	q, err := getQuoteWithClient(ctx, client, ExchangeQuoteRequest{
 		Region:           req.Region,
 		ExpectedAccount:  req.ExpectedAccount,
 		ReservedIDs:      req.ReservedIDs,
@@ -187,20 +200,15 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 		return "", q, fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
 	}
 
+	if q.PaymentDueUSD == nil {
+		return "", q, fmt.Errorf("quote did not return a parseable paymentDue; refusing to execute without cost verification")
+	}
+
 	// paymentDue > max => refuse
-	if q.PaymentDueUSD != nil && q.PaymentDueUSD.Cmp(req.MaxPaymentDueUSD) == 1 {
-		return "", q, fmt.Errorf("paymentDue %s exceeds max %s", q.PaymentDueUSD.RatString(), req.MaxPaymentDueUSD.RatString())
+	if q.PaymentDueUSD.Cmp(req.MaxPaymentDueUSD) == 1 {
+		return "", q, fmt.Errorf("paymentDue %s exceeds max %s", q.PaymentDueUSD.FloatString(2), req.MaxPaymentDueUSD.FloatString(2))
 	}
 
-	cfg, err := loadCfg(ctx, req.Region)
-	if err != nil {
-		return "", q, err
-	}
-	if err := assertAccount(ctx, cfg, req.ExpectedAccount); err != nil {
-		return "", q, err
-	}
-
-	client := ec2.NewFromConfig(cfg)
 	out, err := client.AcceptReservedInstancesExchangeQuote(ctx, &ec2.AcceptReservedInstancesExchangeQuoteInput{
 		ReservedInstanceIds: req.ReservedIDs,
 		TargetConfigurations: []ec2types.TargetConfigurationRequest{
