@@ -69,6 +69,10 @@ resource "azurerm_postgresql_flexible_server" "main" {
     environment = var.environment
     managed_by  = "terraform"
   })
+
+  lifecycle {
+    ignore_changes = [zone]
+  }
 }
 
 # ==============================================
