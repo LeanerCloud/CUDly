@@ -17,7 +17,7 @@ resource "terraform_data" "frontend_build" {
       echo "Building frontend..."
       npm install --production
       npm run build
-      echo "✅ Frontend build complete"
+      echo "Frontend build complete"
     EOT
   }
 }
@@ -58,16 +58,16 @@ resource "terraform_data" "frontend_upload" {
         --content-cache-control "no-cache, no-store, must-revalidate" \
         --pattern "*.html"
 
-      echo "✅ Frontend uploaded to Azure Blob Storage"
+      echo "Frontend uploaded to Azure Blob Storage"
     EOT
   }
 
   depends_on = [terraform_data.frontend_build[0]]
 }
 
-# Purge Azure CDN cache after deployment
+# Purge Azure CDN cache after deployment (classic CDN only)
 resource "terraform_data" "cdn_purge" {
-  count = var.enable_frontend_build ? 1 : 0
+  count = var.enable_frontend_build && !var.use_front_door ? 1 : 0
 
   triggers_replace = {
     # Purge when files change
@@ -82,7 +82,31 @@ resource "terraform_data" "cdn_purge" {
         --profile-name ${var.project_name}-cdn-profile \
         --name ${var.project_name}-cdn-endpoint \
         --content-paths "/*"
-      echo "✅ Azure CDN cache purged"
+      echo "Azure CDN cache purged"
+    EOT
+  }
+
+  depends_on = [terraform_data.frontend_upload[0]]
+}
+
+# Purge Azure Front Door cache after deployment (Front Door only)
+resource "terraform_data" "frontdoor_purge" {
+  count = var.enable_frontend_build && var.use_front_door ? 1 : 0
+
+  triggers_replace = {
+    # Purge when files change
+    upload_hash = terraform_data.frontend_upload[0].id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Purging Azure Front Door cache..."
+      az afd endpoint purge \
+        --resource-group ${var.resource_group_name} \
+        --profile-name ${var.project_name}-frontdoor \
+        --endpoint-name ${var.project_name}-fd-endpoint \
+        --content-paths "/*"
+      echo "Azure Front Door cache purged"
     EOT
   }
 
