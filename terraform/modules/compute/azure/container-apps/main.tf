@@ -87,6 +87,16 @@ resource "azurerm_container_app" "main" {
     identity_ids = [azurerm_user_assigned_identity.container_app.id]
   }
 
+  # Registry authentication
+  dynamic "registry" {
+    for_each = var.registry_server != "" ? [1] : []
+    content {
+      server               = var.registry_server
+      username             = var.registry_username
+      password_secret_name = "registry-password"
+    }
+  }
+
   # Container configuration
   template {
     # Scaling
@@ -118,7 +128,7 @@ resource "azurerm_container_app" "main" {
             ADMIN_EMAIL         = var.admin_email
             ADMIN_PASSWORD      = var.admin_password
             SECRET_PROVIDER     = "azure"
-            AZURE_KEY_VAULT_URI = var.key_vault_uri
+            AZURE_KEY_VAULT_URL = var.key_vault_uri
             AZURE_REGION        = var.location
             PORT                = "8080"
             ALLOWED_ORIGINS     = join(",", var.allowed_origins)
@@ -198,6 +208,15 @@ resource "azurerm_container_app" "main" {
     }
   }
 
+  # Registry password secret (for ACR admin auth)
+  dynamic "secret" {
+    for_each = var.registry_server != "" ? [1] : []
+    content {
+      name  = "registry-password"
+      value = var.registry_password
+    }
+  }
+
   tags = merge(var.tags, {
     environment  = var.environment
     managed_by   = "terraform"
@@ -221,6 +240,25 @@ resource "azurerm_container_app_job" "recommendations" {
   identity {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.container_app.id]
+  }
+
+  # Registry authentication
+  dynamic "registry" {
+    for_each = var.registry_server != "" ? [1] : []
+    content {
+      server               = var.registry_server
+      username             = var.registry_username
+      password_secret_name = "registry-password"
+    }
+  }
+
+  # Registry password secret
+  dynamic "secret" {
+    for_each = var.registry_server != "" ? [1] : []
+    content {
+      name  = "registry-password"
+      value = var.registry_password
+    }
   }
 
   # Manual trigger (will be triggered by Logic Apps or cron)
@@ -251,7 +289,7 @@ resource "azurerm_container_app_job" "recommendations" {
             ADMIN_EMAIL         = var.admin_email
             ADMIN_PASSWORD      = var.admin_password
             SECRET_PROVIDER     = "azure"
-            AZURE_KEY_VAULT_URI = var.key_vault_uri
+            AZURE_KEY_VAULT_URL = var.key_vault_uri
             AZURE_REGION        = var.location
             PORT                = "8080"
             ALLOWED_ORIGINS     = join(",", var.allowed_origins)
@@ -287,10 +325,6 @@ resource "azurerm_monitor_diagnostic_setting" "container_app" {
   name                       = "${var.app_name}-container-app-diag"
   target_resource_id         = azurerm_container_app.main.id
   log_analytics_workspace_id = var.log_analytics_workspace_id
-
-  enabled_log {
-    category = "ContainerAppConsoleLogs"
-  }
 
   enabled_log {
     category = "ContainerAppSystemLogs"

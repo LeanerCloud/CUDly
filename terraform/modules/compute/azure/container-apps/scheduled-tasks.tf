@@ -29,7 +29,7 @@ resource "azurerm_logic_app_trigger_recurrence" "daily" {
   logic_app_id = azurerm_logic_app_workflow.recommendations[0].id
   frequency    = "Day"
   interval     = 1
-  start_time   = formatdate("YYYY-MM-DD'T'${local.schedule_hour}:00:00'Z'", timestamp())
+  start_time   = "${formatdate("YYYY-MM-DD", timestamp())}T${format("%02s", local.schedule_hour)}:00:00Z"
   time_zone    = "UTC"
 }
 
@@ -83,7 +83,7 @@ resource "azurerm_logic_app_trigger_recurrence" "cleanup_daily" {
   logic_app_id = azurerm_logic_app_workflow.cleanup[0].id
   frequency    = "Day"
   interval     = 1
-  start_time   = formatdate("YYYY-MM-DD'T'03:00:00'Z'", timestamp())
+  start_time   = "${formatdate("YYYY-MM-DD", timestamp())}T03:00:00Z"
   time_zone    = "UTC"
 }
 

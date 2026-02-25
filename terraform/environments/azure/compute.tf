@@ -21,7 +21,7 @@ module "compute_container_apps" {
   infrastructure_subnet_id       = module.networking.container_apps_subnet_id
   internal_load_balancer_enabled = var.internal_load_balancer_enabled
   log_analytics_workspace_id     = module.networking.log_analytics_workspace_id
-  enable_diagnostics             = true
+  enable_diagnostics             = false # Container App Environment handles logging via Log Analytics
   database_host                  = module.database.server_fqdn
   database_name                  = module.database.database_name
   database_username              = module.database.administrator_login
@@ -42,6 +42,11 @@ module "compute_container_apps" {
     },
     var.additional_env_vars
   )
+  # ACR registry credentials for image pull
+  registry_server   = azurerm_container_registry.main.login_server
+  registry_username = azurerm_container_registry.main.admin_username
+  registry_password = azurerm_container_registry.main.admin_password
+
   enable_scheduled_jobs   = var.enable_scheduled_jobs
   recommendation_schedule = var.recommendation_schedule
 

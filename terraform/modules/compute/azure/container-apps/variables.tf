@@ -172,6 +172,25 @@ variable "recommendation_schedule" {
   default     = "0 2 * * *" # 2 AM daily
 }
 
+variable "registry_server" {
+  description = "Container registry server URL (e.g. myacr.azurecr.io)"
+  type        = string
+  default     = ""
+}
+
+variable "registry_username" {
+  description = "Container registry username (for admin auth)"
+  type        = string
+  default     = ""
+}
+
+variable "registry_password" {
+  description = "Container registry password (for admin auth)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)
