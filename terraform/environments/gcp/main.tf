@@ -17,6 +17,10 @@ terraform {
       source  = "hashicorp/helm"
       version = "~> 2.11"
     }
+    http = {
+      source  = "hashicorp/http"
+      version = "~> 3.0"
+    }
   }
 
   # Backend configuration for state management
