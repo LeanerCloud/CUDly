@@ -16,8 +16,8 @@ output "load_balancer_ip" {
 }
 
 output "frontend_url" {
-  description = "Frontend URL (load balancer or custom domain)"
-  value       = length(var.domain_names) > 0 ? "https://${var.domain_names[0]}" : "https://${google_compute_global_address.frontend.address}"
+  description = "Frontend URL (HTTPS with custom domain, HTTP with IP only)"
+  value       = length(var.domain_names) > 0 ? "https://${var.domain_names[0]}" : "http://${google_compute_global_address.frontend.address}"
 }
 
 output "backend_bucket_id" {
