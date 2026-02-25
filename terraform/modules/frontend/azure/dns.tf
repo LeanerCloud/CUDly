@@ -18,10 +18,10 @@ resource "azurerm_dns_zone" "subdomain" {
 # Note: This is only used when subdomain_zone_name is set
 # Otherwise, use the custom_domain variable with the resource in main.tf
 resource "azurerm_cdn_endpoint_custom_domain" "frontend_subdomain" {
-  count = var.subdomain_zone_name != "" && length(var.domain_names) > 0 ? 1 : 0
+  count = !var.use_front_door && var.subdomain_zone_name != "" && length(var.domain_names) > 0 ? 1 : 0
 
   name            = replace(var.domain_names[0], ".", "-")
-  cdn_endpoint_id = azurerm_cdn_endpoint.frontend.id
+  cdn_endpoint_id = azurerm_cdn_endpoint.frontend[0].id
   host_name       = var.domain_names[0]
 
   cdn_managed_https {
@@ -41,7 +41,9 @@ resource "azurerm_dns_cname_record" "frontend" {
   zone_name           = azurerm_dns_zone.subdomain[0].name
   resource_group_name = var.resource_group_name
   ttl                 = 300
-  record              = azurerm_cdn_endpoint.frontend.fqdn
+  record = var.use_front_door ? (
+    azurerm_cdn_frontdoor_endpoint.frontend[0].host_name
+  ) : azurerm_cdn_endpoint.frontend[0].fqdn
 
   tags = merge(var.tags, {
     Name        = var.domain_names[0]

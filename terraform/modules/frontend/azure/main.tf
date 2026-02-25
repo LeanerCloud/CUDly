@@ -50,8 +50,10 @@ resource "azurerm_storage_account" "frontend" {
   })
 }
 
-# CDN profile
+# CDN profile (classic - only when not using Front Door)
 resource "azurerm_cdn_profile" "frontend" {
+  count = var.use_front_door ? 0 : 1
+
   name                = "${var.project_name}-cdn-profile"
   location            = var.location
   resource_group_name = var.resource_group_name
@@ -63,11 +65,13 @@ resource "azurerm_cdn_profile" "frontend" {
   })
 }
 
-# CDN endpoint for frontend
+# CDN endpoint for frontend (only when not using Front Door)
 resource "azurerm_cdn_endpoint" "frontend" {
+  count = var.use_front_door ? 0 : 1
+
   name                = "${var.project_name}-cdn-endpoint"
-  profile_name        = azurerm_cdn_profile.frontend.name
-  location            = azurerm_cdn_profile.frontend.location
+  profile_name        = azurerm_cdn_profile.frontend[0].name
+  location            = azurerm_cdn_profile.frontend[0].location
   resource_group_name = var.resource_group_name
 
   origin_host_header     = azurerm_storage_account.frontend.primary_web_host
@@ -144,12 +148,12 @@ resource "azurerm_cdn_endpoint" "frontend" {
   })
 }
 
-# Custom domain (if provided)
+# Custom domain (if provided, only with classic CDN)
 resource "azurerm_cdn_endpoint_custom_domain" "frontend" {
-  count = var.custom_domain != "" ? 1 : 0
+  count = !var.use_front_door && var.custom_domain != "" ? 1 : 0
 
   name            = replace(var.custom_domain, ".", "-")
-  cdn_endpoint_id = azurerm_cdn_endpoint.frontend.id
+  cdn_endpoint_id = azurerm_cdn_endpoint.frontend[0].id
   host_name       = var.custom_domain
 
   cdn_managed_https {
@@ -165,7 +169,7 @@ resource "azurerm_cdn_frontdoor_profile" "frontend" {
 
   name                = "${var.project_name}-frontdoor"
   resource_group_name = var.resource_group_name
-  sku_name            = "Premium_AzureFrontDoor"
+  sku_name            = "Standard_AzureFrontDoor"
 
   tags = merge(var.tags, {
     Name        = "${var.project_name}-frontdoor"
@@ -239,12 +243,12 @@ resource "azurerm_cdn_frontdoor_route" "frontend" {
   https_redirect_enabled = true
 }
 
-# Monitor for CDN health
+# Monitor for CDN health (only with classic CDN)
 resource "azurerm_monitor_metric_alert" "cdn_errors" {
-  count               = var.action_group_id != "" ? 1 : 0
+  count               = !var.use_front_door && var.action_group_id != "" ? 1 : 0
   name                = "${var.project_name}-cdn-errors"
   resource_group_name = var.resource_group_name
-  scopes              = [azurerm_cdn_endpoint.frontend.id]
+  scopes              = [azurerm_cdn_endpoint.frontend[0].id]
   description         = "Alert when CDN error rate is high"
   severity            = 2
   frequency           = "PT5M"

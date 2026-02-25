@@ -22,22 +22,24 @@ output "storage_primary_web_host" {
 
 output "cdn_profile_id" {
   description = "CDN profile ID"
-  value       = azurerm_cdn_profile.frontend.id
+  value       = var.use_front_door ? "" : azurerm_cdn_profile.frontend[0].id
 }
 
 output "cdn_endpoint_id" {
   description = "CDN endpoint ID"
-  value       = azurerm_cdn_endpoint.frontend.id
+  value       = var.use_front_door ? "" : azurerm_cdn_endpoint.frontend[0].id
 }
 
 output "cdn_endpoint_hostname" {
   description = "CDN endpoint hostname (format: <name>.azureedge.net)"
-  value       = "${azurerm_cdn_endpoint.frontend.name}.azureedge.net"
+  value       = var.use_front_door ? "" : "${azurerm_cdn_endpoint.frontend[0].name}.azureedge.net"
 }
 
 output "frontend_url" {
-  description = "Frontend URL (CDN or custom domain)"
-  value       = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${azurerm_cdn_endpoint.frontend.name}.azureedge.net"
+  description = "Frontend URL (CDN, Front Door, or custom domain)"
+  value = var.custom_domain != "" ? "https://${var.custom_domain}" : (
+    var.use_front_door ? "https://${azurerm_cdn_frontdoor_endpoint.frontend[0].host_name}" : "https://${azurerm_cdn_endpoint.frontend[0].name}.azureedge.net"
+  )
 }
 
 output "frontdoor_endpoint_hostname" {
