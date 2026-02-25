@@ -21,6 +21,7 @@ func main() {
 	// Parse command line flags
 	mode := flag.String("mode", "auto", "Runtime mode: auto, lambda, http")
 	port := flag.Int("port", 8080, "HTTP server port (ignored in lambda mode)")
+	task := flag.String("task", "", "Run a scheduled task and exit (e.g., collect_recommendations, cleanup)")
 	flag.Parse()
 
 	// Print version info
@@ -39,6 +40,18 @@ func main() {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
 	defer app.Close()
+
+	// If --task is provided, run the task and exit
+	if *task != "" {
+		log.Printf("Running scheduled task: %s", *task)
+		taskType := server.ScheduledTaskType(*task)
+		result, err := app.HandleScheduledTask(ctx, taskType)
+		if err != nil {
+			log.Fatalf("Scheduled task %q failed: %v", *task, err)
+		}
+		log.Printf("Scheduled task %q completed successfully: %v", *task, result)
+		return
+	}
 
 	// Determine runtime mode
 	runtimeMode := determineRuntimeMode(*mode)
