@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"math/big"
 	"os"
 	"strings"
 	"time"
@@ -36,14 +35,6 @@ func parseIDs(s string) []string {
 		}
 	}
 	return out
-}
-
-func mustRat(s string) (*big.Rat, error) {
-	r := new(big.Rat)
-	if _, ok := r.SetString(strings.TrimSpace(s)); !ok {
-		return nil, fmt.Errorf("invalid decimal: %q", s)
-	}
-	return r, nil
 }
 
 func main() {
@@ -94,7 +85,7 @@ func main() {
 			ReservedIDs:      ids,
 			TargetOfferingID: *targetOffering,
 			TargetCount:      int32(*targetCount),
-			DryRun:           false, // quote is always non-mutating; DryRun here is only permission-check behavior
+			DryRun:           false, // false = real quote; true would only check IAM permissions
 		})
 		if err != nil {
 			o.Error = err.Error()
@@ -128,14 +119,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "execute: REFUSED (see %s)\n", *outPath)
 		os.Exit(2)
 	}
-	maxRat, err := mustRat(*maxPaymentDue)
+	maxRat, err := commitaws.ParseDecimalRat(*maxPaymentDue)
 	if err != nil {
 		o.Error = err.Error()
 		write(o, *outPath)
 		fmt.Fprintf(os.Stderr, "execute: BAD INPUT (see %s)\n", *outPath)
 		os.Exit(2)
 	}
-	o.MaxPaymentDueUSD = maxRat.RatString()
+	o.MaxPaymentDueUSD = maxRat.FloatString(2)
 
 	exID, q, err := commitaws.ExecuteExchange(ctx, commitaws.ExchangeExecuteRequest{
 		Region:           *region,
@@ -164,7 +155,7 @@ func write(v any, path string) {
 		fmt.Fprintf(os.Stderr, "failed to marshal json for %s: %v\n", path, err)
 		return
 	}
-	if err := os.WriteFile(path, b, 0644); err != nil {
+	if err := os.WriteFile(path, b, 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write %s: %v\n", path, err)
 	}
 }
