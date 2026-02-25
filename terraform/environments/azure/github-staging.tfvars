@@ -57,8 +57,8 @@ purge_protection_enabled   = false
 # Scheduled Tasks
 # ==============================================
 
-enable_scheduled_tasks   = true
-recommendation_schedule  = "0 2 * * *"
+enable_scheduled_tasks  = true
+recommendation_schedule = "0 2 * * *"
 
 # ==============================================
 # Logging
