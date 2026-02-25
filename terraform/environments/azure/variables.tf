@@ -383,9 +383,9 @@ variable "aks_enable_log_analytics" {
 # ==============================================
 
 variable "enable_frontend" {
-  description = "Enable frontend CDN deployment"
+  description = "Enable frontend deployment (Azure CDN / Front Door). Set to false for API-only deployments, when the frontend is hosted externally (e.g. Vercel/Netlify), or to reduce costs in dev/test environments."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_frontend_build" {

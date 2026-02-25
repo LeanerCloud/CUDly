@@ -305,7 +305,7 @@ variable "fargate_enable_execute_command" {
 # ==============================================
 
 variable "enable_frontend" {
-  description = "Enable frontend deployment (CloudFront + S3)"
+  description = "Enable frontend deployment (CloudFront + S3). Set to false for API-only deployments, when the frontend is hosted externally (e.g. Vercel/Netlify), or to reduce costs in dev/test environments."
   type        = bool
   default     = true
 }

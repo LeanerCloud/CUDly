@@ -336,9 +336,9 @@ variable "gke_enable_workload_identity" {
 # ==============================================
 
 variable "enable_frontend" {
-  description = "Enable frontend CDN deployment with Load Balancer"
+  description = "Enable frontend deployment (Cloud CDN + Load Balancer). Set to false for API-only deployments, when the frontend is hosted externally (e.g. Vercel/Netlify), or to reduce costs in dev/test environments."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_frontend_build" {
