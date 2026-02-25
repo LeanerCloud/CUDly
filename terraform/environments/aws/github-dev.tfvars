@@ -28,9 +28,9 @@ lambda_function_url_auth_type = "NONE"
 lambda_allowed_origins        = ["*"]
 
 # Fargate Configuration (when compute_platform = "fargate")
-fargate_cpu           = 512
-fargate_memory        = 1024
-fargate_desired_count = 2
+fargate_cpu           = 256
+fargate_memory        = 512
+fargate_desired_count = 1
 fargate_min_capacity  = 1
 fargate_max_capacity  = 5
 
