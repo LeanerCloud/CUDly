@@ -7,7 +7,7 @@
 locals {
   # For simplicity, support daily schedules at a specific hour
   # Full cron parsing would require more complex logic
-  schedule_hour = var.enable_scheduled_tasks ? split(" ", var.recommendations_schedule)[1] : "2"
+  schedule_hour = var.enable_scheduled_tasks ? split(" ", var.recommendation_schedule)[1] : "2"
 }
 
 # Logic App workflow for recommendations refresh
@@ -41,12 +41,13 @@ resource "azurerm_logic_app_action_http" "call_recommendations" {
   logic_app_id = azurerm_logic_app_workflow.recommendations[0].id
 
   method = "POST"
-  uri    = "https://${azurerm_container_app.main.latest_revision_fqdn}/api/recommendations/refresh"
+  uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/recommendations"
 
   headers = {
-    "Content-Type" = "application/json"
-    "X-Trigger"    = "scheduled"
-    "X-Source"     = "azure-logic-apps"
+    "Content-Type"  = "application/json"
+    "Authorization" = "Bearer ${var.scheduled_task_secret}"
+    "X-Trigger"     = "scheduled"
+    "X-Source"      = "azure-logic-apps"
   }
 
   body = jsonencode({
@@ -54,15 +55,6 @@ resource "azurerm_logic_app_action_http" "call_recommendations" {
     timestamp = "@{utcNow()}"
   })
 }
-
-# Optional: Add authentication to the HTTP call
-# If your Container App requires authentication, uncomment this section
-# resource "azurerm_logic_app_action_http" "call_recommendations" {
-#   ...
-#   authentication {
-#     type = "ManagedServiceIdentity"
-#   }
-# }
 
 # Logic App workflow for cleanup (sessions and executions)
 resource "azurerm_logic_app_workflow" "cleanup" {
@@ -95,12 +87,13 @@ resource "azurerm_logic_app_action_http" "call_cleanup" {
   logic_app_id = azurerm_logic_app_workflow.cleanup[0].id
 
   method = "POST"
-  uri    = "https://${azurerm_container_app.main.latest_revision_fqdn}/api/cleanup"
+  uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/cleanup"
 
   headers = {
-    "Content-Type" = "application/json"
-    "X-Trigger"    = "scheduled"
-    "X-Source"     = "azure-logic-apps"
+    "Content-Type"  = "application/json"
+    "Authorization" = "Bearer ${var.scheduled_task_secret}"
+    "X-Trigger"     = "scheduled"
+    "X-Source"      = "azure-logic-apps"
   }
 
   body = jsonencode({

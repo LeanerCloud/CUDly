@@ -43,20 +43,19 @@ resource "azurerm_container_app_environment" "main" {
   # ARCHITECTURE: Consumption plan (default)
   # Uses X86_64 architecture for maximum flexibility and pay-per-use pricing
   # No workload_profile block = Consumption plan (serverless, auto-scaling)
-  #
-  # For ARM64 support in the future, add:
-  # workload_profile {
-  #   name                  = "Dedicated-ARM64"
-  #   workload_profile_type = "D4"  # Example ARM64 profile
-  #   minimum_count         = 1
-  #   maximum_count         = 10
-  # }
 
   tags = merge(var.tags, {
     environment  = var.environment
     managed_by   = "terraform"
-    architecture = "x86_64" # Explicit architecture tag
+    architecture = "x86_64"
   })
+
+  lifecycle {
+    ignore_changes = [
+      # Azure auto-generates this; ignoring prevents unnecessary force-replacement
+      infrastructure_resource_group_name,
+    ]
+  }
 }
 
 # ==============================================
@@ -120,7 +119,7 @@ resource "azurerm_container_app" "main" {
             DB_PORT             = "5432"
             DB_NAME             = var.database_name
             DB_USER             = var.database_username
-            DB_PASSWORD_SECRET  = var.database_password_secret_id
+            DB_PASSWORD_SECRET  = var.database_password_secret_name
             DB_SSL_MODE         = "require"
             DB_CONNECT_TIMEOUT  = "8s"
             DB_AUTO_MIGRATE     = tostring(var.auto_migrate)
@@ -128,6 +127,7 @@ resource "azurerm_container_app" "main" {
             ADMIN_EMAIL         = var.admin_email
             ADMIN_PASSWORD      = var.admin_password
             SECRET_PROVIDER     = "azure"
+            AZURE_CLIENT_ID     = azurerm_user_assigned_identity.container_app.client_id
             AZURE_KEY_VAULT_URL = var.key_vault_uri
             AZURE_REGION        = var.location
             PORT                = "8080"
@@ -222,97 +222,6 @@ resource "azurerm_container_app" "main" {
     managed_by   = "terraform"
     architecture = "x86_64" # Explicit architecture tag
   })
-}
-
-# ==============================================
-# Scheduled Jobs (using Azure Container Apps Jobs)
-# ==============================================
-
-resource "azurerm_container_app_job" "recommendations" {
-  count = var.enable_scheduled_jobs ? 1 : 0
-
-  name                         = "${var.app_name}-recommendations-job"
-  location                     = var.location
-  resource_group_name          = var.resource_group_name
-  container_app_environment_id = azurerm_container_app_environment.main.id
-
-  # Managed identity
-  identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.container_app.id]
-  }
-
-  # Registry authentication
-  dynamic "registry" {
-    for_each = var.registry_server != "" ? [1] : []
-    content {
-      server               = var.registry_server
-      username             = var.registry_username
-      password_secret_name = "registry-password"
-    }
-  }
-
-  # Registry password secret
-  dynamic "secret" {
-    for_each = var.registry_server != "" ? [1] : []
-    content {
-      name  = "registry-password"
-      value = var.registry_password
-    }
-  }
-
-  # Manual trigger (will be triggered by Logic Apps or cron)
-  replica_timeout_in_seconds = 300
-  replica_retry_limit        = 1
-
-  template {
-    container {
-      name   = "recommendations-job"
-      image  = var.image_uri
-      cpu    = var.cpu
-      memory = var.memory
-
-      # Environment variables (same as main app)
-      dynamic "env" {
-        for_each = merge(
-          {
-            ENVIRONMENT         = var.environment
-            RUNTIME_MODE        = "http"
-            DB_HOST             = var.database_host
-            DB_PORT             = "5432"
-            DB_NAME             = var.database_name
-            DB_USER             = var.database_username
-            DB_PASSWORD_SECRET  = var.database_password_secret_id
-            DB_SSL_MODE         = "require"
-            DB_CONNECT_TIMEOUT  = "8s"
-            DB_AUTO_MIGRATE     = "false" # Don't migrate in jobs
-            ADMIN_EMAIL         = var.admin_email
-            ADMIN_PASSWORD      = var.admin_password
-            SECRET_PROVIDER     = "azure"
-            AZURE_KEY_VAULT_URL = var.key_vault_uri
-            AZURE_REGION        = var.location
-            PORT                = "8080"
-            ALLOWED_ORIGINS     = join(",", var.allowed_origins)
-            JOB_TYPE            = "recommendations"
-          },
-          var.additional_env_vars
-        )
-        content {
-          name  = env.key
-          value = env.value
-        }
-      }
-    }
-  }
-
-  # Schedule trigger
-  schedule_trigger_config {
-    cron_expression          = var.recommendation_schedule
-    parallelism              = 1
-    replica_completion_count = 1
-  }
-
-  tags = var.tags
 }
 
 # ==============================================

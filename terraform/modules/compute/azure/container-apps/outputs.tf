@@ -38,11 +38,6 @@ output "managed_identity_client_id" {
   value       = azurerm_user_assigned_identity.container_app.client_id
 }
 
-output "scheduled_job_id" {
-  description = "Scheduled job ID (if enabled)"
-  value       = var.enable_scheduled_jobs ? azurerm_container_app_job.recommendations[0].id : null
-}
-
 output "ingress_fqdn" {
   description = "Ingress FQDN for external access"
   value       = azurerm_container_app.main.latest_revision_fqdn
@@ -62,7 +57,7 @@ output "cleanup_workflow_id" {
   value       = var.enable_scheduled_tasks ? azurerm_logic_app_workflow.cleanup[0].id : null
 }
 
-output "recommendations_schedule" {
+output "recommendation_schedule" {
   description = "Schedule for recommendations workflow"
   value       = var.enable_scheduled_tasks ? "Daily at ${local.schedule_hour}:00 UTC" : null
 }
