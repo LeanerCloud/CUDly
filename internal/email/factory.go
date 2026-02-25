@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
@@ -63,7 +64,21 @@ func NewSenderFromEnvironment(ctx context.Context) (SenderInterface, error) {
 		// GCP uses SendGrid via SMTP
 		apiKey := os.Getenv("SENDGRID_API_KEY")
 		if apiKey == "" {
-			return nil, fmt.Errorf("SENDGRID_API_KEY environment variable required for GCP email")
+			// Resolve from Secret Manager if secret name is provided
+			if secretName := os.Getenv("SENDGRID_API_KEY_SECRET"); secretName != "" {
+				resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
+				if err != nil {
+					return nil, fmt.Errorf("failed to create secret resolver for SendGrid API key: %w", err)
+				}
+				defer resolver.Close()
+				apiKey, err = resolver.GetSecret(ctx, secretName)
+				if err != nil {
+					return nil, fmt.Errorf("failed to resolve SendGrid API key from secret %q: %w", secretName, err)
+				}
+			}
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("SENDGRID_API_KEY or SENDGRID_API_KEY_SECRET environment variable required for GCP email")
 		}
 		return NewSMTPSender(SMTPConfig{
 			Host:      "smtp.sendgrid.net",
@@ -79,8 +94,30 @@ func NewSenderFromEnvironment(ctx context.Context) (SenderInterface, error) {
 		// Azure uses Azure Communication Services via SMTP
 		username := os.Getenv("AZURE_SMTP_USERNAME")
 		password := os.Getenv("AZURE_SMTP_PASSWORD")
+
+		// Resolve credentials from Key Vault if secret names are provided
 		if username == "" || password == "" {
-			return nil, fmt.Errorf("AZURE_SMTP_USERNAME and AZURE_SMTP_PASSWORD environment variables required for Azure email")
+			usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
+			passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
+			if usernameSecret != "" && passwordSecret != "" {
+				resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
+				if err != nil {
+					return nil, fmt.Errorf("failed to create secret resolver for Azure SMTP credentials: %w", err)
+				}
+				defer resolver.Close()
+				username, err = resolver.GetSecret(ctx, usernameSecret)
+				if err != nil {
+					return nil, fmt.Errorf("failed to resolve Azure SMTP username from secret %q: %w", usernameSecret, err)
+				}
+				password, err = resolver.GetSecret(ctx, passwordSecret)
+				if err != nil {
+					return nil, fmt.Errorf("failed to resolve Azure SMTP password from secret %q: %w", passwordSecret, err)
+				}
+			}
+		}
+
+		if username == "" || password == "" {
+			return nil, fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
 		}
 		host := os.Getenv("AZURE_SMTP_HOST")
 		if host == "" {

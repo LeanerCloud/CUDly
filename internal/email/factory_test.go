@@ -102,6 +102,7 @@ func TestNewSenderFromEnvironment_AWS_CloudProvider(t *testing.T) {
 func TestNewSenderFromEnvironment_GCP_MissingAPIKey(t *testing.T) {
 	os.Setenv("SECRET_PROVIDER", "gcp")
 	os.Unsetenv("SENDGRID_API_KEY")
+	os.Unsetenv("SENDGRID_API_KEY_SECRET")
 	defer func() {
 		os.Unsetenv("SECRET_PROVIDER")
 	}()
@@ -110,7 +111,7 @@ func TestNewSenderFromEnvironment_GCP_MissingAPIKey(t *testing.T) {
 	_, err := NewSenderFromEnvironment(ctx)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "SENDGRID_API_KEY environment variable required")
+	assert.Contains(t, err.Error(), "SENDGRID_API_KEY")
 }
 
 func TestNewSenderFromEnvironment_GCP_WithAPIKey(t *testing.T) {
@@ -138,6 +139,8 @@ func TestNewSenderFromEnvironment_Azure_MissingCredentials(t *testing.T) {
 	os.Setenv("SECRET_PROVIDER", "azure")
 	os.Unsetenv("AZURE_SMTP_USERNAME")
 	os.Unsetenv("AZURE_SMTP_PASSWORD")
+	os.Unsetenv("AZURE_SMTP_USERNAME_SECRET")
+	os.Unsetenv("AZURE_SMTP_PASSWORD_SECRET")
 	defer func() {
 		os.Unsetenv("SECRET_PROVIDER")
 	}()
@@ -146,7 +149,7 @@ func TestNewSenderFromEnvironment_Azure_MissingCredentials(t *testing.T) {
 	_, err := NewSenderFromEnvironment(ctx)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AZURE_SMTP_USERNAME and AZURE_SMTP_PASSWORD environment variables required")
+	assert.Contains(t, err.Error(), "Azure SMTP credentials required")
 }
 
 func TestNewSenderFromEnvironment_Azure_WithCredentials(t *testing.T) {
