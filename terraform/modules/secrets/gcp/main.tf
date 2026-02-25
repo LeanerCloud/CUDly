@@ -23,9 +23,8 @@ terraform {
 resource "random_password" "database" {
   count = var.database_password == null ? 1 : 0
 
-  length           = 32
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
+  length  = 32
+  special = true
 }
 
 resource "google_secret_manager_secret" "database_password" {
