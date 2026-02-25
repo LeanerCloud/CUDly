@@ -46,13 +46,11 @@ func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request
 		health.Status = "degraded"
 	}
 
-	// Set response status code based on health
+	// Always return 200 for the health endpoint so startup/liveness probes pass.
+	// The actual health status is in the JSON body. "degraded" means the app is
+	// running but some dependencies (like DB) aren't connected yet - this is
+	// expected during cold starts with lazy DB initialization.
 	statusCode := http.StatusOK
-	if health.Status == "degraded" {
-		statusCode = http.StatusServiceUnavailable
-	} else if health.Status == "unhealthy" {
-		statusCode = http.StatusServiceUnavailable
-	}
 
 	// Write response
 	w.Header().Set("Content-Type", "application/json")

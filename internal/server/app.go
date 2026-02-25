@@ -381,10 +381,7 @@ func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Conf
 	log.Println("Preparing PostgreSQL configuration store (lazy initialization)...")
 
 	// Initialize secret resolver
-	secretResolver, err := secrets.NewResolver(ctx, &secrets.Config{
-		Provider:  os.Getenv("SECRET_PROVIDER"),
-		AWSRegion: os.Getenv("AWS_REGION_CONFIG"),
-	})
+	secretResolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to create secret resolver: %w", err)
 	}

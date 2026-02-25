@@ -158,7 +158,7 @@ func TestHandleHealthCheck(t *testing.T) {
 				app.Config = nil
 				app.Auth = createHealthyAuthService()
 			},
-			expectedStatus: 503,
+			expectedStatus: 200,
 			expectedHealth: "degraded",
 		},
 		{
@@ -168,7 +168,7 @@ func TestHandleHealthCheck(t *testing.T) {
 				app.Config = &mockConfigStoreForHealth{}
 				app.Auth = nil
 			},
-			expectedStatus: 503,
+			expectedStatus: 200,
 			expectedHealth: "degraded",
 		},
 		{
@@ -176,7 +176,7 @@ func TestHandleHealthCheck(t *testing.T) {
 			setupApp: func(app *Application) {
 				app.Version = "test"
 			},
-			expectedStatus: 503,
+			expectedStatus: 200,
 			expectedHealth: "degraded",
 		},
 	}
