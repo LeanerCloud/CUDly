@@ -109,6 +109,67 @@ variable "enable_log_analytics" {
   default     = true
 }
 
+variable "deploy_kubernetes_resources" {
+  description = "Deploy kubernetes resources (namespace, deployment, service, etc). Requires kubernetes/helm providers to be configured at root level. Set to false to only create the AKS cluster."
+  type        = bool
+  default     = false
+}
+
+variable "admin_email" {
+  description = "Administrator email address"
+  type        = string
+  default     = ""
+}
+
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "auto_migrate" {
+  description = "Automatically run database migrations on startup"
+  type        = bool
+  default     = true
+}
+
+variable "allowed_origins" {
+  description = "List of allowed CORS origins"
+  type        = list(string)
+  default     = ["*"]
+}
+
+variable "additional_env_vars" {
+  description = "Additional environment variables"
+  type        = map(string)
+  default     = {}
+}
+
+variable "key_vault_uri" {
+  description = "Key Vault URI for secrets"
+  type        = string
+  default     = ""
+}
+
+variable "service_cidr" {
+  description = "Kubernetes service CIDR"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "dns_service_ip" {
+  description = "Kubernetes DNS service IP (must be within service_cidr)"
+  type        = string
+  default     = "10.0.0.10"
+}
+
+variable "nginx_ingress_version" {
+  description = "NGINX Ingress Controller Helm chart version"
+  type        = string
+  default     = "4.8.0"
+}
+
 variable "tags" {
   description = "Additional tags for resources"
   type        = map(string)

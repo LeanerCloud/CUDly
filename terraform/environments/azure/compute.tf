@@ -25,20 +25,19 @@ module "compute_container_apps" {
   database_host                  = module.database.server_fqdn
   database_name                  = module.database.database_name
   database_username              = module.database.administrator_login
-  database_password_secret_id    = module.secrets.database_password_secret_id
+  database_password_secret_name  = module.secrets.database_password_secret_name
   key_vault_uri                  = module.secrets.key_vault_uri
   auto_migrate                   = var.auto_migrate
   admin_email                    = var.admin_email
   admin_password                 = var.admin_password
   additional_env_vars = merge(
     {
-      JWT_SECRET_ARN      = module.secrets.jwt_secret_id
-      SESSION_SECRET_ARN  = module.secrets.session_secret_id
-      AZURE_SMTP_USERNAME = module.secrets.smtp_username_id
-      AZURE_SMTP_PASSWORD = module.secrets.smtp_password_id
-      FROM_EMAIL          = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.app_name}.example.com"
-      DASHBOARD_URL       = local.dashboard_url
-      CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
+      AZURE_SMTP_USERNAME_SECRET = module.secrets.smtp_username_name
+      AZURE_SMTP_PASSWORD_SECRET = module.secrets.smtp_password_name
+      FROM_EMAIL                 = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.app_name}.example.com"
+      DASHBOARD_URL              = local.dashboard_url
+      CORS_ALLOWED_ORIGIN        = local.dashboard_url != "" ? local.dashboard_url : "*"
+      SCHEDULED_TASK_SECRET      = module.secrets.scheduled_task_secret_value
     },
     var.additional_env_vars
   )
@@ -47,7 +46,9 @@ module "compute_container_apps" {
   registry_username = azurerm_container_registry.main.admin_username
   registry_password = azurerm_container_registry.main.admin_password
 
-  enable_scheduled_jobs   = var.enable_scheduled_jobs
+  # Scheduled tasks (Logic Apps)
+  enable_scheduled_tasks  = var.enable_scheduled_tasks
+  scheduled_task_secret   = module.secrets.scheduled_task_secret_value
   recommendation_schedule = var.recommendation_schedule
 
   tags = local.common_tags
@@ -90,7 +91,20 @@ module "compute_aks" {
   database_password_secret_name = "database-password"
 
   # Key Vault for secrets
-  key_vault_id = module.secrets.key_vault_id
+  key_vault_id  = module.secrets.key_vault_id
+  key_vault_uri = module.secrets.key_vault_uri
+
+  # Application configuration
+  admin_email    = var.admin_email
+  admin_password = var.admin_password
+  auto_migrate   = var.auto_migrate
+  additional_env_vars = merge(
+    {
+      DASHBOARD_URL       = local.dashboard_url
+      CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
+    },
+    var.additional_env_vars
+  )
 
   # Add-ons
   enable_azure_policy  = var.aks_enable_azure_policy
@@ -105,18 +119,15 @@ module "compute_aks" {
 # RBAC - Grant Compute access to Key Vault
 # ==============================================
 
-# This is handled in the compute modules via managed identities
-# Container Apps and AKS both have their own identity management
+# Grant Container App managed identity "Key Vault Secrets User" role
+# so the app can read secrets (DB password, JWT secret, etc.) at runtime
+resource "azurerm_role_assignment" "compute_key_vault_secrets_user" {
+  count = var.compute_platform == "container-apps" && length(module.compute_container_apps) > 0 ? 1 : 0
 
-resource "null_resource" "update_key_vault_rbac" {
-  triggers = {
-    compute_platform = var.compute_platform
-    principal_id = var.compute_platform == "container-apps" ? (
-      length(module.compute_container_apps) > 0 ? module.compute_container_apps[0].managed_identity_principal_id : ""
-      ) : (
-      length(module.compute_aks) > 0 ? module.compute_aks[0].workload_identity_client_id : ""
-    )
-  }
+  scope                = module.secrets.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.compute_container_apps[0].managed_identity_principal_id
 
-  depends_on = [module.compute_container_apps, module.compute_aks, module.secrets]
+  # Implicit dependency through principal_id and scope references is sufficient.
+  # Avoid explicit depends_on on modules to prevent cascading replacements.
 }

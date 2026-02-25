@@ -47,27 +47,27 @@ output "client_key" {
 
 output "load_balancer_ip" {
   description = "Load Balancer external IP"
-  value       = try(data.kubernetes_service.nginx_ingress.status[0].load_balancer[0].ingress[0].ip, "")
+  value       = var.deploy_kubernetes_resources ? try(data.kubernetes_service.nginx_ingress[0].status[0].load_balancer[0].ingress[0].ip, "") : ""
 }
 
 output "api_url" {
   description = "API URL (Load Balancer IP)"
-  value       = try("http://${data.kubernetes_service.nginx_ingress.status[0].load_balancer[0].ingress[0].ip}", "")
+  value       = var.deploy_kubernetes_resources ? try("http://${data.kubernetes_service.nginx_ingress[0].status[0].load_balancer[0].ingress[0].ip}", "") : ""
 }
 
 output "namespace" {
   description = "Kubernetes namespace"
-  value       = kubernetes_namespace.app.metadata[0].name
+  value       = var.deploy_kubernetes_resources ? kubernetes_namespace.app[0].metadata[0].name : ""
 }
 
 output "service_name" {
   description = "Kubernetes service name"
-  value       = kubernetes_service.app.metadata[0].name
+  value       = var.deploy_kubernetes_resources ? kubernetes_service.app[0].metadata[0].name : ""
 }
 
 output "deployment_name" {
   description = "Kubernetes deployment name"
-  value       = kubernetes_deployment.app.metadata[0].name
+  value       = var.deploy_kubernetes_resources ? kubernetes_deployment.app[0].metadata[0].name : ""
 }
 
 output "workload_identity_client_id" {

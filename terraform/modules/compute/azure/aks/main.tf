@@ -69,8 +69,8 @@ resource "azurerm_kubernetes_cluster" "main" {
     network_plugin    = "azure"
     network_policy    = "azure"
     load_balancer_sku = "standard"
-    service_cidr      = "10.0.0.0/16"
-    dns_service_ip    = "10.0.0.10"
+    service_cidr      = var.service_cidr
+    dns_service_ip    = var.dns_service_ip
   }
 
   # Add-ons
@@ -141,6 +141,7 @@ data "azurerm_client_config" "current" {}
 # ==============================================
 
 resource "kubernetes_namespace" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name = var.environment
@@ -162,17 +163,18 @@ resource "kubernetes_namespace" "app" {
 # This is a simplified approach for getting started
 
 resource "kubernetes_secret" "database" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "database-credentials"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
   }
 
   data = {
     host     = var.database_host
     name     = var.database_name
     username = var.database_username
-    # Password should be injected via Key Vault CSI driver in production
+    password = var.database_password_secret_name
   }
 
   type = "Opaque"
@@ -185,10 +187,11 @@ resource "kubernetes_secret" "database" {
 # ==============================================
 
 resource "kubernetes_service_account" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     annotations = {
       "azure.workload.identity/client-id" = azurerm_user_assigned_identity.workload.client_id
@@ -203,10 +206,11 @@ resource "kubernetes_service_account" "app" {
 # ==============================================
 
 resource "kubernetes_deployment" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     labels = {
       app         = "${var.project_name}-api"
@@ -252,32 +256,115 @@ resource "kubernetes_deployment" "app" {
           }
 
           env {
-            name = "DATABASE_HOST"
+            name  = "RUNTIME_MODE"
+            value = "http"
+          }
+
+          env {
+            name = "DB_HOST"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.database.metadata[0].name
+                name = kubernetes_secret.database[0].metadata[0].name
                 key  = "host"
               }
             }
           }
 
           env {
-            name = "DATABASE_NAME"
+            name  = "DB_PORT"
+            value = "5432"
+          }
+
+          env {
+            name = "DB_NAME"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.database.metadata[0].name
+                name = kubernetes_secret.database[0].metadata[0].name
                 key  = "name"
               }
             }
           }
 
           env {
-            name = "DATABASE_USER"
+            name = "DB_USER"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.database.metadata[0].name
+                name = kubernetes_secret.database[0].metadata[0].name
                 key  = "username"
               }
+            }
+          }
+
+          env {
+            name = "DB_PASSWORD_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.database[0].metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name  = "DB_SSL_MODE"
+            value = "require"
+          }
+
+          env {
+            name  = "DB_CONNECT_TIMEOUT"
+            value = "8s"
+          }
+
+          env {
+            name  = "DB_AUTO_MIGRATE"
+            value = tostring(var.auto_migrate)
+          }
+
+          env {
+            name  = "DB_MIGRATIONS_PATH"
+            value = "/app/migrations"
+          }
+
+          env {
+            name  = "ADMIN_EMAIL"
+            value = var.admin_email
+          }
+
+          env {
+            name  = "ADMIN_PASSWORD"
+            value = var.admin_password
+          }
+
+          env {
+            name  = "SECRET_PROVIDER"
+            value = "azure"
+          }
+
+          env {
+            name  = "AZURE_KEY_VAULT_URL"
+            value = var.key_vault_uri
+          }
+
+          env {
+            name  = "AZURE_REGION"
+            value = var.location
+          }
+
+          env {
+            name  = "ALLOWED_ORIGINS"
+            value = join(",", var.allowed_origins)
+          }
+
+          env {
+            name  = "CORS_ALLOWED_ORIGIN"
+            value = length(var.allowed_origins) > 0 ? var.allowed_origins[0] : "*"
+          }
+
+          dynamic "env" {
+            for_each = var.additional_env_vars
+            content {
+              name  = env.key
+              value = env.value
             }
           }
 
@@ -315,7 +402,7 @@ resource "kubernetes_deployment" "app" {
           }
         }
 
-        service_account_name = kubernetes_service_account.app.metadata[0].name
+        service_account_name = kubernetes_service_account.app[0].metadata[0].name
       }
     }
 
@@ -339,10 +426,11 @@ resource "kubernetes_deployment" "app" {
 # ==============================================
 
 resource "kubernetes_service" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     labels = {
       app = "${var.project_name}-api"
@@ -372,10 +460,11 @@ resource "kubernetes_service" "app" {
 # ==============================================
 
 resource "kubernetes_ingress_v1" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     annotations = {
       "kubernetes.io/ingress.class"                = "nginx"
@@ -393,7 +482,7 @@ resource "kubernetes_ingress_v1" "app" {
 
           backend {
             service {
-              name = kubernetes_service.app.metadata[0].name
+              name = kubernetes_service.app[0].metadata[0].name
               port {
                 number = 80
               }
@@ -415,17 +504,18 @@ resource "kubernetes_ingress_v1" "app" {
 # ==============================================
 
 resource "kubernetes_horizontal_pod_autoscaler_v2" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
   }
 
   spec {
     scale_target_ref {
       api_version = "apps/v1"
       kind        = "Deployment"
-      name        = kubernetes_deployment.app.metadata[0].name
+      name        = kubernetes_deployment.app[0].metadata[0].name
     }
 
     min_replicas = 2
@@ -462,12 +552,13 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "app" {
 # ==============================================
 
 resource "helm_release" "nginx_ingress" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   name       = "nginx-ingress"
   repository = "https://kubernetes.github.io/ingress-nginx"
   chart      = "ingress-nginx"
   namespace  = "ingress-nginx"
-  version    = "4.8.0"
+  version    = var.nginx_ingress_version
 
   create_namespace = true
 
@@ -489,6 +580,7 @@ resource "helm_release" "nginx_ingress" {
 # ==============================================
 
 data "kubernetes_service" "nginx_ingress" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "nginx-ingress-ingress-nginx-controller"
