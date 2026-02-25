@@ -226,6 +226,32 @@ variable "cloud_run_allow_unauthenticated" {
 }
 
 # ==============================================
+# Scheduled Tasks (Cloud Scheduler)
+# ==============================================
+
+variable "enable_scheduled_tasks" {
+  description = "Enable Cloud Scheduler for scheduled tasks"
+  type        = bool
+  default     = true
+}
+
+variable "recommendation_schedule" {
+  description = "Cron schedule for recommendations (e.g., '0 2 * * *' for 2 AM daily)"
+  type        = string
+  default     = "0 2 * * *"
+}
+
+# ==============================================
+# Database Migration
+# ==============================================
+
+variable "auto_migrate" {
+  description = "Auto-run database migrations on startup"
+  type        = bool
+  default     = true
+}
+
+# ==============================================
 # Additional Configuration
 # ==============================================
 
@@ -242,7 +268,7 @@ variable "additional_env_vars" {
 variable "gke_kubernetes_version" {
   description = "Kubernetes version for GKE"
   type        = string
-  default     = "1.28"
+  default     = "1.30"
 }
 
 variable "gke_zones" {

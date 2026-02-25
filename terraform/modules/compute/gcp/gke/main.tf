@@ -213,6 +213,7 @@ resource "google_service_account_iam_member" "workload_identity" {
 # ==============================================
 
 resource "kubernetes_namespace" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name = var.environment
@@ -234,17 +235,18 @@ resource "kubernetes_namespace" "app" {
 # This is a simplified approach for getting started
 
 resource "kubernetes_secret" "database" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "database-credentials"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
   }
 
   data = {
     host     = var.database_host
     name     = var.database_name
     username = var.database_username
-    # Password should be injected via Secrets Store CSI driver in production
+    password = var.database_password_secret_name
   }
 
   type = "Opaque"
@@ -257,10 +259,11 @@ resource "kubernetes_secret" "database" {
 # ==============================================
 
 resource "kubernetes_service_account" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     annotations = {
       "iam.gke.io/gcp-service-account" = google_service_account.workload.email
@@ -275,10 +278,11 @@ resource "kubernetes_service_account" "app" {
 # ==============================================
 
 resource "kubernetes_deployment" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     labels = {
       app         = "${var.project_name}-api"
@@ -304,7 +308,7 @@ resource "kubernetes_deployment" "app" {
       }
 
       spec {
-        service_account_name = kubernetes_service_account.app.metadata[0].name
+        service_account_name = kubernetes_service_account.app[0].metadata[0].name
 
         container {
           name  = "api"
@@ -326,32 +330,110 @@ resource "kubernetes_deployment" "app" {
           }
 
           env {
-            name = "DATABASE_HOST"
+            name  = "RUNTIME_MODE"
+            value = "http"
+          }
+
+          env {
+            name = "DB_HOST"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.database.metadata[0].name
+                name = kubernetes_secret.database[0].metadata[0].name
                 key  = "host"
               }
             }
           }
 
           env {
-            name = "DATABASE_NAME"
+            name  = "DB_PORT"
+            value = "5432"
+          }
+
+          env {
+            name = "DB_NAME"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.database.metadata[0].name
+                name = kubernetes_secret.database[0].metadata[0].name
                 key  = "name"
               }
             }
           }
 
           env {
-            name = "DATABASE_USER"
+            name = "DB_USER"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret.database.metadata[0].name
+                name = kubernetes_secret.database[0].metadata[0].name
                 key  = "username"
               }
+            }
+          }
+
+          env {
+            name = "DB_PASSWORD_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.database[0].metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          env {
+            name  = "DB_SSL_MODE"
+            value = "disable"
+          }
+
+          env {
+            name  = "DB_CONNECT_TIMEOUT"
+            value = "8s"
+          }
+
+          env {
+            name  = "DB_AUTO_MIGRATE"
+            value = tostring(var.auto_migrate)
+          }
+
+          env {
+            name  = "DB_MIGRATIONS_PATH"
+            value = "/app/migrations"
+          }
+
+          env {
+            name  = "ADMIN_EMAIL"
+            value = var.admin_email
+          }
+
+          env {
+            name  = "ADMIN_PASSWORD"
+            value = var.admin_password
+          }
+
+          env {
+            name  = "SECRET_PROVIDER"
+            value = "gcp"
+          }
+
+          env {
+            name  = "GCP_PROJECT_ID"
+            value = var.project_id
+          }
+
+          env {
+            name  = "GCP_REGION"
+            value = var.region
+          }
+
+          env {
+            name  = "ALLOWED_ORIGINS"
+            value = join(",", var.allowed_origins)
+          }
+
+          dynamic "env" {
+            for_each = var.additional_env_vars
+            content {
+              name  = env.key
+              value = env.value
             }
           }
 
@@ -412,10 +494,11 @@ resource "kubernetes_deployment" "app" {
 # ==============================================
 
 resource "kubernetes_service" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     labels = {
       app = "${var.project_name}-api"
@@ -445,14 +528,15 @@ resource "kubernetes_service" "app" {
 # ==============================================
 
 resource "kubernetes_ingress_v1" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
 
     annotations = {
       "kubernetes.io/ingress.class"                 = "gce"
-      "kubernetes.io/ingress.global-static-ip-name" = google_compute_global_address.ingress.name
+      "kubernetes.io/ingress.global-static-ip-name" = google_compute_global_address.ingress[0].name
     }
   }
 
@@ -465,7 +549,7 @@ resource "kubernetes_ingress_v1" "app" {
 
           backend {
             service {
-              name = kubernetes_service.app.metadata[0].name
+              name = kubernetes_service.app[0].metadata[0].name
               port {
                 number = 80
               }
@@ -487,17 +571,18 @@ resource "kubernetes_ingress_v1" "app" {
 # ==============================================
 
 resource "kubernetes_horizontal_pod_autoscaler_v2" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
     name      = "${var.project_name}-api"
-    namespace = kubernetes_namespace.app.metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
   }
 
   spec {
     scale_target_ref {
       api_version = "apps/v1"
       kind        = "Deployment"
-      name        = kubernetes_deployment.app.metadata[0].name
+      name        = kubernetes_deployment.app[0].metadata[0].name
     }
 
     min_replicas = 2
@@ -534,6 +619,7 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "app" {
 # ==============================================
 
 resource "google_compute_global_address" "ingress" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   name         = "${local.name_prefix}-ingress-ip"
   project      = var.project_id
@@ -546,10 +632,11 @@ resource "google_compute_global_address" "ingress" {
 # ==============================================
 
 data "kubernetes_ingress_v1" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
-    name      = kubernetes_ingress_v1.app.metadata[0].name
-    namespace = kubernetes_namespace.app.metadata[0].name
+    name      = kubernetes_ingress_v1.app[0].metadata[0].name
+    namespace = kubernetes_namespace.app[0].metadata[0].name
   }
 
   depends_on = [kubernetes_ingress_v1.app]

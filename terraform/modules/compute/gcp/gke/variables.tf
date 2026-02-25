@@ -50,7 +50,7 @@ variable "image_tag" {
 variable "kubernetes_version" {
   description = "Kubernetes version"
   type        = string
-  default     = "1.28"
+  default     = "1.30"
 }
 
 variable "node_count" {
@@ -147,6 +147,37 @@ variable "enable_horizontal_pod_autoscaling" {
 
 variable "labels" {
   description = "Additional labels for resources"
+  type        = map(string)
+  default     = {}
+}
+
+variable "admin_email" {
+  description = "Administrator email address"
+  type        = string
+  default     = ""
+}
+
+variable "admin_password" {
+  description = "Optional initial admin password (skips password reset requirement)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "auto_migrate" {
+  description = "Automatically run database migrations on startup"
+  type        = bool
+  default     = true
+}
+
+variable "allowed_origins" {
+  description = "List of allowed CORS origins"
+  type        = list(string)
+  default     = ["*"]
+}
+
+variable "additional_env_vars" {
+  description = "Additional environment variables"
   type        = map(string)
   default     = {}
 }

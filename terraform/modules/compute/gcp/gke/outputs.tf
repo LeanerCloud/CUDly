@@ -39,27 +39,27 @@ output "workload_identity_email" {
 
 output "load_balancer_ip" {
   description = "Load Balancer external IP"
-  value       = google_compute_global_address.ingress.address
+  value       = var.deploy_kubernetes_resources ? google_compute_global_address.ingress[0].address : ""
 }
 
 output "api_url" {
   description = "API URL (Load Balancer IP)"
-  value       = "http://${google_compute_global_address.ingress.address}"
+  value       = var.deploy_kubernetes_resources ? "http://${google_compute_global_address.ingress[0].address}" : ""
 }
 
 output "namespace" {
   description = "Kubernetes namespace"
-  value       = kubernetes_namespace.app.metadata[0].name
+  value       = var.deploy_kubernetes_resources ? kubernetes_namespace.app[0].metadata[0].name : ""
 }
 
 output "service_name" {
   description = "Kubernetes service name"
-  value       = kubernetes_service.app.metadata[0].name
+  value       = var.deploy_kubernetes_resources ? kubernetes_service.app[0].metadata[0].name : ""
 }
 
 output "deployment_name" {
   description = "Kubernetes deployment name"
-  value       = kubernetes_deployment.app.metadata[0].name
+  value       = var.deploy_kubernetes_resources ? kubernetes_deployment.app[0].metadata[0].name : ""
 }
 
 output "kubeconfig_command" {

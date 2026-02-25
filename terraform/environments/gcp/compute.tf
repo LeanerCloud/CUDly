@@ -39,15 +39,22 @@ module "compute_cloud_run" {
   # VPC Access (for Cloud SQL)
   vpc_connector_id = module.networking.vpc_connector_id
 
+  # Scheduled tasks
+  enable_scheduled_tasks  = var.enable_scheduled_tasks
+  recommendation_schedule = var.recommendation_schedule
+  scheduled_task_secret   = module.secrets.scheduled_task_secret_value
+
+  # Database migration
+  auto_migrate = var.auto_migrate
+
   # Additional environment variables
   additional_env_vars = merge(
     {
-      JWT_SECRET_ARN      = module.secrets.jwt_secret_id
-      SESSION_SECRET_ARN  = module.secrets.session_secret_id
-      SENDGRID_API_KEY    = module.secrets.sendgrid_api_key_id
-      FROM_EMAIL          = "noreply@${var.project_name}.example.com"
-      DASHBOARD_URL       = local.dashboard_url
-      CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
+      SENDGRID_API_KEY_SECRET = module.secrets.sendgrid_api_key_id
+      FROM_EMAIL              = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
+      DASHBOARD_URL           = local.dashboard_url
+      CORS_ALLOWED_ORIGIN     = local.dashboard_url != "" ? local.dashboard_url : "*"
+      SCHEDULED_TASK_SECRET   = module.secrets.scheduled_task_secret_value
     },
     var.additional_env_vars
   )
@@ -96,6 +103,18 @@ module "compute_gke" {
   database_name                 = module.database.database_name
   database_username             = var.database_username
   database_password_secret_name = module.secrets.database_password_secret_name
+
+  # Application configuration
+  admin_email    = var.admin_email
+  admin_password = var.admin_password
+  auto_migrate   = var.auto_migrate
+  additional_env_vars = merge(
+    {
+      DASHBOARD_URL       = local.dashboard_url
+      CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
+    },
+    var.additional_env_vars
+  )
 
   labels = local.common_labels
 
