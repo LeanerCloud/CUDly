@@ -102,8 +102,8 @@ variable "database_username" {
   type        = string
 }
 
-variable "database_password_secret_id" {
-  description = "Key Vault secret ID for database password"
+variable "database_password_secret_name" {
+  description = "Key Vault secret name for database password"
   type        = string
 }
 
@@ -114,8 +114,8 @@ variable "key_vault_uri" {
 
 variable "auto_migrate" {
   description = "Auto-run database migrations on startup"
-  type        = string
-  default     = "true"
+  type        = bool
+  default     = true
 }
 
 variable "admin_email" {
@@ -160,18 +160,6 @@ variable "custom_domains" {
   default = []
 }
 
-variable "enable_scheduled_jobs" {
-  description = "Enable scheduled jobs (recommendations, etc.)"
-  type        = bool
-  default     = true
-}
-
-variable "recommendation_schedule" {
-  description = "Cron schedule for recommendations job"
-  type        = string
-  default     = "0 2 * * *" # 2 AM daily
-}
-
 variable "registry_server" {
   description = "Container registry server URL (e.g. myacr.azurecr.io)"
   type        = string
@@ -207,7 +195,14 @@ variable "enable_scheduled_tasks" {
   default     = true
 }
 
-variable "recommendations_schedule" {
+variable "scheduled_task_secret" {
+  description = "Shared secret for authenticating scheduled task HTTP calls"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "recommendation_schedule" {
   description = "Cron schedule for recommendations refresh (default: daily at 2 AM UTC)"
   type        = string
   default     = "0 2 * * *"

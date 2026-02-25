@@ -19,8 +19,8 @@ compute_platform    = "container-apps"
 enable_docker_build = false # Use pre-built image from CI/CD pipeline
 
 # Container Apps Configuration
-container_cpu            = 0.5
-container_memory         = "1.0Gi"
+container_cpu            = 0.25
+container_memory         = "0.5Gi"
 min_replicas             = 0
 max_replicas             = 10
 external_ingress_enabled = true
@@ -35,7 +35,7 @@ database_storage_mb             = 32768
 database_backup_retention_days  = 7
 database_geo_redundant_backup   = false
 database_high_availability_mode = "Disabled"
-auto_migrate                    = "true"
+auto_migrate                    = true
 
 # ==============================================
 # Networking
@@ -57,8 +57,8 @@ purge_protection_enabled   = false
 # Scheduled Tasks
 # ==============================================
 
-enable_scheduled_jobs   = true
-recommendation_schedule = "0 2 * * *"
+enable_scheduled_tasks   = true
+recommendation_schedule  = "0 2 * * *"
 
 # ==============================================
 # Logging
@@ -67,11 +67,12 @@ recommendation_schedule = "0 2 * * *"
 log_retention_days = 7
 
 # ==============================================
-# Frontend (Azure CDN)
+# Frontend (Azure Front Door + Blob Storage)
 # ==============================================
 
 enable_frontend       = true
 enable_frontend_build = true
+use_front_door        = true
 
 # ==============================================
 # Email Service

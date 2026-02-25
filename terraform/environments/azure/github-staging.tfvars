@@ -35,7 +35,7 @@ database_storage_mb             = 65536
 database_backup_retention_days  = 14
 database_geo_redundant_backup   = false
 database_high_availability_mode = "Disabled"
-auto_migrate                    = "true"
+auto_migrate                    = true
 
 # ==============================================
 # Networking
@@ -57,8 +57,8 @@ purge_protection_enabled   = false
 # Scheduled Tasks
 # ==============================================
 
-enable_scheduled_jobs   = true
-recommendation_schedule = "0 2 * * *"
+enable_scheduled_tasks   = true
+recommendation_schedule  = "0 2 * * *"
 
 # ==============================================
 # Logging

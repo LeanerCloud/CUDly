@@ -292,8 +292,8 @@ variable "internal_load_balancer_enabled" {
 
 variable "auto_migrate" {
   description = "Auto-run database migrations on startup"
-  type        = string
-  default     = "true"
+  type        = bool
+  default     = true
 }
 
 variable "admin_email" {
@@ -314,14 +314,14 @@ variable "additional_env_vars" {
   default     = {}
 }
 
-variable "enable_scheduled_jobs" {
-  description = "Enable scheduled jobs (recommendations, etc.)"
+variable "enable_scheduled_tasks" {
+  description = "Enable scheduled tasks via Logic Apps"
   type        = bool
   default     = true
 }
 
 variable "recommendation_schedule" {
-  description = "Cron schedule for recommendations job"
+  description = "Cron schedule for recommendations task"
   type        = string
   default     = "0 2 * * *" # 2 AM daily
 }
@@ -419,9 +419,9 @@ variable "frontend_cdn_sku" {
 }
 
 variable "use_front_door" {
-  description = "Use Azure Front Door instead of CDN (for premium features like WAF)"
+  description = "Use Azure Front Door instead of classic CDN (classic CDN no longer accepts new profiles)"
   type        = bool
-  default     = false
+  default     = true
 }
 
 # ==============================================
