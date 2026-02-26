@@ -15,7 +15,7 @@ resource "terraform_data" "frontend_build" {
     working_dir = "${path.root}/${var.frontend_path}"
     command     = <<-EOT
       echo "Building frontend..."
-      npm install --production
+      npm install
       npm run build
       echo "✅ Frontend build complete"
     EOT
@@ -29,7 +29,7 @@ resource "terraform_data" "frontend_upload" {
   triggers_replace = {
     # Re-upload when build changes
     build_hash = terraform_data.frontend_build[0].id
-    files_hash = fileexists("${path.root}/${var.frontend_path}/dist") ? sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/dist", "**") : filemd5("${path.root}/${var.frontend_path}/dist/${f}")])) : "none"
+    files_hash = length(fileset("${path.root}/${var.frontend_path}/dist", "**")) > 0 ? sha256(join("", [for f in fileset("${path.root}/${var.frontend_path}/dist", "**") : filemd5("${path.root}/${var.frontend_path}/dist/${f}")])) : "none"
   }
 
   provisioner "local-exec" {

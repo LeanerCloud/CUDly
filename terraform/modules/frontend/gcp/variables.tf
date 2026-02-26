@@ -42,12 +42,6 @@ variable "domain_names" {
   default     = []
 }
 
-variable "dns_managed_zone" {
-  description = "Cloud DNS managed zone name for DNS records"
-  type        = string
-  default     = ""
-}
-
 variable "subdomain_zone_name" {
   description = "Cloud DNS subdomain zone name to create (e.g., cudly.leanercloud.com). Leave empty to skip zone creation."
   type        = string
