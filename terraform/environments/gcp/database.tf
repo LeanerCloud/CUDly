@@ -14,8 +14,7 @@ module "database" {
   database_version = var.database_version
   database_name    = var.database_name
   master_username  = var.database_username
-  # TODO: revert to module.secrets.database_password_value after state stabilizes
-  master_password  = "IMPORT_PLACEHOLDER"
+  master_password  = module.secrets.database_password_value
 
   # Cloud SQL configuration
   tier              = var.database_tier
