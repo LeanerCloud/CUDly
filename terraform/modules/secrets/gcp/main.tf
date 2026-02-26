@@ -55,7 +55,11 @@ resource "random_password" "jwt_secret" {
   count = var.create_jwt_secret ? 1 : 0
 
   length  = 64
-  special = false # Base64-friendly
+  special = true
+
+  lifecycle {
+    ignore_changes = [special]
+  }
 }
 
 resource "google_secret_manager_secret" "jwt_secret" {
@@ -86,7 +90,11 @@ resource "random_password" "session_secret" {
   count = var.create_session_secret ? 1 : 0
 
   length  = 64
-  special = false # Base64-friendly
+  special = true
+
+  lifecycle {
+    ignore_changes = [special]
+  }
 }
 
 resource "google_secret_manager_secret" "session_secret" {
@@ -144,7 +152,11 @@ resource "random_password" "scheduled_task_secret" {
   count = var.create_scheduled_task_secret ? 1 : 0
 
   length  = 64
-  special = false
+  special = true
+
+  lifecycle {
+    ignore_changes = [special]
+  }
 }
 
 resource "google_secret_manager_secret" "scheduled_task_secret" {
