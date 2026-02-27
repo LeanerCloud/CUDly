@@ -19,7 +19,7 @@ resource "terraform_data" "frontend_build" {
     working_dir = "${path.root}/${var.frontend_path}"
     command     = <<-EOT
       echo "Building frontend..."
-      npm install --production
+      npm install
       npm run build
       echo "✅ Frontend build complete"
     EOT
