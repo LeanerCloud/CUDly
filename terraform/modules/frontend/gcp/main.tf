@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
@@ -169,21 +173,59 @@ resource "google_compute_managed_ssl_certificate" "frontend" {
   }
 }
 
-# HTTPS proxy (only when custom domains with SSL cert are available)
-resource "google_compute_target_https_proxy" "frontend" {
-  count = length(var.domain_names) > 0 ? 1 : 0
+# Self-signed certificate for dev HTTPS (when no custom domains)
+resource "tls_private_key" "frontend" {
+  count = length(var.domain_names) > 0 ? 0 : 1
 
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "frontend" {
+  count = length(var.domain_names) > 0 ? 0 : 1
+
+  private_key_pem = tls_private_key.frontend[0].private_key_pem
+
+  subject {
+    common_name  = "cudly-dev.local"
+    organization = "CUDly Dev"
+  }
+
+  validity_period_hours = 8760 # 1 year
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+resource "google_compute_ssl_certificate" "self_signed" {
+  count = length(var.domain_names) > 0 ? 0 : 1
+
+  name        = "${var.project_name}-self-signed-cert"
+  project     = var.project_id
+  private_key = tls_private_key.frontend[0].private_key_pem
+  certificate = tls_self_signed_cert.frontend[0].cert_pem
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# HTTPS proxy (uses managed cert with custom domains, self-signed for dev)
+resource "google_compute_target_https_proxy" "frontend" {
   name    = "${var.project_name}-https-proxy"
   project = var.project_id
 
-  url_map          = google_compute_url_map.frontend.id
-  ssl_certificates = [google_compute_managed_ssl_certificate.frontend[0].id]
+  url_map = google_compute_url_map.frontend.id
+  ssl_certificates = length(var.domain_names) > 0 ? (
+    [google_compute_managed_ssl_certificate.frontend[0].id]
+  ) : [google_compute_ssl_certificate.self_signed[0].id]
 }
 
-# HTTP to HTTPS redirect (only when custom domains with SSL cert are available)
+# HTTP to HTTPS redirect (always active)
 resource "google_compute_url_map" "http_redirect" {
-  count = length(var.domain_names) > 0 ? 1 : 0
-
   name    = "${var.project_name}-http-redirect"
   project = var.project_id
 
@@ -194,20 +236,18 @@ resource "google_compute_url_map" "http_redirect" {
   }
 }
 
-# HTTP proxy: redirects to HTTPS when custom domains exist, serves content directly otherwise
+# HTTP proxy: always redirects to HTTPS
 resource "google_compute_target_http_proxy" "http_redirect" {
   name    = "${var.project_name}-http-proxy"
   project = var.project_id
-  url_map = length(var.domain_names) > 0 ? google_compute_url_map.http_redirect[0].id : google_compute_url_map.frontend.id
+  url_map = google_compute_url_map.http_redirect.id
 }
 
-# Global forwarding rule for HTTPS (only when custom domains with SSL cert)
+# Global forwarding rule for HTTPS (always active)
 resource "google_compute_global_forwarding_rule" "https" {
-  count = length(var.domain_names) > 0 ? 1 : 0
-
   name       = "${var.project_name}-https-rule"
   project    = var.project_id
-  target     = google_compute_target_https_proxy.frontend[0].id
+  target     = google_compute_target_https_proxy.frontend.id
   port_range = "443"
   ip_address = google_compute_global_address.frontend.address
 }

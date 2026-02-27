@@ -16,8 +16,8 @@ output "load_balancer_ip" {
 }
 
 output "frontend_url" {
-  description = "Frontend URL (HTTPS with custom domain, HTTP with IP only)"
-  value       = length(var.domain_names) > 0 ? "https://${var.domain_names[0]}" : "http://${google_compute_global_address.frontend.address}"
+  description = "Frontend URL (always HTTPS, uses custom domain or IP)"
+  value       = length(var.domain_names) > 0 ? "https://${var.domain_names[0]}" : "https://${google_compute_global_address.frontend.address}"
 }
 
 output "backend_bucket_id" {
@@ -36,8 +36,10 @@ output "cdn_enabled" {
 }
 
 output "ssl_certificate_id" {
-  description = "SSL certificate ID (if custom domain provided)"
-  value       = length(var.domain_names) > 0 ? google_compute_managed_ssl_certificate.frontend[0].id : ""
+  description = "SSL certificate ID (managed cert for custom domains, self-signed for dev)"
+  value = length(var.domain_names) > 0 ? (
+    google_compute_managed_ssl_certificate.frontend[0].id
+  ) : google_compute_ssl_certificate.self_signed[0].id
 }
 
 output "subdomain_zone_name" {
