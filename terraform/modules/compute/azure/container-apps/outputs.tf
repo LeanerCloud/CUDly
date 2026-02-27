@@ -9,13 +9,13 @@ output "container_app_name" {
 }
 
 output "container_app_fqdn" {
-  description = "Container App FQDN"
-  value       = azurerm_container_app.main.latest_revision_fqdn
+  description = "Container App FQDN (stable, not revision-specific)"
+  value       = azurerm_container_app.main.ingress[0].fqdn
 }
 
 output "container_app_url" {
   description = "Container App URL"
-  value       = "https://${azurerm_container_app.main.latest_revision_fqdn}"
+  value       = "https://${azurerm_container_app.main.ingress[0].fqdn}"
 }
 
 output "container_app_environment_id" {
@@ -39,8 +39,8 @@ output "managed_identity_client_id" {
 }
 
 output "ingress_fqdn" {
-  description = "Ingress FQDN for external access"
-  value       = azurerm_container_app.main.latest_revision_fqdn
+  description = "Ingress FQDN for external access (stable, not revision-specific)"
+  value       = azurerm_container_app.main.ingress[0].fqdn
 }
 
 # ==============================================
