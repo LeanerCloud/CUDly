@@ -47,9 +47,13 @@ resource "google_sql_database_instance" "main" {
     # For prod: db-custom-2-7680 or higher
     tier              = var.tier
     availability_type = var.high_availability ? "REGIONAL" : "ZONAL"
-    disk_type         = var.disk_type
-    disk_size         = var.disk_size
-    disk_autoresize   = var.disk_autoresize
+
+    user_labels = {
+      environment = var.environment
+    }
+    disk_type       = var.disk_type
+    disk_size       = var.disk_size
+    disk_autoresize = var.disk_autoresize
 
     # Automatic storage increase limit
     disk_autoresize_limit = var.disk_autoresize_limit
@@ -77,7 +81,7 @@ resource "google_sql_database_instance" "main" {
     ip_configuration {
       ipv4_enabled    = var.enable_public_ip
       private_network = var.vpc_network_id
-      ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      ssl_mode        = "ENCRYPTED_ONLY"
 
       # Authorized networks (if public IP is enabled)
       dynamic "authorized_networks" {

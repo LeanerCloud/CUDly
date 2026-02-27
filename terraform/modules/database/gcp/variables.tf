@@ -225,9 +225,3 @@ variable "replica_tier" {
   type        = string
   default     = null
 }
-
-variable "labels" {
-  description = "Labels to apply to resources"
-  type        = map(string)
-  default     = {}
-}
