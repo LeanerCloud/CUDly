@@ -36,26 +36,20 @@ resource "terraform_data" "frontend_upload" {
     command = <<-EOT
       echo "Uploading frontend to Cloud Storage..."
 
-      # Upload files with long cache for static assets
-      gsutil -m rsync -r -d \
-        ${path.root}/${var.frontend_path}/dist \
-        gs://${var.bucket_name}
+      # Upload all static assets with long cache headers (cache-busted filenames)
+      gcloud storage rsync "${path.root}/${var.frontend_path}/dist" "gs://${var.bucket_name}" \
+        --recursive --delete-unmatched-destination-objects \
+        --cache-control="public, max-age=31536000, immutable" \
+        --project="${var.project_id}"
 
-      # Set cache control headers
-      gsutil -m setmeta -h "Cache-Control:public, max-age=31536000, immutable" \
-        "gs://${var.bucket_name}/**.js" \
-        "gs://${var.bucket_name}/**.css" \
-        "gs://${var.bucket_name}/**.png" \
-        "gs://${var.bucket_name}/**.jpg" \
-        "gs://${var.bucket_name}/**.svg" \
-        "gs://${var.bucket_name}/**.woff*" \
-        "gs://${var.bucket_name}/**.ttf"
+      # Override cache headers for HTML files (must not be cached)
+      for html_file in $(gcloud storage ls "gs://${var.bucket_name}/**/*.html" "gs://${var.bucket_name}/*.html" 2>/dev/null); do
+        gcloud storage objects update "$html_file" \
+          --cache-control="no-cache, no-store, must-revalidate" \
+          --project="${var.project_id}"
+      done
 
-      # Set no-cache for HTML files
-      gsutil -m setmeta -h "Cache-Control:no-cache, no-store, must-revalidate" \
-        "gs://${var.bucket_name}/**.html"
-
-      echo "✅ Frontend uploaded to Cloud Storage"
+      echo "Frontend uploaded to Cloud Storage"
     EOT
   }
 
