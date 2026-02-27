@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 5.0"
+    }
     tls = {
       source  = "hashicorp/tls"
       version = "~> 4.0"
@@ -132,14 +136,24 @@ resource "google_compute_region_network_endpoint_group" "api" {
   }
 }
 
-# URL map for routing
-# Note: SPA routing relies on GCS bucket not_found_page=index.html which serves
-# index.html content on 404s. The browser gets the HTML and the JS SPA router
-# handles client-side routing. The 404 status code is harmless for SPA navigation.
+# URL map for routing (uses google-beta for custom error response policy)
+# SPA routing: intercept 404s from GCS and serve index.html with 200 status,
+# so the browser SPA router handles client-side routes like /settings.
+# Requires EXTERNAL_MANAGED load balancing scheme on forwarding rules.
 resource "google_compute_url_map" "frontend" {
+  provider        = google-beta
   name            = "${var.project_name}-url-map"
   project         = var.project_id
   default_service = google_compute_backend_bucket.frontend.id
+
+  default_custom_error_response_policy {
+    error_response_rule {
+      match_response_codes   = ["404"]
+      path                   = "/index.html"
+      override_response_code = 200
+    }
+    error_service = google_compute_backend_bucket.frontend.id
+  }
 
   host_rule {
     hosts        = length(var.domain_names) > 0 ? var.domain_names : ["*"]
@@ -248,20 +262,22 @@ resource "google_compute_target_http_proxy" "http_redirect" {
 
 # Global forwarding rule for HTTPS (always active)
 resource "google_compute_global_forwarding_rule" "https" {
-  name       = "${var.project_name}-https-rule"
-  project    = var.project_id
-  target     = google_compute_target_https_proxy.frontend.id
-  port_range = "443"
-  ip_address = google_compute_global_address.frontend.address
+  name                  = "${var.project_name}-https-rule"
+  project               = var.project_id
+  target                = google_compute_target_https_proxy.frontend.id
+  port_range            = "443"
+  ip_address            = google_compute_global_address.frontend.address
+  load_balancing_scheme = "EXTERNAL_MANAGED"
 }
 
 # Global forwarding rule for HTTP (redirect)
 resource "google_compute_global_forwarding_rule" "http" {
-  name       = "${var.project_name}-http-rule"
-  project    = var.project_id
-  target     = google_compute_target_http_proxy.http_redirect.id
-  port_range = "80"
-  ip_address = google_compute_global_address.frontend.address
+  name                  = "${var.project_name}-http-rule"
+  project               = var.project_id
+  target                = google_compute_target_http_proxy.http_redirect.id
+  port_range            = "80"
+  ip_address            = google_compute_global_address.frontend.address
+  load_balancing_scheme = "EXTERNAL_MANAGED"
 }
 
 # Cloud Armor security policy (optional)

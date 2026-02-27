@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 5.0"
+    }
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "~> 2.23"
@@ -32,6 +36,17 @@ terraform {
 }
 
 provider "google" {
+  project = var.project_id
+  region  = var.region
+
+  default_labels = {
+    project     = "cudly"
+    environment = var.environment
+    managed_by  = "terraform"
+  }
+}
+
+provider "google-beta" {
   project = var.project_id
   region  = var.region
 

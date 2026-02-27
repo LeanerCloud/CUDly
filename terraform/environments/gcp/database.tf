@@ -41,7 +41,5 @@ module "database" {
   enable_iam_authentication       = var.database_enable_iam_auth
   cloud_run_service_account_email = null # Avoid circular dependency
 
-  labels = local.common_labels
-
   depends_on = [module.networking, module.secrets]
 }
