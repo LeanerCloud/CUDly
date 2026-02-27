@@ -35,21 +35,16 @@ resource "terraform_data" "frontend_upload" {
   provisioner "local-exec" {
     command = <<-EOT
       echo "Uploading frontend to Azure Blob Storage..."
+
+      # Upload all static assets with long cache
       az storage blob upload-batch \
         --account-name ${var.storage_account_name} \
         --destination '$web' \
         --source ${path.root}/${var.frontend_path}/dist \
         --overwrite \
-        --content-cache-control "public, max-age=31536000, immutable" \
-        --pattern "*.js" \
-        --pattern "*.css" \
-        --pattern "*.png" \
-        --pattern "*.jpg" \
-        --pattern "*.svg" \
-        --pattern "*.woff*" \
-        --pattern "*.ttf"
+        --content-cache-control "public, max-age=31536000, immutable"
 
-      # Upload HTML files with no-cache
+      # Re-upload HTML files with no-cache (overwrites cache headers)
       az storage blob upload-batch \
         --account-name ${var.storage_account_name} \
         --destination '$web' \
