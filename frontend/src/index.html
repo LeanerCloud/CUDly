@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- Content Security Policy: Restrict resource loading to prevent XSS -->
-    <!-- Note: connect-src uses wildcards for AWS API Gateway and Lambda URLs which are dynamically generated per region/account -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.execute-api.*.amazonaws.com https://*.lambda-url.*.on.aws; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">
+    <!-- Note: connect-src uses wildcards for cloud provider API URLs which are dynamically generated per region/account -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.execute-api.*.amazonaws.com https://*.lambda-url.*.on.aws https://*.azurecontainerapps.io https://*.run.app; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>CUDly - Cloud Commitment Optimizer</title>
 </head>
