@@ -51,6 +51,25 @@ resource "azurerm_dns_cname_record" "frontend" {
   })
 }
 
-# CDN validation record (for Azure-managed certificate)
+# CDN validation record (for Azure-managed certificate on classic CDN)
 # Azure automatically creates validation records when using cdn_managed_https
 # No manual DNS validation records needed
+
+# Front Door DNS TXT validation record (for managed certificate)
+resource "azurerm_dns_txt_record" "frontdoor_validation" {
+  count = var.use_front_door && var.subdomain_zone_name != "" && length(var.domain_names) > 0 ? 1 : 0
+
+  name                = "_dnsauth.${split(".", var.domain_names[0])[0]}"
+  zone_name           = azurerm_dns_zone.subdomain[0].name
+  resource_group_name = var.resource_group_name
+  ttl                 = 3600
+
+  record {
+    value = azurerm_cdn_frontdoor_custom_domain.frontend[0].validation_token
+  }
+
+  tags = merge(var.tags, {
+    Name        = "_dnsauth.${var.domain_names[0]}"
+    Environment = var.environment
+  })
+}

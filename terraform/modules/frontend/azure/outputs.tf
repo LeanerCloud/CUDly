@@ -36,9 +36,11 @@ output "cdn_endpoint_hostname" {
 }
 
 output "frontend_url" {
-  description = "Frontend URL (CDN, Front Door, or custom domain)"
-  value = var.custom_domain != "" ? "https://${var.custom_domain}" : (
-    var.use_front_door ? "https://${azurerm_cdn_frontdoor_endpoint.frontend[0].host_name}" : "https://${azurerm_cdn_endpoint.frontend[0].name}.azureedge.net"
+  description = "Frontend URL (custom domain, Front Door, or CDN)"
+  value = length(var.domain_names) > 0 ? "https://${var.domain_names[0]}" : (
+    var.custom_domain != "" ? "https://${var.custom_domain}" : (
+      var.use_front_door ? "https://${azurerm_cdn_frontdoor_endpoint.frontend[0].host_name}" : "https://${azurerm_cdn_endpoint.frontend[0].name}.azureedge.net"
+    )
   )
 }
 

@@ -227,6 +227,77 @@ resource "azurerm_cdn_frontdoor_origin" "storage" {
   weight                         = 1000
 }
 
+# Front Door origin group for API (Container App)
+resource "azurerm_cdn_frontdoor_origin_group" "api" {
+  count = var.use_front_door ? 1 : 0
+
+  name                     = "api-origin-group"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.frontend[0].id
+
+  load_balancing {
+    sample_size                 = 4
+    successful_samples_required = 3
+  }
+
+  health_probe {
+    path                = "/health"
+    request_type        = "GET"
+    protocol            = "Https"
+    interval_in_seconds = 100
+  }
+}
+
+# Front Door origin for API (Container App)
+resource "azurerm_cdn_frontdoor_origin" "api" {
+  count = var.use_front_door ? 1 : 0
+
+  name                          = "api-origin"
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.api[0].id
+  enabled                       = true
+
+  certificate_name_check_enabled = true
+  host_name                      = var.api_hostname
+  http_port                      = 80
+  https_port                     = 443
+  origin_host_header             = var.api_hostname
+  priority                       = 1
+  weight                         = 1000
+}
+
+# Front Door route for API requests (/api/*)
+resource "azurerm_cdn_frontdoor_route" "api" {
+  count = var.use_front_door ? 1 : 0
+
+  name                          = "api-route"
+  cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.frontend[0].id
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.api[0].id
+  cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.api[0].id]
+
+  cdn_frontdoor_custom_domain_ids = length(var.domain_names) > 0 ? (
+    [azurerm_cdn_frontdoor_custom_domain.frontend[0].id]
+  ) : []
+
+  supported_protocols    = ["Http", "Https"]
+  patterns_to_match      = ["/api/*"]
+  forwarding_protocol    = "HttpsOnly"
+  link_to_default_domain = true
+  https_redirect_enabled = true
+}
+
+# Front Door custom domain (when using Front Door with custom domains)
+resource "azurerm_cdn_frontdoor_custom_domain" "frontend" {
+  count = var.use_front_door && length(var.domain_names) > 0 ? 1 : 0
+
+  name                     = "${var.project_name}-custom-domain"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.frontend[0].id
+  host_name                = var.domain_names[0]
+
+  tls {
+    certificate_type    = "ManagedCertificate"
+    minimum_tls_version = "TLS12"
+  }
+}
+
 # Front Door route
 resource "azurerm_cdn_frontdoor_route" "frontend" {
   count = var.use_front_door ? 1 : 0
@@ -236,11 +307,26 @@ resource "azurerm_cdn_frontdoor_route" "frontend" {
   cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.storage[0].id
   cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.storage[0].id]
 
+  cdn_frontdoor_custom_domain_ids = length(var.domain_names) > 0 ? (
+    [azurerm_cdn_frontdoor_custom_domain.frontend[0].id]
+  ) : []
+
   supported_protocols    = ["Http", "Https"]
   patterns_to_match      = ["/*"]
   forwarding_protocol    = "HttpsOnly"
   link_to_default_domain = true
   https_redirect_enabled = true
+}
+
+# Front Door custom domain association
+resource "azurerm_cdn_frontdoor_custom_domain_association" "frontend" {
+  count = var.use_front_door && length(var.domain_names) > 0 ? 1 : 0
+
+  cdn_frontdoor_custom_domain_id = azurerm_cdn_frontdoor_custom_domain.frontend[0].id
+  cdn_frontdoor_route_ids = [
+    azurerm_cdn_frontdoor_route.frontend[0].id,
+    azurerm_cdn_frontdoor_route.api[0].id,
+  ]
 }
 
 # Monitor for CDN health (only with classic CDN)
