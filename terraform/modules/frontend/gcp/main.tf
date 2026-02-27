@@ -133,6 +133,9 @@ resource "google_compute_region_network_endpoint_group" "api" {
 }
 
 # URL map for routing
+# Note: SPA routing relies on GCS bucket not_found_page=index.html which serves
+# index.html content on 404s. The browser gets the HTML and the JS SPA router
+# handles client-side routing. The 404 status code is harmless for SPA navigation.
 resource "google_compute_url_map" "frontend" {
   name            = "${var.project_name}-url-map"
   project         = var.project_id
