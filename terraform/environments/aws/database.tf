@@ -13,9 +13,10 @@ module "database" {
   master_username            = var.database_username
   master_password_secret_arn = module.secrets.database_password_secret_arn # Use secrets module password
 
-  # Aurora Serverless v2 scaling
-  min_capacity = var.database_min_capacity
-  max_capacity = var.database_max_capacity
+  # Instance sizing
+  instance_class        = var.database_instance_class
+  allocated_storage     = var.database_allocated_storage
+  max_allocated_storage = var.database_max_allocated_storage
 
   # Networking
   vpc_id             = module.networking.vpc_id

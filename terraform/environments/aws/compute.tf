@@ -17,7 +17,7 @@ module "compute_lambda" {
   timeout      = var.lambda_timeout
 
   # Database connection (use RDS Proxy endpoint)
-  database_host                = module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.cluster_endpoint
+  database_host                = module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.instance_address
   database_name                = module.database.database_name
   database_username            = var.database_username
   database_password_secret_arn = module.database.password_secret_arn
@@ -91,7 +91,7 @@ module "compute_fargate" {
   max_capacity  = var.fargate_max_capacity
 
   # Database connection
-  database_host                = module.database.cluster_endpoint
+  database_host                = module.database.instance_address
   database_name                = module.database.database_name
   database_username            = var.database_username
   database_password_secret_arn = module.database.password_secret_arn

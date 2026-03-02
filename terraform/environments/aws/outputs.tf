@@ -28,12 +28,12 @@ output "vpc_ipv6_cidr" {
 
 output "database_endpoint" {
   description = "Database endpoint (use proxy endpoint if available)"
-  value       = module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.cluster_endpoint
+  value       = module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.instance_address
 }
 
-output "database_cluster_endpoint" {
-  description = "Aurora cluster endpoint"
-  value       = module.database.cluster_endpoint
+output "database_instance_endpoint" {
+  description = "RDS instance endpoint"
+  value       = module.database.instance_endpoint
 }
 
 output "database_proxy_endpoint" {
@@ -143,7 +143,7 @@ output "connection_info" {
   description = "Connection information for the application"
   value = {
     api_endpoint = var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : null
-    db_endpoint  = module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.cluster_endpoint
+    db_endpoint  = module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.instance_address
     db_name      = module.database.database_name
     environment  = var.environment
     region       = var.region
@@ -158,16 +158,16 @@ output "connection_info" {
 output "deployment_info" {
   description = "Deployment configuration summary"
   value = {
-    stack_name       = local.stack_name
-    environment      = var.environment
-    region           = var.region
-    compute_platform = var.compute_platform
-    vpc_cidr         = var.vpc_cidr
-    az_count         = var.az_count
-    nat_enabled      = false # Using IPv6 dual-stack, no NAT Gateway needed
-    vpc_endpoints    = false # Not needed with IPv6
-    db_min_capacity  = var.database_min_capacity
-    db_max_capacity  = var.database_max_capacity
+    stack_name        = local.stack_name
+    environment       = var.environment
+    region            = var.region
+    compute_platform  = var.compute_platform
+    vpc_cidr          = var.vpc_cidr
+    az_count          = var.az_count
+    nat_enabled       = false # Using IPv6 dual-stack, no NAT Gateway needed
+    vpc_endpoints     = false # Not needed with IPv6
+    db_instance_class = var.database_instance_class
+    db_storage_gb     = var.database_allocated_storage
   }
 }
 
@@ -226,7 +226,7 @@ output "quick_start_commands" {
     ${var.compute_platform == "lambda" ? "aws logs tail ${module.compute_lambda[0].log_group_name} --follow" : "N/A"}
 
     # Connect to database (requires bastion or VPN)
-    psql "postgresql://${var.database_username}@${module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.cluster_endpoint}:5432/${module.database.database_name}?sslmode=require"
+    psql "postgresql://${var.database_username}@${module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.instance_address}:5432/${module.database.database_name}?sslmode=require"
 
     # Get database password
     aws secretsmanager get-secret-value --secret-id ${module.database.password_secret_name} --query SecretString --output text

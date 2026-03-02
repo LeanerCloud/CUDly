@@ -122,16 +122,22 @@ variable "database_engine_version" {
   default     = "16.4"
 }
 
-variable "database_min_capacity" {
-  description = "Minimum Aurora Serverless v2 capacity (ACUs)"
-  type        = number
-  default     = 0.5
+variable "database_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t4g.micro"
 }
 
-variable "database_max_capacity" {
-  description = "Maximum Aurora Serverless v2 capacity (ACUs)"
+variable "database_allocated_storage" {
+  description = "Initial allocated storage in GB"
   type        = number
-  default     = 1.0
+  default     = 20
+}
+
+variable "database_max_allocated_storage" {
+  description = "Maximum allocated storage in GB for autoscaling (0 to disable)"
+  type        = number
+  default     = 100
 }
 
 variable "database_backup_retention_days" {
