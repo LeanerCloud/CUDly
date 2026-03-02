@@ -40,7 +40,7 @@ fargate_max_capacity  = 10
 
 database_name                  = "cudly"
 database_username              = "cudly"
-database_engine_version        = "16.4"
+database_engine_version        = "16.6"
 database_min_capacity          = 0.5
 database_max_capacity          = 2.0
 database_backup_retention_days = 14
