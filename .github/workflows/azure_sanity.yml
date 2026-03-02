@@ -1,0 +1,77 @@
+name: Azure Sanity (Read-only Dry Run)
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    env:
+      REPORT_PATH: azure_sanity_report.json
+
+    steps:
+      - name: Precheck secrets (skip if not configured)
+        id: precheck
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "${AZURE_CLIENT_ID}" || -z "${AZURE_TENANT_ID}" || -z "${AZURE_SUBSCRIPTION_ID}" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Missing Azure secrets. Skipping Azure sanity."
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.precheck.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        if: steps.precheck.outputs.should_run == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Azure Login (OIDC)
+        if: steps.precheck.outputs.should_run == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build + Run Azure sanity
+        if: steps.precheck.outputs.should_run == 'true'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          go test ./ci_cd_sanity_tests/... -count=1
+          go build -o azure-sanity ./ci_cd_sanity_tests/cmd/azure_sanity
+          ./azure-sanity \
+            --subscription-id "${AZURE_SUBSCRIPTION_ID}" \
+            --expected-subscription "${AZURE_SUBSCRIPTION_ID}" \
+            --expected-tenant "${AZURE_TENANT_ID}" \
+            --out "${REPORT_PATH}"
+
+      - name: Upload report artifact
+        if: always() && steps.precheck.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-sanity-report
+          path: ${{ env.REPORT_PATH }}
+          if-no-files-found: ignore
+
+      - name: Skipped summary
+        if: steps.precheck.outputs.should_run != 'true'
+        run: echo "Azure sanity skipped because required secrets are not configured."

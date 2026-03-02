@@ -1,0 +1,78 @@
+name: AWS Sanity (Read-only Dry Run)
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      REPORT_PATH: sanity_report.json
+      EXPECTED_ACCOUNT: ${{ secrets.AWS_EXPECTED_ACCOUNT_ID }}
+
+    steps:
+      - name: Precheck secrets (skip if not configured)
+        id: precheck
+        shell: bash
+        env:
+          AWS_CICD_READONLY_ROLE_ARN: ${{ secrets.AWS_CICD_READONLY_ROLE_ARN }}
+          AWS_EXPECTED_ACCOUNT_ID: ${{ secrets.AWS_EXPECTED_ACCOUNT_ID }}
+        run: |
+          if [[ -z "${AWS_CICD_READONLY_ROLE_ARN}" || -z "${AWS_EXPECTED_ACCOUNT_ID}" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Missing AWS secrets. Skipping AWS sanity."
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.precheck.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        if: steps.precheck.outputs.should_run == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Configure AWS credentials via OIDC (read-only role)
+        if: steps.precheck.outputs.should_run == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_CICD_READONLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cudly-sanity
+
+      - name: Build
+        if: steps.precheck.outputs.should_run == 'true'
+        run: |
+          go test ./ci_cd_sanity_tests/... -count=1
+          go build -o sanity ./ci_cd_sanity_tests/cmd/sanity
+
+      - name: Run sanity (read-only)
+        if: steps.precheck.outputs.should_run == 'true'
+        run: |
+          ./sanity \
+            --region "${AWS_REGION}" \
+            --expected-account "${EXPECTED_ACCOUNT}" \
+            --out "${REPORT_PATH}"
+
+      - name: Upload report artifact
+        if: always() && steps.precheck.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-sanity-report
+          path: ${{ env.REPORT_PATH }}
+          if-no-files-found: ignore
+
+      - name: Skipped summary
+        if: steps.precheck.outputs.should_run != 'true'
+        run: echo "AWS sanity skipped because required secrets are not configured."
