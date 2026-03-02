@@ -105,9 +105,10 @@ resource "google_compute_backend_service" "api" {
   name    = "${var.project_name}-api-backend"
   project = var.project_id
 
-  protocol    = "HTTPS"
-  port_name   = "http"
-  timeout_sec = 30
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  protocol              = "HTTPS"
+  port_name             = "http"
+  timeout_sec           = 30
 
   backend {
     group = google_compute_region_network_endpoint_group.api.id
