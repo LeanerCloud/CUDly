@@ -298,6 +298,45 @@ resource "azurerm_cdn_frontdoor_custom_domain" "frontend" {
   }
 }
 
+# Front Door rule set for SPA routing
+# Azure Blob Storage static website returns 404 status for unknown paths even with
+# error_404_document set. This rule rewrites non-file paths to /index.html before
+# the request reaches the origin, ensuring SPA client-side routing works correctly.
+resource "azurerm_cdn_frontdoor_rule_set" "spa_routing" {
+  count = var.use_front_door ? 1 : 0
+
+  name                     = "sparouting"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.frontend[0].id
+}
+
+resource "azurerm_cdn_frontdoor_rule" "spa_rewrite" {
+  count = var.use_front_door ? 1 : 0
+
+  depends_on = [azurerm_cdn_frontdoor_origin_group.storage, azurerm_cdn_frontdoor_origin.storage]
+
+  name                      = "SPARewrite"
+  cdn_frontdoor_rule_set_id = azurerm_cdn_frontdoor_rule_set.spa_routing[0].id
+  order                     = 1
+  behavior_on_match         = "Continue"
+
+  conditions {
+    url_file_extension_condition {
+      operator         = "Equal"
+      negate_condition = true
+      match_values     = ["css", "js", "html", "json", "png", "jpg", "svg", "ico", "woff2", "map"]
+      transforms       = ["Lowercase"]
+    }
+  }
+
+  actions {
+    url_rewrite_action {
+      source_pattern          = "/"
+      destination             = "/index.html"
+      preserve_unmatched_path = false
+    }
+  }
+}
+
 # Front Door route
 resource "azurerm_cdn_frontdoor_route" "frontend" {
   count = var.use_front_door ? 1 : 0
@@ -310,6 +349,8 @@ resource "azurerm_cdn_frontdoor_route" "frontend" {
   cdn_frontdoor_custom_domain_ids = length(var.domain_names) > 0 ? (
     [azurerm_cdn_frontdoor_custom_domain.frontend[0].id]
   ) : []
+
+  cdn_frontdoor_rule_set_ids = [azurerm_cdn_frontdoor_rule_set.spa_routing[0].id]
 
   supported_protocols    = ["Http", "Https"]
   patterns_to_match      = ["/*"]
