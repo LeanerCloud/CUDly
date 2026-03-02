@@ -23,8 +23,8 @@ module "database" {
   vpc_cidr           = var.vpc_cidr
   private_subnet_ids = module.networking.private_subnet_ids
 
-  # RDS Proxy (critical for Lambda)
-  enable_rds_proxy = var.compute_platform == "lambda"
+  # RDS Proxy (only needed for high-concurrency Lambda workloads)
+  enable_rds_proxy = false
 
   # Backups
   backup_retention_days = var.database_backup_retention_days
