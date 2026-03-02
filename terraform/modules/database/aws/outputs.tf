@@ -1,11 +1,11 @@
-output "cluster_endpoint" {
-  description = "Aurora cluster endpoint"
-  value       = aws_rds_cluster.main.endpoint
+output "instance_endpoint" {
+  description = "RDS instance endpoint"
+  value       = aws_db_instance.main.endpoint
 }
 
-output "cluster_reader_endpoint" {
-  description = "Aurora cluster reader endpoint"
-  value       = aws_rds_cluster.main.reader_endpoint
+output "instance_address" {
+  description = "RDS instance hostname (without port)"
+  value       = aws_db_instance.main.address
 }
 
 output "proxy_endpoint" {
@@ -15,12 +15,12 @@ output "proxy_endpoint" {
 
 output "database_name" {
   description = "Name of the created database"
-  value       = aws_rds_cluster.main.database_name
+  value       = aws_db_instance.main.db_name
 }
 
 output "master_username" {
   description = "Master username"
-  value       = aws_rds_cluster.main.master_username
+  value       = aws_db_instance.main.username
   sensitive   = true
 }
 
@@ -35,17 +35,17 @@ output "password_secret_name" {
 }
 
 output "security_group_id" {
-  description = "Security group ID for the Aurora cluster"
+  description = "Security group ID for the RDS instance"
   value       = aws_security_group.aurora.id
 }
 
 output "connection_details" {
   description = "Database connection details"
   value = {
-    host                = var.enable_rds_proxy ? aws_db_proxy.main[0].endpoint : aws_rds_cluster.main.endpoint
+    host                = var.enable_rds_proxy ? aws_db_proxy.main[0].endpoint : aws_db_instance.main.address
     port                = 5432
-    database            = aws_rds_cluster.main.database_name
-    username            = aws_rds_cluster.main.master_username
+    database            = aws_db_instance.main.db_name
+    username            = aws_db_instance.main.username
     password_secret_arn = local.db_password_secret_arn
     ssl_mode            = "require"
   }

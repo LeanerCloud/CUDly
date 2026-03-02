@@ -1,5 +1,5 @@
-# AWS Aurora Serverless v2 PostgreSQL Database Module
-# Includes RDS Proxy for Lambda connection pooling
+# AWS RDS PostgreSQL Database Module
+# Standalone instance with optional RDS Proxy for Lambda connection pooling
 
 terraform {
   required_version = ">= 1.6.0"
@@ -80,12 +80,12 @@ resource "aws_db_subnet_group" "main" {
 }
 
 # ==============================================
-# Security Group for Aurora Cluster
+# Security Group for RDS Instance
 # ==============================================
 
 resource "aws_security_group" "aurora" {
-  name_prefix = "${var.stack_name}-aurora-"
-  description = "Security group for Aurora PostgreSQL cluster"
+  name_prefix = "${var.stack_name}-rds-"
+  description = "Security group for RDS PostgreSQL instance"
   vpc_id      = var.vpc_id
 
   ingress {
@@ -105,7 +105,7 @@ resource "aws_security_group" "aurora" {
   }
 
   tags = merge(var.tags, {
-    Name = "${var.stack_name}-aurora-sg"
+    Name = "${var.stack_name}-rds-sg"
   })
 
   lifecycle {
@@ -114,32 +114,30 @@ resource "aws_security_group" "aurora" {
 }
 
 # ==============================================
-# Aurora Serverless v2 Cluster
+# RDS PostgreSQL Instance
 # ==============================================
 
-resource "aws_rds_cluster" "main" {
-  cluster_identifier = "${var.stack_name}-postgres"
-  engine             = "aurora-postgresql"
-  engine_mode        = "provisioned"
-  engine_version     = var.engine_version
+resource "aws_db_instance" "main" {
+  identifier = "${var.stack_name}-postgres"
+  engine     = "postgres"
 
-  database_name   = var.database_name
-  master_username = var.master_username
-  master_password = local.db_password
+  engine_version = var.engine_version
+  instance_class = var.instance_class
+
+  db_name  = var.database_name
+  username = var.master_username
+  password = local.db_password
+
+  allocated_storage     = var.allocated_storage
+  max_allocated_storage = var.max_allocated_storage
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.aurora.id]
 
-  # Serverless v2 scaling configuration
-  serverlessv2_scaling_configuration {
-    max_capacity = var.max_capacity
-    min_capacity = var.min_capacity
-  }
-
   # Backup configuration
-  backup_retention_period      = var.backup_retention_days
-  preferred_backup_window      = "03:00-04:00"
-  preferred_maintenance_window = "sun:04:00-sun:05:00"
+  backup_retention_period = var.backup_retention_days
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "sun:04:00-sun:05:00"
 
   # Encryption
   storage_encrypted = true
@@ -148,33 +146,13 @@ resource "aws_rds_cluster" "main" {
   # Deletion protection
   deletion_protection       = var.deletion_protection
   skip_final_snapshot       = var.skip_final_snapshot
-  final_snapshot_identifier = var.skip_final_snapshot ? null : "${var.stack_name}-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
+  final_snapshot_identifier = var.skip_final_snapshot ? null : "${var.stack_name}-final-snapshot"
 
-  # Enhanced monitoring
-  enabled_cloudwatch_logs_exports = ["postgresql"]
-
-  tags = merge(var.tags, {
-    Name = "${var.stack_name}-aurora-cluster"
-  })
-}
-
-# ==============================================
-# Aurora Serverless v2 Instance
-# ==============================================
-
-resource "aws_rds_cluster_instance" "main" {
-  count = var.instance_count
-
-  identifier         = "${var.stack_name}-postgres-${count.index + 1}"
-  cluster_identifier = aws_rds_cluster.main.id
-  instance_class     = "db.serverless"
-  engine             = aws_rds_cluster.main.engine
-  engine_version     = aws_rds_cluster.main.engine_version
-
+  # Monitoring
   performance_insights_enabled = var.performance_insights_enabled
 
   tags = merge(var.tags, {
-    Name = "${var.stack_name}-aurora-instance-${count.index + 1}"
+    Name = "${var.stack_name}-postgres"
   })
 }
 
@@ -219,9 +197,9 @@ resource "aws_db_proxy_default_target_group" "main" {
 resource "aws_db_proxy_target" "main" {
   count = var.enable_rds_proxy ? 1 : 0
 
-  db_proxy_name         = aws_db_proxy.main[0].name
-  target_group_name     = aws_db_proxy_default_target_group.main[0].name
-  db_cluster_identifier = aws_rds_cluster.main.cluster_identifier
+  db_proxy_name          = aws_db_proxy.main[0].name
+  target_group_name      = aws_db_proxy_default_target_group.main[0].name
+  db_instance_identifier = aws_db_instance.main.identifier
 }
 
 # ==============================================
@@ -243,9 +221,9 @@ resource "aws_security_group" "rds_proxy" {
     cidr_blocks = [var.vpc_cidr]
   }
 
-  # Allow egress to Aurora cluster
+  # Allow egress to RDS instance
   egress {
-    description     = "To Aurora cluster"
+    description     = "To RDS instance"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"

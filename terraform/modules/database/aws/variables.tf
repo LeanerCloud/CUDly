@@ -37,27 +37,27 @@ variable "master_password_secret_arn" {
 }
 
 variable "engine_version" {
-  description = "Aurora PostgreSQL engine version"
+  description = "PostgreSQL engine version"
   type        = string
   default     = "16.4"
 }
 
-variable "min_capacity" {
-  description = "Minimum Aurora Serverless v2 capacity (ACUs)"
-  type        = number
-  default     = 0.5
+variable "instance_class" {
+  description = "RDS instance class (e.g., db.t4g.micro, db.t4g.small)"
+  type        = string
+  default     = "db.t4g.micro"
 }
 
-variable "max_capacity" {
-  description = "Maximum Aurora Serverless v2 capacity (ACUs)"
+variable "allocated_storage" {
+  description = "Initial allocated storage in GB"
   type        = number
-  default     = 2.0
+  default     = 20
 }
 
-variable "instance_count" {
-  description = "Number of Aurora instances (for high availability)"
+variable "max_allocated_storage" {
+  description = "Maximum allocated storage in GB for autoscaling (0 to disable)"
   type        = number
-  default     = 1
+  default     = 100
 }
 
 variable "backup_retention_days" {
