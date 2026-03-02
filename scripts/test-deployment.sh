@@ -8,11 +8,12 @@
 #   ./scripts/test-deployment.sh aws gcp            # test specific providers
 #
 # Environment variables:
-#   GCP_URL=https://<gcp-lb-ip>               (defaults to https://)
+#   GCP_URL=https://cudly-dev.local            (defaults to https://cudly-dev.local)
+#   GCP_RESOLVE=                 (resolve hostname to this IP, for self-signed certs)
 #   AWS_URL=https://<aws-domain>               (defaults to https://fargate-dev.cudly.leanercloud.com)
 #   AZURE_URL=https://<azure-domain>           (no default - set to test Azure)
 #   TEST_EMAIL=user@example.com                (required for auth tests)
-#   TEST_PASSWORD=secret                       (required for auth tests)
+#   TEST_PASSWORD=secret                       (required for auth tests, base64-encoded)
 
 set -euo pipefail
 
@@ -31,11 +32,30 @@ SKIP=0
 WARN=0
 
 # Default endpoints
-GCP_URL="${GCP_URL:-https://}"
+GCP_URL="${GCP_URL:-https://cudly-dev.local}"
+GCP_RESOLVE="${GCP_RESOLVE:-}"
 AWS_URL="${AWS_URL:-https://fargate-dev.cudly.leanercloud.com}"
 AZURE_URL="${AZURE_URL:-}"
 TEST_EMAIL="${TEST_EMAIL:-}"
 TEST_PASSWORD="${TEST_PASSWORD:-}"
+
+# Prefer OpenSSL-based curl over macOS SecureTransport curl.
+# macOS system curl (SecureTransport) disables SNI with --insecure, breaking
+# connections to hosts that need SNI (e.g., GCP load balancer with self-signed cert).
+# Homebrew curl with OpenSSL handles --cacert and --insecure correctly.
+CURL_BIN="curl"
+for candidate in /opt/homebrew/opt/curl/bin/curl /usr/local/opt/curl/bin/curl; do
+  if [[ -x "$candidate" ]] && "$candidate" --version 2>/dev/null | grep -q OpenSSL; then
+    CURL_BIN="$candidate"
+    break
+  fi
+done
+
+# Per-provider curl options, set in the main loop.
+# CURL_K: TLS verification override (--cacert or --insecure)
+# CURL_RESOLVE: --resolve flag to map hostname to IP (for dev without DNS)
+CURL_K=""
+CURL_RESOLVE=""
 
 # Determine which providers to test
 PROVIDERS=()
@@ -54,13 +74,22 @@ get_url() {
   esac
 }
 
+# Get the --resolve IP for a provider (empty if not needed)
+get_resolve_ip() {
+  local provider="$1"
+  case "$provider" in
+    gcp) echo "$GCP_RESOLVE" ;;
+    *)   echo "" ;;
+  esac
+}
+
 # Whether the provider serves frontend through CDN (vs direct container access)
 has_cdn_frontend() {
   local provider="$1"
   case "$provider" in
     aws)   return 0 ;;  # CloudFront
     gcp)   return 0 ;;  # Cloud CDN
-    azure) return 1 ;;  # Direct Container Apps (Front Door not fully wired)
+    azure) return 0 ;;  # Azure Front Door CDN
   esac
 }
 
@@ -70,7 +99,7 @@ uses_api_prefix() {
   case "$provider" in
     aws)   return 0 ;;  # CloudFront routes /api/* to backend
     gcp)   return 0 ;;  # URL map routes /api/* to Cloud Run
-    azure) return 1 ;;  # Direct Container Apps access, no /api prefix
+    azure) return 0 ;;  # Front Door routes /api/* to Container Apps
   esac
 }
 
@@ -97,7 +126,7 @@ log_info() { echo -e "  ${CYAN}INFO${NC} $1"; }
 test_connectivity() {
   local provider="$1" url="$2"
   local status
-  status=$(curl -sk -o /dev/null -w "%{http_code}" -L --connect-timeout 10 --max-time 15 "$url/" 2>/dev/null || echo "000")
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" -L --connect-timeout 10 --max-time 15 "$url/" 2>/dev/null || echo "000")
   # Take last 3 chars only (final status code after redirects)
   status="${status: -3}"
 
@@ -119,17 +148,16 @@ test_health_endpoint() {
   health_path=$(api_path "$provider" "/health")
 
   local response
-  response=$(curl -sk --connect-timeout 10 --max-time 15 "${url}${health_path}" 2>/dev/null)
-  local status=$?
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE --connect-timeout 10 --max-time 15 "${url}${health_path}" 2>/dev/null || true)
 
-  if [[ $status -ne 0 ]]; then
-    log_fail "health: ${health_path} - connection failed"
+  if [[ -z "$response" ]]; then
+    log_fail "health: ${health_path} - connection failed or empty response"
     return 1
   fi
 
   # Check JSON response has expected fields
   local health_status
-  health_status=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+  health_status=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
 
   if [[ "$health_status" == "healthy" ]]; then
     log_pass "health: ${health_path} -> status=healthy"
@@ -143,7 +171,7 @@ test_health_endpoint() {
 
   # Verify expected JSON structure
   local has_checks
-  has_checks=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'checks' in d else 'no')" 2>/dev/null)
+  has_checks=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'checks' in d else 'no')" 2>/dev/null || true)
   if [[ "$has_checks" == "yes" ]]; then
     log_pass "health: response contains 'checks' object"
   else
@@ -151,7 +179,7 @@ test_health_endpoint() {
   fi
 
   local has_timestamp
-  has_timestamp=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'timestamp' in d else 'no')" 2>/dev/null)
+  has_timestamp=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'timestamp' in d else 'no')" 2>/dev/null || true)
   if [[ "$has_timestamp" == "yes" ]]; then
     log_pass "health: response contains 'timestamp'"
   else
@@ -164,7 +192,7 @@ test_https() {
 
   # Test that HTTPS works
   local status
-  status=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}/" 2>/dev/null)
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}/" 2>/dev/null || true)
 
   if [[ "$status" =~ ^[23] ]]; then
     log_pass "https: HTTPS connection successful (HTTP $status)"
@@ -174,9 +202,9 @@ test_https() {
 
   # Test TLS version
   local tls_version
-  tls_version=$(curl -skv "${url}/" 2>&1 | grep -oE 'TLS [0-9.]+' | head -1)
+  tls_version=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -v "${url}/" 2>&1 | grep -oE 'TLSv?[0-9.]+' | head -1 || true)
   if [[ -n "$tls_version" ]]; then
-    if [[ "$tls_version" =~ "TLS 1.2" || "$tls_version" =~ "TLS 1.3" ]]; then
+    if [[ "$tls_version" =~ 1\.[23] ]]; then
       log_pass "https: $tls_version"
     else
       log_fail "https: weak TLS version ($tls_version)"
@@ -195,8 +223,8 @@ test_http_redirect() {
   local http_url="http://${host}/"
 
   local status redirect_url
-  status=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 10 "$http_url" 2>/dev/null)
-  redirect_url=$(curl -sk -o /dev/null -w "%{redirect_url}" --connect-timeout 10 "$http_url" 2>/dev/null)
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "$http_url" 2>/dev/null || true)
+  redirect_url=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{redirect_url}" --connect-timeout 10 "$http_url" 2>/dev/null || true)
 
   if [[ "$status" == "301" || "$status" == "308" ]]; then
     log_pass "http-redirect: HTTP->HTTPS redirect ($status)"
@@ -215,7 +243,7 @@ test_security_headers() {
   health_path=$(api_path "$provider" "/health")
 
   local headers
-  headers=$(curl -sk -D - -o /dev/null --connect-timeout 10 "${url}${health_path}" 2>/dev/null)
+  headers=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
 
   # Check critical security headers
   local header_checks=(
@@ -258,11 +286,11 @@ test_cors() {
   health_path=$(api_path "$provider" "/health")
 
   local headers
-  headers=$(curl -sk -D - -o /dev/null --connect-timeout 10 \
+  headers=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 \
     -X OPTIONS \
     -H "Origin: https://example.com" \
     -H "Access-Control-Request-Method: POST" \
-    "${url}${health_path}" 2>/dev/null)
+    "${url}${health_path}" 2>/dev/null || true)
 
   local status
   status=$(echo "$headers" | head -1 | grep -oE '[0-9]{3}')
@@ -303,8 +331,8 @@ test_frontend_serving() {
 
   # Test index.html
   local status content_type
-  status=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}/" 2>/dev/null)
-  content_type=$(curl -sk -D - -o /dev/null --connect-timeout 10 "${url}/" 2>/dev/null | grep -i "content-type:" | head -1 | tr -d '\r')
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}/" 2>/dev/null || true)
+  content_type=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 "${url}/" 2>/dev/null | grep -i "content-type:" | head -1 | tr -d '\r')
 
   if [[ "$status" == "200" ]]; then
     log_pass "frontend: / returns 200"
@@ -318,25 +346,31 @@ test_frontend_serving() {
     log_warn "frontend: / content-type is '$content_type'"
   fi
 
-  # Test static JS asset
-  local js_status
-  js_status=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}/js/app.20b499b8.js" 2>/dev/null)
-  if [[ "$js_status" == "200" ]]; then
-    log_pass "frontend: JS asset returns 200"
-  elif [[ "$js_status" == "404" ]]; then
-    log_warn "frontend: JS asset returns 404 (may have different hash)"
-  else
-    log_fail "frontend: JS asset returns $js_status"
-  fi
+  # Discover actual JS asset filename from index.html
+  local js_asset
+  js_asset=$($CURL_BIN -s $CURL_K $CURL_RESOLVE --connect-timeout 10 "${url}/" 2>/dev/null | grep -oE '/js/app\.[a-f0-9]+\.js' | head -1)
 
-  # Test cache headers on static assets
-  local cache_header
-  cache_header=$(curl -sk -D - -o /dev/null --connect-timeout 10 "${url}/js/app.20b499b8.js" 2>/dev/null | grep -i "cache-control:" | head -1 | tr -d '\r')
-  if echo "$cache_header" | grep -qi "max-age"; then
-    log_pass "frontend: JS asset has cache-control with max-age"
-    log_info "frontend: $cache_header"
-  elif [[ "$js_status" == "200" ]]; then
-    log_warn "frontend: JS asset missing cache-control header"
+  if [[ -n "$js_asset" ]]; then
+    # Test static JS asset
+    local js_status
+    js_status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${js_asset}" 2>/dev/null || true)
+    if [[ "$js_status" == "200" ]]; then
+      log_pass "frontend: JS asset returns 200 (${js_asset})"
+    else
+      log_fail "frontend: JS asset ${js_asset} returns $js_status"
+    fi
+
+    # Test cache headers on static assets
+    local cache_header
+    cache_header=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 "${url}${js_asset}" 2>/dev/null | grep -i "cache-control:" | head -1 | tr -d '\r')
+    if echo "$cache_header" | grep -qi "max-age"; then
+      log_pass "frontend: JS asset has cache-control with max-age"
+      log_info "frontend: $cache_header"
+    else
+      log_warn "frontend: JS asset missing cache-control header"
+    fi
+  else
+    log_warn "frontend: could not discover JS asset from index.html"
   fi
 }
 
@@ -353,7 +387,7 @@ test_spa_routing() {
 
   for route in "${routes[@]}"; do
     local status
-    status=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${route}" 2>/dev/null)
+    status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${route}" 2>/dev/null || true)
     if [[ "$status" == "200" ]]; then
       log_pass "spa-routing: ${route} returns 200 (index.html fallback)"
     elif [[ "$status" == "404" ]]; then
@@ -371,8 +405,8 @@ test_api_routing() {
 
   # Test that API routes reach the backend
   local status body
-  body=$(curl -sk --connect-timeout 10 "${url}${health_path}" 2>/dev/null)
-  status=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${health_path}" 2>/dev/null)
+  body=$($CURL_BIN -s $CURL_K $CURL_RESOLVE --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
 
   if [[ "$status" == "200" ]]; then
     log_pass "api-routing: ${health_path} proxied to backend (200)"
@@ -385,9 +419,9 @@ test_api_routing() {
   # Test auth endpoint exists
   local auth_path
   auth_path=$(api_path "$provider" "/auth/login")
-  status=$(curl -sk -o /dev/null -w "%{http_code}" -X POST \
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" -X POST \
     -H "Content-Type: application/json" -d '{}' \
-    --connect-timeout 10 "${url}${auth_path}" 2>/dev/null)
+    --connect-timeout 10 "${url}${auth_path}" 2>/dev/null || true)
 
   if [[ "$status" =~ ^[4] ]]; then
     log_pass "api-routing: ${auth_path} reached backend (HTTP $status - expected for empty body)"
@@ -411,10 +445,10 @@ test_auth_flow() {
 
   # Attempt login
   local response status
-  response=$(curl -sk -w "\n%{http_code}" -X POST \
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" -X POST \
     -H "Content-Type: application/json" \
     -d "{\"email\":\"${TEST_EMAIL}\",\"password\":\"${TEST_PASSWORD}\"}" \
-    --connect-timeout 10 "${url}${login_path}" 2>/dev/null)
+    --connect-timeout 10 "${url}${login_path}" 2>/dev/null || true)
 
   status=$(echo "$response" | tail -1)
   local body
@@ -431,9 +465,11 @@ test_auth_flow() {
       log_info "auth: response: $(echo "$body" | head -c 200)"
     fi
   elif [[ "$status" == "400" ]]; then
-    log_warn "auth: login returned 400 - $(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error','unknown'))" 2>/dev/null)"
+    log_warn "auth: login returned 400 - $(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error','unknown'))" 2>/dev/null || true)"
   elif [[ "$status" == "401" ]]; then
     log_warn "auth: login returned 401 (credentials may be wrong or password encoding differs)"
+  elif [[ "$status" == "429" ]]; then
+    log_warn "auth: login returned 429 (rate limited)"
   else
     log_fail "auth: login returned $status"
   fi
@@ -441,7 +477,7 @@ test_auth_flow() {
   # Test that unauthenticated API calls are properly rejected
   local protected_path
   protected_path=$(api_path "$provider" "/configs")
-  status=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${protected_path}" 2>/dev/null)
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${protected_path}" 2>/dev/null || true)
 
   if [[ "$status" == "401" || "$status" == "403" ]]; then
     log_pass "auth: protected endpoint ${protected_path} returns $status without token"
@@ -458,7 +494,7 @@ test_response_time() {
   health_path=$(api_path "$provider" "/health")
 
   local time_total
-  time_total=$(curl -sk -o /dev/null -w "%{time_total}" --connect-timeout 10 "${url}${health_path}" 2>/dev/null)
+  time_total=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{time_total}" --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
 
   if (( $(echo "$time_total < 1.0" | bc -l 2>/dev/null || echo 0) )); then
     log_pass "response-time: ${health_path} in ${time_total}s"
@@ -475,6 +511,9 @@ test_response_time() {
 
 echo -e "${BOLD}CUDly Cross-Provider Deployment Test${NC}"
 echo "========================================"
+if [[ "$CURL_BIN" != "curl" ]]; then
+  echo -e "  ${CYAN}INFO${NC} using OpenSSL curl: $CURL_BIN"
+fi
 echo ""
 
 for provider in "${PROVIDERS[@]}"; do
@@ -488,6 +527,42 @@ for provider in "${PROVIDERS[@]}"; do
     continue
   fi
 
+  # Set per-provider curl options
+  CURL_K=""
+  CURL_RESOLVE=""
+  resolve_ip=$(get_resolve_ip "$provider")
+
+  if [[ -n "$resolve_ip" ]]; then
+    # Extract hostname from URL for --resolve
+    hostname=$(echo "$url" | sed 's|https://||; s|/.*||')
+    CURL_RESOLVE="--resolve ${hostname}:443:${resolve_ip} --resolve ${hostname}:80:${resolve_ip}"
+
+    # For self-signed certs: extract the server cert via openssl and use --cacert.
+    # This works with OpenSSL-based curl. macOS SecureTransport curl ignores --cacert
+    # for trust and also disables SNI with --insecure, so OpenSSL curl is required.
+    cert_file=$(mktemp /tmp/curl-cert.XXXXXX)
+    if echo | openssl s_client -connect "${resolve_ip}:443" -servername "${hostname}" 2>/dev/null \
+         | openssl x509 -outform PEM > "$cert_file" 2>/dev/null && [[ -s "$cert_file" ]]; then
+      if "$CURL_BIN" --version 2>/dev/null | grep -q OpenSSL; then
+        CURL_K="--cacert ${cert_file}"
+        log_info "using --resolve ${hostname} -> ${resolve_ip} (cert pinned via --cacert)"
+      else
+        CURL_K="-k"
+        rm -f "$cert_file"
+        cert_file=""
+        log_warn "using --resolve ${hostname} -> ${resolve_ip} with --insecure (no OpenSSL curl; SNI may break)"
+      fi
+    else
+      CURL_K="-k"
+      rm -f "$cert_file"
+      cert_file=""
+      log_warn "server at ${resolve_ip} returned no cert, falling back to --insecure"
+    fi
+  elif [[ "$url" =~ ^https://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    CURL_K="-k"
+    log_info "using --insecure for bare IP (self-signed cert expected)"
+  fi
+
   # Connectivity check first - skip remaining tests if unreachable
   if ! test_connectivity "$provider" "$url"; then
     log_skip "skipping remaining tests (provider unreachable)"
@@ -495,18 +570,22 @@ for provider in "${PROVIDERS[@]}"; do
     continue
   fi
 
-  test_https "$provider" "$url"
-  test_http_redirect "$provider" "$url"
-  test_health_endpoint "$provider" "$url"
-  test_security_headers "$provider" "$url"
-  test_cors "$provider" "$url"
-  test_api_routing "$provider" "$url"
-  test_auth_flow "$provider" "$url"
-  test_response_time "$provider" "$url"
+  test_https "$provider" "$url" || true
+  test_http_redirect "$provider" "$url" || true
+  test_health_endpoint "$provider" "$url" || true
+  test_security_headers "$provider" "$url" || true
+  test_cors "$provider" "$url" || true
+  test_api_routing "$provider" "$url" || true
+  test_auth_flow "$provider" "$url" || true
+  test_response_time "$provider" "$url" || true
 
   # Frontend-specific tests (only for providers with CDN frontend)
-  test_frontend_serving "$provider" "$url"
-  test_spa_routing "$provider" "$url"
+  test_frontend_serving "$provider" "$url" || true
+  test_spa_routing "$provider" "$url" || true
+
+  # Clean up temp cert file
+  [[ -n "${cert_file:-}" && -f "${cert_file}" ]] && rm -f "$cert_file"
+  cert_file=""
 
   echo ""
 done
