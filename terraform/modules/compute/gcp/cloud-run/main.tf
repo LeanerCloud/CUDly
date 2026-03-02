@@ -86,7 +86,7 @@ resource "google_cloud_run_v2_service" "main" {
             DB_NAME            = var.database_name
             DB_USER            = var.database_username
             DB_PASSWORD_SECRET = var.database_password_secret_id
-            DB_SSL_MODE        = "disable"
+            DB_SSL_MODE        = "require"
             DB_CONNECT_TIMEOUT = "8s"
             DB_AUTO_MIGRATE    = tostring(var.auto_migrate)
             DB_MIGRATIONS_PATH = "/app/migrations"
