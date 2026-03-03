@@ -96,14 +96,14 @@ RUN addgroup -g 1000 cudly && \
 WORKDIR /app
 
 # Copy binary, migrations, and frontend from build stages
-COPY --from=builder /app/cudly /app/cudly
-COPY --from=builder /usr/local/bin/migrate /usr/local/bin/migrate
+COPY --from=builder --chown=cudly:cudly /app/cudly /app/cudly
+COPY --from=builder --chown=cudly:cudly /usr/local/bin/migrate /usr/local/bin/migrate
 COPY --chown=cudly:cudly internal/database/postgres/migrations /app/migrations
 COPY --from=frontend-builder --chown=cudly:cudly /frontend/dist /app/static
 
 # Copy unified entrypoint script and set permissions
 COPY --chown=cudly:cudly scripts/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && chown -R cudly:cudly /app
+RUN chmod +x /entrypoint.sh
 
 # Switch to non-root user
 USER cudly
