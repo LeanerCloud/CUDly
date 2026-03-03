@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/exchange"
 )
 
 // EC2API defines the interface for EC2 operations (enables mocking)
@@ -20,6 +22,8 @@ type EC2API interface {
 	DescribeReservedInstancesOfferings(ctx context.Context, params *ec2.DescribeReservedInstancesOfferingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOfferingsOutput, error)
 	DescribeReservedInstances(ctx context.Context, params *ec2.DescribeReservedInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOutput, error)
 	DescribeInstanceTypeOfferings(ctx context.Context, params *ec2.DescribeInstanceTypeOfferingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstanceTypeOfferingsOutput, error)
+	GetReservedInstancesExchangeQuote(ctx context.Context, params *ec2.GetReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.GetReservedInstancesExchangeQuoteOutput, error)
+	AcceptReservedInstancesExchangeQuote(ctx context.Context, params *ec2.AcceptReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.AcceptReservedInstancesExchangeQuoteOutput, error)
 }
 
 // Client handles AWS EC2 Reserved Instances
@@ -338,4 +342,72 @@ func (c *Client) getOfferingClass(paymentOption string) string {
 	default:
 		return "standard"
 	}
+}
+
+// ConvertibleRI represents an active convertible Reserved Instance.
+type ConvertibleRI struct {
+	ReservedInstanceID  string    `json:"reserved_instance_id"`
+	InstanceType        string    `json:"instance_type"`
+	AvailabilityZone    string    `json:"availability_zone"`
+	InstanceCount       int32     `json:"instance_count"`
+	Start               time.Time `json:"start"`
+	End                 time.Time `json:"end"`
+	OfferingType        string    `json:"offering_type"`
+	FixedPrice          float64   `json:"fixed_price"`
+	UsagePrice          float64   `json:"usage_price"`
+	State               string    `json:"state"`
+	NormalizationFactor float64   `json:"normalization_factor"`
+}
+
+// ListConvertibleReservedInstances returns all active convertible RIs in the region.
+func (c *Client) ListConvertibleReservedInstances(ctx context.Context) ([]ConvertibleRI, error) {
+	input := &ec2.DescribeReservedInstancesInput{
+		Filters: []types.Filter{
+			{
+				Name:   aws.String("state"),
+				Values: []string{"active"},
+			},
+			{
+				Name:   aws.String("offering-class"),
+				Values: []string{"convertible"},
+			},
+		},
+	}
+
+	resp, err := c.client.DescribeReservedInstances(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe convertible reserved instances: %w", err)
+	}
+
+	result := make([]ConvertibleRI, 0, len(resp.ReservedInstances))
+	for _, ri := range resp.ReservedInstances {
+		instanceType := string(ri.InstanceType)
+		normFactor := normalizationFactorForInstanceType(instanceType)
+
+		result = append(result, ConvertibleRI{
+			ReservedInstanceID:  aws.ToString(ri.ReservedInstancesId),
+			InstanceType:        instanceType,
+			AvailabilityZone:    aws.ToString(ri.AvailabilityZone),
+			InstanceCount:       aws.ToInt32(ri.InstanceCount),
+			Start:               aws.ToTime(ri.Start),
+			End:                 aws.ToTime(ri.End),
+			OfferingType:        string(ri.OfferingType),
+			FixedPrice:          float64(aws.ToFloat32(ri.FixedPrice)),
+			UsagePrice:          float64(aws.ToFloat32(ri.UsagePrice)),
+			State:               string(ri.State),
+			NormalizationFactor: normFactor,
+		})
+	}
+
+	return result, nil
+}
+
+// normalizationFactorForInstanceType extracts the size from an instance type
+// (e.g., "m5.xlarge" → "xlarge") and returns the AWS normalization factor.
+func normalizationFactorForInstanceType(instanceType string) float64 {
+	parts := strings.SplitN(instanceType, ".", 2)
+	if len(parts) != 2 {
+		return 0
+	}
+	return exchange.NormalizationFactorForSize(parts[1])
 }

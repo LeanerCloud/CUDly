@@ -51,6 +51,22 @@ func (m *MockEC2Client) DescribeInstanceTypeOfferings(ctx context.Context, param
 	return args.Get(0).(*ec2.DescribeInstanceTypeOfferingsOutput), args.Error(1)
 }
 
+func (m *MockEC2Client) GetReservedInstancesExchangeQuote(ctx context.Context, params *ec2.GetReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.GetReservedInstancesExchangeQuoteOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.GetReservedInstancesExchangeQuoteOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) AcceptReservedInstancesExchangeQuote(ctx context.Context, params *ec2.AcceptReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.AcceptReservedInstancesExchangeQuoteOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.AcceptReservedInstancesExchangeQuoteOutput), args.Error(1)
+}
+
 func TestNewClient(t *testing.T) {
 	cfg := aws.Config{
 		Region: "us-east-1",
