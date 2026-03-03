@@ -338,6 +338,75 @@ export interface SavingsAnalyticsFilters {
   service?: string;
 }
 
+// RI Exchange Types
+export interface ConvertibleRI {
+  reserved_instance_id: string;
+  instance_type: string;
+  availability_zone: string;
+  instance_count: number;
+  start: string;
+  end: string;
+  offering_type: string;
+  fixed_price: number;
+  usage_price: number;
+  state: string;
+  normalization_factor: number;
+}
+
+export interface RIUtilization {
+  reserved_instance_id: string;
+  utilization_percent: number;
+  purchased_hours: number;
+  total_actual_hours: number;
+  unused_hours: number;
+}
+
+export interface ReshapeRecommendation {
+  source_ri_id: string;
+  source_instance_type: string;
+  source_count: number;
+  target_instance_type: string;
+  target_count: number;
+  utilization_percent: number;
+  normalized_used: number;
+  normalized_purchased: number;
+  reason: string;
+}
+
+export interface ExchangeQuoteRequest {
+  ri_ids: string[];
+  target_offering_id: string;
+  target_count: number;
+  region?: string;
+}
+
+export interface ExchangeQuoteSummary {
+  IsValidExchange: boolean;
+  ValidationFailureReason: string;
+  CurrencyCode: string;
+  PaymentDueRaw: string;
+  SourceHourlyPriceRaw: string;
+  SourceRemainingUpfrontRaw: string;
+  SourceRemainingTotalRaw: string;
+  TargetHourlyPriceRaw: string;
+  TargetRemainingUpfrontRaw: string;
+  TargetRemainingTotalRaw: string;
+  OutputReservedInstancesExp?: string;
+}
+
+export interface ExchangeExecuteRequest {
+  ri_ids: string[];
+  target_offering_id: string;
+  target_count: number;
+  max_payment_due_usd: string;
+  region?: string;
+}
+
+export interface ExchangeResult {
+  exchange_id: string;
+  quote: ExchangeQuoteSummary;
+}
+
 // Internal types
 export interface ApiError extends Error {
   status?: number;

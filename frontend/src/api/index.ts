@@ -42,7 +42,14 @@ export type {
   SavingsDataPoint,
   SavingsBreakdownResponse,
   SavingsBreakdownValue,
-  SavingsAnalyticsFilters
+  SavingsAnalyticsFilters,
+  ConvertibleRI,
+  RIUtilization,
+  ReshapeRecommendation,
+  ExchangeQuoteRequest,
+  ExchangeQuoteSummary,
+  ExchangeExecuteRequest,
+  ExchangeResult
 } from './types';
 
 // Re-export client functions
@@ -145,3 +152,12 @@ export {
   saveAzureCredentials,
   saveGCPCredentials
 } from './settings';
+
+// Re-export RI exchange functions
+export {
+  listConvertibleRIs,
+  getRIUtilization,
+  getReshapeRecommendations,
+  getExchangeQuote,
+  executeExchange
+} from './riexchange';
