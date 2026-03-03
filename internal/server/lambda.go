@@ -97,12 +97,12 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 	var request events.LambdaFunctionURLRequest
 	if err := json.Unmarshal(rawEvent, &request); err != nil {
 		log.Printf("Failed to parse HTTP event: %v", err)
+		headers := lambdaSecurityHeaders()
+		headers["Content-Type"] = "application/json"
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 400,
 			Body:       `{"error": "Invalid request format"}`,
-			Headers: map[string]string{
-				"Content-Type": "application/json",
-			},
+			Headers:    headers,
 		}, nil
 	}
 
@@ -115,16 +115,34 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 	return app.API.HandleRequest(ctx, &request)
 }
 
+// lambdaSecurityHeaders returns the standard security headers for Lambda responses.
+// These match the securityHeaders() middleware used in HTTP mode.
+func lambdaSecurityHeaders() map[string]string {
+	return map[string]string{
+		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		"X-Content-Type-Options":    "nosniff",
+		"X-Frame-Options":           "DENY",
+		"Referrer-Policy":           "strict-origin-when-cross-origin",
+		"Permissions-Policy":        "camera=(), microphone=(), geolocation=()",
+	}
+}
+
 // serveLambdaStatic serves a static file as a Lambda Function URL response.
 func (app *Application) serveLambdaStatic(urlPath string) (*events.LambdaFunctionURLResponse, error) {
 	content, contentType, cacheControl, found := serveStaticForLambda(app.staticDir, urlPath)
 	if !found {
+		headers := lambdaSecurityHeaders()
+		headers["Content-Type"] = "text/plain"
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 404,
 			Body:       "Not Found",
-			Headers:    map[string]string{"Content-Type": "text/plain"},
+			Headers:    headers,
 		}, nil
 	}
+
+	headers := lambdaSecurityHeaders()
+	headers["Content-Type"] = contentType
+	headers["Cache-Control"] = cacheControl
 
 	// Text-based content types can be sent as plain body
 	if isTextContentType(contentType) {
@@ -132,10 +150,7 @@ func (app *Application) serveLambdaStatic(urlPath string) (*events.LambdaFunctio
 			StatusCode:      200,
 			Body:            string(content),
 			IsBase64Encoded: false,
-			Headers: map[string]string{
-				"Content-Type":  contentType,
-				"Cache-Control": cacheControl,
-			},
+			Headers:         headers,
 		}, nil
 	}
 
@@ -144,10 +159,7 @@ func (app *Application) serveLambdaStatic(urlPath string) (*events.LambdaFunctio
 		StatusCode:      200,
 		Body:            base64.StdEncoding.EncodeToString(content),
 		IsBase64Encoded: true,
-		Headers: map[string]string{
-			"Content-Type":  contentType,
-			"Cache-Control": cacheControl,
-		},
+		Headers:         headers,
 	}, nil
 }
 
