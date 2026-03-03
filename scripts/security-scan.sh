@@ -2,7 +2,7 @@
 # Comprehensive security scanning script for CUDly
 # Runs multiple security scanners and generates a combined report
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'

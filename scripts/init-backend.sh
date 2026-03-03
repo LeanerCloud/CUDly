@@ -3,7 +3,7 @@
 # Usage: ./scripts/init-backend.sh <environment> <region>
 # Example: ./scripts/init-backend.sh dev us-east-1
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'

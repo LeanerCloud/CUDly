@@ -1,5 +1,5 @@
 #!/bin/sh
-set -e
+set -eu
 
 # ==============================================
 # Unified Entrypoint for Multi-Cloud Deployment

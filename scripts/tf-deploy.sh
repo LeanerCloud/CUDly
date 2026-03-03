@@ -4,7 +4,7 @@
 # Example: ./scripts/tf-deploy.sh aws dev
 # Example: ./scripts/tf-deploy.sh aws prod plan
 
-set -e
+set -euo pipefail
 
 # Colors
 RED='\033[0;31m'
