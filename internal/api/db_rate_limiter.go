@@ -20,6 +20,7 @@ import (
 type DBRateLimiter struct {
 	pool            *pgxpool.Pool
 	limits          map[string]RateLimitConfig // endpoint -> config
+	limitsMu        sync.RWMutex
 	lastCleanup     time.Time
 	cleanupMu       sync.Mutex
 	cleanupRunning  atomic.Bool
@@ -40,6 +41,8 @@ func NewDBRateLimiter(pool *pgxpool.Pool) *DBRateLimiter {
 
 // SetLimit allows customizing rate limits for specific endpoints
 func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
+	rl.limitsMu.Lock()
+	defer rl.limitsMu.Unlock()
 	if rl.limits == nil {
 		rl.limits = make(map[string]RateLimitConfig)
 	}
@@ -56,11 +59,13 @@ func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string)
 	}
 
 	// Get the rate limit configuration for this endpoint
+	rl.limitsMu.RLock()
 	config, exists := rl.limits[endpoint]
 	if !exists {
 		// Default to general API limits if endpoint not specifically configured
 		config = rl.limits["api_general"]
 	}
+	rl.limitsMu.RUnlock()
 
 	// Create the unique identifier combining the key and endpoint
 	id := fmt.Sprintf("%s#ENDPOINT#%s", key, endpoint)
