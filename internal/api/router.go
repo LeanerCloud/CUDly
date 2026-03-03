@@ -120,6 +120,13 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/groups/", Method: "PUT", Handler: r.updateGroupHandler},
 		{PathPrefix: "/api/groups/", Method: "DELETE", Handler: r.deleteGroupHandler},
 
+		// RI Exchange endpoints
+		{ExactPath: "/api/ri-exchange/instances", Method: "GET", Handler: r.listConvertibleRIsHandler},
+		{ExactPath: "/api/ri-exchange/utilization", Method: "GET", Handler: r.getRIUtilizationHandler},
+		{ExactPath: "/api/ri-exchange/reshape-recommendations", Method: "GET", Handler: r.getReshapeRecommendationsHandler},
+		{ExactPath: "/api/ri-exchange/quote", Method: "POST", Handler: r.getExchangeQuoteHandler},
+		{ExactPath: "/api/ri-exchange/execute", Method: "POST", Handler: r.executeExchangeHandler},
+
 		// Health check (both root and /api paths)
 		{ExactPath: "/health", Handler: r.healthCheckHandler},
 		{ExactPath: "/api/health", Handler: r.healthCheckHandler},
@@ -412,6 +419,26 @@ func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFun
 
 func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.docsHandler(ctx, req, params)
+}
+
+func (r *Router) listConvertibleRIsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.listConvertibleRIs(ctx, req)
+}
+
+func (r *Router) getRIUtilizationHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getRIUtilization(ctx, req)
+}
+
+func (r *Router) getReshapeRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getReshapeRecommendations(ctx, req)
+}
+
+func (r *Router) getExchangeQuoteHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getExchangeQuote(ctx, req)
+}
+
+func (r *Router) executeExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.executeExchange(ctx, req)
 }
 
 // formatNotFoundError creates a detailed not found error message
