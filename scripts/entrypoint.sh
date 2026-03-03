@@ -12,16 +12,16 @@ echo "   Runtime Mode: ${RUNTIME_MODE:-auto}"
 
 # Auto-detect runtime environment if set to 'auto'
 if [ "$RUNTIME_MODE" = "auto" ]; then
-  if [ -n "$AWS_LAMBDA_RUNTIME_API" ]; then
+  if [ -n "${AWS_LAMBDA_RUNTIME_API:-}" ]; then
     echo "   Detected: AWS Lambda"
     RUNTIME_MODE=lambda
-  elif [ -n "$K_SERVICE" ]; then
+  elif [ -n "${K_SERVICE:-}" ]; then
     echo "   Detected: GCP Cloud Run"
     RUNTIME_MODE=http
-  elif [ -n "$CONTAINER_APP_NAME" ]; then
+  elif [ -n "${CONTAINER_APP_NAME:-}" ]; then
     echo "   Detected: Azure Container Apps"
     RUNTIME_MODE=http
-  elif [ -n "$ECS_CONTAINER_METADATA_URI" ]; then
+  elif [ -n "${ECS_CONTAINER_METADATA_URI:-}" ]; then
     echo "   Detected: AWS ECS Fargate"
     RUNTIME_MODE=http
   else
@@ -51,16 +51,16 @@ if [ "$DB_AUTO_MIGRATE" = "true" ]; then
     echo "   Resolving DB password from secret manager..."
     # Password will be resolved by the application
     # Migration will use the environment variable if available
-    if [ -z "$DB_PASSWORD" ]; then
+    if [ -z "${DB_PASSWORD:-}" ]; then
       echo "   ⚠️  DB_PASSWORD not set, migrations may fail"
       echo "   Application will attempt to resolve from secret manager on startup"
     fi
   fi
 
-  if [ -n "$DB_PASSWORD" ]; then
+  if [ -n "${DB_PASSWORD:-}" ]; then
     # Run migrations if password is available
     # URL-encode password to handle special characters (generated passwords contain =,[,$, etc.)
-    ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | awk 'BEGIN{split("",hex); for(i=0;i<256;i++){c=sprintf("%c",i); hex[c]=sprintf("%%%02X",i)}} {n=length($0); for(i=1;i<=n;i++){c=substr($0,i,1); if(c~/[A-Za-z0-9._~-]/)printf "%s",c; else printf "%s",hex[c]}}')
+    ENCODED_PASSWORD=$(printf '%s' "${DB_PASSWORD:-}" | awk 'BEGIN{split("",hex); for(i=0;i<256;i++){c=sprintf("%c",i); hex[c]=sprintf("%%%02X",i)}} {n=length($0); for(i=1;i<=n;i++){c=substr($0,i,1); if(c~/[A-Za-z0-9._~-]/)printf "%s",c; else printf "%s",hex[c]}}')
     DB_URL="postgresql://${DB_USER}:${ENCODED_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSL_MODE}"
 
     if migrate -path "$DB_MIGRATIONS_PATH" -database "$DB_URL" up; then
