@@ -14,6 +14,7 @@ import { setupUserHandlers } from './users';
 import { initApiKeys } from './apikeys';
 import { loadHistory } from './history';
 import { initSavingsHistory } from './modules/savings-history';
+import { setupRIExchangeHandlers } from './riexchange';
 
 /**
  * Initialize app
@@ -98,6 +99,9 @@ export function setupEventListeners(): void {
 
   // Setup API keys management
   initApiKeys();
+
+  // Setup RI Exchange event handlers
+  setupRIExchangeHandlers();
 
   // Setup savings history charts
   initSavingsHistory();

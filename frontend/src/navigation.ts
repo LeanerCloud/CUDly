@@ -10,6 +10,7 @@ import { loadGlobalSettings } from './settings';
 import { loadUsers } from './users';
 import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
+import { loadRIExchange } from './riexchange';
 
 /**
  * Switch between tabs
@@ -45,6 +46,9 @@ export function switchTab(tabName: string): void {
     case 'users':
       void loadUsers();
       void loadApiKeys();
+      break;
+    case 'ri-exchange':
+      void loadRIExchange();
       break;
   }
 }

@@ -117,7 +117,7 @@ describe('HTML Structure', () => {
 
     test('has tab content for each tab', () => {
       const tabContents = document.querySelectorAll('.tab-content');
-      expect(tabContents.length).toBe(5);
+      expect(tabContents.length).toBe(6);
     });
   });
 
