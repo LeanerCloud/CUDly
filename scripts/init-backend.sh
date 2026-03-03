@@ -169,7 +169,9 @@ RestrictPublicBuckets=true \
 
 # Enable lifecycle policy to delete old versions
 print_info "Configuring S3 lifecycle policy"
-cat > /tmp/lifecycle.json <<EOF
+LIFECYCLE_JSON=$(mktemp)
+trap 'rm -f "$LIFECYCLE_JSON"' EXIT
+cat > "$LIFECYCLE_JSON" <<EOF
 {
     "Rules": [{
         "ID": "DeleteOldVersions",
@@ -187,10 +189,8 @@ EOF
 
 $AWS_CMD s3api put-bucket-lifecycle-configuration \
     --bucket "${BUCKET_NAME}" \
-    --lifecycle-configuration file:///tmp/lifecycle.json \
+    --lifecycle-configuration "file://${LIFECYCLE_JSON}" \
     --region "${REGION}"
-
-rm -f /tmp/lifecycle.json
 
 # Add bucket tags
 print_info "Adding tags to S3 bucket"
