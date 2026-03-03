@@ -12,8 +12,10 @@ RUN apk add --no-cache \
 # Set shell with pipefail for safer pipe operations
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-# Install golang-migrate for database migrations
-RUN curl -L "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz" | tar xvz && \
+# Install golang-migrate for database migrations (architecture-aware)
+ARG TARGETARCH
+RUN MIGRATE_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    curl -L "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-${MIGRATE_ARCH}.tar.gz" | tar xvz && \
     mv migrate /usr/local/bin/migrate && \
     chmod +x /usr/local/bin/migrate
 
