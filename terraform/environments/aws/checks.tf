@@ -2,8 +2,8 @@
 # Post-deploy Validation Checks
 # ==============================================
 #
-# Runs 16 check blocks during plan/apply (health, headers, public endpoints,
-# auth enforcement, errors, methods, content-type, size limits, CORS, frontend)
+# Runs 13 check blocks during plan/apply (health, headers, public endpoints,
+# auth enforcement, errors, methods, content-type, size limits, frontend)
 # plus a local-exec provisioner for tests that need TLS introspection or
 # multi-step auth flows. See modules/deployment-checks/ for details.
 
