@@ -86,7 +86,7 @@ module.exports = (env, argv) => {
         }
       }
     },
-    devtool: isProduction ? 'source-map' : 'eval-source-map',
+    devtool: isProduction ? 'hidden-source-map' : 'eval-source-map',
     performance: {
       hints: isProduction ? 'warning' : false,
       maxEntrypointSize: 512000,
