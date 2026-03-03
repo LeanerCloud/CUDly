@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	commitaws "github.com/LeanerCloud/CUDly/ci_cd_sanity_tests/pkg/commitments/aws"
+	"github.com/LeanerCloud/CUDly/pkg/exchange"
 )
 
 type Output struct {
@@ -79,7 +79,7 @@ func main() {
 
 	if !*execute {
 		o.Mode = "dry-run"
-		q, err := commitaws.GetExchangeQuote(ctx, commitaws.ExchangeQuoteRequest{
+		q, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
 			Region:           *region,
 			ExpectedAccount:  *expectedAccount,
 			ReservedIDs:      ids,
@@ -119,7 +119,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "execute: REFUSED (see %s)\n", *outPath)
 		os.Exit(2)
 	}
-	maxRat, err := commitaws.ParseDecimalRat(*maxPaymentDue)
+	maxRat, err := exchange.ParseDecimalRat(*maxPaymentDue)
 	if err != nil {
 		o.Error = err.Error()
 		write(o, *outPath)
@@ -128,7 +128,7 @@ func main() {
 	}
 	o.MaxPaymentDueUSD = maxRat.FloatString(2)
 
-	exID, q, err := commitaws.ExecuteExchange(ctx, commitaws.ExchangeExecuteRequest{
+	exID, q, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
 		Region:           *region,
 		ExpectedAccount:  *expectedAccount,
 		ReservedIDs:      ids,
