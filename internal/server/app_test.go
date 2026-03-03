@@ -91,7 +91,7 @@ func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
 
 	lambdaReq := httpToLambdaRequest(req)
 
-	testutil.AssertEqual(t, "1.2.3.4", lambdaReq.RequestContext.HTTP.SourceIP)
+	testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
 	testutil.AssertEqual(t, "TestAgent/1.0", lambdaReq.RequestContext.HTTP.UserAgent)
 }
 

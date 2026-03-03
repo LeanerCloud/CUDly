@@ -185,11 +185,13 @@ func httpToLambdaRequest(r *http.Request) *events.LambdaFunctionURLRequest {
 		}
 	}
 
-	// Get client IP (handle X-Forwarded-For)
+	// Get client IP from X-Forwarded-For using the rightmost entry, which is
+	// set by the nearest trusted proxy (ALB, Cloud Run ingress, etc.). The
+	// leftmost entry is client-controlled and trivially spoofable.
 	sourceIP := r.RemoteAddr
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
-		sourceIP = strings.TrimSpace(parts[0])
+		sourceIP = strings.TrimSpace(parts[len(parts)-1])
 	}
 
 	return &events.LambdaFunctionURLRequest{
