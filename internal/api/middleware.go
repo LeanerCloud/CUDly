@@ -24,6 +24,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
 		"/docs",
+		"/api/docs",
 	}
 	for _, ep := range publicEndpoints {
 		if strings.HasPrefix(path, ep) {

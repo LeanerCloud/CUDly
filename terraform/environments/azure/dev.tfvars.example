@@ -79,8 +79,7 @@ recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM
 # Frontend (Azure CDN)
 # ==============================================
 
-enable_frontend       = true
-enable_frontend_build = true
+enable_cdn = false
 
 # ==============================================
 # Docker Build

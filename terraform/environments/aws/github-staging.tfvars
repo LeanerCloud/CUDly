@@ -65,10 +65,10 @@ flow_logs_retention_days = 14
 secret_recovery_window_days = 14
 
 # ==============================================
-# Frontend (CloudFront + S3)
+# Frontend / CDN
 # ==============================================
 
-enable_frontend_build = true
+enable_cdn            = false
 frontend_price_class  = "PriceClass_100"
 create_subdomain_zone = false
 

@@ -73,12 +73,11 @@ recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM
 auto_migrate = true
 
 # ==============================================
-# Frontend (Cloud CDN + Load Balancer)
+# Frontend (Load Balancer)
 # ==============================================
 
-enable_frontend       = true
-enable_frontend_build = true
-enable_cloud_armor    = false
+enable_cdn         = false
+enable_cloud_armor = false
 
 # ==============================================
 # Docker Build

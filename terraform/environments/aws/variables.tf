@@ -310,14 +310,8 @@ variable "fargate_enable_execute_command" {
 # Frontend Configuration
 # ==============================================
 
-variable "enable_frontend" {
-  description = "Enable frontend deployment (CloudFront + S3). Set to false for API-only deployments, when the frontend is hosted externally (e.g. Vercel/Netlify), or to reduce costs in dev/test environments."
-  type        = bool
-  default     = true
-}
-
-variable "enable_frontend_build" {
-  description = "Enable frontend build and deployment"
+variable "enable_cdn" {
+  description = "Enable CDN (CloudFront) for custom domain and edge caching. When false, the compute endpoint serves the frontend directly. Only needed when using custom domains."
   type        = bool
   default     = false
 }

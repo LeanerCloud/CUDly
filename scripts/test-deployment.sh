@@ -1,19 +1,45 @@
 #!/usr/bin/env bash
-# Cross-provider deployment test harness for CUDly
+# Cross-provider, multi-platform deployment test harness for CUDly
 # Validates that AWS, Azure, and GCP deployments are functionally equivalent
+# across all compute platforms (Lambda, Fargate, Container Apps, AKS, Cloud Run, GKE).
 #
 # Usage:
-#   ./scripts/test-deployment.sh                    # test all providers
-#   ./scripts/test-deployment.sh gcp                # test single provider
-#   ./scripts/test-deployment.sh aws gcp            # test specific providers
+#   ./scripts/test-deployment.sh                    # test all providers, all configured platforms
+#   ./scripts/test-deployment.sh gcp                # test all GCP platforms + CDN
+#   ./scripts/test-deployment.sh aws/lambda         # test specific platform only
+#   ./scripts/test-deployment.sh aws/lambda gcp     # mix of specific + all
 #
 # Environment variables:
+#   # CDN/frontend URLs (legacy, also used for CDN target when platform URLs are set)
+#   AWS_URL=https://<aws-domain>               (defaults to https://lambda-dev.cudly.leanercloud.com)
 #   GCP_URL=https://cudly-dev.local            (defaults to https://cudly-dev.local)
-#   GCP_RESOLVE=                 (resolve hostname to this IP, for self-signed certs)
-#   AWS_URL=https://<aws-domain>               (defaults to https://fargate-dev.cudly.leanercloud.com)
 #   AZURE_URL=https://<azure-domain>           (no default - set to test Azure)
+#
+#   # Platform-specific compute URLs (set to test individual platforms)
+#   AWS_LAMBDA_URL=https://<lambda-domain>
+#   AWS_FARGATE_URL=http://<alb-domain>
+#   AZURE_CONTAINER_APPS_URL=https://<ca-domain>
+#   AZURE_AKS_URL=http://<aks-domain>
+#   GCP_CLOUD_RUN_URL=https://<cr-domain>
+#   GCP_GKE_URL=http://<gke-domain>
+#
+#   # DNS resolve overrides (for self-signed certs / dev without DNS)
+#   GCP_RESOLVE=               (applies to GCP CDN URL)
+#   GCP_CLOUD_RUN_RESOLVE=<ip>               (falls back to GCP_RESOLVE if unset)
+#   GCP_GKE_RESOLVE=<ip>
+#
+#   # Auth test credentials
 #   TEST_EMAIL=user@example.com                (required for auth tests)
 #   TEST_PASSWORD=secret                       (required for auth tests, base64-encoded)
+#
+# When no platform-specific URLs (*_LAMBDA_URL, *_FARGATE_URL, etc.) are set for
+# a provider, the script behaves identically to the legacy single-URL mode: tests
+# the CDN URL only, labeled as "frontend".
+#
+# When platform-specific URLs ARE set, each configured platform is tested
+# separately, plus the CDN URL (if set) is tested as a "cdn" target.
+# HTTP-only platforms (Fargate ALB, AKS, GKE) skip HTTPS and redirect tests.
+# No-frontend platforms skip SPA routing and static file tests.
 
 set -euo pipefail
 
@@ -25,17 +51,71 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 BOLD='\033[1m'
 
-# Counters
+# Counters (global, incremented by log_* functions)
 PASS=0
 FAIL=0
 SKIP=0
 WARN=0
 
-# Default endpoints
-GCP_URL="${GCP_URL:-https://cudly-dev.local}"
+# Per-target summary tracking (parallel indexed arrays for bash 3 compat)
+TARGET_LABELS=()
+TARGET_PASS=()
+TARGET_FAIL=()
+TARGET_WARN=()
+TARGET_SKIP=()
+
+# Platform definitions: cloud|platform|env_prefix|has_frontend|default_protocol
+PLATFORM_DEFS=(
+  "aws|lambda|AWS_LAMBDA|yes|https"
+  "aws|fargate|AWS_FARGATE|no|http"
+  "azure|container-apps|AZURE_CONTAINER_APPS|yes|https"
+  "azure|aks|AZURE_AKS|no|http"
+  "gcp|cloud-run|GCP_CLOUD_RUN|yes|https"
+  "gcp|gke|GCP_GKE|no|http"
+)
+
+# Auto-detect frontend URL from terraform output for a given provider
+detect_frontend_url() {
+  local provider="$1"
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local env_dir="${script_dir}/../terraform/environments/${provider}"
+  if [[ -d "$env_dir" ]]; then
+    local url
+    if [[ "$provider" == "gcp" ]]; then
+      url=$(cd "$env_dir" && GOOGLE_APPLICATION_CREDENTIALS="" terraform output -raw frontend_url 2>/dev/null) || true
+    else
+      url=$(cd "$env_dir" && terraform output -raw frontend_url 2>/dev/null) || true
+    fi
+    [[ -n "$url" ]] && echo "$url"
+  fi
+}
+
+# Strip trailing slash from a URL
+strip_trailing_slash() {
+  local url="$1"
+  echo "${url%/}"
+}
+
+# Default endpoints - auto-detect from terraform outputs if not set via env
+AWS_URL=$(strip_trailing_slash "${AWS_URL:-$(detect_frontend_url aws)}")
+GCP_URL=$(strip_trailing_slash "${GCP_URL:-$(detect_frontend_url gcp)}")
 GCP_RESOLVE="${GCP_RESOLVE:-}"
-AWS_URL="${AWS_URL:-https://fargate-dev.cudly.leanercloud.com}"
-AZURE_URL="${AZURE_URL:-}"
+AZURE_URL=$(strip_trailing_slash "${AZURE_URL:-$(detect_frontend_url azure)}")
+
+# Platform-specific URLs (empty = not configured)
+AWS_LAMBDA_URL="${AWS_LAMBDA_URL:-}"
+AWS_FARGATE_URL="${AWS_FARGATE_URL:-}"
+AZURE_CONTAINER_APPS_URL="${AZURE_CONTAINER_APPS_URL:-}"
+AZURE_AKS_URL="${AZURE_AKS_URL:-}"
+GCP_CLOUD_RUN_URL="${GCP_CLOUD_RUN_URL:-}"
+GCP_GKE_URL="${GCP_GKE_URL:-}"
+
+# Platform-specific resolve IPs (with fallbacks)
+GCP_CLOUD_RUN_RESOLVE="${GCP_CLOUD_RUN_RESOLVE:-$GCP_RESOLVE}"
+GCP_GKE_RESOLVE="${GCP_GKE_RESOLVE:-}"
+
+# Auth test credentials
 TEST_EMAIL="${TEST_EMAIL:-}"
 TEST_PASSWORD="${TEST_PASSWORD:-}"
 
@@ -51,21 +131,53 @@ for candidate in /opt/homebrew/opt/curl/bin/curl /usr/local/opt/curl/bin/curl; d
   fi
 done
 
-# Per-provider curl options, set in the main loop.
+# Per-target curl options, set by setup_curl_options.
 # CURL_K: TLS verification override (--cacert or --insecure)
 # CURL_RESOLVE: --resolve flag to map hostname to IP (for dev without DNS)
 CURL_K=""
 CURL_RESOLVE=""
+CERT_FILE=""
 
-# Determine which providers to test
+# ============================================================
+# CLI argument parsing - supports provider and provider/platform
+# ============================================================
+
 PROVIDERS=()
+PLATFORM_FILTERS=()
+HAS_PLATFORM_FILTERS=false
+
 if [[ $# -gt 0 ]]; then
-  PROVIDERS=("$@")
+  for arg in "$@"; do
+    if [[ "$arg" == */* ]]; then
+      # provider/platform syntax
+      _provider="${arg%%/*}"
+      PLATFORM_FILTERS+=("$arg")
+      HAS_PLATFORM_FILTERS=true
+      # Add provider if not already present
+      _found=false
+      for p in "${PROVIDERS[@]+"${PROVIDERS[@]}"}"; do
+        [[ "$p" == "$_provider" ]] && _found=true && break
+      done
+      [[ "$_found" == "false" ]] && PROVIDERS+=("$_provider")
+    else
+      # Bare provider
+      _found=false
+      for p in "${PROVIDERS[@]+"${PROVIDERS[@]}"}"; do
+        [[ "$p" == "$arg" ]] && _found=true && break
+      done
+      [[ "$_found" == "false" ]] && PROVIDERS+=("$arg")
+    fi
+  done
 else
   PROVIDERS=(aws gcp azure)
 fi
 
-get_url() {
+# ============================================================
+# Helper functions
+# ============================================================
+
+# Get the CDN/legacy URL for a provider
+get_cdn_url() {
   local provider="$1"
   case "$provider" in
     aws)   echo "$AWS_URL" ;;
@@ -74,8 +186,8 @@ get_url() {
   esac
 }
 
-# Get the --resolve IP for a provider (empty if not needed)
-get_resolve_ip() {
+# Get the CDN resolve IP for a provider (empty if not needed)
+get_cdn_resolve_ip() {
   local provider="$1"
   case "$provider" in
     gcp) echo "$GCP_RESOLVE" ;;
@@ -83,34 +195,24 @@ get_resolve_ip() {
   esac
 }
 
-# Whether the provider serves frontend through CDN (vs direct container access)
-has_cdn_frontend() {
-  local provider="$1"
-  case "$provider" in
-    aws)   return 0 ;;  # CloudFront
-    gcp)   return 0 ;;  # Cloud CDN
-    azure) return 0 ;;  # Azure Front Door CDN
-  esac
+# Get platform URL from env_prefix (e.g., AWS_LAMBDA -> $AWS_LAMBDA_URL)
+get_platform_url() {
+  local env_prefix="$1"
+  eval "echo \"\${${env_prefix}_URL:-}\""
 }
 
-# Whether the provider uses /api prefix for API routes through CDN
-uses_api_prefix() {
-  local provider="$1"
-  case "$provider" in
-    aws)   return 0 ;;  # CloudFront routes /api/* to backend
-    gcp)   return 0 ;;  # URL map routes /api/* to Cloud Run
-    azure) return 0 ;;  # Front Door routes /api/* to Container Apps
-  esac
+# Get platform resolve IP from env_prefix (e.g., GCP_CLOUD_RUN -> $GCP_CLOUD_RUN_RESOLVE)
+get_platform_resolve_ip() {
+  local env_prefix="$1"
+  eval "echo \"\${${env_prefix}_RESOLVE:-}\""
 }
 
+# API path helper - container always uses /api/ prefix for API routes
+# Health endpoint is at /health (dedicated handler, not behind /api/)
 api_path() {
   local provider="$1"
   local path="$2"
-  if uses_api_prefix "$provider"; then
-    echo "/api${path}"
-  else
-    echo "${path}"
-  fi
+  echo "/api${path}"
 }
 
 log_pass() { ((PASS++)); echo -e "  ${GREEN}PASS${NC} $1"; }
@@ -118,6 +220,95 @@ log_fail() { ((FAIL++)); echo -e "  ${RED}FAIL${NC} $1"; }
 log_skip() { ((SKIP++)); echo -e "  ${YELLOW}SKIP${NC} $1"; }
 log_warn() { ((WARN++)); echo -e "  ${YELLOW}WARN${NC} $1"; }
 log_info() { echo -e "  ${CYAN}INFO${NC} $1"; }
+
+# Check if a provider/platform pair is allowed by CLI filters
+is_platform_allowed() {
+  local provider="$1"
+  local platform="$2"
+
+  # No filters -> allow everything
+  [[ "$HAS_PLATFORM_FILTERS" == "false" ]] && return 0
+
+  # Check if this exact provider/platform is in the filter list
+  for filter in "${PLATFORM_FILTERS[@]}"; do
+    [[ "$filter" == "${provider}/${platform}" ]] && return 0
+  done
+
+  # Check if the provider was specified as a bare arg (no platform-specific filter)
+  local provider_has_filter=false
+  for filter in "${PLATFORM_FILTERS[@]}"; do
+    [[ "$filter" == "${provider}/"* ]] && provider_has_filter=true && break
+  done
+
+  # If no platform-specific filters exist for this provider, allow all its platforms
+  [[ "$provider_has_filter" == "false" ]] && return 0
+
+  return 1
+}
+
+# Check if any platform-specific URLs are configured for a provider
+has_platform_urls() {
+  local provider="$1"
+  for def in "${PLATFORM_DEFS[@]}"; do
+    IFS='|' read -r cloud platform env_prefix has_frontend default_protocol <<< "$def"
+    if [[ "$cloud" == "$provider" ]]; then
+      local url
+      url=$(get_platform_url "$env_prefix")
+      [[ -n "$url" ]] && return 0
+    fi
+  done
+  return 1
+}
+
+# ============================================================
+# setup_curl_options - configure CURL_K, CURL_RESOLVE, CERT_FILE
+# ============================================================
+
+setup_curl_options() {
+  local url="$1"
+  local resolve_ip="$2"
+
+  CURL_K=""
+  CURL_RESOLVE=""
+  CERT_FILE=""
+
+  if [[ -n "$resolve_ip" ]]; then
+    # Extract hostname from URL for --resolve
+    local hostname
+    hostname=$(echo "$url" | sed 's|https\?://||; s|/.*||')
+    CURL_RESOLVE="--resolve ${hostname}:443:${resolve_ip} --resolve ${hostname}:80:${resolve_ip}"
+
+    # For self-signed certs: extract the server cert via openssl and use --cacert.
+    # This works with OpenSSL-based curl. macOS SecureTransport curl ignores --cacert
+    # for trust and also disables SNI with --insecure, so OpenSSL curl is required.
+    CERT_FILE=$(mktemp /tmp/curl-cert.XXXXXX)
+    if echo | openssl s_client -connect "${resolve_ip}:443" -servername "${hostname}" 2>/dev/null \
+         | openssl x509 -outform PEM > "$CERT_FILE" 2>/dev/null && [[ -s "$CERT_FILE" ]]; then
+      if "$CURL_BIN" --version 2>/dev/null | grep -q OpenSSL; then
+        CURL_K="--cacert ${CERT_FILE}"
+        log_info "using --resolve ${hostname} -> ${resolve_ip} (cert pinned via --cacert)"
+      else
+        CURL_K="-k"
+        rm -f "$CERT_FILE"
+        CERT_FILE=""
+        log_warn "using --resolve ${hostname} -> ${resolve_ip} with --insecure (no OpenSSL curl; SNI may break)"
+      fi
+    else
+      CURL_K="-k"
+      rm -f "$CERT_FILE"
+      CERT_FILE=""
+      log_warn "server at ${resolve_ip} returned no cert, falling back to --insecure"
+    fi
+  elif [[ "$url" =~ ^https://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    CURL_K="-k"
+    log_info "using --insecure for bare IP (self-signed cert expected)"
+  fi
+}
+
+cleanup_cert_file() {
+  [[ -n "${CERT_FILE:-}" && -f "${CERT_FILE}" ]] && rm -f "$CERT_FILE"
+  CERT_FILE=""
+}
 
 # ============================================================
 # Test functions
@@ -139,51 +330,6 @@ test_connectivity() {
   else
     log_fail "connectivity: $url returned HTTP $status"
     return 1
-  fi
-}
-
-test_health_endpoint() {
-  local provider="$1" url="$2"
-  local health_path
-  health_path=$(api_path "$provider" "/health")
-
-  local response
-  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE --connect-timeout 10 --max-time 15 "${url}${health_path}" 2>/dev/null || true)
-
-  if [[ -z "$response" ]]; then
-    log_fail "health: ${health_path} - connection failed or empty response"
-    return 1
-  fi
-
-  # Check JSON response has expected fields
-  local health_status
-  health_status=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
-
-  if [[ "$health_status" == "healthy" ]]; then
-    log_pass "health: ${health_path} -> status=healthy"
-  elif [[ "$health_status" == "degraded" ]]; then
-    log_warn "health: ${health_path} -> status=degraded"
-  elif [[ -n "$health_status" ]]; then
-    log_fail "health: ${health_path} -> status=$health_status"
-  else
-    log_fail "health: ${health_path} -> invalid JSON response"
-  fi
-
-  # Verify expected JSON structure
-  local has_checks
-  has_checks=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'checks' in d else 'no')" 2>/dev/null || true)
-  if [[ "$has_checks" == "yes" ]]; then
-    log_pass "health: response contains 'checks' object"
-  else
-    log_fail "health: response missing 'checks' object"
-  fi
-
-  local has_timestamp
-  has_timestamp=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'timestamp' in d else 'no')" 2>/dev/null || true)
-  if [[ "$has_timestamp" == "yes" ]]; then
-    log_pass "health: response contains 'timestamp'"
-  else
-    log_fail "health: response missing 'timestamp'"
   fi
 }
 
@@ -234,201 +380,6 @@ test_http_redirect() {
     log_skip "http-redirect: HTTP port not reachable (may be blocked)"
   else
     log_fail "http-redirect: expected 301, got $status"
-  fi
-}
-
-test_security_headers() {
-  local provider="$1" url="$2"
-  local health_path
-  health_path=$(api_path "$provider" "/health")
-
-  local headers
-  headers=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
-
-  # Check critical security headers
-  local header_checks=(
-    "strict-transport-security:HSTS"
-    "x-content-type-options:X-Content-Type-Options"
-    "x-frame-options:X-Frame-Options"
-  )
-
-  for check in "${header_checks[@]}"; do
-    local header_name="${check%%:*}"
-    local header_label="${check##*:}"
-    if echo "$headers" | grep -qi "^${header_name}:"; then
-      log_pass "security-header: $header_label present"
-    else
-      log_fail "security-header: $header_label missing"
-    fi
-  done
-
-  # Optional but recommended headers
-  local optional_checks=(
-    "referrer-policy:Referrer-Policy"
-    "content-security-policy:Content-Security-Policy"
-    "permissions-policy:Permissions-Policy"
-  )
-
-  for check in "${optional_checks[@]}"; do
-    local header_name="${check%%:*}"
-    local header_label="${check##*:}"
-    if echo "$headers" | grep -qi "^${header_name}:"; then
-      log_pass "security-header: $header_label present (optional)"
-    else
-      log_warn "security-header: $header_label missing (optional)"
-    fi
-  done
-}
-
-test_cors() {
-  local provider="$1" url="$2"
-  local health_path
-  health_path=$(api_path "$provider" "/health")
-
-  local headers
-  headers=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 \
-    -X OPTIONS \
-    -H "Origin: https://example.com" \
-    -H "Access-Control-Request-Method: POST" \
-    "${url}${health_path}" 2>/dev/null || true)
-
-  local status
-  status=$(echo "$headers" | head -1 | grep -oE '[0-9]{3}')
-
-  if [[ "$status" == "200" || "$status" == "204" ]]; then
-    log_pass "cors: OPTIONS preflight returns $status"
-  else
-    log_fail "cors: OPTIONS preflight returns $status (expected 200/204)"
-  fi
-
-  if echo "$headers" | grep -qi "access-control-allow-methods"; then
-    log_pass "cors: Access-Control-Allow-Methods present"
-  else
-    log_fail "cors: Access-Control-Allow-Methods missing"
-  fi
-
-  if echo "$headers" | grep -qi "access-control-allow-headers"; then
-    log_pass "cors: Access-Control-Allow-Headers present"
-  else
-    log_fail "cors: Access-Control-Allow-Headers missing"
-  fi
-
-  # Check if origin is reflected or wildcard
-  local acao
-  acao=$(echo "$headers" | grep -i "access-control-allow-origin" | head -1 | tr -d '\r')
-  if [[ -n "$acao" ]]; then
-    log_info "cors: $acao"
-  fi
-}
-
-test_frontend_serving() {
-  local provider="$1" url="$2"
-
-  if ! has_cdn_frontend "$provider"; then
-    log_skip "frontend: $provider doesn't serve frontend via CDN"
-    return
-  fi
-
-  # Test index.html
-  local status content_type
-  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}/" 2>/dev/null || true)
-  content_type=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 "${url}/" 2>/dev/null | grep -i "content-type:" | head -1 | tr -d '\r')
-
-  if [[ "$status" == "200" ]]; then
-    log_pass "frontend: / returns 200"
-  else
-    log_fail "frontend: / returns $status (expected 200)"
-  fi
-
-  if echo "$content_type" | grep -qi "text/html"; then
-    log_pass "frontend: / serves text/html"
-  else
-    log_warn "frontend: / content-type is '$content_type'"
-  fi
-
-  # Discover actual JS asset filename from index.html
-  local js_asset
-  js_asset=$($CURL_BIN -s $CURL_K $CURL_RESOLVE --connect-timeout 10 "${url}/" 2>/dev/null | grep -oE '/js/app\.[a-f0-9]+\.js' | head -1)
-
-  if [[ -n "$js_asset" ]]; then
-    # Test static JS asset
-    local js_status
-    js_status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${js_asset}" 2>/dev/null || true)
-    if [[ "$js_status" == "200" ]]; then
-      log_pass "frontend: JS asset returns 200 (${js_asset})"
-    else
-      log_fail "frontend: JS asset ${js_asset} returns $js_status"
-    fi
-
-    # Test cache headers on static assets
-    local cache_header
-    cache_header=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 "${url}${js_asset}" 2>/dev/null | grep -i "cache-control:" | head -1 | tr -d '\r')
-    if echo "$cache_header" | grep -qi "max-age"; then
-      log_pass "frontend: JS asset has cache-control with max-age"
-      log_info "frontend: $cache_header"
-    else
-      log_warn "frontend: JS asset missing cache-control header"
-    fi
-  else
-    log_warn "frontend: could not discover JS asset from index.html"
-  fi
-}
-
-test_spa_routing() {
-  local provider="$1" url="$2"
-
-  if ! has_cdn_frontend "$provider"; then
-    log_skip "spa-routing: $provider doesn't serve frontend via CDN"
-    return
-  fi
-
-  # Test known SPA routes - these should return 200 with index.html, not 404
-  local routes=("/settings" "/users" "/recommendations" "/groups")
-
-  for route in "${routes[@]}"; do
-    local status
-    status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${route}" 2>/dev/null || true)
-    if [[ "$status" == "200" ]]; then
-      log_pass "spa-routing: ${route} returns 200 (index.html fallback)"
-    elif [[ "$status" == "404" ]]; then
-      log_fail "spa-routing: ${route} returns 404 (SPA routing broken)"
-    else
-      log_warn "spa-routing: ${route} returns $status"
-    fi
-  done
-}
-
-test_api_routing() {
-  local provider="$1" url="$2"
-  local health_path
-  health_path=$(api_path "$provider" "/health")
-
-  # Test that API routes reach the backend
-  local status body
-  body=$($CURL_BIN -s $CURL_K $CURL_RESOLVE --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
-  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
-
-  if [[ "$status" == "200" ]]; then
-    log_pass "api-routing: ${health_path} proxied to backend (200)"
-  elif [[ "$status" == "302" ]]; then
-    log_fail "api-routing: ${health_path} got redirect (302) - should be proxied, not redirected"
-  else
-    log_fail "api-routing: ${health_path} returned $status"
-  fi
-
-  # Test auth endpoint exists
-  local auth_path
-  auth_path=$(api_path "$provider" "/auth/login")
-  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" -X POST \
-    -H "Content-Type: application/json" -d '{}' \
-    --connect-timeout 10 "${url}${auth_path}" 2>/dev/null || true)
-
-  if [[ "$status" =~ ^[4] ]]; then
-    log_pass "api-routing: ${auth_path} reached backend (HTTP $status - expected for empty body)"
-  elif [[ "$status" == "302" ]]; then
-    log_fail "api-routing: ${auth_path} got redirect instead of proxy"
-  else
-    log_warn "api-routing: ${auth_path} returned $status"
   fi
 }
 
@@ -488,10 +439,309 @@ test_auth_flow() {
   fi
 }
 
+test_csrf_protection() {
+  local provider="$1" url="$2"
+
+  if [[ -z "$TEST_EMAIL" || -z "$TEST_PASSWORD" ]]; then
+    log_warn "csrf: skipped (set TEST_EMAIL and TEST_PASSWORD to enable)"
+    return
+  fi
+
+  local login_path
+  login_path=$(api_path "$provider" "/auth/login")
+
+  # Login to get Bearer token
+  local response status body
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"${TEST_EMAIL}\",\"password\":\"${TEST_PASSWORD}\"}" \
+    --connect-timeout 10 "${url}${login_path}" 2>/dev/null || true)
+
+  status=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  if [[ "$status" != "200" ]]; then
+    log_warn "csrf: skipped (login failed with $status)"
+    return
+  fi
+
+  local token
+  token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+
+  if [[ -z "$token" ]]; then
+    log_warn "csrf: skipped (could not extract token from login response)"
+    return
+  fi
+
+  # POST /api/auth/logout with Bearer token but NO X-CSRF-Token -> 403
+  local logout_path
+  logout_path=$(api_path "$provider" "/auth/logout")
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" -X POST \
+    -H "Authorization: Bearer ${token}" \
+    --connect-timeout 10 "${url}${logout_path}" 2>/dev/null || true)
+
+  status=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  if [[ "$status" == "403" ]]; then
+    log_pass "csrf: POST ${logout_path} without CSRF token -> 403"
+    # Verify response mentions CSRF
+    local mentions_csrf
+    mentions_csrf=$(echo "$body" | python3 -c "import sys,json; e=json.load(sys.stdin).get('error',''); print('yes' if 'csrf' in e.lower() else 'no')" 2>/dev/null || echo "no")
+    if [[ "$mentions_csrf" == "yes" ]]; then
+      log_pass "csrf: error message mentions CSRF"
+    else
+      log_warn "csrf: 403 response does not mention CSRF in error field"
+    fi
+  else
+    log_fail "csrf: POST ${logout_path} without CSRF token -> $status (expected 403)"
+  fi
+
+  # Clean up: logout with CSRF token so the session is invalidated
+  local csrf_token
+  csrf_token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('csrf_token',''))" 2>/dev/null || true)
+  # Re-login since the CSRF test may have consumed the session state
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"${TEST_EMAIL}\",\"password\":\"${TEST_PASSWORD}\"}" \
+    --connect-timeout 10 "${url}${login_path}" 2>/dev/null || true)
+  body=$(echo "$response" | sed '$d')
+  token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+  csrf_token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('csrf_token',''))" 2>/dev/null || true)
+  if [[ -n "$token" && -n "$csrf_token" ]]; then
+    $CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -X POST \
+      -H "Authorization: Bearer ${token}" \
+      -H "X-CSRF-Token: ${csrf_token}" \
+      --connect-timeout 10 "${url}${logout_path}" 2>/dev/null || true
+  fi
+}
+
+test_authenticated_api() {
+  local provider="$1" url="$2"
+
+  if [[ -z "$TEST_EMAIL" || -z "$TEST_PASSWORD" ]]; then
+    log_warn "auth-api: skipped (set TEST_EMAIL and TEST_PASSWORD to enable)"
+    return
+  fi
+
+  local login_path
+  login_path=$(api_path "$provider" "/auth/login")
+
+  # Login
+  local response status body
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"${TEST_EMAIL}\",\"password\":\"${TEST_PASSWORD}\"}" \
+    --connect-timeout 10 "${url}${login_path}" 2>/dev/null || true)
+
+  status=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  if [[ "$status" != "200" ]]; then
+    log_warn "auth-api: skipped (login failed with $status)"
+    return
+  fi
+
+  local token csrf_token
+  token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+  csrf_token=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('csrf_token',''))" 2>/dev/null || true)
+
+  if [[ -z "$token" ]]; then
+    log_warn "auth-api: skipped (could not extract token)"
+    return
+  fi
+
+  # GET /api/auth/me -> 200, has user email
+  local me_path
+  me_path=$(api_path "$provider" "/auth/me")
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" \
+    -H "Authorization: Bearer ${token}" \
+    --connect-timeout 10 "${url}${me_path}" 2>/dev/null || true)
+  status=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  if [[ "$status" == "200" ]]; then
+    local has_email
+    has_email=$(echo "$body" | python3 -c "import sys,json; print('yes' if 'email' in json.load(sys.stdin) else 'no')" 2>/dev/null || echo "no")
+    if [[ "$has_email" == "yes" ]]; then
+      log_pass "auth-api: GET ${me_path} -> 200 with email"
+    else
+      log_fail "auth-api: GET ${me_path} -> 200 but missing email field"
+    fi
+  else
+    log_fail "auth-api: GET ${me_path} -> $status (expected 200)"
+  fi
+
+  # GET /api/dashboard/summary -> 200, valid JSON
+  local summary_path
+  summary_path=$(api_path "$provider" "/dashboard/summary")
+  response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" \
+    -H "Authorization: Bearer ${token}" \
+    --connect-timeout 10 "${url}${summary_path}" 2>/dev/null || true)
+  status=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  if [[ "$status" == "200" ]]; then
+    local valid_json
+    valid_json=$(echo "$body" | python3 -c "import sys,json; json.load(sys.stdin); print('yes')" 2>/dev/null || echo "no")
+    if [[ "$valid_json" == "yes" ]]; then
+      log_pass "auth-api: GET ${summary_path} -> 200 with valid JSON"
+    else
+      log_fail "auth-api: GET ${summary_path} -> 200 but invalid JSON"
+    fi
+  else
+    log_fail "auth-api: GET ${summary_path} -> $status (expected 200)"
+  fi
+
+  # GET /api/config -> 200
+  local config_path
+  config_path=$(api_path "$provider" "/config")
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer ${token}" \
+    --connect-timeout 10 "${url}${config_path}" 2>/dev/null || true)
+
+  if [[ "$status" == "200" ]]; then
+    log_pass "auth-api: GET ${config_path} -> 200"
+  else
+    log_fail "auth-api: GET ${config_path} -> $status (expected 200)"
+  fi
+
+  # POST /api/auth/logout with Bearer token + CSRF -> 200
+  local logout_path
+  logout_path=$(api_path "$provider" "/auth/logout")
+
+  if [[ -n "$csrf_token" ]]; then
+    response=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -w "\n%{http_code}" -X POST \
+      -H "Authorization: Bearer ${token}" \
+      -H "X-CSRF-Token: ${csrf_token}" \
+      --connect-timeout 10 "${url}${logout_path}" 2>/dev/null || true)
+    status=$(echo "$response" | tail -1)
+
+    if [[ "$status" == "200" ]]; then
+      log_pass "auth-api: POST ${logout_path} with CSRF -> 200"
+    else
+      log_fail "auth-api: POST ${logout_path} with CSRF -> $status (expected 200)"
+    fi
+
+    # GET /api/auth/me with old token after logout -> 401
+    status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" \
+      -H "Authorization: Bearer ${token}" \
+      --connect-timeout 10 "${url}${me_path}" 2>/dev/null || true)
+
+    if [[ "$status" == "401" ]]; then
+      log_pass "auth-api: GET ${me_path} after logout -> 401 (token invalidated)"
+    else
+      log_fail "auth-api: GET ${me_path} after logout -> $status (expected 401)"
+    fi
+  else
+    log_warn "auth-api: skipped logout/post-logout tests (no csrf_token in login response)"
+  fi
+}
+
+test_cors() {
+  local provider="$1" url="$2"
+  # Test CORS on API endpoint (not /health which is diagnostic and doesn't need CORS)
+  local cors_path
+  cors_path=$(api_path "$provider" "/auth/login")
+
+  local headers
+  headers=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 \
+    -X OPTIONS \
+    -H "Origin: https://example.com" \
+    -H "Access-Control-Request-Method: POST" \
+    -H "Access-Control-Request-Headers: Content-Type, Authorization" \
+    "${url}${cors_path}" 2>/dev/null || true)
+
+  local status
+  status=$(echo "$headers" | head -1 | grep -oE '[0-9]{3}')
+
+  if [[ "$status" == "200" || "$status" == "204" ]]; then
+    log_pass "cors: OPTIONS preflight returns $status"
+  else
+    log_fail "cors: OPTIONS preflight returns $status (expected 200/204)"
+  fi
+
+  if echo "$headers" | grep -qi "access-control-allow-methods"; then
+    log_pass "cors: Access-Control-Allow-Methods present"
+  else
+    log_fail "cors: Access-Control-Allow-Methods missing"
+  fi
+
+  if echo "$headers" | grep -qi "access-control-allow-headers"; then
+    log_pass "cors: Access-Control-Allow-Headers present"
+  else
+    log_fail "cors: Access-Control-Allow-Headers missing"
+  fi
+
+  # Check if origin is reflected or wildcard
+  local acao
+  acao=$(echo "$headers" | grep -i "access-control-allow-origin" | head -1 | tr -d '\r')
+  if [[ -n "$acao" ]]; then
+    log_info "cors: $acao"
+  fi
+}
+
+test_method_enforcement() {
+  local provider="$1" url="$2"
+
+  # DELETE /api/auth/login -> 404 (no route match, router has no 405)
+  local login_path
+  login_path=$(api_path "$provider" "/auth/login")
+  local status
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" -X DELETE \
+    --connect-timeout 10 "${url}${login_path}" 2>/dev/null || true)
+
+  if [[ "$status" == "404" || "$status" == "405" ]]; then
+    log_pass "method-enforcement: DELETE ${login_path} -> $status"
+  else
+    log_fail "method-enforcement: DELETE ${login_path} -> $status (expected 404/405)"
+  fi
+
+  # PUT /health -> 404
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" -X PUT \
+    --connect-timeout 10 "${url}/health" 2>/dev/null || true)
+
+  if [[ "$status" == "404" || "$status" == "405" ]]; then
+    log_pass "method-enforcement: PUT /health -> $status"
+  else
+    log_fail "method-enforcement: PUT /health -> $status (expected 404/405)"
+  fi
+}
+
+test_api_docs() {
+  local provider="$1" url="$2"
+  local docs_base="/api/docs"
+
+  # GET /api/docs/openapi.yaml -> 200, YAML content
+  local status content_type
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${docs_base}/openapi.yaml" 2>/dev/null || true)
+
+  if [[ "$status" == "200" ]]; then
+    log_pass "api-docs: ${docs_base}/openapi.yaml -> 200"
+  else
+    log_fail "api-docs: ${docs_base}/openapi.yaml -> $status (expected 200)"
+  fi
+
+  # GET /api/docs -> 200, HTML content (Swagger UI)
+  status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" --connect-timeout 10 "${url}${docs_base}" 2>/dev/null || true)
+  content_type=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -D - -o /dev/null --connect-timeout 10 "${url}${docs_base}" 2>/dev/null | grep -i "content-type:" | head -1 | tr -d '\r')
+
+  if [[ "$status" == "200" ]]; then
+    log_pass "api-docs: ${docs_base} -> 200"
+  else
+    log_fail "api-docs: ${docs_base} -> $status (expected 200)"
+  fi
+
+  if echo "$content_type" | grep -qi "text/html"; then
+    log_pass "api-docs: ${docs_base} serves text/html"
+  else
+    log_warn "api-docs: ${docs_base} content-type is '$content_type'"
+  fi
+}
+
 test_response_time() {
   local provider="$1" url="$2"
-  local health_path
-  health_path=$(api_path "$provider" "/health")
+  local health_path="/health"
 
   local time_total
   time_total=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{time_total}" --connect-timeout 10 "${url}${health_path}" 2>/dev/null || true)
@@ -506,6 +756,86 @@ test_response_time() {
 }
 
 # ============================================================
+# run_tests_for_target - run the full test suite for one target
+# ============================================================
+
+run_tests_for_target() {
+  local provider="$1"
+  local platform="$2"
+  local url="$3"
+  local has_frontend="$4"
+  local default_protocol="$5"
+  local resolve_ip="$6"
+
+  local label="${provider}/${platform}"
+
+  echo -e "${BOLD}${CYAN}[${label}]${NC} ${url}"
+  echo "----------------------------------------"
+
+  # Save counters for per-target delta tracking
+  local saved_pass=$PASS saved_fail=$FAIL saved_warn=$WARN saved_skip=$SKIP
+
+  # Set up curl options for this target
+  setup_curl_options "$url" "$resolve_ip"
+
+  # Warm up containers that may have scaled to zero (e.g. Azure Container Apps)
+  local warmup_status
+  warmup_status=$($CURL_BIN -s $CURL_K $CURL_RESOLVE -o /dev/null -w "%{http_code}" \
+    --connect-timeout 60 --max-time 90 "${url}/health" 2>/dev/null || echo "000")
+  warmup_status="${warmup_status: -3}"
+  if [[ "$warmup_status" != "000" ]]; then
+    log_info "warm-up: container ready (HTTP $warmup_status)"
+  fi
+
+  # Connectivity check first - skip remaining tests if unreachable
+  if ! test_connectivity "$provider" "$url"; then
+    log_skip "skipping remaining tests (target unreachable)"
+    TARGET_LABELS+=("$label")
+    TARGET_PASS+=($((PASS - saved_pass)))
+    TARGET_FAIL+=($((FAIL - saved_fail)))
+    TARGET_WARN+=($((WARN - saved_warn)))
+    TARGET_SKIP+=($((SKIP - saved_skip)))
+    cleanup_cert_file
+    echo ""
+    return
+  fi
+
+  # HTTPS tests - only for HTTPS targets
+  if [[ "$default_protocol" == "https" ]]; then
+    test_https "$provider" "$url" || true
+    test_http_redirect "$provider" "$url" || true
+  else
+    log_skip "https: skipped (HTTP-only target)"
+    log_skip "http-redirect: skipped (HTTP-only target)"
+  fi
+
+  # CORS and method enforcement (require OPTIONS/DELETE/PUT not supported by TF data "http")
+  test_cors "$provider" "$url" || true
+  test_method_enforcement "$provider" "$url" || true
+
+  # API docs endpoint (public, always available)
+  test_api_docs "$provider" "$url" || true
+
+  # Response time
+  test_response_time "$provider" "$url" || true
+
+  # Auth tests - require TEST_EMAIL and TEST_PASSWORD
+  test_auth_flow "$provider" "$url" || true
+  test_csrf_protection "$provider" "$url" || true
+  test_authenticated_api "$provider" "$url" || true
+
+  # Record per-target results
+  TARGET_LABELS+=("$label")
+  TARGET_PASS+=($((PASS - saved_pass)))
+  TARGET_FAIL+=($((FAIL - saved_fail)))
+  TARGET_WARN+=($((WARN - saved_warn)))
+  TARGET_SKIP+=($((SKIP - saved_skip)))
+
+  cleanup_cert_file
+  echo ""
+}
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -517,77 +847,58 @@ fi
 echo ""
 
 for provider in "${PROVIDERS[@]}"; do
-  url=$(get_url "$provider")
-  echo -e "${BOLD}${CYAN}[$provider]${NC} ${url:-"(no URL configured)"}"
-  echo "----------------------------------------"
+  if has_platform_urls "$provider"; then
+    # Multi-platform mode: test each configured platform separately
+    for def in "${PLATFORM_DEFS[@]}"; do
+      IFS='|' read -r cloud platform env_prefix has_frontend default_protocol <<< "$def"
+      [[ "$cloud" != "$provider" ]] && continue
 
-  if [[ -z "$url" ]]; then
-    log_skip "no URL configured for $provider"
-    echo ""
-    continue
-  fi
+      # Check CLI filter
+      is_platform_allowed "$provider" "$platform" || continue
 
-  # Set per-provider curl options
-  CURL_K=""
-  CURL_RESOLVE=""
-  resolve_ip=$(get_resolve_ip "$provider")
+      _url=$(get_platform_url "$env_prefix")
+      [[ -z "$_url" ]] && continue
 
-  if [[ -n "$resolve_ip" ]]; then
-    # Extract hostname from URL for --resolve
-    hostname=$(echo "$url" | sed 's|https://||; s|/.*||')
-    CURL_RESOLVE="--resolve ${hostname}:443:${resolve_ip} --resolve ${hostname}:80:${resolve_ip}"
+      _resolve=$(get_platform_resolve_ip "$env_prefix")
+      run_tests_for_target "$provider" "$platform" "$_url" "$has_frontend" "$default_protocol" "$_resolve"
+    done
 
-    # For self-signed certs: extract the server cert via openssl and use --cacert.
-    # This works with OpenSSL-based curl. macOS SecureTransport curl ignores --cacert
-    # for trust and also disables SNI with --insecure, so OpenSSL curl is required.
-    cert_file=$(mktemp /tmp/curl-cert.XXXXXX)
-    if echo | openssl s_client -connect "${resolve_ip}:443" -servername "${hostname}" 2>/dev/null \
-         | openssl x509 -outform PEM > "$cert_file" 2>/dev/null && [[ -s "$cert_file" ]]; then
-      if "$CURL_BIN" --version 2>/dev/null | grep -q OpenSSL; then
-        CURL_K="--cacert ${cert_file}"
-        log_info "using --resolve ${hostname} -> ${resolve_ip} (cert pinned via --cacert)"
-      else
-        CURL_K="-k"
-        rm -f "$cert_file"
-        cert_file=""
-        log_warn "using --resolve ${hostname} -> ${resolve_ip} with --insecure (no OpenSSL curl; SNI may break)"
-      fi
-    else
-      CURL_K="-k"
-      rm -f "$cert_file"
-      cert_file=""
-      log_warn "server at ${resolve_ip} returned no cert, falling back to --insecure"
+    # Also test CDN URL if configured and allowed by filter
+    _cdn_url=$(get_cdn_url "$provider")
+    if [[ -n "$_cdn_url" ]] && is_platform_allowed "$provider" "cdn"; then
+      _cdn_resolve=$(get_cdn_resolve_ip "$provider")
+      run_tests_for_target "$provider" "cdn" "$_cdn_url" "yes" "https" "$_cdn_resolve"
     fi
-  elif [[ "$url" =~ ^https://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-    CURL_K="-k"
-    log_info "using --insecure for bare IP (self-signed cert expected)"
+  else
+    # Legacy single-URL mode: identical to original behavior
+    # If user specified provider/platform filters for this provider, skip it
+    # (no platform URLs configured, so specific platform requests can't be fulfilled)
+    if [[ "$HAS_PLATFORM_FILTERS" == "true" ]]; then
+      _provider_has_filter=false
+      for filter in "${PLATFORM_FILTERS[@]}"; do
+        [[ "$filter" == "${provider}/"* ]] && _provider_has_filter=true && break
+      done
+      [[ "$_provider_has_filter" == "true" ]] && continue
+    fi
+
+    _url=$(get_cdn_url "$provider")
+
+    if [[ -z "$_url" ]]; then
+      echo -e "${BOLD}${CYAN}[${provider}]${NC} (no URL configured)"
+      echo "----------------------------------------"
+      log_skip "no URL configured for $provider"
+      TARGET_LABELS+=("$provider")
+      TARGET_PASS+=(0)
+      TARGET_FAIL+=(0)
+      TARGET_WARN+=(0)
+      TARGET_SKIP+=(1)
+      echo ""
+      continue
+    fi
+
+    _resolve=$(get_cdn_resolve_ip "$provider")
+    run_tests_for_target "$provider" "frontend" "$_url" "yes" "https" "$_resolve"
   fi
-
-  # Connectivity check first - skip remaining tests if unreachable
-  if ! test_connectivity "$provider" "$url"; then
-    log_skip "skipping remaining tests (provider unreachable)"
-    echo ""
-    continue
-  fi
-
-  test_https "$provider" "$url" || true
-  test_http_redirect "$provider" "$url" || true
-  test_health_endpoint "$provider" "$url" || true
-  test_security_headers "$provider" "$url" || true
-  test_cors "$provider" "$url" || true
-  test_api_routing "$provider" "$url" || true
-  test_auth_flow "$provider" "$url" || true
-  test_response_time "$provider" "$url" || true
-
-  # Frontend-specific tests (only for providers with CDN frontend)
-  test_frontend_serving "$provider" "$url" || true
-  test_spa_routing "$provider" "$url" || true
-
-  # Clean up temp cert file
-  [[ -n "${cert_file:-}" && -f "${cert_file}" ]] && rm -f "$cert_file"
-  cert_file=""
-
-  echo ""
 done
 
 # ============================================================
@@ -597,10 +908,20 @@ done
 echo "========================================"
 echo -e "${BOLD}Summary${NC}"
 echo "========================================"
-echo -e "  ${GREEN}Passed:${NC}  $PASS"
-echo -e "  ${RED}Failed:${NC}  $FAIL"
-echo -e "  ${YELLOW}Warned:${NC}  $WARN"
-echo -e "  ${YELLOW}Skipped:${NC} $SKIP"
+for i in $(seq 0 $((${#TARGET_LABELS[@]} - 1))); do
+  _label="${TARGET_LABELS[$i]}"
+  _p="${TARGET_PASS[$i]}"
+  _f="${TARGET_FAIL[$i]}"
+  _w="${TARGET_WARN[$i]}"
+  _s="${TARGET_SKIP[$i]}"
+  printf "  %-24s PASS: %-4s FAIL: %-4s WARN: %-4s SKIP: %-4s\n" "[${_label}]" "$_p" "$_f" "$_w" "$_s"
+done
+
+if [[ ${#TARGET_LABELS[@]} -gt 1 ]]; then
+  echo "  ----------------------------------------"
+  printf "  %-24s PASS: %-4s FAIL: %-4s WARN: %-4s SKIP: %-4s\n" "Total" "$PASS" "$FAIL" "$WARN" "$SKIP"
+fi
+
 echo ""
 
 if [[ $FAIL -gt 0 ]]; then

@@ -43,6 +43,7 @@ variable "region" {
 variable "image_uri" {
   description = "Container image URI from Artifact Registry (used when enable_docker_build is false)"
   type        = string
+  default     = ""
 }
 
 variable "enable_docker_build" {
@@ -332,25 +333,13 @@ variable "gke_enable_workload_identity" {
 }
 
 # ==============================================
-# Frontend (Cloud CDN + Load Balancer) Configuration
+# Frontend (Load Balancer) Configuration
 # ==============================================
 
-variable "enable_frontend" {
-  description = "Enable frontend deployment (Cloud CDN + Load Balancer). Set to false for API-only deployments, when the frontend is hosted externally (e.g. Vercel/Netlify), or to reduce costs in dev/test environments."
+variable "enable_cdn" {
+  description = "Enable CDN (Global Load Balancer) for custom domain and edge caching. When false, the Cloud Run service URL serves the frontend directly. Only needed when using custom domains."
   type        = bool
-  default     = true
-}
-
-variable "enable_frontend_build" {
-  description = "Enable frontend build and deployment (npm build and file uploads)"
-  type        = bool
-  default     = true
-}
-
-variable "frontend_bucket_name" {
-  description = "Cloud Storage bucket name for frontend files (globally unique)"
-  type        = string
-  default     = ""
+  default     = false
 }
 
 variable "subdomain_zone_name" {

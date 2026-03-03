@@ -1,5 +1,6 @@
-# AWS Frontend Module - CloudFront + S3
-# Serves static files from S3 and proxies /api requests to Lambda Function URL
+# AWS CDN Module - CloudFront for custom domain + edge caching
+# Origin is the compute endpoint (Lambda Function URL or Fargate ALB).
+# Static files are served by the container; CloudFront caches them at the edge.
 
 terraform {
   required_version = ">= 1.0"
@@ -11,144 +12,37 @@ terraform {
   }
 }
 
-# S3 bucket for frontend static files
-resource "aws_s3_bucket" "frontend" {
-  bucket = var.bucket_name
-
-  tags = merge(var.tags, {
-    Name        = "${var.project_name}-frontend"
-    Environment = var.environment
-  })
-}
-
-# Block all public access to S3 (CloudFront OAC will access it)
-resource "aws_s3_bucket_public_access_block" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-# Enable versioning for rollback capability
-resource "aws_s3_bucket_versioning" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-# Server-side encryption
-resource "aws_s3_bucket_server_side_encryption_configuration" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-# Lifecycle policy to clean up old versions
-resource "aws_s3_bucket_lifecycle_configuration" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-
-  rule {
-    id     = "delete-old-versions"
-    status = "Enabled"
-
-    filter {}
-
-    noncurrent_version_expiration {
-      noncurrent_days = 30
-    }
-  }
-}
-
-# CloudFront Origin Access Control for S3
-resource "aws_cloudfront_origin_access_control" "frontend" {
-  name                              = "${var.project_name}-${var.environment}-frontend-oac"
-  description                       = "OAC for ${var.project_name} ${var.environment} frontend S3 bucket"
-  origin_access_control_origin_type = "s3"
-  signing_behavior                  = "always"
-  signing_protocol                  = "sigv4"
-}
-
-# CloudFront distribution
+# CloudFront distribution with single compute origin
 resource "aws_cloudfront_distribution" "frontend" {
-  enabled             = true
-  is_ipv6_enabled     = true
-  comment             = "${var.project_name} Frontend Distribution"
-  default_root_object = "index.html"
-  price_class         = var.price_class
-  # Only use aliases if custom domain is configured
-  aliases    = length(var.domain_names) > 0 && var.acm_certificate_arn != null ? var.domain_names : []
-  web_acl_id = var.waf_acl_arn
+  enabled         = true
+  is_ipv6_enabled = true
+  comment         = "${var.project_name} CDN Distribution"
+  price_class     = var.price_class
+  aliases         = length(var.domain_names) > 0 && var.acm_certificate_arn != null ? var.domain_names : []
+  web_acl_id      = var.waf_acl_arn
 
-  # S3 origin for static files
+  # Single origin: compute endpoint (Lambda Function URL or Fargate ALB)
   origin {
-    domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
-    origin_id                = "S3-${aws_s3_bucket.frontend.id}"
-    origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
-  }
-
-  # Lambda Function URL origin for API requests
-  origin {
-    domain_name = var.api_domain_name
-    origin_id   = "Lambda-API"
+    domain_name = var.origin_domain_name
+    origin_id   = "compute"
 
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = var.api_origin_protocol
+      origin_protocol_policy = var.origin_protocol
       origin_ssl_protocols   = ["TLSv1.2"]
     }
-
-    custom_header {
-      name  = "X-CloudFront-Secret"
-      value = var.cloudfront_secret
-    }
   }
 
-  # Default behavior: serve from S3
+  # Default behavior: forward all requests to compute origin
+  # Static file caching is driven by Cache-Control headers from the origin
   default_cache_behavior {
-    target_origin_id       = "S3-${aws_s3_bucket.frontend.id}"
+    target_origin_id       = "compute"
     viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD", "OPTIONS"]
-    compress               = true
-
-    forwarded_values {
-      query_string = false
-      headers      = ["Origin"]
-
-      cookies {
-        forward = "none"
-      }
-    }
-
-    min_ttl     = 0
-    default_ttl = 3600  # 1 hour
-    max_ttl     = 86400 # 24 hours
-
-    function_association {
-      event_type   = "viewer-response"
-      function_arn = aws_cloudfront_function.security_headers.arn
-    }
-  }
-
-  # API behavior: proxy to Lambda
-  ordered_cache_behavior {
-    path_pattern           = "/api/*"
-    target_origin_id       = "Lambda-API"
-    viewer_protocol_policy = "https-only"
     allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     cached_methods         = ["GET", "HEAD", "OPTIONS"]
     compress               = true
 
-    # Forward all headers/cookies for API requests
     forwarded_values {
       query_string = true
       headers = [
@@ -157,6 +51,7 @@ resource "aws_cloudfront_distribution" "frontend" {
         "X-API-Key",
         "X-CSRF-Token",
         "Content-Type",
+        "Origin",
       ]
 
       cookies {
@@ -164,46 +59,23 @@ resource "aws_cloudfront_distribution" "frontend" {
       }
     }
 
-    # No caching for API requests
+    # Let origin Cache-Control headers drive caching
     min_ttl     = 0
     default_ttl = 0
-    max_ttl     = 0
-  }
+    max_ttl     = 31536000
 
-  # API docs behavior
-  ordered_cache_behavior {
-    path_pattern           = "/docs/*"
-    target_origin_id       = "S3-${aws_s3_bucket.frontend.id}"
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD", "OPTIONS"]
-    compress               = true
-
-    forwarded_values {
-      query_string = false
-      cookies {
-        forward = "none"
-      }
+    function_association {
+      event_type   = "viewer-response"
+      function_arn = aws_cloudfront_function.security_headers.arn
     }
-
-    min_ttl     = 0
-    default_ttl = 3600
-    max_ttl     = 86400
   }
 
-  # Custom error responses for SPA routing
+  # SPA routing: serve index.html for 404s from the origin
   custom_error_response {
     error_code            = 404
     response_code         = 200
     response_page_path    = "/index.html"
-    error_caching_min_ttl = 300
-  }
-
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 300
+    error_caching_min_ttl = 10
   }
 
   restrictions {
@@ -214,7 +86,6 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   viewer_certificate {
-    # Use ACM certificate if custom domain is configured, otherwise use CloudFront default
     acm_certificate_arn            = var.acm_certificate_arn
     cloudfront_default_certificate = var.acm_certificate_arn == null ? true : null
     ssl_support_method             = var.acm_certificate_arn != null ? "sni-only" : null
@@ -222,7 +93,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   tags = merge(var.tags, {
-    Name        = "${var.project_name}-frontend-cdn"
+    Name        = "${var.project_name}-cdn"
     Environment = var.environment
   })
 }
@@ -253,31 +124,6 @@ function handler(event) {
 EOT
 }
 
-# S3 bucket policy to allow CloudFront OAC
-resource "aws_s3_bucket_policy" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowCloudFrontOAC"
-        Effect = "Allow"
-        Principal = {
-          Service = "cloudfront.amazonaws.com"
-        }
-        Action   = "s3:GetObject"
-        Resource = "${aws_s3_bucket.frontend.arn}/*"
-        Condition = {
-          StringEquals = {
-            "AWS:SourceArn" = aws_cloudfront_distribution.frontend.arn
-          }
-        }
-      }
-    ]
-  })
-}
-
 # Route53 DNS record (if domain provided)
 resource "aws_route53_record" "frontend" {
   count = var.route53_zone_id != null && length(var.domain_names) > 0 ? 1 : 0
@@ -293,27 +139,7 @@ resource "aws_route53_record" "frontend" {
   }
 }
 
-# CloudWatch alarm for 4xx errors
-resource "aws_cloudwatch_metric_alarm" "cloudfront_4xx" {
-  alarm_name          = "${var.project_name}-cloudfront-4xx-errors"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "4xxErrorRate"
-  namespace           = "AWS/CloudFront"
-  period              = "300"
-  statistic           = "Average"
-  threshold           = "5"
-  alarm_description   = "CloudFront 4xx error rate is too high"
-  treat_missing_data  = "notBreaching"
-
-  dimensions = {
-    DistributionId = aws_cloudfront_distribution.frontend.id
-  }
-
-  alarm_actions = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []
-}
-
-# CloudWatch alarm for 5xx errors
+# CloudWatch alarm for high error rates
 resource "aws_cloudwatch_metric_alarm" "cloudfront_5xx" {
   alarm_name          = "${var.project_name}-cloudfront-5xx-errors"
   comparison_operator = "GreaterThanThreshold"

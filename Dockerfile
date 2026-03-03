@@ -62,6 +62,17 @@ RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
 # Binary built successfully for ${TARGETOS}/${TARGETARCH}
 
 # ==============================================
+# Frontend build stage
+# ==============================================
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ==============================================
 # Runtime stage - multi-arch base image
 # ==============================================
 FROM alpine:3.19
@@ -84,10 +95,11 @@ RUN addgroup -g 1000 cudly && \
 # Create app directory
 WORKDIR /app
 
-# Copy binary and migrations from builder
+# Copy binary, migrations, and frontend from build stages
 COPY --from=builder /app/cudly /app/cudly
 COPY --from=builder /usr/local/bin/migrate /usr/local/bin/migrate
 COPY --chown=cudly:cudly internal/database/postgres/migrations /app/migrations
+COPY --from=frontend-builder --chown=cudly:cudly /frontend/dist /app/static
 
 # Copy unified entrypoint script and set permissions
 COPY --chown=cudly:cudly scripts/entrypoint.sh /entrypoint.sh
@@ -101,6 +113,7 @@ ENV DB_MIGRATIONS_PATH=/app/migrations \
     DB_AUTO_MIGRATE=true \
     RUNTIME_MODE=auto \
     PORT=8080 \
+    STATIC_DIR=/app/static \
     GOARCH=${TARGETARCH} \
     GOOS=${TARGETOS}
 

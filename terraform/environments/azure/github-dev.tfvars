@@ -67,12 +67,11 @@ recommendation_schedule = "0 2 * * *"
 log_retention_days = 7
 
 # ==============================================
-# Frontend (Azure Front Door + Blob Storage)
+# Frontend (Azure Front Door)
 # ==============================================
 
-enable_frontend       = true
-enable_frontend_build = true
-use_front_door        = true
+enable_cdn     = false
+use_front_door = true
 
 # ==============================================
 # Email Service

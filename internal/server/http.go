@@ -20,16 +20,26 @@ import (
 func CreateHTTPServer(app *Application, port int) *http.Server {
 	mux := http.NewServeMux()
 
-	// Register routes
-	mux.HandleFunc("/", app.handleHTTPRequest)
+	// Register health and scheduled task routes (always available)
 	mux.HandleFunc("/health", app.handleHealthCheck)
 	mux.HandleFunc("/api/scheduled/", app.handleScheduledHTTP)
+
+	// When STATIC_DIR is set, serve static files for non-API paths
+	// and route only /api/ to the API handler.
+	// When unset, all requests go to the API handler (backward compatible).
+	staticDir := staticDirFromEnv()
+	if staticDir != "" {
+		mux.HandleFunc("/api/", app.handleHTTPRequest)
+		mux.Handle("/", spaFileServer(staticDir))
+	} else {
+		mux.HandleFunc("/", app.handleHTTPRequest)
+	}
 
 	addr := fmt.Sprintf(":%d", port)
 
 	return &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      securityHeaders(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -41,6 +51,20 @@ func StartHTTPServer(app *Application, port int) error {
 	server := CreateHTTPServer(app, port)
 	log.Printf("Starting HTTP server on %s", server.Addr)
 	return server.ListenAndServe()
+}
+
+// securityHeaders wraps a handler to add standard security headers to every response.
+// These headers were previously set by CDN (CloudFront/Front Door/GLB) but now need
+// to come from the server since static files are served directly from the container.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleHTTPRequest converts standard HTTP requests to Lambda Function URL format
@@ -143,11 +167,13 @@ func httpToLambdaRequest(r *http.Request) *events.LambdaFunctionURLRequest {
 		}
 	}
 
-	// Convert headers
+	// Convert headers - lowercase all keys to match Lambda Function URL behavior.
+	// Go's http.Request.Header canonicalizes keys (e.g. "X-CSRF-Token" → "X-Csrf-Token"),
+	// but our middleware expects lowercase keys (e.g. "x-csrf-token").
 	headers := make(map[string]string)
 	for key, values := range r.Header {
 		if len(values) > 0 {
-			headers[key] = values[0]
+			headers[strings.ToLower(key)] = values[0]
 		}
 	}
 

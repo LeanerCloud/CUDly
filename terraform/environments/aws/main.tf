@@ -49,7 +49,9 @@ provider "aws" {
 # ==============================================
 
 locals {
-  stack_name    = "${var.project_name}-${var.environment}"
+  stack_name = "${var.project_name}-${var.environment}"
+  # Dashboard URL for CORS and email links
+  # Priority: custom domain > CDN domain > compute default endpoint
   dashboard_url = length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" : ""
 
   common_tags = {

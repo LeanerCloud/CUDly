@@ -20,13 +20,8 @@ variable "location" {
   type        = string
 }
 
-variable "storage_account_name" {
-  description = "Storage account name (must be globally unique, 3-24 lowercase alphanumeric)"
-  type        = string
-}
-
 variable "api_hostname" {
-  description = "Hostname of the Container App API (without https://)"
+  description = "Hostname of the Container App (without https://). All traffic is routed here."
   type        = string
 }
 
@@ -37,7 +32,7 @@ variable "cdn_sku" {
 }
 
 variable "custom_domain" {
-  description = "Custom domain name for the CDN endpoint"
+  description = "Custom domain name for the classic CDN endpoint"
   type        = string
   default     = ""
 }
@@ -55,7 +50,7 @@ variable "subdomain_zone_name" {
 }
 
 variable "use_front_door" {
-  description = "Use Azure Front Door instead of CDN (for premium features)"
+  description = "Use Azure Front Door instead of classic CDN"
   type        = bool
   default     = false
 }
@@ -70,16 +65,4 @@ variable "tags" {
   description = "Additional tags for resources"
   type        = map(string)
   default     = {}
-}
-
-variable "enable_frontend_build" {
-  description = "Enable frontend build and deployment (set to false to skip npm build and file uploads)"
-  type        = bool
-  default     = true
-}
-
-variable "frontend_path" {
-  description = "Path to frontend directory relative to Terraform root (default assumes terraform/environments/<provider> structure)"
-  type        = string
-  default     = "../../../frontend"
 }

@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -87,7 +89,10 @@ func detectLambdaEventType(rawEvent json.RawMessage) string {
 	return "unknown"
 }
 
-// handleLambdaHTTPEvent processes HTTP requests from Lambda Function URL
+// handleLambdaHTTPEvent processes HTTP requests from Lambda Function URL.
+// When STATIC_DIR is set, serves static files for non-API paths directly
+// from the container filesystem, enabling Lambda Function URL to serve
+// the full frontend without S3/CloudFront.
 func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json.RawMessage) (*events.LambdaFunctionURLResponse, error) {
 	var request events.LambdaFunctionURLRequest
 	if err := json.Unmarshal(rawEvent, &request); err != nil {
@@ -101,7 +106,69 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 		}, nil
 	}
 
+	// Serve static files for non-API paths when STATIC_DIR is configured
+	reqPath := request.RawPath
+	if app.staticDir != "" && isStaticPath(reqPath) {
+		return app.serveLambdaStatic(reqPath)
+	}
+
 	return app.API.HandleRequest(ctx, &request)
+}
+
+// serveLambdaStatic serves a static file as a Lambda Function URL response.
+func (app *Application) serveLambdaStatic(urlPath string) (*events.LambdaFunctionURLResponse, error) {
+	content, contentType, cacheControl, found := serveStaticForLambda(app.staticDir, urlPath)
+	if !found {
+		return &events.LambdaFunctionURLResponse{
+			StatusCode: 404,
+			Body:       "Not Found",
+			Headers:    map[string]string{"Content-Type": "text/plain"},
+		}, nil
+	}
+
+	// Text-based content types can be sent as plain body
+	if isTextContentType(contentType) {
+		return &events.LambdaFunctionURLResponse{
+			StatusCode:      200,
+			Body:            string(content),
+			IsBase64Encoded: false,
+			Headers: map[string]string{
+				"Content-Type":  contentType,
+				"Cache-Control": cacheControl,
+			},
+		}, nil
+	}
+
+	// Binary content must be base64-encoded
+	return &events.LambdaFunctionURLResponse{
+		StatusCode:      200,
+		Body:            base64.StdEncoding.EncodeToString(content),
+		IsBase64Encoded: true,
+		Headers: map[string]string{
+			"Content-Type":  contentType,
+			"Cache-Control": cacheControl,
+		},
+	}, nil
+}
+
+// isTextContentType returns true for content types that can be sent as plain text
+// in Lambda Function URL responses (not base64-encoded).
+func isTextContentType(ct string) bool {
+	if strings.HasPrefix(ct, "text/") {
+		return true
+	}
+	textTypes := []string{
+		"application/json",
+		"application/javascript",
+		"application/xml",
+		"image/svg+xml",
+	}
+	for _, t := range textTypes {
+		if strings.HasPrefix(ct, t) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleLambdaSQSEvent processes SQS messages (for async purchase processing)

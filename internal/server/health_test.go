@@ -212,6 +212,63 @@ func TestHandleHealthCheck(t *testing.T) {
 	}
 }
 
+func TestHealthCheckSecurityHeaders(t *testing.T) {
+	app := &Application{
+		Version: "test",
+		Config:  &mockConfigStoreForHealth{},
+		Auth:    createHealthyAuthService(),
+		appConfig: ApplicationConfig{
+			CORSAllowedOrigin: "https://example.com",
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	w := httptest.NewRecorder()
+	app.handleHealthCheck(w, req)
+
+	testutil.AssertEqual(t, 200, w.Code)
+
+	// Verify security headers are present
+	securityHeaders := []string{
+		"Strict-Transport-Security",
+		"X-Content-Type-Options",
+		"X-Frame-Options",
+		"X-Xss-Protection",
+		"Content-Security-Policy",
+		"Permissions-Policy",
+		"Referrer-Policy",
+		"Cache-Control",
+	}
+	for _, header := range securityHeaders {
+		testutil.AssertTrue(t, w.Header().Get(header) != "", "Expected header "+header+" to be present")
+	}
+
+	// Verify CORS headers
+	testutil.AssertEqual(t, "https://example.com", w.Header().Get("Access-Control-Allow-Origin"))
+	testutil.AssertTrue(t, w.Header().Get("Access-Control-Allow-Methods") != "", "Expected CORS methods header")
+	testutil.AssertTrue(t, w.Header().Get("Access-Control-Allow-Headers") != "", "Expected CORS headers header")
+}
+
+func TestHealthCheckNoCORSWhenNotConfigured(t *testing.T) {
+	app := &Application{
+		Version: "test",
+		Config:  &mockConfigStoreForHealth{},
+		Auth:    createHealthyAuthService(),
+	}
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	w := httptest.NewRecorder()
+	app.handleHealthCheck(w, req)
+
+	testutil.AssertEqual(t, 200, w.Code)
+
+	// CORS headers should be absent when origin is not configured
+	testutil.AssertEqual(t, "", w.Header().Get("Access-Control-Allow-Origin"))
+
+	// Security headers should still be present
+	testutil.AssertTrue(t, w.Header().Get("Strict-Transport-Security") != "", "HSTS should be present even without CORS")
+}
+
 func TestCheckConfigStore(t *testing.T) {
 	tests := []struct {
 		name           string

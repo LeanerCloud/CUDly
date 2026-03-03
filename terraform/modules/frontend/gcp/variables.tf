@@ -20,19 +20,8 @@ variable "region" {
   type        = string
 }
 
-variable "location" {
-  description = "GCP location for bucket (region or multi-region like US, EU)"
-  type        = string
-  default     = "US"
-}
-
-variable "bucket_name" {
-  description = "Cloud Storage bucket name (must be globally unique)"
-  type        = string
-}
-
 variable "cloud_run_service_name" {
-  description = "Cloud Run service name for API backend"
+  description = "Cloud Run service name for the backend"
   type        = string
 }
 
@@ -55,7 +44,7 @@ variable "enable_cloud_armor" {
 }
 
 variable "api_log_sample_rate" {
-  description = "Sample rate for API backend logs (0.0 to 1.0)"
+  description = "Sample rate for backend logs (0.0 to 1.0)"
   type        = number
   default     = 1.0
 }
@@ -76,16 +65,4 @@ variable "labels" {
   description = "Additional labels for resources"
   type        = map(string)
   default     = {}
-}
-
-variable "enable_frontend_build" {
-  description = "Enable frontend build and deployment (set to false to skip npm build and file uploads)"
-  type        = bool
-  default     = true
-}
-
-variable "frontend_path" {
-  description = "Path to frontend directory relative to Terraform root (default assumes terraform/environments/<provider> structure)"
-  type        = string
-  default     = "../../../frontend"
 }

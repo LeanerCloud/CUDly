@@ -50,6 +50,7 @@ module "compute_cloud_run" {
   # Additional environment variables
   additional_env_vars = merge(
     {
+      STATIC_DIR              = "/app/static"
       SENDGRID_API_KEY_SECRET = module.secrets.sendgrid_api_key_id
       FROM_EMAIL              = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL           = local.dashboard_url
@@ -110,6 +111,7 @@ module "compute_gke" {
   auto_migrate   = var.auto_migrate
   additional_env_vars = merge(
     {
+      STATIC_DIR          = "/app/static"
       DASHBOARD_URL       = local.dashboard_url
       CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
     },

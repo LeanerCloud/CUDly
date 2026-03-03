@@ -52,8 +52,8 @@ func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request
 	// expected during cold starts with lazy DB initialization.
 	statusCode := http.StatusOK
 
-	// Write response
-	w.Header().Set("Content-Type", "application/json")
+	// Write response with security headers and CORS
+	setHealthResponseHeaders(w, app.appConfig.CORSAllowedOrigin)
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(health)
 }
@@ -87,6 +87,30 @@ func (app *Application) checkConfigStore(ctx context.Context) CheckResult {
 
 	return CheckResult{
 		Status: "healthy",
+	}
+}
+
+// setHealthResponseHeaders adds security headers and CORS to the health endpoint response.
+// These match the headers set by internal/api/handler.go for API responses, ensuring
+// consistent security posture when hitting the container directly without a CDN.
+func setHealthResponseHeaders(w http.ResponseWriter, corsOrigin string) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Security headers
+	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-XSS-Protection", "1; mode=block")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+
+	// CORS headers
+	if corsOrigin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key, Authorization, X-Authorization, X-CSRF-Token")
 	}
 }
 

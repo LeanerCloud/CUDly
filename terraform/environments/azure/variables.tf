@@ -382,22 +382,10 @@ variable "aks_enable_log_analytics" {
 # Frontend (CDN) Configuration
 # ==============================================
 
-variable "enable_frontend" {
-  description = "Enable frontend deployment (Azure CDN / Front Door). Set to false for API-only deployments, when the frontend is hosted externally (e.g. Vercel/Netlify), or to reduce costs in dev/test environments."
+variable "enable_cdn" {
+  description = "Enable CDN (Azure CDN / Front Door) for custom domain and edge caching. When false, the Container Apps URL serves the frontend directly. Only needed when using custom domains."
   type        = bool
-  default     = true
-}
-
-variable "enable_frontend_build" {
-  description = "Enable frontend build and deployment (npm build and file uploads)"
-  type        = bool
-  default     = true
-}
-
-variable "frontend_storage_account_name" {
-  description = "Storage account name for frontend files (3-24 lowercase alphanumeric, globally unique)"
-  type        = string
-  default     = ""
+  default     = false
 }
 
 variable "subdomain_zone_name" {

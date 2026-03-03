@@ -38,6 +38,9 @@ type Application struct {
 	Version     string
 	DB          *database.Connection // PostgreSQL database connection
 
+	// Static file serving directory (from STATIC_DIR env var)
+	staticDir string
+
 	// Lazy initialization fields for PostgreSQL (Lambda ENI readiness)
 	dbConfig       *database.Config
 	secretResolver secrets.Resolver
@@ -183,6 +186,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		RateLimiter:    rateLimiter,
 		Version:        cfg.Version,
 		DB:             nil, // Will be initialized lazily on first request
+		staticDir:      staticDirFromEnv(),
 		dbConfig:       deps.DBConfig,
 		secretResolver: deps.SecretResolver,
 		appConfig:      cfg,

@@ -1,40 +1,24 @@
 # ==============================================
-# Frontend (CloudFront + S3)
+# Frontend CDN (CloudFront)
+# Only created when enable_cdn = true (custom domain + edge caching)
+# When disabled, the compute endpoint serves the frontend directly
 # ==============================================
-
-resource "random_password" "cloudfront_secret" {
-  count   = var.enable_frontend ? 1 : 0
-  length  = 32
-  special = true
-}
-
-resource "random_id" "frontend_bucket" {
-  count       = var.enable_frontend ? 1 : 0
-  byte_length = 4
-}
 
 module "frontend" {
   source = "../../modules/frontend/aws"
-  count  = var.enable_frontend ? 1 : 0
+  count  = var.enable_cdn ? 1 : 0
 
   project_name = var.project_name
   environment  = var.environment
 
-  # Frontend build configuration
-  enable_frontend_build = var.enable_frontend_build
-
-  # S3 bucket for frontend files (random suffix avoids naming conflicts on destroy/recreate)
-  bucket_name = "${local.stack_name}-frontend-${random_id.frontend_bucket[0].hex}"
-
-  # API endpoint - Lambda Function URL or Fargate ALB CNAME (for TLS cert matching)
-  api_domain_name = var.compute_platform == "lambda" ? (
+  # Compute origin - Lambda Function URL or Fargate ALB CNAME (for TLS cert matching)
+  origin_domain_name = var.compute_platform == "lambda" ? (
     replace(replace(module.compute_lambda[0].function_url, "https://", ""), "/", "")
     ) : (
-    "api-${var.environment}.${var.subdomain_zone_name}"
+    var.subdomain_zone_name != "" ? "api-${var.environment}.${var.subdomain_zone_name}" : module.compute_fargate[0].alb_dns_name
   )
 
-  # CloudFront secret for origin verification
-  cloudfront_secret = random_password.cloudfront_secret[0].result
+  origin_protocol = var.compute_platform == "lambda" ? "https-only" : "http-only"
 
   # Optional: Custom domain
   domain_names = var.frontend_domain_names

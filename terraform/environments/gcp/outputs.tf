@@ -83,6 +83,17 @@ output "gke_load_balancer_ip" {
   value       = var.compute_platform == "gke" ? module.compute_gke[0].load_balancer_ip : null
 }
 
+# Frontend URL (CDN or compute default endpoint)
+output "frontend_url" {
+  description = "Frontend URL (CDN, custom domain, or compute default endpoint)"
+  value = (
+    var.enable_cdn ? module.frontend[0].frontend_url :
+    length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" :
+    var.compute_platform == "cloud-run" ? module.compute_cloud_run[0].service_url :
+    module.compute_gke[0].api_url
+  )
+}
+
 # Unified Outputs (work for both platforms)
 output "api_endpoint" {
   description = "API endpoint URL (works for both platforms)"

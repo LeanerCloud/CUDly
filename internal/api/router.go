@@ -126,6 +126,10 @@ func (r *Router) registerRoutes() {
 
 		// Public info endpoint
 		{ExactPath: "/api/info", Method: "GET", Handler: r.getPublicInfoHandler},
+
+		// API documentation (Swagger UI + raw spec)
+		{PathPrefix: "/api/docs", Method: "GET", Handler: r.docsHandler},
+		{PathPrefix: "/docs", Method: "GET", Handler: r.docsHandler},
 	}
 }
 
@@ -404,6 +408,10 @@ func (r *Router) healthCheckHandler(ctx context.Context, req *events.LambdaFunct
 
 func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getPublicInfo(ctx, req)
+}
+
+func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.docsHandler(ctx, req, params)
 }
 
 // formatNotFoundError creates a detailed not found error message

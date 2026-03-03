@@ -203,6 +203,14 @@ func (h *Handler) handleRequestError(err error) (int, any) {
 	return 500, map[string]string{"error": "Internal server error"}
 }
 
+// rawResponse allows handlers to return pre-formatted, non-JSON content
+// (e.g. HTML, YAML). buildResponse will use the body and contentType directly
+// instead of JSON-marshaling.
+type rawResponse struct {
+	contentType string
+	body        string
+}
+
 // buildResponse creates a Lambda Function URL response
 func (h *Handler) buildResponse(statusCode int, headers map[string]string, body any, err error) (*events.LambdaFunctionURLResponse, error) {
 	if err != nil {
@@ -210,6 +218,16 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 			StatusCode: 500,
 			Headers:    headers,
 			Body:       `{"error": "internal server error"}`,
+		}, nil
+	}
+
+	// Handle raw (non-JSON) responses
+	if raw, ok := body.(*rawResponse); ok {
+		headers["Content-Type"] = raw.contentType
+		return &events.LambdaFunctionURLResponse{
+			StatusCode: statusCode,
+			Headers:    headers,
+			Body:       raw.body,
 		}, nil
 	}
 

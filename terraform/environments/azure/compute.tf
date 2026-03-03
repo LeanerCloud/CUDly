@@ -32,6 +32,7 @@ module "compute_container_apps" {
   admin_password                 = var.admin_password
   additional_env_vars = merge(
     {
+      STATIC_DIR                 = "/app/static"
       AZURE_SMTP_USERNAME_SECRET = module.secrets.smtp_username_name
       AZURE_SMTP_PASSWORD_SECRET = module.secrets.smtp_password_name
       FROM_EMAIL                 = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.app_name}.example.com"
@@ -100,6 +101,7 @@ module "compute_aks" {
   auto_migrate   = var.auto_migrate
   additional_env_vars = merge(
     {
+      STATIC_DIR          = "/app/static"
       DASHBOARD_URL       = local.dashboard_url
       CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
     },

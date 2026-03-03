@@ -1,4 +1,4 @@
-# AWS Frontend Module Variables
+# AWS CDN Module Variables
 
 variable "project_name" {
   description = "Project name for resource naming"
@@ -10,26 +10,15 @@ variable "environment" {
   type        = string
 }
 
-variable "bucket_name" {
-  description = "S3 bucket name for frontend files"
+variable "origin_domain_name" {
+  description = "Domain name of the compute origin (Lambda Function URL or Fargate ALB, without https://)"
   type        = string
 }
 
-variable "api_domain_name" {
-  description = "Domain name of the Lambda Function URL (without https://)"
-  type        = string
-}
-
-variable "api_origin_protocol" {
-  description = "Protocol policy for the API origin (https-only for Lambda URLs, http-only for ALB)"
+variable "origin_protocol" {
+  description = "Protocol policy for the origin (https-only for Lambda URLs, http-only for ALB)"
   type        = string
   default     = "https-only"
-}
-
-variable "cloudfront_secret" {
-  description = "Secret header value to verify requests from CloudFront"
-  type        = string
-  sensitive   = true
 }
 
 variable "domain_names" {
@@ -84,16 +73,4 @@ variable "tags" {
   description = "Additional tags for resources"
   type        = map(string)
   default     = {}
-}
-
-variable "enable_frontend_build" {
-  description = "Enable frontend build and deployment (set to false to skip npm build and file uploads)"
-  type        = bool
-  default     = true
-}
-
-variable "frontend_path" {
-  description = "Path to frontend directory relative to Terraform root (default assumes terraform/environments/<provider> structure)"
-  type        = string
-  default     = "../../../frontend"
 }

@@ -176,23 +176,25 @@ output "deployment_info" {
 # ==============================================
 
 output "frontend_url" {
-  description = "Frontend URL"
-  value       = var.enable_frontend ? module.frontend[0].frontend_url : null
+  description = "Frontend URL (CDN, custom domain, or compute default endpoint)"
+  value = (
+    var.enable_cdn ? module.frontend[0].frontend_url :
+    # Lambda Function URLs can't have custom domains without CDN/API Gateway
+    var.compute_platform == "lambda" ? module.compute_lambda[0].function_url :
+    # Fargate ALB can have custom domains via Route53 alias
+    length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" :
+    "http://${module.compute_fargate[0].alb_dns_name}"
+  )
 }
 
 output "cloudfront_distribution_id" {
   description = "CloudFront distribution ID for cache invalidation"
-  value       = var.enable_frontend ? module.frontend[0].cloudfront_distribution_id : null
+  value       = var.enable_cdn ? module.frontend[0].cloudfront_distribution_id : null
 }
 
 output "cloudfront_domain_name" {
   description = "CloudFront distribution domain name"
-  value       = var.enable_frontend ? module.frontend[0].cloudfront_domain_name : null
-}
-
-output "frontend_bucket" {
-  description = "S3 bucket name for frontend files"
-  value       = var.enable_frontend ? module.frontend[0].s3_bucket_id : null
+  value       = var.enable_cdn ? module.frontend[0].cloudfront_domain_name : null
 }
 
 # ==============================================
@@ -217,10 +219,10 @@ output "quick_start_commands" {
   description = "Quick start commands for common operations"
   value       = <<-EOT
     # Access the frontend
-    ${var.enable_frontend ? "open ${module.frontend[0].frontend_url}" : "# Frontend not enabled"}
+    open ${var.enable_cdn ? module.frontend[0].frontend_url : var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : "http://${module.compute_fargate[0].alb_dns_name}"}
 
     # Test the API health check
-    curl ${var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : "N/A"}/health
+    curl ${var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : module.compute_fargate[0].api_url}/health
 
     # View Lambda logs (if using Lambda)
     ${var.compute_platform == "lambda" ? "aws logs tail ${module.compute_lambda[0].log_group_name} --follow" : "N/A"}
@@ -233,8 +235,5 @@ output "quick_start_commands" {
 
     # Update Lambda function image
     ${var.compute_platform == "lambda" ? "aws lambda update-function-code --function-name ${module.compute_lambda[0].function_name} --image-uri NEW_IMAGE_URI" : "N/A"}
-
-    # Deploy frontend
-    ${var.enable_frontend ? "cd ../../../../frontend && ./deploy.sh -p aws -e ${var.environment} -b ${module.frontend[0].s3_bucket_id} -d ${module.frontend[0].cloudfront_distribution_id}" : "# Frontend not enabled"}
   EOT
 }

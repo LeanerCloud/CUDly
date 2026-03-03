@@ -70,8 +70,7 @@ log_retention_days = 90
 # Frontend (Azure CDN)
 # ==============================================
 
-enable_frontend       = true
-enable_frontend_build = true
+enable_cdn = false
 
 # ==============================================
 # Email Service

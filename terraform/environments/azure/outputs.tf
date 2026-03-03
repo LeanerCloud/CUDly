@@ -146,6 +146,17 @@ output "aks_load_balancer_ip" {
   value       = var.compute_platform == "aks" ? module.compute_aks[0].load_balancer_ip : null
 }
 
+# Frontend URL (CDN or compute default endpoint)
+output "frontend_url" {
+  description = "Frontend URL (CDN, custom domain, or compute default endpoint)"
+  value = (
+    var.enable_cdn ? module.frontend[0].frontend_url :
+    length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" :
+    var.compute_platform == "container-apps" ? module.compute_container_apps[0].container_app_url :
+    module.compute_aks[0].api_url
+  )
+}
+
 # Unified Outputs (work for both platforms)
 output "api_endpoint" {
   description = "API endpoint URL (works for both platforms)"

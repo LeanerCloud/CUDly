@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,8 +95,9 @@ func TestHttpToLambdaRequest(t *testing.T) {
 			}
 
 			for key, expectedValue := range tt.headers {
-				actualValue, ok := lambdaReq.Headers[key]
-				testutil.AssertTrue(t, ok, "Expected header "+key+" to be present")
+				lowerKey := strings.ToLower(key)
+				actualValue, ok := lambdaReq.Headers[lowerKey]
+				testutil.AssertTrue(t, ok, "Expected header "+lowerKey+" to be present")
 				testutil.AssertEqual(t, expectedValue, actualValue)
 			}
 		})

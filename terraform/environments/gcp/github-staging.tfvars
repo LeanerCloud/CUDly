@@ -63,12 +63,11 @@ recommendation_schedule = "0 2 * * *"
 auto_migrate = true
 
 # ==============================================
-# Frontend (Cloud CDN + Load Balancer)
+# Frontend (Load Balancer)
 # ==============================================
 
-enable_frontend       = true
-enable_frontend_build = true
-enable_cloud_armor    = true
+enable_cdn         = false
+enable_cloud_armor = true
 
 # ==============================================
 # Variables provided by GitHub Actions:

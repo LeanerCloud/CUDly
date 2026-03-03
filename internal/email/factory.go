@@ -59,83 +59,88 @@ func NewSenderFromEnvironment(ctx context.Context) (SenderInterface, error) {
 			FromEmail:    os.Getenv("FROM_EMAIL"),
 			EmailAddress: os.Getenv("EMAIL_ADDRESS"),
 		})
-
 	case ProviderGCP:
-		// GCP uses SendGrid via SMTP
-		apiKey := os.Getenv("SENDGRID_API_KEY")
-		if apiKey == "" {
-			// Resolve from Secret Manager if secret name is provided
-			if secretName := os.Getenv("SENDGRID_API_KEY_SECRET"); secretName != "" {
-				resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
-				if err != nil {
-					return nil, fmt.Errorf("failed to create secret resolver for SendGrid API key: %w", err)
-				}
-				defer resolver.Close()
-				apiKey, err = resolver.GetSecret(ctx, secretName)
-				if err != nil {
-					return nil, fmt.Errorf("failed to resolve SendGrid API key from secret %q: %w", secretName, err)
-				}
-			}
-		}
-		if apiKey == "" {
-			return nil, fmt.Errorf("SENDGRID_API_KEY or SENDGRID_API_KEY_SECRET environment variable required for GCP email")
-		}
-		return NewSMTPSender(SMTPConfig{
-			Host:      "smtp.sendgrid.net",
-			Port:      587,
-			Username:  "apikey", // SendGrid uses literal "apikey" as username
-			Password:  apiKey,
-			FromEmail: os.Getenv("FROM_EMAIL"),
-			FromName:  "CUDly",
-			UseTLS:    true,
-		})
-
+		return newGCPSenderFromEnv(ctx)
 	case ProviderAzure:
-		// Azure uses Azure Communication Services via SMTP
-		username := os.Getenv("AZURE_SMTP_USERNAME")
-		password := os.Getenv("AZURE_SMTP_PASSWORD")
-
-		// Resolve credentials from Key Vault if secret names are provided
-		if username == "" || password == "" {
-			usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
-			passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
-			if usernameSecret != "" && passwordSecret != "" {
-				resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
-				if err != nil {
-					return nil, fmt.Errorf("failed to create secret resolver for Azure SMTP credentials: %w", err)
-				}
-				defer resolver.Close()
-				username, err = resolver.GetSecret(ctx, usernameSecret)
-				if err != nil {
-					return nil, fmt.Errorf("failed to resolve Azure SMTP username from secret %q: %w", usernameSecret, err)
-				}
-				password, err = resolver.GetSecret(ctx, passwordSecret)
-				if err != nil {
-					return nil, fmt.Errorf("failed to resolve Azure SMTP password from secret %q: %w", passwordSecret, err)
-				}
-			}
-		}
-
-		if username == "" || password == "" {
-			return nil, fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
-		}
-		host := os.Getenv("AZURE_SMTP_HOST")
-		if host == "" {
-			host = "smtp.azurecomm.net" // Default Azure Communication Services SMTP host
-		}
-		return NewSMTPSender(SMTPConfig{
-			Host:      host,
-			Port:      587,
-			Username:  username,
-			Password:  password,
-			FromEmail: os.Getenv("FROM_EMAIL"),
-			FromName:  "CUDly",
-			UseTLS:    true,
-		})
-
+		return newAzureSenderFromEnv(ctx)
 	default:
 		return nil, fmt.Errorf("unsupported email provider: %s", provider)
 	}
+}
+
+// newGCPSenderFromEnv creates a SendGrid-based email sender from environment variables
+func newGCPSenderFromEnv(ctx context.Context) (SenderInterface, error) {
+	apiKey := os.Getenv("SENDGRID_API_KEY")
+	if apiKey == "" {
+		// Resolve from Secret Manager if secret name is provided
+		if secretName := os.Getenv("SENDGRID_API_KEY_SECRET"); secretName != "" {
+			resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
+			if err != nil {
+				return nil, fmt.Errorf("failed to create secret resolver for SendGrid API key: %w", err)
+			}
+			defer resolver.Close()
+			apiKey, err = resolver.GetSecret(ctx, secretName)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve SendGrid API key from secret %q: %w", secretName, err)
+			}
+		}
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("SENDGRID_API_KEY or SENDGRID_API_KEY_SECRET environment variable required for GCP email")
+	}
+	return NewSMTPSender(SMTPConfig{
+		Host:      "smtp.sendgrid.net",
+		Port:      587,
+		Username:  "apikey", // SendGrid uses literal "apikey" as username
+		Password:  apiKey,
+		FromEmail: os.Getenv("FROM_EMAIL"),
+		FromName:  "CUDly",
+		UseTLS:    true,
+	})
+}
+
+// newAzureSenderFromEnv creates an Azure Communication Services email sender from environment variables
+func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
+	username := os.Getenv("AZURE_SMTP_USERNAME")
+	password := os.Getenv("AZURE_SMTP_PASSWORD")
+
+	// Resolve credentials from Key Vault if secret names are provided
+	if username == "" || password == "" {
+		usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
+		passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
+		if usernameSecret != "" && passwordSecret != "" {
+			resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
+			if err != nil {
+				return nil, fmt.Errorf("failed to create secret resolver for Azure SMTP credentials: %w", err)
+			}
+			defer resolver.Close()
+			username, err = resolver.GetSecret(ctx, usernameSecret)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve Azure SMTP username from secret %q: %w", usernameSecret, err)
+			}
+			password, err = resolver.GetSecret(ctx, passwordSecret)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve Azure SMTP password from secret %q: %w", passwordSecret, err)
+			}
+		}
+	}
+
+	if username == "" || password == "" {
+		return nil, fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
+	}
+	host := os.Getenv("AZURE_SMTP_HOST")
+	if host == "" {
+		host = "smtp.azurecomm.net" // Default Azure Communication Services SMTP host
+	}
+	return NewSMTPSender(SMTPConfig{
+		Host:      host,
+		Port:      587,
+		Username:  username,
+		Password:  password,
+		FromEmail: os.Getenv("FROM_EMAIL"),
+		FromName:  "CUDly",
+		UseTLS:    true,
+	})
 }
 
 // NewSenderWithConfig creates an email sender with explicit configuration
