@@ -160,6 +160,14 @@ func (r *RecommendationsClientAdapter) GetRIUtilization(ctx context.Context, loo
 	return r.client.GetRIUtilization(ctx, lookbackDays)
 }
 
+// NewRecommendationsClientDirect creates a new recommendations client returning the concrete type
+// (needed for GetRIUtilization which is not part of the generic provider interface).
+func NewRecommendationsClientDirect(cfg aws.Config) *RecommendationsClientAdapter {
+	return &RecommendationsClientAdapter{
+		client: recommendations.NewClient(cfg),
+	}
+}
+
 // NewEC2ClientDirect creates a new EC2 client returning the concrete type
 // (needed for ListConvertibleReservedInstances which is not part of the generic provider interface).
 func NewEC2ClientDirect(cfg aws.Config) *ec2.Client {

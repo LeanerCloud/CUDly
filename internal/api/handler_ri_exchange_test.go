@@ -65,6 +65,59 @@ func TestGetExchangeQuote_Validation(t *testing.T) {
 	assert.Contains(t, err.Error(), "target_offering_id is required")
 }
 
+func TestGetRIUtilization_LookbackValidation(t *testing.T) {
+	mockAuth := &mockAuthForExchange{}
+	h := &Handler{auth: mockAuth}
+
+	tests := []struct {
+		name    string
+		days    string
+		wantErr string
+	}{
+		{"negative", "-1", "lookback_days must be between 1 and 365"},
+		{"zero", "0", "lookback_days must be between 1 and 365"},
+		{"too large", "999", "lookback_days must be between 1 and 365"},
+		{"not a number", "abc", "lookback_days must be between 1 and 365"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := h.getRIUtilization(context.Background(), &events.LambdaFunctionURLRequest{
+				Headers:               map[string]string{"authorization": "Bearer test-token"},
+				QueryStringParameters: map[string]string{"lookback_days": tt.days},
+			})
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestGetReshapeRecommendations_ThresholdValidation(t *testing.T) {
+	mockAuth := &mockAuthForExchange{}
+	h := &Handler{auth: mockAuth}
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{"negative", "-1", "threshold must be a number between 0 and 100"},
+		{"over 100", "101", "threshold must be a number between 0 and 100"},
+		{"not a number", "abc", "threshold must be a number between 0 and 100"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := h.getReshapeRecommendations(context.Background(), &events.LambdaFunctionURLRequest{
+				Headers:               map[string]string{"authorization": "Bearer test-token"},
+				QueryStringParameters: map[string]string{"threshold": tt.value},
+			})
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestExecuteExchange_Validation(t *testing.T) {
 	mockAuth := &mockAuthForExchange{}
 	h := &Handler{auth: mockAuth}

@@ -3,6 +3,7 @@ package recommendations
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -93,6 +94,10 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 }
 
 func parseFloat(s string) float64 {
-	f, _ := strconv.ParseFloat(s, 64)
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		log.Printf("warning: failed to parse float %q: %v", s, err)
+		return 0
+	}
 	return f
 }

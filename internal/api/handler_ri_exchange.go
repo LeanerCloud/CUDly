@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"math"
 	"strconv"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -44,9 +46,11 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 
 	lookbackDays := 30
 	if days := req.QueryStringParameters["lookback_days"]; days != "" {
-		if d, err := strconv.Atoi(days); err == nil && d > 0 {
-			lookbackDays = d
+		d, err := strconv.Atoi(days)
+		if err != nil || d < 1 || d > 365 {
+			return nil, NewClientError(400, "lookback_days must be between 1 and 365")
 		}
+		lookbackDays = d
 	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
@@ -54,7 +58,7 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	recsAdapter := awsprovider.NewRecommendationsClient(cfg).(*awsprovider.RecommendationsClientAdapter)
+	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
 	utilization, err := recsAdapter.GetRIUtilization(ctx, lookbackDays)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
@@ -72,9 +76,11 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 
 	threshold := 95.0
 	if t := req.QueryStringParameters["threshold"]; t != "" {
-		if f, err := strconv.ParseFloat(t, 64); err == nil {
-			threshold = f
+		f, err := strconv.ParseFloat(t, 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 100 {
+			return nil, NewClientError(400, "threshold must be a number between 0 and 100")
 		}
+		threshold = f
 	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
@@ -90,7 +96,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	// Fetch utilization
-	recsAdapter := awsprovider.NewRecommendationsClient(cfg).(*awsprovider.RecommendationsClientAdapter)
+	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
 	utilData, err := recsAdapter.GetRIUtilization(ctx, 30)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
@@ -150,7 +156,8 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 		TargetCount:      body.TargetCount,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("exchange quote failed: %w", err)
+		log.Printf("exchange quote failed: %v", err)
+		return nil, NewClientError(500, "exchange quote failed")
 	}
 
 	return quote, nil
@@ -194,7 +201,8 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 		MaxPaymentDueUSD: maxRat,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("exchange execution failed: %w", err)
+		log.Printf("exchange execution failed: %v", err)
+		return nil, NewClientError(500, "exchange execution failed")
 	}
 
 	return &ExchangeExecuteResponse{
