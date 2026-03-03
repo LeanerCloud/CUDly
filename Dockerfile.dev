@@ -12,12 +12,20 @@ RUN apk add --no-cache \
 # Set shell with pipefail for safer pipe operations
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-# Install golang-migrate for database migrations (architecture-aware)
+# Install golang-migrate for database migrations (architecture-aware, checksum-verified)
 ARG TARGETARCH
 RUN MIGRATE_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
-    curl -L "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-${MIGRATE_ARCH}.tar.gz" | tar xvz && \
+    if [ "$MIGRATE_ARCH" = "arm64" ]; then \
+      MIGRATE_SHA256="9c95441cc430ffdac89276d14de5e2f18bfafca00796c2895490d62e3776d104"; \
+    else \
+      MIGRATE_SHA256="26c53c9162c9c4aaa84c47cd12455d4a9ac725befbe82850a5937b5ec1e7b8e6"; \
+    fi && \
+    curl -Lo migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-${MIGRATE_ARCH}.tar.gz" && \
+    echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c - && \
+    tar xvzf migrate.tar.gz && \
     mv migrate /usr/local/bin/migrate && \
-    chmod +x /usr/local/bin/migrate
+    chmod +x /usr/local/bin/migrate && \
+    rm migrate.tar.gz
 
 WORKDIR /app
 
