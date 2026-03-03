@@ -39,6 +39,10 @@ func (m *mockCostExplorerAPI) GetSavingsPlansPurchaseRecommendation(ctx context.
 	return m.spRecommendations, nil
 }
 
+func (m *mockCostExplorerAPI) GetReservationUtilization(ctx context.Context, params *costexplorer.GetReservationUtilizationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationUtilizationOutput, error) {
+	return &costexplorer.GetReservationUtilizationOutput{}, nil
+}
+
 func TestNewClient(t *testing.T) {
 	cfg := aws.Config{
 		Region: "us-west-2",

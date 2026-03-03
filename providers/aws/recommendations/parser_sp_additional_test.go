@@ -236,6 +236,10 @@ func (m *mockCostExplorerForSP) GetSavingsPlansPurchaseRecommendation(ctx contex
 	return &costexplorer.GetSavingsPlansPurchaseRecommendationOutput{}, nil
 }
 
+func (m *mockCostExplorerForSP) GetReservationUtilization(ctx context.Context, params *costexplorer.GetReservationUtilizationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationUtilizationOutput, error) {
+	return &costexplorer.GetReservationUtilizationOutput{}, nil
+}
+
 func TestGetSavingsPlansRecommendations_WithFilters(t *testing.T) {
 	mockAPI := &mockCostExplorerForSP{
 		responses: map[types.SupportedSavingsPlansType]*costexplorer.GetSavingsPlansPurchaseRecommendationOutput{

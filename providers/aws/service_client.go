@@ -154,3 +154,14 @@ func (r *RecommendationsClientAdapter) GetRecommendationsForService(ctx context.
 func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
 	return r.client.GetAllRecommendations(ctx)
 }
+
+// GetRIUtilization gets per-RI utilization from Cost Explorer.
+func (r *RecommendationsClientAdapter) GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+	return r.client.GetRIUtilization(ctx, lookbackDays)
+}
+
+// NewEC2ClientDirect creates a new EC2 client returning the concrete type
+// (needed for ListConvertibleReservedInstances which is not part of the generic provider interface).
+func NewEC2ClientDirect(cfg aws.Config) *ec2.Client {
+	return ec2.NewClient(cfg)
+}

@@ -27,6 +27,10 @@ func (m *mockCostExplorerClient) GetSavingsPlansPurchaseRecommendation(ctx conte
 	return &costexplorer.GetSavingsPlansPurchaseRecommendationOutput{}, nil
 }
 
+func (m *mockCostExplorerClient) GetReservationUtilization(ctx context.Context, params *costexplorer.GetReservationUtilizationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationUtilizationOutput, error) {
+	return &costexplorer.GetReservationUtilizationOutput{}, nil
+}
+
 // newTestRecommendationsClient creates a recommendations client with a mock CE client
 func newTestRecommendationsClient(ce *mockCostExplorerClient) *recommendations.Client {
 	return recommendations.NewClientWithAPI(ce, "us-east-1")
