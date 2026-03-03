@@ -19,6 +19,9 @@ let currentRecommendations: ReshapeRecommendation[] = [];
 let lastQuote: ExchangeQuoteSummary | null = null;
 let lastQuoteRequest: { ri_ids: string[]; target_offering_id: string; target_count: number } | null = null;
 
+// Generation counter to prevent stale utilization data from overwriting fresh data
+let utilizationGeneration = 0;
+
 /**
  * Load the RI Exchange tab — called when tab is activated
  */
@@ -69,16 +72,19 @@ async function loadConvertibleRIs(): Promise<void> {
     currentRIs = await api.listConvertibleRIs();
     renderRIsTable(container);
     // Load utilization asynchronously (Cost Explorer is slow)
-    void loadUtilization();
+    utilizationGeneration++;
+    void loadUtilization(utilizationGeneration);
   } catch (error) {
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load convertible RIs: ${escapeHtml(err.message)}</p>`;
   }
 }
 
-async function loadUtilization(): Promise<void> {
+async function loadUtilization(generation: number): Promise<void> {
   try {
     const utilization = await api.getRIUtilization();
+    // Discard if a newer load was started while we were waiting
+    if (generation !== utilizationGeneration) return;
     currentUtilization = new Map(utilization.map(u => [u.reserved_instance_id, u]));
     // Re-render table with utilization data
     const container = document.getElementById('ri-exchange-instances-list');
@@ -225,7 +231,8 @@ async function submitQuote(): Promise<void> {
 
   const riIds = riIdsInput.value.split(',').map(s => s.trim()).filter(Boolean);
   const targetOfferingId = targetInput.value.trim();
-  const targetCount = parseInt(countInput?.value || '1', 10);
+  const rawCount = parseInt(countInput?.value ?? '1', 10);
+  const targetCount = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;
 
   if (riIds.length === 0) {
     resultContainer.innerHTML = '<p class="error">Please enter at least one RI ID.</p>';
@@ -314,8 +321,9 @@ async function submitExecute(): Promise<void> {
   }
 
   const maxPayment = maxPaymentInput?.value.trim();
-  if (!maxPayment) {
-    resultContainer.innerHTML = '<p class="error">Please enter a maximum payment cap (USD).</p>';
+  const maxPaymentNum = parseFloat(maxPayment ?? '');
+  if (!maxPayment || isNaN(maxPaymentNum) || maxPaymentNum < 0) {
+    resultContainer.innerHTML = '<p class="error">Please enter a valid non-negative payment cap (USD).</p>';
     return;
   }
 
@@ -336,6 +344,14 @@ async function submitExecute(): Promise<void> {
         <p>Payment Due: <strong>${escapeHtml(result.quote.PaymentDueRaw)}</strong> ${escapeHtml(result.quote.CurrencyCode)}</p>
       </div>
     `;
+
+    // Clear exchange state to prevent accidental re-execution
+    lastQuote = null;
+    lastQuoteRequest = null;
+    const executeSection = document.getElementById('ri-exchange-execute-section');
+    if (executeSection) executeSection.classList.add('hidden');
+    const quoteResultContainer = document.getElementById('ri-exchange-quote-result');
+    if (quoteResultContainer) quoteResultContainer.innerHTML = '';
 
     // Refresh the RI list after successful exchange
     void loadConvertibleRIs();
