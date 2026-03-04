@@ -272,6 +272,13 @@ func (app *Application) ensureDB(ctx context.Context) error {
 		// When unset, admin must use password reset email flow to log in
 		adminEmail := os.Getenv("ADMIN_EMAIL")
 		adminPassword := os.Getenv("ADMIN_PASSWORD")
+		if secret := os.Getenv("ADMIN_PASSWORD_SECRET"); secret != "" && app.secretResolver != nil {
+			resolved, err := app.secretResolver.GetSecret(ctx, secret)
+			if err != nil {
+				return fmt.Errorf("failed to resolve admin password secret: %w", err)
+			}
+			adminPassword = resolved
+		}
 
 		if err := migrations.RunMigrations(ctx, dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword); err != nil {
 			log.Printf("Migration failed: %v", err)
