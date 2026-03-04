@@ -4,18 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"strconv"
 
 	"github.com/aws/aws-lambda-go/events"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
+	"github.com/LeanerCloud/CUDly/pkg/exchange"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
-
-	"github.com/LeanerCloud/CUDly/pkg/exchange"
 )
 
 // listConvertibleRIs returns all active convertible Reserved Instances.
@@ -156,7 +155,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 		TargetCount:      body.TargetCount,
 	})
 	if err != nil {
-		log.Printf("exchange quote failed: %v", err)
+		logging.Errorf("exchange quote failed: %v", err)
 		return nil, NewClientError(500, "exchange quote failed")
 	}
 
@@ -201,7 +200,7 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 		MaxPaymentDueUSD: maxRat,
 	})
 	if err != nil {
-		log.Printf("exchange execution failed: %v", err)
+		logging.Errorf("exchange execution failed: %v", err)
 		return nil, NewClientError(500, "exchange execution failed")
 	}
 
