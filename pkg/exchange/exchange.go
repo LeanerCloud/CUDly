@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"time"
 
 	sdkaws "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,9 +23,9 @@ type ExchangeQuoteSummary struct {
 	CurrencyCode            string
 
 	PaymentDueRaw string   // as returned by AWS (string)
-	PaymentDueUSD *big.Rat // parsed numeric (optional)
+	PaymentDueUSD *big.Rat `json:"-"` // internal use only, not serializable
 
-	OutputReservedInstancesExp *time.Time
+	OutputReservedInstancesExp string // formatted date string (YYYY-MM-DD), empty if not set
 
 	// Rollups (strings in AWS response)
 	SourceHourlyPriceRaw      string
@@ -148,8 +147,7 @@ func getQuoteWithClient(ctx context.Context, client *ec2.Client, req ExchangeQuo
 	}
 
 	if out.OutputReservedInstancesWillExpireAt != nil {
-		t := *out.OutputReservedInstancesWillExpireAt
-		s.OutputReservedInstancesExp = &t
+		s.OutputReservedInstancesExp = out.OutputReservedInstancesWillExpireAt.Format("2006-01-02")
 	}
 
 	if s.PaymentDueRaw != "" {
