@@ -334,14 +334,11 @@ func (c *Client) getDurationValue(term string) int64 {
 	return OneYearSeconds
 }
 
-// getOfferingClass converts payment option to EC2 offering class
-func (c *Client) getOfferingClass(paymentOption string) string {
-	switch paymentOption {
-	case "all-upfront":
-		return "convertible"
-	default:
-		return "standard"
-	}
+// getOfferingClass returns the EC2 offering class for RI queries.
+// Always returns "convertible" — standard RIs are legacy and all modern
+// RI purchases should use convertible for exchange flexibility.
+func (c *Client) getOfferingClass(_ string) string {
+	return "convertible"
 }
 
 // ConvertibleRI represents an active convertible Reserved Instance.
