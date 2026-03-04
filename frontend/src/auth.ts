@@ -741,8 +741,8 @@ async function saveProfile(e: Event): Promise<void> {
       method: 'PUT',
       body: JSON.stringify({
         email,
-        current_password: currentPassword,
-        new_password: newPassword || undefined
+        current_password: api.base64Encode(currentPassword),
+        new_password: newPassword ? api.base64Encode(newPassword) : undefined
       })
     });
 

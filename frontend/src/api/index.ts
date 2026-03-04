@@ -61,7 +61,8 @@ export {
   isAuthenticated,
   clearAuth,
   getAuthHeaders,
-  apiRequest
+  apiRequest,
+  base64Encode
 } from './client';
 
 // Re-export auth functions

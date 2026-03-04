@@ -86,7 +86,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
  */
 export async function resetPassword(token: string, newPassword: string): Promise<void> {
   const API_BASE = getApiBase();
-  const body = JSON.stringify({ token, new_password: newPassword });
+  const body = JSON.stringify({ token, new_password: base64Encode(newPassword) });
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   await addContentHashHeader(headers, body);
 

@@ -8,7 +8,8 @@ jest.mock('../api', () => ({
   login: jest.fn(),
   logout: jest.fn(),
   requestPasswordReset: jest.fn(),
-  apiRequest: jest.fn()
+  apiRequest: jest.fn(),
+  base64Encode: (s: string) => btoa(s)
 }));
 
 // Mock the state module
