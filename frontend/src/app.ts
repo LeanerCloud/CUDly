@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI, logout } from './auth';
+import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, refreshRecommendations, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
 import { switchTab } from './navigation';
@@ -231,14 +231,6 @@ function setupButtonHandlers(): void {
     loadHistoryBtn.addEventListener('click', () => void loadHistory());
   }
 
-  // Logout button (Note: already has handler in auth.ts updateUserUI, but keeping for safety)
-  const logoutBtn = document.getElementById('logout-btn');
-  if (logoutBtn) {
-    // Remove any existing listeners first to avoid duplicates
-    const newLogoutBtn = logoutBtn.cloneNode(true) as HTMLButtonElement;
-    logoutBtn.parentNode?.replaceChild(newLogoutBtn, logoutBtn);
-    newLogoutBtn.addEventListener('click', () => void logout());
-  }
 }
 
 /**
