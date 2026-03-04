@@ -77,6 +77,42 @@ type ExchangeExecuteRequest struct {
 	MaxPaymentDueUSD *big.Rat
 }
 
+// EC2ExchangeAPI defines the EC2 API methods used by exchange operations.
+// Satisfied by *ec2.Client; accept this interface to enable testing without
+// real AWS credentials.
+type EC2ExchangeAPI interface {
+	GetReservedInstancesExchangeQuote(ctx context.Context, params *ec2.GetReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.GetReservedInstancesExchangeQuoteOutput, error)
+	AcceptReservedInstancesExchangeQuote(ctx context.Context, params *ec2.AcceptReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.AcceptReservedInstancesExchangeQuoteOutput, error)
+}
+
+// ExchangeClient wraps an EC2ExchangeAPI for dependency-injected exchange
+// operations. Use NewExchangeClient to construct one.
+type ExchangeClient struct {
+	ec2 EC2ExchangeAPI
+}
+
+// NewExchangeClient creates an ExchangeClient from an AWS config.
+func NewExchangeClient(cfg sdkaws.Config) *ExchangeClient {
+	return &ExchangeClient{ec2: ec2.NewFromConfig(cfg)}
+}
+
+// NewExchangeClientFromAPI creates an ExchangeClient from an existing
+// EC2ExchangeAPI implementation (useful for testing).
+func NewExchangeClientFromAPI(api EC2ExchangeAPI) *ExchangeClient {
+	return &ExchangeClient{ec2: api}
+}
+
+// GetQuote retrieves an exchange quote using the injected EC2 client.
+func (c *ExchangeClient) GetQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
+	return getQuoteWithAPI(ctx, c.ec2, req)
+}
+
+// Execute performs a convertible RI exchange with a spend-cap guardrail
+// using the injected EC2 client.
+func (c *ExchangeClient) Execute(ctx context.Context, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
+	return executeWithAPI(ctx, c.ec2, req)
+}
+
 func loadCfg(ctx context.Context, region string) (sdkaws.Config, error) {
 	if region == "" {
 		region = "us-east-1"
@@ -107,12 +143,12 @@ func GetExchangeQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQ
 	if err := assertAccount(ctx, cfg, req.ExpectedAccount); err != nil {
 		return nil, err
 	}
-	return getQuoteWithClient(ctx, ec2.NewFromConfig(cfg), req)
+	return getQuoteWithAPI(ctx, ec2.NewFromConfig(cfg), req)
 }
 
-// getQuoteWithClient performs the quote call using a pre-configured EC2 client,
+// getQuoteWithAPI performs the quote call using an EC2ExchangeAPI,
 // allowing ExecuteExchange to reuse the same client for both quote and accept.
-func getQuoteWithClient(ctx context.Context, client *ec2.Client, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
+func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
 	if len(req.ReservedIDs) == 0 {
 		return nil, fmt.Errorf("must provide at least one reserved instance ID")
 	}
@@ -174,6 +210,7 @@ func getQuoteWithClient(ctx context.Context, client *ec2.Client, req ExchangeQuo
 }
 
 // ExecuteExchange performs a convertible RI exchange with a spend-cap guardrail.
+// This is a convenience wrapper that creates its own AWS client from default config.
 func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeID string, quote *ExchangeQuoteSummary, err error) {
 	if req.MaxPaymentDueUSD == nil {
 		return "", nil, fmt.Errorf("refusing to execute without max-payment-due-usd guardrail")
@@ -187,9 +224,16 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 		return "", nil, err
 	}
 
-	client := ec2.NewFromConfig(cfg)
+	return executeWithAPI(ctx, ec2.NewFromConfig(cfg), req)
+}
 
-	q, err := getQuoteWithClient(ctx, client, ExchangeQuoteRequest{
+// executeWithAPI performs the exchange using an injected EC2ExchangeAPI.
+func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
+	if req.MaxPaymentDueUSD == nil {
+		return "", nil, fmt.Errorf("refusing to execute without max-payment-due-usd guardrail")
+	}
+
+	q, err := getQuoteWithAPI(ctx, client, ExchangeQuoteRequest{
 		Region:           req.Region,
 		ExpectedAccount:  req.ExpectedAccount,
 		ReservedIDs:      req.ReservedIDs,
