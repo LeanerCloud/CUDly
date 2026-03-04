@@ -102,23 +102,38 @@ check "security_headers" {
     }
   }
 
+  # Header names may be lowercase (HTTP/2) or canonical-case (HTTP/1.1)
+  # depending on the platform and http provider version, so check both.
+
   assert {
-    condition     = lookup(data.http.security.response_headers, "strict-transport-security", "") != ""
+    condition = (
+      lookup(data.http.security.response_headers, "strict-transport-security", "") != "" ||
+      lookup(data.http.security.response_headers, "Strict-Transport-Security", "") != ""
+    )
     error_message = "HSTS header missing from /api/info response"
   }
 
   assert {
-    condition     = lookup(data.http.security.response_headers, "x-content-type-options", "") != ""
+    condition = (
+      lookup(data.http.security.response_headers, "x-content-type-options", "") != "" ||
+      lookup(data.http.security.response_headers, "X-Content-Type-Options", "") != ""
+    )
     error_message = "X-Content-Type-Options header missing from /api/info response"
   }
 
   assert {
-    condition     = lookup(data.http.security.response_headers, "x-frame-options", "") != ""
+    condition = (
+      lookup(data.http.security.response_headers, "x-frame-options", "") != "" ||
+      lookup(data.http.security.response_headers, "X-Frame-Options", "") != ""
+    )
     error_message = "X-Frame-Options header missing from /api/info response"
   }
 
   assert {
-    condition     = can(regex("no-(store|cache)", lookup(data.http.security.response_headers, "cache-control", "")))
+    condition = (
+      can(regex("no-(store|cache)", lookup(data.http.security.response_headers, "cache-control", ""))) ||
+      can(regex("no-(store|cache)", lookup(data.http.security.response_headers, "Cache-Control", "")))
+    )
     error_message = "Cache-Control header missing no-store/no-cache on /api/info response"
   }
 }
@@ -402,7 +417,10 @@ check "frontend_serving" {
   }
 
   assert {
-    condition     = can(regex("text/html", lookup(data.http.root.response_headers, "content-type", "")))
+    condition = (
+      can(regex("text/html", lookup(data.http.root.response_headers, "content-type", ""))) ||
+      can(regex("text/html", lookup(data.http.root.response_headers, "Content-Type", "")))
+    )
     error_message = "GET / content-type is not text/html"
   }
 }
