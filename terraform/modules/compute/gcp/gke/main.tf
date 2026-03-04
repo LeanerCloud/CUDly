@@ -450,22 +450,22 @@ resource "kubernetes_deployment" "app" {
 
           liveness_probe {
             http_get {
-              path = "/health"
-              port = 8080
+              path = var.health_check_path
+              port = var.health_check_port
             }
-            initial_delay_seconds = 30
-            period_seconds        = 10
+            initial_delay_seconds = var.liveness_probe_initial_delay
+            period_seconds        = var.liveness_probe_period
             timeout_seconds       = 5
             failure_threshold     = 3
           }
 
           readiness_probe {
             http_get {
-              path = "/health"
-              port = 8080
+              path = var.health_check_path
+              port = var.health_check_port
             }
-            initial_delay_seconds = 10
-            period_seconds        = 5
+            initial_delay_seconds = var.readiness_probe_initial_delay
+            period_seconds        = var.readiness_probe_period
             timeout_seconds       = 3
             failure_threshold     = 3
           }
@@ -627,17 +627,47 @@ resource "google_compute_global_address" "ingress" {
   ip_version   = "IPV4"
 }
 
-# ==============================================
-# Get Ingress Load Balancer IP
-# ==============================================
 
-data "kubernetes_ingress_v1" "app" {
-  count = var.deploy_kubernetes_resources ? 1 : 0
+# ==============================================
+# Cloud Scheduler for Scheduled Tasks
+# ==============================================
+# Uses the same HTTP trigger pattern as Cloud Run module.
+# Cloud Scheduler calls the app endpoint through the load balancer.
 
-  metadata {
-    name      = kubernetes_ingress_v1.app[0].metadata[0].name
-    namespace = kubernetes_namespace.app[0].metadata[0].name
+resource "google_cloud_scheduler_job" "recommendations" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name             = "${local.name_prefix}-recommendations"
+  description      = "Trigger recommendations collection"
+  schedule         = var.recommendation_schedule
+  time_zone        = "UTC"
+  attempt_deadline = "320s"
+  project          = var.project_id
+  region           = var.region
+
+  retry_config {
+    retry_count = 3
   }
 
-  depends_on = [kubernetes_ingress_v1.app]
+  http_target {
+    http_method = "POST"
+    uri         = "${var.app_url}/api/scheduled/recommendations"
+
+    headers = {
+      "Authorization" = "Bearer ${var.scheduled_task_secret}"
+    }
+
+    oidc_token {
+      service_account_email = google_service_account.scheduler[0].email
+    }
+  }
+}
+
+# Service account for Cloud Scheduler
+resource "google_service_account" "scheduler" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  account_id   = "${var.project_name}-${var.environment}-gke-sched"
+  display_name = "Cloud Scheduler service account for GKE ${var.project_name}"
+  project      = var.project_id
 }

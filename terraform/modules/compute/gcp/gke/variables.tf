@@ -187,3 +187,72 @@ variable "deploy_kubernetes_resources" {
   type        = bool
   default     = false
 }
+
+# ==============================================
+# Health Check Configuration
+# ==============================================
+
+variable "health_check_path" {
+  description = "HTTP path for health checks"
+  type        = string
+  default     = "/health"
+}
+
+variable "health_check_port" {
+  description = "Port for health checks"
+  type        = number
+  default     = 8080
+}
+
+variable "liveness_probe_initial_delay" {
+  description = "Liveness probe initial delay in seconds"
+  type        = number
+  default     = 30
+}
+
+variable "liveness_probe_period" {
+  description = "Liveness probe period in seconds"
+  type        = number
+  default     = 10
+}
+
+variable "readiness_probe_initial_delay" {
+  description = "Readiness probe initial delay in seconds"
+  type        = number
+  default     = 10
+}
+
+variable "readiness_probe_period" {
+  description = "Readiness probe period in seconds"
+  type        = number
+  default     = 5
+}
+
+# ==============================================
+# Scheduled Tasks Configuration
+# ==============================================
+
+variable "enable_scheduled_tasks" {
+  description = "Enable Cloud Scheduler for scheduled tasks"
+  type        = bool
+  default     = false
+}
+
+variable "recommendation_schedule" {
+  description = "Cron schedule for recommendations (e.g., '0 2 * * *' for 2 AM daily)"
+  type        = string
+  default     = "0 2 * * *"
+}
+
+variable "scheduled_task_secret" {
+  description = "Shared secret for authenticating scheduled task HTTP calls"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "app_url" {
+  description = "Application URL for scheduled task HTTP triggers (e.g., https://app.example.com). Required when enable_scheduled_tasks is true."
+  type        = string
+  default     = ""
+}
