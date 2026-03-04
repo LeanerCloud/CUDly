@@ -500,6 +500,90 @@ resource "kubernetes_ingress_v1" "app" {
 }
 
 # ==============================================
+# Network Policies
+# ==============================================
+
+# Default deny all ingress - requires explicit allow rules
+resource "kubernetes_network_policy" "default_deny_ingress" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
+
+  metadata {
+    name      = "default-deny-ingress"
+    namespace = kubernetes_namespace.app[0].metadata[0].name
+  }
+
+  spec {
+    pod_selector {}
+
+    policy_types = ["Ingress"]
+  }
+
+  depends_on = [kubernetes_namespace.app]
+}
+
+# Allow ingress from NGINX ingress controller to app pods
+resource "kubernetes_network_policy" "allow_ingress_from_nginx" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
+
+  metadata {
+    name      = "allow-ingress-from-nginx"
+    namespace = kubernetes_namespace.app[0].metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        app = "${var.project_name}-api"
+      }
+    }
+
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = "ingress-nginx"
+          }
+        }
+      }
+
+      ports {
+        port     = 8080
+        protocol = "TCP"
+      }
+    }
+
+    policy_types = ["Ingress"]
+  }
+
+  depends_on = [kubernetes_namespace.app]
+}
+
+# ==============================================
+# Resource Quota
+# ==============================================
+
+resource "kubernetes_resource_quota" "app" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
+
+  metadata {
+    name      = "${var.project_name}-quota"
+    namespace = kubernetes_namespace.app[0].metadata[0].name
+  }
+
+  spec {
+    hard = {
+      "requests.cpu"    = "4"
+      "requests.memory" = "8Gi"
+      "limits.cpu"      = "8"
+      "limits.memory"   = "16Gi"
+      "pods"            = "20"
+    }
+  }
+
+  depends_on = [kubernetes_namespace.app]
+}
+
+# ==============================================
 # Horizontal Pod Autoscaler
 # ==============================================
 
@@ -578,6 +662,9 @@ resource "helm_release" "nginx_ingress" {
 # ==============================================
 # Get Ingress Load Balancer IP
 # ==============================================
+# NOTE: The LoadBalancer IP may not be available on the first terraform apply
+# because Azure provisions the external IP asynchronously. Outputs use try()
+# to return "" when pending. A subsequent apply will resolve the IP.
 
 data "kubernetes_service" "nginx_ingress" {
   count = var.deploy_kubernetes_resources ? 1 : 0
