@@ -145,15 +145,16 @@ func TestAnalyzeReshaping(t *testing.T) {
 	}
 }
 
-func TestNormalizationFactors(t *testing.T) {
-	// Verify key normalization factors
-	assert.Equal(t, 0.25, NormalizationFactors["nano"])
-	assert.Equal(t, 0.5, NormalizationFactors["micro"])
-	assert.Equal(t, 1.0, NormalizationFactors["small"])
-	assert.Equal(t, 4.0, NormalizationFactors["large"])
-	assert.Equal(t, 8.0, NormalizationFactors["xlarge"])
-	assert.Equal(t, 192.0, NormalizationFactors["24xlarge"])
-	assert.Equal(t, 192.0, NormalizationFactors["metal"])
+func TestNormalizationFactorForSize(t *testing.T) {
+	// Verify key normalization factors via the public accessor
+	assert.Equal(t, 0.25, NormalizationFactorForSize("nano"))
+	assert.Equal(t, 0.5, NormalizationFactorForSize("micro"))
+	assert.Equal(t, 1.0, NormalizationFactorForSize("small"))
+	assert.Equal(t, 4.0, NormalizationFactorForSize("large"))
+	assert.Equal(t, 8.0, NormalizationFactorForSize("xlarge"))
+	assert.Equal(t, 192.0, NormalizationFactorForSize("24xlarge"))
+	assert.Equal(t, 192.0, NormalizationFactorForSize("metal"))
+	assert.Equal(t, 0.0, NormalizationFactorForSize("unknown"))
 }
 
 func TestParseInstanceType(t *testing.T) {

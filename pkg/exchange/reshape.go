@@ -35,9 +35,9 @@ type ReshapeRecommendation struct {
 	Reason              string  `json:"reason"`
 }
 
-// NormalizationFactors maps EC2 instance sizes to their AWS normalization factors.
+// normalizationFactors maps EC2 instance sizes to their AWS normalization factors.
 // See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ri-modification-instancemove.html
-var NormalizationFactors = map[string]float64{
+var normalizationFactors = map[string]float64{
 	"nano":     0.25,
 	"micro":    0.5,
 	"small":    1,
@@ -79,7 +79,7 @@ func parseInstanceType(instanceType string) (family, size string) {
 // NormalizationFactorForSize returns the normalization factor for a given instance size.
 // Returns 0 if the size is unknown.
 func NormalizationFactorForSize(size string) float64 {
-	return NormalizationFactors[size]
+	return normalizationFactors[size]
 }
 
 // AnalyzeReshaping identifies underutilized convertible RIs and suggests optimal
@@ -118,7 +118,10 @@ func AnalyzeReshaping(ris []RIInfo, utilization []UtilizationInfo, threshold flo
 			continue
 		}
 
-		normFactor := NormalizationFactors[size]
+		normFactor := ri.NormalizationFactor
+		if normFactor == 0 {
+			normFactor = normalizationFactors[size]
+		}
 		if normFactor == 0 {
 			continue
 		}
@@ -172,7 +175,7 @@ func findBestFit(normalizedUsed float64) (size string, count int32) {
 	// Find the largest size where normFactor <= normalizedUsed (fits in 1 instance)
 	bestIdx := -1
 	for i, s := range sizeOrder {
-		nf := NormalizationFactors[s]
+		nf := normalizationFactors[s]
 		if nf > 0 && nf <= normalizedUsed {
 			bestIdx = i
 		}
@@ -180,7 +183,7 @@ func findBestFit(normalizedUsed float64) (size string, count int32) {
 
 	if bestIdx >= 0 {
 		s := sizeOrder[bestIdx]
-		nf := NormalizationFactors[s]
+		nf := normalizationFactors[s]
 		needed := int32(math.Ceil(normalizedUsed / nf))
 		return s, needed
 	}
