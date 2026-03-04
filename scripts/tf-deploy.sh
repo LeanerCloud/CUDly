@@ -87,9 +87,9 @@ echo "Profile:      ${PROFILE}"
 echo "Action:       ${ACTION}"
 echo "Profile File: ${PROFILE_FILE}"
 echo "Working Dir:  ${ENV_DIR}"
-if [ -n "$AWS_PROFILE" ]; then
+if [ -n "${AWS_PROFILE:-}" ]; then
     echo "AWS Profile:  ${AWS_PROFILE}"
-elif [ -n "$TF_VAR_aws_profile" ]; then
+elif [ -n "${TF_VAR_aws_profile:-}" ]; then
     echo "AWS Profile:  ${TF_VAR_aws_profile}"
 else
     log_warning "AWS_PROFILE not set. Set it with: export AWS_PROFILE=your-profile"
