@@ -83,6 +83,34 @@ resource "azurerm_key_vault_secret" "database_password" {
 }
 
 # ==============================================
+# Admin Password Secret
+# ==============================================
+
+resource "random_password" "admin_password" {
+  count = var.create_admin_password_secret && var.admin_password == null ? 1 : 0
+
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
+resource "azurerm_key_vault_secret" "admin_password" {
+  count = var.create_admin_password_secret ? 1 : 0
+
+  name         = "admin-password"
+  value        = var.admin_password != null ? var.admin_password : random_password.admin_password[0].result
+  key_vault_id = azurerm_key_vault.main.id
+
+  content_type = "password"
+
+  tags = merge(var.tags, {
+    environment = var.environment
+  })
+
+  depends_on = [azurerm_role_assignment.current_user_secrets_officer]
+}
+
+# ==============================================
 # Application Secrets
 # ==============================================
 

@@ -123,11 +123,10 @@ variable "admin_email" {
   type        = string
 }
 
-variable "admin_password" {
-  description = "Optional initial admin password (skips password reset requirement)"
+variable "admin_password_secret_name" {
+  description = "Key Vault secret name containing admin password"
   type        = string
   default     = ""
-  sensitive   = true
 }
 
 variable "allowed_origins" {

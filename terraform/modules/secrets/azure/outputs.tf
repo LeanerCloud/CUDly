@@ -29,6 +29,16 @@ output "database_password_value" {
   sensitive   = true
 }
 
+output "admin_password_secret_id" {
+  description = "Admin password secret ID (if created)"
+  value       = var.create_admin_password_secret ? azurerm_key_vault_secret.admin_password[0].id : null
+}
+
+output "admin_password_secret_name" {
+  description = "Admin password secret name (if created)"
+  value       = var.create_admin_password_secret ? azurerm_key_vault_secret.admin_password[0].name : null
+}
+
 output "jwt_secret_id" {
   description = "JWT secret ID (if created)"
   value       = var.create_jwt_secret ? azurerm_key_vault_secret.jwt_secret[0].id : null
@@ -95,6 +105,7 @@ output "all_secret_names" {
   description = "List of all secret names"
   value = concat(
     [azurerm_key_vault_secret.database_password.name],
+    var.create_admin_password_secret ? [azurerm_key_vault_secret.admin_password[0].name] : [],
     var.create_jwt_secret ? [azurerm_key_vault_secret.jwt_secret[0].name] : [],
     var.create_session_secret ? [azurerm_key_vault_secret.session_secret[0].name] : [],
     [for secret in azurerm_key_vault_secret.additional : secret.name]

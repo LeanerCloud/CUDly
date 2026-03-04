@@ -113,25 +113,25 @@ resource "azurerm_container_app" "main" {
       dynamic "env" {
         for_each = merge(
           {
-            ENVIRONMENT         = var.environment
-            RUNTIME_MODE        = "http"
-            DB_HOST             = var.database_host
-            DB_PORT             = "5432"
-            DB_NAME             = var.database_name
-            DB_USER             = var.database_username
-            DB_PASSWORD_SECRET  = var.database_password_secret_name
-            DB_SSL_MODE         = "require"
-            DB_CONNECT_TIMEOUT  = "8s"
-            DB_AUTO_MIGRATE     = tostring(var.auto_migrate)
-            DB_MIGRATIONS_PATH  = "/app/migrations"
-            ADMIN_EMAIL         = var.admin_email
-            ADMIN_PASSWORD      = var.admin_password
-            SECRET_PROVIDER     = "azure"
-            AZURE_CLIENT_ID     = azurerm_user_assigned_identity.container_app.client_id
-            AZURE_KEY_VAULT_URL = var.key_vault_uri
-            AZURE_REGION        = var.location
-            PORT                = "8080"
-            ALLOWED_ORIGINS     = join(",", var.allowed_origins)
+            ENVIRONMENT           = var.environment
+            RUNTIME_MODE          = "http"
+            DB_HOST               = var.database_host
+            DB_PORT               = "5432"
+            DB_NAME               = var.database_name
+            DB_USER               = var.database_username
+            DB_PASSWORD_SECRET    = var.database_password_secret_name
+            DB_SSL_MODE           = "require"
+            DB_CONNECT_TIMEOUT    = "8s"
+            DB_AUTO_MIGRATE       = tostring(var.auto_migrate)
+            DB_MIGRATIONS_PATH    = "/app/migrations"
+            ADMIN_EMAIL           = var.admin_email
+            ADMIN_PASSWORD_SECRET = var.admin_password_secret_name
+            SECRET_PROVIDER       = "azure"
+            AZURE_CLIENT_ID       = azurerm_user_assigned_identity.container_app.client_id
+            AZURE_KEY_VAULT_URL   = var.key_vault_uri
+            AZURE_REGION          = var.location
+            PORT                  = "8080"
+            ALLOWED_ORIGINS       = join(",", var.allowed_origins)
           },
           var.additional_env_vars
         )
