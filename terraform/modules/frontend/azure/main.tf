@@ -314,6 +314,61 @@ resource "azurerm_cdn_frontdoor_rule" "spa_rewrite" {
   }
 }
 
+# Rule set: Security response headers
+# Matches the security headers set by CloudFront Function in the AWS module.
+resource "azurerm_cdn_frontdoor_rule_set" "security_headers" {
+  count = var.use_front_door ? 1 : 0
+
+  name                     = "securityheaders"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.frontend[0].id
+}
+
+resource "azurerm_cdn_frontdoor_rule" "security_headers" {
+  count = var.use_front_door ? 1 : 0
+
+  depends_on = [
+    azurerm_cdn_frontdoor_origin_group.container_apps,
+    azurerm_cdn_frontdoor_origin.container_apps,
+  ]
+
+  name                      = "SecurityHeaders"
+  cdn_frontdoor_rule_set_id = azurerm_cdn_frontdoor_rule_set.security_headers[0].id
+  order                     = 1
+  behavior_on_match         = "Continue"
+
+  actions {
+    response_header_action {
+      header_action = "Overwrite"
+      header_name   = "Strict-Transport-Security"
+      value         = "max-age=31536000; includeSubDomains; preload"
+    }
+
+    response_header_action {
+      header_action = "Overwrite"
+      header_name   = "X-Content-Type-Options"
+      value         = "nosniff"
+    }
+
+    response_header_action {
+      header_action = "Overwrite"
+      header_name   = "X-Frame-Options"
+      value         = "DENY"
+    }
+
+    response_header_action {
+      header_action = "Overwrite"
+      header_name   = "X-XSS-Protection"
+      value         = "1; mode=block"
+    }
+
+    response_header_action {
+      header_action = "Overwrite"
+      header_name   = "Referrer-Policy"
+      value         = "strict-origin-when-cross-origin"
+    }
+  }
+}
+
 # Single route - all traffic goes to Container Apps origin
 resource "azurerm_cdn_frontdoor_route" "frontend" {
   count = var.use_front_door ? 1 : 0
@@ -330,6 +385,7 @@ resource "azurerm_cdn_frontdoor_route" "frontend" {
   cdn_frontdoor_rule_set_ids = [
     azurerm_cdn_frontdoor_rule_set.https_redirect[0].id,
     azurerm_cdn_frontdoor_rule_set.spa_routing[0].id,
+    azurerm_cdn_frontdoor_rule_set.security_headers[0].id,
   ]
 
   supported_protocols    = ["Http", "Https"]

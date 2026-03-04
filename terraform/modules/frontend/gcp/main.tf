@@ -51,6 +51,15 @@ resource "google_compute_backend_service" "cloudrun" {
 
   enable_cdn = false
 
+  # Security response headers - matches AWS CloudFront and Azure Front Door
+  custom_response_headers = [
+    "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload",
+    "X-Content-Type-Options: nosniff",
+    "X-Frame-Options: DENY",
+    "X-XSS-Protection: 1; mode=block",
+    "Referrer-Policy: strict-origin-when-cross-origin",
+  ]
+
   security_policy = var.enable_cloud_armor ? google_compute_security_policy.frontend[0].id : null
 
   log_config {
