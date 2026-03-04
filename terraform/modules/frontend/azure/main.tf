@@ -66,7 +66,7 @@ resource "azurerm_cdn_endpoint" "frontend" {
   # HTTPS redirect
   global_delivery_rule {
     url_redirect_action {
-      redirect_type = "Found"
+      redirect_type = "Moved"
       protocol      = "Https"
     }
   }
@@ -77,9 +77,9 @@ resource "azurerm_cdn_endpoint" "frontend" {
     order = 1
 
     url_file_extension_condition {
-      operator         = "LessThan"
-      match_values     = ["1"]
-      negate_condition = false
+      operator         = "Equal"
+      negate_condition = true
+      match_values     = ["css", "js", "html", "json", "png", "jpg", "svg", "ico", "woff2", "map"]
     }
 
     url_path_condition {
