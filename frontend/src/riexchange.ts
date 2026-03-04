@@ -348,6 +348,7 @@ async function submitExecute(): Promise<void> {
     // Clear exchange state to prevent accidental re-execution
     lastQuote = null;
     lastQuoteRequest = null;
+    if (confirmCheckbox) confirmCheckbox.checked = false;
     const executeSection = document.getElementById('ri-exchange-execute-section');
     if (executeSection) executeSection.classList.add('hidden');
     const quoteResultContainer = document.getElementById('ri-exchange-quote-result');
