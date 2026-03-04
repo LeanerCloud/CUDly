@@ -139,21 +139,33 @@ resource "azurerm_key_vault_secret" "session_secret" {
 # ==============================================
 #
 # IMPORTANT: Azure Communication Services SMTP credentials cannot be auto-generated
-# via Terraform. These secrets are created with placeholder values that must be
-# replaced manually after deployment.
+# via Terraform. The Azure Resource Manager API does not expose an endpoint for
+# creating or rotating SMTP credentials — this is a manual Azure Portal step.
 #
-# To generate SMTP credentials:
-# 1. Go to Azure Portal -> Azure Communication Services -> your resource
-# 2. Navigate to "Email" -> "Try Email" or your connected email domain
-# 3. Go to "Settings" -> "Keys" to get the connection string
-# 4. Use the connection string to derive SMTP credentials:
-#    - Username: The full connection string (or the resource name + access key)
-#    - Password: The access key from the connection string
-# 5. Update the Key Vault secrets via Azure Portal or CLI:
-#    az keyvault secret set --vault-name <vault> --name azure-smtp-username --value <username>
-#    az keyvault secret set --vault-name <vault> --name azure-smtp-password --value <password>
+# These secrets are created with placeholder values that must be replaced manually
+# after the initial `terraform apply`.
 #
-# Alternatively, pass smtp_username and smtp_password variables during terraform apply.
+# Prerequisites:
+#   - An Azure Communication Services resource with a connected email domain
+#   - The email domain must be verified and active
+#
+# Steps to generate SMTP credentials:
+#   1. Open Azure Portal -> Azure Communication Services -> your resource
+#   2. Go to "Email" -> select your connected email domain
+#   3. Navigate to "Settings" -> "Keys" to get the primary connection string
+#   4. The SMTP credentials are derived from the connection string:
+#      - SMTP Endpoint: smtp.azurecomm.net
+#      - SMTP Port: 587 (STARTTLS)
+#      - Username: <ACS-Resource-Name>.<Primary-Key>.smtp (see Azure docs for exact format)
+#      - Password: The primary key from the connection string
+#   5. Update the Key Vault secrets:
+#        az keyvault secret set --vault-name <vault> --name azure-smtp-username --value "<username>"
+#        az keyvault secret set --vault-name <vault> --name azure-smtp-password --value "<password>"
+#   6. Restart the Container App / AKS pods to pick up the new credentials
+#
+# Alternative: Pass smtp_username and smtp_password variables during terraform apply
+# to avoid the manual portal step (useful for CI/CD pipelines where credentials are
+# pre-generated or stored in a separate vault).
 
 # SMTP Username (from Azure Communication Services)
 resource "azurerm_key_vault_secret" "smtp_username" {
