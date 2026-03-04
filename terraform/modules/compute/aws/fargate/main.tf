@@ -655,7 +655,7 @@ resource "aws_cloudwatch_event_target" "recommendations" {
 
   input = jsonencode({
     containerOverrides = [{
-      name    = "main"
+      name    = "app"
       command = ["./cudly", "--task", "collect_recommendations"]
     }]
   })
