@@ -43,51 +43,83 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 		},
 	}
 
-	var result *costexplorer.GetReservationUtilizationOutput
-	var err error
+	// Paginate through all results — daily granularity with GroupBy can
+	// produce multiple pages and multiple entries per RI (one per day).
+	type accumulator struct {
+		purchasedHours   float64
+		totalActualHours float64
+		unusedHours      float64
+	}
+	agg := make(map[string]*accumulator)
 
-	c.rateLimiter.Reset()
+	var nextPageToken *string
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
-			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
+		input.NextPageToken = nextPageToken
+
+		var result *costexplorer.GetReservationUtilizationOutput
+		var err error
+
+		c.rateLimiter.Reset()
+		for {
+			if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+				return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
+			}
+
+			result, err = c.costExplorerClient.GetReservationUtilization(ctx, input)
+			if !c.rateLimiter.ShouldRetry(err) {
+				break
+			}
 		}
 
-		result, err = c.costExplorerClient.GetReservationUtilization(ctx, input)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if err != nil {
+			return nil, fmt.Errorf("failed to get reservation utilization: %w", err)
+		}
+
+		for _, group := range result.UtilizationsByTime {
+			for _, detail := range group.Groups {
+				if detail.Key == nil || detail.Utilization == nil {
+					continue
+				}
+
+				id := aws.ToString(detail.Key)
+				a, ok := agg[id]
+				if !ok {
+					a = &accumulator{}
+					agg[id] = a
+				}
+
+				if detail.Utilization.PurchasedHours != nil {
+					a.purchasedHours += parseFloat(aws.ToString(detail.Utilization.PurchasedHours))
+				}
+				if detail.Utilization.TotalActualHours != nil {
+					a.totalActualHours += parseFloat(aws.ToString(detail.Utilization.TotalActualHours))
+				}
+				if detail.Utilization.UnusedHours != nil {
+					a.unusedHours += parseFloat(aws.ToString(detail.Utilization.UnusedHours))
+				}
+			}
+		}
+
+		if result.NextPageToken == nil || *result.NextPageToken == "" {
 			break
 		}
+		nextPageToken = result.NextPageToken
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to get reservation utilization: %w", err)
-	}
-
-	var utilizations []RIUtilization
-	for _, group := range result.UtilizationsByTime {
-		for _, detail := range group.Groups {
-			if detail.Key == nil || detail.Utilization == nil {
-				continue
-			}
-
-			util := RIUtilization{
-				ReservedInstanceID: aws.ToString(detail.Key),
-			}
-
-			if detail.Utilization.UtilizationPercentage != nil {
-				util.UtilizationPercent = parseFloat(aws.ToString(detail.Utilization.UtilizationPercentage))
-			}
-			if detail.Utilization.PurchasedHours != nil {
-				util.PurchasedHours = parseFloat(aws.ToString(detail.Utilization.PurchasedHours))
-			}
-			if detail.Utilization.TotalActualHours != nil {
-				util.TotalActualHours = parseFloat(aws.ToString(detail.Utilization.TotalActualHours))
-			}
-			if detail.Utilization.UnusedHours != nil {
-				util.UnusedHours = parseFloat(aws.ToString(detail.Utilization.UnusedHours))
-			}
-
-			utilizations = append(utilizations, util)
+	// Compute aggregate utilization per RI
+	utilizations := make([]RIUtilization, 0, len(agg))
+	for id, a := range agg {
+		pct := 0.0
+		if a.purchasedHours > 0 {
+			pct = (a.totalActualHours / a.purchasedHours) * 100
 		}
+		utilizations = append(utilizations, RIUtilization{
+			ReservedInstanceID: id,
+			UtilizationPercent: pct,
+			PurchasedHours:     a.purchasedHours,
+			TotalActualHours:   a.totalActualHours,
+			UnusedHours:        a.unusedHours,
+		})
 	}
 
 	return utilizations, nil
