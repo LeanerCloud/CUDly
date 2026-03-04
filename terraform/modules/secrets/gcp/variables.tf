@@ -20,6 +20,19 @@ variable "database_password" {
   sensitive   = true
 }
 
+variable "admin_password" {
+  description = "Admin password (if null, a random password will be generated)"
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "create_admin_password_secret" {
+  description = "Create admin password secret in Secret Manager"
+  type        = bool
+  default     = true
+}
+
 variable "create_jwt_secret" {
   description = "Create JWT signing secret"
   type        = bool

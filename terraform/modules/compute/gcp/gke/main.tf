@@ -405,8 +405,8 @@ resource "kubernetes_deployment" "app" {
           }
 
           env {
-            name  = "ADMIN_PASSWORD"
-            value = var.admin_password
+            name  = "ADMIN_PASSWORD_SECRET"
+            value = var.admin_password_secret_name
           }
 
           env {

@@ -157,11 +157,10 @@ variable "admin_email" {
   default     = ""
 }
 
-variable "admin_password" {
-  description = "Optional initial admin password (skips password reset requirement)"
+variable "admin_password_secret_name" {
+  description = "Full Secret Manager secret name containing admin password"
   type        = string
   default     = ""
-  sensitive   = true
 }
 
 variable "auto_migrate" {

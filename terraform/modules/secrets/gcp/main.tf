@@ -47,6 +47,40 @@ resource "google_secret_manager_secret_version" "database_password" {
 }
 
 # ==============================================
+# Admin Password Secret
+# ==============================================
+
+resource "random_password" "admin_password" {
+  count = var.create_admin_password_secret && var.admin_password == null ? 1 : 0
+
+  length  = 32
+  special = true
+}
+
+resource "google_secret_manager_secret" "admin_password" {
+  count = var.create_admin_password_secret ? 1 : 0
+
+  secret_id = "${var.service_name}-admin-password"
+  project   = var.project_id
+
+  replication {
+    auto {}
+  }
+
+  labels = merge(var.labels, {
+    environment = var.environment
+    managed_by  = "terraform"
+  })
+}
+
+resource "google_secret_manager_secret_version" "admin_password" {
+  count = var.create_admin_password_secret ? 1 : 0
+
+  secret      = google_secret_manager_secret.admin_password[0].id
+  secret_data = var.admin_password != null ? var.admin_password : random_password.admin_password[0].result
+}
+
+# ==============================================
 # Application Secrets
 # ==============================================
 
@@ -228,6 +262,15 @@ resource "google_secret_manager_secret_iam_member" "cloud_run_db_password" {
 
   project   = var.project_id
   secret_id = google_secret_manager_secret.database_password.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.cloud_run_service_account_email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "cloud_run_admin_password" {
+  count = var.create_admin_password_secret && var.cloud_run_service_account_email != null ? 1 : 0
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.admin_password[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.cloud_run_service_account_email}"
 }

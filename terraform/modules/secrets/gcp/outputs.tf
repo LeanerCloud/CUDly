@@ -14,6 +14,16 @@ output "database_password_value" {
   sensitive   = true
 }
 
+output "admin_password_secret_id" {
+  description = "Secret Manager secret ID for admin password (if created)"
+  value       = var.create_admin_password_secret ? google_secret_manager_secret.admin_password[0].secret_id : null
+}
+
+output "admin_password_secret_name" {
+  description = "Full secret name for admin password (if created)"
+  value       = var.create_admin_password_secret ? google_secret_manager_secret.admin_password[0].name : null
+}
+
 output "jwt_secret_id" {
   description = "Secret Manager secret ID for JWT (if created)"
   value       = var.create_jwt_secret ? google_secret_manager_secret.jwt_secret[0].secret_id : null
@@ -70,6 +80,7 @@ output "all_secret_ids" {
   description = "List of all secret IDs created by this module"
   value = concat(
     [google_secret_manager_secret.database_password.secret_id],
+    var.create_admin_password_secret ? [google_secret_manager_secret.admin_password[0].secret_id] : [],
     var.create_jwt_secret ? [google_secret_manager_secret.jwt_secret[0].secret_id] : [],
     var.create_session_secret ? [google_secret_manager_secret.session_secret[0].secret_id] : [],
     [for secret in google_secret_manager_secret.additional : secret.secret_id]
@@ -83,6 +94,9 @@ output "secret_env_vars" {
     {
       DB_PASSWORD_SECRET = google_secret_manager_secret.database_password.name
     },
+    var.create_admin_password_secret ? {
+      ADMIN_PASSWORD_SECRET = google_secret_manager_secret.admin_password[0].name
+    } : {},
     var.create_jwt_secret ? {
       JWT_SECRET_NAME = google_secret_manager_secret.jwt_secret[0].name
     } : {},
