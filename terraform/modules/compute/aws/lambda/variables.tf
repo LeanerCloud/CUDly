@@ -61,11 +61,10 @@ variable "admin_email" {
   type        = string
 }
 
-variable "admin_password" {
-  description = "Optional initial admin password (skips password reset requirement)"
+variable "admin_password_secret_arn" {
+  description = "ARN of Secrets Manager secret containing admin password"
   type        = string
   default     = ""
-  sensitive   = true
 }
 
 variable "auto_migrate" {

@@ -14,6 +14,16 @@ output "database_password_value" {
   sensitive   = true
 }
 
+output "admin_password_secret_arn" {
+  description = "ARN of the admin password secret (if created)"
+  value       = var.create_admin_password_secret ? aws_secretsmanager_secret.admin_password[0].arn : null
+}
+
+output "admin_password_secret_name" {
+  description = "Name of the admin password secret (if created)"
+  value       = var.create_admin_password_secret ? aws_secretsmanager_secret.admin_password[0].name : null
+}
+
 output "jwt_secret_arn" {
   description = "ARN of the JWT signing secret (if created)"
   value       = var.create_jwt_secret ? aws_secretsmanager_secret.jwt_secret[0].arn : null
@@ -69,6 +79,7 @@ output "all_secret_arns" {
   description = "List of all secret ARNs created by this module"
   value = concat(
     [aws_secretsmanager_secret.database_password.arn],
+    var.create_admin_password_secret ? [aws_secretsmanager_secret.admin_password[0].arn] : [],
     var.create_jwt_secret ? [aws_secretsmanager_secret.jwt_secret[0].arn] : [],
     var.create_session_secret ? [aws_secretsmanager_secret.session_secret[0].arn] : [],
     [for secret in aws_secretsmanager_secret.additional : secret.arn]
@@ -82,6 +93,9 @@ output "secret_env_vars" {
     {
       DB_PASSWORD_SECRET = aws_secretsmanager_secret.database_password.arn
     },
+    var.create_admin_password_secret ? {
+      ADMIN_PASSWORD_SECRET = aws_secretsmanager_secret.admin_password[0].arn
+    } : {},
     var.create_jwt_secret ? {
       JWT_SECRET_ARN = aws_secretsmanager_secret.jwt_secret[0].arn
     } : {},

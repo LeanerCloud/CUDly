@@ -53,6 +53,39 @@ resource "aws_secretsmanager_secret_version" "database_password" {
 }
 
 # ==============================================
+# Admin Password Secret
+# ==============================================
+
+resource "random_password" "admin_password" {
+  count = var.create_admin_password_secret && var.admin_password == null ? 1 : 0
+
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
+resource "aws_secretsmanager_secret" "admin_password" {
+  count = var.create_admin_password_secret ? 1 : 0
+
+  name_prefix             = "${var.stack_name}-admin-password-"
+  description             = "Admin user password for ${var.stack_name}"
+  recovery_window_in_days = var.recovery_window_days
+
+  tags = merge(var.tags, {
+    Name        = "${var.stack_name}-admin-password"
+    ManagedBy   = "terraform"
+    Environment = var.environment
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "admin_password" {
+  count = var.create_admin_password_secret ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.admin_password[0].id
+  secret_string = var.admin_password != null ? var.admin_password : random_password.admin_password[0].result
+}
+
+# ==============================================
 # Application Secrets (API keys, tokens, etc.)
 # ==============================================
 
@@ -306,6 +339,7 @@ data "aws_iam_policy_document" "secret_read" {
     ]
     resources = concat(
       [aws_secretsmanager_secret.database_password.arn],
+      var.create_admin_password_secret ? [aws_secretsmanager_secret.admin_password[0].arn] : [],
       var.create_jwt_secret ? [aws_secretsmanager_secret.jwt_secret[0].arn] : [],
       var.create_session_secret ? [aws_secretsmanager_secret.session_secret[0].arn] : [],
       [for secret in aws_secretsmanager_secret.additional : secret.arn]

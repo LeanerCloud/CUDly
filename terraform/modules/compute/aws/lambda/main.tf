@@ -33,21 +33,21 @@ resource "aws_lambda_function" "main" {
   environment {
     variables = merge(
       {
-        ENVIRONMENT        = var.environment
-        RUNTIME_MODE       = "lambda"
-        DB_HOST            = var.database_host
-        DB_PORT            = "5432"
-        DB_NAME            = var.database_name
-        DB_USER            = var.database_username
-        DB_PASSWORD_SECRET = var.database_password_secret_arn
-        DB_SSL_MODE        = "require"
-        DB_CONNECT_TIMEOUT = "8s" # Short timeout per attempt (retries handle long waits)
-        DB_AUTO_MIGRATE    = var.auto_migrate
-        DB_MIGRATIONS_PATH = "/app/migrations"
-        ADMIN_EMAIL        = var.admin_email
-        ADMIN_PASSWORD     = var.admin_password
-        SECRET_PROVIDER    = "aws"
-        AWS_REGION_CONFIG  = var.region
+        ENVIRONMENT           = var.environment
+        RUNTIME_MODE          = "lambda"
+        DB_HOST               = var.database_host
+        DB_PORT               = "5432"
+        DB_NAME               = var.database_name
+        DB_USER               = var.database_username
+        DB_PASSWORD_SECRET    = var.database_password_secret_arn
+        DB_SSL_MODE           = "require"
+        DB_CONNECT_TIMEOUT    = "8s" # Short timeout per attempt (retries handle long waits)
+        DB_AUTO_MIGRATE       = var.auto_migrate
+        DB_MIGRATIONS_PATH    = "/app/migrations"
+        ADMIN_EMAIL           = var.admin_email
+        ADMIN_PASSWORD_SECRET = var.admin_password_secret_arn
+        SECRET_PROVIDER       = "aws"
+        AWS_REGION_CONFIG     = var.region
       },
       var.additional_env_vars
     )
@@ -176,10 +176,12 @@ resource "aws_iam_role_policy" "secrets_access" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [
+        Resource = compact([
           var.database_password_secret_arn,
-          "${var.database_password_secret_arn}*"
-        ]
+          "${var.database_password_secret_arn}*",
+          var.admin_password_secret_arn,
+          var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}*" : "",
+        ])
       }
     ]
   })

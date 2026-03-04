@@ -103,10 +103,12 @@ resource "aws_iam_role_policy" "task_execution_secrets" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [
+        Resource = compact([
           var.database_password_secret_arn,
-          "${var.database_password_secret_arn}-*"
-        ]
+          "${var.database_password_secret_arn}-*",
+          var.admin_password_secret_arn,
+          var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}-*" : "",
+        ])
       }
     ]
   })
@@ -145,10 +147,12 @@ resource "aws_iam_role_policy" "task_secrets" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [
+        Resource = compact([
           var.database_password_secret_arn,
-          "${var.database_password_secret_arn}-*"
-        ]
+          "${var.database_password_secret_arn}-*",
+          var.admin_password_secret_arn,
+          var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}-*" : "",
+        ])
       }
     ]
   })
@@ -399,8 +403,8 @@ resource "aws_ecs_task_definition" "main" {
             value = var.admin_email
           },
           {
-            name  = "ADMIN_PASSWORD"
-            value = var.admin_password
+            name  = "ADMIN_PASSWORD_SECRET"
+            value = var.admin_password_secret_arn
           },
           {
             name  = "SECRET_PROVIDER"
