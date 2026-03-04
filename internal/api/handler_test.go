@@ -1048,9 +1048,11 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth, apiKey: "test-key"}
 
+	// Use Bearer token only — API-key auth returns a synthetic session
+	// without UserID, so self-deletion prevention only applies to
+	// session-based auth.
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
-			"X-API-Key":     "test-key",
 			"Authorization": "Bearer test-token",
 			"X-CSRF-Token":  "test-csrf",
 		},

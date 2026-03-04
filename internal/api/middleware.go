@@ -178,8 +178,15 @@ func (h *Handler) validateCSRF(ctx context.Context, req *events.LambdaFunctionUR
 	return h.auth.ValidateCSRFToken(ctx, sessionToken, csrfToken)
 }
 
-// requireAdmin checks if the current user has admin role
+// requireAdmin checks if the current user has admin role.
+// Accepts both admin API-key auth and Bearer token auth.
 func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
+	// Check admin API key first (stateless auth)
+	apiKey := extractAPIKey(req)
+	if h.checkAdminAPIKey(apiKey) {
+		return &Session{Role: "admin"}, nil
+	}
+
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
