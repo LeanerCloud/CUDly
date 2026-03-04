@@ -24,10 +24,10 @@ output "ssl_certificate_id" {
 
 output "subdomain_zone_name" {
   description = "Cloud DNS managed zone name for subdomain"
-  value       = var.subdomain_zone_name != "" ? google_dns_managed_zone.subdomain[0].name : ""
+  value       = try(google_dns_managed_zone.subdomain[0].name, "")
 }
 
 output "subdomain_zone_nameservers" {
   description = "Nameservers for subdomain zone (add these as NS records in parent zone)"
-  value       = var.subdomain_zone_name != "" ? google_dns_managed_zone.subdomain[0].name_servers : []
+  value       = try(google_dns_managed_zone.subdomain[0].name_servers, [])
 }
