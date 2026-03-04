@@ -63,17 +63,16 @@ if [ "$DB_AUTO_MIGRATE" = "true" ]; then
     ENCODED_PASSWORD=$(printf '%s' "${DB_PASSWORD:-}" | awk 'BEGIN{split("",hex); for(i=0;i<256;i++){c=sprintf("%c",i); hex[c]=sprintf("%%%02X",i)}} {n=length($0); for(i=1;i<=n;i++){c=substr($0,i,1); if(c~/[A-Za-z0-9._~-]/)printf "%s",c; else printf "%s",hex[c]}}')
     DB_URL="postgresql://${DB_USER}:${ENCODED_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSL_MODE}"
 
-    if migrate -path "$DB_MIGRATIONS_PATH" -database "$DB_URL" up; then
+    migrate -path "$DB_MIGRATIONS_PATH" -database "$DB_URL" up 2>&1
+    MIGRATE_EXIT_CODE=$?
+    if [ $MIGRATE_EXIT_CODE -eq 0 ]; then
       echo "   ✅ Migrations completed successfully"
+    elif [ $MIGRATE_EXIT_CODE -eq 1 ]; then
+      # Exit code 1 means "no change", which is okay
+      echo "   ℹ️  No new migrations to apply"
     else
-      MIGRATE_EXIT_CODE=$?
-      if [ $MIGRATE_EXIT_CODE -eq 1 ]; then
-        # Exit code 1 means "no change", which is okay
-        echo "   ℹ️  No new migrations to apply"
-      else
-        echo "   ❌ Migration failed with exit code $MIGRATE_EXIT_CODE"
-        exit $MIGRATE_EXIT_CODE
-      fi
+      echo "   ❌ Migration failed with exit code $MIGRATE_EXIT_CODE"
+      exit $MIGRATE_EXIT_CODE
     fi
   else
     echo "   ⚠️  Skipping migrations (DB_PASSWORD not available)"
