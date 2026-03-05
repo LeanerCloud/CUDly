@@ -23,8 +23,8 @@ module "compute_lambda" {
   database_password_secret_arn = module.database.password_secret_arn
 
   # Admin user configuration
-  admin_email    = module.database.admin_email
-  admin_password = var.admin_password
+  admin_email               = module.database.admin_email
+  admin_password_secret_arn = coalesce(module.secrets.admin_password_secret_arn, "")
 
   # Auto-migrate on cold start
   auto_migrate = var.database_auto_migrate
@@ -98,8 +98,8 @@ module "compute_fargate" {
   database_password_secret_arn = module.database.password_secret_arn
 
   # Admin user configuration
-  admin_email    = var.admin_email
-  admin_password = var.admin_password
+  admin_email               = var.admin_email
+  admin_password_secret_arn = coalesce(module.secrets.admin_password_secret_arn, "")
 
   # Auto-migrate on startup
   auto_migrate = var.database_auto_migrate

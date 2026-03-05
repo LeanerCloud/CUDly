@@ -11,6 +11,7 @@ module "secrets" {
 
   # Generate random password for dev (in prod, you'd provide this via tfvars)
   database_password = null # Will be auto-generated
+  admin_password    = var.admin_password
 
   recovery_window_days  = var.secret_recovery_window_days
   create_jwt_secret     = true

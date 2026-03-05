@@ -29,7 +29,7 @@ module "compute_container_apps" {
   key_vault_uri                  = module.secrets.key_vault_uri
   auto_migrate                   = var.auto_migrate
   admin_email                    = var.admin_email
-  admin_password                 = var.admin_password
+  admin_password_secret_name     = coalesce(module.secrets.admin_password_secret_name, "")
   additional_env_vars = merge(
     {
       STATIC_DIR                 = "/app/static"
@@ -89,16 +89,16 @@ module "compute_aks" {
   database_host                 = module.database.server_fqdn
   database_name                 = module.database.database_name
   database_username             = module.database.administrator_login
-  database_password_secret_name = "database-password"
+  database_password_secret_name = module.secrets.database_password_secret_name
 
   # Key Vault for secrets
   key_vault_id  = module.secrets.key_vault_id
   key_vault_uri = module.secrets.key_vault_uri
 
   # Application configuration
-  admin_email    = var.admin_email
-  admin_password = var.admin_password
-  auto_migrate   = var.auto_migrate
+  admin_email                = var.admin_email
+  admin_password_secret_name = coalesce(module.secrets.admin_password_secret_name, "")
+  auto_migrate               = var.auto_migrate
   additional_env_vars = merge(
     {
       STATIC_DIR          = "/app/static"

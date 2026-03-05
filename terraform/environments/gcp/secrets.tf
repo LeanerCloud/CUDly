@@ -11,6 +11,7 @@ module "secrets" {
 
   # Generate random password for dev (in prod, provide this via tfvars)
   database_password = null # Will be auto-generated
+  admin_password    = var.admin_password
 
   create_jwt_secret     = true
   create_session_secret = true

@@ -33,8 +33,8 @@ module "compute_cloud_run" {
   database_password_secret_id = module.secrets.database_password_secret_id
 
   # Admin email
-  admin_email    = var.admin_email
-  admin_password = var.admin_password
+  admin_email                = var.admin_email
+  admin_password_secret_name = coalesce(module.secrets.admin_password_secret_name, "")
 
   # VPC Access (for Cloud SQL)
   vpc_connector_id = module.networking.vpc_connector_id
@@ -106,9 +106,9 @@ module "compute_gke" {
   database_password_secret_name = module.secrets.database_password_secret_name
 
   # Application configuration
-  admin_email    = var.admin_email
-  admin_password = var.admin_password
-  auto_migrate   = var.auto_migrate
+  admin_email                = var.admin_email
+  admin_password_secret_name = coalesce(module.secrets.admin_password_secret_name, "")
+  auto_migrate               = var.auto_migrate
   additional_env_vars = merge(
     {
       STATIC_DIR          = "/app/static"

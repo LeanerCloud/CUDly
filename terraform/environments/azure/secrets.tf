@@ -18,6 +18,7 @@ module "secrets" {
   allowed_ip_addresses       = var.allowed_ip_addresses
   allowed_subnet_ids         = var.create_private_subnet ? [module.networking.private_subnet_id] : []
   database_password          = var.database_password
+  admin_password             = var.admin_password
   create_jwt_secret          = true
   create_session_secret      = true
   additional_secrets         = nonsensitive(var.additional_secrets)
