@@ -76,11 +76,8 @@ fi
 # Configuration
 PROJECT_NAME="cudly"
 BUCKET_NAME="${PROJECT_NAME}-terraform-state-${ENVIRONMENT}"
-DYNAMODB_TABLE="${PROJECT_NAME}-terraform-locks-${ENVIRONMENT}"
-
 print_info "Initializing Terraform backend for ${ENVIRONMENT} environment in ${REGION}"
 print_info "S3 Bucket: ${BUCKET_NAME}"
-print_info "DynamoDB Table: ${DYNAMODB_TABLE}"
 
 # Check if AWS CLI is installed
 if ! command -v aws &> /dev/null; then
@@ -205,48 +202,6 @@ $AWS_CMD s3api put-bucket-tagging \
     --region "${REGION}"
 
 # ==============================================
-# Create DynamoDB Table for State Locking
-# ==============================================
-
-print_info "Creating DynamoDB table: ${DYNAMODB_TABLE}"
-
-# Check if table already exists
-if $AWS_CMD dynamodb describe-table \
-    --table-name "${DYNAMODB_TABLE}" \
-    --region "${REGION}" &> /dev/null; then
-    print_warn "DynamoDB table already exists"
-else
-    # Create table
-    $AWS_CMD dynamodb create-table \
-        --table-name "${DYNAMODB_TABLE}" \
-        --attribute-definitions AttributeName=LockID,AttributeType=S \
-        --key-schema AttributeName=LockID,KeyType=HASH \
-        --billing-mode PAY_PER_REQUEST \
-        --tags \
-            Key=Project,Value="${PROJECT_NAME}" \
-            Key=Environment,Value="${ENVIRONMENT}" \
-            Key=ManagedBy,Value=Terraform \
-            Key=Purpose,Value=TerraformStateLocking \
-        --region "${REGION}"
-
-    print_info "Waiting for DynamoDB table to be active..."
-    $AWS_CMD dynamodb wait table-exists \
-        --table-name "${DYNAMODB_TABLE}" \
-        --region "${REGION}"
-
-    print_info "DynamoDB table created successfully"
-fi
-
-# Enable point-in-time recovery (for production)
-if [ "$ENVIRONMENT" == "prod" ]; then
-    print_info "Enabling point-in-time recovery for production"
-    $AWS_CMD dynamodb update-continuous-backups \
-        --table-name "${DYNAMODB_TABLE}" \
-        --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true \
-        --region "${REGION}"
-fi
-
-# ==============================================
 # Update Terraform Backend Configuration
 # ==============================================
 
@@ -267,7 +222,7 @@ terraform {
     key            = "${ENVIRONMENT}/terraform.tfstate"
     region         = "${REGION}"
     encrypt        = true
-    dynamodb_table = "${DYNAMODB_TABLE}"
+    use_lockfile   = true
 
     # Optional: Use KMS for encryption
     # kms_key_id = "arn:aws:kms:${REGION}:${ACCOUNT_ID}:key/YOUR-KMS-KEY-ID"

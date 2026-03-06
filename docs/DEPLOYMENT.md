@@ -179,7 +179,7 @@ bucket         = "cudly-terraform-state-prod"
 key            = "prod/terraform.tfstate"
 region         = "us-east-1"
 encrypt        = true
-dynamodb_table = "cudly-terraform-locks-prod"
+use_lockfile   = true
 ```
 
 ---
