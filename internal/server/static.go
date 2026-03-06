@@ -70,41 +70,65 @@ func setCacheHeaders(w http.ResponseWriter, urlPath string) {
 	}
 }
 
-// serveStaticForLambda checks if the request path matches a static file in dir.
-// Returns the file content, content type, cache header, and whether a file was found.
-func serveStaticForLambda(dir, urlPath string) (content []byte, contentType string, cacheControl string, found bool) {
-	cleanPath := path.Clean(urlPath)
+// resolveStaticFilePath validates the URL path against directory traversal and
+// resolves the actual file path. Falls back to index.html for extensionless
+// paths (SPA routing). Returns the file path, the clean path used for content
+// type detection, and whether a valid file was found.
+func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok bool) {
+	cleanPath = path.Clean(urlPath)
 	if cleanPath == "/" || cleanPath == "." {
 		cleanPath = "/index.html"
 	}
 
-	filePath := filepath.Join(dir, filepath.FromSlash(cleanPath))
+	filePath = filepath.Join(dir, filepath.FromSlash(cleanPath))
 
-	// Prevent directory traversal
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, "", "", false
+		return "", "", false
 	}
 	absFile, err := filepath.Abs(filePath)
 	if err != nil {
-		return nil, "", "", false
+		return "", "", false
 	}
 	if !strings.HasPrefix(absFile, absDir) {
-		return nil, "", "", false
+		return "", "", false
 	}
 
 	info, err := os.Stat(filePath)
 	if err != nil || info.IsDir() {
-		// File not found: if path has extension, truly not found
 		if path.Ext(cleanPath) != "" {
-			return nil, "", "", false
+			return "", "", false
 		}
-		// SPA fallback: serve index.html
+		// SPA fallback
 		filePath = filepath.Join(dir, "index.html")
 		cleanPath = "/index.html"
 		if _, err := os.Stat(filePath); err != nil {
-			return nil, "", "", false
+			return "", "", false
 		}
+	}
+
+	return filePath, cleanPath, true
+}
+
+// cacheControlForExt returns the Cache-Control header value for a file extension.
+func cacheControlForExt(ext string) string {
+	switch ext {
+	case ".html":
+		return "no-cache, no-store, must-revalidate"
+	case ".js", ".css", ".woff", ".woff2", ".ttf", ".eot",
+		".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp":
+		return "public, max-age=31536000, immutable"
+	default:
+		return "public, max-age=3600"
+	}
+}
+
+// serveStaticForLambda checks if the request path matches a static file in dir.
+// Returns the file content, content type, cache header, and whether a file was found.
+func serveStaticForLambda(dir, urlPath string) (content []byte, contentType string, cacheControl string, found bool) {
+	filePath, cleanPath, ok := resolveStaticFilePath(dir, urlPath)
+	if !ok {
+		return nil, "", "", false
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -112,24 +136,13 @@ func serveStaticForLambda(dir, urlPath string) (content []byte, contentType stri
 		return nil, "", "", false
 	}
 
-	// Determine content type from extension
 	ext := strings.ToLower(path.Ext(cleanPath))
 	ct := mime.TypeByExtension(ext)
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
 
-	// Determine cache control
-	cc := "public, max-age=3600"
-	switch ext {
-	case ".html":
-		cc = "no-cache, no-store, must-revalidate"
-	case ".js", ".css", ".woff", ".woff2", ".ttf", ".eot",
-		".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp":
-		cc = "public, max-age=31536000, immutable"
-	}
-
-	return data, ct, cc, true
+	return data, ct, cacheControlForExt(ext), true
 }
 
 // staticDirFromEnv returns the STATIC_DIR env var if set and the directory exists.

@@ -37,6 +37,49 @@ func truncate(s string, max int) string {
 	return s[:max] + "...(truncated)"
 }
 
+// validateAccountExpectations parses "az account show" JSON output and checks
+// that the subscription and tenant IDs match expectations.
+func validateAccountExpectations(opts Options, accountOut []byte) report.CheckResult {
+	start := time.Now().UTC()
+	check := report.CheckResult{
+		Name:      "azure:account:expected_checks",
+		StartedAt: start,
+		Details:   map[string]string{},
+	}
+
+	var a azAccountShow
+	if err := json.Unmarshal(accountOut, &a); err != nil {
+		check.EndedAt = time.Now().UTC()
+		check.Status = report.StatusFail
+		check.Message = fmt.Sprintf("failed to parse az account show JSON: %v", err)
+		check.Details["raw"] = string(accountOut)
+		return check
+	}
+
+	check.EndedAt = time.Now().UTC()
+	check.Details["id"] = a.ID
+	check.Details["tenantId"] = a.TenantID
+	check.Details["name"] = a.Name
+	check.Details["state"] = a.State
+	check.Details["user"] = a.User.Name
+
+	var msgs []string
+	if opts.ExpectedSubID != "" && a.ID != opts.ExpectedSubID {
+		msgs = append(msgs, fmt.Sprintf("unexpected subscription: got %s want %s", a.ID, opts.ExpectedSubID))
+	}
+	if opts.ExpectedTenantID != "" && a.TenantID != opts.ExpectedTenantID {
+		msgs = append(msgs, fmt.Sprintf("unexpected tenant: got %s want %s", a.TenantID, opts.ExpectedTenantID))
+	}
+
+	if len(msgs) == 0 {
+		check.Status = report.StatusPass
+	} else {
+		check.Status = report.StatusFail
+		check.Message = strings.Join(msgs, "; ")
+	}
+	return check
+}
+
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	if opts.SubscriptionID == "" {
 		opts.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
@@ -90,52 +133,8 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	accountOut, cr := runCmd("azure:account:show", "account", "show", "-o", "json")
 	rep.Add(cr)
 
-	// Robust expected checks via JSON parsing (no fragile string matching)
 	if opts.ExpectedSubID != "" || opts.ExpectedTenantID != "" {
-		start := time.Now().UTC()
-		check := report.CheckResult{
-			Name:      "azure:account:expected_checks",
-			StartedAt: start,
-			Details:   map[string]string{},
-		}
-
-		var a azAccountShow
-		err := json.Unmarshal(accountOut, &a)
-		end := time.Now().UTC()
-		check.EndedAt = end
-
-		if err != nil {
-			check.Status = report.StatusFail
-			check.Message = fmt.Sprintf("failed to parse az account show JSON: %v", err)
-			check.Details["raw"] = string(accountOut)
-			rep.Add(check)
-		} else {
-			check.Details["id"] = a.ID
-			check.Details["tenantId"] = a.TenantID
-			check.Details["name"] = a.Name
-			check.Details["state"] = a.State
-			check.Details["user"] = a.User.Name
-
-			ok := true
-			msg := ""
-
-			if opts.ExpectedSubID != "" && a.ID != opts.ExpectedSubID {
-				ok = false
-				msg += fmt.Sprintf("unexpected subscription: got %s want %s; ", a.ID, opts.ExpectedSubID)
-			}
-			if opts.ExpectedTenantID != "" && a.TenantID != opts.ExpectedTenantID {
-				ok = false
-				msg += fmt.Sprintf("unexpected tenant: got %s want %s; ", a.TenantID, opts.ExpectedTenantID)
-			}
-
-			if ok {
-				check.Status = report.StatusPass
-			} else {
-				check.Status = report.StatusFail
-				check.Message = strings.TrimSpace(msg)
-			}
-			rep.Add(check)
-		}
+		rep.Add(validateAccountExpectations(opts, accountOut))
 	}
 
 	// Read-only lists (sample)

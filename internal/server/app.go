@@ -267,17 +267,10 @@ func (app *Application) ensureDB(ctx context.Context) error {
 	if app.dbConfig.AutoMigrate {
 		log.Println("Running database migrations...")
 
-		// Get admin email and optional password for migration
-		// When ADMIN_PASSWORD is set, admin is created with that password and active=true
-		// When unset, admin must use password reset email flow to log in
 		adminEmail := os.Getenv("ADMIN_EMAIL")
-		adminPassword := os.Getenv("ADMIN_PASSWORD")
-		if secret := os.Getenv("ADMIN_PASSWORD_SECRET"); secret != "" && app.secretResolver != nil {
-			resolved, err := app.secretResolver.GetSecret(ctx, secret)
-			if err != nil {
-				return fmt.Errorf("failed to resolve admin password secret: %w", err)
-			}
-			adminPassword = resolved
+		adminPassword, err := app.resolveAdminPassword(ctx)
+		if err != nil {
+			return err
 		}
 
 		if err := migrations.RunMigrations(ctx, dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword); err != nil {
@@ -298,6 +291,20 @@ func (app *Application) ensureDB(ctx context.Context) error {
 	app.dbConnected = true
 
 	return nil
+}
+
+// resolveAdminPassword returns the admin password from env or secret manager.
+func (app *Application) resolveAdminPassword(ctx context.Context) (string, error) {
+	password := os.Getenv("ADMIN_PASSWORD")
+	secret := os.Getenv("ADMIN_PASSWORD_SECRET")
+	if secret != "" && app.secretResolver != nil {
+		resolved, err := app.secretResolver.GetSecret(ctx, secret)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve admin password secret: %w", err)
+		}
+		password = resolved
+	}
+	return password, nil
 }
 
 // reinitializeAfterConnect re-creates all stores and services that depend on the

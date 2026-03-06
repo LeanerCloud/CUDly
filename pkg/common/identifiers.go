@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// isAllowedIDChar reports whether r is allowed in an AWS reservation ID
+// (ASCII letter, digit, or hyphen).
+func isAllowedIDChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-'
+}
+
 // SanitizeReservationID returns an identifier safe for AWS reservation/reserved-instance
 // ID or name fields: only ASCII letters, digits, and hyphens; no leading/trailing
 // hyphen; no consecutive hyphens. Dots are replaced with hyphens. If the result
@@ -13,7 +19,7 @@ import (
 func SanitizeReservationID(id, fallbackPrefix string) string {
 	var b strings.Builder
 	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+		if isAllowedIDChar(r) {
 			b.WriteRune(r)
 		} else if r == '.' {
 			b.WriteRune('-')

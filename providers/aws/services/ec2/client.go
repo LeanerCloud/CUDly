@@ -152,14 +152,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	return result, nil
 }
 
-// findOfferingID finds the appropriate EC2 Reserved Instance offering ID
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	details, ok := rec.Details.(*common.ComputeDetails)
-	if !ok || details == nil {
-		return "", fmt.Errorf("invalid service details for EC2")
-	}
-
-	// Default values if not specified
+// buildOfferingFilters constructs the EC2 API filters for finding an RI offering.
+func (c *Client) buildOfferingFilters(rec common.Recommendation, details *common.ComputeDetails) []types.Filter {
 	platform := details.Platform
 	if platform == "" {
 		platform = "Linux/UNIX"
@@ -173,39 +167,24 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		scope = "Region"
 	}
 
-	// Prepare filters for the offering search
-	filters := []types.Filter{
-		{
-			Name:   aws.String("instance-type"),
-			Values: []string{rec.ResourceType},
-		},
-		{
-			Name:   aws.String("product-description"),
-			Values: []string{platform},
-		},
-		{
-			Name:   aws.String("instance-tenancy"),
-			Values: []string{tenancy},
-		},
-		{
-			Name:   aws.String("scope"),
-			Values: []string{scope},
-		},
+	return []types.Filter{
+		{Name: aws.String("instance-type"), Values: []string{rec.ResourceType}},
+		{Name: aws.String("product-description"), Values: []string{platform}},
+		{Name: aws.String("instance-tenancy"), Values: []string{tenancy}},
+		{Name: aws.String("scope"), Values: []string{scope}},
+		{Name: aws.String("duration"), Values: []string{fmt.Sprintf("%d", c.getDurationValue(rec.Term))}},
+		{Name: aws.String("offering-class"), Values: []string{c.getOfferingClass(rec.PaymentOption)}},
+	}
+}
+
+// findOfferingID finds the appropriate EC2 Reserved Instance offering ID
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+	details, ok := rec.Details.(*common.ComputeDetails)
+	if !ok || details == nil {
+		return "", fmt.Errorf("invalid service details for EC2")
 	}
 
-	// Add duration filter
-	durationValue := c.getDurationValue(rec.Term)
-	filters = append(filters, types.Filter{
-		Name:   aws.String("duration"),
-		Values: []string{fmt.Sprintf("%d", durationValue)},
-	})
-
-	// Add offering class filter
-	offeringClass := c.getOfferingClass(rec.PaymentOption)
-	filters = append(filters, types.Filter{
-		Name:   aws.String("offering-class"),
-		Values: []string{offeringClass},
-	})
+	filters := c.buildOfferingFilters(rec, details)
 
 	var nextToken *string
 	for {
@@ -231,7 +210,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		nextToken = result.NextToken
 	}
 
-	return "", fmt.Errorf("no offerings found for %s %s %s", rec.ResourceType, platform, tenancy)
+	return "", fmt.Errorf("no offerings found for %s %s %s", rec.ResourceType, details.Platform, details.Tenancy)
 }
 
 // ValidateOffering checks if an offering exists without purchasing

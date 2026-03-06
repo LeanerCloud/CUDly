@@ -20,6 +20,61 @@ type Options struct {
 	MaxList         int32  // used for EC2; RDS will clamp to valid range
 }
 
+func checkIdentity(ctx context.Context, cfg aws.Config, expectedAccount string) (map[string]string, error) {
+	out, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return nil, err
+	}
+	d := map[string]string{
+		"account": aws.ToString(out.Account),
+		"arn":     aws.ToString(out.Arn),
+		"user_id": aws.ToString(out.UserId),
+	}
+	if expectedAccount != "" && aws.ToString(out.Account) != expectedAccount {
+		return d, fmt.Errorf("unexpected AWS account: got %s want %s", aws.ToString(out.Account), expectedAccount)
+	}
+	return d, nil
+}
+
+func checkRegions(ctx context.Context, cfg aws.Config) (map[string]string, error) {
+	out, err := ec2.NewFromConfig(cfg).DescribeRegions(ctx, &ec2.DescribeRegionsInput{})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"regions_count": fmt.Sprintf("%d", len(out.Regions))}, nil
+}
+
+func checkInstances(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) {
+	out, err := ec2.NewFromConfig(cfg).DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		MaxResults: aws.Int32(maxList),
+	})
+	if err != nil {
+		return nil, err
+	}
+	instances := 0
+	for _, r := range out.Reservations {
+		instances += len(r.Instances)
+	}
+	return map[string]string{"instances_seen": fmt.Sprintf("%d", instances)}, nil
+}
+
+func checkRDS(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) {
+	max := maxList
+	if max < 20 {
+		max = 20
+	}
+	if max > 100 {
+		max = 100
+	}
+	out, err := rds.NewFromConfig(cfg).DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
+		MaxRecords: aws.Int32(max),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"db_instances_seen": fmt.Sprintf("%d", len(out.DBInstances))}, nil
+}
+
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	if opts.Region == "" {
 		opts.Region = "us-east-1"
@@ -40,81 +95,31 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 		return nil, err
 	}
 
-	runCheck := func(name string, fn func(context.Context, aws.Config) (map[string]string, error)) {
+	runCheck := func(name string, fn func() (map[string]string, error)) {
 		start := time.Now().UTC()
-		details, e := fn(ctx, cfg)
-		end := time.Now().UTC()
-
-		cr := report.CheckResult{Name: name, StartedAt: start, EndedAt: end}
+		details, e := fn()
+		cr := report.CheckResult{Name: name, StartedAt: start, EndedAt: time.Now().UTC()}
 		if e == nil {
 			cr.Status = report.StatusPass
-			cr.Details = details
 		} else {
 			cr.Status = report.StatusFail
 			cr.Message = e.Error()
-			cr.Details = details
 		}
+		cr.Details = details
 		rep.Add(cr)
 	}
 
-	// READ ONLY: identity check
-	runCheck("sts:GetCallerIdentity", func(ctx context.Context, cfg aws.Config) (map[string]string, error) {
-		out, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-		if err != nil {
-			return nil, err
-		}
-		d := map[string]string{
-			"account": aws.ToString(out.Account),
-			"arn":     aws.ToString(out.Arn),
-			"user_id": aws.ToString(out.UserId),
-		}
-		if opts.ExpectedAccount != "" && aws.ToString(out.Account) != opts.ExpectedAccount {
-			return d, fmt.Errorf("unexpected AWS account: got %s want %s", aws.ToString(out.Account), opts.ExpectedAccount)
-		}
-		return d, nil
+	runCheck("sts:GetCallerIdentity", func() (map[string]string, error) {
+		return checkIdentity(ctx, cfg, opts.ExpectedAccount)
 	})
-
-	// READ ONLY: regions
-	runCheck("ec2:DescribeRegions", func(ctx context.Context, cfg aws.Config) (map[string]string, error) {
-		out, err := ec2.NewFromConfig(cfg).DescribeRegions(ctx, &ec2.DescribeRegionsInput{})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]string{"regions_count": fmt.Sprintf("%d", len(out.Regions))}, nil
+	runCheck("ec2:DescribeRegions", func() (map[string]string, error) {
+		return checkRegions(ctx, cfg)
 	})
-
-	// READ ONLY: instances (sample)
-	runCheck("ec2:DescribeInstances (sample)", func(ctx context.Context, cfg aws.Config) (map[string]string, error) {
-		out, err := ec2.NewFromConfig(cfg).DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-			MaxResults: aws.Int32(opts.MaxList),
-		})
-		if err != nil {
-			return nil, err
-		}
-		instances := 0
-		for _, r := range out.Reservations {
-			instances += len(r.Instances)
-		}
-		return map[string]string{"instances_seen": fmt.Sprintf("%d", instances)}, nil
+	runCheck("ec2:DescribeInstances (sample)", func() (map[string]string, error) {
+		return checkInstances(ctx, cfg, opts.MaxList)
 	})
-
-	// READ ONLY: RDS (sample) — MaxRecords must be 20..100
-	runCheck("rds:DescribeDBInstances (sample)", func(ctx context.Context, cfg aws.Config) (map[string]string, error) {
-		max := opts.MaxList
-		if max < 20 {
-			max = 20
-		}
-		if max > 100 {
-			max = 100
-		}
-
-		out, err := rds.NewFromConfig(cfg).DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-			MaxRecords: aws.Int32(max),
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]string{"db_instances_seen": fmt.Sprintf("%d", len(out.DBInstances))}, nil
+	runCheck("rds:DescribeDBInstances (sample)", func() (map[string]string, error) {
+		return checkRDS(ctx, cfg, opts.MaxList)
 	})
 
 	rep.EndedAt = time.Now().UTC()

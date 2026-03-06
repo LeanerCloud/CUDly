@@ -276,39 +276,14 @@ type PatchPlanRequest struct {
 	NotificationDaysBefore *int    `json:"notification_days_before,omitempty"`
 }
 
-// patchPlan handles partial updates to a plan (PATCH method)
-func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (any, error) {
-	// Validate UUID format to prevent injection attacks
-	if err := validateUUID(planID); err != nil {
-		return nil, err
-	}
-
-	// Require admin access for patching plans
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
-		return nil, err
-	}
-
-	var req PatchPlanRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
-		return nil, NewClientError(400, "invalid request body")
-	}
-
-	// Fetch existing plan
-	plan, err := h.config.GetPurchasePlan(ctx, planID)
-	if err != nil {
-		return nil, fmt.Errorf("plan not found: %s", planID)
-	}
-	if plan == nil {
-		return nil, fmt.Errorf("plan not found: %s", planID)
-	}
-
-	// Apply only the fields that are present in the request, with validation
+// applyPatchFields applies validated partial-update fields to a plan.
+func applyPatchFields(plan *config.PurchasePlan, req PatchPlanRequest) error {
 	if req.Name != nil {
 		if len(*req.Name) == 0 {
-			return nil, NewClientError(400, "plan name cannot be empty")
+			return NewClientError(400, "plan name cannot be empty")
 		}
 		if len(*req.Name) > 255 {
-			return nil, NewClientError(400, "plan name too long (max 255 characters)")
+			return NewClientError(400, "plan name too long (max 255 characters)")
 		}
 		plan.Name = *req.Name
 	}
@@ -320,15 +295,42 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 	}
 	if req.NotificationDaysBefore != nil {
 		if *req.NotificationDaysBefore < 0 || *req.NotificationDaysBefore > 30 {
-			return nil, NewClientError(400, "notification_days_before must be between 0 and 30")
+			return NewClientError(400, "notification_days_before must be between 0 and 30")
 		}
 		plan.NotificationDaysBefore = *req.NotificationDaysBefore
 	}
+	return nil
+}
 
-	// Update timestamp
+// patchPlan handles partial updates to a plan (PATCH method)
+func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (any, error) {
+	if err := validateUUID(planID); err != nil {
+		return nil, err
+	}
+
+	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+		return nil, err
+	}
+
+	var req PatchPlanRequest
+	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		return nil, fmt.Errorf("plan not found: %s", planID)
+	}
+	if plan == nil {
+		return nil, fmt.Errorf("plan not found: %s", planID)
+	}
+
+	if err := applyPatchFields(plan, req); err != nil {
+		return nil, err
+	}
+
 	plan.UpdatedAt = time.Now()
 
-	// Validate and save
 	if err := plan.Validate(); err != nil {
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}

@@ -66,42 +66,21 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	return &RIUtilizationResponse{Utilization: utilization}, nil
 }
 
-// getReshapeRecommendations orchestrates fetching convertible RIs + utilization
-// and returns reshape recommendations.
-func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
-		return nil, err
+// parseThresholdParam parses and validates the "threshold" query parameter.
+func parseThresholdParam(params map[string]string) (float64, error) {
+	t := params["threshold"]
+	if t == "" {
+		return 95.0, nil
 	}
-
-	threshold := 95.0
-	if t := req.QueryStringParameters["threshold"]; t != "" {
-		f, err := strconv.ParseFloat(t, 64)
-		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 100 {
-			return nil, NewClientError(400, "threshold must be a number between 0 and 100")
-		}
-		threshold = f
+	f, err := strconv.ParseFloat(t, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 100 {
+		return 0, NewClientError(400, "threshold must be a number between 0 and 100")
 	}
+	return f, nil
+}
 
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
-	}
-
-	// Fetch convertible RIs
-	ec2Client := awsprovider.NewEC2ClientDirect(cfg)
-	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
-	}
-
-	// Fetch utilization
-	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
-	utilData, err := recsAdapter.GetRIUtilization(ctx, 30)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
-	}
-
-	// Convert to exchange package types
+// convertToExchangeTypes converts provider-specific types to the exchange package types.
+func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo) {
 	riInfos := make([]exchange.RIInfo, len(instances))
 	for i, inst := range instances {
 		riInfos[i] = exchange.RIInfo{
@@ -121,6 +100,39 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 		}
 	}
 
+	return riInfos, utilInfos
+}
+
+// getReshapeRecommendations orchestrates fetching convertible RIs + utilization
+// and returns reshape recommendations.
+func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	if _, err := h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
+
+	threshold, err := parseThresholdParam(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	ec2Client := awsprovider.NewEC2ClientDirect(cfg)
+	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
+	}
+
+	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
+	utilData, err := recsAdapter.GetRIUtilization(ctx, 30)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
+	}
+
+	riInfos, utilInfos := convertToExchangeTypes(instances, utilData)
 	recs := exchange.AnalyzeReshaping(riInfos, utilInfos, threshold)
 
 	return &ReshapeRecommendationsResponse{Recommendations: recs}, nil

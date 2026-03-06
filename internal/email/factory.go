@@ -99,38 +99,48 @@ func newGCPSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	})
 }
 
+// resolveAzureSMTPCredentials returns Azure SMTP username and password from
+// environment variables or secret manager.
+func resolveAzureSMTPCredentials(ctx context.Context) (username, password string, err error) {
+	username = os.Getenv("AZURE_SMTP_USERNAME")
+	password = os.Getenv("AZURE_SMTP_PASSWORD")
+	if username != "" && password != "" {
+		return username, password, nil
+	}
+
+	usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
+	passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
+	if usernameSecret == "" || passwordSecret == "" {
+		return "", "", fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
+	}
+
+	resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create secret resolver for Azure SMTP credentials: %w", err)
+	}
+	defer resolver.Close()
+
+	username, err = resolver.GetSecret(ctx, usernameSecret)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve Azure SMTP username from secret %q: %w", usernameSecret, err)
+	}
+	password, err = resolver.GetSecret(ctx, passwordSecret)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve Azure SMTP password from secret %q: %w", passwordSecret, err)
+	}
+	return username, password, nil
+}
+
 // newAzureSenderFromEnv creates an Azure Communication Services email sender from environment variables
 func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
-	username := os.Getenv("AZURE_SMTP_USERNAME")
-	password := os.Getenv("AZURE_SMTP_PASSWORD")
-
-	// Resolve credentials from Key Vault if secret names are provided
-	if username == "" || password == "" {
-		usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
-		passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
-		if usernameSecret != "" && passwordSecret != "" {
-			resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
-			if err != nil {
-				return nil, fmt.Errorf("failed to create secret resolver for Azure SMTP credentials: %w", err)
-			}
-			defer resolver.Close()
-			username, err = resolver.GetSecret(ctx, usernameSecret)
-			if err != nil {
-				return nil, fmt.Errorf("failed to resolve Azure SMTP username from secret %q: %w", usernameSecret, err)
-			}
-			password, err = resolver.GetSecret(ctx, passwordSecret)
-			if err != nil {
-				return nil, fmt.Errorf("failed to resolve Azure SMTP password from secret %q: %w", passwordSecret, err)
-			}
-		}
+	username, password, err := resolveAzureSMTPCredentials(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	if username == "" || password == "" {
-		return nil, fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
-	}
 	host := os.Getenv("AZURE_SMTP_HOST")
 	if host == "" {
-		host = "smtp.azurecomm.net" // Default Azure Communication Services SMTP host
+		host = "smtp.azurecomm.net"
 	}
 	return NewSMTPSender(SMTPConfig{
 		Host:      host,

@@ -134,46 +134,27 @@ func (s *SMTPSender) SendToEmail(ctx context.Context, toEmail, subject, body str
 	return nil
 }
 
-// sendMailTLS sends email using STARTTLS (required for most modern SMTP servers)
-func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
-	// Connect to server
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		return err
+// smtpAuthenticate performs SMTP AUTH with user-friendly 535 error translation.
+func smtpAuthenticate(c *smtp.Client, auth smtp.Auth) error {
+	if auth == nil {
+		return nil
 	}
-	defer c.Close()
-
-	// Start TLS - this method is only called when useTLS is true
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return err
-	}
-
-	tlsConfig := &tls.Config{
-		ServerName: host,
-	}
-
-	if err = c.StartTLS(tlsConfig); err != nil {
-		return err
-	}
-
-	// Authenticate
-	if auth != nil {
-		if err = c.Auth(auth); err != nil {
-			// Check for common SMTP errors
-			if strings.Contains(err.Error(), "535") {
-				return fmt.Errorf("SMTP authentication failed - check username/password")
-			}
-			return err
+	if err := c.Auth(auth); err != nil {
+		if strings.Contains(err.Error(), "535") {
+			return fmt.Errorf("SMTP authentication failed - check username/password")
 		}
+		return err
 	}
+	return nil
+}
 
-	// Send mail
-	if err = c.Mail(from); err != nil {
+// smtpSendBody performs the MAIL/RCPT/DATA sequence on an already-authenticated client.
+func smtpSendBody(c *smtp.Client, from string, to []string, msg []byte) error {
+	if err := c.Mail(from); err != nil {
 		return err
 	}
 	for _, addr := range to {
-		if err = c.Rcpt(addr); err != nil {
+		if err := c.Rcpt(addr); err != nil {
 			return err
 		}
 	}
@@ -182,14 +163,34 @@ func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []
 	if err != nil {
 		return err
 	}
+	if _, err = w.Write(msg); err != nil {
+		return err
+	}
+	return w.Close()
+}
 
-	_, err = w.Write(msg)
+// sendMailTLS sends email using STARTTLS (required for most modern SMTP servers)
+func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
 	}
 
-	err = w.Close()
-	if err != nil {
+	if err = c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+		return err
+	}
+
+	if err = smtpAuthenticate(c, auth); err != nil {
+		return err
+	}
+
+	if err = smtpSendBody(c, from, to, msg); err != nil {
 		return err
 	}
 

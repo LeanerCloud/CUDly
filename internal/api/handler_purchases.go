@@ -232,37 +232,8 @@ func (h *Handler) cancelPurchase(ctx context.Context, execID, token string) (any
 	return map[string]string{"status": "cancelled"}, nil
 }
 
-// getPurchaseDetails returns details about a specific purchase execution
-func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (any, error) {
-	// Validate UUID format to prevent injection attacks
-	if err := validateUUID(executionID); err != nil {
-		return nil, err
-	}
-
-	// Require admin access for viewing purchase details
-	if _, err := h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
-
-	// Get the execution
-	execution, err := h.config.GetExecutionByID(ctx, executionID)
-	if err != nil {
-		return nil, fmt.Errorf("execution not found: %w", err)
-	}
-	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
-	}
-
-	// Get associated plan for additional details
-	var planName string
-	if execution.PlanID != "" {
-		plan, err := h.config.GetPurchasePlan(ctx, execution.PlanID)
-		if err == nil && plan != nil {
-			planName = plan.Name
-		}
-	}
-
-	// Build response matching frontend expectations
+// buildPurchaseDetailsResponse builds the response map for a purchase execution.
+func buildPurchaseDetailsResponse(execution *config.PurchaseExecution, planName string) map[string]any {
 	response := map[string]any{
 		"execution_id":       execution.ExecutionID,
 		"plan_id":            execution.PlanID,
@@ -284,8 +255,36 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 	if execution.Error != "" {
 		response["error"] = execution.Error
 	}
+	return response
+}
 
-	return response, nil
+// getPurchaseDetails returns details about a specific purchase execution
+func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (any, error) {
+	if err := validateUUID(executionID); err != nil {
+		return nil, err
+	}
+
+	if _, err := h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
+
+	execution, err := h.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return nil, fmt.Errorf("execution not found: %w", err)
+	}
+	if execution == nil {
+		return nil, fmt.Errorf("execution not found: %s", executionID)
+	}
+
+	var planName string
+	if execution.PlanID != "" {
+		plan, err := h.config.GetPurchasePlan(ctx, execution.PlanID)
+		if err == nil && plan != nil {
+			planName = plan.Name
+		}
+	}
+
+	return buildPurchaseDetailsResponse(execution, planName), nil
 }
 
 // ExecutePurchaseRequest represents the request to execute purchases
@@ -293,9 +292,30 @@ type ExecutePurchaseRequest struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 }
 
+// validateAndTotalRecommendations validates each recommendation and returns totals.
+func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfront, savings float64, err error) {
+	const maxAmount = 10_000_000 // $10M sanity cap
+	for i, rec := range recs {
+		if rec.UpfrontCost < 0 {
+			return 0, 0, NewClientError(400, fmt.Sprintf("recommendation %d has negative upfront cost: %.2f", i, rec.UpfrontCost))
+		}
+		if rec.Savings < 0 {
+			return 0, 0, NewClientError(400, fmt.Sprintf("recommendation %d has negative savings: %.2f", i, rec.Savings))
+		}
+		upfront += rec.UpfrontCost
+		savings += rec.Savings
+	}
+	if upfront > maxAmount {
+		return 0, 0, NewClientError(400, fmt.Sprintf("total upfront cost %.2f exceeds maximum allowed (%.2f)", upfront, float64(maxAmount)))
+	}
+	if savings > maxAmount {
+		return 0, 0, NewClientError(400, fmt.Sprintf("total estimated savings %.2f exceeds maximum allowed (%.2f)", savings, float64(maxAmount)))
+	}
+	return upfront, savings, nil
+}
+
 // executePurchase handles direct purchase execution from recommendations
 func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	// Require admin access for executing purchases
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
 	}
@@ -305,7 +325,6 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Validate recommendations count to prevent DoS
 	const maxRecommendations = 1000
 	if len(execReq.Recommendations) == 0 {
 		return nil, NewClientError(400, "no recommendations provided")
@@ -314,34 +333,16 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
 	}
 
-	// Create a new execution for these recommendations
+	totalUpfront, totalSavings, err := validateAndTotalRecommendations(execReq.Recommendations)
+	if err != nil {
+		return nil, err
+	}
+
 	executionID := uuid.New().String()
-	now := time.Now()
-
-	// Calculate totals from recommendations with validation
-	const maxAmount = 10_000_000 // $10M sanity cap
-	var totalUpfront, totalSavings float64
-	for i, rec := range execReq.Recommendations {
-		if rec.UpfrontCost < 0 {
-			return nil, NewClientError(400, fmt.Sprintf("recommendation %d has negative upfront cost: %.2f", i, rec.UpfrontCost))
-		}
-		if rec.Savings < 0 {
-			return nil, NewClientError(400, fmt.Sprintf("recommendation %d has negative savings: %.2f", i, rec.Savings))
-		}
-		totalUpfront += rec.UpfrontCost
-		totalSavings += rec.Savings
-	}
-	if totalUpfront > maxAmount {
-		return nil, NewClientError(400, fmt.Sprintf("total upfront cost %.2f exceeds maximum allowed (%.2f)", totalUpfront, float64(maxAmount)))
-	}
-	if totalSavings > maxAmount {
-		return nil, NewClientError(400, fmt.Sprintf("total estimated savings %.2f exceeds maximum allowed (%.2f)", totalSavings, float64(maxAmount)))
-	}
-
 	execution := &config.PurchaseExecution{
 		ExecutionID:      executionID,
 		Status:           "pending",
-		ScheduledDate:    now,
+		ScheduledDate:    time.Now(),
 		Recommendations:  execReq.Recommendations,
 		TotalUpfrontCost: totalUpfront,
 		EstimatedSavings: totalSavings,

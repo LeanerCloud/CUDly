@@ -53,44 +53,60 @@ func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 // The key should be formatted as "IP#{ip}" or "EMAIL#{email}"
 // The endpoint identifies which rate limit configuration to use
 func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string) (bool, error) {
-	// Handle nil rate limiter (for testing or when not configured)
 	if rl == nil || rl.pool == nil {
 		return true, nil
 	}
 
-	// Get the rate limit configuration for this endpoint
 	rl.limitsMu.RLock()
 	config, exists := rl.limits[endpoint]
 	if !exists {
-		// Default to general API limits if endpoint not specifically configured
 		config = rl.limits["api_general"]
 	}
 	rl.limitsMu.RUnlock()
 
-	// Create the unique identifier combining the key and endpoint
 	id := fmt.Sprintf("%s#ENDPOINT#%s", key, endpoint)
 
-	now := time.Now()
-	resetTime := now.Add(config.Window)
-
-	// Use transaction to ensure atomic read-modify-write
 	tx, err := rl.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) // Will be no-op if committed
 
-	// Try to get existing rate limit entry with row lock
 	var count int
 	var existingResetTime time.Time
-	err = tx.QueryRow(ctx,
+	queryErr := tx.QueryRow(ctx,
 		`SELECT count, reset_time FROM rate_limits WHERE id = $1 FOR UPDATE`,
 		id,
 	).Scan(&count, &existingResetTime)
 
-	if errors.Is(err, pgx.ErrNoRows) {
-		// No existing entry, create a new one
-		_, err = tx.Exec(ctx,
+	allowed, err := rateLimitOutcome(ctx, tx, id, config, queryErr, count, existingResetTime)
+	if err != nil {
+		return false, err
+	}
+
+	if allowed && errors.Is(queryErr, pgx.ErrNoRows) {
+		rl.maybeCleanup()
+	}
+
+	return allowed, nil
+}
+
+// execAndCommit executes a SQL statement and commits the transaction.
+func execAndCommit(ctx context.Context, tx pgx.Tx, sql string, args ...any) error {
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// rateLimitOutcome decides whether to allow the request, performs the appropriate
+// database mutation, and commits the transaction.
+func rateLimitOutcome(ctx context.Context, tx pgx.Tx, id string, config RateLimitConfig, queryErr error, count int, existingResetTime time.Time) (bool, error) {
+	now := time.Now()
+	resetTime := now.Add(config.Window)
+
+	if errors.Is(queryErr, pgx.ErrNoRows) {
+		err := execAndCommit(ctx, tx,
 			`INSERT INTO rate_limits (id, count, reset_time, created_at, updated_at)
 			 VALUES ($1, 1, $2, $3, $3)`,
 			id, resetTime, now,
@@ -98,60 +114,37 @@ func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string)
 		if err != nil {
 			return false, fmt.Errorf("failed to create rate limit entry: %w", err)
 		}
-
-		if err = tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
-		// Periodically clean up old entries (throttled, non-blocking)
-		rl.maybeCleanup()
-
 		return true, nil
-	} else if err != nil {
-		return false, fmt.Errorf("failed to query rate limit entry: %w", err)
+	}
+	if queryErr != nil {
+		return false, fmt.Errorf("failed to query rate limit entry: %w", queryErr)
 	}
 
-	// Check if the window has expired
 	if now.After(existingResetTime) {
-		// Window expired, reset the counter
-		_, err = tx.Exec(ctx,
+		err := execAndCommit(ctx, tx,
 			`UPDATE rate_limits SET count = 1, reset_time = $1, updated_at = $2 WHERE id = $3`,
 			resetTime, now, id,
 		)
 		if err != nil {
 			return false, fmt.Errorf("failed to reset rate limit entry: %w", err)
 		}
-
-		if err = tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
 		return true, nil
 	}
 
-	// Window is still active, check if limit exceeded
 	if count >= config.MaxAttempts {
-		// Limit exceeded - commit to release lock
-		if err = tx.Commit(ctx); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			logging.Warnf("Failed to commit after rate limit exceeded: %v", err)
 		}
 		return false, nil
 	}
 
-	// Increment the counter
-	newCount := count + 1
-	_, err = tx.Exec(ctx,
+	err := execAndCommit(ctx, tx,
 		`UPDATE rate_limits SET count = $1, updated_at = $2 WHERE id = $3`,
-		newCount, now, id,
+		count+1, now, id,
 	)
 	if err != nil {
 		return false, fmt.Errorf("failed to increment rate limit counter: %w", err)
 	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
 	return true, nil
 }
 

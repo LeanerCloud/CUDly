@@ -88,79 +88,80 @@ func NormalizationFactorForSize(size string) float64 {
 // threshold is a percentage (0–100) below which an RI is considered underutilized.
 // For example, threshold=95 means RIs with <95% utilization get recommendations.
 func AnalyzeReshaping(ris []RIInfo, utilization []UtilizationInfo, threshold float64) []ReshapeRecommendation {
-	// Build utilization lookup
 	utilMap := make(map[string]float64, len(utilization))
 	for _, u := range utilization {
 		utilMap[u.RIID] = u.UtilizationPercent
 	}
 
 	var recommendations []ReshapeRecommendation
-
 	for _, ri := range ris {
-		// Safety: only convertible RIs can be exchanged
-		if !strings.EqualFold(ri.OfferingClass, "convertible") {
-			continue
+		if rec := analyzeRI(ri, utilMap, threshold); rec != nil {
+			recommendations = append(recommendations, *rec)
 		}
+	}
+	return recommendations
+}
 
-		// Must have utilization data
-		util, ok := utilMap[ri.ID]
-		if !ok {
-			continue
-		}
+// resolveNormFactor returns the normalization factor for the RI, falling back
+// to the standard table value for the instance size. Returns 0 if unknown.
+func resolveNormFactor(ri RIInfo, size string) float64 {
+	if ri.NormalizationFactor != 0 {
+		return ri.NormalizationFactor
+	}
+	return normalizationFactors[size]
+}
 
-		// Well-utilized RIs don't need reshaping
-		if util >= threshold {
-			continue
-		}
-
-		family, size := parseInstanceType(ri.InstanceType)
-		if family == "" || size == "" {
-			continue
-		}
-
-		normFactor := ri.NormalizationFactor
-		if normFactor == 0 {
-			normFactor = normalizationFactors[size]
-		}
-		if normFactor == 0 {
-			continue
-		}
-
-		normalizedPurchased := normFactor * float64(ri.InstanceCount)
-		normalizedUsed := normalizedPurchased * (util / 100.0)
-
-		// Find the best-fit instance size in the same family
-		targetSize, targetCount := findBestFit(normalizedUsed)
-		if targetSize == "" || targetCount == 0 {
-			continue
-		}
-
-		targetInstanceType := family + "." + targetSize
-
-		// Skip if no actual change
-		if targetInstanceType == ri.InstanceType && targetCount == ri.InstanceCount {
-			continue
-		}
-
-		recommendations = append(recommendations, ReshapeRecommendation{
-			SourceRIID:          ri.ID,
-			SourceInstanceType:  ri.InstanceType,
-			SourceCount:         ri.InstanceCount,
-			TargetInstanceType:  targetInstanceType,
-			TargetCount:         targetCount,
-			UtilizationPercent:  util,
-			NormalizedUsed:      normalizedUsed,
-			NormalizedPurchased: normalizedPurchased,
-			Reason: fmt.Sprintf(
-				"RI at %.0f%% utilization (%.1f/%.1f normalized units). Suggest exchanging %dx %s for %dx %s.",
-				util, normalizedUsed, normalizedPurchased,
-				ri.InstanceCount, ri.InstanceType,
-				targetCount, targetInstanceType,
-			),
-		})
+// analyzeRI evaluates a single RI and returns a reshape recommendation if it is
+// underutilized and convertible, or nil if no action is needed.
+func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *ReshapeRecommendation {
+	if !strings.EqualFold(ri.OfferingClass, "convertible") {
+		return nil
 	}
 
-	return recommendations
+	util, ok := utilMap[ri.ID]
+	if !ok || util >= threshold {
+		return nil
+	}
+
+	family, size := parseInstanceType(ri.InstanceType)
+	if family == "" {
+		return nil
+	}
+
+	normFactor := resolveNormFactor(ri, size)
+	if normFactor == 0 {
+		return nil
+	}
+
+	normalizedPurchased := normFactor * float64(ri.InstanceCount)
+	normalizedUsed := normalizedPurchased * (util / 100.0)
+
+	targetSize, targetCount := findBestFit(normalizedUsed)
+	if targetSize == "" {
+		return nil
+	}
+
+	targetInstanceType := family + "." + targetSize
+	if targetInstanceType == ri.InstanceType && targetCount == ri.InstanceCount {
+		return nil
+	}
+
+	return &ReshapeRecommendation{
+		SourceRIID:          ri.ID,
+		SourceInstanceType:  ri.InstanceType,
+		SourceCount:         ri.InstanceCount,
+		TargetInstanceType:  targetInstanceType,
+		TargetCount:         targetCount,
+		UtilizationPercent:  util,
+		NormalizedUsed:      normalizedUsed,
+		NormalizedPurchased: normalizedPurchased,
+		Reason: fmt.Sprintf(
+			"RI at %.0f%% utilization (%.1f/%.1f normalized units). Suggest exchanging %dx %s for %dx %s.",
+			util, normalizedUsed, normalizedPurchased,
+			ri.InstanceCount, ri.InstanceType,
+			targetCount, targetInstanceType,
+		),
+	}
 }
 
 // findBestFit finds the instance size and count that best fits normalizedUsed units.

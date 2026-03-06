@@ -21,6 +21,13 @@ type RIUtilization struct {
 	UnusedHours        float64 `json:"unused_hours"`
 }
 
+// riAccumulator aggregates utilization hours across multiple daily entries for one RI.
+type riAccumulator struct {
+	purchasedHours   float64
+	totalActualHours float64
+	unusedHours      float64
+}
+
 // GetRIUtilization fetches per-RI utilization from Cost Explorer for the last N days.
 func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUtilization, error) {
 	if lookbackDays <= 0 {
@@ -43,60 +50,20 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 		},
 	}
 
-	// Paginate through all results — daily granularity with GroupBy can
-	// produce multiple pages and multiple entries per RI (one per day).
-	type accumulator struct {
-		purchasedHours   float64
-		totalActualHours float64
-		unusedHours      float64
-	}
-	agg := make(map[string]*accumulator)
+	agg := make(map[string]*riAccumulator)
 
 	var nextPageToken *string
 	for {
 		input.NextPageToken = nextPageToken
 
-		var result *costexplorer.GetReservationUtilizationOutput
-		var err error
-
-		c.rateLimiter.Reset()
-		for {
-			if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
-				return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
-			}
-
-			result, err = c.costExplorerClient.GetReservationUtilization(ctx, input)
-			if !c.rateLimiter.ShouldRetry(err) {
-				break
-			}
-		}
-
+		result, err := c.fetchUtilizationPage(ctx, input)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get reservation utilization: %w", err)
+			return nil, err
 		}
 
 		for _, group := range result.UtilizationsByTime {
 			for _, detail := range group.Groups {
-				if detail.Key == nil || detail.Utilization == nil {
-					continue
-				}
-
-				id := aws.ToString(detail.Key)
-				a, ok := agg[id]
-				if !ok {
-					a = &accumulator{}
-					agg[id] = a
-				}
-
-				if detail.Utilization.PurchasedHours != nil {
-					a.purchasedHours += parseFloat(aws.ToString(detail.Utilization.PurchasedHours))
-				}
-				if detail.Utilization.TotalActualHours != nil {
-					a.totalActualHours += parseFloat(aws.ToString(detail.Utilization.TotalActualHours))
-				}
-				if detail.Utilization.UnusedHours != nil {
-					a.unusedHours += parseFloat(aws.ToString(detail.Utilization.UnusedHours))
-				}
+				aggregateUtilizationDetail(agg, detail)
 			}
 		}
 
@@ -106,7 +73,6 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 		nextPageToken = result.NextPageToken
 	}
 
-	// Compute aggregate utilization per RI
 	utilizations := make([]RIUtilization, 0, len(agg))
 	for id, a := range agg {
 		pct := 0.0
@@ -123,6 +89,49 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 	}
 
 	return utilizations, nil
+}
+
+// fetchUtilizationPage calls the Cost Explorer API with rate-limit retry.
+func (c *Client) fetchUtilizationPage(ctx context.Context, input *costexplorer.GetReservationUtilizationInput) (*costexplorer.GetReservationUtilizationOutput, error) {
+	c.rateLimiter.Reset()
+	for {
+		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
+		}
+
+		result, err := c.costExplorerClient.GetReservationUtilization(ctx, input)
+		if !c.rateLimiter.ShouldRetry(err) {
+			if err != nil {
+				return nil, fmt.Errorf("failed to get reservation utilization: %w", err)
+			}
+			return result, nil
+		}
+	}
+}
+
+// aggregateUtilizationDetail accumulates hours from a single utilization detail
+// into the per-RI aggregation map.
+func aggregateUtilizationDetail(agg map[string]*riAccumulator, detail types.ReservationUtilizationGroup) {
+	if detail.Key == nil || detail.Utilization == nil {
+		return
+	}
+
+	id := aws.ToString(detail.Key)
+	a, ok := agg[id]
+	if !ok {
+		a = &riAccumulator{}
+		agg[id] = a
+	}
+
+	if detail.Utilization.PurchasedHours != nil {
+		a.purchasedHours += parseFloat(aws.ToString(detail.Utilization.PurchasedHours))
+	}
+	if detail.Utilization.TotalActualHours != nil {
+		a.totalActualHours += parseFloat(aws.ToString(detail.Utilization.TotalActualHours))
+	}
+	if detail.Utilization.UnusedHours != nil {
+		a.unusedHours += parseFloat(aws.ToString(detail.Utilization.UnusedHours))
+	}
 }
 
 func parseFloat(s string) float64 {
