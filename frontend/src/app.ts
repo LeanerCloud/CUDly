@@ -175,7 +175,6 @@ function setupButtonHandlers(): void {
   const confirmSelectRecsBtn = document.getElementById('confirm-select-recommendations-btn');
   if (confirmSelectRecsBtn) {
     confirmSelectRecsBtn.addEventListener('click', () => {
-      console.log('Confirm recommendations clicked');
     });
   }
 
