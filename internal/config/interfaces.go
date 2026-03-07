@@ -34,4 +34,16 @@ type StoreInterface interface {
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error
 	GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error)
 	GetAllPurchaseHistory(ctx context.Context, limit int) ([]PurchaseHistoryRecord, error)
+
+	// RI Exchange history
+	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error
+	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)
+	GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error)
+	GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error)
+	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*RIExchangeRecord, error)
+	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
+	FailRIExchange(ctx context.Context, id string, errorMsg string) error
+	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
+	CancelAllPendingExchanges(ctx context.Context) (int64, error)
+	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]RIExchangeRecord, error)
 }

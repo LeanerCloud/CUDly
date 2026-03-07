@@ -290,6 +290,12 @@ func (n *noopEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr,
 func (n *noopEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
 	return nil
 }
+func (n *noopEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
+	return nil
+}
+func (n *noopEmailSender) SendRIExchangeCompleted(ctx context.Context, data email.RIExchangeNotificationData) error {
+	return nil
+}
 
 func TestLoadApplicationConfig(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {

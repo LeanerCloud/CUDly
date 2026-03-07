@@ -134,6 +134,71 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
+	args := m.Called(ctx, record)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) GetRIExchangeRecord(ctx context.Context, id string) (*config.RIExchangeRecord, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
+}
+
+func (m *MockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token string) (*config.RIExchangeRecord, error) {
+	args := m.Called(ctx, token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
+}
+
+func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
+	args := m.Called(ctx, since, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
+}
+
+func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*config.RIExchangeRecord, error) {
+	args := m.Called(ctx, id, fromStatus, toStatus)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
+}
+
+func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+	args := m.Called(ctx, id, exchangeID)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+	args := m.Called(ctx, id, errorMsg)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
+	args := m.Called(ctx, date)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
+	args := m.Called(ctx, olderThan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
+}
+
 // MockPurchaseManager is a mock implementation of purchase.Manager
 type MockPurchaseManager struct {
 	mock.Mock

@@ -821,6 +821,290 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 }
 
 // ==========================================
+// RI EXCHANGE HISTORY
+// ==========================================
+
+// SaveRIExchangeRecord saves an RI exchange record
+func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error {
+	if record.ID == "" {
+		record.ID = uuid.New().String()
+	}
+
+	query := `
+		INSERT INTO ri_exchange_history (
+			id, account_id, exchange_id, region, source_ri_ids,
+			source_instance_type, source_count, target_offering_id,
+			target_instance_type, target_count, payment_due,
+			status, approval_token, error, mode, completed_at, expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`
+
+	_, err := s.db.Exec(ctx, query,
+		record.ID,
+		record.AccountID,
+		record.ExchangeID,
+		record.Region,
+		record.SourceRIIDs,
+		record.SourceInstanceType,
+		record.SourceCount,
+		record.TargetOfferingID,
+		record.TargetInstanceType,
+		record.TargetCount,
+		record.PaymentDue,
+		record.Status,
+		nullStringFromString(record.ApprovalToken),
+		nullStringFromString(record.Error),
+		record.Mode,
+		record.CompletedAt,
+		record.ExpiresAt,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to save ri exchange record: %w", err)
+	}
+
+	return nil
+}
+
+// GetRIExchangeRecord retrieves an RI exchange record by ID
+func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error) {
+	query := `
+		SELECT id, account_id, exchange_id, region, source_ri_ids,
+		       source_instance_type, source_count, target_offering_id,
+		       target_instance_type, target_count, payment_due::text,
+		       status, approval_token, error, mode,
+		       created_at, updated_at, completed_at, expires_at
+		FROM ri_exchange_history
+		WHERE id = $1
+	`
+
+	records, err := s.queryRIExchangeRecords(ctx, query, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	return &records[0], nil
+}
+
+// GetRIExchangeRecordByToken retrieves an RI exchange record by approval token
+func (s *PostgresStore) GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error) {
+	query := `
+		SELECT id, account_id, exchange_id, region, source_ri_ids,
+		       source_instance_type, source_count, target_offering_id,
+		       target_instance_type, target_count, payment_due::text,
+		       status, approval_token, error, mode,
+		       created_at, updated_at, completed_at, expires_at
+		FROM ri_exchange_history
+		WHERE approval_token = $1
+	`
+
+	records, err := s.queryRIExchangeRecords(ctx, query, token)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	return &records[0], nil
+}
+
+// GetRIExchangeHistory retrieves RI exchange history records
+func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error) {
+	query := `
+		SELECT id, account_id, exchange_id, region, source_ri_ids,
+		       source_instance_type, source_count, target_offering_id,
+		       target_instance_type, target_count, payment_due::text,
+		       status, approval_token, error, mode,
+		       created_at, updated_at, completed_at, expires_at
+		FROM ri_exchange_history
+		WHERE created_at >= $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+
+	return s.queryRIExchangeRecords(ctx, query, since, limit)
+}
+
+// TransitionRIExchangeStatus atomically transitions an RI exchange record status
+func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*RIExchangeRecord, error) {
+	query := `
+		UPDATE ri_exchange_history
+		SET status = $3
+		WHERE id = $1 AND status = $2 AND (expires_at IS NULL OR expires_at > NOW())
+		RETURNING id, account_id, exchange_id, region, source_ri_ids,
+		          source_instance_type, source_count, target_offering_id,
+		          target_instance_type, target_count, payment_due::text,
+		          status, approval_token, error, mode,
+		          created_at, updated_at, completed_at, expires_at
+	`
+
+	records, err := s.queryRIExchangeRecords(ctx, query, id, fromStatus, toStatus)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	return &records[0], nil
+}
+
+// CompleteRIExchange marks an RI exchange as completed
+func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+	query := `
+		UPDATE ri_exchange_history
+		SET status = 'completed', exchange_id = $2, completed_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := s.db.Exec(ctx, query, id, exchangeID)
+	if err != nil {
+		return fmt.Errorf("failed to complete ri exchange: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("ri exchange record not found: %s", id)
+	}
+
+	return nil
+}
+
+// FailRIExchange marks an RI exchange as failed
+func (s *PostgresStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+	query := `
+		UPDATE ri_exchange_history
+		SET status = 'failed', error = $2
+		WHERE id = $1
+	`
+
+	result, err := s.db.Exec(ctx, query, id, errorMsg)
+	if err != nil {
+		return fmt.Errorf("failed to fail ri exchange: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("ri exchange record not found: %s", id)
+	}
+
+	return nil
+}
+
+// GetRIExchangeDailySpend returns total payment_due for completed exchanges on a given date (UTC)
+func (s *PostgresStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
+	query := `
+		SELECT COALESCE(SUM(payment_due), 0)::text
+		FROM ri_exchange_history
+		WHERE status = 'completed'
+		  AND completed_at >= date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC')
+		  AND completed_at < date_trunc('day', $1::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 day'
+	`
+
+	var total string
+	err := s.db.QueryRow(ctx, query, date).Scan(&total)
+	if err != nil {
+		return "", fmt.Errorf("failed to get ri exchange daily spend: %w", err)
+	}
+
+	return total, nil
+}
+
+// CancelAllPendingExchanges cancels all pending RI exchange records
+func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
+	query := `
+		UPDATE ri_exchange_history
+		SET status = 'cancelled'
+		WHERE status = 'pending'
+	`
+
+	result, err := s.db.Exec(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cancel pending exchanges: %w", err)
+	}
+
+	return result.RowsAffected(), nil
+}
+
+// GetStaleProcessingExchanges returns processing exchanges older than the given duration
+func (s *PostgresStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]RIExchangeRecord, error) {
+	query := `
+		SELECT id, account_id, exchange_id, region, source_ri_ids,
+		       source_instance_type, source_count, target_offering_id,
+		       target_instance_type, target_count, payment_due::text,
+		       status, approval_token, error, mode,
+		       created_at, updated_at, completed_at, expires_at
+		FROM ri_exchange_history
+		WHERE status = 'processing' AND updated_at < NOW() - $1::interval
+	`
+
+	return s.queryRIExchangeRecords(ctx, query, fmt.Sprintf("%d seconds", int(olderThan.Seconds())))
+}
+
+// queryRIExchangeRecords is a helper to query and scan RI exchange records
+func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string, args ...any) ([]RIExchangeRecord, error) {
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ri exchange records: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]RIExchangeRecord, 0)
+	for rows.Next() {
+		var record RIExchangeRecord
+		var approvalToken, errStr sql.NullString
+		var completedAt, expiresAt sql.NullTime
+
+		err := rows.Scan(
+			&record.ID,
+			&record.AccountID,
+			&record.ExchangeID,
+			&record.Region,
+			&record.SourceRIIDs,
+			&record.SourceInstanceType,
+			&record.SourceCount,
+			&record.TargetOfferingID,
+			&record.TargetInstanceType,
+			&record.TargetCount,
+			&record.PaymentDue,
+			&record.Status,
+			&approvalToken,
+			&errStr,
+			&record.Mode,
+			&record.CreatedAt,
+			&record.UpdatedAt,
+			&completedAt,
+			&expiresAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan ri exchange record: %w", err)
+		}
+
+		if approvalToken.Valid {
+			record.ApprovalToken = approvalToken.String
+		}
+		if errStr.Valid {
+			record.Error = errStr.String
+		}
+		if completedAt.Valid {
+			record.CompletedAt = &completedAt.Time
+		}
+		if expiresAt.Valid {
+			record.ExpiresAt = &expiresAt.Time
+		}
+
+		records = append(records, record)
+	}
+
+	return records, rows.Err()
+}
+
+// ==========================================
 // HELPER FUNCTIONS
 // ==========================================
 

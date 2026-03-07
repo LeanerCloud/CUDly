@@ -130,6 +130,56 @@ If you have any questions, please contact your administrator.
 This is an automated message from CUDly.
 `
 
+const riExchangePendingApprovalTemplate = `CUDly - RI Exchange Approval Required
+======================================
+
+CUDly has identified convertible RI exchanges that need your approval.
+
+Proposed Exchanges:
+{{range .Exchanges}}
+- Source: {{.SourceRIID}} ({{.SourceInstanceType}}, {{printf "%.1f" .UtilizationPct}}% utilized)
+  Target: {{.TargetInstanceType}} x{{.TargetCount}}
+  Payment Due: ${{.PaymentDue}}
+  [Approve] {{$.DashboardURL}}/api/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}
+  [Reject]  {{$.DashboardURL}}/api/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}
+{{end}}
+Total Payment: ${{.TotalPayment}}
+{{if .Skipped}}
+Skipped (could not process):
+{{range .Skipped}}
+- {{.SourceRIID}} ({{.SourceInstanceType}}): {{.Reason}}
+{{end}}{{end}}
+Please approve within 6 hours (before the next analysis run).
+
+Review exchange history:
+{{.DashboardURL}}/#ri-exchange
+
+This is an automated message from CUDly.
+`
+
+const riExchangeCompletedTemplate = `CUDly - RI Exchanges Completed
+==============================
+
+The following RI exchanges have been {{if eq .Mode "auto"}}automatically {{end}}completed:
+
+{{range .Exchanges}}{{if eq .Error ""}}
+- Source: {{.SourceRIID}} ({{.SourceInstanceType}})
+  Target: {{.TargetInstanceType}} x{{.TargetCount}}
+  Payment: ${{.PaymentDue}}
+  Exchange ID: {{.ExchangeID}}
+{{end}}{{end}}
+Total Payment: ${{.TotalPayment}}
+{{if .Skipped}}
+Skipped (could not process):
+{{range .Skipped}}
+- {{.SourceRIID}} ({{.SourceInstanceType}}): {{.Reason}}
+{{end}}{{end}}
+View exchange history:
+{{.DashboardURL}}/#ri-exchange
+
+This is an automated message from CUDly.
+`
+
 // SendNewRecommendationsNotification sends an email about new recommendations
 func (s *Sender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error {
 	body, err := RenderNewRecommendationsEmail(data)
@@ -205,4 +255,26 @@ func (s *Sender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role
 	}
 
 	return s.SendToEmail(ctx, email, "Welcome to CUDly", body)
+}
+
+// SendRIExchangePendingApproval sends an email with RI exchange approval links
+func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error {
+	body, err := RenderRIExchangePendingApprovalEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render ri exchange pending approval email: %w", err)
+	}
+
+	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
+	return s.SendNotification(ctx, subject, body)
+}
+
+// SendRIExchangeCompleted sends a notification about completed RI exchanges
+func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error {
+	body, err := RenderRIExchangeCompletedEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render ri exchange completed email: %w", err)
+	}
+
+	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
+	return s.SendNotification(ctx, subject, body)
 }

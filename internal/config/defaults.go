@@ -300,6 +300,56 @@ var DefaultSettings = []ConfigSetting{
 		UpdatedAt:   time.Now(),
 	},
 
+	// RI Exchange Automation
+	{
+		Key:         "ri_exchange.auto_exchange_enabled",
+		Value:       false,
+		Type:        "bool",
+		Category:    "ri_exchange",
+		Description: "Master toggle for automated RI exchange",
+		UpdatedAt:   time.Now(),
+	},
+	{
+		Key:         "ri_exchange.mode",
+		Value:       "manual",
+		Type:        "string",
+		Category:    "ri_exchange",
+		Description: "Exchange mode: manual (email approval) or auto (fully automated)",
+		UpdatedAt:   time.Now(),
+	},
+	{
+		Key:         "ri_exchange.utilization_threshold",
+		Value:       95.0,
+		Type:        "float",
+		Category:    "ri_exchange",
+		Description: "Utilization percentage below which an RI triggers exchange consideration",
+		UpdatedAt:   time.Now(),
+	},
+	{
+		Key:         "ri_exchange.max_payment_per_exchange_usd",
+		Value:       0.0,
+		Type:        "float",
+		Category:    "ri_exchange",
+		Description: "Maximum payment per single exchange in USD (0 = refuse any payment)",
+		UpdatedAt:   time.Now(),
+	},
+	{
+		Key:         "ri_exchange.max_payment_daily_usd",
+		Value:       0.0,
+		Type:        "float",
+		Category:    "ri_exchange",
+		Description: "Maximum total daily exchange spend in USD (0 = refuse any payment)",
+		UpdatedAt:   time.Now(),
+	},
+	{
+		Key:         "ri_exchange.lookback_days",
+		Value:       30,
+		Type:        "int",
+		Category:    "ri_exchange",
+		Description: "Days of utilization data to consider for exchange recommendations",
+		UpdatedAt:   time.Now(),
+	},
+
 	// API Rate Limiting
 	{
 		Key:         "api.rate_limit_requests_per_minute",

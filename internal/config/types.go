@@ -162,6 +162,29 @@ type PurchaseHistoryRecord struct {
 	RampStep         int       `json:"ramp_step,omitempty" dynamodbav:"ramp_step,omitempty"`
 }
 
+// RIExchangeRecord represents a record in the ri_exchange_history table
+type RIExchangeRecord struct {
+	ID                 string     `json:"id"`
+	AccountID          string     `json:"account_id"`
+	ExchangeID         string     `json:"exchange_id"`
+	Region             string     `json:"region"`
+	SourceRIIDs        []string   `json:"source_ri_ids"`
+	SourceInstanceType string     `json:"source_instance_type"`
+	SourceCount        int        `json:"source_count"`
+	TargetOfferingID   string     `json:"target_offering_id"`
+	TargetInstanceType string     `json:"target_instance_type"`
+	TargetCount        int        `json:"target_count"`
+	PaymentDue         string     `json:"payment_due"`
+	Status             string     `json:"status"`
+	ApprovalToken      string     `json:"approval_token,omitempty"`
+	Error              string     `json:"error,omitempty"`
+	Mode               string     `json:"mode"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+}
+
 // ConfigSetting represents a configuration setting for the defaults system
 type ConfigSetting struct {
 	Key         string    `json:"key"`

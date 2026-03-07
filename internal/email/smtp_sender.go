@@ -257,5 +257,25 @@ func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data No
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
+// SendRIExchangePendingApproval sends an RI exchange approval email via SMTP
+func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error {
+	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
+	body, err := RenderRIExchangePendingApprovalEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render ri exchange pending approval email: %w", err)
+	}
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+}
+
+// SendRIExchangeCompleted sends an RI exchange completion email via SMTP
+func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error {
+	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
+	body, err := RenderRIExchangeCompletedEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render ri exchange completed email: %w", err)
+	}
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+}
+
 // Verify that SMTPSender implements SenderInterface
 var _ SenderInterface = (*SMTPSender)(nil)

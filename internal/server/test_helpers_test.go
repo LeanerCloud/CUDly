@@ -85,3 +85,34 @@ func (m *mockConfigStoreForHealth) GetAllPurchaseHistory(ctx context.Context, li
 func (m *mockConfigStoreForHealth) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	return 0, nil
 }
+
+func (m *mockConfigStoreForHealth) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) GetRIExchangeRecord(ctx context.Context, id string) (*config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) GetRIExchangeRecordByToken(ctx context.Context, token string) (*config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
+	return "0", nil
+}
+func (m *mockConfigStoreForHealth) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+func (m *mockConfigStoreForHealth) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}

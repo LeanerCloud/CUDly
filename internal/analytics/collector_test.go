@@ -186,6 +186,37 @@ func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	return 0, nil
 }
 
+func (m *mockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
+	return nil
+}
+func (m *mockConfigStore) GetRIExchangeRecord(ctx context.Context, id string) (*config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token string) (*config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+	return nil
+}
+func (m *mockConfigStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+	return nil
+}
+func (m *mockConfigStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
+	return "0", nil
+}
+func (m *mockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+func (m *mockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
+
 // TestNewCollector tests the NewCollector function
 func TestNewCollector(t *testing.T) {
 	t.Run("returns error when analytics store is nil", func(t *testing.T) {

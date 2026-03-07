@@ -333,6 +333,10 @@ type ConvertibleRI struct {
 	UsagePrice          float64   `json:"usage_price"`
 	State               string    `json:"state"`
 	NormalizationFactor float64   `json:"normalization_factor"`
+	ProductDescription  string    `json:"product_description"`
+	InstanceTenancy     string    `json:"instance_tenancy"`
+	Scope               string    `json:"scope"`
+	Duration            int64     `json:"duration"`
 }
 
 // ListConvertibleReservedInstances returns all active convertible RIs in the region.
@@ -372,10 +376,69 @@ func (c *Client) ListConvertibleReservedInstances(ctx context.Context) ([]Conver
 			UsagePrice:          float64(aws.ToFloat32(ri.UsagePrice)),
 			State:               string(ri.State),
 			NormalizationFactor: normFactor,
+			ProductDescription:  string(ri.ProductDescription),
+			InstanceTenancy:     string(ri.InstanceTenancy),
+			Scope:               string(ri.Scope),
+			Duration:            aws.ToInt64(ri.Duration),
 		})
 	}
 
 	return result, nil
+}
+
+// FindConvertibleOfferingParams holds the parameters for finding a convertible RI offering.
+type FindConvertibleOfferingParams struct {
+	InstanceType       string
+	ProductDescription string
+	Tenancy            string
+	Scope              string
+	Duration           int64
+}
+
+// FindConvertibleOffering finds a convertible RI offering ID for the given parameters.
+func (c *Client) FindConvertibleOffering(ctx context.Context, params FindConvertibleOfferingParams) (string, error) {
+	tenancy := params.Tenancy
+	if tenancy == "" {
+		tenancy = "default"
+	}
+	scope := params.Scope
+	if scope == "" {
+		scope = "Region"
+	}
+	duration := params.Duration
+	if duration == 0 {
+		duration = OneYearSeconds
+	}
+	productDesc := params.ProductDescription
+	if productDesc == "" {
+		productDesc = "Linux/UNIX"
+	}
+
+	filters := []types.Filter{
+		{Name: aws.String("instance-type"), Values: []string{params.InstanceType}},
+		{Name: aws.String("product-description"), Values: []string{productDesc}},
+		{Name: aws.String("instance-tenancy"), Values: []string{tenancy}},
+		{Name: aws.String("scope"), Values: []string{scope}},
+		{Name: aws.String("duration"), Values: []string{fmt.Sprintf("%d", duration)}},
+		{Name: aws.String("offering-class"), Values: []string{"convertible"}},
+	}
+
+	input := &ec2.DescribeReservedInstancesOfferingsInput{
+		Filters:            filters,
+		IncludeMarketplace: aws.Bool(false),
+		MaxResults:         aws.Int32(20),
+	}
+
+	result, err := c.client.DescribeReservedInstancesOfferings(ctx, input)
+	if err != nil {
+		return "", fmt.Errorf("failed to describe convertible offerings: %w", err)
+	}
+
+	if len(result.ReservedInstancesOfferings) == 0 {
+		return "", fmt.Errorf("no convertible offering found for %s (%s, %s, %s)", params.InstanceType, productDesc, tenancy, scope)
+	}
+
+	return aws.ToString(result.ReservedInstancesOfferings[0].ReservedInstancesOfferingId), nil
 }
 
 // normalizationFactorForInstanceType extracts the size from an instance type

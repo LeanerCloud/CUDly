@@ -221,3 +221,33 @@ type RecommendationSummary struct {
 	Count          int
 	MonthlySavings float64
 }
+
+// RIExchangeNotificationData holds data for RI exchange email templates
+type RIExchangeNotificationData struct {
+	DashboardURL string
+	Mode         string
+	Exchanges    []RIExchangeItem
+	Skipped      []SkippedExchange
+	TotalPayment string
+}
+
+// RIExchangeItem represents a single exchange in an email notification
+type RIExchangeItem struct {
+	RecordID           string
+	ApprovalToken      string
+	SourceRIID         string
+	SourceInstanceType string
+	TargetInstanceType string
+	TargetCount        int
+	PaymentDue         string
+	ExchangeID         string
+	UtilizationPct     float64
+	Error              string
+}
+
+// SkippedExchange represents an exchange that was skipped
+type SkippedExchange struct {
+	SourceRIID         string
+	SourceInstanceType string
+	Reason             string
+}

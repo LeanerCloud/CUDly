@@ -63,3 +63,13 @@ func RenderPurchaseConfirmationEmail(data NotificationData) (string, error) {
 func RenderPurchaseFailedEmail(data NotificationData) (string, error) {
 	return renderTemplate("failed", purchaseFailedTemplate, data)
 }
+
+// RenderRIExchangePendingApprovalEmail renders the RI exchange pending approval email template
+func RenderRIExchangePendingApprovalEmail(data RIExchangeNotificationData) (string, error) {
+	return renderTemplate("ri-exchange-pending", riExchangePendingApprovalTemplate, data)
+}
+
+// RenderRIExchangeCompletedEmail renders the RI exchange completed email template
+func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, error) {
+	return renderTemplate("ri-exchange-completed", riExchangeCompletedTemplate, data)
+}
