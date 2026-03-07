@@ -409,9 +409,9 @@ func TestClient_GetOfferingClass(t *testing.T) {
 		expected      string
 	}{
 		{"All upfront returns convertible", "all-upfront", "convertible"},
-		{"Partial upfront returns standard", "partial-upfront", "standard"},
-		{"No upfront returns standard", "no-upfront", "standard"},
-		{"Default (unknown) returns standard", "unknown", "standard"},
+		{"Partial upfront returns convertible", "partial-upfront", "convertible"},
+		{"No upfront returns convertible", "no-upfront", "convertible"},
+		{"Default (unknown) returns convertible", "unknown", "convertible"},
 	}
 
 	for _, tt := range tests {
