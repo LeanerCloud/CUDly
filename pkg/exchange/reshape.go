@@ -136,6 +136,23 @@ func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *Reshap
 	normalizedPurchased := normFactor * float64(ri.InstanceCount)
 	normalizedUsed := normalizedPurchased * (util / 100.0)
 
+	if normalizedUsed <= 0 {
+		return &ReshapeRecommendation{
+			SourceRIID:          ri.ID,
+			SourceInstanceType:  ri.InstanceType,
+			SourceCount:         ri.InstanceCount,
+			TargetInstanceType:  "",
+			TargetCount:         0,
+			UtilizationPercent:  util,
+			NormalizedUsed:      0,
+			NormalizedPurchased: normalizedPurchased,
+			Reason: fmt.Sprintf(
+				"RI is completely unused (%.0f%% utilization, %.1f normalized units wasted). Consider letting it expire or exchanging for needed capacity.",
+				util, normalizedPurchased,
+			),
+		}
+	}
+
 	targetSize, targetCount := findBestFit(normalizedUsed)
 	if targetSize == "" {
 		return nil

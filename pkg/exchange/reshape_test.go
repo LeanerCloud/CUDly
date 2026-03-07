@@ -74,7 +74,7 @@ func TestAnalyzeReshaping(t *testing.T) {
 			},
 		},
 		{
-			name: "RI at 0% utilization — suggest smallest in family",
+			name: "RI at 0% utilization — recommend expiry or reallocation",
 			ris: []RIInfo{
 				{ID: "ri-5", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"},
 			},
@@ -82,7 +82,13 @@ func TestAnalyzeReshaping(t *testing.T) {
 				{RIID: "ri-5", UtilizationPercent: 0},
 			},
 			threshold: 95,
-			wantCount: 0, // 0% means 0 normalized used → no fit possible
+			wantCount: 1,
+			checkFirst: func(t *testing.T, rec ReshapeRecommendation) {
+				assert.Equal(t, "", rec.TargetInstanceType)
+				assert.Equal(t, int32(0), rec.TargetCount)
+				assert.Contains(t, rec.Reason, "completely unused")
+				assert.InDelta(t, 8.0, rec.NormalizedPurchased, 0.01) // xlarge = 8 units
+			},
 		},
 		{
 			name: "multiple counts: 4x m5.xlarge at 25%",
