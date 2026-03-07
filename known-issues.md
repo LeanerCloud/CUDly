@@ -17,3 +17,17 @@ No critical issues at this time. The following are known limitations:
 - **Multi-target exchange**: The AWS exchange APIs accept multiple `TargetConfigurationRequest` entries, allowing a single exchange to produce several target RIs. The current implementation supports only one target per exchange. Supporting multi-target would require rethinking the request types, validation logic, and spend-cap guardrails.
 
 - **Utilization caching**: `getRIUtilization` and `getReshapeRecommendations` call Cost Explorer on every request. Cost Explorer charges per API call and is rate-limited. Adding a cache would reduce costs and improve response times, but the cache design (key strategy incorporating region + lookback_days, TTL policy, invalidation on RI changes) warrants separate planning.
+
+## Test Performance
+
+### Test parallelization
+
+Unit tests do not use t.Parallel(). Adding it could provide 2-4x speedup but requires:
+- Auditing test files for shared state (global vars, package-level mocks)
+- Ensuring test helpers (createTestUser, createTestService) are goroutine-safe
+- Starting with low-risk packages (pkg/exchange, providers/aws/services/ec2) before auth
+
+Candidate packages (low shared state risk, audit still required):
+- pkg/exchange
+- providers/aws/services/ec2
+- internal/api (validation tests only)
