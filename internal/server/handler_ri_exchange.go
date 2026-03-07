@@ -18,6 +18,18 @@ import (
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 )
 
+// riExchangeClients holds the injectable dependencies for RI exchange operations.
+// In production, handleRIExchangeReshape constructs real AWS clients.
+// Tests call executeRIExchangeReshape directly with mock implementations.
+type riExchangeClients struct {
+	listConvertibleRIs func(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
+	getRIUtilization   func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
+	exchangeClient     exchange.ExchangeClientInterface
+	lookupOffering     func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error)
+	accountID          string
+	region             string
+}
+
 // handleRIExchangeReshape runs the automated RI exchange analysis and execution.
 func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.AutoExchangeResult, error) {
 	log.Println("Starting RI exchange reshape analysis...")
@@ -36,39 +48,53 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	accountID := resolveAccountID(ctx, awsCfg)
-
 	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
-	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
+	clients := riExchangeClients{
+		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
+			return ec2Client.ListConvertibleReservedInstances(ctx)
+		},
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
+			return recsClient.GetRIUtilization(ctx, lookbackDays)
+		},
+		exchangeClient: exchange.NewExchangeClient(awsCfg),
+		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+			return ec2Client.FindConvertibleOffering(ctx, ec2svc.FindConvertibleOfferingParams{
+				InstanceType:       instanceType,
+				ProductDescription: productDesc,
+				Tenancy:            tenancy,
+				Scope:              scope,
+				Duration:           duration,
+			})
+		},
+		accountID: resolveAccountID(ctx, awsCfg),
+		region:    awsCfg.Region,
+	}
+
+	return app.executeRIExchangeReshape(ctx, cfg, clients)
+}
+
+// executeRIExchangeReshape contains the core exchange logic, separated from AWS
+// client construction for testability.
+func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *config.GlobalConfig, clients riExchangeClients) (*exchange.AutoExchangeResult, error) {
+	instances, err := clients.listConvertibleRIs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
 	}
 
-	recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
-	utilData, err := recsClient.GetRIUtilization(ctx, cfg.RIExchangeLookbackDays)
+	utilData, err := clients.getRIUtilization(ctx, cfg.RIExchangeLookbackDays)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
 
 	riInfos, utilInfos, riMetadata := convertForAutoExchange(instances, utilData)
 
-	exchangeClient := exchange.NewExchangeClient(awsCfg)
-	lookupFn := func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
-		return ec2Client.FindConvertibleOffering(ctx, ec2svc.FindConvertibleOfferingParams{
-			InstanceType:       instanceType,
-			ProductDescription: productDesc,
-			Tenancy:            tenancy,
-			Scope:              scope,
-			Duration:           duration,
-		})
-	}
-
 	store := newConfigExchangeStoreAdapter(app.Config)
 
 	result, err := exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
 		Store:          store,
-		ExchangeClient: exchangeClient,
-		LookupOffering: lookupFn,
+		ExchangeClient: clients.exchangeClient,
+		LookupOffering: clients.lookupOffering,
 		RIs:            riInfos,
 		Utilization:    utilInfos,
 		Config: exchange.RIExchangeConfig{
@@ -78,8 +104,8 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 			MaxPaymentDailyUSD:       cfg.RIExchangeMaxDailyUSD,
 			LookbackDays:             cfg.RIExchangeLookbackDays,
 		},
-		AccountID:    accountID,
-		Region:       awsCfg.Region,
+		AccountID:    clients.accountID,
+		Region:       clients.region,
 		DashboardURL: app.appConfig.DashboardURL,
 		RIMetadata:   riMetadata,
 	})

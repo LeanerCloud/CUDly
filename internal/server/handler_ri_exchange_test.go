@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"math/big"
 	"testing"
 	"time"
 
@@ -338,6 +339,266 @@ func TestSendExchangeNotification_EmailFailure(t *testing.T) {
 	app.sendExchangeNotification(context.Background(), result)
 }
 
+// --- Tests for executeRIExchangeReshape (end-to-end handler tests) ---
+
+func TestExecuteRIExchangeReshape_NoConvertibleRIs(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	store := &mockConfigStoreForExchange{}
+	app := &Application{Config: store}
+
+	cfg := &config.GlobalConfig{
+		RIExchangeEnabled:              true,
+		RIExchangeMode:                 "manual",
+		RIExchangeUtilizationThreshold: 95.0,
+		RIExchangeLookbackDays:         30,
+	}
+
+	clients := riExchangeClients{
+		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
+			return nil, nil // no RIs
+		},
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			return nil, nil
+		},
+		exchangeClient: &mockExchangeClient{},
+		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+			return "", nil
+		},
+		accountID: "123456789",
+		region:    "us-east-1",
+	}
+
+	result, err := app.executeRIExchangeReshape(ctx, cfg, clients)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, 0, len(result.Completed))
+	testutil.AssertEqual(t, 0, len(result.Pending))
+	testutil.AssertEqual(t, 0, len(result.Skipped))
+}
+
+func TestExecuteRIExchangeReshape_ListRIsFailure(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	store := &mockConfigStoreForExchange{}
+	app := &Application{Config: store}
+
+	cfg := &config.GlobalConfig{
+		RIExchangeEnabled: true,
+		RIExchangeMode:    "manual",
+	}
+
+	clients := riExchangeClients{
+		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
+			return nil, errors.New("EC2 API throttled")
+		},
+	}
+
+	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)
+	testutil.AssertError(t, err)
+	if err.Error() != "failed to list convertible RIs: EC2 API throttled" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestExecuteRIExchangeReshape_UtilizationFailure(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	store := &mockConfigStoreForExchange{}
+	app := &Application{Config: store}
+
+	cfg := &config.GlobalConfig{
+		RIExchangeEnabled:      true,
+		RIExchangeMode:         "manual",
+		RIExchangeLookbackDays: 30,
+	}
+
+	clients := riExchangeClients{
+		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
+			return []ec2svc.ConvertibleRI{{ReservedInstanceID: "ri-1"}}, nil
+		},
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			return nil, errors.New("Cost Explorer unavailable")
+		},
+	}
+
+	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)
+	testutil.AssertError(t, err)
+	if err.Error() != "failed to get RI utilization: Cost Explorer unavailable" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	var savedRecords []*config.RIExchangeRecord
+	store := &mockConfigStoreForExchange{
+		saveRIExchangeRecordFunc: func(ctx context.Context, record *config.RIExchangeRecord) error {
+			savedRecords = append(savedRecords, record)
+			return nil
+		},
+	}
+
+	approvalSent := false
+	app := &Application{
+		Config: store,
+		Email: &mockEmailSender{
+			sendApprovalFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+				approvalSent = true
+				return nil
+			},
+		},
+	}
+
+	cfg := &config.GlobalConfig{
+		RIExchangeEnabled:              true,
+		RIExchangeMode:                 "manual",
+		RIExchangeUtilizationThreshold: 95.0,
+		RIExchangeMaxPerExchangeUSD:    100.0,
+		RIExchangeMaxDailyUSD:          500.0,
+		RIExchangeLookbackDays:         30,
+	}
+
+	clients := riExchangeClients{
+		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
+			return []ec2svc.ConvertibleRI{
+				{
+					ReservedInstanceID:  "ri-underutilized",
+					InstanceType:        "m5.large",
+					InstanceCount:       2,
+					NormalizationFactor: 4.0,
+					ProductDescription:  "Linux/UNIX",
+					InstanceTenancy:     "default",
+					Scope:               "Region",
+					Duration:            31536000,
+				},
+			}, nil
+		},
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			return []recommendations.RIUtilization{
+				{ReservedInstanceID: "ri-underutilized", UtilizationPercent: 40.0},
+			}, nil
+		},
+		exchangeClient: &mockExchangeClient{
+			getQuoteFunc: func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+				return &exchange.ExchangeQuoteSummary{
+					IsValidExchange:  true,
+					PaymentDueUSD:    new(big.Rat).SetFloat64(5.00),
+					PaymentDueUSDStr: "5.00",
+				}, nil
+			},
+		},
+		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+			return "offering-123", nil
+		},
+		accountID: "123456789",
+		region:    "us-east-1",
+	}
+
+	result, err := app.executeRIExchangeReshape(ctx, cfg, clients)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, "manual", result.Mode)
+	testutil.AssertEqual(t, 1, len(result.Pending))
+	testutil.AssertEqual(t, 0, len(result.Completed))
+	testutil.AssertEqual(t, "ri-underutilized", result.Pending[0].SourceRIID)
+
+	if len(savedRecords) == 0 {
+		t.Fatal("expected record to be saved")
+	}
+	testutil.AssertEqual(t, "pending", savedRecords[0].Status)
+	testutil.AssertEqual(t, "manual", savedRecords[0].Mode)
+
+	if !approvalSent {
+		t.Error("expected approval email to be sent in manual mode")
+	}
+}
+
+func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	var savedRecords []*config.RIExchangeRecord
+	store := &mockConfigStoreForExchange{
+		saveRIExchangeRecordFunc: func(ctx context.Context, record *config.RIExchangeRecord) error {
+			savedRecords = append(savedRecords, record)
+			return nil
+		},
+	}
+
+	completedSent := false
+	app := &Application{
+		Config: store,
+		Email: &mockEmailSender{
+			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+				completedSent = true
+				return nil
+			},
+		},
+	}
+
+	cfg := &config.GlobalConfig{
+		RIExchangeEnabled:              true,
+		RIExchangeMode:                 "auto",
+		RIExchangeUtilizationThreshold: 95.0,
+		RIExchangeMaxPerExchangeUSD:    100.0,
+		RIExchangeMaxDailyUSD:          500.0,
+		RIExchangeLookbackDays:         30,
+	}
+
+	clients := riExchangeClients{
+		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
+			return []ec2svc.ConvertibleRI{
+				{
+					ReservedInstanceID:  "ri-underutilized",
+					InstanceType:        "c5.xlarge",
+					InstanceCount:       1,
+					NormalizationFactor: 8.0,
+					ProductDescription:  "Linux/UNIX",
+					InstanceTenancy:     "default",
+					Scope:               "Region",
+					Duration:            31536000,
+				},
+			}, nil
+		},
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			return []recommendations.RIUtilization{
+				{ReservedInstanceID: "ri-underutilized", UtilizationPercent: 30.0},
+			}, nil
+		},
+		exchangeClient: &mockExchangeClient{
+			getQuoteFunc: func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+				return &exchange.ExchangeQuoteSummary{
+					IsValidExchange:  true,
+					PaymentDueUSD:    new(big.Rat).SetFloat64(3.50),
+					PaymentDueUSDStr: "3.50",
+				}, nil
+			},
+			executeFunc: func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+				return "exch-auto-1", &exchange.ExchangeQuoteSummary{
+					IsValidExchange:  true,
+					PaymentDueUSD:    new(big.Rat).SetFloat64(3.50),
+					PaymentDueUSDStr: "3.50",
+				}, nil
+			},
+		},
+		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+			return "offering-456", nil
+		},
+		accountID: "123456789",
+		region:    "us-east-1",
+	}
+
+	result, err := app.executeRIExchangeReshape(ctx, cfg, clients)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, "auto", result.Mode)
+	testutil.AssertEqual(t, 1, len(result.Completed))
+	testutil.AssertEqual(t, 0, len(result.Pending))
+	testutil.AssertEqual(t, "exch-auto-1", result.Completed[0].ExchangeID)
+
+	if !completedSent {
+		t.Error("expected completed email to be sent in auto mode")
+	}
+}
+
 // --- Mock types ---
 
 type mockConfigStoreForExchange struct {
@@ -420,4 +681,23 @@ func (m *mockEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 		return m.sendCompletedFunc(ctx, data)
 	}
 	return nil
+}
+
+type mockExchangeClient struct {
+	getQuoteFunc func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error)
+	executeFunc  func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
+}
+
+func (m *mockExchangeClient) GetQuote(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+	if m.getQuoteFunc != nil {
+		return m.getQuoteFunc(ctx, req)
+	}
+	return nil, errors.New("GetQuote not mocked")
+}
+
+func (m *mockExchangeClient) Execute(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+	if m.executeFunc != nil {
+		return m.executeFunc(ctx, req)
+	}
+	return "", nil, errors.New("Execute not mocked")
 }

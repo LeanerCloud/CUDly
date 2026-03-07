@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestListConvertibleRIs_RequiresAdmin(t *testing.T) {
@@ -165,6 +168,133 @@ func TestExecuteExchange_Validation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid max_payment_due_usd")
 }
+
+// --- Approve/Reject edge case tests ---
+
+func TestRejectRIExchange_AlreadyCompleted(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	h := &Handler{config: mockStore}
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440000"
+	token := "valid-token-123"
+
+	// Record exists but is already completed
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:            id,
+		ApprovalToken: token,
+		Status:        "completed",
+		ExchangeID:    "exch-already-done",
+	}, nil)
+
+	// Transition from pending→cancelled fails (record is not pending)
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled").
+		Return((*config.RIExchangeRecord)(nil), nil)
+
+	_, err := h.rejectRIExchange(ctx, id, token)
+	assert.Error(t, err)
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "already processed")
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestApproveRIExchange_AlreadyCancelled(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	h := &Handler{config: mockStore}
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440001"
+	token := "valid-token-456"
+
+	// Record exists but was cancelled by a newer analysis run
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:            id,
+		ApprovalToken: token,
+		Status:        "cancelled",
+	}, nil)
+
+	// Transition from pending→processing fails (record is cancelled)
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+		Return((*config.RIExchangeRecord)(nil), nil)
+
+	_, err := h.approveRIExchange(ctx, id, token)
+	assert.Error(t, err)
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "already processed")
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestApproveRIExchange_DoubleApprove(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	h := &Handler{config: mockStore}
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440002"
+	token := "valid-token-789"
+
+	// Record exists and is already being processed (first approve succeeded)
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:            id,
+		ApprovalToken: token,
+		Status:        "processing",
+		SourceRIIDs:   []string{"ri-123"},
+		PaymentDue:    "5.00",
+	}, nil)
+
+	// Transition from pending→processing fails (already processing)
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+		Return((*config.RIExchangeRecord)(nil), nil)
+
+	_, err := h.approveRIExchange(ctx, id, token)
+	assert.Error(t, err)
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "already processed")
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestApproveRIExchange_InvalidToken(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	h := &Handler{config: mockStore}
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440003"
+
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:            id,
+		ApprovalToken: "correct-token",
+		Status:        "pending",
+	}, nil)
+
+	_, err := h.approveRIExchange(ctx, id, "wrong-token")
+	assert.Error(t, err)
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, err.Error(), "invalid approval token")
+}
+
+func TestRejectRIExchange_MissingToken(t *testing.T) {
+	h := &Handler{}
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440004"
+
+	_, err := h.rejectRIExchange(ctx, id, "")
+	assert.Error(t, err)
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "rejection token is required")
+}
+
+// Suppress unused import warnings
+var _ = mock.Anything
+var _ = time.Now
+var _ = config.RIExchangeRecord{}
 
 // mockAuthForExchange is a minimal auth mock that returns an admin session.
 type mockAuthForExchange struct{}
