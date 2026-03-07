@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
@@ -17,13 +18,23 @@ import (
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 )
 
+// loadAWSConfigWithRegion loads an AWS config, optionally overriding the region.
+func loadAWSConfigWithRegion(ctx context.Context, region string) (aws.Config, error) {
+	var opts []func(*awsconfig.LoadOptions) error
+	if region != "" {
+		opts = append(opts, awsconfig.WithRegion(region))
+	}
+	return awsconfig.LoadDefaultConfig(ctx, opts...)
+}
+
 // listConvertibleRIs returns all active convertible Reserved Instances.
 func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
 	}
 
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	region := req.QueryStringParameters["region"]
+	cfg, err := loadAWSConfigWithRegion(ctx, region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -48,7 +59,8 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	region := req.QueryStringParameters["region"]
+	cfg, err := loadAWSConfigWithRegion(ctx, region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -130,7 +142,8 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	region := req.QueryStringParameters["region"]
+	cfg, err := loadAWSConfigWithRegion(ctx, region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
