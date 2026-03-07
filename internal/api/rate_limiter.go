@@ -26,7 +26,7 @@ func getDefaultRateLimits() map[string]RateLimitConfig {
 	return map[string]RateLimitConfig{
 		"login":           NewRateLimitConfig(5, 15*60), // 5 attempts / 15 minutes / IP
 		"forgot_password": NewRateLimitConfig(10, 5*60), // 10 attempts / 5 minutes / email
-		"api_general":     NewRateLimitConfig(100, 60),  // 100 requests / minute / IP
+		"api_general":     NewRateLimitConfig(300, 60),  // 300 requests / minute / IP
 		"admin":           NewRateLimitConfig(30, 60),   // 30 / minute / user
 	}
 }
