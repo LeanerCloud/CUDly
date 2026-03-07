@@ -18,13 +18,24 @@ import (
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 )
 
-// loadAWSConfigWithRegion loads an AWS config, optionally overriding the region.
-func loadAWSConfigWithRegion(ctx context.Context, region string) (aws.Config, error) {
-	var opts []func(*awsconfig.LoadOptions) error
-	if region != "" {
-		opts = append(opts, awsconfig.WithRegion(region))
+// getBaseAWSConfig returns the cached base AWS config, loading it once via sync.Once.
+func (h *Handler) getBaseAWSConfig(ctx context.Context) (aws.Config, error) {
+	h.awsCfgOnce.Do(func() {
+		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
+	})
+	return h.awsCfg, h.awsCfgErr
+}
+
+// loadAWSConfigWithRegion returns the cached base config, optionally overriding the region.
+func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (aws.Config, error) {
+	cfg, err := h.getBaseAWSConfig(ctx)
+	if err != nil {
+		return aws.Config{}, err
 	}
-	return awsconfig.LoadDefaultConfig(ctx, opts...)
+	if region != "" {
+		cfg.Region = region
+	}
+	return cfg, nil
 }
 
 // listConvertibleRIs returns all active convertible Reserved Instances.
@@ -34,7 +45,7 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 	}
 
 	region := req.QueryStringParameters["region"]
-	cfg, err := loadAWSConfigWithRegion(ctx, region)
+	cfg, err := h.loadAWSConfigWithRegion(ctx, region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -60,7 +71,7 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	}
 
 	region := req.QueryStringParameters["region"]
-	cfg, err := loadAWSConfigWithRegion(ctx, region)
+	cfg, err := h.loadAWSConfigWithRegion(ctx, region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -143,7 +154,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	region := req.QueryStringParameters["region"]
-	cfg, err := loadAWSConfigWithRegion(ctx, region)
+	cfg, err := h.loadAWSConfigWithRegion(ctx, region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}

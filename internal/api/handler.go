@@ -4,10 +4,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"sync"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 )
@@ -26,6 +28,10 @@ type Handler struct {
 	rateLimiter        RateLimiterInterface
 	analyticsClient    AnalyticsClientInterface    // Optional: S3/Athena analytics client
 	analyticsCollector AnalyticsCollectorInterface // Optional: Hourly collector
+
+	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
+	awsCfg     aws.Config // cached base AWS config (no region override)
+	awsCfgErr  error      // error from loading the base config, if any
 }
 
 // NewHandler creates a new API handler
