@@ -407,6 +407,37 @@ export interface ExchangeResult {
   quote: ExchangeQuoteSummary;
 }
 
+// RI Exchange Config Types
+export interface RIExchangeConfig {
+  auto_exchange_enabled: boolean;
+  mode: "manual" | "auto";
+  utilization_threshold: number;
+  max_payment_per_exchange_usd: number;
+  max_payment_daily_usd: number;
+  lookback_days: number;
+}
+
+export interface RIExchangeHistoryRecord {
+  id: string;
+  account_id: string;
+  exchange_id: string;
+  region: string;
+  source_ri_ids: string[];
+  source_instance_type: string;
+  source_count: number;
+  target_offering_id: string;
+  target_instance_type: string;
+  target_count: number;
+  payment_due: string;
+  status: string;
+  mode: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+  expires_at?: string;
+}
+
 // Internal types
 export interface ApiError extends Error {
   status?: number;

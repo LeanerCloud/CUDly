@@ -49,7 +49,9 @@ export type {
   ExchangeQuoteRequest,
   ExchangeQuoteSummary,
   ExchangeExecuteRequest,
-  ExchangeResult
+  ExchangeResult,
+  RIExchangeConfig,
+  RIExchangeHistoryRecord
 } from './types';
 
 // Re-export client functions
@@ -160,5 +162,8 @@ export {
   getRIUtilization,
   getReshapeRecommendations,
   getExchangeQuote,
-  executeExchange
+  executeExchange,
+  getRIExchangeConfig,
+  updateRIExchangeConfig,
+  getRIExchangeHistory
 } from './riexchange';

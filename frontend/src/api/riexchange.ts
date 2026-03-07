@@ -10,7 +10,9 @@ import type {
   ExchangeQuoteRequest,
   ExchangeQuoteSummary,
   ExchangeExecuteRequest,
-  ExchangeResult
+  ExchangeResult,
+  RIExchangeConfig,
+  RIExchangeHistoryRecord
 } from './types';
 
 /**
@@ -57,4 +59,38 @@ export async function executeExchange(req: ExchangeExecuteRequest): Promise<Exch
     method: 'POST',
     body: JSON.stringify(req),
   });
+}
+
+/**
+ * Get RI exchange automation config
+ */
+export async function getRIExchangeConfig(): Promise<RIExchangeConfig> {
+  return apiRequest<RIExchangeConfig>('/ri-exchange/config');
+}
+
+/**
+ * Update RI exchange automation config
+ */
+export async function updateRIExchangeConfig(config: RIExchangeConfig): Promise<void> {
+  await apiRequest<{ status: string }>('/ri-exchange/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+/**
+ * Get RI exchange history records
+ */
+export async function getRIExchangeHistory(
+  params?: { status?: string; limit?: number }
+): Promise<RIExchangeHistoryRecord[]> {
+  let qs = '';
+  if (params) {
+    const parts: string[] = [];
+    if (params.status) parts.push(`status=${encodeURIComponent(params.status)}`);
+    if (params.limit) parts.push(`limit=${params.limit}`);
+    if (parts.length > 0) qs = `?${parts.join('&')}`;
+  }
+  const resp = await apiRequest<{ records: RIExchangeHistoryRecord[] }>(`/ri-exchange/history${qs}`);
+  return resp.records ?? [];
 }
