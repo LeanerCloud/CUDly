@@ -14,6 +14,14 @@ type GlobalConfig struct {
 	DefaultPayment      string   `json:"default_payment" dynamodbav:"default_payment"`
 	DefaultCoverage     float64  `json:"default_coverage" dynamodbav:"default_coverage"`
 	DefaultRampSchedule string   `json:"default_ramp_schedule" dynamodbav:"default_ramp_schedule"`
+
+	// RI Exchange automation settings
+	RIExchangeEnabled              bool    `json:"ri_exchange_enabled" dynamodbav:"ri_exchange_enabled"`
+	RIExchangeMode                 string  `json:"ri_exchange_mode" dynamodbav:"ri_exchange_mode"`
+	RIExchangeUtilizationThreshold float64 `json:"ri_exchange_utilization_threshold" dynamodbav:"ri_exchange_utilization_threshold"`
+	RIExchangeMaxPerExchangeUSD    float64 `json:"ri_exchange_max_per_exchange_usd" dynamodbav:"ri_exchange_max_per_exchange_usd"`
+	RIExchangeMaxDailyUSD          float64 `json:"ri_exchange_max_daily_usd" dynamodbav:"ri_exchange_max_daily_usd"`
+	RIExchangeLookbackDays         int     `json:"ri_exchange_lookback_days" dynamodbav:"ri_exchange_lookback_days"`
 }
 
 // ServiceConfig represents per-service configuration

@@ -33,7 +33,9 @@ var _ StoreInterface = (*PostgresStore)(nil)
 func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, error) {
 	query := `
 		SELECT enabled_providers, notification_email, approval_required,
-		       default_term, default_payment, default_coverage, default_ramp_schedule
+		       default_term, default_payment, default_coverage, default_ramp_schedule,
+		       ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
+		       ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days
 		FROM global_config
 		WHERE id = 1
 	`
@@ -49,18 +51,27 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		&config.DefaultPayment,
 		&config.DefaultCoverage,
 		&config.DefaultRampSchedule,
+		&config.RIExchangeEnabled,
+		&config.RIExchangeMode,
+		&config.RIExchangeUtilizationThreshold,
+		&config.RIExchangeMaxPerExchangeUSD,
+		&config.RIExchangeMaxDailyUSD,
+		&config.RIExchangeLookbackDays,
 	)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			// Return default config if none exists
 			return &GlobalConfig{
-				EnabledProviders:    []string{},
-				ApprovalRequired:    true,
-				DefaultTerm:         3,
-				DefaultPayment:      "all-upfront",
-				DefaultCoverage:     80.0,
-				DefaultRampSchedule: "immediate",
+				EnabledProviders:               []string{},
+				ApprovalRequired:               true,
+				DefaultTerm:                    3,
+				DefaultPayment:                 "all-upfront",
+				DefaultCoverage:                80.0,
+				DefaultRampSchedule:            "immediate",
+				RIExchangeMode:                 "manual",
+				RIExchangeUtilizationThreshold: 95.0,
+				RIExchangeLookbackDays:         30,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get global config: %w", err)
@@ -80,8 +91,10 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 	query := `
 		INSERT INTO global_config (
 			id, enabled_providers, notification_email, approval_required,
-			default_term, default_payment, default_coverage, default_ramp_schedule
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7)
+			default_term, default_payment, default_coverage, default_ramp_schedule,
+			ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
+			ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -90,8 +103,24 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			default_payment = $5,
 			default_coverage = $6,
 			default_ramp_schedule = $7,
+			ri_exchange_enabled = $8,
+			ri_exchange_mode = $9,
+			ri_exchange_utilization_threshold = $10,
+			ri_exchange_max_per_exchange_usd = $11,
+			ri_exchange_max_daily_usd = $12,
+			ri_exchange_lookback_days = $13,
 			updated_at = NOW()
 	`
+
+	if config.RIExchangeMode == "" {
+		config.RIExchangeMode = "manual"
+	}
+	if config.RIExchangeLookbackDays == 0 {
+		config.RIExchangeLookbackDays = 30
+	}
+	if config.RIExchangeUtilizationThreshold == 0 {
+		config.RIExchangeUtilizationThreshold = 95.0
+	}
 
 	_, err := s.db.Exec(ctx, query,
 		config.EnabledProviders,
@@ -101,6 +130,12 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		config.DefaultPayment,
 		config.DefaultCoverage,
 		config.DefaultRampSchedule,
+		config.RIExchangeEnabled,
+		config.RIExchangeMode,
+		config.RIExchangeUtilizationThreshold,
+		config.RIExchangeMaxPerExchangeUSD,
+		config.RIExchangeMaxDailyUSD,
+		config.RIExchangeLookbackDays,
 	)
 
 	if err != nil {

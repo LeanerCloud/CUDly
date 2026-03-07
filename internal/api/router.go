@@ -126,6 +126,11 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/ri-exchange/reshape-recommendations", Method: "GET", Handler: r.getReshapeRecommendationsHandler},
 		{ExactPath: "/api/ri-exchange/quote", Method: "POST", Handler: r.getExchangeQuoteHandler},
 		{ExactPath: "/api/ri-exchange/execute", Method: "POST", Handler: r.executeExchangeHandler},
+		{ExactPath: "/api/ri-exchange/config", Method: "GET", Handler: r.getRIExchangeConfigHandler},
+		{ExactPath: "/api/ri-exchange/config", Method: "PUT", Handler: r.updateRIExchangeConfigHandler},
+		{ExactPath: "/api/ri-exchange/history", Method: "GET", Handler: r.getRIExchangeHistoryHandler},
+		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler},
+		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler},
 
 		// Health check (both root and /api paths)
 		{ExactPath: "/health", Handler: r.healthCheckHandler},
@@ -439,6 +444,26 @@ func (r *Router) getExchangeQuoteHandler(ctx context.Context, req *events.Lambda
 
 func (r *Router) executeExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.executeExchange(ctx, req)
+}
+
+func (r *Router) getRIExchangeConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getRIExchangeConfig(ctx, req)
+}
+
+func (r *Router) updateRIExchangeConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.updateRIExchangeConfig(ctx, req)
+}
+
+func (r *Router) getRIExchangeHistoryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getRIExchangeHistory(ctx, req)
+}
+
+func (r *Router) approveRIExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.approveRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
+}
+
+func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.rejectRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
 }
 
 // formatNotFoundError creates a detailed not found error message

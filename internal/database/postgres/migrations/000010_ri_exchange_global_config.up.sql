@@ -1,0 +1,7 @@
+ALTER TABLE global_config
+    ADD COLUMN IF NOT EXISTS ri_exchange_enabled BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS ri_exchange_mode VARCHAR(20) NOT NULL DEFAULT 'manual',
+    ADD COLUMN IF NOT EXISTS ri_exchange_utilization_threshold DOUBLE PRECISION NOT NULL DEFAULT 95.0,
+    ADD COLUMN IF NOT EXISTS ri_exchange_max_per_exchange_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS ri_exchange_max_daily_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS ri_exchange_lookback_days INTEGER NOT NULL DEFAULT 30;

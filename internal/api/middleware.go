@@ -18,6 +18,8 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/api/info",
 		"/api/purchases/approve/",
 		"/api/purchases/cancel/",
+		"/api/ri-exchange/approve/",
+		"/api/ri-exchange/reject/",
 		"/api/auth/login",
 		"/api/auth/check-admin",
 		"/api/auth/setup-admin",
@@ -123,8 +125,10 @@ func (h *Handler) requiresCSRFValidation(method, path string) bool {
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
-		"/api/purchases/approve/", // Token-based auth
-		"/api/purchases/cancel/",  // Token-based auth
+		"/api/purchases/approve/",   // Token-based auth
+		"/api/purchases/cancel/",    // Token-based auth
+		"/api/ri-exchange/approve/", // Token-based auth
+		"/api/ri-exchange/reject/",  // Token-based auth
 	}
 
 	for _, exempt := range csrfExemptPaths {

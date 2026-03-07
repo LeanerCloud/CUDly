@@ -2,15 +2,19 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
@@ -299,4 +303,266 @@ type ExchangeExecuteRequestBody struct {
 type ExchangeExecuteResponse struct {
 	ExchangeID string                         `json:"exchange_id"`
 	Quote      *exchange.ExchangeQuoteSummary `json:"quote"`
+}
+
+// getRIExchangeConfig returns the current RI exchange automation settings.
+func (h *Handler) getRIExchangeConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	if _, err := h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
+
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	return &RIExchangeConfigResponse{
+		AutoExchangeEnabled:      globalCfg.RIExchangeEnabled,
+		Mode:                     globalCfg.RIExchangeMode,
+		UtilizationThreshold:     globalCfg.RIExchangeUtilizationThreshold,
+		MaxPaymentPerExchangeUSD: globalCfg.RIExchangeMaxPerExchangeUSD,
+		MaxPaymentDailyUSD:       globalCfg.RIExchangeMaxDailyUSD,
+		LookbackDays:             globalCfg.RIExchangeLookbackDays,
+	}, nil
+}
+
+// updateRIExchangeConfig updates the RI exchange automation settings.
+func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	if _, err := h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
+
+	var body RIExchangeConfigUpdateRequest
+	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+
+	if err := body.validate(); err != nil {
+		return nil, err
+	}
+
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	globalCfg.RIExchangeEnabled = body.AutoExchangeEnabled
+	globalCfg.RIExchangeMode = body.Mode
+	globalCfg.RIExchangeUtilizationThreshold = body.UtilizationThreshold
+	globalCfg.RIExchangeMaxPerExchangeUSD = body.MaxPaymentPerExchangeUSD
+	globalCfg.RIExchangeMaxDailyUSD = body.MaxPaymentDailyUSD
+	globalCfg.RIExchangeLookbackDays = body.LookbackDays
+
+	if err := h.config.SaveGlobalConfig(ctx, globalCfg); err != nil {
+		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	return &StatusResponse{Status: "updated"}, nil
+}
+
+// getRIExchangeHistory returns RI exchange records from the last 12 months.
+func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	if _, err := h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
+
+	since := time.Now().AddDate(-1, 0, 0)
+	records, err := h.config.GetRIExchangeHistory(ctx, since, 500)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load exchange history: %w", err)
+	}
+
+	return &RIExchangeHistoryResponse{Records: records}, nil
+}
+
+// approveRIExchange handles approval of a pending RI exchange via token.
+func (h *Handler) approveRIExchange(ctx context.Context, id, token string) (any, error) {
+	record, err := h.validateExchangeApproval(ctx, id, token)
+	if err != nil {
+		return nil, err
+	}
+
+	// Atomic transition: pending -> processing (checks expiry in WHERE clause)
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing")
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+	}
+	if transitioned == nil {
+		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+	}
+
+	return h.executeApprovedExchange(ctx, id, record)
+}
+
+// validateExchangeApproval validates ID, token, and record state for an exchange approval.
+func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string) (*config.RIExchangeRecord, error) {
+	if err := validateUUID(id); err != nil {
+		return nil, err
+	}
+	if token == "" {
+		return nil, NewClientError(400, "approval token is required")
+	}
+
+	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+	}
+	if record == nil {
+		return nil, NewClientError(404, "exchange record not found")
+	}
+
+	if record.ApprovalToken == "" {
+		return nil, NewClientError(403, "this exchange record does not support approval")
+	}
+
+	if subtle.ConstantTimeCompare([]byte(token), []byte(record.ApprovalToken)) != 1 {
+		return nil, NewClientError(403, "invalid approval token")
+	}
+
+	return record, nil
+}
+
+// failExchange marks an exchange as failed, logging if the DB write also fails.
+func (h *Handler) failExchange(ctx context.Context, id, reason string) (any, error) {
+	if failErr := h.config.FailRIExchange(ctx, id, reason); failErr != nil {
+		logging.Errorf("failed to mark exchange %s as failed (DB may be unavailable): %v", id, failErr)
+	}
+	return map[string]any{"status": "failed", "reason": reason}, nil
+}
+
+// executeApprovedExchange checks caps and executes the exchange after approval.
+func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record *config.RIExchangeRecord) (any, error) {
+	dailySpendStr, err := h.config.GetRIExchangeDailySpend(ctx, time.Now())
+	if err != nil {
+		return h.failExchange(ctx, id, "daily spending cap check failed")
+	}
+
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return h.failExchange(ctx, id, "config load failed")
+	}
+
+	if reason := checkDailyCap(dailySpendStr, record.PaymentDue, globalCfg.RIExchangeMaxDailyUSD); reason != "" {
+		return h.failExchange(ctx, id, reason)
+	}
+
+	region := record.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	perExchangeCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxPerExchangeUSD)
+	exchangeID, _, execErr := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+		Region:           region,
+		ReservedIDs:      record.SourceRIIDs,
+		TargetOfferingID: record.TargetOfferingID,
+		TargetCount:      int32(record.TargetCount),
+		MaxPaymentDueUSD: perExchangeCap,
+	})
+	if execErr != nil {
+		return h.failExchange(ctx, id, execErr.Error())
+	}
+
+	if err := h.config.CompleteRIExchange(ctx, id, exchangeID); err != nil {
+		logging.Errorf("failed to mark exchange %s as completed: %v", id, err)
+	}
+
+	return map[string]any{"status": "completed", "exchange_id": exchangeID}, nil
+}
+
+// checkDailyCap verifies the exchange payment won't exceed the daily spending cap.
+// Returns an empty string if within cap, or a reason string if exceeded.
+func checkDailyCap(dailySpendStr, paymentDueStr string, maxDailyUSD float64) string {
+	dailyCap := new(big.Rat).SetFloat64(maxDailyUSD)
+	dailySpent, _ := exchange.ParseDecimalRat(dailySpendStr)
+	if dailySpent == nil {
+		dailySpent = new(big.Rat)
+	}
+	paymentDue, _ := exchange.ParseDecimalRat(paymentDueStr)
+	if paymentDue == nil {
+		paymentDue = new(big.Rat)
+	}
+
+	newTotal := new(big.Rat).Add(dailySpent, paymentDue)
+	if newTotal.Cmp(dailyCap) > 0 {
+		return fmt.Sprintf("daily cap exceeded: spent $%s + payment $%s > cap $%.2f",
+			dailySpent.FloatString(2), paymentDue.FloatString(2), maxDailyUSD)
+	}
+	return ""
+}
+
+// rejectRIExchange handles rejection of a pending RI exchange via token.
+func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, error) {
+	if err := validateUUID(id); err != nil {
+		return nil, err
+	}
+	if token == "" {
+		return nil, NewClientError(400, "rejection token is required")
+	}
+
+	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+	}
+	if record == nil {
+		return nil, NewClientError(404, "exchange record not found")
+	}
+
+	if subtle.ConstantTimeCompare([]byte(token), []byte(record.ApprovalToken)) != 1 {
+		return nil, NewClientError(403, "invalid rejection token")
+	}
+
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled")
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+	}
+	if transitioned == nil {
+		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled")
+	}
+
+	return map[string]string{"status": "cancelled"}, nil
+}
+
+// RIExchangeConfigResponse is the response for GET /api/ri-exchange/config.
+type RIExchangeConfigResponse struct {
+	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
+	Mode                     string  `json:"mode"`
+	UtilizationThreshold     float64 `json:"utilization_threshold"`
+	MaxPaymentPerExchangeUSD float64 `json:"max_payment_per_exchange_usd"`
+	MaxPaymentDailyUSD       float64 `json:"max_payment_daily_usd"`
+	LookbackDays             int     `json:"lookback_days"`
+}
+
+// RIExchangeConfigUpdateRequest is the request body for PUT /api/ri-exchange/config.
+type RIExchangeConfigUpdateRequest struct {
+	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
+	Mode                     string  `json:"mode"`
+	UtilizationThreshold     float64 `json:"utilization_threshold"`
+	MaxPaymentPerExchangeUSD float64 `json:"max_payment_per_exchange_usd"`
+	MaxPaymentDailyUSD       float64 `json:"max_payment_daily_usd"`
+	LookbackDays             int     `json:"lookback_days"`
+}
+
+func (r *RIExchangeConfigUpdateRequest) validate() error {
+	if r.Mode != "manual" && r.Mode != "auto" {
+		return NewClientError(400, "mode must be 'manual' or 'auto'")
+	}
+	if r.UtilizationThreshold < 0 || r.UtilizationThreshold > 100 {
+		return NewClientError(400, "utilization_threshold must be between 0 and 100")
+	}
+	if r.LookbackDays < 1 || r.LookbackDays > 365 {
+		return NewClientError(400, "lookback_days must be between 1 and 365")
+	}
+	if r.MaxPaymentPerExchangeUSD < 0 {
+		return NewClientError(400, "max_payment_per_exchange_usd must be >= 0")
+	}
+	if r.MaxPaymentDailyUSD < 0 {
+		return NewClientError(400, "max_payment_daily_usd must be >= 0")
+	}
+	return nil
+}
+
+// RIExchangeHistoryResponse is the response for GET /api/ri-exchange/history.
+type RIExchangeHistoryResponse struct {
+	Records []config.RIExchangeRecord `json:"records"`
 }
