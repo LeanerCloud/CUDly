@@ -124,7 +124,11 @@ const staleProcessingThreshold = 15 * time.Minute
 func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoExchangeResult, error) {
 	result := &AutoExchangeResult{Mode: params.Config.Mode}
 
-	// 1. Cancel all stale pending records
+	// 1. Cancel all stale pending records.
+	// Race condition note: if a user clicks approve at 5h59m while this new run
+	// fires and cancels pending records, the TransitionRIExchangeStatus atomic
+	// WHERE clause prevents the exchange from executing (record already cancelled
+	// → returns nil → handler returns 409).
 	cancelled, err := params.Store.CancelAllPendingExchanges(ctx)
 	if err != nil {
 		logging.Warnf("failed to cancel pending exchanges: %v", err)

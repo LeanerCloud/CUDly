@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -597,6 +598,129 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 	if !completedSent {
 		t.Error("expected completed email to be sent in auto mode")
 	}
+}
+
+func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	// Track daily spend: increases after each completed exchange
+	dailySpendCalls := 0
+	var savedRecords []*config.RIExchangeRecord
+	store := &mockConfigStoreForExchange{
+		saveRIExchangeRecordFunc: func(ctx context.Context, record *config.RIExchangeRecord) error {
+			savedRecords = append(savedRecords, record)
+			return nil
+		},
+		getDailySpendFunc: func(ctx context.Context, date time.Time) (string, error) {
+			dailySpendCalls++
+			if dailySpendCalls == 1 {
+				return "0", nil // first exchange: no prior spend
+			}
+			return "8.00", nil // second exchange: first exchange's $8 already counted
+		},
+	}
+
+	app := &Application{
+		Config: store,
+		Email: &mockEmailSender{
+			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+				return nil
+			},
+		},
+	}
+
+	cfg := &config.GlobalConfig{
+		RIExchangeEnabled:              true,
+		RIExchangeMode:                 "auto",
+		RIExchangeUtilizationThreshold: 95.0,
+		RIExchangeMaxPerExchangeUSD:    50.0,
+		RIExchangeMaxDailyUSD:          10.0, // daily cap: $10
+		RIExchangeLookbackDays:         30,
+	}
+
+	clients := riExchangeClients{
+		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
+			return []ec2svc.ConvertibleRI{
+				{
+					ReservedInstanceID:  "ri-first",
+					InstanceType:        "m5.xlarge",
+					InstanceCount:       1,
+					NormalizationFactor: 8.0,
+					ProductDescription:  "Linux/UNIX",
+					InstanceTenancy:     "default",
+					Scope:               "Region",
+					Duration:            31536000,
+				},
+				{
+					ReservedInstanceID:  "ri-second",
+					InstanceType:        "c5.xlarge",
+					InstanceCount:       1,
+					NormalizationFactor: 8.0,
+					ProductDescription:  "Linux/UNIX",
+					InstanceTenancy:     "default",
+					Scope:               "Region",
+					Duration:            31536000,
+				},
+			}, nil
+		},
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			return []recommendations.RIUtilization{
+				{ReservedInstanceID: "ri-first", UtilizationPercent: 40.0},
+				{ReservedInstanceID: "ri-second", UtilizationPercent: 30.0},
+			}, nil
+		},
+		exchangeClient: &mockExchangeClient{
+			getQuoteFunc: func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+				return &exchange.ExchangeQuoteSummary{
+					IsValidExchange:  true,
+					PaymentDueUSD:    new(big.Rat).SetFloat64(8.00),
+					PaymentDueUSDStr: "8.00",
+				}, nil
+			},
+			executeFunc: func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+				return "exch-" + req.ReservedIDs[0], &exchange.ExchangeQuoteSummary{
+					IsValidExchange:  true,
+					PaymentDueUSD:    new(big.Rat).SetFloat64(8.00),
+					PaymentDueUSDStr: "8.00",
+				}, nil
+			},
+		},
+		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+			return "offering-cap-test", nil
+		},
+		accountID: "123456789",
+		region:    "us-east-1",
+	}
+
+	result, err := app.executeRIExchangeReshape(ctx, cfg, clients)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, "auto", result.Mode)
+
+	// First exchange succeeds ($0 + $8 = $8 < $10 cap)
+	testutil.AssertEqual(t, 1, len(result.Completed))
+	testutil.AssertEqual(t, "exch-ri-first", result.Completed[0].ExchangeID)
+
+	// Second exchange is blocked by daily cap ($8 + $8 = $16 > $10 cap)
+	testutil.AssertEqual(t, 1, len(result.Failed))
+	if len(result.Failed) > 0 {
+		if !strings.Contains(result.Failed[0].Error, "daily cap exceeded") {
+			t.Errorf("expected daily cap error, got: %s", result.Failed[0].Error)
+		}
+	}
+
+	// Verify records saved: 1 completed + 1 failed
+	completedCount := 0
+	failedCount := 0
+	for _, r := range savedRecords {
+		switch r.Status {
+		case "completed":
+			completedCount++
+		case "failed":
+			failedCount++
+		}
+	}
+	testutil.AssertEqual(t, 1, completedCount)
+	testutil.AssertEqual(t, 1, failedCount)
 }
 
 // --- Mock types ---
