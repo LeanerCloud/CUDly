@@ -123,6 +123,7 @@ function renderRIsTable(container: HTMLElement): void {
           <th>Offering</th>
           <th>Expiry</th>
           <th>Utilization</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -140,11 +141,20 @@ function renderRIsTable(container: HTMLElement): void {
             <td>${escapeHtml(ri.offering_type)}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
+            <td><button class="btn-small" data-action="quote-ri" data-ri-id="${escapeHtml(ri.reserved_instance_id)}" data-count="${ri.instance_count}" aria-label="Get Quote for ${escapeHtml(ri.reserved_instance_id)}">Get Quote</button></td>
           </tr>`;
         }).join('')}
       </tbody>
     </table>
   `;
+
+  // Attach "Get Quote" handlers for individual RIs
+  container.querySelectorAll<HTMLButtonElement>('[data-action="quote-ri"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const count = parseInt(btn.dataset['count'] || '1', 10);
+      fillQuoteFromRI(btn.dataset['riId'] || '', isNaN(count) ? 1 : count);
+    });
+  });
 }
 
 // ──────────────────────────────────────────────
@@ -226,6 +236,30 @@ function fillQuoteFromRecommendation(rec: ReshapeRecommendation): void {
 
   // Scroll the quote form into view
   document.getElementById('ri-exchange-quote-section')?.scrollIntoView({ behavior: 'smooth' });
+}
+
+export function fillQuoteFromRI(riId: string, count: number): void {
+  const riIdsInput = document.getElementById('ri-exchange-ri-ids') as HTMLInputElement | null;
+  const targetInput = document.getElementById('ri-exchange-target-offering') as HTMLInputElement | null;
+  const countInput = document.getElementById('ri-exchange-target-count') as HTMLInputElement | null;
+
+  if (riIdsInput) riIdsInput.value = riId;
+  if (targetInput) targetInput.value = '';
+  if (countInput) countInput.value = String(count);
+
+  // Clear stale quote/execute state from previous interactions
+  const executeSection = document.getElementById('ri-exchange-execute-section');
+  if (executeSection) executeSection.classList.add('hidden');
+  const quoteResult = document.getElementById('ri-exchange-quote-result');
+  if (quoteResult) quoteResult.textContent = '';
+
+  // Scroll first, then focus after scroll completes to avoid double-scroll jank
+  // (focus() on off-screen elements triggers an instant browser scroll)
+  const quoteSection = document.getElementById('ri-exchange-quote-section');
+  if (quoteSection) {
+    quoteSection.scrollIntoView({ behavior: 'smooth' });
+    setTimeout(() => { targetInput?.focus(); }, 500);
+  }
 }
 
 // ──────────────────────────────────────────────
