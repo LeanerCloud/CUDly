@@ -52,6 +52,10 @@ module "compute_container_apps" {
   scheduled_task_secret   = module.secrets.scheduled_task_secret_value
   recommendation_schedule = var.recommendation_schedule
 
+  # RI exchange automation
+  enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
+  ri_exchange_schedule        = var.ri_exchange_schedule
+
   tags = local.common_tags
 
   depends_on = [module.networking, module.database, module.secrets, module.build]

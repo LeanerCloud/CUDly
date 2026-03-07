@@ -44,6 +44,10 @@ module "compute_cloud_run" {
   recommendation_schedule = var.recommendation_schedule
   scheduled_task_secret   = module.secrets.scheduled_task_secret_value
 
+  # RI exchange automation
+  enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
+  ri_exchange_schedule        = var.ri_exchange_schedule
+
   # Database migration
   auto_migrate = var.auto_migrate
 

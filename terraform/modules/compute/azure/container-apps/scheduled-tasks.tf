@@ -56,6 +56,64 @@ resource "azurerm_logic_app_action_http" "call_recommendations" {
   })
 }
 
+# ==============================================
+# Logic App workflow for RI Exchange Automation
+# ==============================================
+
+# Parse RI exchange cron schedule hour (same approach as recommendations)
+locals {
+  ri_exchange_schedule_hour = var.enable_ri_exchange_schedule ? split(" ", var.ri_exchange_schedule)[1] : "0"
+  # Extract interval from cron hour field (e.g., "*/6" -> 6)
+  ri_exchange_interval = var.enable_ri_exchange_schedule ? (
+    can(regex("\\*/([0-9]+)", local.ri_exchange_schedule_hour))
+    ? tonumber(regex("\\*/([0-9]+)", local.ri_exchange_schedule_hour)[0])
+    : 24
+  ) : 6
+}
+
+resource "azurerm_logic_app_workflow" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name                = "${var.app_name}-ri-exchange"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+
+  tags = var.tags
+}
+
+resource "azurerm_logic_app_trigger_recurrence" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name         = "ri-exchange-trigger"
+  logic_app_id = azurerm_logic_app_workflow.ri_exchange[0].id
+  frequency    = "Hour"
+  interval     = local.ri_exchange_interval
+  start_time   = "${formatdate("YYYY-MM-DD", timestamp())}T00:00:00Z"
+  time_zone    = "UTC"
+}
+
+resource "azurerm_logic_app_action_http" "call_ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name         = "call-ri-exchange-endpoint"
+  logic_app_id = azurerm_logic_app_workflow.ri_exchange[0].id
+
+  method = "POST"
+  uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/ri-exchange"
+
+  headers = {
+    "Content-Type"  = "application/json"
+    "Authorization" = "Bearer ${var.scheduled_task_secret}"
+    "X-Trigger"     = "scheduled"
+    "X-Source"      = "azure-logic-apps"
+  }
+
+  body = jsonencode({
+    source    = "azure-logic-apps"
+    timestamp = "@{utcNow()}"
+  })
+}
+
 # Logic App workflow for cleanup (sessions and executions)
 resource "azurerm_logic_app_workflow" "cleanup" {
   count = var.enable_scheduled_tasks ? 1 : 0

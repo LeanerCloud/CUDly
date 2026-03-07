@@ -279,3 +279,39 @@ resource "aws_lambda_permission" "eventbridge" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.scheduled_recommendations[0].arn
 }
+
+# ==============================================
+# EventBridge Rule for RI Exchange Automation
+# ==============================================
+
+resource "aws_cloudwatch_event_rule" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name                = "${var.stack_name}-ri-exchange"
+  description         = "Trigger RI exchange automation"
+  schedule_expression = var.ri_exchange_schedule
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.ri_exchange[0].name
+  target_id = "lambda"
+  arn       = aws_lambda_function.main.arn
+
+  input = jsonencode({
+    action = "ri_exchange_reshape"
+  })
+}
+
+resource "aws_lambda_permission" "eventbridge_ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  statement_id  = "AllowExecutionFromEventBridgeRIExchange"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.main.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.ri_exchange[0].arn
+}

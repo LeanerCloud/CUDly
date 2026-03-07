@@ -206,3 +206,16 @@ variable "recommendation_schedule" {
   type        = string
   default     = "0 2 * * *"
 }
+
+variable "enable_ri_exchange_schedule" {
+  description = "Enable scheduled RI exchange automation via Logic Apps"
+  type        = bool
+  default     = false
+}
+
+variable "ri_exchange_schedule" {
+  # Standard 5-field cron: 0 */6 * * * runs at 00:00, 06:00, 12:00, 18:00 UTC.
+  description = "Cron schedule for RI exchange automation (e.g., '0 */6 * * *' for every 6 hours)"
+  type        = string
+  default     = "0 */6 * * *"
+}

@@ -174,6 +174,19 @@ variable "manage_project_log_retention" {
   default     = false
 }
 
+variable "enable_ri_exchange_schedule" {
+  description = "Enable scheduled RI exchange automation"
+  type        = bool
+  default     = false
+}
+
+variable "ri_exchange_schedule" {
+  # Standard 5-field cron: 0 */6 * * * runs at 00:00, 06:00, 12:00, 18:00 UTC.
+  description = "Cron schedule for RI exchange automation (e.g., '0 */6 * * *' for every 6 hours)"
+  type        = string
+  default     = "0 */6 * * *"
+}
+
 variable "additional_env_vars" {
   description = "Additional environment variables"
   type        = map(string)

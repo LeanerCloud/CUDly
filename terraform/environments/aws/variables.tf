@@ -250,6 +250,18 @@ variable "recommendation_schedule" {
   default     = "rate(1 day)"
 }
 
+variable "enable_ri_exchange_schedule" {
+  description = "Enable scheduled RI exchange automation"
+  type        = bool
+  default     = false
+}
+
+variable "ri_exchange_schedule" {
+  description = "Schedule for RI exchange automation. rate() starts from deployment time; cron(0 0/6 * * ? *) runs at fixed clock hours (EventBridge cron syntax). For predictable approval windows, prefer cron."
+  type        = string
+  default     = "rate(6 hours)"
+}
+
 # ==============================================
 # Additional Configuration
 # ==============================================

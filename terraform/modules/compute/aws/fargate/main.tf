@@ -739,3 +739,98 @@ resource "aws_iam_role_policy" "eventbridge" {
     ]
   })
 }
+
+# ==============================================
+# Scheduled RI Exchange Automation
+# ==============================================
+
+resource "aws_cloudwatch_event_rule" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name                = "${local.name_prefix}-ri-exchange"
+  description         = "Trigger RI exchange automation"
+  schedule_expression = var.ri_exchange_schedule
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_event_target" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.ri_exchange[0].name
+  target_id = "ecs-task"
+  arn       = aws_ecs_cluster.main.arn
+  role_arn  = aws_iam_role.eventbridge_ri_exchange[0].arn
+
+  ecs_target {
+    task_count          = 1
+    task_definition_arn = aws_ecs_task_definition.main.arn
+    launch_type         = "FARGATE"
+    platform_version    = "LATEST"
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_tasks.id]
+      assign_public_ip = false
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [{
+      name    = "app"
+      command = ["./cudly", "--task", "ri_exchange_reshape"]
+    }]
+  })
+}
+
+# IAM role for EventBridge to run ECS tasks (RI exchange)
+resource "aws_iam_role" "eventbridge_ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name = "${local.name_prefix}-eb-ri-exchange"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "eventbridge_ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name = "ecs-run-task"
+  role = aws_iam_role.eventbridge_ri_exchange[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecs:RunTask"
+        ]
+        Resource = aws_ecs_task_definition.main.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          aws_iam_role.task_execution.arn,
+          aws_iam_role.task.arn
+        ]
+      }
+    ]
+  })
+}

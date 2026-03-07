@@ -247,6 +247,59 @@ resource "google_cloud_run_service_iam_member" "scheduler_invoker" {
 }
 
 # ==============================================
+# Cloud Scheduler for RI Exchange Automation
+# ==============================================
+
+resource "google_cloud_scheduler_job" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name             = "${var.service_name}-ri-exchange"
+  description      = "Trigger RI exchange automation"
+  schedule         = var.ri_exchange_schedule
+  time_zone        = "UTC"
+  attempt_deadline = "320s"
+  project          = var.project_id
+  region           = var.region
+
+  retry_config {
+    retry_count = 3
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/ri-exchange"
+
+    headers = {
+      "Authorization" = "Bearer ${var.scheduled_task_secret}"
+    }
+
+    oidc_token {
+      service_account_email = google_service_account.scheduler_ri_exchange[0].email
+    }
+  }
+}
+
+# Service account for RI Exchange Cloud Scheduler
+resource "google_service_account" "scheduler_ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  account_id   = "${var.service_name}-ri-sched"
+  display_name = "Cloud Scheduler service account for RI exchange"
+  project      = var.project_id
+}
+
+# Grant RI exchange scheduler permission to invoke Cloud Run
+resource "google_cloud_run_service_iam_member" "scheduler_ri_exchange_invoker" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  service  = google_cloud_run_v2_service.main.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler_ri_exchange[0].email}"
+}
+
+# ==============================================
 # Cloud Logging
 # ==============================================
 

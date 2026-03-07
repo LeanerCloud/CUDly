@@ -51,6 +51,10 @@ module "compute_lambda" {
   enable_scheduled_tasks  = var.enable_scheduled_tasks
   recommendation_schedule = var.recommendation_schedule
 
+  # RI exchange automation
+  enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
+  ri_exchange_schedule        = var.ri_exchange_schedule
+
   # Additional environment variables
   additional_env_vars = merge(
     {
@@ -130,6 +134,10 @@ module "compute_fargate" {
   # Scheduled tasks
   enable_scheduled_tasks  = var.enable_scheduled_tasks
   recommendation_schedule = var.recommendation_schedule
+
+  # RI exchange automation
+  enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
+  ri_exchange_schedule        = var.ri_exchange_schedule
 
   # ECS Exec for debugging
   enable_execute_command = var.fargate_enable_execute_command
