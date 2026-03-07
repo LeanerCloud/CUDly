@@ -19,6 +19,7 @@ const (
 	TaskSendNotifications         ScheduledTaskType = "send_notifications"
 	TaskCleanupExpiredRecords     ScheduledTaskType = "cleanup"
 	TaskRefreshAnalytics          ScheduledTaskType = "analytics_refresh"
+	TaskRIExchangeReshape         ScheduledTaskType = "ri_exchange_reshape"
 )
 
 // HandleScheduledTask processes a scheduled task by type
@@ -36,6 +37,8 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 		return app.handleCleanupExpiredRecords(ctx)
 	case TaskRefreshAnalytics:
 		return app.handleRefreshAnalytics(ctx)
+	case TaskRIExchangeReshape:
+		return app.handleRIExchangeReshape(ctx)
 	default:
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
@@ -177,6 +180,8 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 		return TaskCleanupExpiredRecords, nil
 	case "analytics_refresh":
 		return TaskRefreshAnalytics, nil
+	case "ri_exchange_reshape":
+		return TaskRIExchangeReshape, nil
 	default:
 		return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
 	}

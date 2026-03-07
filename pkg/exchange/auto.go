@@ -268,6 +268,10 @@ func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec Re
 
 func processManualExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string) ExchangeOutcome {
 	token := uuid.New().String()
+	// 24h is a safety net; the email says "approve within 6 hours" because
+	// CancelAllPendingExchanges at the next run start (every 6h) will cancel
+	// this record. The 24h expiry catches edge cases where the scheduled run
+	// is delayed or disabled.
 	expiresAt := time.Now().Add(24 * time.Hour)
 
 	record := &ExchangeRecord{
@@ -313,6 +317,11 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 	}
 }
 
+// processAutoExchange executes a single exchange in auto mode.
+// If overlapping scheduled runs attempt to exchange the same RI, the first
+// succeeds and the second fails because AWS replaces the source RI atomically.
+// No DB-level mutex is needed — AWS itself guarantees idempotency (an RI can
+// only be exchanged once). The failed attempt is recorded with status=failed.
 func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string, perExchangeCap *big.Rat) ExchangeOutcome {
 	outcome := ExchangeOutcome{
 		SourceRIID:         rec.SourceRIID,
