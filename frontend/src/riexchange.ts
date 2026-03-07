@@ -38,7 +38,6 @@ void MODE_VALUES;
  */
 export async function loadRIExchange(): Promise<void> {
   await Promise.all([
-    loadAutomationSettings(),
     loadConvertibleRIs(),
     loadReshapeRecommendations(),
     loadExchangeHistory(),
@@ -380,7 +379,7 @@ async function submitExecute(): Promise<void> {
 // Automation Settings
 // ──────────────────────────────────────────────
 
-async function loadAutomationSettings(): Promise<void> {
+export async function loadAutomationSettings(): Promise<void> {
   const container = document.getElementById('ri-exchange-automation-settings');
   if (!container) return;
 
