@@ -22,8 +22,9 @@ type ExchangeQuoteSummary struct {
 	ValidationFailureReason string
 	CurrencyCode            string
 
-	PaymentDueRaw string   // as returned by AWS (string)
-	PaymentDueUSD *big.Rat `json:"-"` // internal use only, not serializable
+	PaymentDueRaw    string   // as returned by AWS (string)
+	PaymentDueUSD    *big.Rat `json:"-"`                         // internal use only, not serializable
+	PaymentDueUSDStr string   `json:"payment_due_usd,omitempty"` // parsed decimal for JSON consumers
 
 	OutputReservedInstancesExp string // formatted date string (YYYY-MM-DD), empty if not set
 
@@ -192,6 +193,7 @@ func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuo
 			return nil, fmt.Errorf("quote returned invalid paymentDue %q: %w", s.PaymentDueRaw, perr)
 		}
 		s.PaymentDueUSD = p
+		s.PaymentDueUSDStr = p.FloatString(6)
 	}
 
 	// Rollups (optional but useful for debugging)
