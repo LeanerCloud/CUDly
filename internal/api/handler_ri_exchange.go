@@ -43,13 +43,9 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	lookbackDays := 30
-	if days := req.QueryStringParameters["lookback_days"]; days != "" {
-		d, err := strconv.Atoi(days)
-		if err != nil || d < 1 || d > 365 {
-			return nil, NewClientError(400, "lookback_days must be between 1 and 365")
-		}
-		lookbackDays = d
+	lookbackDays, err := parseLookbackDaysParam(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
 	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
@@ -64,6 +60,20 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	}
 
 	return &RIUtilizationResponse{Utilization: utilization}, nil
+}
+
+// parseLookbackDaysParam parses and validates the "lookback_days" query parameter.
+// Returns 30 as default when the parameter is absent.
+func parseLookbackDaysParam(params map[string]string) (int, error) {
+	days := params["lookback_days"]
+	if days == "" {
+		return 30, nil
+	}
+	d, err := strconv.Atoi(days)
+	if err != nil || d < 1 || d > 365 {
+		return 0, NewClientError(400, "lookback_days must be between 1 and 365")
+	}
+	return d, nil
 }
 
 // parseThresholdParam parses and validates the "threshold" query parameter.
@@ -115,6 +125,11 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 
+	lookbackDays, err := parseLookbackDaysParam(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -127,7 +142,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
-	utilData, err := recsAdapter.GetRIUtilization(ctx, 30)
+	utilData, err := recsAdapter.GetRIUtilization(ctx, lookbackDays)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
