@@ -663,7 +663,7 @@ func TestAddToPasswordHistory(t *testing.T) {
 
 // Test checkPasswordHistory
 func TestCheckPasswordHistory(t *testing.T) {
-	service := &Service{}
+	service := newTestService()
 
 	t.Run("password not in history", func(t *testing.T) {
 		newPassword := "NewS3cur3123!"

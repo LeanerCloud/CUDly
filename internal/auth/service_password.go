@@ -38,9 +38,11 @@ var commonPasswords = []string{
 // hashPassword hashes a password using bcrypt.
 // Bcrypt handles salting internally, so no external salt is needed.
 func (s *Service) hashPassword(password string) (string, error) {
-	// Hash with bcrypt using increased cost factor for better security
-	// Bcrypt automatically generates and stores a unique salt per password
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	cost := bcryptCost
+	if s.bcryptCostOverride > 0 {
+		cost = s.bcryptCostOverride
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), cost)
 	if err != nil {
 		return "", err
 	}

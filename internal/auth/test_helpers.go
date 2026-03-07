@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // MockStore is a mock implementation of the auth store for testing
@@ -196,13 +197,20 @@ var _ StoreInterface = (*MockStore)(nil)
 // Verify that MockEmailSender implements EmailSenderInterface
 var _ EmailSenderInterface = (*MockEmailSender)(nil)
 
+// newTestService returns a minimal Service with fast bcrypt for unit tests.
+// It has no store or email sender — use createTestService() for tests that need mocks.
+func newTestService() *Service {
+	return &Service{bcryptCostOverride: bcrypt.MinCost}
+}
+
 // createTestService creates a service with mocks for testing
 func createTestService(mockStore *MockStore, mockEmail *MockEmailSender) *Service {
 	return &Service{
-		store:           mockStore,
-		emailSender:     mockEmail,
-		sessionDuration: 24 * time.Hour,
-		dashboardURL:    "https://dashboard.example.com",
+		store:              mockStore,
+		emailSender:        mockEmail,
+		sessionDuration:    24 * time.Hour,
+		dashboardURL:       "https://dashboard.example.com",
+		bcryptCostOverride: bcrypt.MinCost,
 	}
 }
 
@@ -210,9 +218,7 @@ func createTestService(mockStore *MockStore, mockEmail *MockEmailSender) *Servic
 func createTestUser(t *testing.T, password string) *User {
 	t.Helper()
 
-	// We need a service instance to hash the password
-	// Note: salt is no longer used - bcrypt handles salting internally
-	s := &Service{}
+	s := newTestService()
 	hash, err := s.hashPassword(password)
 	require.NoError(t, err)
 

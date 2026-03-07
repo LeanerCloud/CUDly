@@ -346,8 +346,7 @@ func TestLogin_WithMFA(t *testing.T) {
 	counter := currentTime / timeStep
 	validCode := generateTOTP(mfaSecret, counter)
 
-	// Hash the password using service method (salt no longer used)
-	s := &Service{}
+	s := newTestService()
 	hash, _ := s.hashPassword("SecurePass@123")
 
 	user := &User{
@@ -383,7 +382,7 @@ func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 	service := createTestService(mockStore, mockEmail)
 
-	s := &Service{}
+	s := newTestService()
 	hash, _ := s.hashPassword("SecurePass@123")
 
 	user := &User{
@@ -419,7 +418,7 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 	service := createTestService(mockStore, mockEmail)
 
-	s := &Service{}
+	s := newTestService()
 	hash, _ := s.hashPassword("SecurePass@123")
 
 	user := &User{
@@ -453,7 +452,7 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 	service := createTestService(mockStore, mockEmail)
 
-	s := &Service{}
+	s := newTestService()
 	hash, _ := s.hashPassword("SecurePass@123")
 
 	user := &User{

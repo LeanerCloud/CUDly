@@ -47,10 +47,9 @@ func TestHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("password hashing and verification", func(t *testing.T) {
-		service := &Service{}
+		service := newTestService()
 		password := "TestPassword123"
 
-		// Note: salt is no longer used - bcrypt handles salting internally
 		hash, err := service.hashPassword(password)
 		require.NoError(t, err)
 		assert.NotEmpty(t, hash)

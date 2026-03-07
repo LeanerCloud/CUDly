@@ -29,10 +29,11 @@ const (
 
 // Service handles authentication and authorization
 type Service struct {
-	store           StoreInterface
-	emailSender     EmailSenderInterface
-	sessionDuration time.Duration
-	dashboardURL    string
+	store              StoreInterface
+	emailSender        EmailSenderInterface
+	sessionDuration    time.Duration
+	dashboardURL       string
+	bcryptCostOverride int // if > 0, overrides bcryptCost const (used by tests for speed)
 }
 
 // ServiceConfig holds configuration for the auth service

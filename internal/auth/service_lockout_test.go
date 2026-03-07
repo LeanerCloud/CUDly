@@ -235,7 +235,7 @@ func TestLogin_AccountLockout_MFAFailure(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 	service := createTestService(mockStore, mockEmail)
 
-	s := &Service{}
+	s := newTestService()
 	hash, _ := s.hashPassword("CorrectPassword123")
 
 	testUser := &User{
