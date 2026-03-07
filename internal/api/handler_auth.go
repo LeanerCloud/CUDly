@@ -94,11 +94,6 @@ func (h *Handler) checkAdminExists(ctx context.Context, req *events.LambdaFuncti
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
-	// Rate limiting: 100 requests per IP per minute (light limit for public endpoint)
-	if err := h.checkRateLimit(ctx, req, "api_general"); err != nil {
-		return nil, err
-	}
-
 	exists, err := h.auth.CheckAdminExists(ctx)
 	if err != nil {
 		return nil, err

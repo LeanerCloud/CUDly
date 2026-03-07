@@ -97,18 +97,8 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context) (*UpcomingPurchaseRe
 }
 
 // getPublicInfo returns public information about the CUDly instance (no auth required)
+// No rate limiting — this is hit by Terraform deployment checks and the frontend on every page load.
 func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PublicInfoResponse, error) {
-	// Rate limiting: 100 requests per IP per minute (light limit for public endpoint)
-	if h.rateLimiter != nil {
-		clientIP := req.RequestContext.HTTP.SourceIP
-		allowed, err := h.rateLimiter.AllowWithIP(ctx, clientIP, "api_general")
-		if err != nil {
-			// Log but continue on rate limiter errors
-		} else if !allowed {
-			return nil, NewClientError(429, "too many requests, please try again later")
-		}
-	}
-
 	// Check if admin exists
 	adminExists := false
 	if h.auth != nil {

@@ -214,34 +214,6 @@ func TestHandler_getPublicInfo(t *testing.T) {
 		assert.True(t, result.AdminExists)
 	})
 
-	t.Run("with rate limiting - blocked", func(t *testing.T) {
-		mockRateLimiter := new(MockRateLimiter)
-		mockRateLimiter.On("AllowWithIP", ctx, "192.168.1.1", "api_general").Return(false, nil)
-
-		handler := &Handler{
-			rateLimiter: mockRateLimiter,
-		}
-
-		_, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "too many requests")
-	})
-
-	t.Run("with rate limiting - error continues", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockRateLimiter := new(MockRateLimiter)
-		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
-		mockRateLimiter.On("AllowWithIP", ctx, "192.168.1.1", "api_general").Return(true, errors.New("rate limiter error"))
-
-		handler := &Handler{
-			auth:        mockAuth,
-			rateLimiter: mockRateLimiter,
-		}
-
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
-		assert.True(t, result.AdminExists)
-	})
 }
 
 func TestHandler_calculateCommitmentMetrics(t *testing.T) {
