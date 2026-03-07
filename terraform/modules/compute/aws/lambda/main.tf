@@ -210,6 +210,29 @@ resource "aws_iam_role_policy" "ses_access" {
   })
 }
 
+# RI Exchange: EC2 and Cost Explorer read access
+resource "aws_iam_role_policy" "ri_exchange" {
+  name_prefix = "${var.stack_name}-ri-exchange-"
+  role        = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeReservedInstances",
+          "ec2:DescribeReservedInstancesOfferings",
+          "ec2:GetReservedInstancesExchangeQuote",
+          "ec2:AcceptReservedInstancesExchangeQuote",
+          "ce:GetReservationUtilization"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # ==============================================
 # CloudWatch Log Group
 # ==============================================
