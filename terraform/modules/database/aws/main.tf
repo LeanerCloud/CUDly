@@ -21,7 +21,7 @@ terraform {
 # ==============================================
 
 resource "random_password" "db_password" {
-  count = var.master_password_secret_arn == null ? 1 : 0
+  count = var.create_password ? 1 : 0
 
   length  = 32
   special = true
@@ -30,7 +30,7 @@ resource "random_password" "db_password" {
 }
 
 resource "aws_secretsmanager_secret" "db_password" {
-  count = var.master_password_secret_arn == null ? 1 : 0
+  count = var.create_password ? 1 : 0
 
   name_prefix = "${var.stack_name}-db-password-"
   description = "PostgreSQL database password for ${var.stack_name}"
@@ -39,7 +39,7 @@ resource "aws_secretsmanager_secret" "db_password" {
 }
 
 resource "aws_secretsmanager_secret_version" "db_password" {
-  count = var.master_password_secret_arn == null ? 1 : 0
+  count = var.create_password ? 1 : 0
 
   secret_id = aws_secretsmanager_secret.db_password[0].id
   secret_string = jsonencode({
@@ -50,20 +50,20 @@ resource "aws_secretsmanager_secret_version" "db_password" {
 
 # Data source to read existing secret if provided
 data "aws_secretsmanager_secret" "existing_password" {
-  count = var.master_password_secret_arn != null ? 1 : 0
+  count = var.create_password ? 0 : 1
   arn   = var.master_password_secret_arn
 }
 
 data "aws_secretsmanager_secret_version" "existing_password" {
-  count     = var.master_password_secret_arn != null ? 1 : 0
+  count     = var.create_password ? 0 : 1
   secret_id = data.aws_secretsmanager_secret.existing_password[0].id
 }
 
 # Local value for the actual secret ARN and password to use
 locals {
-  db_password_secret_arn = var.master_password_secret_arn != null ? var.master_password_secret_arn : aws_secretsmanager_secret.db_password[0].arn
+  db_password_secret_arn = var.create_password ? aws_secretsmanager_secret.db_password[0].arn : var.master_password_secret_arn
   # Parse JSON to extract password from secret (both generated and existing secrets use JSON format)
-  db_password = var.master_password_secret_arn != null ? jsondecode(data.aws_secretsmanager_secret_version.existing_password[0].secret_string)["password"] : jsondecode(aws_secretsmanager_secret_version.db_password[0].secret_string)["password"]
+  db_password = var.create_password ? jsondecode(aws_secretsmanager_secret_version.db_password[0].secret_string)["password"] : jsondecode(data.aws_secretsmanager_secret_version.existing_password[0].secret_string)["password"]
 }
 
 # ==============================================

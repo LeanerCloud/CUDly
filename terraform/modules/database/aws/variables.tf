@@ -36,6 +36,12 @@ variable "master_password_secret_arn" {
   default     = null
 }
 
+variable "create_password" {
+  description = "Whether to create a new database password. Set to false when master_password_secret_arn is provided externally."
+  type        = bool
+  default     = true
+}
+
 variable "engine_version" {
   description = "PostgreSQL engine version"
   type        = string

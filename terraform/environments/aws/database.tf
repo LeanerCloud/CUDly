@@ -12,6 +12,7 @@ module "database" {
   database_name              = var.database_name
   master_username            = var.database_username
   master_password_secret_arn = module.secrets.database_password_secret_arn # Use secrets module password
+  create_password            = false                                       # Password managed by secrets module
 
   # Instance sizing
   instance_class        = var.database_instance_class
