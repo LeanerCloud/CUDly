@@ -16,7 +16,7 @@ module "build" {
   # platform defaults to native (arm64 on Apple Silicon, amd64 on x86). Set explicitly for cross-compilation in CI/CD.
 
   # Registry login for ECR
-  registry_login_command = "aws ecr get-login-password --region ${var.region} --profile ${var.aws_profile != null ? var.aws_profile : "default"} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
+  registry_login_command = "aws ecr get-login-password --region ${var.region}${var.aws_profile != null ? " --profile ${var.aws_profile}" : ""} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
 
   # Build options
   skip_docker_build  = false
