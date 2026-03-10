@@ -35,7 +35,7 @@ fargate_min_capacity  = 1
 fargate_max_capacity  = 5
 
 # ==============================================
-# Database (Aurora Serverless v2)
+# Database (RDS PostgreSQL)
 # ==============================================
 
 database_name                  = "cudly"

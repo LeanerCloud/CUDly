@@ -6,14 +6,13 @@ project_name = "cudly"
 environment  = "fargate-dev"
 
 # Cloud configuration
-provider = "aws"
-region   = "us-east-1"
-# aws_profile = "your-aws-profile"  # Set TF_VAR_aws_profile env var
+region = "us-east-1"
+# aws_profile = "your-aws-profile"
 
 # Compute platform
 compute_platform = "fargate"
 
-# Fargate settings
+# Fargate configuration
 fargate_cpu           = 512
 fargate_memory        = 1024
 fargate_desired_count = 1
@@ -22,43 +21,33 @@ fargate_max_capacity  = 4
 # fargate_certificate_arn = "arn:aws:acm:..."  # Only needed if not using subdomain_zone_name
 
 # Docker build settings
-skip_docker_build    = false
-skip_docker_push     = false
-docker_platform      = "linux/arm64"  # Graviton for cost savings
-cleanup_old_images   = true
+enable_docker_build = true
 
-# Database
-database_name                    = "cudly"
-database_username                = "cudly"
-database_engine_version          = "16.4"
-database_min_capacity            = 0.5
-database_max_capacity            = 2.0
-database_backup_retention_days   = 7
-database_deletion_protection     = false
-database_skip_final_snapshot     = true
-database_auto_migrate            = true
+# Admin
+admin_email = "admin@example.com"
+
+# Database (RDS PostgreSQL)
+database_name                  = "cudly"
+database_username              = "cudly"
+database_engine_version        = "16.6"
+database_backup_retention_days = 7
+database_deletion_protection   = false
+database_skip_final_snapshot   = true
+database_performance_insights  = false
+database_auto_migrate          = true
 
 # Networking
-vpc_cidr = "10.0.0.0/16"
-az_count = 2
-
-# Frontend
-enable_frontend_build = true
-
-# Features
-enable_dashboard = true
-enable_scheduled_tasks = true
-
-# Monitoring
-enable_monitoring = false
+vpc_cidr         = "10.0.0.0/16"
+az_count         = 2
+enable_flow_logs = false
 
 # Secrets
 secret_recovery_window_days = 7
 
-# Tags
-tags = {
-  Environment = "fargate-dev"
-  ManagedBy   = "terraform"
-  Project     = "cudly"
-  Owner       = "devteam"
-}
+# Frontend
+enable_cdn           = false
+frontend_price_class = "PriceClass_100"
+
+# Scheduled tasks
+enable_scheduled_tasks  = true
+recommendation_schedule = "rate(1 day)"

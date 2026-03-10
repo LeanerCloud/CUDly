@@ -6,55 +6,53 @@ project_name = "cudly"
 environment  = "prod"
 
 # Cloud configuration
-provider = "aws"
-region   = "us-east-1"
-# aws_profile = "your-aws-profile"  # Set TF_VAR_aws_profile env var
+region = "us-east-1"
+# aws_profile = "your-aws-profile"
 
 # Compute platform
-compute_platform = "lambda"  # or "fargate"
-architecture     = "arm64"   # Graviton for cost savings
-memory_size      = 1024      # More memory for production
+compute_platform = "lambda" # or "fargate"
+
+# Lambda configuration
+lambda_architecture           = "arm64"
+lambda_memory_size            = 1024 # More memory for production
+lambda_timeout                = 60
+lambda_reserved_concurrency   = -1
+lambda_log_retention_days     = 30
+lambda_enable_function_url    = true
+lambda_function_url_auth_type = "NONE"
+lambda_allowed_origins        = ["*"] # TODO: restrict to production domain
 
 # Docker build settings
-skip_docker_build    = false
-skip_docker_push     = false
-docker_platform      = "linux/arm64"
-cleanup_old_images   = true
+enable_docker_build = true
 
-# Database
-database_name                    = "cudly"
-database_username                = "cudly"
-database_engine_version          = "16.4"
-database_min_capacity            = 2.0   # Higher minimum for prod
-database_max_capacity            = 8.0   # Higher max for prod
-database_backup_retention_days   = 30    # Longer retention for prod
-database_deletion_protection     = true  # Protect against deletion
-database_skip_final_snapshot     = false # Create final snapshot
-database_auto_migrate            = true
-database_high_availability       = true
+# Admin
+admin_email = "admin@example.com"
+
+# Database (RDS PostgreSQL)
+database_name                  = "cudly"
+database_username              = "cudly"
+database_engine_version        = "16.6"
+database_backup_retention_days = 30   # Longer retention for prod
+database_deletion_protection   = true # Protect against deletion
+database_skip_final_snapshot   = false
+database_performance_insights  = true
+database_auto_migrate          = false # Manual migrations in production
 
 # Networking
-vpc_cidr = "10.0.0.0/16"
-az_count = 3  # More AZs for production
-
-# Frontend
-enable_frontend_build = true
-
-# Features
-enable_dashboard = true
-enable_scheduled_tasks = true
-
-# Monitoring
-enable_monitoring = true  # Full monitoring in production
+vpc_cidr         = "10.0.0.0/16"
+az_count         = 3 # More AZs for production
+enable_flow_logs = true
 
 # Secrets
 secret_recovery_window_days = 30
 
-# Tags
-tags = {
-  Environment = "prod"
-  ManagedBy   = "terraform"
-  Project     = "cudly"
-  Owner       = "platform"
-  CostCenter  = "production"
-}
+# Frontend
+enable_cdn           = false
+frontend_price_class = "PriceClass_200"
+# subdomain_zone_name   = "cudly.example.com"
+# create_subdomain_zone = false
+# frontend_domain_names = ["cudly.example.com"]
+
+# Scheduled tasks
+enable_scheduled_tasks  = true
+recommendation_schedule = "rate(1 day)"
