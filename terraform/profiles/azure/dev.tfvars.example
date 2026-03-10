@@ -1,4 +1,4 @@
-# Azure Development Environment Profile
+# Azure Development Profile
 # Copy to dev.tfvars and customize with your values
 
 # Project identification
@@ -6,33 +6,35 @@ app_name    = "cudly"
 environment = "dev"
 
 # Azure configuration
-subscription_id = "your-subscription-id"  # REQUIRED: Your Azure subscription ID
+subscription_id = "your-subscription-id" # REQUIRED
 location        = "eastus"
 
 # Compute platform
 compute_platform = "container-apps"
 
 # Container Apps settings
-container_apps_cpu    = "0.5"
-container_apps_memory = "1Gi"
-container_apps_min_replicas = 0
-container_apps_max_replicas = 10
+container_cpu    = 0.5
+container_memory = "1.0Gi"
+min_replicas     = 0
+max_replicas     = 10
 
-# Database
-database_name     = "cudly"
-database_username = "cudly"
-database_sku      = "B_Standard_B1ms"  # Basic tier for dev
-database_storage_mb = 32768
+# Docker build settings
+enable_docker_build = true
+image_uri           = "placeholder" # Unused when enable_docker_build = true
 
-# Networking
-vnet_cidr = "10.0.0.0/16"
+# Key Vault
+key_vault_name = "cudly-dev-kv" # REQUIRED: must be globally unique, 3-24 chars
+
+# Database (PostgreSQL Flexible Server)
+database_sku_name              = "B_Standard_B1ms"
+database_storage_mb            = 32768
+database_backup_retention_days = 7
 
 # Admin
 admin_email = "admin@example.com"
 
-# Features
-enable_scheduled_tasks = true
-enable_frontend_build  = true
+# Networking
+vnet_cidr = "10.0.0.0/16"
 
-# Monitoring
-enable_monitoring = false  # Reduced monitoring in dev
+# Scheduled tasks
+enable_scheduled_tasks = true
