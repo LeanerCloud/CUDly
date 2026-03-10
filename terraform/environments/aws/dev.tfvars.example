@@ -104,6 +104,12 @@ enable_docker_build = true
 # ==============================================
 
 admin_email = "admin@example.com"
+# Leave empty or omit to auto-generate a random password stored in Secrets Manager.
+# To retrieve the generated password:
+#   aws secretsmanager get-secret-value \
+#     --secret-id "$(terraform output -raw admin_password_secret_name)" \
+#     --query SecretString --output text
+# admin_password = "YourSecurePassword123!"
 
 # ==============================================
 # Additional Environment Variables
