@@ -44,14 +44,12 @@ fargate_max_capacity  = 10
 # fargate_certificate_arn = "arn:aws:acm:..."  # Only needed if not using subdomain_zone_name
 
 # ==============================================
-# Database (Aurora Serverless v2)
+# Database (RDS PostgreSQL)
 # ==============================================
 
 database_name            = "cudly"
 database_username        = "cudly"
-database_engine_version  = "16.4"
-database_min_capacity    = 0.5   # ACUs (0.5 = minimum)
-database_max_capacity    = 2.0   # ACUs (scale up to 2)
+database_engine_version  = "16.6"
 database_backup_retention_days = 7
 database_deletion_protection   = false  # Allow deletion in dev
 database_skip_final_snapshot   = true   # Skip in dev
@@ -79,7 +77,6 @@ additional_secrets = {}
 # Frontend (CloudFront + S3)
 # ==============================================
 
-enable_frontend_build = true
 frontend_price_class  = "PriceClass_100"  # US, Canada, Europe
 
 # Custom domain (optional)
