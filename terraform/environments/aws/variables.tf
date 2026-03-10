@@ -178,7 +178,7 @@ variable "admin_email" {
 variable "admin_password" {
   description = "Optional initial admin password (skips password reset requirement)"
   type        = string
-  default     = ""
+  default     = null
   sensitive   = true
 }
 
