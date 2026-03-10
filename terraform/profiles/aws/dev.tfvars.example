@@ -6,53 +6,53 @@ project_name = "cudly"
 environment  = "dev"
 
 # Cloud configuration
-provider = "aws"
-region   = "us-east-1"
-# aws_profile = "your-aws-profile"  # Set TF_VAR_aws_profile env var
+region = "us-east-1"
+# aws_profile = "your-aws-profile"
 
 # Compute platform
 compute_platform = "lambda"
-architecture     = "arm64"  # Graviton for cost savings
-memory_size      = 512      # 512 MB
+
+# Lambda configuration
+lambda_architecture           = "arm64"
+lambda_memory_size            = 512
+lambda_timeout                = 60
+lambda_reserved_concurrency   = -1
+lambda_log_retention_days     = 7
+lambda_enable_function_url    = true
+lambda_function_url_auth_type = "NONE"
+lambda_allowed_origins        = ["*"]
 
 # Docker build settings
-skip_docker_build    = false
-skip_docker_push     = false
-docker_platform      = "linux/arm64"
-cleanup_old_images   = true
+enable_docker_build = true
+
+# Admin
+admin_email = "admin@example.com"
 
 # Database
-database_name                    = "cudly"
-database_username                = "cudly"
-database_engine_version          = "16.4"
-database_min_capacity            = 0.5   # Minimum for dev
-database_max_capacity            = 2.0   # Max for dev
-database_backup_retention_days   = 7
-database_deletion_protection     = false # Allow deletion in dev
-database_skip_final_snapshot     = true  # Skip snapshot in dev
-database_auto_migrate            = true
+database_name                  = "cudly"
+database_username              = "cudly"
+database_engine_version        = "16.6"
+database_backup_retention_days = 7
+database_deletion_protection   = false
+database_skip_final_snapshot   = true
+database_performance_insights  = false
+database_auto_migrate          = true
 
 # Networking
-vpc_cidr = "10.0.0.0/16"
-az_count = 2
-
-# Frontend
-enable_frontend_build = true
-
-# Features
-enable_dashboard = true
-enable_scheduled_tasks = true
-
-# Monitoring
-enable_monitoring = false  # Reduced monitoring in dev
+vpc_cidr         = "10.0.0.0/16"
+az_count         = 2
+enable_flow_logs = false
 
 # Secrets
 secret_recovery_window_days = 7
 
-# Tags
-tags = {
-  Environment = "dev"
-  ManagedBy   = "terraform"
-  Project     = "cudly"
-  Owner       = "devteam"
-}
+# Frontend
+enable_cdn            = false
+frontend_price_class  = "PriceClass_100"
+# subdomain_zone_name   = "cudly.example.com"
+# create_subdomain_zone = false
+# frontend_domain_names = ["dev.cudly.example.com"]
+
+# Scheduled tasks
+enable_scheduled_tasks  = true
+recommendation_schedule = "rate(1 day)"
