@@ -91,3 +91,8 @@ enable_docker_build = true
 # ==============================================
 
 admin_email = "admin@example.com"
+# Leave empty or omit to auto-generate a random password stored in Secret Manager.
+# To retrieve the generated password:
+#   gcloud secrets versions access latest \
+#     --secret=<service-name>-admin-password --project=<project-id>
+# admin_password = "YourSecurePassword123!"

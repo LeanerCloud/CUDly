@@ -87,7 +87,7 @@ resource "azurerm_key_vault_secret" "database_password" {
 # ==============================================
 
 resource "random_password" "admin_password" {
-  count = var.create_admin_password_secret && var.admin_password == null ? 1 : 0
+  count = var.create_admin_password_secret && (var.admin_password == null || var.admin_password == "") ? 1 : 0
 
   length           = 32
   special          = true
@@ -98,7 +98,7 @@ resource "azurerm_key_vault_secret" "admin_password" {
   count = var.create_admin_password_secret ? 1 : 0
 
   name         = "admin-password"
-  value        = var.admin_password != null ? var.admin_password : random_password.admin_password[0].result
+  value        = var.admin_password != null && var.admin_password != "" ? var.admin_password : random_password.admin_password[0].result
   key_vault_id = azurerm_key_vault.main.id
 
   content_type = "password"

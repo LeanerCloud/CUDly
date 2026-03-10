@@ -100,3 +100,9 @@ email_use_azure_managed_domain = true
 # ==============================================
 
 admin_email = "admin@example.com"
+# Leave empty or omit to auto-generate a random password stored in Key Vault.
+# To retrieve the generated password:
+#   az keyvault secret show \
+#     --vault-name <your-vault-name> --name admin-password \
+#     --query value --output tsv
+# admin_password = "YourSecurePassword123!"

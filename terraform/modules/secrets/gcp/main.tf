@@ -51,7 +51,7 @@ resource "google_secret_manager_secret_version" "database_password" {
 # ==============================================
 
 resource "random_password" "admin_password" {
-  count = var.create_admin_password_secret && var.admin_password == null ? 1 : 0
+  count = var.create_admin_password_secret && (var.admin_password == null || var.admin_password == "") ? 1 : 0
 
   length  = 32
   special = true
@@ -77,7 +77,7 @@ resource "google_secret_manager_secret_version" "admin_password" {
   count = var.create_admin_password_secret ? 1 : 0
 
   secret      = google_secret_manager_secret.admin_password[0].id
-  secret_data = var.admin_password != null ? var.admin_password : random_password.admin_password[0].result
+  secret_data = var.admin_password != null && var.admin_password != "" ? var.admin_password : random_password.admin_password[0].result
 }
 
 # ==============================================
