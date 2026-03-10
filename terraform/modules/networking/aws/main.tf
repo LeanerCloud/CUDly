@@ -40,11 +40,6 @@ data "aws_subnets" "default" {
   }
 }
 
-data "aws_subnet" "default" {
-  count = var.use_default_vpc ? length(data.aws_subnets.default[0].ids) : 0
-  id    = data.aws_subnets.default[0].ids[count.index]
-}
-
 # Local values to determine which VPC/subnets to use
 locals {
   create_vpc = !var.use_existing_vpc && !var.use_default_vpc
@@ -82,7 +77,7 @@ resource "aws_vpc" "main" {
   cidr_block                       = var.vpc_cidr
   enable_dns_hostnames             = true
   enable_dns_support               = true
-  assign_generated_ipv6_cidr_block = true
+  assign_generated_ipv6_cidr_block = var.enable_ipv6
 
   tags = merge(var.tags, {
     Name = "${var.stack_name}-vpc"
@@ -108,7 +103,7 @@ resource "aws_internet_gateway" "main" {
 # ==============================================
 
 resource "aws_egress_only_internet_gateway" "main" {
-  count = local.create_vpc && local.vpc_ipv6_cidr != null ? 1 : 0
+  count = local.create_vpc && var.enable_ipv6 ? 1 : 0
 
   vpc_id = local.vpc_id
 
@@ -382,10 +377,10 @@ resource "aws_subnet" "public" {
 
   vpc_id                          = local.vpc_id
   cidr_block                      = cidrsubnet(var.vpc_cidr, 8, count.index)
-  ipv6_cidr_block                 = local.vpc_ipv6_cidr != null ? cidrsubnet(local.vpc_ipv6_cidr, 8, count.index) : null
+  ipv6_cidr_block                 = var.enable_ipv6 ? cidrsubnet(local.vpc_ipv6_cidr, 8, count.index) : null
   availability_zone               = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch         = true
-  assign_ipv6_address_on_creation = local.vpc_ipv6_cidr != null
+  assign_ipv6_address_on_creation = var.enable_ipv6
 
   tags = merge(var.tags, {
     Name = "${var.stack_name}-public-${data.aws_availability_zones.available.names[count.index]}"
@@ -402,9 +397,9 @@ resource "aws_subnet" "private" {
 
   vpc_id                          = local.vpc_id
   cidr_block                      = cidrsubnet(var.vpc_cidr, 8, count.index + var.az_count)
-  ipv6_cidr_block                 = local.vpc_ipv6_cidr != null ? cidrsubnet(local.vpc_ipv6_cidr, 8, count.index + var.az_count) : null
+  ipv6_cidr_block                 = var.enable_ipv6 ? cidrsubnet(local.vpc_ipv6_cidr, 8, count.index + var.az_count) : null
   availability_zone               = data.aws_availability_zones.available.names[count.index]
-  assign_ipv6_address_on_creation = local.vpc_ipv6_cidr != null
+  assign_ipv6_address_on_creation = var.enable_ipv6
 
   tags = merge(var.tags, {
     Name = "${var.stack_name}-private-${data.aws_availability_zones.available.names[count.index]}"
@@ -439,7 +434,7 @@ resource "aws_route" "public_internet_ipv4" {
 
 # IPv6 route to Internet Gateway
 resource "aws_route" "public_internet_ipv6" {
-  count = local.create_vpc && local.vpc_ipv6_cidr != null ? 1 : 0
+  count = local.create_vpc && var.enable_ipv6 ? 1 : 0
 
   route_table_id              = aws_route_table.public[0].id
   destination_ipv6_cidr_block = "::/0"
@@ -468,7 +463,7 @@ resource "aws_route_table" "private" {
 
 # IPv6 egress route for private subnets
 resource "aws_route" "private_internet_ipv6" {
-  count = local.create_vpc && local.vpc_ipv6_cidr != null ? var.az_count : 0
+  count = local.create_vpc && var.enable_ipv6 ? var.az_count : 0
 
   route_table_id              = aws_route_table.private[count.index].id
   destination_ipv6_cidr_block = "::/0"
@@ -517,7 +512,7 @@ resource "aws_security_group" "database" {
     from_port        = 5432
     to_port          = 5432
     protocol         = "tcp"
-    ipv6_cidr_blocks = local.vpc_ipv6_cidr != null ? [local.vpc_ipv6_cidr] : []
+    ipv6_cidr_blocks = var.enable_ipv6 ? [local.vpc_ipv6_cidr] : []
   }
 
   # Allow all outbound (IPv4)
@@ -714,7 +709,7 @@ resource "aws_security_group" "vpc_endpoints" {
     from_port        = 443
     to_port          = 443
     protocol         = "tcp"
-    ipv6_cidr_blocks = local.vpc_ipv6_cidr != null ? [local.vpc_ipv6_cidr] : []
+    ipv6_cidr_blocks = var.enable_ipv6 ? [local.vpc_ipv6_cidr] : []
   }
 
   # Allow all outbound (IPv4)

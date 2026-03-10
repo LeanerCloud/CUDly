@@ -3,11 +3,6 @@ variable "stack_name" {
   type        = string
 }
 
-variable "environment" {
-  description = "Environment name (dev/staging/prod)"
-  type        = string
-}
-
 variable "region" {
   description = "AWS region"
   type        = string
@@ -82,6 +77,12 @@ variable "enable_nat_gateway" {
   description = "Enable fck-nat instance for IPv4 egress (required for services without IPv6 support like SES) - costs ~$3/month"
   type        = bool
   default     = false
+}
+
+variable "enable_ipv6" {
+  description = "Enable IPv6 on the VPC (assign_generated_ipv6_cidr_block)"
+  type        = bool
+  default     = true
 }
 
 variable "tags" {

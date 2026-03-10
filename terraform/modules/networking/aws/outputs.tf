@@ -65,7 +65,7 @@ output "internet_gateway_id" {
 
 output "egress_only_gateway_id" {
   description = "Egress-Only Internet Gateway ID (IPv6)"
-  value       = local.create_vpc && local.vpc_ipv6_cidr != null ? aws_egress_only_internet_gateway.main[0].id : null
+  value       = local.create_vpc && var.enable_ipv6 ? aws_egress_only_internet_gateway.main[0].id : null
 }
 
 output "public_route_table_id" {
