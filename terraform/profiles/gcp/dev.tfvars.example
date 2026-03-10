@@ -1,4 +1,4 @@
-# GCP Development Environment Profile
+# GCP Development Profile
 # Copy to dev.tfvars and customize with your values
 
 # Project identification
@@ -6,33 +6,31 @@ project_name = "cudly"
 environment  = "dev"
 
 # GCP configuration
-project_id = "your-gcp-project-id"  # REQUIRED: Your GCP project ID
+project_id = "your-gcp-project-id" # REQUIRED
 region     = "us-central1"
 
 # Compute platform
 compute_platform = "cloud-run"
 
 # Cloud Run settings
-cloud_run_cpu    = "1"
-cloud_run_memory = "512Mi"
+cloud_run_cpu           = "1"
+cloud_run_memory        = "512Mi"
 cloud_run_min_instances = 0
 cloud_run_max_instances = 10
 
-# Database
-database_name     = "cudly"
-database_username = "cudly"
-database_tier     = "db-f1-micro"  # Smallest tier for dev
-database_version  = "POSTGRES_16"
+# Docker build settings
+enable_docker_build = true
+
+# Database (Cloud SQL PostgreSQL)
+database_name    = "cudly"
+database_version = "POSTGRES_16"
+database_tier    = "db-f1-micro" # Smallest tier for dev
 
 # Networking
-network_cidr = "10.0.0.0/16"
+subnet_cidr = "10.0.0.0/24"
 
 # Admin
 admin_email = "admin@example.com"
 
-# Features
+# Scheduled tasks
 enable_scheduled_tasks = true
-enable_frontend_build  = true
-
-# Monitoring
-enable_monitoring = false  # Reduced monitoring in dev
