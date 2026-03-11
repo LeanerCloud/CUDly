@@ -83,7 +83,7 @@ provider "helm" {
 # ==============================================
 
 locals {
-  app_name = "${var.app_name}-${var.environment}"
+  app_name = "${var.project_name}-${var.environment}"
 
   common_tags = merge(var.tags, {
     Environment = var.environment

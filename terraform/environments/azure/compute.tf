@@ -35,7 +35,7 @@ module "compute_container_apps" {
       STATIC_DIR                 = "/app/static"
       AZURE_SMTP_USERNAME_SECRET = module.secrets.smtp_username_name
       AZURE_SMTP_PASSWORD_SECRET = module.secrets.smtp_password_name
-      FROM_EMAIL                 = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.app_name}.example.com"
+      FROM_EMAIL                 = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL              = local.dashboard_url
       CORS_ALLOWED_ORIGIN        = local.dashboard_url != "" ? local.dashboard_url : "*"
       SCHEDULED_TASK_SECRET      = module.secrets.scheduled_task_secret_value
@@ -69,7 +69,7 @@ module "compute_aks" {
   source = "../../modules/compute/azure/aks"
   count  = var.compute_platform == "aks" ? 1 : 0
 
-  project_name        = var.app_name
+  project_name        = var.project_name
   environment         = var.environment
   resource_group_name = azurerm_resource_group.main.name
   location            = var.location

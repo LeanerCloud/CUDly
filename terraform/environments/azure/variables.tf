@@ -7,8 +7,8 @@ variable "subscription_id" {
   type        = string
 }
 
-variable "app_name" {
-  description = "Application name (will be prefixed with environment)"
+variable "project_name" {
+  description = "Project name (will be prefixed with environment)"
   type        = string
   default     = "cudly"
 }

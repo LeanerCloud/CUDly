@@ -221,7 +221,7 @@ output "quick_start_commands" {
         --database-name ${module.database.database_name}
 
     View Application Logs:
-      ${var.compute_platform == "container-apps" ? "az containerapp logs show \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --follow" : "az aks get-credentials --name ${module.compute_aks[0].cluster_name} --resource-group ${azurerm_resource_group.main.name}\n      kubectl logs -f deployment/${var.app_name}-api -n ${var.environment}"}
+      ${var.compute_platform == "container-apps" ? "az containerapp logs show \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --follow" : "az aks get-credentials --name ${module.compute_aks[0].cluster_name} --resource-group ${azurerm_resource_group.main.name}\n      kubectl logs -f deployment/${var.project_name}-api -n ${var.environment}"}
 
     View Key Vault Secrets:
       az keyvault secret list \
@@ -235,10 +235,10 @@ output "quick_start_commands" {
         --query value -o tsv
 
     Update Application:
-      ${var.compute_platform == "container-apps" ? "az containerapp update \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --image YOUR_NEW_IMAGE_URI" : "kubectl set image deployment/${var.app_name}-api api=YOUR_NEW_IMAGE_URI -n ${var.environment}"}
+      ${var.compute_platform == "container-apps" ? "az containerapp update \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --image YOUR_NEW_IMAGE_URI" : "kubectl set image deployment/${var.project_name}-api api=YOUR_NEW_IMAGE_URI -n ${var.environment}"}
 
     Scale Application:
-      ${var.compute_platform == "container-apps" ? "az containerapp update \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --min-replicas 2 \\\n        --max-replicas 20" : "kubectl scale deployment/${var.app_name}-api --replicas=3 -n ${var.environment}"}
+      ${var.compute_platform == "container-apps" ? "az containerapp update \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --min-replicas 2 \\\n        --max-replicas 20" : "kubectl scale deployment/${var.project_name}-api --replicas=3 -n ${var.environment}"}
 
     View Application Metrics:
       ${var.compute_platform == "container-apps" ? "az monitor metrics list \\\n        --resource ${module.compute_container_apps[0].container_app_id} \\\n        --metric Requests \\\n        --aggregation Total" : "kubectl top pods -n ${var.environment}"}
@@ -250,7 +250,7 @@ output "quick_start_commands" {
         --aggregation Average
 
     Run Database Migrations Manually:
-      ${var.compute_platform == "container-apps" ? "az containerapp exec \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --command \"/app/cudly migrate up\"" : "kubectl exec -it deployment/${var.app_name}-api -n ${var.environment} -- /app/cudly migrate up"}
+      ${var.compute_platform == "container-apps" ? "az containerapp exec \\\n        --name ${module.compute_container_apps[0].container_app_name} \\\n        --resource-group ${azurerm_resource_group.main.name} \\\n        --command \"/app/cudly migrate up\"" : "kubectl exec -it deployment/${var.project_name}-api -n ${var.environment} -- /app/cudly migrate up"}
 
     View Log Analytics Logs (requires workspace access):
       az monitor log-analytics query \

@@ -6,10 +6,10 @@
 # Project Settings
 # ==============================================
 
-app_name    = "cudly"
-environment = "prod"
-location    = "eastus"
-cost_center = "engineering"
+project_name = "cudly"
+environment  = "prod"
+location     = "eastus"
+cost_center  = "engineering"
 
 # ==============================================
 # Compute Platform

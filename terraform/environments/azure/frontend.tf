@@ -6,7 +6,7 @@ module "frontend" {
   source = "../../modules/frontend/azure"
   count  = var.enable_cdn ? 1 : 0
 
-  project_name        = var.app_name
+  project_name        = var.project_name
   environment         = var.environment
   resource_group_name = azurerm_resource_group.main.name
   location            = var.location

@@ -2,7 +2,7 @@
 # Copy to dev.tfvars and customize with your values
 
 # Project identification
-app_name    = "cudly"
+project_name = "cudly"
 environment = "dev"
 
 # Azure configuration

@@ -5,7 +5,7 @@
 # Project Settings
 # ==============================================
 
-app_name    = "cudly"
+project_name = "cudly"
 environment = "dev"
 
 # ==============================================
