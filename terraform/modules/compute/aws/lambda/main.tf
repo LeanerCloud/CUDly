@@ -238,7 +238,7 @@ resource "aws_iam_role_policy" "ri_exchange" {
 # ==============================================
 
 resource "aws_cloudwatch_log_group" "lambda" {
-  name              = "/aws/lambda/${aws_lambda_function.main.function_name}"
+  name_prefix       = "/aws/lambda/${aws_lambda_function.main.function_name}-"
   retention_in_days = var.log_retention_days
 
   tags = var.tags
