@@ -25,6 +25,8 @@ resource "random_password" "database" {
 
   length  = 32
   special = true
+  # Exclude characters that might cause issues in connection strings
+  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
 resource "google_secret_manager_secret" "database_password" {
@@ -89,11 +91,7 @@ resource "random_password" "jwt_secret" {
   count = var.create_jwt_secret ? 1 : 0
 
   length  = 64
-  special = true
-
-  lifecycle {
-    ignore_changes = [special]
-  }
+  special = false # Base64-friendly
 }
 
 resource "google_secret_manager_secret" "jwt_secret" {
@@ -124,11 +122,7 @@ resource "random_password" "session_secret" {
   count = var.create_session_secret ? 1 : 0
 
   length  = 64
-  special = true
-
-  lifecycle {
-    ignore_changes = [special]
-  }
+  special = false # Base64-friendly
 }
 
 resource "google_secret_manager_secret" "session_secret" {
