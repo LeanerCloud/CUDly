@@ -21,6 +21,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
@@ -326,10 +327,11 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 
 	// Update auth service with PostgreSQL auth store
 	app.Auth = auth.NewService(auth.ServiceConfig{
-		Store:           authStore,
-		EmailSender:     app.Email,
-		SessionDuration: 24 * time.Hour,
-		DashboardURL:    app.appConfig.DashboardURL,
+		Store:            authStore,
+		EmailSender:      app.Email,
+		SessionDuration:  24 * time.Hour,
+		DashboardURL:     app.appConfig.DashboardURL,
+		OnPasswordChange: buildAdminPasswordSyncCallback(authStore, app.secretResolver),
 	})
 	if app.Auth == nil {
 		return fmt.Errorf("failed to create auth service")
@@ -372,6 +374,31 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 	}
 
 	return nil
+}
+
+// buildAdminPasswordSyncCallback returns a callback that syncs the admin user's
+// password to the secret manager when it changes. Returns nil if the required
+// environment variables (ADMIN_PASSWORD_SECRET, ADMIN_EMAIL) are not set or
+// the secret resolver is nil.
+func buildAdminPasswordSyncCallback(store auth.StoreInterface, resolver secrets.Resolver) func(ctx context.Context, userID, newPassword string) {
+	adminPasswordSecret := os.Getenv("ADMIN_PASSWORD_SECRET")
+	adminEmail := os.Getenv("ADMIN_EMAIL")
+
+	if adminPasswordSecret == "" || resolver == nil || adminEmail == "" {
+		return nil
+	}
+
+	return func(ctx context.Context, userID, newPassword string) {
+		user, err := store.GetUserByID(ctx, userID)
+		if err != nil || user == nil || user.Email != adminEmail {
+			return
+		}
+		if err := resolver.PutSecret(ctx, adminPasswordSecret, newPassword); err != nil {
+			logging.Warnf("Failed to sync admin password to secret manager: %v", err)
+		} else {
+			logging.Infof("Admin password synced to secret manager")
+		}
+	}
 }
 
 // Close gracefully shuts down the application
