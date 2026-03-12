@@ -134,7 +134,7 @@ resource "aws_iam_role" "task" {
   tags = local.common_tags
 }
 
-# Allow task to read secrets
+# Allow task to read secrets and write admin password secret
 resource "aws_iam_role_policy" "task_secrets" {
   name = "secrets-access"
   role = aws_iam_role.task.id
@@ -150,6 +150,16 @@ resource "aws_iam_role_policy" "task_secrets" {
         Resource = compact([
           var.database_password_secret_arn,
           "${var.database_password_secret_arn}-*",
+          var.admin_password_secret_arn,
+          var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}-*" : "",
+        ])
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:PutSecretValue"
+        ]
+        Resource = compact([
           var.admin_password_secret_arn,
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}-*" : "",
         ])

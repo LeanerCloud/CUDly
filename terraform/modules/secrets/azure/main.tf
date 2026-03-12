@@ -292,7 +292,7 @@ resource "azurerm_role_assignment" "container_app_secrets_user" {
   count = var.container_app_identity_principal_id != null ? 1 : 0
 
   scope                = azurerm_key_vault.main.id
-  role_definition_name = "Key Vault Secrets User"
+  role_definition_name = "Key Vault Secrets Officer"
   principal_id         = var.container_app_identity_principal_id
 }
 

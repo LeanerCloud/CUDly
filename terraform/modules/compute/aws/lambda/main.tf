@@ -182,6 +182,16 @@ resource "aws_iam_role_policy" "secrets_access" {
           var.admin_password_secret_arn,
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}*" : "",
         ])
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:PutSecretValue"
+        ]
+        Resource = compact([
+          var.admin_password_secret_arn,
+          var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}*" : "",
+        ])
       }
     ]
   })
