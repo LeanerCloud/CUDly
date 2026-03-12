@@ -27,6 +27,11 @@ func (r *EnvResolver) GetSecret(ctx context.Context, secretID string) (string, e
 	return value, nil
 }
 
+// PutSecret is a no-op for environment variables
+func (r *EnvResolver) PutSecret(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 // GetSecretJSON retrieves and parses a JSON secret from environment variable
 func (r *EnvResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)

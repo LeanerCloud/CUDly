@@ -34,14 +34,16 @@ type Service struct {
 	sessionDuration    time.Duration
 	dashboardURL       string
 	bcryptCostOverride int // if > 0, overrides bcryptCost const (used by tests for speed)
+	onPasswordChange   func(ctx context.Context, userID, newPassword string)
 }
 
 // ServiceConfig holds configuration for the auth service
 type ServiceConfig struct {
-	Store           StoreInterface
-	EmailSender     EmailSenderInterface
-	SessionDuration time.Duration
-	DashboardURL    string
+	Store            StoreInterface
+	EmailSender      EmailSenderInterface
+	SessionDuration  time.Duration
+	DashboardURL     string
+	OnPasswordChange func(ctx context.Context, userID, newPassword string)
 }
 
 // NewService creates a new auth service
@@ -61,10 +63,18 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 
 	return &Service{
-		store:           cfg.Store,
-		emailSender:     cfg.EmailSender,
-		sessionDuration: cfg.SessionDuration,
-		dashboardURL:    cfg.DashboardURL,
+		store:            cfg.Store,
+		emailSender:      cfg.EmailSender,
+		sessionDuration:  cfg.SessionDuration,
+		dashboardURL:     cfg.DashboardURL,
+		onPasswordChange: cfg.OnPasswordChange,
+	}
+}
+
+// notifyPasswordChange calls the password change callback if configured
+func (s *Service) notifyPasswordChange(ctx context.Context, userID, newPassword string) {
+	if s.onPasswordChange != nil {
+		s.onPasswordChange(ctx, userID, newPassword)
 	}
 }
 

@@ -225,7 +225,11 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 		logging.Warnf("Failed to delete sessions for user %s during password change: %v", userID, err)
 	}
 
-	return s.store.UpdateUser(ctx, user)
+	if err := s.store.UpdateUser(ctx, user); err != nil {
+		return err
+	}
+	s.notifyPasswordChange(ctx, userID, req.NewPassword)
+	return nil
 }
 
 // RequestPasswordReset initiates a password reset
@@ -296,7 +300,11 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetCon
 		logging.Warnf("Failed to delete sessions for user %s during password reset: %v", user.ID, err)
 	}
 
-	return s.store.UpdateUser(ctx, user)
+	if err := s.store.UpdateUser(ctx, user); err != nil {
+		return err
+	}
+	s.notifyPasswordChange(ctx, user.ID, req.NewPassword)
+	return nil
 }
 
 func (s *Service) validateResetToken(ctx context.Context, token string) (*User, error) {

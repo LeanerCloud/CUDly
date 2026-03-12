@@ -226,6 +226,15 @@ func TestEnvResolver_ListSecrets(t *testing.T) {
 	}
 }
 
+func TestEnvResolver_PutSecret(t *testing.T) {
+	resolver := NewEnvResolver()
+	ctx := context.Background()
+
+	// PutSecret is a no-op for env resolver, should always succeed
+	err := resolver.PutSecret(ctx, "ANY_SECRET", "any-value")
+	assert.NoError(t, err)
+}
+
 func TestEnvResolver_Close(t *testing.T) {
 	resolver := NewEnvResolver()
 

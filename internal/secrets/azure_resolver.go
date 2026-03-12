@@ -52,6 +52,20 @@ func (r *AzureResolver) GetSecret(ctx context.Context, secretID string) (string,
 	return *resp.Value, nil
 }
 
+// PutSecret creates or updates a secret in Azure Key Vault
+func (r *AzureResolver) PutSecret(ctx context.Context, secretID string, value string) error {
+	params := azsecrets.SetSecretParameters{
+		Value: &value,
+	}
+
+	_, err := r.client.SetSecret(ctx, secretID, params, nil)
+	if err != nil {
+		return fmt.Errorf("failed to set secret %s: %w", secretID, err)
+	}
+
+	return nil
+}
+
 // GetSecretJSON retrieves and parses a JSON secret
 func (r *AzureResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)

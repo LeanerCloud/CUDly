@@ -55,6 +55,21 @@ func (r *AWSResolver) GetSecret(ctx context.Context, secretID string) (string, e
 	return "", fmt.Errorf("secret %s has no string value", secretID)
 }
 
+// PutSecret creates or updates a secret value in AWS Secrets Manager
+func (r *AWSResolver) PutSecret(ctx context.Context, secretID string, value string) error {
+	input := &secretsmanager.PutSecretValueInput{
+		SecretId:     aws.String(secretID),
+		SecretString: aws.String(value),
+	}
+
+	_, err := r.client.PutSecretValue(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to put secret %s: %w", secretID, err)
+	}
+
+	return nil
+}
+
 // GetSecretJSON retrieves and parses a JSON secret
 func (r *AWSResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)

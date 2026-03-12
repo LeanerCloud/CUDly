@@ -214,6 +214,7 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email st
 		if err := s.store.DeleteUserSessions(ctx, userID); err != nil {
 			logging.Warnf("Failed to delete sessions for user %s during profile update: %v", userID, err)
 		}
+		s.notifyPasswordChange(ctx, userID, newPassword)
 	}
 
 	logging.Infof("User profile updated: id=%s", user.ID)

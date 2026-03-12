@@ -48,6 +48,25 @@ func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, e
 	return string(result.Payload.Data), nil
 }
 
+// PutSecret adds a new version to an existing secret in GCP Secret Manager
+func (r *GCPResolver) PutSecret(ctx context.Context, secretID string, value string) error {
+	parent := fmt.Sprintf("projects/%s/secrets/%s", r.projectID, secretID)
+
+	req := &secretmanagerpb.AddSecretVersionRequest{
+		Parent: parent,
+		Payload: &secretmanagerpb.SecretPayload{
+			Data: []byte(value),
+		},
+	}
+
+	_, err := r.client.AddSecretVersion(ctx, req)
+	if err != nil {
+		return fmt.Errorf("failed to add secret version for %s: %w", secretID, err)
+	}
+
+	return nil
+}
+
 // GetSecretJSON retrieves and parses a JSON secret
 func (r *GCPResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)
