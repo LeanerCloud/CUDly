@@ -30,9 +30,7 @@ func main() {
 	log.Printf("CUDly Server v%s (built: %s)", Version, BuildTime)
 
 	// Set version in environment for the application
-	if Version != "" {
-		os.Setenv("VERSION", Version)
-	}
+	os.Setenv("VERSION", Version)
 
 	ctx := context.Background()
 
