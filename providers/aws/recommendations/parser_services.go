@@ -2,6 +2,7 @@ package recommendations
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
@@ -157,11 +158,6 @@ func (c *Client) parseRedshiftDetails(rec *common.Recommendation, details *types
 
 // parseMemoryDBDetails extracts MemoryDB-specific details
 func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	// MemoryDB might not have specific details in Cost Explorer yet
-	rec.ResourceType = "db.r6gd.xlarge" // Default
-	rec.Details = &common.CacheDetails{
-		Engine:   "redis",
-		NodeType: rec.ResourceType,
-	}
+	log.Printf("WARNING: MemoryDB does not provide instance details in Cost Explorer, skipping recommendation")
 	return nil
 }
