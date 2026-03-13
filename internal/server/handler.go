@@ -4,11 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log"
 
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
+
+// TaskLocker abstracts advisory lock operations for scheduled task concurrency control.
+type TaskLocker interface {
+	TryAdvisoryLock(ctx context.Context, lockID int64) (bool, error)
+	ReleaseAdvisoryLock(ctx context.Context, lockID int64)
+}
 
 // ScheduledTaskType represents different types of scheduled tasks
 type ScheduledTaskType string
@@ -22,10 +29,34 @@ const (
 	TaskRIExchangeReshape         ScheduledTaskType = "ri_exchange_reshape"
 )
 
-// HandleScheduledTask processes a scheduled task by type
+// HandleScheduledTask processes a scheduled task by type.
+// It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
 func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
 	log.Printf("Handling scheduled task: %s", taskType)
 
+	if err := app.ensureDB(ctx); err != nil {
+		return nil, fmt.Errorf("database connection failed: %w", err)
+	}
+
+	locker := app.taskLocker()
+	if locker != nil {
+		lockID := taskLockID(taskType)
+		acquired, err := locker.TryAdvisoryLock(ctx, lockID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check task lock: %w", err)
+		}
+		if !acquired {
+			log.Printf("Task %s already running (advisory lock held), skipping", taskType)
+			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
+		}
+		defer locker.ReleaseAdvisoryLock(ctx, lockID)
+	}
+
+	return app.dispatchTask(ctx, taskType)
+}
+
+// dispatchTask routes a scheduled task to its handler.
+func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
 	switch taskType {
 	case TaskCollectRecommendations:
 		return app.handleCollectRecommendations(ctx)
@@ -42,6 +73,24 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 	default:
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
+}
+
+// taskLocker returns the configured TaskLocker, falling back to DB if set.
+func (app *Application) taskLocker() TaskLocker {
+	if app.TaskLocker != nil {
+		return app.TaskLocker
+	}
+	if app.DB != nil {
+		return app.DB
+	}
+	return nil
+}
+
+// taskLockID derives a stable int64 lock ID from the task type name.
+func taskLockID(taskType ScheduledTaskType) int64 {
+	h := fnv.New64a()
+	h.Write([]byte("cudly:task:" + string(taskType)))
+	return int64(h.Sum64())
 }
 
 // handleCollectRecommendations collects cost optimization recommendations

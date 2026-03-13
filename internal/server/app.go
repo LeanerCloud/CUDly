@@ -38,6 +38,7 @@ type Application struct {
 	Analytics   AnalyticsStoreInterface  // Analytics store for savings data
 	Version     string
 	DB          *database.Connection // PostgreSQL database connection
+	TaskLocker  TaskLocker           // Advisory lock for scheduled tasks (defaults to DB)
 
 	// Static file serving directory (from STATIC_DIR env var)
 	staticDir string

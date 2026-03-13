@@ -233,6 +233,21 @@ func (c *Connection) Ping(ctx context.Context) error {
 	return c.pool.Ping(ctx)
 }
 
+// TryAdvisoryLock attempts to acquire a PostgreSQL session-level advisory lock.
+// Returns true if the lock was acquired, false if another session holds it.
+func (c *Connection) TryAdvisoryLock(ctx context.Context, lockID int64) (bool, error) {
+	var acquired bool
+	err := c.pool.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
+	return acquired, err
+}
+
+// ReleaseAdvisoryLock releases a previously acquired advisory lock.
+func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
+	if _, err := c.pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID); err != nil {
+		logging.Warnf("Failed to release advisory lock %d: %v", lockID, err)
+	}
+}
+
 // parseLogLevel converts string log level to pgx tracelog level
 func parseLogLevel(level string) tracelog.LogLevel {
 	switch level {
