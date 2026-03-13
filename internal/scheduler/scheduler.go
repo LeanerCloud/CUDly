@@ -4,6 +4,8 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
@@ -326,8 +328,13 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 
 		// Parse term to integer (e.g., "3yr" -> 3)
 		term := 3
-		if rec.Term == "1yr" {
-			term = 1
+		if rec.Term != "" {
+			termStr := strings.TrimSuffix(rec.Term, "yr")
+			if parsed, err := strconv.Atoi(termStr); err == nil && parsed > 0 {
+				term = parsed
+			} else {
+				logging.Warnf("Invalid term value %q, defaulting to 3 years", rec.Term)
+			}
 		}
 
 		records = append(records, config.RecommendationRecord{
