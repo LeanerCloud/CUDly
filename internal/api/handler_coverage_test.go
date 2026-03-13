@@ -156,7 +156,8 @@ func TestSetSecurityHeaders_AllHeaders(t *testing.T) {
 	assert.Contains(t, result["Strict-Transport-Security"], "max-age=")
 	assert.Equal(t, "nosniff", result["X-Content-Type-Options"])
 	assert.Equal(t, "DENY", result["X-Frame-Options"])
-	assert.Equal(t, "1; mode=block", result["X-XSS-Protection"])
+	// X-XSS-Protection has been removed: deprecated and no-op in modern browsers
+	assert.Empty(t, result["X-XSS-Protection"])
 	assert.Contains(t, result["Referrer-Policy"], "strict-origin")
 	assert.Contains(t, result["Permissions-Policy"], "geolocation=()")
 	assert.Contains(t, result["Cache-Control"], "no-store")

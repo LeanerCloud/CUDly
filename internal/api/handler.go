@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -60,10 +61,14 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		analyticsCollector: cfg.AnalyticsCollector,
 	}
 
-	// Pre-load API key
+	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)
 	if cfg.APIKeySecretARN != "" {
-		if key, err := h.loadAPIKey(context.Background()); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if key, err := h.loadAPIKey(ctx); err == nil {
 			h.apiKey = key
+		} else {
+			logging.Warnf("Failed to pre-load API key from Secrets Manager: %v", err)
 		}
 	}
 
@@ -88,9 +93,6 @@ func setSecurityHeaders(headers map[string]string) map[string]string {
 	// X-Frame-Options - prevent clickjacking
 	headers["X-Frame-Options"] = "DENY"
 
-	// X-XSS-Protection - enable browser XSS filtering
-	headers["X-XSS-Protection"] = "1; mode=block"
-
 	// Referrer-Policy - control referrer information
 	headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
@@ -102,6 +104,10 @@ func setSecurityHeaders(headers map[string]string) map[string]string {
 
 // HandleRequest processes a Lambda Function URL request
 func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
+	if req == nil {
+		resp, _ := h.buildResponse(400, h.buildResponseHeaders(), map[string]string{"error": "nil request"}, nil)
+		return resp, nil
+	}
 	corsHeaders := h.buildResponseHeaders()
 
 	// Handle preflight
@@ -134,6 +140,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 		corsHeaders["Access-Control-Allow-Origin"] = h.corsAllowedOrigin
 		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
 		corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization, X-Authorization, X-CSRF-Token"
+		corsHeaders["Access-Control-Allow-Credentials"] = "true"
 	}
 
 	return corsHeaders
@@ -258,23 +265,30 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 	}, nil
 }
 
-// loadAPIKey retrieves the API key from Secrets Manager
+// loadAPIKey retrieves the API key from Secrets Manager.
+// It caches the base AWS config via awsCfgOnce to avoid redundant config loads.
 func (h *Handler) loadAPIKey(ctx context.Context) (string, error) {
 	if h.secretsARN == "" {
 		return "", nil
 	}
 
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
-	if err != nil {
-		return "", err
+	h.awsCfgOnce.Do(func() {
+		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
+	})
+	if h.awsCfgErr != nil {
+		return "", h.awsCfgErr
 	}
 
-	client := secretsmanager.NewFromConfig(cfg)
+	client := secretsmanager.NewFromConfig(h.awsCfg)
 	result, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
 		SecretId: &h.secretsARN,
 	})
 	if err != nil {
 		return "", err
+	}
+
+	if result.SecretString == nil {
+		return "", nil
 	}
 
 	return *result.SecretString, nil

@@ -17,7 +17,8 @@ func TestSetSecurityHeaders(t *testing.T) {
 	// Verify all required security headers are present
 	assert.Equal(t, "nosniff", headers["X-Content-Type-Options"], "X-Content-Type-Options should be nosniff")
 	assert.Equal(t, "DENY", headers["X-Frame-Options"], "X-Frame-Options should be DENY")
-	assert.Equal(t, "1; mode=block", headers["X-XSS-Protection"], "X-XSS-Protection should be enabled")
+	// X-XSS-Protection has been removed: it is deprecated and a no-op in modern browsers
+	assert.Empty(t, headers["X-XSS-Protection"], "X-XSS-Protection should not be set")
 	assert.Equal(t, "max-age=31536000; includeSubDomains", headers["Strict-Transport-Security"], "HSTS should be set with 1 year max-age")
 	assert.Equal(t, "strict-origin-when-cross-origin", headers["Referrer-Policy"], "Referrer-Policy should be strict-origin-when-cross-origin")
 	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'", headers["Content-Security-Policy"], "CSP should be restrictive")
@@ -59,7 +60,8 @@ func TestHandleRequest_SecurityHeaders(t *testing.T) {
 	// Verify all security headers are present in response
 	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
 	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
-	assert.Equal(t, "1; mode=block", resp.Headers["X-XSS-Protection"])
+	// X-XSS-Protection has been removed: deprecated and no-op in modern browsers
+	assert.Empty(t, resp.Headers["X-XSS-Protection"])
 	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
 	assert.Equal(t, "strict-origin-when-cross-origin", resp.Headers["Referrer-Policy"])
 	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'", resp.Headers["Content-Security-Policy"])
