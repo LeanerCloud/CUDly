@@ -53,6 +53,9 @@ func LoadConfigFromEnv() *Config {
 
 // NewResolver creates a new secret resolver based on the provider
 func NewResolver(ctx context.Context, config *Config) (Resolver, error) {
+	if config == nil {
+		return nil, fmt.Errorf("secrets config must not be nil")
+	}
 	switch config.Provider {
 	case "aws":
 		return NewAWSResolver(ctx, config.AWSRegion)
