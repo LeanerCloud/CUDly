@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -112,7 +113,7 @@ func (s *FrontendService) uploadDirectory(ctx context.Context, distDir, bucketNa
 		_, err = s.S3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:       aws.String(bucketName),
 			Key:          aws.String(key),
-			Body:         strings.NewReader(string(content)),
+			Body:         bytes.NewReader(content),
 			ContentType:  aws.String(contentType),
 			CacheControl: aws.String(cacheControl),
 		})
