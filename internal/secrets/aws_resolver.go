@@ -99,15 +99,19 @@ func (r *AWSResolver) ListSecrets(ctx context.Context, filter string) ([]string,
 		}
 	}
 
-	result, err := r.client.ListSecrets(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list secrets: %w", err)
-	}
+	// Paginate through all results
+	secrets := make([]string, 0)
+	paginator := secretsmanager.NewListSecretsPaginator(r.client, input)
+	for paginator.HasMorePages() {
+		result, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list secrets: %w", err)
+		}
 
-	secrets := make([]string, 0, len(result.SecretList))
-	for _, secret := range result.SecretList {
-		if secret.Name != nil {
-			secrets = append(secrets, *secret.Name)
+		for _, secret := range result.SecretList {
+			if secret.Name != nil {
+				secrets = append(secrets, *secret.Name)
+			}
 		}
 	}
 
