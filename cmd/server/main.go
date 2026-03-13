@@ -7,6 +7,8 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/server"
 )
@@ -41,11 +43,15 @@ func main() {
 	}
 	defer app.Close()
 
-	// If --task is provided, run the task and exit
+	// If --task is provided, run the task with a timeout and exit
 	if *task != "" {
-		log.Printf("Running scheduled task: %s", *task)
+		timeout := getTaskTimeout()
+		taskCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		log.Printf("Running scheduled task: %s (timeout: %v)", *task, timeout)
 		taskType := server.ScheduledTaskType(*task)
-		result, err := app.HandleScheduledTask(ctx, taskType)
+		result, err := app.HandleScheduledTask(taskCtx, taskType)
 		if err != nil {
 			log.Fatalf("Scheduled task %q failed: %v", *task, err)
 		}
@@ -68,6 +74,16 @@ func main() {
 	default:
 		log.Fatalf("Unknown runtime mode: %s", runtimeMode)
 	}
+}
+
+// getTaskTimeout returns the task timeout from TASK_TIMEOUT env var or the default of 15 minutes.
+func getTaskTimeout() time.Duration {
+	if v := os.Getenv("TASK_TIMEOUT"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return 15 * time.Minute
 }
 
 // determineRuntimeMode determines the runtime mode based on flags and environment
