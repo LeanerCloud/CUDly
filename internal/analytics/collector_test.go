@@ -40,6 +40,7 @@ func (m *mockAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapshots 
 	if m.bulkInsertSnapshotsFunc != nil {
 		return m.bulkInsertSnapshotsFunc(ctx, snapshots)
 	}
+	m.savedSnapshots = append(m.savedSnapshots, snapshots...)
 	return nil
 }
 
@@ -583,15 +584,10 @@ func TestCollectorCollect(t *testing.T) {
 		assert.Equal(t, "SavingsPlan", analyticsStore.savedSnapshots[0].CommitmentType)
 	})
 
-	t.Run("continues on save snapshot failure and reports warning", func(t *testing.T) {
-		saveCount := 0
+	t.Run("returns error when BulkInsertSnapshots fails", func(t *testing.T) {
 		analyticsStore := &mockAnalyticsStore{
-			saveSnapshotFunc: func(ctx context.Context, snapshot *SavingsSnapshot) error {
-				saveCount++
-				if saveCount == 1 {
-					return errors.New("save failed")
-				}
-				return nil
+			bulkInsertSnapshotsFunc: func(ctx context.Context, snapshots []SavingsSnapshot) error {
+				return errors.New("bulk insert failed")
 			},
 		}
 		activeTime := time.Now().AddDate(0, -3, 0)
@@ -609,17 +605,6 @@ func TestCollectorCollect(t *testing.T) {
 						EstimatedSavings: 100.0,
 						UpfrontCost:      500.0,
 					},
-					{
-						AccountID:        "test-account",
-						PurchaseID:       "purchase-2",
-						Timestamp:        activeTime,
-						Provider:         "aws",
-						Service:          "elasticache",
-						Region:           "us-east-1",
-						Term:             1,
-						EstimatedSavings: 150.0,
-						UpfrontCost:      700.0,
-					},
 				}, nil
 			},
 		}
@@ -630,11 +615,10 @@ func TestCollectorCollect(t *testing.T) {
 		collector, err := NewCollector(cfg, configStore)
 		require.NoError(t, err)
 
-		// Should not return error even if one save fails
 		err = collector.Collect(context.Background())
 
-		assert.NoError(t, err)
-		assert.Equal(t, 2, saveCount) // Both saves were attempted
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to save snapshots")
 	})
 
 	t.Run("handles 3-year term purchases correctly", func(t *testing.T) {

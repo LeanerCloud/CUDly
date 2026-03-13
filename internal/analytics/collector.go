@@ -83,7 +83,7 @@ func (c *Collector) Collect(ctx context.Context) error {
 	for _, p := range purchases {
 		// Check if purchase is still active (within term)
 		purchaseTime := p.Timestamp
-		termDuration := time.Duration(p.Term) * HoursPerYear * time.Hour
+		termDuration := time.Duration(p.Term*HoursPerYear) * time.Hour
 		expiryTime := purchaseTime.Add(termDuration)
 
 		if now.After(expiryTime) {
@@ -116,16 +116,15 @@ func (c *Collector) Collect(ctx context.Context) error {
 
 	log.Printf("Analytics collector: Found %d active purchases, %d unique combinations", activePurchases, len(serviceMap))
 
-	// Create and save a snapshot for each service/provider/region combination
-	savedCount := 0
+	// Build snapshots for all active combinations and bulk-insert in one round-trip.
+	snapshots := make([]SavingsSnapshot, 0, len(serviceMap))
 	for _, agg := range serviceMap {
-		// Determine commitment type from service
 		commitmentType := "RI"
 		if agg.service == "SavingsPlans" {
 			commitmentType = "SavingsPlan"
 		}
 
-		snapshot := &SavingsSnapshot{
+		snapshots = append(snapshots, SavingsSnapshot{
 			AccountID:          c.accountID,
 			Timestamp:          now,
 			Provider:           agg.provider,
@@ -140,16 +139,18 @@ func (c *Collector) Collect(ctx context.Context) error {
 				"active_purchases": agg.count,
 				"collection_time":  now.Format(time.RFC3339),
 			},
-		}
-
-		if err := c.store.SaveSnapshot(ctx, snapshot); err != nil {
-			log.Printf("Warning: Failed to save snapshot for %s/%s/%s: %v",
-				agg.service, agg.provider, agg.region, err)
-			continue
-		}
-		savedCount++
+		})
 	}
 
-	log.Printf("Analytics collector: Successfully saved %d snapshots", savedCount)
+	if len(snapshots) == 0 {
+		log.Printf("Analytics collector: No active purchases to snapshot")
+		return nil
+	}
+
+	if err := c.store.BulkInsertSnapshots(ctx, snapshots); err != nil {
+		return fmt.Errorf("failed to save snapshots: %w", err)
+	}
+
+	log.Printf("Analytics collector: Successfully saved %d snapshots", len(snapshots))
 	return nil
 }
