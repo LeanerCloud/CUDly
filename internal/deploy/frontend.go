@@ -105,7 +105,7 @@ func (s *FrontendService) uploadDirectory(ctx context.Context, distDir, bucketNa
 
 		// Set cache control based on file type
 		cacheControl := "max-age=31536000" // 1 year for assets
-		if key == "index.html" || strings.HasSuffix(key, ".json") {
+		if strings.HasSuffix(key, ".html") || strings.HasSuffix(key, ".json") || strings.HasSuffix(key, ".webmanifest") {
 			cacheControl = "no-cache, no-store, must-revalidate"
 		}
 
