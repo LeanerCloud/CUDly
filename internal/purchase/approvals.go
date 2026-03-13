@@ -22,6 +22,9 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token strin
 	}
 
 	// Validate token using constant-time comparison to prevent timing attacks
+	if execution.ApprovalToken == "" || token == "" {
+		return fmt.Errorf("invalid approval token")
+	}
 	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return fmt.Errorf("invalid approval token")
 	}
@@ -55,6 +58,9 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token string
 	}
 
 	// Validate token using constant-time comparison to prevent timing attacks
+	if execution.ApprovalToken == "" || token == "" {
+		return fmt.Errorf("invalid approval token")
+	}
 	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return fmt.Errorf("invalid approval token")
 	}
