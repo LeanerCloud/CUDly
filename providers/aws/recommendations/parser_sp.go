@@ -3,6 +3,7 @@ package recommendations
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -90,16 +91,32 @@ func (c *Client) parseSavingsPlanDetail(
 	var hourlyCommitment, monthlySavings, savingsPercent, upfrontCost float64
 
 	if detail.HourlyCommitmentToPurchase != nil {
-		hourlyCommitment, _ = strconv.ParseFloat(*detail.HourlyCommitmentToPurchase, 64)
+		if val, err := strconv.ParseFloat(*detail.HourlyCommitmentToPurchase, 64); err == nil {
+			hourlyCommitment = val
+		} else {
+			log.Printf("WARNING: failed to parse HourlyCommitmentToPurchase: %v", err)
+		}
 	}
 	if detail.EstimatedMonthlySavingsAmount != nil {
-		monthlySavings, _ = strconv.ParseFloat(*detail.EstimatedMonthlySavingsAmount, 64)
+		if val, err := strconv.ParseFloat(*detail.EstimatedMonthlySavingsAmount, 64); err == nil {
+			monthlySavings = val
+		} else {
+			log.Printf("WARNING: failed to parse EstimatedMonthlySavingsAmount: %v", err)
+		}
 	}
 	if detail.EstimatedSavingsPercentage != nil {
-		savingsPercent, _ = strconv.ParseFloat(*detail.EstimatedSavingsPercentage, 64)
+		if val, err := strconv.ParseFloat(*detail.EstimatedSavingsPercentage, 64); err == nil {
+			savingsPercent = val
+		} else {
+			log.Printf("WARNING: failed to parse EstimatedSavingsPercentage: %v", err)
+		}
 	}
 	if detail.UpfrontCost != nil {
-		upfrontCost, _ = strconv.ParseFloat(*detail.UpfrontCost, 64)
+		if val, err := strconv.ParseFloat(*detail.UpfrontCost, 64); err == nil {
+			upfrontCost = val
+		} else {
+			log.Printf("WARNING: failed to parse UpfrontCost: %v", err)
+		}
 	}
 
 	planTypeStr := string(planType)
