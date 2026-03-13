@@ -230,9 +230,10 @@ func TestEnvResolver_PutSecret(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
 
-	// PutSecret is a no-op for env resolver, should always succeed
+	// PutSecret is not supported for env resolver — should return an error
+	// to prevent callers from silently losing written values.
 	err := resolver.PutSecret(ctx, "ANY_SECRET", "any-value")
-	assert.NoError(t, err)
+	assert.ErrorContains(t, err, "does not support writing secrets")
 }
 
 func TestEnvResolver_Close(t *testing.T) {
