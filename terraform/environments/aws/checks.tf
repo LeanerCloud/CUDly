@@ -12,8 +12,8 @@ module "deployment_checks" {
 
   api_base_url = trimsuffix(
     var.compute_platform == "lambda"
-    ? module.compute_lambda[0].function_url
-    : module.compute_fargate[0].api_url,
+    ? one(module.compute_lambda[*].function_url)
+    : one(module.compute_fargate[*].api_url),
     "/"
   )
 
