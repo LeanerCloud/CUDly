@@ -87,7 +87,7 @@ func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Conf
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			// Calculate exponential backoff delay: 2s, 4s, 8s, 16s, 30s (capped)
+			// Calculate exponential backoff delay: 4s, 8s, 16s, 30s (capped)
 			delay := time.Duration(1<<uint(attempt)) * baseDelay
 			if delay > maxDelay {
 				delay = maxDelay
