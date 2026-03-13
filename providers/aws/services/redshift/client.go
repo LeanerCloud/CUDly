@@ -191,8 +191,16 @@ func (c *Client) matchesDuration(offeringDuration *int32, term string) bool {
 
 // matchesOfferingType checks if the offering type matches
 func (c *Client) matchesOfferingType(offeringType string, paymentOption string) bool {
-	// Redshift uses "Regular" and "Upgradable" offering types
-	return offeringType == "Regular" || offeringType == "Upgradable"
+	switch paymentOption {
+	case "all-upfront":
+		return offeringType == "All Upfront"
+	case "partial-upfront":
+		return offeringType == "Partial Upfront"
+	case "no-upfront":
+		return offeringType == "No Upfront"
+	default:
+		return false
+	}
 }
 
 // ValidateOffering checks if an offering exists without purchasing
