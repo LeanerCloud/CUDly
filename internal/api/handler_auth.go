@@ -195,14 +195,19 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Decode base64-encoded passwords
-	currentPassword, err := decodeBase64Password(profileReq.CurrentPassword)
-	if err != nil {
-		return nil, err
+	// Decode base64-encoded passwords if provided
+	var currentPassword, newPassword string
+	if profileReq.CurrentPassword != "" {
+		currentPassword, err = decodeBase64Password(profileReq.CurrentPassword)
+		if err != nil {
+			return nil, err
+		}
 	}
-	newPassword, err := decodeBase64Password(profileReq.NewPassword)
-	if err != nil {
-		return nil, err
+	if profileReq.NewPassword != "" {
+		newPassword, err = decodeBase64Password(profileReq.NewPassword)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Update profile through auth service
@@ -234,7 +239,10 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Decode base64-encoded passwords
+	// Decode base64-encoded passwords - both required for change password
+	if pwdReq.CurrentPassword == "" || pwdReq.NewPassword == "" {
+		return nil, NewClientError(400, "current password and new password are required")
+	}
 	currentPassword, err := decodeBase64Password(pwdReq.CurrentPassword)
 	if err != nil {
 		return nil, err
