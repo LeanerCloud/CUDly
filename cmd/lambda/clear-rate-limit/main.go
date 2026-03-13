@@ -4,11 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/aws/aws-lambda-go/lambda"
 )
+
+const defaultDomain = "leanercloud.com"
+
+func getDomain() string {
+	if domain := os.Getenv("RATE_LIMIT_DOMAIN"); domain != "" {
+		return domain
+	}
+	return defaultDomain
+}
 
 type Response struct {
 	Message        string `json:"message"`
@@ -42,8 +52,9 @@ func clearRateLimit(ctx context.Context) (Response, error) {
 	defer db.Close()
 
 	// Clear rate limits for forgot_password endpoint
+	domain := getDomain()
 	tag, err := db.Exec(ctx,
-		"DELETE FROM rate_limits WHERE id LIKE 'EMAIL#%@leanercloud.com#ENDPOINT#forgot_password'")
+		fmt.Sprintf("DELETE FROM rate_limits WHERE id LIKE 'EMAIL#%%@%s#ENDPOINT#forgot_password'", domain))
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to delete rate limits: %w", err)
 	}
