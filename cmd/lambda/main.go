@@ -37,9 +37,7 @@ func initApp(ctx context.Context) (*server.Application, error) {
 	}
 
 	// Set version for the application
-	if Version != "" {
-		os.Setenv("VERSION", Version)
-	}
+	os.Setenv("VERSION", Version)
 
 	log.Printf("CUDly Lambda Handler starting, version: %s", Version)
 
