@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/rand"
 	"strings"
 	"time"
 )
@@ -73,10 +74,7 @@ func (r *RateLimiter) Wait(ctx context.Context) error {
 	}
 
 	// Add jitter (up to 20% of delay)
-	jitter := time.Duration(float64(delay) * 0.2 * math.Sin(float64(time.Now().UnixNano())))
-	if jitter < 0 {
-		jitter = -jitter
-	}
+	jitter := time.Duration(float64(delay) * 0.2 * rand.Float64())
 	delay += jitter
 
 	select {
