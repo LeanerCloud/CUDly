@@ -49,7 +49,7 @@ type ServiceConfig struct {
 // NewService creates a new auth service
 func NewService(cfg ServiceConfig) *Service {
 	if cfg.SessionDuration == 0 {
-		cfg.SessionDuration = DefaultSessionDurationHours * time.Hour
+		cfg.SessionDuration = time.Duration(DefaultSessionDurationHours) * time.Hour
 	}
 
 	// SECURITY: Validate that dashboard URL uses HTTPS in production
@@ -58,7 +58,12 @@ func NewService(cfg ServiceConfig) *Service {
 		// Allow http for localhost development only
 		if !strings.HasPrefix(cfg.DashboardURL, "http://localhost") &&
 			!strings.HasPrefix(cfg.DashboardURL, "http://127.0.0.1") {
-			logging.Warnf("SECURITY WARNING: Dashboard URL does not use HTTPS: %s. Password reset links may be insecure.", cfg.DashboardURL)
+			// Strip query string before logging to avoid leaking tokens in log output
+			safeURL := cfg.DashboardURL
+			if idx := strings.IndexByte(safeURL, '?'); idx >= 0 {
+				safeURL = safeURL[:idx]
+			}
+			logging.Warnf("SECURITY WARNING: Dashboard URL does not use HTTPS: %s. Password reset links may be insecure.", safeURL)
 		}
 	}
 
@@ -92,9 +97,13 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 		return nil, err
 	}
 
-	if _, err := mail.ParseAddress(req.Email); err != nil {
+	// Use only the address portion to prevent RFC 5322 display-name attacks
+	// e.g. `"Attacker" <user@host>` must not be forwarded verbatim to the store
+	parsed, err := mail.ParseAddress(req.Email)
+	if err != nil {
 		return nil, fmt.Errorf("invalid email format")
 	}
+	req.Email = parsed.Address
 
 	user, err := s.getUserAndValidateStatus(ctx, req.Email)
 	if err != nil {
@@ -124,7 +133,8 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
-		logging.Warnf("Login attempt for locked account: id=%s (locked for %v more)", user.ID, remainingTime)
+		// Omit user.ID from log to avoid leaking internal identifiers to log
+		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
@@ -133,9 +143,10 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 
 // verifyPasswordAndMFA verifies password and MFA code if enabled
 func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req LoginRequest) error {
-	// Check if password is not set (empty hash) - user must reset password
+	// Use a generic error for missing password hash to avoid leaking account state
+	// (a distinct message would reveal that the account exists but has no password set)
 	if user.PasswordHash == "" {
-		return fmt.Errorf("password not set - please use the password reset feature to set your password")
+		return fmt.Errorf("invalid email or password")
 	}
 
 	if !s.verifyPassword(req.Password, user.PasswordHash) {
@@ -193,6 +204,9 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	if err := s.ensureStore(); err != nil {
 		return err
 	}
+	if token == "" {
+		return fmt.Errorf("token is required")
+	}
 	hashedToken := hashSessionToken(token)
 	return s.store.DeleteSession(ctx, hashedToken)
 }
@@ -213,6 +227,10 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 		return nil, fmt.Errorf("session not found")
 	}
 
+	if session.ExpiresAt.IsZero() {
+		return nil, fmt.Errorf("session has no expiry: data integrity error")
+	}
+
 	if time.Now().After(session.ExpiresAt) {
 		if err := s.store.DeleteSession(ctx, hashedToken); err != nil {
 			logging.Warnf("Failed to delete expired session: %v", err)
@@ -220,9 +238,11 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 		return nil, fmt.Errorf("session expired")
 	}
 
-	// Return session with the original token (not the hash) for client use
-	session.Token = token
-	return session, nil
+	// Return a copy of the session with the original token (not the hash) for client use.
+	// Copying avoids mutating a potentially-shared store-cached pointer.
+	result := *session
+	result.Token = token
+	return &result, nil
 }
 
 // ValidateCSRFToken validates the CSRF token for a session
@@ -253,16 +273,16 @@ func (s *Service) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken
 
 // CleanupExpiredSessions removes expired sessions from the store
 func (s *Service) CleanupExpiredSessions(ctx context.Context) error {
-	if s.store == nil {
-		return fmt.Errorf("auth store not initialized")
+	if err := s.ensureStore(); err != nil {
+		return err
 	}
 	return s.store.CleanupExpiredSessions(ctx)
 }
 
 // Ping checks the health of the auth store database connection
 func (s *Service) Ping(ctx context.Context) error {
-	if s.store == nil {
-		return fmt.Errorf("auth store not initialized")
+	if err := s.ensureStore(); err != nil {
+		return err
 	}
 	return s.store.Ping(ctx)
 }
