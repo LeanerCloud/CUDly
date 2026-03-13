@@ -173,8 +173,14 @@ func (r *RampSchedule) Validate() error {
 	}
 
 	// Validate percent per step
-	if r.PercentPerStep < MinCoverage || r.PercentPerStep > MaxCoverage {
-		return fmt.Errorf("percent per step must be between %d and %d, got: %.2f", MinCoverage, MaxCoverage, r.PercentPerStep)
+	if r.Type != "" {
+		if r.PercentPerStep <= MinCoverage || r.PercentPerStep > MaxCoverage {
+			return fmt.Errorf("percent per step must be between %d and %d for ramp schedule, got: %.2f", MinCoverage+1, MaxCoverage, r.PercentPerStep)
+		}
+	} else {
+		if r.PercentPerStep < MinCoverage || r.PercentPerStep > MaxCoverage {
+			return fmt.Errorf("percent per step must be between %d and %d, got: %.2f", MinCoverage, MaxCoverage, r.PercentPerStep)
+		}
 	}
 
 	// Validate step interval
