@@ -108,12 +108,12 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 			continue
 		}
 
-		processed++
-
 		// Skip if cancelled or already completed
 		if exec.Status == "cancelled" || exec.Status == "completed" {
 			continue
 		}
+
+		processed++
 
 		logging.Infof("Executing scheduled purchase: %s", exec.ExecutionID)
 
