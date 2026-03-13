@@ -41,7 +41,10 @@ type Config struct {
 	AzureVaultURL string
 }
 
-// LoadConfigFromEnv loads resolver configuration from environment variables
+// LoadConfigFromEnv loads resolver configuration from environment variables.
+// Defaults to the "env" (environment variable) provider when SECRET_PROVIDER is unset,
+// which is suitable for local development only. In production, ensure SECRET_PROVIDER
+// is explicitly set (aws, gcp, or azure) to avoid accidental use of the dev-only resolver.
 func LoadConfigFromEnv() *Config {
 	return &Config{
 		Provider:      getEnv("SECRET_PROVIDER", "env"),
