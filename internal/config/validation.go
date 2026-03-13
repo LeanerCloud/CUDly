@@ -153,6 +153,9 @@ func (p *PurchasePlan) Validate() error {
 	}
 
 	// Validate each service config
+	if len(p.Services) == 0 {
+		return fmt.Errorf("plan must have at least one service")
+	}
 	for key, svc := range p.Services {
 		if err := svc.Validate(); err != nil {
 			return fmt.Errorf("invalid service config '%s': %w", key, err)
