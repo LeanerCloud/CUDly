@@ -80,12 +80,6 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	}
 
 	for _, ri := range response.ReservedInstances {
-		// Calculate term in months
-		duration := aws.ToInt64(ri.Duration)
-		termMonths := 12
-		if duration == ThreeYearSeconds {
-			termMonths = 36
-		}
 
 		commitment := common.Commitment{
 			Provider:       common.ProviderAWS,
@@ -98,11 +92,6 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 			State:          string(ri.State),
 			StartDate:      aws.ToTime(ri.Start),
 			EndDate:        aws.ToTime(ri.End),
-		}
-
-		// Set term string
-		if termMonths == 36 {
-			commitment.ResourceType = string(ri.InstanceType)
 		}
 
 		commitments = append(commitments, commitment)
