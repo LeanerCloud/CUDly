@@ -163,12 +163,12 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		return "", err
 	}
 
-	termMonths := convertTermToMonths(rec.Term)
+	termSeconds := convertTermToSeconds(rec.Term)
 	paymentOption := convertPaymentOption(rec.PaymentOption)
 
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
-		Durations:      []int64{termMonths},
+		Durations:      []int64{termSeconds},
 		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
 	}
 
@@ -191,15 +191,15 @@ func convertPlanType(planType string) (types.SavingsPlanType, error) {
 	}
 }
 
-// convertTermToMonths converts a term string to months
-func convertTermToMonths(term string) int64 {
+// convertTermToSeconds converts a term string to seconds for AWS API
+func convertTermToSeconds(term string) int64 {
 	if term == "3yr" || term == "3" {
-		return 36
+		return 94608000 // 3 years in seconds (365 * 3 * 86400)
 	}
 	if term != "1yr" && term != "1" && term != "" {
-		log.Printf("WARNING: unknown Savings Plans term %q, defaulting to 12 months", term)
+		log.Printf("WARNING: unknown Savings Plans term %q, defaulting to 1 year", term)
 	}
-	return 12
+	return 31536000 // 1 year in seconds (365 * 86400)
 }
 
 // convertPaymentOption converts a payment option string to AWS SDK type
