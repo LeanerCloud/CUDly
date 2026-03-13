@@ -17,8 +17,11 @@ func NewEnvResolver() *EnvResolver {
 	return &EnvResolver{}
 }
 
-// GetSecret retrieves a secret from environment variables
-// secretID is the environment variable name
+// GetSecret retrieves a secret from environment variables.
+// secretID is the environment variable name.
+// Note: both "variable not set" and "variable set to empty string" return an error,
+// meaning intentionally-empty secret values are not supported by this resolver.
+// This is consistent with cloud-provider resolvers that also reject empty values.
 func (r *EnvResolver) GetSecret(ctx context.Context, secretID string) (string, error) {
 	value := os.Getenv(secretID)
 	if value == "" {
