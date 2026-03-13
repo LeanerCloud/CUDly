@@ -4,6 +4,7 @@ package rds
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -332,6 +333,7 @@ func (c *Client) normalizeEngineName(engine string) string {
 		if strings.Contains(engineLower, "postgres") {
 			return "aurora-postgresql"
 		}
+		log.Printf("WARNING: Unknown Aurora variant %q, defaulting to aurora-mysql", engine)
 		return "aurora-mysql"
 	}
 
