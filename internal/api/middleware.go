@@ -188,7 +188,7 @@ func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionUR
 	// Check admin API key first (stateless auth)
 	apiKey := extractAPIKey(req)
 	if h.checkAdminAPIKey(apiKey) {
-		return &Session{Role: "admin"}, nil
+		return &Session{Role: "admin", UserID: "admin-api-key"}, nil
 	}
 
 	if h.auth == nil {
