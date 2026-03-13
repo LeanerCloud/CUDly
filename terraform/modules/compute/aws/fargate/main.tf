@@ -378,9 +378,10 @@ resource "aws_ecs_task_definition" "main" {
 
   container_definitions = jsonencode([
     {
-      name      = "app"
-      image     = var.image_uri
-      essential = true
+      name        = "app"
+      image       = var.image_uri
+      essential   = true
+      stopTimeout = 120
 
       portMappings = [
         {
@@ -462,6 +463,10 @@ resource "aws_ecs_task_definition" "main" {
           {
             name  = "DB_PASSWORD_SECRET"
             value = var.database_password_secret_arn
+          },
+          {
+            name  = "TASK_TIMEOUT"
+            value = tostring(var.task_timeout)
           }
         ],
         [
@@ -690,6 +695,11 @@ resource "aws_cloudwatch_event_target" "recommendations" {
     }
   }
 
+  retry_policy {
+    maximum_retry_attempts       = 0
+    maximum_event_age_in_seconds = 3600
+  }
+
   input = jsonencode({
     containerOverrides = [{
       name    = "app"
@@ -783,6 +793,11 @@ resource "aws_cloudwatch_event_target" "ri_exchange" {
       security_groups  = [aws_security_group.ecs_tasks.id]
       assign_public_ip = false
     }
+  }
+
+  retry_policy {
+    maximum_retry_attempts       = 0
+    maximum_event_age_in_seconds = 3600
   }
 
   input = jsonencode({

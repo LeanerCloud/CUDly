@@ -179,6 +179,12 @@ variable "ri_exchange_schedule" {
   default     = "rate(6 hours)"
 }
 
+variable "task_timeout" {
+  description = "Timeout in seconds for one-off scheduled tasks"
+  type        = number
+  default     = 900
+}
+
 variable "additional_env_vars" {
   description = "Additional environment variables"
   type        = map(string)
