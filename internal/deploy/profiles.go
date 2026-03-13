@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,7 +62,7 @@ func LoadConfig() (*DeploymentConfig, error) {
 	configPath := GetConfigPath()
 
 	// If config doesn't exist, return empty config
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		return &DeploymentConfig{
 			Profiles: make(map[string]ProfileConfig),
 		}, nil
