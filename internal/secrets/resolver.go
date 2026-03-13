@@ -61,6 +61,8 @@ func NewResolver(ctx context.Context, config *Config) (Resolver, error) {
 	}
 	switch config.Provider {
 	case "aws":
+		// AWSRegion defaults to us-east-1 when empty (via LoadConfigFromEnv).
+		// Callers constructing Config manually should set AWSRegion explicitly.
 		return NewAWSResolver(ctx, config.AWSRegion)
 	case "gcp":
 		if config.GCPProjectID == "" {
