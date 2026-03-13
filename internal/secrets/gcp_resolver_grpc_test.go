@@ -207,9 +207,9 @@ func TestGCPResolverReal_ListSecrets_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Len(t, result, 3)
-	assert.Equal(t, "projects/test-project/secrets/secret-1", result[0])
-	assert.Equal(t, "projects/test-project/secrets/secret-2", result[1])
-	assert.Equal(t, "projects/test-project/secrets/secret-3", result[2])
+	assert.Equal(t, "secret-1", result[0])
+	assert.Equal(t, "secret-2", result[1])
+	assert.Equal(t, "secret-3", result[2])
 }
 
 func TestGCPResolverReal_ListSecrets_WithFilter(t *testing.T) {

@@ -3,7 +3,9 @@ package secrets
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -43,6 +45,10 @@ func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, e
 	result, err := r.client.AccessSecretVersion(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("failed to access secret %s: %w", secretID, err)
+	}
+
+	if result.Payload == nil {
+		return "", fmt.Errorf("secret %s returned nil payload", secretID)
 	}
 
 	return string(result.Payload.Data), nil
@@ -94,16 +100,16 @@ func (r *GCPResolver) ListSecrets(ctx context.Context, filter string) ([]string,
 
 	for {
 		secret, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to list secrets: %w", err)
 		}
 
-		// Extract secret name from full resource path
+		// Extract the short name from the full resource path.
 		// Format: projects/{project}/secrets/{secret}
-		secrets = append(secrets, secret.Name)
+		secrets = append(secrets, path.Base(secret.Name))
 	}
 
 	return secrets, nil
