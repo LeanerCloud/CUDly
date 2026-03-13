@@ -52,7 +52,7 @@ func (r *AWSResolver) GetSecret(ctx context.Context, secretID string) (string, e
 		return *result.SecretString, nil
 	}
 
-	return "", fmt.Errorf("secret %s has no string value", secretID)
+	return "", fmt.Errorf("secret %s has no string value (binary secrets not supported by this resolver)", secretID)
 }
 
 // PutSecret creates or updates a secret value in AWS Secrets Manager
