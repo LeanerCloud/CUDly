@@ -54,7 +54,10 @@ func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, e
 	return string(result.Payload.Data), nil
 }
 
-// PutSecret adds a new version to an existing secret in GCP Secret Manager
+// PutSecret adds a new version to an existing secret in GCP Secret Manager.
+// Note: unlike AWS, GCP requires the secret resource to already exist — this
+// function only appends a new version. It will return an error if the secret
+// has not been pre-created via CreateSecret.
 func (r *GCPResolver) PutSecret(ctx context.Context, secretID string, value string) error {
 	parent := fmt.Sprintf("projects/%s/secrets/%s", r.projectID, secretID)
 
