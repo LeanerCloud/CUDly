@@ -137,6 +137,13 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
 		return nil, fmt.Errorf("invalid email or password")
 	}
+	// NOTE: when LockedUntil is set but the window has already expired, the user falls
+	// through here with FailedLoginAttempts and LockedUntil still set in memory.
+	// These fields are cleared in completeSuccessfulLogin after a successful password
+	// check. If the password check fails, recordFailedLogin re-locks the account
+	// correctly. This two-site invariant is intentional: clearing stale lock state
+	// here would require an extra store write on every login attempt for a
+	// previously-locked user, with no security benefit.
 
 	return user, nil
 }
@@ -161,6 +168,8 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 		if user.MFASecret == "" {
 			return fmt.Errorf("MFA is enabled but not configured")
 		}
+		// verifyTOTP is panic-safe: a malformed secret causes generateTOTP to return ""
+		// (base32 decode error), resulting in a comparison miss rather than a panic.
 		if !verifyTOTP(user.MFASecret, req.MFACode) {
 			s.recordFailedLogin(ctx, user)
 			return fmt.Errorf("invalid MFA code")
@@ -181,6 +190,10 @@ func (s *Service) completeSuccessfulLogin(ctx context.Context, user *User) (*Log
 	user.LastLoginAt = &now
 	user.FailedLoginAttempts = 0
 	user.LockedUntil = nil
+	// Deliberately do not return this error: the session was successfully created and the
+	// token already issued. Failing here would leave the caller with no token despite a
+	// valid login. The consequence is that LastLoginAt / FailedLoginAttempts may be stale
+	// in the store until the next successful login, which is an acceptable trade-off.
 	if err := s.store.UpdateUser(ctx, user); err != nil {
 		logging.Warnf("Failed to update login info for user %s: %v", user.ID, err)
 	}

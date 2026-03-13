@@ -667,6 +667,169 @@ func TestService_ErrorPaths(t *testing.T) {
 	})
 }
 
+func TestService_ValidateSession_ZeroExpiresAt(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	service := createTestService(mockStore, mockEmail)
+
+	hashedToken := hashSessionToken("zero-expiry-token")
+	// Session with zero-value ExpiresAt (data integrity bug in store)
+	session := &Session{
+		Token:     hashedToken,
+		UserID:    "user-123",
+		ExpiresAt: time.Time{}, // zero value
+	}
+
+	mockStore.On("GetSession", ctx, hashedToken).Return(session, nil).Once()
+
+	result, err := service.ValidateSession(ctx, "zero-expiry-token")
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "no expiry")
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_Logout_EmptyToken(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	service := createTestService(mockStore, mockEmail)
+
+	err := service.Logout(ctx, "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "token is required")
+
+	// DeleteSession must not be called
+	mockStore.AssertNotCalled(t, "DeleteSession")
+}
+
+func TestService_Logout_NilStore(t *testing.T) {
+	ctx := context.Background()
+
+	service := &Service{} // no store set
+
+	err := service.Logout(ctx, "some-token")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not initialized")
+}
+
+func TestService_Login_NilStore(t *testing.T) {
+	ctx := context.Background()
+
+	service := &Service{} // no store set
+
+	req := LoginRequest{Email: "user@example.com", Password: "pass"}
+	resp, err := service.Login(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "not initialized")
+}
+
+func TestService_Login_RFC5322DisplayName(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	service := createTestService(mockStore, mockEmail)
+
+	testUser := createTestUser(t, "SecurePass@123")
+
+	// Store should be called with the bare address only, not the display-name form
+	mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(testUser, nil).Once()
+	mockStore.On("CreateSession", ctx, mock.AnythingOfType("*auth.Session")).Return(nil).Once()
+	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
+
+	req := LoginRequest{
+		Email:    `"Attacker" <test@example.com>`,
+		Password: "SecurePass@123",
+	}
+
+	resp, err := service.Login(ctx, req)
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_Login_LockedUser(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	service := createTestService(mockStore, mockEmail)
+
+	lockedUntil := time.Now().Add(10 * time.Minute)
+	testUser := createTestUser(t, "SecurePass@123")
+	testUser.LockedUntil = &lockedUntil
+
+	mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(testUser, nil).Once()
+
+	req := LoginRequest{
+		Email:    "test@example.com",
+		Password: "SecurePass@123",
+	}
+
+	resp, err := service.Login(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "invalid email or password")
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_Login_EmptyPasswordHash(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	service := createTestService(mockStore, mockEmail)
+
+	testUser := createTestUser(t, "SecurePass@123")
+	testUser.PasswordHash = "" // simulate account with no password set
+
+	mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(testUser, nil).Once()
+
+	req := LoginRequest{
+		Email:    "test@example.com",
+		Password: "SecurePass@123",
+	}
+
+	resp, err := service.Login(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	// Must return generic error, not a message that leaks account state
+	assert.Contains(t, err.Error(), "invalid email or password")
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_notifyPasswordChange(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil callback is a no-op", func(t *testing.T) {
+		service := &Service{onPasswordChange: nil}
+		// Must not panic
+		service.notifyPasswordChange(ctx, "user-123", "newpass")
+	})
+
+	t.Run("non-nil callback is invoked", func(t *testing.T) {
+		var gotUserID, gotPassword string
+		service := &Service{
+			onPasswordChange: func(c context.Context, uid, pw string) {
+				gotUserID = uid
+				gotPassword = pw
+			},
+		}
+		service.notifyPasswordChange(ctx, "user-123", "newpass")
+		assert.Equal(t, "user-123", gotUserID)
+		assert.Equal(t, "newpass", gotPassword)
+	})
+}
+
 func TestService_ValidateCSRFToken(t *testing.T) {
 	ctx := context.Background()
 
