@@ -91,8 +91,8 @@ func SaveConfig(config *DeploymentConfig) error {
 	configDir := GetConfigDir()
 	configPath := GetConfigPath()
 
-	// Ensure the config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	// Ensure the config directory exists with restrictive permissions
+	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
