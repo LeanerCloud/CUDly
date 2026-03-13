@@ -228,7 +228,12 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 		return "", fmt.Errorf("no Savings Plans offerings found matching criteria")
 	}
 
-	return *result.SearchResults[0].OfferingId, nil
+	firstResult := result.SearchResults[0]
+	if firstResult.OfferingId == nil {
+		return "", fmt.Errorf("Savings Plans offering has nil ID")
+	}
+
+	return *firstResult.OfferingId, nil
 }
 
 // ValidateOffering checks if a Savings Plans offering exists
