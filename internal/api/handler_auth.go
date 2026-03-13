@@ -107,8 +107,8 @@ func (h *Handler) setupAdmin(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
-	// Rate limiting: 5 attempts per IP per 15 minutes (same as login)
-	if err := h.checkRateLimit(ctx, req, "login"); err != nil {
+	// Rate limiting: 5 attempts per IP per 15 minutes for admin setup
+	if err := h.checkRateLimit(ctx, req, "setup_admin"); err != nil {
 		return nil, err
 	}
 
