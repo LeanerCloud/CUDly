@@ -41,7 +41,7 @@ func TestECRService_EnsureRepository_Creates(t *testing.T) {
 	createCalled := false
 	mockClient := &MockECRClient{
 		DescribeRepositoriesFunc: func(ctx context.Context, params *ecr.DescribeRepositoriesInput, optFns ...func(*ecr.Options)) (*ecr.DescribeRepositoriesOutput, error) {
-			return nil, errors.New("RepositoryNotFoundException")
+			return nil, &ecrtypes.RepositoryNotFoundException{Message: aws.String("repository not found")}
 		},
 		CreateRepositoryFunc: func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error) {
 			createCalled = true
@@ -307,7 +307,7 @@ func TestECRService_LoginToECR_DockerLoginError(t *testing.T) {
 func TestECRService_EnsureRepository_CreateError(t *testing.T) {
 	mockClient := &MockECRClient{
 		DescribeRepositoriesFunc: func(ctx context.Context, params *ecr.DescribeRepositoriesInput, optFns ...func(*ecr.Options)) (*ecr.DescribeRepositoriesOutput, error) {
-			return nil, errors.New("RepositoryNotFoundException")
+			return nil, &ecrtypes.RepositoryNotFoundException{Message: aws.String("repository not found")}
 		},
 		CreateRepositoryFunc: func(ctx context.Context, params *ecr.CreateRepositoryInput, optFns ...func(*ecr.Options)) (*ecr.CreateRepositoryOutput, error) {
 			return nil, errors.New("create failed")

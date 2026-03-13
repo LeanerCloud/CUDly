@@ -33,26 +33,51 @@ func NewECRService(client ECRClient, publicClient ECRPublicClient, cmdRunner Com
 // EnsureRepository ensures the ECR repository exists, creating it if necessary.
 // Returns the repository URI.
 func (s *ECRService) EnsureRepository(ctx context.Context, repoName, accountID, region string) (string, error) {
-	// Check if repository exists
-	_, err := s.Client.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{
+	uri, err := s.describeRepository(ctx, repoName)
+	if err != nil {
+		return "", err
+	}
+	if uri != "" {
+		return uri, nil
+	}
+	return s.createRepository(ctx, repoName, accountID, region)
+}
+
+// describeRepository returns the URI of an existing ECR repository, or "" if it doesn't exist.
+// Returns an error for any failure other than RepositoryNotFoundException.
+func (s *ECRService) describeRepository(ctx context.Context, repoName string) (string, error) {
+	out, err := s.Client.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{
 		RepositoryNames: []string{repoName},
 	})
-
 	if err != nil {
-		// Create repository if it doesn't exist
-		log.Printf("Creating ECR repository: %s", repoName)
-		_, err = s.Client.CreateRepository(ctx, &ecr.CreateRepositoryInput{
-			RepositoryName: aws.String(repoName),
-			ImageScanningConfiguration: &ecrtypes.ImageScanningConfiguration{
-				ScanOnPush: true,
-			},
-		})
-		var repoExists *ecrtypes.RepositoryAlreadyExistsException
-		if err != nil && !errors.As(err, &repoExists) {
-			return "", fmt.Errorf("failed to create ECR repository: %w", err)
+		var notFound *ecrtypes.RepositoryNotFoundException
+		if errors.As(err, &notFound) {
+			return "", nil // repository does not exist yet
 		}
+		return "", fmt.Errorf("failed to describe ECR repository: %w", err)
 	}
+	if out != nil && len(out.Repositories) > 0 && out.Repositories[0].RepositoryUri != nil {
+		return *out.Repositories[0].RepositoryUri, nil
+	}
+	return "", nil
+}
 
+// createRepository creates an ECR repository and returns its URI.
+func (s *ECRService) createRepository(ctx context.Context, repoName, accountID, region string) (string, error) {
+	log.Printf("Creating ECR repository: %s", repoName)
+	out, err := s.Client.CreateRepository(ctx, &ecr.CreateRepositoryInput{
+		RepositoryName: aws.String(repoName),
+		ImageScanningConfiguration: &ecrtypes.ImageScanningConfiguration{
+			ScanOnPush: true,
+		},
+	})
+	var repoExists *ecrtypes.RepositoryAlreadyExistsException
+	if err != nil && !errors.As(err, &repoExists) {
+		return "", fmt.Errorf("failed to create ECR repository: %w", err)
+	}
+	if out != nil && out.Repository != nil && out.Repository.RepositoryUri != nil {
+		return *out.Repository.RepositoryUri, nil
+	}
 	return fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com/%s", accountID, region, repoName), nil
 }
 
@@ -97,6 +122,10 @@ func (s *ECRService) LoginToECR(ctx context.Context, accountID, region string) e
 
 	if len(result.AuthorizationData) == 0 {
 		return fmt.Errorf("no authorization data returned")
+	}
+
+	if result.AuthorizationData[0].AuthorizationToken == nil {
+		return fmt.Errorf("authorization token is nil in ECR response")
 	}
 
 	authToken := *result.AuthorizationData[0].AuthorizationToken
