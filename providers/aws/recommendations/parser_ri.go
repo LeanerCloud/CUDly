@@ -84,10 +84,10 @@ func (c *Client) parseRecommendedQuantity(details *types.ReservationPurchaseReco
 	var count float64
 	_, err := fmt.Sscanf(qty, "%f", &count)
 	if err != nil {
-		if intCount, err := strconv.Atoi(qty); err == nil {
+		if intCount, atoiErr := strconv.Atoi(qty); atoiErr == nil {
 			return intCount, nil
 		}
-		return 0, fmt.Errorf("failed to parse quantity '%s': %w", qty, err)
+		return 0, fmt.Errorf("failed to parse quantity '%s' as float or int", qty)
 	}
 
 	return int(math.Round(count)), nil
