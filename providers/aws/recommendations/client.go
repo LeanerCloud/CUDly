@@ -119,7 +119,11 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 			continue
 		}
 		allRecommendations = append(allRecommendations, recs...)
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return allRecommendations, ctx.Err()
+		}
 	}
 
 	return allRecommendations, nil
