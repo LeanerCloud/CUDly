@@ -150,7 +150,7 @@ func TestPostgresStore_GetUserByID(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("return nil when user not found", func(t *testing.T) {
+	t.Run("return ErrNoRows when user not found", func(t *testing.T) {
 		mockDB := new(MockDBConnection)
 		store := &PostgresStore{db: mockDB}
 
@@ -158,7 +158,7 @@ func TestPostgresStore_GetUserByID(t *testing.T) {
 		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), mock.Anything).Return(mockRow)
 
 		user, err := store.GetUserByID(ctx, "nonexistent")
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
 		assert.Nil(t, user)
 
 		mockDB.AssertExpectations(t)
@@ -190,7 +190,7 @@ func TestPostgresStore_GetUserByEmail(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("return nil when user not found", func(t *testing.T) {
+	t.Run("return ErrNoRows when user not found", func(t *testing.T) {
 		mockDB := new(MockDBConnection)
 		store := &PostgresStore{db: mockDB}
 
@@ -198,7 +198,7 @@ func TestPostgresStore_GetUserByEmail(t *testing.T) {
 		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), mock.Anything).Return(mockRow)
 
 		user, err := store.GetUserByEmail(ctx, "nonexistent@example.com")
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
 		assert.Nil(t, user)
 
 		mockDB.AssertExpectations(t)
@@ -374,7 +374,7 @@ func TestPostgresStore_GetUserByResetToken(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("return nil when token not found", func(t *testing.T) {
+	t.Run("return ErrNoRows when token not found", func(t *testing.T) {
 		mockDB := new(MockDBConnection)
 		store := &PostgresStore{db: mockDB}
 
@@ -382,7 +382,7 @@ func TestPostgresStore_GetUserByResetToken(t *testing.T) {
 		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), mock.Anything).Return(mockRow)
 
 		user, err := store.GetUserByResetToken(ctx, "invalid-token")
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
 		assert.Nil(t, user)
 
 		mockDB.AssertExpectations(t)
@@ -734,7 +734,7 @@ func TestPostgresStore_GetGroup(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("return nil when group not found", func(t *testing.T) {
+	t.Run("return ErrNoRows when group not found", func(t *testing.T) {
 		mockDB := new(MockDBConnection)
 		store := &PostgresStore{db: mockDB}
 
@@ -742,7 +742,7 @@ func TestPostgresStore_GetGroup(t *testing.T) {
 		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), mock.Anything).Return(mockRow)
 
 		group, err := store.GetGroup(ctx, "nonexistent")
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
 		assert.Nil(t, group)
 
 		mockDB.AssertExpectations(t)
@@ -1002,7 +1002,7 @@ func TestPostgresStore_GetAPIKeyByID(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("return nil when key not found", func(t *testing.T) {
+	t.Run("return ErrNoRows when key not found", func(t *testing.T) {
 		mockDB := new(MockDBConnection)
 		store := &PostgresStore{db: mockDB}
 
@@ -1010,7 +1010,7 @@ func TestPostgresStore_GetAPIKeyByID(t *testing.T) {
 		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), mock.Anything).Return(mockRow)
 
 		key, err := store.GetAPIKeyByID(ctx, "nonexistent")
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
 		assert.Nil(t, key)
 
 		mockDB.AssertExpectations(t)
@@ -1045,7 +1045,7 @@ func TestPostgresStore_GetAPIKeyByHash(t *testing.T) {
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("return nil when key not found", func(t *testing.T) {
+	t.Run("return ErrNoRows when key not found", func(t *testing.T) {
 		mockDB := new(MockDBConnection)
 		store := &PostgresStore{db: mockDB}
 
@@ -1053,7 +1053,7 @@ func TestPostgresStore_GetAPIKeyByHash(t *testing.T) {
 		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), mock.Anything).Return(mockRow)
 
 		key, err := store.GetAPIKeyByHash(ctx, "nonexistent")
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
 		assert.Nil(t, key)
 
 		mockDB.AssertExpectations(t)

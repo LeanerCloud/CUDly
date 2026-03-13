@@ -2,12 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -186,6 +188,9 @@ func (s *Service) checkCommonPasswords(password string) error {
 func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangePasswordRequest) error {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("user not found")
+		}
 		return err
 	}
 	if user == nil {
@@ -236,6 +241,11 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
 	user, err := s.store.GetUserByEmail(ctx, email)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Don't reveal if email exists
+			logging.Debugf("Password reset requested for non-existent email: %s", email)
+			return nil
+		}
 		return err
 	}
 	if user == nil {
@@ -312,6 +322,9 @@ func (s *Service) validateResetToken(ctx context.Context, token string) (*User, 
 
 	user, err := s.store.GetUserByResetToken(ctx, tokenHash)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("invalid or expired reset token")
+		}
 		return nil, err
 	}
 	if user == nil {

@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // CreateAPIKey creates a new user API key with scoped permissions
@@ -18,6 +20,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID, name string, permiss
 	// Validate user exists and is active
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, fmt.Errorf("user not found")
+		}
 		return "", nil, fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
@@ -108,6 +113,9 @@ func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAP
 	// Validate user exists
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user not found")
+		}
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
@@ -126,6 +134,9 @@ func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAP
 func (s *Service) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPIKey, error) {
 	key, err := s.store.GetAPIKeyByHash(ctx, keyHash)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // treat not-found as nil key; callers check for nil
+		}
 		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
 
@@ -137,6 +148,9 @@ func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error 
 	// Get the key to verify ownership
 	key, err := s.store.GetAPIKeyByID(ctx, keyID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("API key not found")
+		}
 		return fmt.Errorf("failed to get API key: %w", err)
 	}
 	if key == nil {
@@ -146,6 +160,9 @@ func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error 
 	// Verify ownership (unless admin)
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("user not found")
+		}
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
@@ -172,6 +189,9 @@ func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error 
 	// Get the key to verify ownership
 	key, err := s.store.GetAPIKeyByID(ctx, keyID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("API key not found")
+		}
 		return fmt.Errorf("failed to get API key: %w", err)
 	}
 	if key == nil {
@@ -181,6 +201,9 @@ func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error 
 	// Verify ownership (unless admin)
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("user not found")
+		}
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
@@ -201,13 +224,40 @@ func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error 
 	return nil
 }
 
+// validateAPIKeyStatus checks that the key is active and not expired.
+func validateAPIKeyStatus(key *UserAPIKey) error {
+	if !key.IsActive {
+		return fmt.Errorf("API key is revoked")
+	}
+	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
+		return fmt.Errorf("API key has expired")
+	}
+	return nil
+}
+
+// lookupAPIKeyUser retrieves and validates the user associated with an API key.
+func (s *Service) lookupAPIKeyUser(ctx context.Context, userID string) (*User, error) {
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user account not found")
+		}
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return nil, fmt.Errorf("user account not found")
+	}
+	if !user.Active {
+		return nil, fmt.Errorf("user account is not active")
+	}
+	return user, nil
+}
+
 // ValidateUserAPIKey validates an API key and returns the key info and associated user
 func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserAPIKey, *User, error) {
-	// Compute hash of the provided key
 	hash := sha256.Sum256([]byte(apiKey))
 	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
 
-	// Look up the key by hash
 	key, err := s.GetAPIKeyByHash(ctx, keyHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to validate API key: %w", err)
@@ -216,28 +266,13 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, fmt.Errorf("invalid API key")
 	}
 
-	// Check if key is active
-	if !key.IsActive {
-		return nil, nil, fmt.Errorf("API key is revoked")
+	if err := validateAPIKeyStatus(key); err != nil {
+		return nil, nil, err
 	}
 
-	// Check if key has expired
-	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
-		return nil, nil, fmt.Errorf("API key has expired")
-	}
-
-	// Get the associated user
-	user, err := s.store.GetUserByID(ctx, key.UserID)
+	user, err := s.lookupAPIKeyUser(ctx, key.UserID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return nil, nil, fmt.Errorf("user account not found")
-	}
-
-	// Check if user is active
-	if !user.Active {
-		return nil, nil, fmt.Errorf("user account is not active")
+		return nil, nil, err
 	}
 
 	// Update last used timestamp (async to avoid blocking)

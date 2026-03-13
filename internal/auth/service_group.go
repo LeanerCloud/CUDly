@@ -2,11 +2,13 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // CreateGroup creates a new permission group
@@ -44,6 +46,9 @@ func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Permission, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user not found")
+		}
 		return nil, err
 	}
 	if user == nil {
@@ -83,6 +88,9 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 func (s *Service) BuildAuthContext(ctx context.Context, userID string) (*AuthContext, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user not found")
+		}
 		return nil, err
 	}
 	if user == nil {

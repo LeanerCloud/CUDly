@@ -2,12 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/mail"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // SetupAdmin creates the first admin user using API key authentication
@@ -79,29 +81,28 @@ func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 	return s.store.AdminExists(ctx)
 }
 
-// CreateUser creates a new user (admin only)
-func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*User, error) {
-	// Validate email
+// validateCreateUserRequest validates the fields of a CreateUserRequest before creating
+// the user record. Returns an error if any field is invalid.
+func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserRequest) error {
 	if _, err := mail.ParseAddress(req.Email); err != nil {
-		return nil, fmt.Errorf("invalid email format")
+		return fmt.Errorf("invalid email format")
 	}
-
-	// Check if email already exists
 	existing, err := s.store.GetUserByEmail(ctx, req.Email)
-	if err != nil {
-		return nil, err
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("email already in use")
+		return fmt.Errorf("email already in use")
 	}
-
-	// Validate role
 	if req.Role != RoleAdmin && req.Role != RoleUser && req.Role != RoleReadOnly {
-		return nil, fmt.Errorf("invalid role: %s", req.Role)
+		return fmt.Errorf("invalid role: %s", req.Role)
 	}
+	return s.validatePassword(req.Password)
+}
 
-	// Validate password
-	if err := s.validatePassword(req.Password); err != nil {
+// CreateUser creates a new user (admin only)
+func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*User, error) {
+	if err := s.validateCreateUserRequest(ctx, req); err != nil {
 		return nil, err
 	}
 
@@ -138,25 +139,17 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*User,
 func (s *Service) UpdateUser(ctx context.Context, userID string, req UpdateUserRequest) (*User, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user not found")
+		}
 		return nil, err
 	}
 	if user == nil {
 		return nil, fmt.Errorf("user not found")
 	}
 
-	if req.Role != nil {
-		if *req.Role != RoleAdmin && *req.Role != RoleUser && *req.Role != RoleReadOnly {
-			return nil, fmt.Errorf("invalid role: %s", *req.Role)
-		}
-		user.Role = *req.Role
-	}
-
-	if req.GroupIDs != nil {
-		user.GroupIDs = req.GroupIDs
-	}
-
-	if req.Active != nil {
-		user.Active = *req.Active
+	if err := applyUpdateUserRequest(user, req); err != nil {
+		return nil, err
 	}
 
 	if err := s.store.UpdateUser(ctx, user); err != nil {
@@ -164,6 +157,23 @@ func (s *Service) UpdateUser(ctx context.Context, userID string, req UpdateUserR
 	}
 
 	return user, nil
+}
+
+// applyUpdateUserRequest applies the non-nil fields of req to user, validating as needed.
+func applyUpdateUserRequest(user *User, req UpdateUserRequest) error {
+	if req.Role != nil {
+		if *req.Role != RoleAdmin && *req.Role != RoleUser && *req.Role != RoleReadOnly {
+			return fmt.Errorf("invalid role: %s", *req.Role)
+		}
+		user.Role = *req.Role
+	}
+	if req.GroupIDs != nil {
+		user.GroupIDs = req.GroupIDs
+	}
+	if req.Active != nil {
+		user.Active = *req.Active
+	}
+	return nil
 }
 
 // DeleteUser removes a user (admin only)
@@ -176,7 +186,7 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 	return s.store.DeleteUser(ctx, userID)
 }
 
-// GetUser returns user info
+// GetUser returns user info. Returns (nil, pgx.ErrNoRows) if the user does not exist.
 func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
 	return s.store.GetUserByID(ctx, userID)
 }
@@ -185,6 +195,9 @@ func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
 func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("user not found")
+		}
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
@@ -228,7 +241,7 @@ func (s *Service) updateUserEmail(ctx context.Context, user *User, email string)
 		}
 		// Check email uniqueness
 		existing, err := s.store.GetUserByEmail(ctx, email)
-		if err != nil {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 		if existing != nil {

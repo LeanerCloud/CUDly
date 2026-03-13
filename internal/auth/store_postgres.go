@@ -113,8 +113,11 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 	)
 
 	if err != nil {
-		if isDuplicateKeyError(err) {
+		if isEmailDuplicateError(err) {
 			return fmt.Errorf("email already in use")
+		}
+		if isDuplicateKeyError(err) {
+			return fmt.Errorf("failed to create user: unique constraint violation: %w", err)
 		}
 		return fmt.Errorf("failed to create user: %w", err)
 	}
@@ -127,6 +130,18 @@ func isDuplicateKeyError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code == "23505"
+	}
+	return false
+}
+
+// isEmailDuplicateError returns true only when the violated constraint is the
+// users_email_key (or users_email_unique) constraint, so we don't mistakenly
+// surface "email already in use" for ID collisions or other uniqueness violations.
+func isEmailDuplicateError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return pgErr.ConstraintName == "users_email_key" ||
+			pgErr.ConstraintName == "users_email_unique"
 	}
 	return false
 }
@@ -203,6 +218,8 @@ func (s *PostgresStore) DeleteUser(ctx context.Context, userID string) error {
 
 // ListUsers lists all users
 func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
+	// LIMIT provides a safety cap against unbounded memory allocation on large installations.
+	// Pagination support should be added if this limit proves insufficient.
 	query := `
 		SELECT id, email, password_hash, salt, role, group_ids, active,
 		       mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
@@ -210,6 +227,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 		       created_at, updated_at, last_login_at
 		FROM users
 		ORDER BY created_at DESC
+		LIMIT 10000
 	`
 
 	rows, err := s.db.Query(ctx, query)
@@ -223,6 +241,9 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 		user, err := s.scanUser(rows)
 		if err != nil {
 			return nil, err
+		}
+		if user == nil {
+			continue
 		}
 		users = append(users, *user)
 	}
@@ -375,11 +396,14 @@ func (s *PostgresStore) DeleteGroup(ctx context.Context, groupID string) error {
 
 // ListGroups lists all groups
 func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
+	// LIMIT provides a safety cap against unbounded memory allocation.
+	// Pagination support should be added if this limit proves insufficient.
 	query := `
 		SELECT id, name, description, permissions, allowed_accounts,
 		       created_at, updated_at, created_by
 		FROM groups
 		ORDER BY created_at DESC
+		LIMIT 10000
 	`
 
 	rows, err := s.db.Query(ctx, query)
@@ -393,6 +417,9 @@ func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
 		group, err := s.scanGroup(rows)
 		if err != nil {
 			return nil, err
+		}
+		if group == nil {
+			continue
 		}
 		groups = append(groups, *group)
 	}
@@ -455,7 +482,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session,
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("session not found or expired")
 		}
 		return nil, fmt.Errorf("failed to get session: %w", err)
@@ -595,6 +622,9 @@ func (s *PostgresStore) ListAPIKeysByUser(ctx context.Context, userID string) ([
 		if err != nil {
 			return nil, err
 		}
+		if key == nil {
+			continue
+		}
 		keys = append(keys, key)
 	}
 
@@ -642,9 +672,12 @@ func (s *PostgresStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 // UpdateAPIKeyLastUsed atomically updates the last_used_at timestamp for an API key
 func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
 	query := `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`
-	_, err := s.db.Exec(ctx, query, keyID)
+	result, err := s.db.Exec(ctx, query, keyID)
 	if err != nil {
 		return fmt.Errorf("failed to update API key last used: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("API key not found: %s", keyID)
 	}
 	return nil
 }
@@ -703,8 +736,8 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, pgx.ErrNoRows
 		}
 		return nil, fmt.Errorf("failed to scan user: %w", err)
 	}
@@ -753,15 +786,17 @@ func (s *PostgresStore) scanGroup(scanner Scanner) (*Group, error) {
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, pgx.ErrNoRows
 		}
 		return nil, fmt.Errorf("failed to scan group: %w", err)
 	}
 
-	// Unmarshal permissions
-	if err := json.Unmarshal(permissionsJSON, &group.Permissions); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal permissions: %w", err)
+	// Unmarshal permissions — guard against NULL column, consistent with scanAPIKey
+	if len(permissionsJSON) > 0 {
+		if err := json.Unmarshal(permissionsJSON, &group.Permissions); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal permissions: %w", err)
+		}
 	}
 
 	group.AllowedAccounts = allowedAccounts
@@ -793,8 +828,8 @@ func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, pgx.ErrNoRows
 		}
 		return nil, fmt.Errorf("failed to scan API key: %w", err)
 	}
