@@ -243,8 +243,11 @@ func (c *Connection) TryAdvisoryLock(ctx context.Context, lockID int64) (bool, e
 
 // ReleaseAdvisoryLock releases a previously acquired advisory lock.
 func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
-	if _, err := c.pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockID); err != nil {
+	var released bool
+	if err := c.pool.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", lockID).Scan(&released); err != nil {
 		logging.Warnf("Failed to release advisory lock %d: %v", lockID, err)
+	} else if !released {
+		logging.Warnf("Advisory lock %d was not held by this session", lockID)
 	}
 }
 
