@@ -55,8 +55,10 @@ type PurchaseDefaults struct {
 
 // ProcessResult holds the result of processing scheduled purchases
 type ProcessResult struct {
-	Processed int `json:"processed"`
-	Executed  int `json:"executed"`
+	Processed int      `json:"processed"`
+	Executed  int      `json:"executed"`
+	Failed    int      `json:"failed"`
+	Errors    []string `json:"errors,omitempty"`
 }
 
 // NotificationResult holds the result of sending notifications
@@ -100,6 +102,8 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 	now := time.Now()
 	processed := 0
 	executed := 0
+	failed := 0
+	var errors []string
 
 	for _, exec := range executions {
 		// Check if it's time to execute
@@ -122,6 +126,8 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 			logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, err)
 			exec.Status = "failed"
 			exec.Error = err.Error()
+			failed++
+			errors = append(errors, fmt.Sprintf("%s: %v", exec.ExecutionID, err))
 		} else {
 			exec.Status = "completed"
 			completedAt := time.Now()
@@ -143,5 +149,7 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 	return &ProcessResult{
 		Processed: processed,
 		Executed:  executed,
+		Failed:    failed,
+		Errors:    errors,
 	}, nil
 }
