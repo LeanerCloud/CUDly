@@ -164,7 +164,11 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		return nil, fmt.Errorf("failed to get AWS recommendations client: %w", err)
 	}
 
-	// Build recommendation params from global config
+	// Build recommendation params from global config.
+	// Note: These params are only used in the fallback path (when GetAllRecommendations
+	// returns empty). The primary GetAllRecommendations call returns all recommendations
+	// and filtering by term/payment is handled later in convertRecommendations
+	// with a hardcoded default of term=3.
 	params := common.RecommendationParams{
 		Term:           fmt.Sprintf("%dyr", globalCfg.DefaultTerm),
 		PaymentOption:  globalCfg.DefaultPayment,
