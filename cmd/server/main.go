@@ -45,11 +45,11 @@ func main() {
 	if *task != "" {
 		timeout := getTaskTimeout()
 		taskCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
 
 		log.Printf("Running scheduled task: %s (timeout: %v)", *task, timeout)
 		taskType := server.ScheduledTaskType(*task)
 		result, err := app.HandleScheduledTask(taskCtx, taskType)
+		cancel()
 		if err != nil {
 			log.Fatalf("Scheduled task %q failed: %v", *task, err)
 		}
