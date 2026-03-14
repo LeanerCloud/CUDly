@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -109,7 +110,12 @@ func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Conf
 			}
 		}
 
-		// Attempt to create connection pool
+		// Attempt to create connection pool.
+		// Note: The context passed to pgxpool.NewWithConfig is used as-is for each attempt.
+		// If the context has a deadline shorter than the total retry window (~60s),
+		// later attempts will fail immediately due to context cancellation rather than
+		// retrying meaningfully. Callers should ensure the context deadline accounts
+		// for the full retry budget, or the retry loop provides no benefit.
 		var err error
 		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 		if err != nil {
@@ -146,6 +152,12 @@ func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
 	}
 
 	// Set pool configuration
+	if config.MaxConnections > math.MaxInt32 {
+		return nil, fmt.Errorf("MaxConnections value %d exceeds int32 max", config.MaxConnections)
+	}
+	if config.MinConnections > math.MaxInt32 {
+		return nil, fmt.Errorf("MinConnections value %d exceeds int32 max", config.MinConnections)
+	}
 	poolConfig.MaxConns = int32(config.MaxConnections)
 	poolConfig.MinConns = int32(config.MinConnections)
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
