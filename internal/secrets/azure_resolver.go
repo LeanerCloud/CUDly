@@ -97,8 +97,9 @@ func (r *AzureResolver) ListSecrets(ctx context.Context, filter string) ([]strin
 		for _, secret := range page.Value {
 			if secret.ID != nil {
 				name := secret.ID.Name()
-				// Apply filter during iteration to avoid loading all secrets into memory
-				if filter == "" || strings.Contains(name, filter) {
+				// Apply filter during iteration to avoid loading all secrets into memory.
+				// Using HasPrefix to match the documented prefix filter behavior.
+				if filter == "" || strings.HasPrefix(name, filter) {
 					secrets = append(secrets, name)
 				}
 			}

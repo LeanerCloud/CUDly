@@ -302,6 +302,8 @@ func (l *stdLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string
 	case tracelog.LogLevelDebug:
 		logging.Debugf("%s %v", msg, safeData)
 	case tracelog.LogLevelInfo:
+		// Note: Structured data is intentionally omitted at info level to reduce log verbosity.
+		// Only message is logged; use warn/error levels for structured data.
 		logging.Infof("%s", msg)
 	case tracelog.LogLevelWarn:
 		logging.Warnf("%s %v", msg, safeData)
