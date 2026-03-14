@@ -28,6 +28,12 @@ var (
 
 // initApp initializes the application using the unified server package.
 // Uses a mutex to protect against concurrent initialization.
+//
+// Note: The mutex is held for the entire initialization duration. If initialization
+// is slow (e.g., DB timeout), concurrent Lambda invocations (possible with provisioned
+// concurrency) will block until the first goroutine completes. In practice, Lambda
+// serializes cold starts, so this is not an issue. For provisioned concurrency,
+// consider implementing a leader election pattern if initialization time becomes a concern.
 func initApp(ctx context.Context) (*server.Application, error) {
 	appMu.Lock()
 	defer appMu.Unlock()
