@@ -207,8 +207,10 @@ func (m *Manager) updatePlanProgress(ctx context.Context, planID string) error {
 		return nil
 	}
 
-	// Advance ramp schedule
-	plan.RampSchedule.CurrentStep++
+	// Advance ramp schedule only if not complete
+	if !plan.RampSchedule.IsComplete() {
+		plan.RampSchedule.CurrentStep++
+	}
 
 	// Calculate next execution date
 	if !plan.RampSchedule.IsComplete() {
