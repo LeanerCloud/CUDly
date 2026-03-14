@@ -3,6 +3,8 @@ package scheduler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -14,7 +16,6 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
-	"github.com/google/uuid"
 )
 
 // SchedulerConfig holds configuration for the scheduler
@@ -344,8 +345,12 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			}
 		}
 
+		key := fmt.Sprintf("%s:%s:%s:%s:%s", providerName, rec.Service, rec.Region, rec.ResourceType, rec.PaymentOption)
+		hash := sha256.Sum256([]byte(key))
+		recordID := hex.EncodeToString(hash[:])[:16]
+
 		records = append(records, config.RecommendationRecord{
-			ID:           uuid.New().String(),
+			ID:           recordID,
 			Provider:     providerName,
 			Service:      string(rec.Service),
 			Region:       rec.Region,
