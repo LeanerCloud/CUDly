@@ -18,7 +18,12 @@ type Resolver interface {
 	// PutSecret creates or updates a secret value by ID/ARN/name
 	PutSecret(ctx context.Context, secretID string, value string) error
 
-	// ListSecrets lists available secrets (filtered by prefix if provided)
+	// ListSecrets lists available secrets.
+	// Filter behavior varies by provider:
+	//   - AWS: uses API-side substring matching (FilterNameStringTypeName)
+	//   - Azure: uses prefix matching (strings.HasPrefix)
+	//   - GCP: uses prefix matching (strings.HasPrefix)
+	//   - Env: uses prefix matching (strings.HasPrefix)
 	ListSecrets(ctx context.Context, filter string) ([]string, error)
 
 	// Close cleans up any resources
