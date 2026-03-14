@@ -110,17 +110,24 @@ export function parseQueryParams(queryString: string): Record<string, string> {
  * Build URL with query parameters
  */
 export function buildUrl(baseUrl: string, params: Record<string, string | number | boolean | null | undefined>): string {
-  const url = new URL(baseUrl, window.location.origin);
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
-      url.searchParams.set(key, String(value));
-    }
-  });
-  return url.toString();
+  try {
+    const url = new URL(baseUrl, window.location.origin);
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    });
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
 }
 
 /**
- * Deep clone an object
+ * Deep clone an object using JSON serialization.
+ * Note: This drops undefined values, converts Date to strings,
+ * and does not preserve Set/Map objects. For objects containing
+ * Set/Map, use structuredClone() instead.
  */
 export function deepClone<T>(obj: T): T {
   if (obj === null || typeof obj !== 'object') return obj;
