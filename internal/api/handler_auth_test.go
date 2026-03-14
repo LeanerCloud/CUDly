@@ -482,7 +482,8 @@ func TestHandler_forgotPassword_Success(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth}
 
-	result, err := handler.forgotPassword(ctx, `{"email": "user@example.com"}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{"email": "user@example.com"}`}
+	result, err := handler.forgotPassword(ctx, req)
 	require.NoError(t, err)
 
 	resp := result.(map[string]string)
@@ -493,7 +494,8 @@ func TestHandler_forgotPassword_NoAuthService(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{auth: nil}
 
-	result, err := handler.forgotPassword(ctx, `{"email": "user@example.com"}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{"email": "user@example.com"}`}
+	result, err := handler.forgotPassword(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "authentication service not configured")
@@ -504,7 +506,8 @@ func TestHandler_forgotPassword_InvalidBody(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	handler := &Handler{auth: mockAuth}
 
-	result, err := handler.forgotPassword(ctx, `{invalid json}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{invalid json}`}
+	result, err := handler.forgotPassword(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid request body")
@@ -519,7 +522,8 @@ func TestHandler_forgotPassword_ErrorStillReturnsSuccess(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth}
 
-	result, err := handler.forgotPassword(ctx, `{"email": "nonexistent@example.com"}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{"email": "nonexistent@example.com"}`}
+	result, err := handler.forgotPassword(ctx, req)
 	require.NoError(t, err) // Should still succeed to prevent enumeration
 
 	resp := result.(map[string]string)
@@ -537,7 +541,8 @@ func TestHandler_resetPassword_Success(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth}
 
-	result, err := handler.resetPassword(ctx, `{"token": "reset-token", "new_password": "newpassword123"}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "reset-token", "new_password": "newpassword123"}`}
+	result, err := handler.resetPassword(ctx, req)
 	require.NoError(t, err)
 
 	resp := result.(map[string]string)
@@ -548,7 +553,8 @@ func TestHandler_resetPassword_NoAuthService(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{auth: nil}
 
-	result, err := handler.resetPassword(ctx, `{"token": "reset-token", "new_password": "newpassword123"}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "reset-token", "new_password": "newpassword123"}`}
+	result, err := handler.resetPassword(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "authentication service not configured")
@@ -559,7 +565,8 @@ func TestHandler_resetPassword_InvalidBody(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	handler := &Handler{auth: mockAuth}
 
-	result, err := handler.resetPassword(ctx, `{invalid json}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{invalid json}`}
+	result, err := handler.resetPassword(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid request body")
@@ -573,7 +580,8 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth}
 
-	result, err := handler.resetPassword(ctx, `{"token": "bad-token", "new_password": "newpassword123"}`)
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "bad-token", "new_password": "newpassword123"}`}
+	result, err := handler.resetPassword(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid or expired token")

@@ -125,13 +125,13 @@ func (h *Handler) setupAdmin(ctx context.Context, req *events.LambdaFunctionURLR
 	return response, nil
 }
 
-func (h *Handler) forgotPassword(ctx context.Context, body string) (any, error) {
+func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
 	var pwdReq PasswordResetRequest
-	if err := json.Unmarshal([]byte(body), &pwdReq); err != nil {
+	if err := json.Unmarshal([]byte(req.Body), &pwdReq); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -156,13 +156,13 @@ func (h *Handler) forgotPassword(ctx context.Context, body string) (any, error) 
 	return map[string]string{"status": "if the email exists, a reset link has been sent"}, nil
 }
 
-func (h *Handler) resetPassword(ctx context.Context, body string) (any, error) {
+func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
 	var pwdResetReq PasswordResetConfirm
-	if err := json.Unmarshal([]byte(body), &pwdResetReq); err != nil {
+	if err := json.Unmarshal([]byte(req.Body), &pwdResetReq); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 

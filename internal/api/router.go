@@ -343,11 +343,11 @@ func (r *Router) setupAdminHandler(ctx context.Context, req *events.LambdaFuncti
 }
 
 func (r *Router) forgotPasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.forgotPassword(ctx, req.Body)
+	return r.h.forgotPassword(ctx, req)
 }
 
 func (r *Router) resetPasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.resetPassword(ctx, req.Body)
+	return r.h.resetPassword(ctx, req)
 }
 
 func (r *Router) updateProfileHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

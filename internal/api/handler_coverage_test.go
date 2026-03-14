@@ -728,9 +728,8 @@ func TestHandler_forgotPassword_SuccessOnError(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth}
 
-	body := `{"email": "test@example.com"}`
-
-	result, err := handler.forgotPassword(ctx, body)
+	req := &events.LambdaFunctionURLRequest{Body: `{"email": "test@example.com"}`}
+	result, err := handler.forgotPassword(ctx, req)
 	require.NoError(t, err)
 
 	response, ok := result.(map[string]string)
