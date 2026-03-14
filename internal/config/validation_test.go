@@ -15,8 +15,10 @@ func TestGlobalConfig_Validate(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name:    "valid empty config",
-			config:  GlobalConfig{},
+			name: "valid empty config",
+			config: GlobalConfig{
+				DefaultTerm: 3,
+			},
 			wantErr: false,
 		},
 		{
@@ -64,6 +66,7 @@ func TestGlobalConfig_Validate(t *testing.T) {
 		{
 			name: "invalid payment option",
 			config: GlobalConfig{
+				DefaultTerm:    3,
 				DefaultPayment: "invalid-payment",
 			},
 			wantErr: true,
@@ -72,6 +75,7 @@ func TestGlobalConfig_Validate(t *testing.T) {
 		{
 			name: "coverage too low",
 			config: GlobalConfig{
+				DefaultTerm:     3,
 				DefaultCoverage: -1,
 			},
 			wantErr: true,
@@ -80,6 +84,7 @@ func TestGlobalConfig_Validate(t *testing.T) {
 		{
 			name: "coverage too high",
 			config: GlobalConfig{
+				DefaultTerm:     3,
 				DefaultCoverage: 101,
 			},
 			wantErr: true,
@@ -88,6 +93,7 @@ func TestGlobalConfig_Validate(t *testing.T) {
 		{
 			name: "valid no-upfront payment",
 			config: GlobalConfig{
+				DefaultTerm:    3,
 				DefaultPayment: "no-upfront",
 			},
 			wantErr: false,
@@ -95,6 +101,7 @@ func TestGlobalConfig_Validate(t *testing.T) {
 		{
 			name: "valid partial-upfront payment",
 			config: GlobalConfig{
+				DefaultTerm:    3,
 				DefaultPayment: "partial-upfront",
 			},
 			wantErr: false,

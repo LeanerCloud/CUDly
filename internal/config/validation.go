@@ -24,7 +24,7 @@ func (c *GlobalConfig) Validate() error {
 	if err := c.validateNotificationEmail(); err != nil {
 		return err
 	}
-	if err := validateTerm(c.DefaultTerm); err != nil {
+	if err := validateGlobalTerm(c.DefaultTerm); err != nil {
 		return err
 	}
 	if err := validatePaymentOption(c.DefaultPayment); err != nil {
@@ -53,9 +53,17 @@ func (c *GlobalConfig) validateNotificationEmail() error {
 	return nil
 }
 
-// validateTerm validates that the term is 1 or 3 years (or 0 for not set)
+// validateTerm validates that the term is 1 or 3 years (or 0 for not set - service-level only)
 func validateTerm(term int) error {
 	if term != 0 && term != 1 && term != 3 {
+		return fmt.Errorf("default term must be 1 or 3 years, got: %d", term)
+	}
+	return nil
+}
+
+// validateGlobalTerm validates that the term is 1 or 3 years (0 is not allowed for global config)
+func validateGlobalTerm(term int) error {
+	if term != 1 && term != 3 {
 		return fmt.Errorf("default term must be 1 or 3 years, got: %d", term)
 	}
 	return nil
