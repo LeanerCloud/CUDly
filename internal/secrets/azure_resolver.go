@@ -96,22 +96,13 @@ func (r *AzureResolver) ListSecrets(ctx context.Context, filter string) ([]strin
 
 		for _, secret := range page.Value {
 			if secret.ID != nil {
-				// Extract secret name from ID (format: https://{vault}.vault.azure.net/secrets/{name})
-				// For simplicity, append the full ID
-				secrets = append(secrets, secret.ID.Name())
+				name := secret.ID.Name()
+				// Apply filter during iteration to avoid loading all secrets into memory
+				if filter == "" || strings.Contains(name, filter) {
+					secrets = append(secrets, name)
+				}
 			}
 		}
-	}
-
-	// Apply filter if provided (simple substring match)
-	if filter != "" {
-		filtered := make([]string, 0)
-		for _, secret := range secrets {
-			if strings.Contains(secret, filter) {
-				filtered = append(filtered, secret)
-			}
-		}
-		return filtered, nil
 	}
 
 	return secrets, nil
