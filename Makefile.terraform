@@ -1,7 +1,9 @@
 # Terraform Deployment Makefile
 # Simplified commands for common Terraform operations
 
-.PHONY: help deploy plan destroy profile-new profile-list clean
+.PHONY: help deploy plan destroy profile-new profile-list profile-show clean clean-locks \
+        output aws-dev aws-prod azure-dev gcp-dev quick-plan aws-dev-plan quick-deploy \
+        validate fmt state-list state-show docker-build docker-skip frontend-only frontend-skip
 
 # Default profile settings
 PROVIDER ?= aws
@@ -74,12 +76,16 @@ profile-show: ## Show current profile contents
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@cat terraform/profiles/$(PROVIDER)/$(PROFILE).tfvars 2>/dev/null || echo "Profile not found"
 
-clean: ## Clean Terraform cache and state files
+clean: ## Clean Terraform cache and state files (preserves .terraform.lock.hcl)
 	@echo "🧹 Cleaning Terraform cache files..."
 	@find terraform/environments -name ".terraform" -type d -exec rm -rf {} + 2>/dev/null || true
 	@find terraform/environments -name "*.tfstate.backup" -type f -delete 2>/dev/null || true
-	@find terraform/environments -name ".terraform.lock.hcl" -type f -delete 2>/dev/null || true
 	@echo "✅ Clean complete"
+
+clean-locks: ## Delete .terraform.lock.hcl files (causes provider re-resolution on next init)
+	@echo "⚠️  Deleting lock files — run terraform init to re-resolve providers"
+	@find terraform/environments -name ".terraform.lock.hcl" -type f -delete 2>/dev/null || true
+	@echo "✅ Lock files deleted"
 
 # Convenience shortcuts
 aws-dev: ## Deploy to AWS dev

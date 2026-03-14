@@ -85,7 +85,7 @@ func main() {
 			ReservedIDs:      ids,
 			TargetOfferingID: *targetOffering,
 			TargetCount:      int32(*targetCount),
-			DryRun:           false, // false = real quote; true would only check IAM permissions
+			DryRun:           false, // IAMCheckOnly: false = real quote, true = only verify IAM permissions
 		})
 		if err != nil {
 			o.Error = err.Error()

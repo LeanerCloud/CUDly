@@ -27,6 +27,9 @@ type CleanupResult struct {
 func cleanupExpiredRecords(ctx context.Context, event CleanupEvent) (*CleanupResult, error) {
 	log.Printf("Starting cleanup job (dryRun=%v)", event.DryRun)
 
+	// A new DB connection is opened per invocation (no connection reuse across warm starts).
+	// This is intentional: the cleanup Lambda runs infrequently and the simpler, stateless
+	// design is preferred over the shared-connection pattern used in cmd/lambda/main.go.
 	db, err := initDB(ctx)
 	if err != nil {
 		return nil, err

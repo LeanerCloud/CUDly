@@ -35,7 +35,7 @@ RUN MIGRATE_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") 
     fi && \
     curl -Lo migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-${MIGRATE_ARCH}.tar.gz" && \
     echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c - && \
-    tar xvzf migrate.tar.gz && \
+    tar xzf migrate.tar.gz && \
     mv migrate /usr/local/bin/migrate && \
     chmod +x /usr/local/bin/migrate && \
     rm migrate.tar.gz
@@ -67,7 +67,7 @@ RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
     -o /app/cudly \
     ./cmd/server
 
-# Binary built successfully for ${TARGETOS}/${TARGETARCH}
+# Binary built successfully
 
 # ==============================================
 # Frontend build stage
