@@ -126,7 +126,19 @@ func (s *FrontendService) uploadDirectory(ctx context.Context, distDir, bucketNa
 }
 
 // FindFrontendDir finds the frontend directory.
+// Search order:
+//   - Relative paths from current directory (frontend, ../frontend, ../../frontend)
+//   - Relative to executable directory (for deployed binaries)
+//   - CUDLY_FRONTEND_DIR environment variable (highest priority)
 func (s *FrontendService) FindFrontendDir() (string, error) {
+	// Check environment variable first for deployed binaries
+	if envPath := os.Getenv("CUDLY_FRONTEND_DIR"); envPath != "" {
+		packageJSON := filepath.Join(envPath, "package.json")
+		if _, err := os.Stat(packageJSON); err == nil {
+			return filepath.Abs(envPath)
+		}
+	}
+
 	paths := []string{
 		"frontend",
 		"../frontend",
@@ -166,18 +178,22 @@ func (s *FrontendService) InvalidateCloudFrontCache(ctx context.Context, bucketN
 }
 
 func (s *FrontendService) findDistributionForBucket(ctx context.Context, bucketName string) (string, error) {
-	result, err := s.CloudFrontClient.ListDistributions(ctx, &cloudfront.ListDistributionsInput{})
-	if err != nil {
-		return "", fmt.Errorf("failed to list distributions: %w", err)
-	}
+	paginator := cloudfront.NewListDistributionsPaginator(s.CloudFrontClient, &cloudfront.ListDistributionsInput{})
 
-	if result.DistributionList == nil || result.DistributionList.Items == nil {
-		return "", nil
-	}
+	for paginator.HasMorePages() {
+		result, err := paginator.NextPage(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to list distributions: %w", err)
+		}
 
-	for _, dist := range result.DistributionList.Items {
-		if distID := s.checkDistributionOrigins(dist, bucketName); distID != "" {
-			return distID, nil
+		if result.DistributionList == nil || result.DistributionList.Items == nil {
+			continue
+		}
+
+		for _, dist := range result.DistributionList.Items {
+			if distID := s.checkDistributionOrigins(dist, bucketName); distID != "" {
+				return distID, nil
+			}
 		}
 	}
 
