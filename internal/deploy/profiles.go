@@ -3,6 +3,7 @@ package deploy
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,6 +44,7 @@ type DeploymentConfig struct {
 func GetConfigPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		log.Printf("WARNING: could not determine home directory: %v", err)
 		return ""
 	}
 	return filepath.Join(homeDir, ".cudly", "deployment.yaml")
@@ -52,6 +54,7 @@ func GetConfigPath() string {
 func GetConfigDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		log.Printf("WARNING: could not determine home directory: %v", err)
 		return ""
 	}
 	return filepath.Join(homeDir, ".cudly")
