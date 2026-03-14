@@ -177,7 +177,10 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		return nil, fmt.Errorf("failed to get AWS recommendations: %w", err)
 	}
 
-	// Also try with params for any specific filtering
+	// Also try with params for any specific filtering.
+	// Note: This fallback is intentionally silent on error - if both calls
+	// fail, we proceed with an empty list and log a warning.
+	// This ensures the scheduler continues even if recommendations are unavailable.
 	if len(recommendations) == 0 {
 		recommendations, err = recClient.GetRecommendations(ctx, params)
 		if err != nil {
