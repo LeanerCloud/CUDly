@@ -196,7 +196,11 @@ func processRecommendation(ctx context.Context, params RunAutoExchangeParams, re
 
 	if params.Config.Mode == "manual" {
 		outcome := processManualExchange(ctx, params, rec, offeringID, paymentDueStr)
-		result.Pending = append(result.Pending, outcome)
+		if outcome.Error != "" {
+			result.Failed = append(result.Failed, outcome)
+		} else {
+			result.Pending = append(result.Pending, outcome)
+		}
 	} else {
 		outcome := processAutoExchange(ctx, params, rec, offeringID, paymentDueStr, perExchangeCap)
 		if outcome.Error != "" {
@@ -355,7 +359,10 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		return outcome
 	}
 
-	paymentDue, _ := ParseDecimalRat(paymentDueStr)
+	paymentDue, err := ParseDecimalRat(paymentDueStr)
+	if err != nil {
+		logging.Warnf("failed to parse payment due %q: %v, using zero", paymentDueStr, err)
+	}
 	if paymentDue == nil {
 		paymentDue = new(big.Rat)
 	}
