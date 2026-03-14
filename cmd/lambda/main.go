@@ -58,7 +58,7 @@ func Handler(ctx context.Context, rawEvent json.RawMessage) (interface{}, error)
 	// Initialize app on first request (lazy initialization)
 	application, err := initApp(ctx)
 	if err != nil {
-		log.Printf("Failed to initialize application: %v", err)
+		// Lambda runtime will log the returned error, so no need to log here
 		return nil, fmt.Errorf("initialization failed: %w", err)
 	}
 
