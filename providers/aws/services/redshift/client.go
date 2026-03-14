@@ -4,6 +4,7 @@ package redshift
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -253,15 +254,40 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 	return details, nil
 }
 
-// GetValidResourceTypes returns valid Redshift node types (static list)
+// GetValidResourceTypes returns valid Redshift node types by querying the API
 func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	return []string{
-		"dc2.large",
-		"dc2.8xlarge",
-		"ra3.xlplus",
-		"ra3.4xlarge",
-		"ra3.16xlarge",
-	}, nil
+	nodeTypes := make(map[string]bool)
+	var marker *string
+
+	for {
+		input := &redshift.DescribeReservedNodeOfferingsInput{
+			MaxRecords: aws.Int32(100),
+			Marker:     marker,
+		}
+
+		result, err := c.client.DescribeReservedNodeOfferings(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe offerings: %w", err)
+		}
+
+		for _, offering := range result.ReservedNodeOfferings {
+			if offering.NodeType != nil {
+				nodeTypes[*offering.NodeType] = true
+			}
+		}
+
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+			break
+		}
+		marker = result.Marker
+	}
+
+	types := make([]string, 0, len(nodeTypes))
+	for nodeType := range nodeTypes {
+		types = append(types, nodeType)
+	}
+	sort.Strings(types)
+	return types, nil
 }
 
 // getTermMonthsFromDuration converts duration in seconds to months

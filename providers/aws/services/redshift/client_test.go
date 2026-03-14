@@ -175,13 +175,27 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 }
 
 func TestClient_GetValidResourceTypes(t *testing.T) {
-	client := &Client{region: "us-east-1"}
+	mockRS := new(MockRedshiftClient)
+	client := &Client{
+		client: mockRS,
+		region: "us-east-1",
+	}
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{NodeType: aws.String("dc2.large")},
+				{NodeType: aws.String("dc2.8xlarge")},
+				{NodeType: aws.String("ra3.xlplus")},
+				{NodeType: aws.String("ra3.4xlarge")},
+				{NodeType: aws.String("ra3.16xlarge")},
+			},
+		}, nil)
 
 	result, err := client.GetValidResourceTypes(context.Background())
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result)
-	// Check for expected node types from the static list
 	assert.Contains(t, result, "dc2.large")
 	assert.Contains(t, result, "dc2.8xlarge")
 	assert.Contains(t, result, "ra3.xlplus")
