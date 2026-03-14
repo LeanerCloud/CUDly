@@ -30,16 +30,16 @@ export function setCurrentProvider(provider: AppState['currentProvider']) {
   state.currentProvider = provider;
 }
 
-export function getRecommendations() {
-  return state.currentRecommendations;
+export function getRecommendations(): AppState['currentRecommendations'] {
+  return [...state.currentRecommendations];
 }
 
 export function setRecommendations(recs: AppState['currentRecommendations']) {
   state.currentRecommendations = recs;
 }
 
-export function getSelectedRecommendations() {
-  return state.selectedRecommendations;
+export function getSelectedRecommendations(): ReadonlySet<number> {
+  return new Set(state.selectedRecommendations);
 }
 
 export function clearSelectedRecommendations() {
