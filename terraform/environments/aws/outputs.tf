@@ -111,7 +111,7 @@ output "fargate_log_group_name" {
 # Unified API endpoint output
 output "api_endpoint" {
   description = "API endpoint URL (Lambda or Fargate)"
-  value       = var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : module.compute_fargate[0].api_url
+  value       = var.compute_platform == "lambda" ? try(module.compute_lambda[0].function_url, null) : try(module.compute_fargate[0].api_url, null)
 }
 
 # ==============================================
@@ -219,13 +219,13 @@ output "quick_start_commands" {
   description = "Quick start commands for common operations"
   value       = <<-EOT
     # Access the frontend
-    open ${var.enable_cdn ? module.frontend[0].frontend_url : var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : "http://${module.compute_fargate[0].alb_dns_name}"}
+    open ${var.enable_cdn ? try(module.frontend[0].frontend_url, "") : var.compute_platform == "lambda" ? try(module.compute_lambda[0].function_url, "") : "http://${try(module.compute_fargate[0].alb_dns_name, "")}"}
 
     # Test the API health check
-    curl ${var.compute_platform == "lambda" ? module.compute_lambda[0].function_url : module.compute_fargate[0].api_url}/health
+    curl ${var.compute_platform == "lambda" ? try(module.compute_lambda[0].function_url, "") : try(module.compute_fargate[0].api_url, "")}/health
 
     # View Lambda logs (if using Lambda)
-    ${var.compute_platform == "lambda" ? "aws logs tail ${module.compute_lambda[0].log_group_name} --follow" : "N/A"}
+    ${var.compute_platform == "lambda" ? "aws logs tail ${try(module.compute_lambda[0].log_group_name, "")} --follow" : "N/A"}
 
     # Connect to database (requires bastion or VPN)
     psql "postgresql://${var.database_username}@${module.database.proxy_endpoint != null ? module.database.proxy_endpoint : module.database.instance_address}:5432/${module.database.database_name}?sslmode=require"
@@ -234,6 +234,6 @@ output "quick_start_commands" {
     aws secretsmanager get-secret-value --secret-id ${module.database.password_secret_name} --query SecretString --output text
 
     # Update Lambda function image
-    ${var.compute_platform == "lambda" ? "aws lambda update-function-code --function-name ${module.compute_lambda[0].function_name} --image-uri NEW_IMAGE_URI" : "N/A"}
+    ${var.compute_platform == "lambda" ? "aws lambda update-function-code --function-name ${try(module.compute_lambda[0].function_name, "")} --image-uri NEW_IMAGE_URI" : "N/A"}
   EOT
 }
