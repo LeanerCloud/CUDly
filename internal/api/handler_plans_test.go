@@ -593,7 +593,7 @@ func TestHandler_patchPlan_NotFound(t *testing.T) {
 	result, err := handler.patchPlan(ctx, req, "99999999-9999-9999-9999-999999999999")
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "plan not found")
+	assert.Contains(t, err.Error(), "failed to get plan")
 }
 
 func TestHandler_patchPlan_NilPlan(t *testing.T) {

@@ -105,8 +105,9 @@ func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapsh
 				snapshot.ID = uuid.New().String()
 			}
 
-			// Marshal metadata
-			var metadataJSON any
+			// Marshal metadata. Use []byte so pgx transmits it as a JSON value
+			// for the jsonb column rather than as a bytea literal.
+			var metadataJSON []byte
 			if snapshot.Metadata != nil {
 				data, err := json.Marshal(snapshot.Metadata)
 				if err != nil {

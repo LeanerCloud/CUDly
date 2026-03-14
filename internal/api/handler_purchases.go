@@ -132,6 +132,10 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, fmt.Errorf("execution not found: %s", executionID)
 	}
 
+	if execution.Status != "paused" {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be resumed from status %q (only 'paused' executions can be resumed)", executionID, execution.Status))
+	}
+
 	execution.Status = "pending"
 	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
 		return nil, fmt.Errorf("failed to resume execution: %w", err)
@@ -158,6 +162,11 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	}
 	if execution == nil {
 		return nil, fmt.Errorf("execution not found: %s", executionID)
+	}
+
+	// Only allow transitioning from pending or paused to running
+	if execution.Status != "pending" && execution.Status != "paused" {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be run from status %q (only 'pending' or 'paused' executions can be started)", executionID, execution.Status))
 	}
 
 	// Set status to running and trigger execution

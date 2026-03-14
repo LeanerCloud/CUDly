@@ -126,7 +126,7 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 
 	// Validate the configuration
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("validation error: %w", err)
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
 	if err := h.config.SaveServiceConfig(ctx, &cfg); err != nil {

@@ -119,7 +119,7 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 	// Fetch existing plan to preserve data not sent in request
 	existingPlan, err := h.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
-		return nil, fmt.Errorf("plan not found: %s", planID)
+		return nil, fmt.Errorf("failed to get plan %s: %w", planID, err)
 	}
 
 	// Create new plan from request
@@ -319,10 +319,10 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 
 	plan, err := h.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
-		return nil, fmt.Errorf("plan not found: %s", planID)
+		return nil, fmt.Errorf("failed to get plan %s: %w", planID, err)
 	}
 	if plan == nil {
-		return nil, fmt.Errorf("plan not found: %s", planID)
+		return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
 	}
 
 	if err := applyPatchFields(plan, req); err != nil {

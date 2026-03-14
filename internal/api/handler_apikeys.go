@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -59,7 +60,7 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	if h.rateLimiter != nil {
 		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if err != nil {
-			// Log but continue on rate limiter errors
+			logging.Warnf("rate limiter error for user %s on admin operation: %v", session.UserID, err)
 		} else if !allowed {
 			return nil, NewClientError(429, "too many requests, please slow down")
 		}

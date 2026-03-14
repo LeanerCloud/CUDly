@@ -451,6 +451,10 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		region = "us-east-1"
 	}
 
+	if globalCfg.RIExchangeMaxPerExchangeUSD == 0 {
+		return h.failExchange(ctx, id, "per-exchange spending cap is not configured (RIExchangeMaxPerExchangeUSD is 0)")
+	}
+
 	perExchangeCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxPerExchangeUSD)
 	exchangeID, _, execErr := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
 		Region:           region,
@@ -474,12 +478,16 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 // Returns an empty string if within cap, or a reason string if exceeded.
 func checkDailyCap(dailySpendStr, paymentDueStr string, maxDailyUSD float64) string {
 	dailyCap := new(big.Rat).SetFloat64(maxDailyUSD)
-	dailySpent, _ := exchange.ParseDecimalRat(dailySpendStr)
-	if dailySpent == nil {
-		dailySpent = new(big.Rat)
+	dailySpent, err := exchange.ParseDecimalRat(dailySpendStr)
+	if err != nil || dailySpent == nil {
+		// A parse failure means we cannot determine today's spend; treat as a cap
+		// check failure to avoid under-counting spend (fail-safe).
+		logging.Warnf("checkDailyCap: failed to parse daily spend string %q: %v; blocking exchange to avoid exceeding cap", dailySpendStr, err)
+		return fmt.Sprintf("daily spend check failed: could not parse today's spend value %q", dailySpendStr)
 	}
-	paymentDue, _ := exchange.ParseDecimalRat(paymentDueStr)
-	if paymentDue == nil {
+	paymentDue, err := exchange.ParseDecimalRat(paymentDueStr)
+	if err != nil || paymentDue == nil {
+		logging.Warnf("checkDailyCap: failed to parse payment due string %q: %v; treating as $0", paymentDueStr, err)
 		paymentDue = new(big.Rat)
 	}
 
