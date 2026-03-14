@@ -243,12 +243,21 @@ func (s *FrontendService) EmptyBucket(ctx context.Context, bucketName string) er
 			objects = append(objects, s3types.ObjectIdentifier{Key: obj.Key})
 		}
 
-		_, err = s.S3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		deleteResult, err := s.S3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(bucketName),
 			Delete: &s3types.Delete{Objects: objects},
 		})
 		if err != nil {
 			return err
+		}
+
+		// Check for per-object errors
+		if len(deleteResult.Errors) > 0 {
+			var errMsgs []string
+			for _, delErr := range deleteResult.Errors {
+				errMsgs = append(errMsgs, *delErr.Key+": "+*delErr.Message)
+			}
+			return fmt.Errorf("failed to delete some objects: %s", strings.Join(errMsgs, "; "))
 		}
 
 		if !aws.ToBool(result.IsTruncated) {
