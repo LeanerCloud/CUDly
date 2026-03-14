@@ -189,8 +189,9 @@ func (s *FrontendService) checkDistributionOrigins(dist cftypes.DistributionSumm
 		return ""
 	}
 
+	expectedDomain := bucketName + ".s3."
 	for _, origin := range dist.Origins.Items {
-		if origin.DomainName != nil && strings.Contains(*origin.DomainName, bucketName) {
+		if origin.DomainName != nil && strings.HasPrefix(*origin.DomainName, expectedDomain) {
 			return *dist.Id
 		}
 	}
