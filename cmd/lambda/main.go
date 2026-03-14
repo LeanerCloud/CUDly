@@ -42,7 +42,9 @@ func initApp(ctx context.Context) (*server.Application, error) {
 		return app, nil
 	}
 
-	// Set version for the application
+	// Set version for the application.
+	// Note: os.Setenv is not thread-safe, but Lambda serializes cold starts so this is safe.
+	// Consider passing version through a struct field for multi-threaded environments.
 	os.Setenv("VERSION", Version)
 
 	log.Printf("CUDly Lambda Handler starting, version: %s", Version)

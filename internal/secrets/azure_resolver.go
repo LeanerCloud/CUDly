@@ -18,8 +18,10 @@ type AzureResolver struct {
 
 // NewAzureResolver creates a new Azure Key Vault resolver
 func NewAzureResolver(ctx context.Context, vaultURL string) (*AzureResolver, error) {
-	// Create a credential using DefaultAzureCredential
-	// This supports multiple authentication methods (managed identity, environment variables, Azure CLI, etc.)
+	// Create a credential using DefaultAzureCredential.
+	// Note: azidentity.NewDefaultAzureCredential does not accept a context parameter,
+	// so any deadline set on ctx has no effect on credential acquisition.
+	// This is an SDK limitation.
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Azure credential: %w", err)
