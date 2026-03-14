@@ -4,6 +4,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -97,21 +98,27 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 
 	// Send notification if we have recommendations
 	if len(allRecommendations) > 0 && totalSavings > 0 {
+		// Sort by savings descending to show top recommendations in email
+		sort.Slice(allRecommendations, func(i, j int) bool {
+			return allRecommendations[i].Savings > allRecommendations[j].Savings
+		})
+
 		data := email.NotificationData{
 			DashboardURL: s.dashboardURL,
 			TotalSavings: totalSavings,
 		}
 		for _, rec := range allRecommendations {
-			if len(data.Recommendations) < 10 { // Limit to top 10 in email
-				data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
-					Service:        rec.Service,
-					ResourceType:   rec.ResourceType,
-					Engine:         rec.Engine,
-					Region:         rec.Region,
-					Count:          rec.Count,
-					MonthlySavings: rec.Savings,
-				})
+			if len(data.Recommendations) >= 10 { // Limit to top 10 in email
+				break
 			}
+			data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
+				Service:        rec.Service,
+				ResourceType:   rec.ResourceType,
+				Engine:         rec.Engine,
+				Region:         rec.Region,
+				Count:          rec.Count,
+				MonthlySavings: rec.Savings,
+			})
 		}
 
 		if err := s.email.SendNewRecommendationsNotification(ctx, data); err != nil {
