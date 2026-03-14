@@ -182,7 +182,8 @@ export function getStatusBadge(enabled: boolean, autoPurchase: boolean): StatusB
 }
 
 /**
- * Calculate payback period in months
+ * Calculate payback period in months.
+ * Returns 0 when upfrontCost <= 0 (immediate payback) or monthlySavings <= 0 (no savings).
  */
 export function calculatePaybackMonths(upfrontCost: number, monthlySavings: number): number {
   if (!monthlySavings || monthlySavings <= 0) return 0;

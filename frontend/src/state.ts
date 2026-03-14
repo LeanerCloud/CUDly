@@ -55,6 +55,7 @@ export function removeSelectedRecommendation(index: number) {
 }
 
 export function getSavingsChart() {
+  // Returns chart instance by reference. Callers may need to call methods on it.
   return state.savingsChart;
 }
 
