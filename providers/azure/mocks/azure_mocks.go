@@ -55,9 +55,9 @@ func (p *MockReservationsDetailsPager) More() bool {
 }
 
 // NextPage returns the next page of results
-func (p *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error) {
+func (p *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error) {
 	p.pageCount++
-	return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+	return armconsumption.ReservationsDetailsClientListResponse{
 		ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 			Value: p.Results,
 		},

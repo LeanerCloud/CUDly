@@ -43,7 +43,7 @@ func (m *MockRecommendationsPager) NextPage(ctx context.Context) (armconsumption
 
 // MockReservationsDetailsPager mocks the ReservationsDetailsPager interface
 type MockReservationsDetailsPager struct {
-	pages []armconsumption.ReservationsDetailsClientListByReservationOrderResponse
+	pages []armconsumption.ReservationsDetailsClientListResponse
 	index int
 	err   error
 }
@@ -52,12 +52,12 @@ func (m *MockReservationsDetailsPager) More() bool {
 	return m.index < len(m.pages)
 }
 
-func (m *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error) {
+func (m *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error) {
 	if m.err != nil {
-		return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{}, m.err
+		return armconsumption.ReservationsDetailsClientListResponse{}, m.err
 	}
 	if m.index >= len(m.pages) {
-		return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{}, errors.New("no more pages")
+		return armconsumption.ReservationsDetailsClientListResponse{}, errors.New("no more pages")
 	}
 	page := m.pages[m.index]
 	m.index++
@@ -465,7 +465,7 @@ func TestCacheClient_GetExistingCommitments_WithMockPager(t *testing.T) {
 
 	// Create mock pager with Redis commitment
 	mockPager := &MockReservationsDetailsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{
 				ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 					Value: []*armconsumption.ReservationDetail{
@@ -502,7 +502,7 @@ func TestCacheClient_GetExistingCommitments_FilterNonRedis(t *testing.T) {
 	reservationID2 := "test-reservation-2"
 
 	mockPager := &MockReservationsDetailsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{
 				ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 					Value: []*armconsumption.ReservationDetail{
@@ -538,7 +538,7 @@ func TestCacheClient_GetExistingCommitments_NilProperties(t *testing.T) {
 
 	// Test that nil properties are handled gracefully
 	mockPager := &MockReservationsDetailsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{
 				ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 					Value: []*armconsumption.ReservationDetail{
@@ -564,7 +564,7 @@ func TestCacheClient_GetExistingCommitments_PagerError(t *testing.T) {
 
 	// Test that pager errors are handled gracefully
 	mockPager := &MockReservationsDetailsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{},
 		},
 		err: errors.New("API error"),

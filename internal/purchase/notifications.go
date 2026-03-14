@@ -79,11 +79,14 @@ func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.Purchas
 		return false
 	}
 
-	// Update notification sent time
+	// Update notification sent time. If this fails the suppression timestamp is
+	// not persisted, so the next run would resend — return false to avoid
+	// double-counting and let the caller decide whether to retry.
 	now := time.Now()
 	plan.LastNotificationSent = &now
 	if err := m.config.UpdatePurchasePlan(ctx, plan); err != nil {
-		logging.Errorf("Failed to update plan: %v", err)
+		logging.Errorf("Failed to update plan notification timestamp: %v", err)
+		return false
 	}
 
 	return true

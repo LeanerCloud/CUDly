@@ -34,7 +34,7 @@ type RecommendationsPager interface {
 // ReservationsDetailsPager interface for reservations details pager (enables mocking)
 type ReservationsDetailsPager interface {
 	More() bool
-	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error)
 }
 
 // CapabilitiesClient interface for SQL capabilities (enables mocking)
@@ -177,7 +177,7 @@ func (c *DatabaseClient) createReservationsPager() (ReservationsDetailsPager, er
 	}
 
 	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
 // collectSQLReservations collects SQL Database reservations from the pager

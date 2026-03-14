@@ -29,7 +29,7 @@ type RecommendationsPager interface {
 // ReservationsDetailsPager defines the interface for paging through reservation details
 type ReservationsDetailsPager interface {
 	More() bool
-	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error)
 }
 
 // ResourceSKUsPager defines the interface for paging through resource SKUs
@@ -177,7 +177,7 @@ func (c *ComputeClient) createReservationsPager() (ReservationsDetailsPager, err
 	}
 
 	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
 // collectVMReservations collects VM reservations from the pager

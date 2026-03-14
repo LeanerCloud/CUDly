@@ -34,7 +34,7 @@ type RecommendationsPager interface {
 // ReservationsDetailsPager interface for reservations details pager (enables mocking)
 type ReservationsDetailsPager interface {
 	More() bool
-	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error)
 }
 
 // CosmosAccountsPager interface for Cosmos DB accounts pager (enables mocking)
@@ -178,7 +178,7 @@ func (c *CosmosDBClient) createReservationsPager() (ReservationsDetailsPager, er
 	}
 
 	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000", &armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
 // collectCosmosReservations collects Cosmos DB reservations from the pager
