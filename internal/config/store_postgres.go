@@ -919,7 +919,7 @@ func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RI
 	}
 
 	if len(records) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("ri exchange record not found: %s", id)
 	}
 
 	return &records[0], nil
@@ -943,7 +943,7 @@ func (s *PostgresStore) GetRIExchangeRecordByToken(ctx context.Context, token st
 	}
 
 	if len(records) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("ri exchange record not found for token")
 	}
 
 	return &records[0], nil
@@ -968,6 +968,32 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 
 // TransitionRIExchangeStatus atomically transitions an RI exchange record status
 func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*RIExchangeRecord, error) {
+	// First check if the record exists
+	checkQuery := `SELECT status FROM ri_exchange_history WHERE id = $1`
+	var currentStatus string
+	err := s.db.QueryRow(ctx, checkQuery, id).Scan(&currentStatus)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("ri exchange record not found: %s", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to check ri exchange status: %w", err)
+	}
+
+	if currentStatus != fromStatus {
+		return nil, fmt.Errorf("ri exchange status transition failed: expected status %q but current status is %q", fromStatus, currentStatus)
+	}
+
+	// Check if expired
+	expiredQuery := `SELECT 1 FROM ri_exchange_history WHERE id = $1 AND expires_at IS NOT NULL AND expires_at <= NOW()`
+	var isExpired int
+	err = s.db.QueryRow(ctx, expiredQuery, id).Scan(&isExpired)
+	if err == nil {
+		return nil, fmt.Errorf("ri exchange has expired")
+	}
+	if err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("failed to check expiration: %w", err)
+	}
+
 	query := `
 		UPDATE ri_exchange_history
 		SET status = $3
@@ -985,7 +1011,7 @@ func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id strin
 	}
 
 	if len(records) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("ri exchange status transition failed: record not found or expired")
 	}
 
 	return &records[0], nil
