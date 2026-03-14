@@ -189,10 +189,10 @@ func (c *Connection) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("database ping failed: %w", err)
 	}
 
-	// Check pool statistics
+	// Check pool has any connections available
 	stats := c.pool.Stat()
-	if stats.AcquireCount() > 0 && stats.AcquiredConns() == 0 && stats.IdleConns() == 0 {
-		return fmt.Errorf("connection pool has no available connections")
+	if stats.TotalConns() == 0 {
+		return fmt.Errorf("connection pool has no connections")
 	}
 
 	return nil
