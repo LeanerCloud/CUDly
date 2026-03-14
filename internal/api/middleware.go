@@ -214,6 +214,10 @@ func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionUR
 
 // checkRateLimit checks if the request is allowed based on IP-based rate limiting.
 // Returns nil if allowed, or an error if rate limited.
+//
+// Note: This function uses a fail-open design - if the rate limiter encounters
+// an error (e.g., Redis unavailable), the request is allowed through rather than
+// blocking legitimate users. This is intentional to ensure availability.
 func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunctionURLRequest, endpoint string) error {
 	if h.rateLimiter == nil {
 		return nil
