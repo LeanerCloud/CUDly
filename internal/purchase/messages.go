@@ -85,18 +85,21 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) e
 	}
 
 	logging.Infof("Executing purchase from async message: %s", msg.ExecutionID)
-	if err := m.executePurchase(ctx, execution); err != nil {
+	purchaseErr := m.executePurchase(ctx, execution)
+	if purchaseErr != nil {
 		execution.Status = "failed"
-		execution.Error = err.Error()
+		execution.Error = purchaseErr.Error()
 	} else {
 		execution.Status = "completed"
 		completedAt := time.Now()
 		execution.CompletedAt = &completedAt
 	}
 
-	// Save the updated execution
+	// Save the updated execution — return error so SQS keeps the message
+	// visible for retry if persistence fails, preventing lost failure records.
 	if saveErr := m.config.SavePurchaseExecution(ctx, execution); saveErr != nil {
 		logging.Errorf("Failed to save execution status: %v", saveErr)
+		return fmt.Errorf("failed to save execution status for %s: %w", msg.ExecutionID, saveErr)
 	}
 
 	// Update plan progress
@@ -104,7 +107,8 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) e
 		logging.Errorf("Failed to update plan progress: %v", err)
 	}
 
-	return nil
+	// Return purchase error so SQS can retry the message on purchase failure.
+	return purchaseErr
 }
 
 // handleApproveMessage processes an approve message

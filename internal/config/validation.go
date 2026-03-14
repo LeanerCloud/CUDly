@@ -160,8 +160,8 @@ func (p *PurchasePlan) Validate() error {
 		return fmt.Errorf("invalid ramp schedule: %w", err)
 	}
 
-	// Validate each service config
-	if len(p.Services) == 0 {
+	// Enabled plans must have at least one service; disabled/draft plans may not yet
+	if p.Enabled && len(p.Services) == 0 {
 		return fmt.Errorf("plan must have at least one service")
 	}
 	for key, svc := range p.Services {
@@ -175,37 +175,40 @@ func (p *PurchasePlan) Validate() error {
 
 // Validate validates the RampSchedule
 func (r *RampSchedule) Validate() error {
-	// Type is required if any ramp settings are provided
 	if r.Type != "" && !isValidRampScheduleType(r.Type) {
 		return fmt.Errorf("invalid ramp schedule type: %s (valid: %s)", r.Type, strings.Join(ValidRampScheduleTypes, ", "))
 	}
-
-	// Validate percent per step
-	if r.Type != "" {
-		if r.PercentPerStep <= MinCoverage || r.PercentPerStep > MaxCoverage {
-			return fmt.Errorf("percent per step must be between %d and %d for ramp schedule, got: %.2f", MinCoverage+1, MaxCoverage, r.PercentPerStep)
-		}
-	} else {
-		if r.PercentPerStep < MinCoverage || r.PercentPerStep > MaxCoverage {
-			return fmt.Errorf("percent per step must be between %d and %d, got: %.2f", MinCoverage, MaxCoverage, r.PercentPerStep)
-		}
+	if err := r.validatePercentPerStep(); err != nil {
+		return err
 	}
-
-	// Validate step interval
 	if r.StepIntervalDays < 0 || r.StepIntervalDays > MaxStepIntervalDays {
 		return fmt.Errorf("step interval must be between 0 and %d days, got: %d", MaxStepIntervalDays, r.StepIntervalDays)
 	}
-
-	// Validate current step
 	if r.CurrentStep < 0 {
 		return fmt.Errorf("current step cannot be negative")
 	}
-
-	// Validate total steps
 	if r.TotalSteps < 0 || r.TotalSteps > MaxTotalSteps {
 		return fmt.Errorf("total steps must be between 0 and %d, got: %d", MaxTotalSteps, r.TotalSteps)
 	}
+	return nil
+}
 
+// validatePercentPerStep checks PercentPerStep bounds based on ramp type.
+// Step-based types require > 0; "immediate" ignores it; unset type allows 0.
+func (r *RampSchedule) validatePercentPerStep() error {
+	switch r.Type {
+	case "immediate":
+		// Immediate mode purchases all at once — PercentPerStep is irrelevant.
+		return nil
+	case "":
+		if r.PercentPerStep < MinCoverage || r.PercentPerStep > MaxCoverage {
+			return fmt.Errorf("percent per step must be between %d and %d, got: %.2f", MinCoverage, MaxCoverage, r.PercentPerStep)
+		}
+	default:
+		if r.PercentPerStep <= MinCoverage || r.PercentPerStep > MaxCoverage {
+			return fmt.Errorf("percent per step must be between %d and %d for ramp schedule, got: %.2f", MinCoverage+1, MaxCoverage, r.PercentPerStep)
+		}
+	}
 	return nil
 }
 

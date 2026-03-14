@@ -269,7 +269,7 @@ func TestHandler_HandleRequest_PutConfig(t *testing.T) {
 			"Authorization": "Bearer test-token",
 			"X-CSRF-Token":  "test-csrf",
 		},
-		Body: `{"enabled_providers": ["aws"]}`,
+		Body: `{"enabled_providers": ["aws"], "default_term": 1}`,
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
 				Method: "PUT",

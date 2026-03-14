@@ -27,13 +27,39 @@ type CleanupResult struct {
 func cleanupExpiredRecords(ctx context.Context, event CleanupEvent) (*CleanupResult, error) {
 	log.Printf("Starting cleanup job (dryRun=%v)", event.DryRun)
 
-	// Initialize database connection with secret resolution
+	db, err := initDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	now := time.Now()
+	result := &CleanupResult{
+		DryRun:    event.DryRun,
+		Timestamp: now.Unix(),
+	}
+
+	if event.DryRun {
+		if err := dryRunCount(ctx, db, now, result); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := deleteExpired(ctx, db, now, result); err != nil {
+			return nil, err
+		}
+	}
+
+	log.Printf("Cleanup job completed: %+v", result)
+	return result, nil
+}
+
+// initDB creates and returns a database connection using env config and optional secret resolution.
+func initDB(ctx context.Context) (*database.Connection, error) {
 	dbConfig, err := database.LoadFromEnv()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load database config: %w", err)
 	}
 
-	// Create secret resolver if password secret is specified
 	var secretResolver database.SecretResolver
 	if dbConfig.PasswordSecret != "" {
 		secretConfig := secrets.LoadConfigFromEnv()
@@ -49,47 +75,51 @@ func cleanupExpiredRecords(ctx context.Context, event CleanupEvent) (*CleanupRes
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer db.Close()
+	return db, nil
+}
 
-	now := time.Now()
-	result := &CleanupResult{
-		DryRun:    event.DryRun,
-		Timestamp: now.Unix(),
+// dryRunCount counts records that would be deleted without actually deleting them.
+func dryRunCount(ctx context.Context, db *database.Connection, now time.Time, result *CleanupResult) error {
+	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM sessions WHERE expires_at < $1", now).Scan(&result.SessionsDeleted); err != nil {
+		return fmt.Errorf("failed to count expired sessions: %w", err)
 	}
-
-	if event.DryRun {
-		// Count what would be deleted
-		err = db.QueryRow(ctx, "SELECT COUNT(*) FROM sessions WHERE expires_at < $1", now).Scan(&result.SessionsDeleted)
-		if err != nil {
-			return nil, fmt.Errorf("failed to count expired sessions: %w", err)
-		}
-
-		err = db.QueryRow(ctx, "SELECT COUNT(*) FROM purchase_executions WHERE expires_at < $1", now).Scan(&result.ExecutionsDeleted)
-		if err != nil {
-			return nil, fmt.Errorf("failed to count expired executions: %w", err)
-		}
-
-		log.Printf("DRY RUN: Would delete %d sessions and %d executions", result.SessionsDeleted, result.ExecutionsDeleted)
-	} else {
-		// Delete expired sessions
-		tag, err := db.Exec(ctx, "DELETE FROM sessions WHERE expires_at < $1", now)
-		if err != nil {
-			return nil, fmt.Errorf("failed to cleanup sessions: %w", err)
-		}
-		result.SessionsDeleted = tag.RowsAffected()
-		log.Printf("Deleted %d expired sessions", result.SessionsDeleted)
-
-		// Delete expired executions
-		tag, err = db.Exec(ctx, "DELETE FROM purchase_executions WHERE expires_at < $1", now)
-		if err != nil {
-			return nil, fmt.Errorf("failed to cleanup executions: %w", err)
-		}
-		result.ExecutionsDeleted = tag.RowsAffected()
-		log.Printf("Deleted %d expired executions", result.ExecutionsDeleted)
+	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM purchase_executions WHERE expires_at < $1", now).Scan(&result.ExecutionsDeleted); err != nil {
+		return fmt.Errorf("failed to count expired executions: %w", err)
 	}
+	log.Printf("DRY RUN: Would delete %d sessions and %d executions", result.SessionsDeleted, result.ExecutionsDeleted)
+	return nil
+}
 
-	log.Printf("Cleanup job completed: %+v", result)
-	return result, nil
+// deleteExpired deletes expired sessions and executions in a single transaction.
+func deleteExpired(ctx context.Context, db *database.Connection, now time.Time, result *CleanupResult) (err error) {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	tag, err := tx.Exec(ctx, "DELETE FROM sessions WHERE expires_at < $1", now)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup sessions: %w", err)
+	}
+	result.SessionsDeleted = tag.RowsAffected()
+	log.Printf("Deleted %d expired sessions", result.SessionsDeleted)
+
+	tag, err = tx.Exec(ctx, "DELETE FROM purchase_executions WHERE expires_at < $1", now)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup executions: %w", err)
+	}
+	result.ExecutionsDeleted = tag.RowsAffected()
+	log.Printf("Deleted %d expired executions", result.ExecutionsDeleted)
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit cleanup transaction: %w", err)
+	}
+	return nil
 }
 
 func main() {

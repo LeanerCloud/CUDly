@@ -73,8 +73,9 @@ func (r *RateLimiter) Wait(ctx context.Context) error {
 		delay = r.maxDelay
 	}
 
-	// Add jitter (up to 20% of delay)
-	jitter := time.Duration(float64(delay) * 0.2 * rand.Float64())
+	// Add jitter (up to 20% of delay). Math/rand is intentional: jitter only
+	// needs uniform distribution, not cryptographic randomness.
+	jitter := time.Duration(float64(delay) * 0.2 * rand.Float64()) // #nosec G404
 	delay += jitter
 
 	select {

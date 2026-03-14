@@ -156,6 +156,8 @@ func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuo
 	if strings.TrimSpace(req.TargetOfferingID) == "" {
 		return nil, fmt.Errorf("must provide target offering ID")
 	}
+	// Default TargetCount to 1 if not specified. Note: req is a value copy,
+	// so this default does not mutate the caller's struct.
 	if req.TargetCount <= 0 {
 		req.TargetCount = 1
 	}
@@ -251,15 +253,23 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 		return "", q, fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
 	}
 
-	if q.PaymentDueUSD == nil {
-		return "", q, fmt.Errorf("quote did not return a parseable paymentDue; refusing to execute without cost verification")
+	// AWS may return an empty PaymentDue for zero-cost exchanges (e.g., same-RI-type
+	// conversions). Treat nil as zero cost so valid zero-cost exchanges are not refused.
+	paymentDue := q.PaymentDueUSD
+	if paymentDue == nil {
+		paymentDue = new(big.Rat)
 	}
 
 	// paymentDue > max => refuse
-	if q.PaymentDueUSD.Cmp(req.MaxPaymentDueUSD) == 1 {
-		return "", q, fmt.Errorf("paymentDue %s exceeds max %s", q.PaymentDueUSD.FloatString(2), req.MaxPaymentDueUSD.FloatString(2))
+	if paymentDue.Cmp(req.MaxPaymentDueUSD) == 1 {
+		return "", q, fmt.Errorf("paymentDue %s exceeds max %s", paymentDue.FloatString(2), req.MaxPaymentDueUSD.FloatString(2))
 	}
 
+	// NOTE: The AWS RI exchange API has no atomic quote+accept operation. The
+	// AcceptReservedInstancesExchangeQuote call re-evaluates pricing server-side,
+	// so in rare cases the actual payment could differ from the quoted amount
+	// (e.g., due to RI valuation changes between GetQuote and Accept).
+	// This is a known API limitation and not something we can prevent here.
 	out, err := client.AcceptReservedInstancesExchangeQuote(ctx, &ec2.AcceptReservedInstancesExchangeQuoteInput{
 		ReservedInstanceIds: req.ReservedIDs,
 		TargetConfigurations: []ec2types.TargetConfigurationRequest{

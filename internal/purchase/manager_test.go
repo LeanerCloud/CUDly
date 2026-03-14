@@ -135,7 +135,9 @@ func TestManager_ProcessScheduledPurchases_CompletedExecution(t *testing.T) {
 	result, err := manager.ProcessScheduledPurchases(ctx)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, result.Processed)
+	// Completed executions are skipped without being re-executed; processed counter
+	// reflects only actually-attempted executions, not skipped ones.
+	assert.Equal(t, 0, result.Processed)
 	assert.Equal(t, 0, result.Executed)
 
 	mockStore.AssertExpectations(t)
@@ -265,7 +267,9 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 	result, err := manager.ProcessScheduledPurchases(ctx)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, result.Processed)
+	// Cancelled executions are skipped without being re-executed; processed counter
+	// reflects only actually-attempted executions, not skipped ones.
+	assert.Equal(t, 0, result.Processed)
 	assert.Equal(t, 0, result.Executed)
 
 	mockStore.AssertExpectations(t)

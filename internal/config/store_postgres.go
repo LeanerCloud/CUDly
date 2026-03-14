@@ -61,14 +61,15 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			// Return default config if none exists
+			// Return default config if none exists.
+			// Values must align with DefaultSettings in defaults.go.
 			return &GlobalConfig{
 				EnabledProviders:               []string{},
 				ApprovalRequired:               true,
 				DefaultTerm:                    3,
-				DefaultPayment:                 "all-upfront",
-				DefaultCoverage:                80.0,
-				DefaultRampSchedule:            "immediate",
+				DefaultPayment:                 "no-upfront",
+				DefaultCoverage:                float64(DefaultCoveragePercent),
+				DefaultRampSchedule:            RampImmediate,
 				RIExchangeMode:                 "manual",
 				RIExchangeUtilizationThreshold: 95.0,
 				RIExchangeLookbackDays:         30,
@@ -112,14 +113,18 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			updated_at = NOW()
 	`
 
-	if config.RIExchangeMode == "" {
-		config.RIExchangeMode = "manual"
+	// Use local copies for defaults so we don't mutate the caller's struct.
+	riExchangeMode := config.RIExchangeMode
+	if riExchangeMode == "" {
+		riExchangeMode = "manual"
 	}
-	if config.RIExchangeLookbackDays == 0 {
-		config.RIExchangeLookbackDays = 30
+	riExchangeLookbackDays := config.RIExchangeLookbackDays
+	if riExchangeLookbackDays == 0 {
+		riExchangeLookbackDays = 30
 	}
-	if config.RIExchangeUtilizationThreshold == 0 {
-		config.RIExchangeUtilizationThreshold = 95.0
+	riExchangeUtilizationThreshold := config.RIExchangeUtilizationThreshold
+	if riExchangeUtilizationThreshold == 0 {
+		riExchangeUtilizationThreshold = 95.0
 	}
 
 	_, err := s.db.Exec(ctx, query,
@@ -131,11 +136,11 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		config.DefaultCoverage,
 		config.DefaultRampSchedule,
 		config.RIExchangeEnabled,
-		config.RIExchangeMode,
-		config.RIExchangeUtilizationThreshold,
+		riExchangeMode,
+		riExchangeUtilizationThreshold,
 		config.RIExchangeMaxPerExchangeUSD,
 		config.RIExchangeMaxDailyUSD,
-		config.RIExchangeLookbackDays,
+		riExchangeLookbackDays,
 	)
 
 	if err != nil {

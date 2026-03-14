@@ -376,6 +376,9 @@ func TestPurchasePlan_Validate(t *testing.T) {
 					Type: "immediate",
 				},
 				NotificationDaysBefore: 7,
+				Services: map[string]ServiceConfig{
+					"aws/rds": {Provider: "aws", Service: "rds"},
+				},
 			},
 			wantErr: false,
 		},

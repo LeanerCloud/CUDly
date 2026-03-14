@@ -45,6 +45,9 @@ func checkRegions(ctx context.Context, cfg aws.Config) (map[string]string, error
 }
 
 func checkInstances(ctx context.Context, cfg aws.Config, maxList int32) (map[string]string, error) {
+	if maxList <= 0 {
+		maxList = 5
+	}
 	out, err := ec2.NewFromConfig(cfg).DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		MaxResults: aws.Int32(maxList),
 	})

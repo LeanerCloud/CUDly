@@ -61,7 +61,7 @@ func TestHandler_createPlan(t *testing.T) {
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
-	body := `{"name": "New Plan", "enabled": true, "auto_purchase": false}`
+	body := `{"name": "New Plan", "enabled": true, "auto_purchase": false, "provider": "aws", "service": "rds"}`
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
@@ -451,6 +451,9 @@ func TestHandler_patchPlan_Success(t *testing.T) {
 		AutoPurchase:           false,
 		NotificationDaysBefore: 3,
 		CreatedAt:              time.Now().AddDate(0, -1, 0),
+		Services: map[string]config.ServiceConfig{
+			"aws/rds": {Provider: "aws", Service: "rds"},
+		},
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -492,6 +495,9 @@ func TestHandler_patchPlan_UpdateMultipleFields(t *testing.T) {
 		Enabled:                false,
 		AutoPurchase:           false,
 		NotificationDaysBefore: 3,
+		Services: map[string]config.ServiceConfig{
+			"aws/rds": {Provider: "aws", Service: "rds"},
+		},
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)

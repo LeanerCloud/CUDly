@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -18,6 +19,10 @@ import (
 type Connection struct {
 	pool   *pgxpool.Pool
 	config *Config
+	// lockedConns stores pinned pool connections for session-level advisory locks.
+	// Session-level advisory locks are tied to the PostgreSQL session (backend),
+	// not the transaction, so lock and unlock must use the same underlying connection.
+	lockedConns sync.Map // map[int64]*pgxpool.Conn
 }
 
 // SecretResolver interface for retrieving secrets from cloud providers
@@ -34,33 +39,9 @@ func NewConnection(ctx context.Context, config *Config, secretResolver SecretRes
 		return nil, fmt.Errorf("DB_PASSWORD_SECRET is set but no secret resolver was provided")
 	}
 
-	// Resolve password from secret manager if needed
-	password := config.Password
-	if config.PasswordSecret != "" && secretResolver != nil {
-		secret, err := secretResolver.GetSecret(ctx, config.PasswordSecret)
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve database password from secret manager: %w", err)
-		}
-
-		// Try to parse as JSON (for RDS Proxy format: {"username": "...", "password": "..."})
-		// If it's not JSON, use the raw string as the password
-		var secretData map[string]any
-		if err := json.Unmarshal([]byte(secret), &secretData); err == nil {
-			// Successfully parsed as JSON, extract password field
-			if pwd, ok := secretData["password"].(string); ok {
-				password = pwd
-			} else {
-				return nil, fmt.Errorf("secret is JSON but missing 'password' field")
-			}
-		} else {
-			// Not JSON, use the raw secret as password (backward compatibility)
-			password = secret
-		}
-	}
-
-	// If no password was resolved, fail
-	if password == "" {
-		return nil, fmt.Errorf("database password not configured (set DB_PASSWORD or DB_PASSWORD_SECRET)")
+	password, err := resolvePassword(ctx, config, secretResolver)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build connection pool configuration
@@ -79,6 +60,39 @@ func NewConnection(ctx context.Context, config *Config, secretResolver SecretRes
 		pool:   pool,
 		config: config,
 	}, nil
+}
+
+// resolvePassword returns the database password, fetching from secret manager if configured.
+// Falls back to the static password in config if no secret is set.
+func resolvePassword(ctx context.Context, config *Config, secretResolver SecretResolver) (string, error) {
+	if config.PasswordSecret == "" || secretResolver == nil {
+		if config.Password == "" {
+			return "", fmt.Errorf("database password not configured (set DB_PASSWORD or DB_PASSWORD_SECRET)")
+		}
+		return config.Password, nil
+	}
+
+	secret, err := secretResolver.GetSecret(ctx, config.PasswordSecret)
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve database password from secret manager: %w", err)
+	}
+
+	return extractPasswordFromSecret(secret)
+}
+
+// extractPasswordFromSecret parses a secret value, which may be a raw password string
+// or a JSON object in RDS Proxy format: {"username": "...", "password": "..."}.
+func extractPasswordFromSecret(secret string) (string, error) {
+	var secretData map[string]any
+	if err := json.Unmarshal([]byte(secret), &secretData); err != nil {
+		// Not JSON — use the raw string as the password (backward compatibility)
+		return secret, nil
+	}
+	// Successfully parsed as JSON, extract password field
+	if pwd, ok := secretData["password"].(string); ok {
+		return pwd, nil
+	}
+	return "", fmt.Errorf("secret is JSON but missing 'password' field")
 }
 
 // createConnectionPoolWithRetry creates a connection pool with exponential backoff retry
@@ -252,16 +266,48 @@ func (c *Connection) Ping(ctx context.Context) error {
 
 // TryAdvisoryLock attempts to acquire a PostgreSQL session-level advisory lock.
 // Returns true if the lock was acquired, false if another session holds it.
+//
+// Session-level advisory locks in PostgreSQL are tied to the backend session, not
+// the transaction. With a connection pool, lock and unlock must use the same underlying
+// connection. This method pins a connection for the duration of the lock and stores it
+// internally; callers MUST call ReleaseAdvisoryLock to release both the lock and the
+// pinned connection.
 func (c *Connection) TryAdvisoryLock(ctx context.Context, lockID int64) (bool, error) {
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to acquire pinned connection for advisory lock: %w", err)
+	}
+
 	var acquired bool
-	err := c.pool.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
-	return acquired, err
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired); err != nil {
+		conn.Release()
+		return false, err
+	}
+
+	if !acquired {
+		conn.Release()
+		return false, nil
+	}
+
+	// Store the pinned connection so ReleaseAdvisoryLock uses the same session.
+	c.lockedConns.Store(lockID, conn)
+	return true, nil
 }
 
 // ReleaseAdvisoryLock releases a previously acquired advisory lock.
+// It reuses the same pinned connection used by TryAdvisoryLock to ensure
+// the unlock targets the correct PostgreSQL session.
 func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
+	val, ok := c.lockedConns.LoadAndDelete(lockID)
+	if !ok {
+		logging.Warnf("ReleaseAdvisoryLock called for lock %d but no pinned connection found", lockID)
+		return
+	}
+	conn := val.(*pgxpool.Conn)
+	defer conn.Release()
+
 	var released bool
-	if err := c.pool.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", lockID).Scan(&released); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", lockID).Scan(&released); err != nil {
 		logging.Warnf("Failed to release advisory lock %d: %v", lockID, err)
 	} else if !released {
 		logging.Warnf("Advisory lock %d was not held by this session", lockID)

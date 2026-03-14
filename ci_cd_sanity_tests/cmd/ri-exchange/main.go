@@ -90,12 +90,12 @@ func main() {
 		if err != nil {
 			o.Error = err.Error()
 			o.Quote = q
-			write(o, *outPath)
+			writeOrExit(o, *outPath)
 			fmt.Fprintf(os.Stderr, "quote: FAIL (see %s)\n", *outPath)
 			os.Exit(1)
 		}
 		o.Quote = q
-		write(o, *outPath)
+		writeOrExit(o, *outPath)
 
 		if !q.IsValidExchange {
 			fmt.Fprintf(os.Stderr, "quote: INVALID (%s) (see %s)\n", q.ValidationFailureReason, *outPath)
@@ -109,20 +109,20 @@ func main() {
 	o.Mode = "execute"
 	if strings.TrimSpace(*ack) != "YES" {
 		o.Error = "refusing to execute: pass --ack YES"
-		write(o, *outPath)
+		writeOrExit(o, *outPath)
 		fmt.Fprintf(os.Stderr, "execute: REFUSED (see %s)\n", *outPath)
 		os.Exit(2)
 	}
 	if strings.TrimSpace(*maxPaymentDue) == "" {
 		o.Error = "refusing to execute: --max-payment-due-usd is required as a safety cap"
-		write(o, *outPath)
+		writeOrExit(o, *outPath)
 		fmt.Fprintf(os.Stderr, "execute: REFUSED (see %s)\n", *outPath)
 		os.Exit(2)
 	}
 	maxRat, err := exchange.ParseDecimalRat(*maxPaymentDue)
 	if err != nil {
 		o.Error = err.Error()
-		write(o, *outPath)
+		writeOrExit(o, *outPath)
 		fmt.Fprintf(os.Stderr, "execute: BAD INPUT (see %s)\n", *outPath)
 		os.Exit(2)
 	}
@@ -139,23 +139,32 @@ func main() {
 	o.Quote = q
 	if err != nil {
 		o.Error = err.Error()
-		write(o, *outPath)
+		writeOrExit(o, *outPath)
 		fmt.Fprintf(os.Stderr, "execute: FAIL (see %s)\n", *outPath)
 		os.Exit(1)
 	}
 
 	o.ExchangeID = exID
-	write(o, *outPath)
+	writeOrExit(o, *outPath)
 	fmt.Printf("execute: OK exchangeId=%s (see %s)\n", exID, *outPath)
 }
 
-func write(v any, path string) {
+func write(v any, path string) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to marshal json for %s: %v\n", path, err)
-		return
+		return err
 	}
 	if err := os.WriteFile(path, b, 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write %s: %v\n", path, err)
+		return err
+	}
+	return nil
+}
+
+// writeOrExit writes output to path and exits with code 1 if writing fails.
+func writeOrExit(v any, path string) {
+	if err := write(v, path); err != nil {
+		os.Exit(1)
 	}
 }

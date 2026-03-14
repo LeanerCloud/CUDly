@@ -83,41 +83,29 @@ func (c *Client) parseSavingsPlansRecommendations(
 }
 
 // parseSavingsPlanDetail converts a single Savings Plan recommendation detail
+// parseOptionalFloat parses a string pointer as float64, logging a warning on failure.
+// Returns 0 if the pointer is nil.
+func parseOptionalFloat(field string, s *string) float64 {
+	if s == nil {
+		return 0
+	}
+	val, err := strconv.ParseFloat(*s, 64)
+	if err != nil {
+		log.Printf("WARNING: failed to parse %s: %v", field, err)
+		return 0
+	}
+	return val
+}
+
 func (c *Client) parseSavingsPlanDetail(
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
 	params common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
 ) *common.Recommendation {
-	var hourlyCommitment, monthlySavings, savingsPercent, upfrontCost float64
-
-	if detail.HourlyCommitmentToPurchase != nil {
-		if val, err := strconv.ParseFloat(*detail.HourlyCommitmentToPurchase, 64); err == nil {
-			hourlyCommitment = val
-		} else {
-			log.Printf("WARNING: failed to parse HourlyCommitmentToPurchase: %v", err)
-		}
-	}
-	if detail.EstimatedMonthlySavingsAmount != nil {
-		if val, err := strconv.ParseFloat(*detail.EstimatedMonthlySavingsAmount, 64); err == nil {
-			monthlySavings = val
-		} else {
-			log.Printf("WARNING: failed to parse EstimatedMonthlySavingsAmount: %v", err)
-		}
-	}
-	if detail.EstimatedSavingsPercentage != nil {
-		if val, err := strconv.ParseFloat(*detail.EstimatedSavingsPercentage, 64); err == nil {
-			savingsPercent = val
-		} else {
-			log.Printf("WARNING: failed to parse EstimatedSavingsPercentage: %v", err)
-		}
-	}
-	if detail.UpfrontCost != nil {
-		if val, err := strconv.ParseFloat(*detail.UpfrontCost, 64); err == nil {
-			upfrontCost = val
-		} else {
-			log.Printf("WARNING: failed to parse UpfrontCost: %v", err)
-		}
-	}
+	hourlyCommitment := parseOptionalFloat("HourlyCommitmentToPurchase", detail.HourlyCommitmentToPurchase)
+	monthlySavings := parseOptionalFloat("EstimatedMonthlySavingsAmount", detail.EstimatedMonthlySavingsAmount)
+	savingsPercent := parseOptionalFloat("EstimatedSavingsPercentage", detail.EstimatedSavingsPercentage)
+	upfrontCost := parseOptionalFloat("UpfrontCost", detail.UpfrontCost)
 
 	planTypeStr := string(planType)
 	switch planType {
