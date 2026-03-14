@@ -27,12 +27,12 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	accountID := m.getAWSAccountID(ctx)
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID)
 
-	if err := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); err != nil {
-		logging.Errorf("Failed to send confirmation: %v", err)
-	}
-
 	if len(purchaseErrors) > 0 {
 		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
+	}
+
+	if err := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); err != nil {
+		logging.Errorf("Failed to send confirmation: %v", err)
 	}
 
 	return nil
