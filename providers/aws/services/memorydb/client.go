@@ -4,6 +4,7 @@ package memorydb
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -253,26 +254,41 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 	return details, nil
 }
 
-// GetValidResourceTypes returns valid MemoryDB node types (static list)
+// GetValidResourceTypes returns valid MemoryDB node types by querying the API
 func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	return []string{
-		"db.t4g.small",
-		"db.t4g.medium",
-		"db.r6g.large",
-		"db.r6g.xlarge",
-		"db.r6g.2xlarge",
-		"db.r6g.4xlarge",
-		"db.r6g.8xlarge",
-		"db.r6g.12xlarge",
-		"db.r6g.16xlarge",
-		"db.r7g.large",
-		"db.r7g.xlarge",
-		"db.r7g.2xlarge",
-		"db.r7g.4xlarge",
-		"db.r7g.8xlarge",
-		"db.r7g.12xlarge",
-		"db.r7g.16xlarge",
-	}, nil
+	nodeTypesMap := make(map[string]bool)
+	var nextToken *string
+
+	for {
+		input := &memorydb.DescribeReservedNodesOfferingsInput{
+			NextToken:  nextToken,
+			MaxResults: aws.Int32(100),
+		}
+
+		result, err := c.client.DescribeReservedNodesOfferings(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe MemoryDB offerings: %w", err)
+		}
+
+		for _, offering := range result.ReservedNodesOfferings {
+			if offering.NodeType != nil {
+				nodeTypesMap[*offering.NodeType] = true
+			}
+		}
+
+		if result.NextToken == nil || *result.NextToken == "" {
+			break
+		}
+		nextToken = result.NextToken
+	}
+
+	nodeTypes := make([]string, 0, len(nodeTypesMap))
+	for nodeType := range nodeTypesMap {
+		nodeTypes = append(nodeTypes, nodeType)
+	}
+
+	sort.Strings(nodeTypes)
+	return nodeTypes, nil
 }
 
 // createPurchaseTags creates standard tags for the purchase

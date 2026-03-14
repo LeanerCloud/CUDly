@@ -166,13 +166,25 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 }
 
 func TestClient_GetValidResourceTypes(t *testing.T) {
-	client := &Client{region: "us-east-1"}
+	mockMDB := new(MockMemoryDBClient)
+	client := &Client{
+		client: mockMDB,
+		region: "us-east-1",
+	}
+
+	mockMDB.On("DescribeReservedNodesOfferings", mock.Anything, mock.Anything).
+		Return(&memorydb.DescribeReservedNodesOfferingsOutput{
+			ReservedNodesOfferings: []types.ReservedNodesOffering{
+				{NodeType: aws.String("db.t4g.small")},
+				{NodeType: aws.String("db.r6g.large")},
+				{NodeType: aws.String("db.r7g.xlarge")},
+			},
+		}, nil)
 
 	result, err := client.GetValidResourceTypes(context.Background())
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result)
-	// Check for some expected node types
 	assert.Contains(t, result, "db.t4g.small")
 	assert.Contains(t, result, "db.r6g.large")
 	assert.Contains(t, result, "db.r7g.xlarge")
