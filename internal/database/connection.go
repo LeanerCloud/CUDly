@@ -28,6 +28,11 @@ type SecretResolver interface {
 // NewConnection creates a new database connection pool
 // If secretResolver is provided and config.PasswordSecret is set, password will be retrieved from secret manager
 func NewConnection(ctx context.Context, config *Config, secretResolver SecretResolver) (*Connection, error) {
+	// Check if secret resolver is needed but not provided
+	if config.PasswordSecret != "" && secretResolver == nil {
+		return nil, fmt.Errorf("DB_PASSWORD_SECRET is set but no secret resolver was provided")
+	}
+
 	// Resolve password from secret manager if needed
 	password := config.Password
 	if config.PasswordSecret != "" && secretResolver != nil {
