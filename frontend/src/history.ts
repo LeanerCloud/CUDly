@@ -39,6 +39,11 @@ export async function viewPlanHistory(planId: string): Promise<void> {
     renderHistoryList(data.purchases || []);
   } catch (error) {
     console.error('Failed to load plan history:', error);
+    const list = document.getElementById('history-list');
+    if (list) {
+      const err = error as Error;
+      list.innerHTML = `<p class="error">Failed to load plan history: ${escapeHtml(err.message)}</p>`;
+    }
   }
 }
 
