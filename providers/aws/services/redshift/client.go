@@ -190,18 +190,11 @@ func (c *Client) matchesDuration(offeringDuration *int32, term string) bool {
 	return int(offeringMonths) == requiredMonths
 }
 
-// matchesOfferingType checks if the offering type matches
-func (c *Client) matchesOfferingType(offeringType string, paymentOption string) bool {
-	switch paymentOption {
-	case "all-upfront":
-		return offeringType == "All Upfront"
-	case "partial-upfront":
-		return offeringType == "Partial Upfront"
-	case "no-upfront":
-		return offeringType == "No Upfront"
-	default:
-		return false
-	}
+// matchesOfferingType checks if the offering type is a valid Redshift reserved node offering type.
+// Redshift uses "Regular" and "Upgradable" as offering type identifiers — not payment-option strings
+// like other AWS services. Payment flexibility is encoded differently in the Redshift API.
+func (c *Client) matchesOfferingType(offeringType string, _ string) bool {
+	return offeringType == "Regular" || offeringType == "Upgradable"
 }
 
 // ValidateOffering checks if an offering exists without purchasing
