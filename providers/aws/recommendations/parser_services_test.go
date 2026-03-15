@@ -499,17 +499,13 @@ func TestParseMemoryDBDetails(t *testing.T) {
 	client := &Client{}
 
 	rec := &common.Recommendation{}
-	details := &types.ReservationPurchaseRecommendationDetail{
-		// MemoryDB might not have specific details in Cost Explorer yet
-	}
+	details := &types.ReservationPurchaseRecommendationDetail{}
 
 	err := client.parseMemoryDBDetails(rec, details)
 
+	// parseMemoryDBDetails logs a warning and skips the recommendation
+	// (MemoryDB does not expose instance details in Cost Explorer)
 	require.NoError(t, err)
-	assert.Equal(t, "db.r6gd.xlarge", rec.ResourceType)
-
-	cacheDetails, ok := rec.Details.(*common.CacheDetails)
-	require.True(t, ok, "Details should be CacheDetails type")
-	assert.Equal(t, "redis", cacheDetails.Engine)
-	assert.Equal(t, "db.r6gd.xlarge", cacheDetails.NodeType)
+	assert.Empty(t, rec.ResourceType, "ResourceType should not be set when MemoryDB details are unavailable")
+	assert.Nil(t, rec.Details, "Details should remain nil when MemoryDB details are unavailable")
 }
