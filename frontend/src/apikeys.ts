@@ -151,9 +151,9 @@ export async function handleCreateApiKey(e: Event): Promise<void> {
   const errorEl = document.getElementById('create-apikey-error');
   if (errorEl) errorEl.classList.add('hidden');
 
-  const name = (document.getElementById('apikey-name') as HTMLInputElement).value.trim();
-  const expiresCheckbox = (document.getElementById('apikey-expires') as HTMLInputElement).checked;
-  const expiresAtInput = (document.getElementById('apikey-expires-at') as HTMLInputElement).value;
+  const name = (document.getElementById('apikey-name') as HTMLInputElement | null)?.value.trim() ?? '';
+  const expiresCheckbox = (document.getElementById('apikey-expires') as HTMLInputElement | null)?.checked ?? false;
+  const expiresAtInput = (document.getElementById('apikey-expires-at') as HTMLInputElement | null)?.value ?? '';
 
   if (!name) {
     showError('API key name is required');
