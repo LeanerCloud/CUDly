@@ -41,6 +41,7 @@ jobs:
   validate:
     name: Validate Rollback
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       is_valid: ${{ steps.check.outputs.is_valid }}
       image_uri: ${{ steps.check.outputs.image_uri }}
@@ -104,6 +105,7 @@ jobs:
   verify-image:
     name: Verify Image Exists
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: validate
     if: needs.validate.outputs.is_valid == 'true'
 
@@ -176,6 +178,7 @@ jobs:
   rollback-aws-lambda:
     name: Rollback AWS Lambda
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [validate, verify-image]
     if: inputs.cloud == 'aws-lambda'
     environment:
@@ -226,6 +229,7 @@ jobs:
   rollback-aws-fargate:
     name: Rollback AWS Fargate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [validate, verify-image]
     if: inputs.cloud == 'aws-fargate'
     environment:
@@ -263,6 +267,7 @@ jobs:
   rollback-gcp:
     name: Rollback GCP Cloud Run
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [validate, verify-image]
     if: inputs.cloud == 'gcp'
     environment:
@@ -298,6 +303,7 @@ jobs:
   rollback-azure:
     name: Rollback Azure Container Apps
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [validate, verify-image]
     if: inputs.cloud == 'azure'
     environment:
@@ -334,6 +340,7 @@ jobs:
   summary:
     name: Rollback Summary
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs:
       - validate
       - verify-image
