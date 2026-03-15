@@ -7,6 +7,8 @@ import { formatCurrency, formatDate, escapeHtml } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 
+const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
+
 /**
  * Initialize history date range
  */
@@ -52,10 +54,15 @@ export async function viewPlanHistory(planId: string): Promise<void> {
  */
 export async function loadHistory(): Promise<void> {
   try {
+    const rawProvider = (document.getElementById('history-provider-filter') as HTMLSelectElement | null)?.value || '';
+    const provider: api.Provider | undefined = (VALID_PROVIDERS as string[]).includes(rawProvider)
+      ? (rawProvider as api.Provider)
+      : undefined;
+
     const filters: api.HistoryFilters = {
       start: (document.getElementById('history-start') as HTMLInputElement | null)?.value,
       end: (document.getElementById('history-end') as HTMLInputElement | null)?.value,
-      provider: ((document.getElementById('history-provider-filter') as HTMLSelectElement | null)?.value || undefined) as api.Provider | undefined
+      provider
     };
     const data = await api.getHistory(filters) as unknown as HistoryResponse;
     renderHistorySummary(data.summary || {});
