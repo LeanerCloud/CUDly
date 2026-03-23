@@ -125,6 +125,12 @@ variable "admin_password_secret_name" {
   default     = ""
 }
 
+variable "enable_admin_password_writer" {
+  description = "Grant the Cloud Run SA write access to the admin password secret. Set to true when admin_password_secret_name comes from a resource attribute (known after apply) to avoid sensitive-value-in-count Terraform limitation."
+  type        = bool
+  default     = false
+}
+
 variable "allowed_origins" {
   description = "List of allowed CORS origins"
   type        = list(string)

@@ -33,8 +33,9 @@ module "compute_cloud_run" {
   database_password_secret_id = module.secrets.database_password_secret_id
 
   # Admin email
-  admin_email                = var.admin_email
-  admin_password_secret_name = coalesce(module.secrets.admin_password_secret_name, "")
+  admin_email                  = var.admin_email
+  admin_password_secret_name   = coalesce(module.secrets.admin_password_secret_name, "")
+  enable_admin_password_writer = true # secret name comes from secrets module output, not a literal
 
   # VPC Access (for Cloud SQL)
   vpc_connector_id = module.networking.vpc_connector_id

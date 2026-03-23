@@ -202,6 +202,7 @@ output "deployment_summary" {
 
 output "quick_start_commands" {
   description = "Quick start commands for post-deployment"
+  sensitive   = true
   value       = <<-EOT
     ================================================================================
     CUDly Azure Deployment - ${upper(var.environment)} Environment

@@ -195,7 +195,7 @@ resource "google_project_iam_member" "secret_accessor" {
 
 # Grant write access to admin password secret only (for password sync)
 resource "google_secret_manager_secret_iam_member" "admin_password_writer" {
-  count = var.admin_password_secret_name != "" ? 1 : 0
+  count = var.enable_admin_password_writer ? 1 : 0
 
   project   = var.project_id
   secret_id = var.admin_password_secret_name
