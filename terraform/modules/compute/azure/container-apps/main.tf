@@ -225,6 +225,36 @@ resource "azurerm_container_app" "main" {
 }
 
 # ==============================================
+# Runtime RBAC: CUDly application cloud API access
+# ==============================================
+
+data "azurerm_subscription" "current" {}
+
+# Cost Management Reader: grants access to Azure Consumption API (reservation
+# recommendations, reservation details) needed for CUDly RI/SP features.
+resource "azurerm_role_assignment" "cost_management_reader" {
+  scope                = data.azurerm_subscription.current.id
+  role_definition_name = "Cost Management Reader"
+  principal_id         = azurerm_user_assigned_identity.container_app.principal_id
+}
+
+# Reservations Reader: built-in role that covers Microsoft.Capacity read
+# operations and Microsoft.Compute/skus/read for SKU enumeration.
+resource "azurerm_role_assignment" "reservations_reader" {
+  scope                = data.azurerm_subscription.current.id
+  role_definition_name = "Reservations Reader"
+  principal_id         = azurerm_user_assigned_identity.container_app.principal_id
+}
+
+# Reservations Purchaser: allows writing reservationOrders so CUDly can
+# purchase/exchange Azure reservations on behalf of users.
+resource "azurerm_role_assignment" "reservations_purchaser" {
+  scope                = data.azurerm_subscription.current.id
+  role_definition_name = "Reservations Purchaser"
+  principal_id         = azurerm_user_assigned_identity.container_app.principal_id
+}
+
+# ==============================================
 # Diagnostic Settings
 # ==============================================
 
