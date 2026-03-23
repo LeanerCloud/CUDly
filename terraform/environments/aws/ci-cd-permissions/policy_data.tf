@@ -67,7 +67,15 @@ resource "aws_iam_policy" "data" {
           "rds:DescribeDBInstances",
           "rds:DescribeDBSubnetGroups",
           "rds:ListTagsForResource",
+          "rds:CreateDBProxy",
+          "rds:DeleteDBProxy",
+          "rds:DeregisterDBProxyTargets",
+          "rds:DescribeDBProxies",
+          "rds:DescribeDBProxyTargetGroups",
+          "rds:DescribeDBProxyTargets",
           "rds:ModifyDBInstance",
+          "rds:ModifyDBProxy",
+          "rds:RegisterDBProxyTargets",
           "rds:RemoveTagsFromResource",
         ]
         Resource = "*"
@@ -84,6 +92,7 @@ resource "aws_iam_policy" "data" {
           "secretsmanager:ListSecrets",
           "secretsmanager:PutSecretValue",
           "secretsmanager:RestoreSecret",
+          "secretsmanager:RotateSecret",
           "secretsmanager:TagResource",
           "secretsmanager:UntagResource",
           "secretsmanager:UpdateSecret",
