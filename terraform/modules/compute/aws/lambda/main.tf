@@ -220,7 +220,7 @@ resource "aws_iam_role_policy" "ses_access" {
   })
 }
 
-# RI Exchange: EC2 and Cost Explorer read access
+# RI Exchange and Savings Plans: all reservation services and Cost Explorer
 resource "aws_iam_role_policy" "ri_exchange" {
   name_prefix = "${var.stack_name}-ri-exchange-"
   role        = aws_iam_role.lambda.id
@@ -231,11 +231,44 @@ resource "aws_iam_role_policy" "ri_exchange" {
       {
         Effect = "Allow"
         Action = [
+          # EC2 reserved instances
           "ec2:DescribeReservedInstances",
           "ec2:DescribeReservedInstancesOfferings",
           "ec2:GetReservedInstancesExchangeQuote",
           "ec2:AcceptReservedInstancesExchangeQuote",
-          "ce:GetReservationUtilization"
+          "ec2:PurchaseReservedInstancesOffering",
+          "ec2:DescribeInstanceTypeOfferings",
+          # RDS reserved instances
+          "rds:DescribeReservedDBInstances",
+          "rds:DescribeReservedDBInstancesOfferings",
+          "rds:PurchaseReservedDBInstancesOffering",
+          # ElastiCache reserved nodes
+          "elasticache:DescribeReservedCacheNodes",
+          "elasticache:DescribeReservedCacheNodesOfferings",
+          "elasticache:PurchaseReservedCacheNodesOffering",
+          # OpenSearch reserved instances
+          "es:DescribeReservedElasticsearchInstances",
+          "es:DescribeReservedElasticsearchInstanceOfferings",
+          "es:PurchaseReservedElasticsearchInstanceOffering",
+          # Redshift reserved nodes
+          "redshift:DescribeReservedNodes",
+          "redshift:DescribeReservedNodeOfferings",
+          "redshift:PurchaseReservedNodeOffering",
+          # MemoryDB reserved nodes
+          "memorydb:DescribeReservedNodes",
+          "memorydb:DescribeReservedNodesOfferings",
+          "memorydb:PurchaseReservedNodesOffering",
+          # Cost Explorer
+          "ce:GetReservationUtilization",
+          "ce:GetReservationPurchaseRecommendation",
+          "ce:GetSavingsPlansPurchaseRecommendation",
+          "ce:GetSavingsPlansUtilization",
+          # Savings Plans
+          "savingsplans:DescribeSavingsPlans",
+          "savingsplans:DescribeSavingsPlanRates",
+          "savingsplans:DescribeSavingsPlansOfferingRates",
+          "savingsplans:DescribeSavingsPlansOfferings",
+          "savingsplans:CreateSavingsPlan",
         ]
         Resource = "*"
       }
