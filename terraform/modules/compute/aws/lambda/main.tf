@@ -280,6 +280,16 @@ resource "aws_cloudwatch_event_target" "lambda" {
   })
 }
 
+resource "aws_lambda_permission" "function_url_public" {
+  count = (var.enable_function_url && var.function_url_auth_type == "NONE") ? 1 : 0
+
+  statement_id           = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.main.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
 resource "aws_lambda_permission" "eventbridge" {
   count = var.enable_scheduled_tasks ? 1 : 0
 
