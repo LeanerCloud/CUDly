@@ -21,7 +21,7 @@ terraform {
 # ==============================================
 
 resource "random_password" "database" {
-  count = var.master_password == null ? 1 : 0
+  count = var.generate_password ? 1 : 0
 
   length           = 32
   special          = true

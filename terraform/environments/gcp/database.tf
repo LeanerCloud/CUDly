@@ -11,10 +11,11 @@ module "database" {
   region       = var.region
 
   # Database configuration
-  database_version = var.database_version
-  database_name    = var.database_name
-  master_username  = var.database_username
-  master_password  = module.secrets.database_password_value
+  database_version  = var.database_version
+  database_name     = var.database_name
+  master_username   = var.database_username
+  master_password   = module.secrets.database_password_value
+  generate_password = false # password comes from secrets module, not auto-generated
 
   # Cloud SQL configuration
   tier              = var.database_tier

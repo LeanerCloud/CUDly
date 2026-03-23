@@ -43,6 +43,12 @@ variable "master_password" {
   sensitive   = true
 }
 
+variable "generate_password" {
+  description = "Auto-generate a random database password. Set to false when master_password is provided externally (e.g. from a secrets module output) to avoid the sensitive-value-in-count Terraform limitation."
+  type        = bool
+  default     = true
+}
+
 variable "tier" {
   description = "Machine type tier (db-custom-[CPUs]-[RAM_MB])"
   type        = string
