@@ -1,0 +1,27 @@
+locals {
+  networking_actions = [
+    "Microsoft.Network/virtualNetworks/*",
+    "Microsoft.Network/networkSecurityGroups/*",
+    "Microsoft.Network/networkSecurityGroups/join/action",
+    "Microsoft.Network/routeTables/*",
+    "Microsoft.Network/routeTables/join/action",
+    "Microsoft.Network/privateDnsZones/*",
+    "Microsoft.Network/networkWatchers/*",
+    "Microsoft.Network/dnsZones/*",
+    "Microsoft.Network/locations/*",
+    "Microsoft.OperationalInsights/workspaces/*",
+    "Microsoft.OperationalInsights/locations/*",
+    "Microsoft.Insights/components/*",
+    "Microsoft.Insights/diagnosticSettings/*",
+    "Microsoft.Insights/metricAlerts/*",
+    "Microsoft.Insights/actionGroups/*",
+    "Microsoft.Insights/scheduledQueryRules/*",
+    "Microsoft.Insights/workbooks/*",
+    "Microsoft.Insights/webtests/*",
+    "Microsoft.Resources/subscriptions/resourceGroups/*",
+    "Microsoft.Resources/subscriptions/providers/read",
+    "Microsoft.Resources/subscriptions/locations/read",
+    "Microsoft.Resources/deployments/*",
+    "*/register/action",
+  ]
+}
