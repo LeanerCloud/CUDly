@@ -310,6 +310,42 @@ resource "google_cloud_run_service_iam_member" "scheduler_ri_exchange_invoker" {
 }
 
 # ==============================================
+# Runtime IAM: CUDly application cloud API access
+# ==============================================
+
+# Compute Viewer: grants compute.commitments.list and compute.machineTypes.list
+# needed for listing CUDs and available instance types.
+resource "google_project_iam_member" "compute_viewer" {
+  project = var.project_id
+  role    = "roles/compute.viewer"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Compute Admin: grants compute.commitments.create so CUDly can purchase
+# committed use discounts (CUDs) on behalf of users.
+resource "google_project_iam_member" "compute_commitment_admin" {
+  project = var.project_id
+  role    = "roles/compute.admin"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Recommender Viewer: read access to the Recommender API (commitment
+# recommendations, cost insights) for surfacing optimization suggestions.
+resource "google_project_iam_member" "recommender_viewer" {
+  project = var.project_id
+  role    = "roles/recommender.viewer"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Billing Account Viewer: read access to Cloud Billing catalog (SKU prices)
+# used when calculating cost savings for GCP commitments.
+resource "google_project_iam_member" "billing_viewer" {
+  project = var.project_id
+  role    = "roles/billing.viewer"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# ==============================================
 # Cloud Logging
 # ==============================================
 
