@@ -7,7 +7,6 @@ locals {
     "Microsoft.Storage/storageAccounts/*",
     "Microsoft.Storage/storageAccounts/blobServices/*",
     "Microsoft.Storage/storageAccounts/blobServices/containers/*",
-    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/*",
     "Microsoft.Communication/CommunicationServices/*",
     "Microsoft.Communication/EmailServices/*",
     "Microsoft.Authorization/roleAssignments/read",

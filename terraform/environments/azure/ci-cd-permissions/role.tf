@@ -10,6 +10,10 @@ resource "azurerm_role_definition" "cudly_deploy" {
       local.networking_actions,
     )
     not_actions = []
+    # Blob data-plane: needed for Terraform state backend read/write
+    data_actions = [
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/*",
+    ]
   }
 
   assignable_scopes = [
