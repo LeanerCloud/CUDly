@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"strings"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -34,8 +35,15 @@ func NewGCPResolver(ctx context.Context, projectID string) (*GCPResolver, error)
 
 // GetSecret retrieves a secret from GCP Secret Manager
 func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, error) {
-	// Build the resource name for the latest version
-	name := fmt.Sprintf("projects/%s/secrets/%s/versions/latest", r.projectID, secretID)
+	// Build the resource name for the latest version.
+	// secretID may be a short name ("my-secret") or a full resource name
+	// ("projects/PROJECT/secrets/my-secret"). Accept both forms.
+	var name string
+	if strings.HasPrefix(secretID, "projects/") {
+		name = secretID + "/versions/latest"
+	} else {
+		name = fmt.Sprintf("projects/%s/secrets/%s/versions/latest", r.projectID, secretID)
+	}
 
 	// Access the secret version
 	req := &secretmanagerpb.AccessSecretVersionRequest{
@@ -59,7 +67,12 @@ func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, e
 // function only appends a new version. It will return an error if the secret
 // has not been pre-created via CreateSecret.
 func (r *GCPResolver) PutSecret(ctx context.Context, secretID string, value string) error {
-	parent := fmt.Sprintf("projects/%s/secrets/%s", r.projectID, secretID)
+	var parent string
+	if strings.HasPrefix(secretID, "projects/") {
+		parent = secretID
+	} else {
+		parent = fmt.Sprintf("projects/%s/secrets/%s", r.projectID, secretID)
+	}
 
 	req := &secretmanagerpb.AddSecretVersionRequest{
 		Parent: parent,
