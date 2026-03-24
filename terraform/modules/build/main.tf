@@ -62,6 +62,7 @@ resource "terraform_data" "docker_build" {
 
       docker buildx build \
         ${var.platform != "" ? "--platform ${var.platform}" : ""} \
+        --network=host \
         --tag ${local.image_uri} \
         --build-arg GIT_COMMIT=${local.git_commit} \
         --build-arg BUILD_DATE=${local.timestamp} \
