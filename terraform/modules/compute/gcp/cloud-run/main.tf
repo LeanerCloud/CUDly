@@ -339,10 +339,14 @@ resource "google_project_iam_member" "recommender_viewer" {
 
 # Billing Account Viewer: read access to Cloud Billing catalog (SKU prices)
 # used when calculating cost savings for GCP commitments.
-resource "google_project_iam_member" "billing_viewer" {
-  project = var.project_id
-  role    = "roles/billing.viewer"
-  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+# roles/billing.viewer is a billing-account-level role and cannot be assigned
+# at the project level. A billing_account_id must be provided to grant it.
+resource "google_billing_account_iam_member" "billing_viewer" {
+  count = var.billing_account_id != "" ? 1 : 0
+
+  billing_account_id = var.billing_account_id
+  role               = "roles/billing.viewer"
+  member             = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
 # ==============================================

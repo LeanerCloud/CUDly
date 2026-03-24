@@ -372,3 +372,9 @@ variable "enable_cloud_armor" {
   type        = bool
   default     = true
 }
+
+variable "billing_account_id" {
+  description = "GCP billing account ID. Required to grant billing.viewer so the app can read SKU prices. Leave empty to skip the IAM binding."
+  type        = string
+  default     = ""
+}

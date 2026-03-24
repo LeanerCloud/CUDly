@@ -52,6 +52,9 @@ module "compute_cloud_run" {
   # Database migration
   auto_migrate = var.auto_migrate
 
+  # Billing account (for billing.viewer IAM binding at account level)
+  billing_account_id = var.billing_account_id
+
   # Additional environment variables
   additional_env_vars = merge(
     {

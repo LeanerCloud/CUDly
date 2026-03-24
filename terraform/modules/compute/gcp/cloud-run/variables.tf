@@ -193,6 +193,12 @@ variable "ri_exchange_schedule" {
   default     = "0 */6 * * *"
 }
 
+variable "billing_account_id" {
+  description = "GCP billing account ID (e.g. '017217-CF7D29-F5AAE4'). Required to grant billing.viewer on the billing account so the app can read SKU prices. Leave empty to skip the billing IAM binding."
+  type        = string
+  default     = ""
+}
+
 variable "additional_env_vars" {
   description = "Additional environment variables"
   type        = map(string)
