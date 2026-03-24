@@ -17,6 +17,9 @@ frontend/dist
 # Git
 .git
 
+# Go vendor (dependencies downloaded at build time)
+vendor/
+
 # Temporary files
 tmp/
 

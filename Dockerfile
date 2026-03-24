@@ -51,8 +51,8 @@ COPY providers/aws/go.mod providers/aws/go.sum providers/aws/
 COPY providers/azure/go.mod providers/azure/go.sum providers/azure/
 COPY providers/gcp/go.mod providers/gcp/go.sum providers/gcp/
 
-# Copy vendored dependencies (to avoid network download issues)
-COPY vendor/ ./vendor/
+# Download dependencies
+RUN go mod download
 
 # Copy source code
 COPY . .
@@ -62,7 +62,6 @@ COPY . .
 # Default: ARM64 for cost optimization (20% savings on AWS Fargate)
 RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -mod=vendor \
     -ldflags="-s -w -X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -o /app/cudly \
     ./cmd/server
