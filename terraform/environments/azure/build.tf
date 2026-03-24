@@ -25,7 +25,5 @@ module "build" {
 
   # Build options
   skip_docker_build  = false
-  skip_docker_push   = false
   cleanup_old_images = true
-  load_image         = false
 }

@@ -34,18 +34,6 @@ variable "skip_docker_build" {
   default     = false
 }
 
-variable "skip_docker_push" {
-  description = "Skip Docker push (useful for local testing)"
-  type        = bool
-  default     = false
-}
-
-variable "load_image" {
-  description = "Load image to local Docker daemon (for testing)"
-  type        = bool
-  default     = false
-}
-
 variable "extra_build_args" {
   description = "Extra arguments to pass to docker build"
   type        = string

@@ -31,7 +31,7 @@ locals {
   image_uri = "${var.registry_url}/${var.image_name}:${local.image_tag}"
 }
 
-# Docker build
+# Docker build and push (single step using buildx --push)
 resource "terraform_data" "docker_build" {
   count = var.skip_docker_build ? 0 : 1
 
@@ -51,7 +51,11 @@ resource "terraform_data" "docker_build" {
   provisioner "local-exec" {
     working_dir = var.source_path
     command     = <<-EOT
-      echo "🔨 Building Docker image..."
+      set -e
+      echo "🔐 Logging in to registry..."
+      ${var.registry_login_command}
+
+      echo "🔨 Building and pushing Docker image..."
       echo "Image: ${local.image_uri}"
       echo "Platform: ${var.platform != "" ? var.platform : "native"}"
       echo "Git commit: ${local.git_commit}"
@@ -61,58 +65,14 @@ resource "terraform_data" "docker_build" {
         --tag ${local.image_uri} \
         --build-arg GIT_COMMIT=${local.git_commit} \
         --build-arg BUILD_DATE=${local.timestamp} \
-        ${var.load_image ? "--load" : ""} \
+        --push \
         ${var.extra_build_args} \
         .
 
-      echo "✅ Docker image built successfully"
-    EOT
-  }
-}
-
-# Registry login
-# IMPORTANT: Re-login before EVERY push since ECR tokens expire after 12 hours
-resource "terraform_data" "registry_login" {
-  count = var.skip_docker_build || var.skip_docker_push ? 0 : 1
-
-  triggers_replace = {
-    # Re-login whenever we're about to push (build ID changes)
-    build_id = terraform_data.docker_build[0].id
-    registry = var.registry_url
-  }
-
-  provisioner "local-exec" {
-    command = var.registry_login_command
-  }
-
-  depends_on = [terraform_data.docker_build]
-}
-
-# Docker push
-resource "terraform_data" "docker_push" {
-  count = var.skip_docker_build || var.skip_docker_push ? 0 : 1
-
-  triggers_replace = {
-    # Push when build changes
-    build_id = terraform_data.docker_build[0].id
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "📤 Pushing Docker image to registry..."
-      echo "Image: ${local.image_uri}"
-
-      docker push ${local.image_uri}
-
-      echo "✅ Docker image pushed successfully"
+      echo "✅ Docker image built and pushed successfully"
       echo "Image URI: ${local.image_uri}"
     EOT
   }
-
-  depends_on = [
-    terraform_data.docker_build,
-    terraform_data.registry_login
-  ]
 }
 
 # Cleanup old images (optional)
@@ -120,17 +80,17 @@ resource "terraform_data" "docker_cleanup" {
   count = var.cleanup_old_images && !var.skip_docker_build ? 1 : 0
 
   triggers_replace = {
-    # Run after push
-    push_id = var.skip_docker_push ? "skip" : terraform_data.docker_push[0].id
+    build_id = terraform_data.docker_build[0].id
   }
 
   provisioner "local-exec" {
     command = <<-EOT
+      set -e
       echo "🧹 Cleaning up old Docker images..."
       docker image prune -f --filter "until=24h"
       echo "✅ Cleanup complete"
     EOT
   }
 
-  depends_on = [terraform_data.docker_push]
+  depends_on = [terraform_data.docker_build]
 }
