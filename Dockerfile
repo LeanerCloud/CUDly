@@ -62,6 +62,7 @@ COPY . .
 # Default: ARM64 for cost optimization (20% savings on AWS Fargate)
 RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -p 6 \
     -ldflags="-s -w -X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -o /app/cudly \
     ./cmd/server
