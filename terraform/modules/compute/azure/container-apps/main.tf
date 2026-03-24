@@ -45,7 +45,6 @@ resource "azurerm_container_app_environment" "main" {
   # No workload_profile block = Consumption plan (serverless, auto-scaling)
 
   tags = merge(var.tags, {
-    environment  = var.environment
     managed_by   = "terraform"
     architecture = "x86_64"
   })
@@ -218,9 +217,8 @@ resource "azurerm_container_app" "main" {
   }
 
   tags = merge(var.tags, {
-    environment  = var.environment
     managed_by   = "terraform"
-    architecture = "x86_64" # Explicit architecture tag
+    architecture = "x86_64"
   })
 }
 
