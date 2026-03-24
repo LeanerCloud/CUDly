@@ -238,19 +238,13 @@ resource "azurerm_role_assignment" "cost_management_reader" {
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
 
-# Reservations Reader: built-in role that covers Microsoft.Capacity read
-# operations and Microsoft.Compute/skus/read for SKU enumeration.
-resource "azurerm_role_assignment" "reservations_reader" {
-  scope                = data.azurerm_subscription.current.id
-  role_definition_name = "Reservations Reader"
-  principal_id         = azurerm_user_assigned_identity.container_app.principal_id
-}
-
-# Reservations Purchaser: allows writing reservationOrders so CUDly can
+# Reservation Purchaser: allows writing reservationOrders so CUDly can
 # purchase/exchange Azure reservations on behalf of users.
+# Note: "Reservations Reader" does not exist as a built-in Azure role.
+# Read access to reservations is covered by the Reservation Purchaser role itself.
 resource "azurerm_role_assignment" "reservations_purchaser" {
   scope                = data.azurerm_subscription.current.id
-  role_definition_name = "Reservations Purchaser"
+  role_definition_name = "Reservation Purchaser"
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
 
