@@ -42,8 +42,8 @@ database_name                  = "cudly"
 database_username              = "cudly"
 database_engine_version        = "16.6"
 database_backup_retention_days = 14
-database_deletion_protection   = true
-database_skip_final_snapshot   = false
+database_deletion_protection   = false
+database_skip_final_snapshot   = true
 database_performance_insights  = true
 database_auto_migrate          = true
 
