@@ -173,7 +173,7 @@ jobs:
         run: |
           cat <<EOF > deployment-info.json
           {
-            "environment": "${{ inputs.environment }}",
+            "environment": "${{ inputs.environment || 'dev' }}",
             "app_url": "${{ steps.deploy.outputs.app_url }}",
             "app_name": "${{ steps.deploy.outputs.app_name }}",
             "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -186,7 +186,7 @@ jobs:
       - name: Upload deployment info
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-info-azure-${{ inputs.environment }}
+          name: deployment-info-azure-${{ inputs.environment || 'dev' }}
           path: deployment-info.json
           retention-days: 90
 
@@ -286,14 +286,14 @@ jobs:
       - name: Download deployment info
         uses: actions/download-artifact@v4
         with:
-          name: deployment-info-azure-${{ inputs.environment }}
+          name: deployment-info-azure-${{ inputs.environment || 'dev' }}
         continue-on-error: true
 
       - name: Post summary
         run: |
           echo "## Azure Container Apps Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment || 'dev' }}" >> $GITHUB_STEP_SUMMARY
           echo "**Location:** ${{ env.AZURE_LOCATION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 

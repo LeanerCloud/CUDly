@@ -54,6 +54,8 @@ jobs:
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    outputs:
+      service_url: ${{ steps.deploy.outputs.service_url }}
 
     steps:
       - name: Checkout code
@@ -120,7 +122,7 @@ jobs:
         run: |
           cat <<EOF > deployment-info.json
           {
-            "environment": "${{ inputs.environment }}",
+            "environment": "${{ inputs.environment || 'dev' }}",
             "service_url": "${{ steps.deploy.outputs.service_url }}",
             "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "deployed_by": "${{ github.actor }}",
@@ -132,7 +134,7 @@ jobs:
       - name: Upload deployment info
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-info-gcp-${{ inputs.environment }}
+          name: deployment-info-gcp-${{ inputs.environment || 'dev' }}
           path: deployment-info.json
           retention-days: 90
 
@@ -143,39 +145,12 @@ jobs:
     needs: build-and-deploy
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform Init
-        env:
-          TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
-          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
-        run: |
-          printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
-          cd terraform/environments/gcp
-          terraform init -backend-config=/tmp/backend.tfbackend
-
       - name: Get Service URL
         id: get-url
         run: |
-          cd terraform/environments/gcp
-          SERVICE_URL=$(terraform output -raw cloud_run_service_url 2>/dev/null || echo "")
+          SERVICE_URL="${{ needs.build-and-deploy.outputs.service_url }}"
           if [ -z "$SERVICE_URL" ]; then
-            echo "Failed to get service URL"
+            echo "Failed to get service URL from deploy outputs"
             exit 1
           fi
           echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
@@ -240,14 +215,14 @@ jobs:
       - name: Download deployment info
         uses: actions/download-artifact@v4
         with:
-          name: deployment-info-gcp-${{ inputs.environment }}
+          name: deployment-info-gcp-${{ inputs.environment || 'dev' }}
         continue-on-error: true
 
       - name: Post summary
         run: |
           echo "## GCP Cloud Run Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment || 'dev' }}" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.GCP_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
