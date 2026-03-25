@@ -42,6 +42,7 @@ resource "aws_iam_policy" "compute" {
         Resource = [
           "arn:aws:logs:*:*:log-group:/aws/lambda/cudly-*",
           "arn:aws:logs:*:*:log-group:/aws/vpc/cudly-*",
+          "arn:aws:logs:*:*:log-group:/ecs/cudly-*",
         ]
       },
       {
