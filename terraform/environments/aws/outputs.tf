@@ -1,4 +1,18 @@
 # ==============================================
+# Registry Outputs
+# ==============================================
+
+output "ecr_repository_url" {
+  description = "ECR repository URL (includes registry prefix)"
+  value       = module.registry.repository_url
+}
+
+output "ecr_repository_name" {
+  description = "ECR repository name"
+  value       = module.registry.repository_name
+}
+
+# ==============================================
 # Networking Outputs
 # ==============================================
 
