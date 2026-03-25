@@ -48,6 +48,7 @@ env:
   GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'cudly' }}
   TF_VERSION: '1.10.0'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # Determine deployment environment

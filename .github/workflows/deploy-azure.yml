@@ -51,6 +51,7 @@ env:
   ACR_NAME: ${{ vars.ACR_NAME || 'cudlyacr' }}
   RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'cudly-rg' }}
   TF_VERSION: '1.10.0'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # Determine deployment environment
