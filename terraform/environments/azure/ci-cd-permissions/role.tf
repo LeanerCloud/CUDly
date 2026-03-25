@@ -27,5 +27,5 @@ resource "azurerm_role_definition" "cudly_deploy" {
 resource "azurerm_role_assignment" "cudly_deploy" {
   scope              = "/subscriptions/${var.subscription_id}"
   role_definition_id = azurerm_role_definition.cudly_deploy.role_definition_resource_id
-  principal_id       = var.assignee_object_id
+  principal_id       = azuread_service_principal.cudly_deploy.object_id
 }

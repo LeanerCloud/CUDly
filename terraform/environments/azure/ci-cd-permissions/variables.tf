@@ -3,7 +3,8 @@ variable "subscription_id" {
   type        = string
 }
 
-variable "assignee_object_id" {
-  description = "Azure AD object ID of the service principal to assign the deploy role to"
+variable "github_repo" {
+  description = "GitHub repository (owner/name) whose Actions workflows may authenticate via federated identity credentials (e.g. 'LeanerCloud/CUDly'). Leave empty to skip federated credential setup."
   type        = string
+  default     = "LeanerCloud/CUDly"
 }
