@@ -1,0 +1,9 @@
+# Azure CI/CD Permissions - example tfvars
+# Copy to terraform.tfvars and fill in your values
+
+# Azure subscription ID
+subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# Object ID of the service principal that will be assigned the deploy role.
+# Get it with: az ad sp show --id <appId> --query id -o tsv
+assignee_object_id = "00000000-0000-0000-0000-000000000000"

@@ -1,0 +1,10 @@
+# AWS CI/CD Permissions - example tfvars
+# Copy to terraform.tfvars and fill in your values
+
+# AWS region (must match state bucket region)
+aws_region = "us-east-1"
+
+# IAM principal allowed to assume the cudly-terraform-deploy role.
+# Use "user/<username>" for an IAM user, or "role/<rolename>" for a role
+# (e.g. a GitHub Actions OIDC role).
+trust_principal = "user/alice"

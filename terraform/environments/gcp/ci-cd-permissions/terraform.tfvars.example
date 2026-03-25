@@ -1,0 +1,5 @@
+# GCP CI/CD Permissions - example tfvars
+# Copy to terraform.tfvars and fill in your values
+
+# GCP project ID where the deploy service account will be created
+project_id = "your-gcp-project-id"

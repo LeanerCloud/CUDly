@@ -7,7 +7,7 @@ resource "aws_iam_role" "cudly_deploy" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/cristi" }
+      Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:${var.trust_principal}" }
       Action    = "sts:AssumeRole"
     }]
   })
