@@ -64,7 +64,7 @@ recommendation_schedule = "0 2 * * *"
 # Logging
 # ==============================================
 
-log_retention_days = 7
+log_retention_days = 30
 
 # ==============================================
 # Frontend (Azure Front Door)
