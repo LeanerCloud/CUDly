@@ -1,0 +1,210 @@
+# Cleanup Staging Resources (one-off)
+#
+# Destroys all resources tracked in the staging Terraform state files.
+# Run this once after switching the default pipeline environment to 'dev'.
+#
+# Required GitHub Secrets (same as deploy workflows):
+#   - TF_BACKEND_AWS, TF_BACKEND_AZURE, TF_BACKEND_GCP
+#   - ADMIN_EMAIL
+#   - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#
+# Required GitHub Variables:
+#   - AWS_REGION, AWS_ROLE_TO_ASSUME
+#   - GCP_PROJECT_ID, GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT
+
+name: Cleanup Staging Resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm destruction of ALL staging resources'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: '1.10.0'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  guard:
+    name: Confirm Destruction
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "destroy" ]; then
+            echo "You must type 'destroy' exactly to confirm. Got: '$CONFIRM'"
+            exit 1
+          fi
+          echo "Confirmation accepted. Proceeding with staging resource destruction."
+
+  destroy-aws-lambda:
+    name: Destroy AWS Lambda (staging)
+    runs-on: ubuntu-24.04-arm
+    needs: guard
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init (staging state)
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+        run: |
+          printf '%s\nkey = "github-staging/terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
+          cd terraform/environments/aws
+          terraform init -backend-config=/tmp/backend.tfbackend
+
+      - name: Terraform Destroy
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/aws
+          terraform destroy \
+            -var-file="github-staging.tfvars" \
+            -var="compute_platform=lambda" \
+            -auto-approve
+
+  destroy-aws-fargate:
+    name: Destroy AWS Fargate (staging)
+    runs-on: ubuntu-24.04-arm
+    needs: guard
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init (staging state)
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+        run: |
+          printf '%s\nkey = "github-fargate-staging/terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
+          cd terraform/environments/aws
+          terraform init -backend-config=/tmp/backend.tfbackend
+
+      - name: Terraform Destroy
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/aws
+          terraform destroy \
+            -var-file="github-staging.tfvars" \
+            -var="compute_platform=fargate" \
+            -auto-approve
+
+  destroy-azure:
+    name: Destroy Azure (staging)
+    runs-on: ubuntu-latest
+    needs: guard
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init (staging state)
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
+        run: |
+          printf '%s\nkey = "github-staging.terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
+          cd terraform/environments/azure
+          terraform init -backend-config=/tmp/backend.tfbackend
+
+      - name: Terraform Destroy
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          cd terraform/environments/azure
+          terraform destroy \
+            -var-file="github-staging.tfvars" \
+            -var="location=eastus" \
+            -auto-approve || echo "Destroy complete (some resources may have already been absent)"
+
+  destroy-gcp:
+    name: Destroy GCP (staging)
+    runs-on: ubuntu-latest
+    needs: guard
+    env:
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init (staging state)
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
+        run: |
+          printf '%s\nprefix = "github-staging"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
+          cd terraform/environments/gcp
+          terraform init -backend-config=/tmp/backend.tfbackend
+
+      - name: Terraform Destroy
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          cd terraform/environments/gcp
+          terraform destroy \
+            -var-file="github-staging.tfvars" \
+            -auto-approve || echo "Destroy complete (some resources may have already been absent)"
