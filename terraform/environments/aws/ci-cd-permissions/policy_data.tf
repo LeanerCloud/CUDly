@@ -57,6 +57,17 @@ resource "aws_iam_policy" "data" {
         Resource = "*"
       },
       {
+        Sid      = "IAMServiceLinkedRole"
+        Effect   = "Allow"
+        Action   = ["iam:CreateServiceLinkedRole"]
+        Resource = "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+        Condition = {
+          StringLike = {
+            "iam:AWSServiceName" = "rds.amazonaws.com"
+          }
+        }
+      },
+      {
         Sid    = "RDS"
         Effect = "Allow"
         Action = [
