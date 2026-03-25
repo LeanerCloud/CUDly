@@ -7,5 +7,6 @@ variable "subscription_id" {
 variable "assignee_object_id" {
   description = "Azure AD object ID of the user/SP to assign the deploy role to"
   type        = string
-  default     = "2187c37b-8380-40f3-9403-955a6040dad1"
+  # cudly-terraform-deploy SP: a3e02cbb-a854-4f8a-83a4-6c3388eaefa6
+  default = "a3e02cbb-a854-4f8a-83a4-6c3388eaefa6"
 }

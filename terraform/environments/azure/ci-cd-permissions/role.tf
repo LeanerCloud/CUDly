@@ -10,9 +10,12 @@ resource "azurerm_role_definition" "cudly_deploy" {
       local.networking_actions,
     )
     not_actions = []
-    # Blob data-plane: needed for Terraform state backend read/write
+    # Data-plane permissions (cannot be granted via control-plane actions block)
     data_actions = [
+      # Blob data-plane: Terraform state backend read/write
       "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/*",
+      # Key Vault data-plane: read/write secrets (enableRbacAuthorization=true vaults)
+      "Microsoft.KeyVault/vaults/secrets/*",
     ]
   }
 
