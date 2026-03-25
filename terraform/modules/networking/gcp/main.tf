@@ -90,6 +90,11 @@ resource "google_vpc_access_connector" "main" {
   machine_type  = var.connector_machine_type
   min_instances = var.connector_min_instances
   max_instances = var.connector_max_instances
+
+  timeouts {
+    create = "20m"
+    delete = "20m"
+  }
 }
 
 # Dedicated subnet for VPC Access Connector
