@@ -49,6 +49,7 @@ database_subnet_cidr       = "10.0.2.0/24"
 # Key Vault
 # ==============================================
 
+key_vault_name             = "cudly-dev-kv"
 key_vault_sku              = "standard"
 soft_delete_retention_days = 7
 purge_protection_enabled   = false
