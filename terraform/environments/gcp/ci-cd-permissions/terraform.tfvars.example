@@ -1,5 +1,20 @@
 # GCP CI/CD Permissions - example tfvars
-# Copy to terraform.tfvars and fill in your values
-
-# GCP project ID where the deploy service account will be created
+# Copy to terraform.tfvars and fill in your values.
+#
+# Prerequisites: gcloud CLI authenticated (gcloud auth login) with an account
+# that has Project IAM Admin on the target project.
+#
+# ─── project_id ────────────────────────────────────────────────────────────────
+# The GCP project where the cudly-terraform-deploy service account will be
+# created and granted the necessary roles.
+#
+# List projects you have access to:
+#   gcloud projects list --format="table(projectId,name)"
+#
+# Show the currently active project:
+#   gcloud config get-value project
+#
+# Get the project ID from a project number:
+#   gcloud projects describe <PROJECT_NUMBER> --format="value(projectId)"
+#
 project_id = "your-gcp-project-id"

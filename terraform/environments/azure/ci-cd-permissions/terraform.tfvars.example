@@ -1,9 +1,32 @@
 # Azure CI/CD Permissions - example tfvars
-# Copy to terraform.tfvars and fill in your values
-
-# Azure subscription ID
+# Copy to terraform.tfvars and fill in your values.
+#
+# Prerequisites: Azure CLI logged in (az login) with an account that has
+# Owner or User Access Administrator on the target subscription.
+#
+# ─── subscription_id ───────────────────────────────────────────────────────────
+# The subscription where the custom deploy role will be created and assigned.
+#
+# List all subscriptions you have access to:
+#   az account list --query "[].{name:name, id:id}" --output table
+#
+# Show the currently active subscription:
+#   az account show --query id --output tsv
+#
 subscription_id = "00000000-0000-0000-0000-000000000000"
 
-# Object ID of the service principal that will be assigned the deploy role.
-# Get it with: az ad sp show --id <appId> --query id -o tsv
+# ─── assignee_object_id ────────────────────────────────────────────────────────
+# Object ID of the service principal that will be assigned the CUDly Terraform
+# deploy role.  This must be the *object* ID (not the app/client ID).
+#
+# Option A — create a new service principal and capture its object ID:
+#   az ad sp create-for-rbac --name "cudly-terraform-deploy" --skip-assignment true
+#   az ad sp show --id <appId from above> --query id --output tsv
+#
+# Option B — look up an existing service principal by display name:
+#   az ad sp list --display-name "cudly-terraform-deploy" --query "[0].id" --output tsv
+#
+# Option C — use a user account instead of a SP (not recommended for CI/CD):
+#   az ad user show --id user@example.com --query id --output tsv
+#
 assignee_object_id = "00000000-0000-0000-0000-000000000000"

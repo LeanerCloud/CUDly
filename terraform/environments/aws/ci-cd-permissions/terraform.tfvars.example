@@ -1,10 +1,31 @@
 # AWS CI/CD Permissions - example tfvars
-# Copy to terraform.tfvars and fill in your values
-
-# AWS region (must match state bucket region)
+# Copy to terraform.tfvars and fill in your values.
+#
+# Prerequisites: AWS CLI configured with credentials that have IAM write access.
+#
+# ─── aws_region ────────────────────────────────────────────────────────────────
+# Must match the region of the Terraform state S3 bucket.
+# Fetch your current default region:
+#   aws configure get region
+#
 aws_region = "us-east-1"
 
-# IAM principal allowed to assume the cudly-terraform-deploy role.
-# Use "user/<username>" for an IAM user, or "role/<rolename>" for a role
-# (e.g. a GitHub Actions OIDC role).
+# ─── trust_principal ───────────────────────────────────────────────────────────
+# IAM principal (within the same account) allowed to assume the
+# cudly-terraform-deploy role via sts:AssumeRole.
+#
+# Format: "user/<username>" or "role/<rolename>"
+#
+# For an IAM user — find your username:
+#   aws iam get-user --query 'User.UserName' --output text
+#   → trust_principal = "user/alice"
+#
+# For a GitHub Actions OIDC role (recommended for CI/CD):
+#   aws iam list-roles --query "Roles[?contains(RoleName,'github')].RoleName" --output text
+#   → trust_principal = "role/GitHubActionsRole"
+#
+# For the current caller identity (any type):
+#   aws sts get-caller-identity --query 'Arn' --output text
+#   # Extract the "user/<name>" or "role/<name>" suffix from the ARN
+#
 trust_principal = "user/alice"
