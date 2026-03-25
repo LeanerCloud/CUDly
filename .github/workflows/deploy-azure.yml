@@ -53,10 +53,29 @@ env:
   TF_VERSION: '1.10.0'
 
 jobs:
+  # Determine deployment environment
+  prepare:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+    steps:
+      - name: Determine environment
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_call" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
   # Build Docker image (via Terraform build module) and deploy
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    needs: prepare
     outputs:
       app_url: ${{ steps.deploy.outputs.app_url }}
       app_name: ${{ steps.deploy.outputs.app_name }}
@@ -85,7 +104,7 @@ jobs:
       - name: Break stale state lock (if any)
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
-          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           STORAGE_ACCOUNT=$(grep -E '^\s*storage_account_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
@@ -120,7 +139,7 @@ jobs:
         run: |
           cd terraform/environments/azure
           terraform plan \
-            -var-file="github-${{ inputs.environment || 'dev' }}.tfvars" \
+            -var-file="github-${{ needs.prepare.outputs.environment }}.tfvars" \
             -var="resource_group=${{ env.RESOURCE_GROUP }}" \
             -var="location=${{ env.AZURE_LOCATION }}" \
             -out=tfplan
@@ -146,7 +165,7 @@ jobs:
       - name: Release state lock on failure
         if: failure() || cancelled()
         env:
-          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           STORAGE_ACCOUNT=$(grep -E '^\s*storage_account_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
           CONTAINER=$(grep -E '^\s*container_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
@@ -173,7 +192,7 @@ jobs:
         run: |
           cat <<EOF > deployment-info.json
           {
-            "environment": "${{ inputs.environment || 'dev' }}",
+            "environment": "${{ needs.prepare.outputs.environment }}",
             "app_url": "${{ steps.deploy.outputs.app_url }}",
             "app_name": "${{ steps.deploy.outputs.app_name }}",
             "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -186,7 +205,7 @@ jobs:
       - name: Upload deployment info
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-info-azure-${{ inputs.environment || 'dev' }}
+          name: deployment-info-azure-${{ needs.prepare.outputs.environment }}
           path: deployment-info.json
           retention-days: 90
 
@@ -194,7 +213,8 @@ jobs:
   test-deployment:
     name: Test Deployment
     runs-on: ubuntu-latest
-    needs: build-and-deploy
+    needs: [prepare, build-and-deploy]
+    if: always() && needs.build-and-deploy.result == 'success'
 
     steps:
       - name: Azure Login
@@ -212,28 +232,30 @@ jobs:
             echo "Failed to get app URL from deploy outputs"
             exit 1
           fi
+          # Ensure URL has scheme and no trailing slash
+          case "$APP_URL" in
+            http://*|https://*) ;; # already has scheme
+            *) APP_URL="https://$APP_URL" ;;
+          esac
+          APP_URL="${APP_URL%/}"
           echo "url=$APP_URL" >> $GITHUB_OUTPUT
 
       - name: Wait for Container App to be ready
         run: |
-          echo "Waiting 45 seconds for Container App to be ready..."
-          sleep 45
+          echo "Waiting 30 seconds for Container App to be ready..."
+          sleep 30
 
       - name: Test health endpoint
         run: |
           URL="${{ steps.get-url.outputs.url }}"
-          echo "Testing health endpoint: https://$URL/health"
+          echo "Testing health endpoint: $URL/health"
 
-          for i in {1..10}; do
-            if curl -f -s "https://$URL/health" > /dev/null; then
-              echo "✅ Health check passed!"
-
-              # Test response content
-              RESPONSE=$(curl -s "https://$URL/health")
+          for i in {1..5}; do
+            if curl -f -s "$URL/health" > /dev/null; then
+              RESPONSE=$(curl -s "$URL/health")
               echo "Response: $RESPONSE"
-
               if echo "$RESPONSE" | grep -q '"status"'; then
-                echo "✅ Health endpoint returns valid JSON"
+                echo "Health check passed!"
                 exit 0
               fi
             fi
@@ -241,7 +263,7 @@ jobs:
             sleep 10
           done
 
-          echo "❌ Health check failed after 10 attempts"
+          echo "Health check failed after 5 attempts"
           exit 1
 
       - name: Run smoke tests
@@ -250,19 +272,18 @@ jobs:
 
           echo "Running basic smoke tests..."
 
-          # Test health endpoint multiple times
           for i in {1..3}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$URL/health")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health")
             if [ "$STATUS" -eq 200 ]; then
-              echo "✅ Health check $i: passed (HTTP $STATUS)"
+              echo "Health check $i: passed (HTTP $STATUS)"
             else
-              echo "❌ Health check $i: failed (HTTP $STATUS)"
+              echo "Health check $i: failed (HTTP $STATUS)"
               exit 1
             fi
             sleep 2
           done
 
-          echo "✅ All smoke tests passed!"
+          echo "All smoke tests passed!"
 
       - name: Check Container App logs
         run: |
@@ -279,21 +300,21 @@ jobs:
   summary:
     name: Deployment Summary
     runs-on: ubuntu-latest
-    needs: [build-and-deploy, test-deployment]
+    needs: [prepare, build-and-deploy, test-deployment]
     if: always()
 
     steps:
       - name: Download deployment info
         uses: actions/download-artifact@v4
         with:
-          name: deployment-info-azure-${{ inputs.environment || 'dev' }}
+          name: deployment-info-azure-${{ needs.prepare.outputs.environment }}
         continue-on-error: true
 
       - name: Post summary
         run: |
           echo "## Azure Container Apps Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment || 'dev' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "**Location:** ${{ env.AZURE_LOCATION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
