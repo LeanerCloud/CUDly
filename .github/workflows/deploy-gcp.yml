@@ -50,10 +50,29 @@ env:
   TF_VERSION: '1.10.0'
 
 jobs:
+  # Determine deployment environment
+  prepare:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+    steps:
+      - name: Determine environment
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_call" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
   # Build Docker image (via Terraform build module) and deploy
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    needs: prepare
     outputs:
       service_url: ${{ steps.deploy.outputs.service_url }}
 
@@ -78,9 +97,15 @@ jobs:
       - name: Terraform Init
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
-          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
+          # Break any stale state lock from a previous failed run
+          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          if [ -n "$BUCKET" ]; then
+            LOCK_FILE="gs://${BUCKET}/github-${ENVIRONMENT}/default.tflock"
+            gsutil rm "${LOCK_FILE}" 2>/dev/null || true
+          fi
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
 
@@ -90,7 +115,7 @@ jobs:
         run: |
           cd terraform/environments/gcp
           terraform plan \
-            -var-file="github-${{ inputs.environment || 'dev' }}.tfvars" \
+            -var-file="github-${{ needs.prepare.outputs.environment }}.tfvars" \
             -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
             -out=tfplan
 
@@ -109,7 +134,7 @@ jobs:
       - name: Release state lock on failure
         if: failure() || cancelled()
         env:
-          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
           if [ -n "$BUCKET" ]; then
@@ -122,7 +147,7 @@ jobs:
         run: |
           cat <<EOF > deployment-info.json
           {
-            "environment": "${{ inputs.environment || 'dev' }}",
+            "environment": "${{ needs.prepare.outputs.environment }}",
             "service_url": "${{ steps.deploy.outputs.service_url }}",
             "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "deployed_by": "${{ github.actor }}",
@@ -134,7 +159,7 @@ jobs:
       - name: Upload deployment info
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-info-gcp-${{ inputs.environment || 'dev' }}
+          name: deployment-info-gcp-${{ needs.prepare.outputs.environment }}
           path: deployment-info.json
           retention-days: 90
 
@@ -142,7 +167,8 @@ jobs:
   test-deployment:
     name: Test Deployment
     runs-on: ubuntu-latest
-    needs: build-and-deploy
+    needs: [prepare, build-and-deploy]
+    if: always() && needs.build-and-deploy.result == 'success'
 
     steps:
       - name: Get Service URL
@@ -153,6 +179,7 @@ jobs:
             echo "Failed to get service URL from deploy outputs"
             exit 1
           fi
+          SERVICE_URL="${SERVICE_URL%/}"
           echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
       - name: Wait for Cloud Run to be ready
@@ -167,14 +194,10 @@ jobs:
 
           for i in {1..5}; do
             if curl -f -s "$URL/health" > /dev/null; then
-              echo "✅ Health check passed!"
-
-              # Test response content
               RESPONSE=$(curl -s "$URL/health")
               echo "Response: $RESPONSE"
-
               if echo "$RESPONSE" | grep -q '"status"'; then
-                echo "✅ Health endpoint returns valid JSON"
+                echo "Health check passed!"
                 exit 0
               fi
             fi
@@ -182,7 +205,7 @@ jobs:
             sleep 10
           done
 
-          echo "❌ Health check failed after 5 attempts"
+          echo "Health check failed after 5 attempts"
           exit 1
 
       - name: Run smoke tests
@@ -195,34 +218,35 @@ jobs:
           for i in {1..3}; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health")
             if [ "$STATUS" -eq 200 ]; then
-              echo "✅ Health check $i: passed (HTTP $STATUS)"
+              echo "Health check $i: passed (HTTP $STATUS)"
             else
-              echo "❌ Health check $i: failed (HTTP $STATUS)"
+              echo "Health check $i: failed (HTTP $STATUS)"
               exit 1
             fi
+            sleep 2
           done
 
-          echo "✅ All smoke tests passed!"
+          echo "All smoke tests passed!"
 
   # Post deployment summary
   summary:
     name: Deployment Summary
     runs-on: ubuntu-latest
-    needs: [build-and-deploy, test-deployment]
+    needs: [prepare, build-and-deploy, test-deployment]
     if: always()
 
     steps:
       - name: Download deployment info
         uses: actions/download-artifact@v4
         with:
-          name: deployment-info-gcp-${{ inputs.environment || 'dev' }}
+          name: deployment-info-gcp-${{ needs.prepare.outputs.environment }}
         continue-on-error: true
 
       - name: Post summary
         run: |
           echo "## GCP Cloud Run Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ inputs.environment || 'dev' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.prepare.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.GCP_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
