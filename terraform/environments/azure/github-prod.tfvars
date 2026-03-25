@@ -16,7 +16,7 @@ cost_center  = "engineering"
 # ==============================================
 
 compute_platform    = "container-apps"
-enable_docker_build = false # Use pre-built image from CI/CD pipeline
+enable_docker_build = true # Build image via Terraform build module (no separate CI build step)
 
 # Container Apps Configuration
 container_cpu            = 2.0

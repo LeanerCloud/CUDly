@@ -15,7 +15,7 @@ region       = "us-east-1"
 # ==============================================
 
 compute_platform    = "lambda"
-enable_docker_build = false # Use pre-built image from CI/CD pipeline
+enable_docker_build = true # Build image via Terraform build module (no separate CI build step)
 
 # Lambda Configuration
 lambda_architecture           = "arm64"
