@@ -47,3 +47,14 @@ resource "azuread_application_federated_identity_credential" "github_pr" {
   issuer         = "https://token.actions.githubusercontent.com"
   subject        = "repo:${var.github_repo}:pull_request"
 }
+
+resource "azuread_application_federated_identity_credential" "github_feat_multicloud" {
+  count = var.github_repo != "" ? 1 : 0
+
+  application_id = azuread_application.cudly_deploy.id
+  display_name   = "github-actions-feat-multicloud"
+  description    = "GitHub Actions OIDC — ${var.github_repo} feat/multicloud-web-frontend branch"
+  audiences      = ["api://AzureADTokenExchange"]
+  issuer         = "https://token.actions.githubusercontent.com"
+  subject        = "repo:${var.github_repo}:ref:refs/heads/feat/multicloud-web-frontend"
+}

@@ -13,7 +13,7 @@ module "build" {
 
   # Build configuration
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
-  # platform defaults to native (arm64 on Apple Silicon, amd64 on x86). Set explicitly for cross-compilation in CI/CD.
+  platform    = "linux/amd64"           # Lambda container images run on amd64
 
   # Registry login for ECR
   registry_login_command = "aws ecr get-login-password --region ${var.region}${var.aws_profile != null ? " --profile ${var.aws_profile}" : ""} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
@@ -21,4 +21,6 @@ module "build" {
   # Build options
   skip_docker_build  = false
   cleanup_old_images = true
+
+  depends_on = [module.registry]
 }

@@ -7,16 +7,16 @@ module "build" {
   source = "../../modules/build"
   count  = var.enable_docker_build ? 1 : 0
 
-  # GCR/Artifact Registry configuration
-  registry_url = "gcr.io/${var.project_id}"
+  # Artifact Registry configuration
+  registry_url = module.registry.repository_url
   image_name   = "cudly"
 
   # Build configuration
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
   platform    = "linux/amd64"           # Cloud Run and GKE use amd64
 
-  # Registry login for GCR
-  registry_login_command = "gcloud auth configure-docker gcr.io"
+  # Registry login for Artifact Registry
+  registry_login_command = "gcloud auth configure-docker ${var.region}-docker.pkg.dev"
 
   # Build options
   skip_docker_build  = false

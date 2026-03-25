@@ -49,13 +49,10 @@ env:
   TF_VERSION: '1.6.0'
 
 jobs:
-  # Build and push Docker image to ACR
+  # Build Docker image (via Terraform build module) and deploy
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    environment:
-      name: azure-${{ inputs.environment }}
-      url: ${{ steps.deploy.outputs.app_url }}
 
     steps:
       - name: Checkout code
@@ -67,30 +64,6 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Login to Azure Container Registry
-        run: |
-          az acr login --name ${{ env.ACR_NAME }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker image
-        run: |
-          IMAGE_URI="${{ env.ACR_NAME }}.azurecr.io/cudly:${{ github.sha }}"
-          echo "Building image: $IMAGE_URI"
-
-          # Azure Container Apps uses x86_64 (amd64) architecture
-          docker buildx build \
-            --platform linux/amd64 \
-            --build-arg VERSION=${{ github.sha }} \
-            -t $IMAGE_URI \
-            --push \
-            .
-
-          echo "Pushing image to Azure Container Registry..."
-
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -115,7 +88,6 @@ jobs:
           cd terraform/environments/azure
           terraform plan \
             -var-file="github-${{ inputs.environment || 'dev' }}.tfvars" \
-            -var="image_uri=${{ env.IMAGE_URI }}" \
             -var="resource_group=${{ env.RESOURCE_GROUP }}" \
             -var="location=${{ env.AZURE_LOCATION }}" \
             -out=tfplan
@@ -143,7 +115,6 @@ jobs:
           cat <<EOF > deployment-info.json
           {
             "environment": "${{ inputs.environment }}",
-            "image_uri": "${{ env.IMAGE_URI }}",
             "app_url": "${{ steps.deploy.outputs.app_url }}",
             "app_name": "${{ steps.deploy.outputs.app_name }}",
             "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",

@@ -46,13 +46,10 @@ env:
   TF_VERSION: '1.6.0'
 
 jobs:
-  # Build and push Docker image to Artifact Registry
+  # Build Docker image (via Terraform build module) and deploy
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    environment:
-      name: gcp-${{ inputs.environment }}
-      url: ${{ steps.deploy.outputs.service_url }}
 
     steps:
       - name: Checkout code
@@ -66,28 +63,6 @@ jobs:
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: |
-          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker image
-        run: |
-          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/cudly:${{ github.sha }}"
-          echo "Building image: $IMAGE_URI"
-
-          # GCP Cloud Run uses x86_64 (amd64) architecture
-          docker buildx build \
-            --platform linux/amd64 \
-            --build-arg VERSION=${{ github.sha }} \
-            -t $IMAGE_URI \
-            --push \
-            .
-
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -110,7 +85,6 @@ jobs:
           cd terraform/environments/gcp
           terraform plan \
             -var-file="github-${{ inputs.environment || 'dev' }}.tfvars" \
-            -var="image_uri=${{ env.IMAGE_URI }}" \
             -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
             -out=tfplan
 
@@ -131,7 +105,6 @@ jobs:
           cat <<EOF > deployment-info.json
           {
             "environment": "${{ inputs.environment }}",
-            "image_uri": "${{ env.IMAGE_URI }}",
             "service_url": "${{ steps.deploy.outputs.service_url }}",
             "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "deployed_by": "${{ github.actor }}",

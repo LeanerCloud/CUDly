@@ -15,7 +15,7 @@ region       = "us-central1"
 # ==============================================
 
 compute_platform    = "cloud-run"
-enable_docker_build = false # Use pre-built image from CI/CD pipeline
+enable_docker_build = true # Build and push image via terraform apply on the runner
 
 # Cloud Run Configuration
 cloud_run_cpu                   = "1"
