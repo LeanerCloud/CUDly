@@ -1,8 +1,9 @@
 # Azure Terraform Backend Configuration - Development
 # Copy to dev.tfbackend and customize with your values
 #
-# Usage (backend.tf is gitignored — create it once per checkout):
-#   printf 'terraform {\n  backend "azurerm" {}\n}\n' > backend.tf
+# Usage:
+#   cp backends/dev.tfbackend.example backends/dev.tfbackend
+#   # Edit dev.tfbackend with your values, then:
 #   terraform init -backend-config=backends/dev.tfbackend
 
 resource_group_name  = "cudly-terraform-state-rg"

@@ -74,7 +74,6 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
-          printf 'terraform {\n  backend "gcs" {}\n}\n' > terraform/environments/gcp/backend.tf
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
@@ -150,7 +149,6 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
-          printf 'terraform {\n  backend "gcs" {}\n}\n' > terraform/environments/gcp/backend.tf
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
