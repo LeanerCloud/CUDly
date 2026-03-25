@@ -10,22 +10,31 @@
 #
 aws_region = "us-east-1"
 
+# ─── github_repo ───────────────────────────────────────────────────────────────
+# GitHub repository (owner/name) whose Actions workflows may assume the deploy
+# role via OIDC (keyless — no access keys needed).
+#
+# Creates an IAM OIDC identity provider for token.actions.githubusercontent.com
+# and updates the role trust policy to allow sts:AssumeRoleWithWebIdentity from
+# the specified repo.
+#
+# Set to "" to skip OIDC provider creation.
+#
+github_repo = "LeanerCloud/CUDly"
+
 # ─── trust_principal ───────────────────────────────────────────────────────────
-# IAM principal (within the same account) allowed to assume the
-# cudly-terraform-deploy role via sts:AssumeRole.
+# (Optional) IAM principal in the same account allowed to assume the deploy
+# role via sts:AssumeRole — useful for local developer deployments.
 #
 # Format: "user/<username>" or "role/<rolename>"
 #
-# For an IAM user — find your username:
+# Find your IAM username:
 #   aws iam get-user --query 'User.UserName' --output text
-#   → trust_principal = "user/alice"
 #
-# For a GitHub Actions OIDC role (recommended for CI/CD):
-#   aws iam list-roles --query "Roles[?contains(RoleName,'github')].RoleName" --output text
-#   → trust_principal = "role/GitHubActionsRole"
-#
-# For the current caller identity (any type):
+# Find your current caller identity:
 #   aws sts get-caller-identity --query 'Arn' --output text
-#   # Extract the "user/<name>" or "role/<name>" suffix from the ARN
+#   # Extract the "user/<name>" or "assumed-role/<name>/..." suffix
 #
-trust_principal = "user/alice"
+# Leave empty (or omit) if GitHub Actions OIDC is the only deploy path.
+#
+# trust_principal = "user/alice"

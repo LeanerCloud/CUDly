@@ -15,18 +15,14 @@
 #
 subscription_id = "00000000-0000-0000-0000-000000000000"
 
-# ─── assignee_object_id ────────────────────────────────────────────────────────
-# Object ID of the service principal that will be assigned the CUDly Terraform
-# deploy role.  This must be the *object* ID (not the app/client ID).
+# ─── github_repo ───────────────────────────────────────────────────────────────
+# GitHub repository (owner/name) whose Actions workflows will authenticate
+# via Azure AD Federated Identity Credentials (keyless — no client secrets).
 #
-# Option A — create a new service principal and capture its object ID:
-#   az ad sp create-for-rbac --name "cudly-terraform-deploy" --skip-assignment true
-#   az ad sp show --id <appId from above> --query id --output tsv
+# Two federated credentials are created:
+#   - main branch deployments: repo:<owner>/<name>:ref:refs/heads/main
+#   - pull request plan checks: repo:<owner>/<name>:pull_request
 #
-# Option B — look up an existing service principal by display name:
-#   az ad sp list --display-name "cudly-terraform-deploy" --query "[0].id" --output tsv
+# Set to "" to skip federated credential and service principal creation.
 #
-# Option C — use a user account instead of a SP (not recommended for CI/CD):
-#   az ad user show --id user@example.com --query id --output tsv
-#
-assignee_object_id = "00000000-0000-0000-0000-000000000000"
+github_repo = "LeanerCloud/CUDly"

@@ -1,0 +1,35 @@
+# AWS backend configuration for ci-cd-permissions
+# Copy to backend.hcl and fill in your values.
+# Pass to terraform init: terraform init -backend-config=backend.hcl
+#
+# The S3 bucket must exist before running terraform init.
+# See README.md for bucket creation commands.
+#
+# ─── bucket ────────────────────────────────────────────────────────────────────
+# Name of the S3 bucket that holds Terraform state.
+# List existing buckets:
+#   aws s3 ls
+#
+bucket = "cudly-terraform-state-dev"
+
+# ─── key ───────────────────────────────────────────────────────────────────────
+# State file path within the bucket. Use a unique key per workspace.
+#
+key = "iam/terraform.tfstate"
+
+# ─── region ────────────────────────────────────────────────────────────────────
+# Region of the S3 bucket (must match the bucket's region).
+# Check the bucket's region:
+#   aws s3api get-bucket-location --bucket cudly-terraform-state-dev --output text
+#
+region = "us-east-1"
+
+# ─── encrypt ───────────────────────────────────────────────────────────────────
+# Always encrypt state at rest.
+#
+encrypt = true
+
+# ─── use_lockfile ──────────────────────────────────────────────────────────────
+# Use S3-native locking (Terraform >= 1.10, no DynamoDB table needed).
+#
+use_lockfile = true
