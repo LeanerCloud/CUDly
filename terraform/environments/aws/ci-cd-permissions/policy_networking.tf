@@ -64,6 +64,8 @@ resource "aws_iam_policy" "networking" {
           "ec2:DisassociateRouteTable",
           "ec2:ModifySubnetAttribute",
           "ec2:ModifyVpcAttribute",
+          "ec2:ModifyVpcEndpoint",
+          "ec2:ReplaceRoute",
           "ec2:RevokeSecurityGroupEgress",
           "ec2:RevokeSecurityGroupIngress",
           "ec2:RunInstances",
