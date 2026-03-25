@@ -76,6 +76,32 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
+      - name: Empty ECR repository before destroy
+        run: |
+          REPO="cudly-staging"
+          # Try the known staging repo name; also try legacy name without suffix
+          for REPO_NAME in cudly-staging cudly; do
+            IMAGE_IDS=$(aws ecr list-images --repository-name "$REPO_NAME" \
+              --query 'imageIds[*]' --output json 2>/dev/null)
+            if [ "$IMAGE_IDS" != "null" ] && [ "$IMAGE_IDS" != "[]" ]; then
+              echo "Deleting images from ECR repo $REPO_NAME..."
+              aws ecr batch-delete-image --repository-name "$REPO_NAME" \
+                --image-ids "$IMAGE_IDS" 2>/dev/null || true
+            fi
+          done
+          # Also try to find the staging ECR repo from state
+          REPO_NAME=$(cd terraform/environments/aws && \
+            terraform output -raw ecr_repository_name 2>/dev/null || echo "")
+          if [ -n "$REPO_NAME" ] && [ "$REPO_NAME" != "cudly-staging" ] && [ "$REPO_NAME" != "cudly" ]; then
+            IMAGE_IDS=$(aws ecr list-images --repository-name "$REPO_NAME" \
+              --query 'imageIds[*]' --output json 2>/dev/null)
+            if [ "$IMAGE_IDS" != "null" ] && [ "$IMAGE_IDS" != "[]" ]; then
+              echo "Deleting images from ECR repo $REPO_NAME..."
+              aws ecr batch-delete-image --repository-name "$REPO_NAME" \
+                --image-ids "$IMAGE_IDS" 2>/dev/null || true
+            fi
+          fi
+
       - name: Terraform Destroy
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
@@ -117,6 +143,21 @@ jobs:
           printf '%s\nkey = "github-fargate-staging/terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
+
+      - name: Empty ECR repository before destroy
+        run: |
+          # Get ECR repo name from Terraform output (random suffix)
+          REPO_NAME=$(cd terraform/environments/aws && \
+            terraform output -raw ecr_repository_name 2>/dev/null || echo "")
+          if [ -n "$REPO_NAME" ]; then
+            IMAGE_IDS=$(aws ecr list-images --repository-name "$REPO_NAME" \
+              --query 'imageIds[*]' --output json 2>/dev/null)
+            if [ "$IMAGE_IDS" != "null" ] && [ "$IMAGE_IDS" != "[]" ]; then
+              echo "Deleting images from ECR repo $REPO_NAME..."
+              aws ecr batch-delete-image --repository-name "$REPO_NAME" \
+                --image-ids "$IMAGE_IDS" 2>/dev/null || true
+            fi
+          fi
 
       - name: Terraform Destroy
         env:
@@ -206,6 +247,24 @@ jobs:
           printf '%s\nprefix = "github-staging"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
+
+      - name: Delete Cloud SQL instance directly (avoids user/DB ordering deadlock)
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          PROJECT="${{ vars.GCP_PROJECT_ID }}"
+          # Find and delete the staging Cloud SQL instance to avoid PostgreSQL dependency errors
+          INSTANCE=$(gcloud sql instances list --project="$PROJECT" \
+            --filter="name:cudly-staging" --format="value(name)" 2>/dev/null | head -1)
+          if [ -n "$INSTANCE" ]; then
+            echo "Deleting Cloud SQL instance $INSTANCE..."
+            gcloud sql instances delete "$INSTANCE" --project="$PROJECT" --quiet 2>/dev/null || true
+          fi
+          # Remove the instance from Terraform state so destroy doesn't try to delete it again
+          cd terraform/environments/gcp
+          terraform state rm google_sql_database_instance.main 2>/dev/null || true
+          terraform state rm google_sql_database.main 2>/dev/null || true
+          terraform state rm google_sql_user.main 2>/dev/null || true
 
       - name: Terraform Destroy
         env:
