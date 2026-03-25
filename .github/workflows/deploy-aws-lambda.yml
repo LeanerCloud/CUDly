@@ -233,7 +233,9 @@ jobs:
 
       - name: Test health endpoint
         run: |
+          # Strip trailing slash so $URL/health doesn't become //health
           URL="${{ steps.get-url.outputs.url }}"
+          URL="${URL%/}"
           echo "Testing health endpoint: $URL/health"
 
           for i in {1..5}; do
@@ -250,7 +252,9 @@ jobs:
 
       - name: Run smoke tests
         run: |
+          # Strip trailing slash so $URL/health doesn't become //health
           URL="${{ steps.get-url.outputs.url }}"
+          URL="${URL%/}"
 
           # Test health endpoint response
           echo "Testing health endpoint response..."

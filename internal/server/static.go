@@ -172,10 +172,13 @@ func staticDirFromEnv() string {
 // isStaticPath returns true if the path should be handled by the static file
 // server rather than the API. API paths start with /api/ or are /health.
 func isStaticPath(urlPath string) bool {
-	if strings.HasPrefix(urlPath, "/api/") || urlPath == "/api" {
+	// Normalize double slashes (e.g. //health -> /health) that can arise
+	// when a trailing-slash base URL is concatenated with a path.
+	clean := path.Clean(urlPath)
+	if strings.HasPrefix(clean, "/api/") || clean == "/api" {
 		return false
 	}
-	if urlPath == "/health" {
+	if clean == "/health" {
 		return false
 	}
 	return true
