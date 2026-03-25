@@ -19,7 +19,7 @@ enable_docker_build = true # Build and push image via terraform apply on the run
 
 # Cloud Run Configuration
 cloud_run_cpu                   = "1"
-cloud_run_memory                = "256Mi"
+cloud_run_memory                = "512Mi"
 cloud_run_min_instances         = 0
 cloud_run_max_instances         = 10
 cloud_run_request_timeout       = 300
