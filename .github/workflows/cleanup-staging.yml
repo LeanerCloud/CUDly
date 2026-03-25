@@ -173,7 +173,7 @@ jobs:
           terraform destroy \
             -var-file="github-staging.tfvars" \
             -var="location=eastus" \
-            -auto-approve || echo "Destroy complete (some resources may have already been absent)"
+            -auto-approve
 
   destroy-gcp:
     name: Destroy GCP (staging)
@@ -215,4 +215,4 @@ jobs:
           cd terraform/environments/gcp
           terraform destroy \
             -var-file="github-staging.tfvars" \
-            -auto-approve || echo "Destroy complete (some resources may have already been absent)"
+            -auto-approve
