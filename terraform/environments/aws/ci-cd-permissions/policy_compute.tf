@@ -188,6 +188,8 @@ resource "aws_iam_policy" "compute" {
           "application-autoscaling:DescribeScalingPolicies",
           "application-autoscaling:PutScalingPolicy",
           "application-autoscaling:RegisterScalableTarget",
+          "application-autoscaling:TagResource",
+          "application-autoscaling:UntagResource",
         ]
         Resource = "*"
       },
