@@ -46,13 +46,18 @@ env:
   AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
   ACR_NAME: ${{ vars.ACR_NAME || 'cudlyacr' }}
   RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'cudly-rg' }}
-  TF_VERSION: '1.6.0'
+  TF_VERSION: '1.10.0'
 
 jobs:
   # Build Docker image (via Terraform build module) and deploy
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout code
@@ -75,6 +80,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
+          printf 'terraform { backend "azurerm" {} }' > terraform/environments/azure/backend.tf
           printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
           terraform init -backend-config=/tmp/backend.tfbackend
@@ -136,6 +142,11 @@ jobs:
     name: Test Deployment
     runs-on: ubuntu-latest
     needs: build-and-deploy
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout code
@@ -158,6 +169,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
+          printf 'terraform { backend "azurerm" {} }' > terraform/environments/azure/backend.tf
           printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
           terraform init -backend-config=/tmp/backend.tfbackend

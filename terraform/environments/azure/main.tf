@@ -2,7 +2,7 @@
 # Orchestrates all Azure modules for CUDly deployment
 
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.10.0"
 
   required_providers {
     azurerm = {
@@ -35,15 +35,6 @@ terraform {
     }
   }
 
-  # Backend configuration for state management (commented out for validation)
-  # backend "azurerm" {
-  #   # Configure with:
-  #   # terraform init \
-  #   #   -backend-config="resource_group_name=cudly-terraform-state" \
-  #   #   -backend-config="storage_account_name=cudlytfstate" \
-  #   #   -backend-config="container_name=tfstate" \
-  #   #   -backend-config="key=dev/terraform.tfstate"
-  # }
 }
 
 provider "azurerm" {

@@ -59,7 +59,7 @@ on:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-  TF_VERSION: '1.6.0'
+  TF_VERSION: '1.10.0'
 
 jobs:
   # Determine deployment environment
@@ -119,6 +119,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
+          printf 'terraform { backend "s3" {} }' > terraform/environments/aws/backend.tf
           printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
@@ -198,6 +199,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
+          printf 'terraform { backend "s3" {} }' > terraform/environments/aws/backend.tf
           printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend

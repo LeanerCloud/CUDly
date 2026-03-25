@@ -2,7 +2,7 @@
 # Terraform configuration for dev deployment with Cloud Run
 
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.10.0"
 
   required_providers {
     google = {
@@ -27,12 +27,6 @@ terraform {
     }
   }
 
-  # Backend configuration for state management
-  # Uncomment and configure after creating GCS bucket
-  # backend "gcs" {
-  #   bucket = "cudly-terraform-state-dev"
-  #   prefix = "dev/terraform.tfstate"
-  # }
 }
 
 provider "google" {

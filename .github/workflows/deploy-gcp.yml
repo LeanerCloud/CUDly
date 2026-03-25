@@ -43,7 +43,7 @@ on:
 env:
   GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'cudly' }}
-  TF_VERSION: '1.6.0'
+  TF_VERSION: '1.10.0'
 
 jobs:
   # Build Docker image (via Terraform build module) and deploy
@@ -74,6 +74,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
+          printf 'terraform { backend "gcs" {} }' > terraform/environments/gcp/backend.tf
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
@@ -149,6 +150,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
+          printf 'terraform { backend "gcs" {} }' > terraform/environments/gcp/backend.tf
           printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/gcp
           terraform init -backend-config=/tmp/backend.tfbackend
