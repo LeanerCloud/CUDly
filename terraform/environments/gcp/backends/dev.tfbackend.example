@@ -1,7 +1,8 @@
 # GCP Terraform Backend Configuration - Development
 # Copy to dev.tfbackend and customize with your values
 #
-# Usage:
+# Usage (backend.tf is gitignored — create it once per checkout):
+#   printf 'terraform {\n  backend "gcs" {}\n}\n' > backend.tf
 #   terraform init -backend-config=backends/dev.tfbackend
 
 bucket = "cudly-terraform-state-dev"

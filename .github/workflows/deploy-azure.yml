@@ -80,7 +80,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
-          printf 'terraform { backend "azurerm" {} }' > terraform/environments/azure/backend.tf
+          printf 'terraform {\n  backend "azurerm" {}\n}\n' > terraform/environments/azure/backend.tf
           printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
           terraform init -backend-config=/tmp/backend.tfbackend
@@ -169,7 +169,7 @@ jobs:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
           ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
-          printf 'terraform { backend "azurerm" {} }' > terraform/environments/azure/backend.tf
+          printf 'terraform {\n  backend "azurerm" {}\n}\n' > terraform/environments/azure/backend.tf
           printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
           terraform init -backend-config=/tmp/backend.tfbackend
