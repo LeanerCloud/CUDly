@@ -36,6 +36,7 @@ on:
       - 'terraform/modules/secrets/aws/**'
       - 'terraform/modules/networking/aws/**'
       - 'terraform/environments/aws/**'
+      - '.github/workflows/deploy-aws-lambda.yml'
   workflow_dispatch:
     inputs:
       environment:
