@@ -24,6 +24,10 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: deploy-gcp-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
     branches: [main, feat/multicloud-web-frontend]
@@ -97,7 +101,7 @@ jobs:
           terraform apply -auto-approve tfplan
 
           # Get service URL
-          SERVICE_URL=$(terraform output -raw service_url 2>/dev/null || echo "")
+          SERVICE_URL=$(terraform output -raw cloud_run_service_url 2>/dev/null || echo "")
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
       - name: Release state lock on failure
@@ -169,7 +173,7 @@ jobs:
         id: get-url
         run: |
           cd terraform/environments/gcp
-          SERVICE_URL=$(terraform output -raw service_url 2>/dev/null || echo "")
+          SERVICE_URL=$(terraform output -raw cloud_run_service_url 2>/dev/null || echo "")
           if [ -z "$SERVICE_URL" ]; then
             echo "Failed to get service URL"
             exit 1
