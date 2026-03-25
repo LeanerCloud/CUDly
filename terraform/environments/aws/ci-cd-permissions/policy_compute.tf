@@ -72,6 +72,7 @@ resource "aws_iam_policy" "compute" {
         Effect = "Allow"
         Action = [
           "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchDeleteImage",
           "ecr:BatchGetImage",
           "ecr:CompleteLayerUpload",
           "ecr:CreateRepository",
@@ -84,6 +85,7 @@ resource "aws_iam_policy" "compute" {
           "ecr:GetLifecyclePolicy",
           "ecr:GetRepositoryPolicy",
           "ecr:InitiateLayerUpload",
+          "ecr:ListImages",
           "ecr:ListTagsForResource",
           "ecr:PutImage",
           "ecr:PutLifecyclePolicy",
@@ -186,6 +188,7 @@ resource "aws_iam_policy" "compute" {
           "application-autoscaling:DeregisterScalableTarget",
           "application-autoscaling:DescribeScalableTargets",
           "application-autoscaling:DescribeScalingPolicies",
+          "application-autoscaling:ListTagsForResource",
           "application-autoscaling:PutScalingPolicy",
           "application-autoscaling:RegisterScalableTarget",
           "application-autoscaling:TagResource",
