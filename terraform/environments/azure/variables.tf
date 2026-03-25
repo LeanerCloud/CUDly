@@ -236,6 +236,7 @@ variable "database_standby_availability_zone" {
 variable "image_uri" {
   description = "Container image URI (used when enable_docker_build is false)"
   type        = string
+  default     = ""
 }
 
 variable "enable_docker_build" {
