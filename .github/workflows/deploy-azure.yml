@@ -122,9 +122,13 @@ jobs:
         run: |
           STORAGE_ACCOUNT=$(grep -E '^\s*storage_account_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
           CONTAINER=$(grep -E '^\s*container_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          RESOURCE_GROUP=$(grep -E '^\s*resource_group_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
           if [ -n "$STORAGE_ACCOUNT" ] && [ -n "$CONTAINER" ]; then
             STATE_KEY="github-${ENVIRONMENT}.terraform.tfstate"
-            ACCOUNT_KEY=$(az storage account keys list --account-name "${STORAGE_ACCOUNT}" --query '[0].value' -o tsv 2>/dev/null || echo "")
+            ACCOUNT_KEY=$(az storage account keys list \
+              --account-name "${STORAGE_ACCOUNT}" \
+              ${RESOURCE_GROUP:+--resource-group "${RESOURCE_GROUP}"} \
+              --query '[0].value' -o tsv 2>/dev/null || echo "")
             if [ -n "$ACCOUNT_KEY" ]; then
               echo "Breaking Azure Blob lease on ${STATE_KEY}"
               az storage blob lease break \
@@ -132,6 +136,8 @@ jobs:
                 --container-name "${CONTAINER}" \
                 --blob-name "${STATE_KEY}" \
                 --account-key "${ACCOUNT_KEY}" 2>/dev/null || echo "No lease to break (already clean)"
+            else
+              echo "WARNING: Could not get storage account key — lease may remain held"
             fi
           fi
 
