@@ -98,6 +98,10 @@ jobs:
     name: Deploy with Terraform
     runs-on: ubuntu-24.04-arm  # ARM runner: Docker build targets linux/arm64 (Lambda/Fargate Graviton2)
     needs: prepare
+    outputs:
+      function_url: ${{ steps.outputs.outputs.function_url }}
+      function_name: ${{ steps.outputs.outputs.function_name }}
+      log_group: ${{ steps.outputs.outputs.log_group }}
 
     steps:
       - name: Checkout code
@@ -192,36 +196,12 @@ jobs:
     if: always() && needs.deploy.result == 'success'
 
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform Init
-        env:
-          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
-          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
-        run: |
-          printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
-          cd terraform/environments/aws
-          terraform init -backend-config=/tmp/backend.tfbackend
-
       - name: Get Function URL
         id: get-url
         run: |
-          cd terraform/environments/aws
-          FUNCTION_URL=$(terraform output -raw lambda_function_url 2>/dev/null || echo "")
+          FUNCTION_URL="${{ needs.deploy.outputs.function_url }}"
           if [ -z "$FUNCTION_URL" ]; then
-            echo "Failed to get function URL from Terraform outputs"
+            echo "Failed to get function URL from deploy outputs"
             exit 1
           fi
           echo "url=$FUNCTION_URL" >> $GITHUB_OUTPUT
