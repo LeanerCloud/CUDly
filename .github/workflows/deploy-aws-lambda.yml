@@ -141,6 +141,19 @@ jobs:
           cd terraform/environments/aws
           terraform apply -auto-approve tfplan
 
+      - name: Release state lock on failure
+        if: failure() || cancelled()
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+        run: |
+          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          if [ -n "$BUCKET" ]; then
+            LOCK_KEY="github-${ENVIRONMENT}/terraform.tfstate.tflock"
+            echo "Releasing S3 state lock: s3://${BUCKET}/${LOCK_KEY}"
+            aws s3 rm "s3://${BUCKET}/${LOCK_KEY}" 2>/dev/null || echo "No lock file found (already clean)"
+          fi
+
       - name: Get Terraform outputs
         id: outputs
         run: |

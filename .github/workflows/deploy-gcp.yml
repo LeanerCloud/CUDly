@@ -100,6 +100,18 @@ jobs:
           SERVICE_URL=$(terraform output -raw service_url 2>/dev/null || echo "")
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
+      - name: Release state lock on failure
+        if: failure() || cancelled()
+        env:
+          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+        run: |
+          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          if [ -n "$BUCKET" ]; then
+            LOCK_FILE="gs://${BUCKET}/github-${ENVIRONMENT}/default.tflock"
+            echo "Releasing GCS state lock: ${LOCK_FILE}"
+            gsutil rm "${LOCK_FILE}" 2>/dev/null || echo "No lock file found (already clean)"
+          fi
+
       - name: Save deployment info
         run: |
           cat <<EOF > deployment-info.json
