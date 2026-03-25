@@ -68,7 +68,7 @@ jobs:
           elif [[ "${{ github.event_name }}" == "workflow_call" ]]; then
             echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
           else
-            echo "environment=staging" >> $GITHUB_OUTPUT
+            echo "environment=dev" >> $GITHUB_OUTPUT
           fi
 
   # Build Docker image (via Terraform build module) and deploy
