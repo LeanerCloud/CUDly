@@ -191,11 +191,31 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform Init (staging state)
+      - name: Break stale Azure state lock
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
         run: |
           printf '%s\nkey = "github-staging.terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
+          STORAGE_ACCOUNT=$(grep -E '^\s*storage_account_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          CONTAINER=$(grep -E '^\s*container_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          RESOURCE_GROUP=$(grep -E '^\s*resource_group_name\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          STATE_KEY="github-staging.terraform.tfstate"
+          if [ -n "$STORAGE_ACCOUNT" ] && [ -n "$CONTAINER" ]; then
+            ACCOUNT_KEY=$(az storage account keys list \
+              --account-name "${STORAGE_ACCOUNT}" \
+              ${RESOURCE_GROUP:+--resource-group "${RESOURCE_GROUP}"} \
+              --query '[0].value' -o tsv 2>/dev/null || echo "")
+            if [ -n "$ACCOUNT_KEY" ]; then
+              az storage blob lease break \
+                --account-name "${STORAGE_ACCOUNT}" \
+                --container-name "${CONTAINER}" \
+                --blob-name "${STATE_KEY}" \
+                --account-key "${ACCOUNT_KEY}" 2>/dev/null || echo "No lease to break (clean)"
+            fi
+          fi
+
+      - name: Terraform Init (staging state)
+        run: |
           cd terraform/environments/azure
           terraform init -backend-config=/tmp/backend.tfbackend
 
