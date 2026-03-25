@@ -181,9 +181,13 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
+          printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
       - name: Terraform Plan
         id: plan
@@ -258,9 +262,13 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
+          printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
       - name: Get Function URL
         id: get-url

@@ -98,9 +98,13 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
+          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
+          printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
       - name: Terraform Plan
         env:
@@ -110,7 +114,7 @@ jobs:
         run: |
           cd terraform/environments/azure
           terraform plan \
-            -var-file="github-${{ inputs.environment }}.tfvars" \
+            -var-file="github-${{ inputs.environment || 'dev' }}.tfvars" \
             -var="image_uri=${{ env.IMAGE_URI }}" \
             -var="resource_group=${{ env.RESOURCE_GROUP }}" \
             -var="location=${{ env.AZURE_LOCATION }}" \
@@ -179,9 +183,13 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
+          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
         run: |
+          printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
       - name: Get Container App URL
         id: get-url
