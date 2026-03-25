@@ -45,7 +45,7 @@ jobs:
   # Build and push Docker image if not provided
   build-and-push:
     name: Build & Push Docker Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm  # ARM runner: Docker build targets linux/arm64 (Fargate Graviton2)
     if: inputs.image_uri == ''
     outputs:
       image_uri: ${{ steps.set-uri.outputs.image_uri }}

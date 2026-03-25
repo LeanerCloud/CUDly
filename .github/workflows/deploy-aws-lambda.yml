@@ -96,7 +96,7 @@ jobs:
   # Deploy infrastructure with Terraform (includes Docker build via build module)
   deploy:
     name: Deploy with Terraform
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm  # ARM runner: Docker build targets linux/arm64 (Lambda/Fargate Graviton2)
     needs: prepare
 
     steps:

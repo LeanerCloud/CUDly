@@ -13,7 +13,7 @@ module "build" {
 
   # Build configuration
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
-  platform    = "linux/amd64"           # Lambda container images run on amd64
+  platform    = "linux/arm64"           # Lambda and Fargate use ARM64 (Graviton2, 20% cost savings)
 
   # Registry login for ECR
   registry_login_command = "aws ecr get-login-password --region ${var.region}${var.aws_profile != null ? " --profile ${var.aws_profile}" : ""} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"

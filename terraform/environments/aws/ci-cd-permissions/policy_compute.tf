@@ -34,7 +34,6 @@ resource "aws_iam_policy" "compute" {
         Action = [
           "logs:CreateLogGroup",
           "logs:DeleteLogGroup",
-          "logs:DescribeLogGroups",
           "logs:ListTagsForResource",
           "logs:PutRetentionPolicy",
           "logs:TagResource",
@@ -44,6 +43,12 @@ resource "aws_iam_policy" "compute" {
           "arn:aws:logs:*:*:log-group:/aws/lambda/cudly-*",
           "arn:aws:logs:*:*:log-group:/aws/vpc/cudly-*",
         ]
+      },
+      {
+        Sid      = "CloudWatchLogsDescribe"
+        Effect   = "Allow"
+        Action   = ["logs:DescribeLogGroups"]
+        Resource = "*"
       },
       {
         Sid    = "EventBridge"
