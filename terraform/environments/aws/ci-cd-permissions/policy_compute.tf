@@ -40,7 +40,10 @@ resource "aws_iam_policy" "compute" {
           "logs:TagResource",
           "logs:UntagResource",
         ]
-        Resource = "arn:aws:logs:*:*:log-group:/aws/lambda/cudly-*"
+        Resource = [
+          "arn:aws:logs:*:*:log-group:/aws/lambda/cudly-*",
+          "arn:aws:logs:*:*:log-group:/aws/vpc/cudly-*",
+        ]
       },
       {
         Sid    = "EventBridge"

@@ -34,8 +34,10 @@ resource "aws_iam_policy" "data" {
           "iam:PassRole",
           "iam:PutRolePolicy",
           "iam:RemoveRoleFromInstanceProfile",
+          "iam:TagInstanceProfile",
           "iam:TagPolicy",
           "iam:TagRole",
+          "iam:UntagInstanceProfile",
           "iam:UntagPolicy",
           "iam:UntagRole",
         ]
