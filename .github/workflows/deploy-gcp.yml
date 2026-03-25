@@ -4,25 +4,29 @@
 # Serverless container platform with automatic scaling.
 #
 # Required GitHub Secrets:
-#   - GCP_SA_KEY: GCP Service Account JSON key with permissions:
-#       * Artifact Registry Writer
-#       * Cloud Run Admin
-#       * Service Account User
-#       * Compute Network Admin (for VPC connector)
-#   - GCP_PROJECT_ID: GCP project ID
 #   - ADMIN_EMAIL: Admin email for notifications
 #
 # Required GitHub Variables:
 #   - GCP_REGION: GCP region (e.g., us-central1)
+#   - GCP_PROJECT_ID: GCP project ID
+#   - GCP_WORKLOAD_IDENTITY_PROVIDER: WIF provider resource name for OIDC keyless auth
+#   - GCP_SERVICE_ACCOUNT: SA email for OIDC keyless auth
 #   - ARTIFACT_REGISTRY_REPO: Artifact Registry repository name (default: cudly)
 #
 # Triggered by:
+#   - Pushes to main or feat/multicloud-web-frontend branch
 #   - Manual workflow dispatch
 #   - Workflow call from deploy-all.yml
 
 name: Deploy to GCP Cloud Run
 
+permissions:
+  id-token: write
+  contents: read
+
 on:
+  push:
+    branches: [main, feat/multicloud-web-frontend]
   workflow_dispatch:
     inputs:
       environment:
@@ -57,7 +61,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -71,7 +76,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/cudly:${{ github.sha }}"
+          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/cudly:${{ github.sha }}"
           echo "Building image: $IMAGE_URI"
 
           # GCP Cloud Run uses x86_64 (amd64) architecture
@@ -102,7 +107,7 @@ jobs:
           terraform plan \
             -var-file="github-${{ inputs.environment }}.tfvars" \
             -var="image_uri=${{ env.IMAGE_URI }}" \
-            -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -151,7 +156,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
