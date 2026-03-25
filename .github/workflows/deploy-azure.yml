@@ -140,7 +140,6 @@ jobs:
           cd terraform/environments/azure
           terraform plan \
             -var-file="github-${{ needs.prepare.outputs.environment }}.tfvars" \
-            -var="resource_group=${{ env.RESOURCE_GROUP }}" \
             -var="location=${{ env.AZURE_LOCATION }}" \
             -out=tfplan
 
