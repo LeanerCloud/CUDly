@@ -162,6 +162,7 @@ resource "aws_iam_policy" "compute" {
           "elasticloadbalancing:DeleteListener",
           "elasticloadbalancing:DeleteLoadBalancer",
           "elasticloadbalancing:DeleteTargetGroup",
+          "elasticloadbalancing:DescribeListenerAttributes",
           "elasticloadbalancing:DescribeListeners",
           "elasticloadbalancing:DescribeLoadBalancerAttributes",
           "elasticloadbalancing:DescribeLoadBalancers",
