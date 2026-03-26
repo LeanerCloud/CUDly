@@ -295,18 +295,22 @@ func (app *Application) ensureDB(ctx context.Context) error {
 	return nil
 }
 
-// resolveAdminPassword returns the admin password from env or secret manager.
+// resolveAdminPassword returns the admin password from Secrets Manager.
+// It requires ADMIN_PASSWORD_SECRET to be set to a valid secret ARN/name.
+// If absent, it returns an error to prevent startup with no secret source.
 func (app *Application) resolveAdminPassword(ctx context.Context) (string, error) {
-	password := os.Getenv("ADMIN_PASSWORD")
 	secret := os.Getenv("ADMIN_PASSWORD_SECRET")
-	if secret != "" && app.secretResolver != nil {
-		resolved, err := app.secretResolver.GetSecret(ctx, secret)
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve admin password secret: %w", err)
-		}
-		password = resolved
+	if secret == "" {
+		return "", fmt.Errorf("ADMIN_PASSWORD_SECRET environment variable is required but not set; refusing to start without a Secrets Manager ARN")
 	}
-	return password, nil
+	if app.secretResolver == nil {
+		return "", fmt.Errorf("secret resolver is not configured; cannot resolve ADMIN_PASSWORD_SECRET")
+	}
+	resolved, err := app.secretResolver.GetSecret(ctx, secret)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve admin password secret: %w", err)
+	}
+	return resolved, nil
 }
 
 // reinitializeAfterConnect re-creates all stores and services that depend on the
