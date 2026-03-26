@@ -47,7 +47,7 @@ on:
         type: string
 
 env:
-  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'westus2' }}
   ACR_NAME: ${{ vars.ACR_NAME || 'cudlyacr' }}
   RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'cudly-rg' }}
   TF_VERSION: '1.10.0'

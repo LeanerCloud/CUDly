@@ -8,7 +8,7 @@
 
 project_name = "cudly"
 environment  = "dev"
-location     = "eastus"
+location     = "westus2"
 cost_center  = "engineering"
 
 # ==============================================
