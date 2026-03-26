@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 )
 
 // RecommendationsPager defines the interface for paging through recommendations
@@ -62,7 +63,7 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Comp
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		httpClient:     httpclient.New(),
 	}
 }
 

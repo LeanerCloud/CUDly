@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/cosmos/armcosmos/v2"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 )
 
 // HTTPClient interface for HTTP operations (enables mocking)
@@ -60,7 +61,7 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Cosm
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		httpClient:     httpclient.New(),
 	}
 }
 
