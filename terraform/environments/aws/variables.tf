@@ -155,7 +155,7 @@ variable "database_performance_insights" {
 variable "database_deletion_protection" {
   description = "Enable deletion protection"
   type        = bool
-  default     = false # False in dev for easy teardown
+  default     = true
 }
 
 variable "database_skip_final_snapshot" {
@@ -213,7 +213,7 @@ variable "lambda_enable_function_url" {
 variable "lambda_function_url_auth_type" {
   description = "Function URL auth type (NONE or AWS_IAM)"
   type        = string
-  default     = "NONE"
+  default     = "AWS_IAM"
 }
 
 variable "lambda_allowed_origins" {

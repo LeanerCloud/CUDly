@@ -1,52 +1,3 @@
-variable "project_id" {
-  description = "GCP project ID"
-  type        = string
-}
-
-variable "region" {
-  description = "GCP region"
-  type        = string
-}
-
-variable "function_name" {
-  description = "Name of the Cloud Function"
-  type        = string
-  default     = "cudly-cleanup"
-}
-
-variable "image_uri" {
-  description = "Container image URI for the cleanup function"
-  type        = string
-}
-
-variable "db_host" {
-  description = "Database host (Cloud SQL connection name or private IP)"
-  type        = string
-}
-
-variable "db_password_secret_id" {
-  description = "Secret Manager secret ID containing the database password"
-  type        = string
-}
-
-variable "vpc_connector" {
-  description = "VPC connector for private Cloud SQL access"
-  type        = string
-  default     = ""
-}
-
-variable "schedule" {
-  description = "Cloud Scheduler schedule (cron format)"
-  type        = string
-  default     = "0 2 * * *"
-}
-
-variable "labels" {
-  description = "Labels to apply to all resources"
-  type        = map(string)
-  default     = {}
-}
-
 # Service account for Cloud Function
 resource "google_service_account" "cleanup" {
   project      = var.project_id
@@ -85,6 +36,9 @@ resource "google_cloudfunctions2_function" "cleanup" {
     timeout_seconds       = 300
     service_account_email = google_service_account.cleanup.email
 
+    # Restrict to internal traffic only; external triggers go via Cloud Scheduler with OIDC
+    ingress_settings = "ALLOW_INTERNAL_ONLY"
+
     environment_variables = {
       DB_HOST            = var.db_host
       DB_PORT            = "5432"
@@ -97,12 +51,8 @@ resource "google_cloudfunctions2_function" "cleanup" {
     }
 
     # VPC connector for private Cloud SQL access
-    dynamic "vpc_connector" {
-      for_each = var.vpc_connector != "" ? [1] : []
-      content {
-        name = var.vpc_connector
-      }
-    }
+    vpc_connector                 = var.vpc_connector != "" ? var.vpc_connector : null
+    vpc_connector_egress_settings = var.vpc_connector != "" ? "ALL_TRAFFIC" : null
   }
 
   labels = var.labels
@@ -113,7 +63,7 @@ resource "google_storage_bucket" "function_source" {
   project       = var.project_id
   name          = "${var.project_id}-${var.function_name}-source"
   location      = var.region
-  force_destroy = true
+  force_destroy = false # Prevent accidental data loss; delete bucket contents manually before destroying
 
   uniform_bucket_level_access = true
 }
@@ -164,25 +114,4 @@ resource "google_cloudfunctions2_function_iam_member" "cleanup_invoker" {
   cloud_function = google_cloudfunctions2_function.cleanup.name
   role           = "roles/cloudfunctions.invoker"
   member         = "serviceAccount:${google_service_account.cleanup.email}"
-}
-
-# Outputs
-output "function_uri" {
-  description = "URI of the Cloud Function"
-  value       = google_cloudfunctions2_function.cleanup.service_config[0].uri
-}
-
-output "function_name" {
-  description = "Name of the Cloud Function"
-  value       = google_cloudfunctions2_function.cleanup.name
-}
-
-output "schedule" {
-  description = "Cloud Scheduler schedule"
-  value       = var.schedule
-}
-
-output "service_account_email" {
-  description = "Service account email for the cleanup function"
-  value       = google_service_account.cleanup.email
 }

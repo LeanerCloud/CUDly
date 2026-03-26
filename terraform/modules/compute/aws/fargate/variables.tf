@@ -110,7 +110,7 @@ variable "alb_security_group_id" {
 variable "enable_https" {
   description = "Enable HTTPS listener on ALB"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "certificate_arn" {
@@ -152,7 +152,7 @@ variable "unhealthy_threshold" {
 variable "log_retention_days" {
   description = "CloudWatch log retention in days"
   type        = number
-  default     = 7
+  default     = 90
 }
 
 variable "enable_scheduled_tasks" {
