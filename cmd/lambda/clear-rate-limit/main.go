@@ -54,7 +54,8 @@ func clearRateLimit(ctx context.Context) (Response, error) {
 	// Clear rate limits for forgot_password endpoint
 	domain := getDomain()
 	tag, err := db.Exec(ctx,
-		fmt.Sprintf("DELETE FROM rate_limits WHERE id LIKE 'EMAIL#%%@%s#ENDPOINT#forgot_password'", domain))
+		"DELETE FROM rate_limits WHERE id LIKE $1",
+		"EMAIL#%@"+domain+"#ENDPOINT#forgot_password")
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to delete rate limits: %w", err)
 	}
