@@ -115,6 +115,18 @@ variable "slow_request_threshold" {
   default     = 5000 # 5 seconds
 }
 
+variable "enable_guardduty" {
+  description = "Enable GuardDuty threat detection. Has per-GB cost implications (CloudTrail/VPC Flow Logs/DNS logs analyzed). Recommended for production."
+  type        = bool
+  default     = false
+}
+
+variable "enable_security_hub" {
+  description = "Enable Security Hub with CIS and AFSBP standards. Has per-check cost implications (~$0.001/check/resource/month). Recommended for production."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
