@@ -1,5 +1,7 @@
 # Development Dockerfile with hot reload using Air
-FROM golang:1.25-alpine AS development
+# TODO: Pin to SHA256 digest for reproducible builds:
+#   docker buildx imagetools inspect golang:1.25.4-alpine3.21
+FROM golang:1.25.4-alpine3.21 AS development
 
 # Install development tools and Air for hot reload
 RUN apk add --no-cache \
@@ -48,6 +50,12 @@ COPY . .
 RUN if [ ! -f .air.toml ]; then air init; fi
 
 EXPOSE 8080
+
+# Create non-root user for security; grant ownership of app dir and Go paths
+RUN addgroup -S devuser && adduser -S devuser -G devuser && \
+    chown -R devuser:devuser /app /root/go /root/.cache 2>/dev/null || true
+
+USER devuser
 
 # Start with Air for hot reload
 CMD ["air", "-c", ".air.toml"]

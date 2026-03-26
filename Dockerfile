@@ -10,7 +10,9 @@ ARG TARGETARCH
 ARG TARGETOS=linux
 
 # Build stage
-FROM golang:1.25-alpine AS builder
+# TODO: Pin to SHA256 digest for reproducible builds:
+#   docker buildx imagetools inspect golang:1.25.4-alpine3.21
+FROM golang:1.25.4-alpine3.21 AS builder
 
 # Re-declare args for use in this stage
 ARG TARGETARCH
@@ -72,7 +74,9 @@ RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
 # ==============================================
 # Frontend build stage
 # ==============================================
-FROM node:20-alpine AS frontend-builder
+# TODO: Pin to SHA256 digest for reproducible builds:
+#   docker buildx imagetools inspect node:20.19-alpine3.21
+FROM node:20.19-alpine3.21 AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
@@ -83,7 +87,9 @@ RUN npm run build
 # ==============================================
 # Runtime stage - multi-arch base image
 # ==============================================
-FROM alpine:3.19
+# TODO: Pin to SHA256 digest for reproducible builds:
+#   docker buildx imagetools inspect alpine:3.21.3
+FROM alpine:3.21.3
 
 # Re-declare args for use in this stage
 ARG TARGETARCH
