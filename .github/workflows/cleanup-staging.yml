@@ -74,28 +74,14 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      - name: Empty ECR repositories before destroy
+      - name: Force-delete all staging ECR repos
         run: |
-          # Force-delete all staging ECR repos (known names + state-derived random-suffix name)
-          for REPO_NAME in cudly-staging cudly; do
-            if aws ecr delete-repository --repository-name "$REPO_NAME" --force 2>/dev/null; then
-              echo "Deleted ECR repo $REPO_NAME"
-            else
-              echo "Repo $REPO_NAME not found or already deleted, skipping"
-            fi
+          for REPO in $(aws ecr describe-repositories --query "repositories[?starts_with(repositoryName,'cudly-staging') || repositoryName=='cudly'].repositoryName" --output text 2>/dev/null); do
+            echo "Force-deleting ECR repo $REPO..."
+            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null || echo "  Failed to delete $REPO"
           done
-          # Also try to find the staging ECR repo from state (has random suffix)
-          REPO_NAME=$(cd terraform/environments/aws && \
-            terraform output -raw ecr_repository_name 2>/dev/null || echo "")
-          if [ -n "$REPO_NAME" ] && [ "$REPO_NAME" != "cudly-staging" ] && [ "$REPO_NAME" != "cudly" ]; then
-            if aws ecr delete-repository --repository-name "$REPO_NAME" --force 2>/dev/null; then
-              echo "Deleted ECR repo $REPO_NAME"
-            else
-              echo "Repo $REPO_NAME not found or already deleted, skipping"
-            fi
-          fi
 
-      - name: Disable RDS deletion protection before destroy
+      - name: Disable RDS deletion protection
         run: |
           for INSTANCE_ID in $(aws rds describe-db-instances \
             --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
@@ -104,6 +90,7 @@ jobs:
             aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
               --no-deletion-protection --apply-immediately 2>/dev/null || true
           done
+          sleep 30
 
       - name: Terraform Destroy
         env:
@@ -145,20 +132,14 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      - name: Empty ECR repository before destroy
+      - name: Force-delete all staging ECR repos
         run: |
-          # Force-delete ECR repo from state (has random suffix)
-          REPO_NAME=$(cd terraform/environments/aws && \
-            terraform output -raw ecr_repository_name 2>/dev/null || echo "")
-          if [ -n "$REPO_NAME" ]; then
-            if aws ecr delete-repository --repository-name "$REPO_NAME" --force 2>/dev/null; then
-              echo "Deleted ECR repo $REPO_NAME"
-            else
-              echo "Repo $REPO_NAME not found or already deleted, skipping"
-            fi
-          fi
+          for REPO in $(aws ecr describe-repositories --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" --output text 2>/dev/null); do
+            echo "Force-deleting ECR repo $REPO..."
+            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null || echo "  Failed to delete $REPO"
+          done
 
-      - name: Disable RDS deletion protection before destroy
+      - name: Disable RDS deletion protection
         run: |
           for INSTANCE_ID in $(aws rds describe-db-instances \
             --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
@@ -167,6 +148,7 @@ jobs:
             aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
               --no-deletion-protection --apply-immediately 2>/dev/null || true
           done
+          sleep 30
 
       - name: Terraform Destroy
         env:
