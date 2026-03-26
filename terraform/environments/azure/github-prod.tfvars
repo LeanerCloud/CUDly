@@ -92,7 +92,6 @@ tags = {
 # ==============================================
 # Variables provided by GitHub Actions:
 #   TF_VAR_subscription_id        = ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-#   TF_VAR_key_vault_name         = ${{ vars.KEY_VAULT_NAME }}
 #   TF_VAR_admin_email            = ${{ secrets.ADMIN_EMAIL }}
 #   TF_VAR_image_uri              = (from build step)
 #   TF_VAR_email_custom_domain_name = (for production email)

@@ -49,7 +49,6 @@ database_subnet_cidr       = "10.0.2.0/24"
 # Key Vault
 # ==============================================
 
-key_vault_name             = "cudly-dev-kv"
 key_vault_sku              = "standard"
 soft_delete_retention_days = 7
 purge_protection_enabled   = false
@@ -94,7 +93,6 @@ tags = {
 # ==============================================
 # Variables provided by GitHub Actions:
 #   TF_VAR_subscription_id = ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-#   TF_VAR_key_vault_name  = ${{ vars.KEY_VAULT_NAME }}
 #   TF_VAR_admin_email     = ${{ secrets.ADMIN_EMAIL }}
 #   TF_VAR_image_uri       = (from build step)
 # ==============================================
