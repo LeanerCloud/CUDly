@@ -56,15 +56,15 @@ variable "slack_webhook_url" {
 }
 
 variable "enable_sns_encryption" {
-  description = "Enable KMS encryption for SNS topic"
+  description = "Enable KMS encryption for SNS topic. Costs ~$1/month per KMS key plus per-API-call charges. Recommended for production."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "enable_xray" {
-  description = "Enable AWS X-Ray tracing"
+  description = "Enable AWS X-Ray tracing. Free tier: 100k traces/month; beyond that $5/million traces recorded. Recommended for production."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "xray_sampling_rate" {

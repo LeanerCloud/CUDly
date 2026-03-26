@@ -203,6 +203,12 @@ variable "enable_execute_command" {
   default     = false
 }
 
+variable "enable_container_insights" {
+  description = "Enable ECS Container Insights (CloudWatch custom metrics per container). Has per-metric cost implications (~$0.30/metric/month). Recommended for production."
+  type        = bool
+  default     = false
+}
+
 variable "enable_alb_deletion_protection" {
   description = "Enable ALB deletion protection (recommended for production)"
   type        = bool
