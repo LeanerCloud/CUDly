@@ -7,9 +7,8 @@
 #   - DB_PASSWORD_AWS: Database password for AWS Aurora
 #   - DB_PASSWORD_GCP: Database password for GCP Cloud SQL
 #   - DB_PASSWORD_AZURE: Database password for Azure Flexible Server
-#   - AWS_ACCESS_KEY_ID: AWS credentials (for bastion/VPN access)
-#   - AWS_SECRET_ACCESS_KEY: AWS secret key
-#   - GCP_SA_KEY: GCP service account key
+#   - (AWS auth via OIDC: vars.AWS_ROLE_TO_ASSUME)
+#   - (GCP auth via WIF: vars.GCP_WORKLOAD_IDENTITY_PROVIDER + vars.GCP_SERVICE_ACCOUNT)
 #   - AZURE_CREDENTIALS: Azure credentials
 #
 # Required GitHub Variables:
@@ -23,6 +22,10 @@
 #   - Before deployment workflows (optional)
 
 name: Database Migration
+
+permissions:
+  id-token: write
+  contents: read
 
 on:
   workflow_dispatch:
@@ -148,8 +151,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Get database endpoint from Terraform
@@ -220,7 +222,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
