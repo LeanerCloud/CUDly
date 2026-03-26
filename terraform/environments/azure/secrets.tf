@@ -10,7 +10,7 @@ module "secrets" {
   resource_group_name = azurerm_resource_group.main.name
   location            = var.location
 
-  key_vault_name             = var.key_vault_name
+  key_vault_name             = "${local.app_name}-kv"
   sku_name                   = var.key_vault_sku
   soft_delete_retention_days = var.soft_delete_retention_days
   purge_protection_enabled   = var.purge_protection_enabled

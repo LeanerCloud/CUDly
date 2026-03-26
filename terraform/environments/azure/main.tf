@@ -69,12 +69,17 @@ provider "helm" {
   }
 }
 
+# Unique suffix to prevent naming conflicts (Key Vault, ACR are globally unique)
+resource "random_id" "suffix" {
+  byte_length = 4
+}
+
 # ==============================================
 # Local Variables
 # ==============================================
 
 locals {
-  app_name = "${var.project_name}-${var.environment}"
+  app_name = "${var.project_name}-${var.environment}-${random_id.suffix.hex}"
 
   common_tags = merge(var.tags, {
     Environment = var.environment

@@ -102,10 +102,6 @@ variable "log_retention_days" {
 # Key Vault (Secrets)
 # ==============================================
 
-variable "key_vault_name" {
-  description = "Key Vault name (must be globally unique, 3-24 chars)"
-  type        = string
-}
 
 variable "key_vault_sku" {
   description = "Key Vault SKU (standard or premium)"
