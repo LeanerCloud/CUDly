@@ -58,11 +58,12 @@ func StartHTTPServer(app *Application, port int) error {
 // to come from the server since static files are served directly from the container.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -136,8 +137,8 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	// Execute scheduled task
 	result, err := app.HandleScheduledTask(ctx, taskType)
 	if err != nil {
-		log.Printf("Scheduled task error: %v", err)
-		http.Error(w, fmt.Sprintf("Task failed: %v", err), http.StatusInternalServerError)
+		log.Printf("Scheduled task %q error: %v", taskTypeStr, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
