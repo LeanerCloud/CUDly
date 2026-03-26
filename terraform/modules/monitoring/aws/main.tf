@@ -58,81 +58,89 @@ resource "aws_sns_topic_subscription" "slack" {
   endpoint  = var.slack_webhook_url
 }
 
+# Platform-specific dashboard widgets, built per-branch to avoid Terraform
+# tuple-length type errors that arise when the two sides of a ternary contain
+# lists of objects whose inner arrays have different lengths.
+locals {
+  lambda_widgets = [
+    {
+      type = "metric"
+      properties = {
+        metrics = [
+          ["AWS/Lambda", "Invocations", { stat = "Sum", label = "Total Invocations" }],
+          [".", "Errors", { stat = "Sum", label = "Errors", color = "#d62728" }],
+          [".", "Throttles", { stat = "Sum", label = "Throttles", color = "#ff7f0e" }],
+          [".", "Duration", { stat = "Average", label = "Avg Duration (ms)" }],
+          [".", "ConcurrentExecutions", { stat = "Maximum", label = "Peak Concurrency" }]
+        ]
+        period = 300
+        stat   = "Average"
+        region = var.aws_region
+        title  = "Lambda Performance"
+        yAxis  = { left = { min = 0 } }
+      }
+    },
+    {
+      type = "metric"
+      properties = {
+        metrics = [
+          ["AWS/Lambda", "Errors", { stat = "Sum" }],
+          [".", "Invocations", { stat = "Sum" }]
+        ]
+        period = 300
+        stat   = "Sum"
+        region = var.aws_region
+        title  = "Lambda Error Rate"
+        yAxis  = { left = { min = 0, max = 100 } }
+        view   = "singleValue"
+      }
+    }
+  ]
+
+  fargate_widgets = [
+    {
+      type = "metric"
+      properties = {
+        metrics = [
+          ["AWS/ECS", "CPUUtilization", { stat = "Average", label = "CPU %" }],
+          [".", "MemoryUtilization", { stat = "Average", label = "Memory %" }]
+        ]
+        period = 300
+        stat   = "Average"
+        region = var.aws_region
+        title  = "ECS Resource Utilization"
+      }
+    },
+    {
+      type = "metric"
+      properties = {
+        metrics = [
+          ["AWS/ApplicationELB", "TargetResponseTime", { stat = "Average", label = "Response Time (s)" }],
+          [".", "RequestCount", { stat = "Sum", label = "Request Count" }],
+          [".", "HTTPCode_Target_5XX_Count", { stat = "Sum", label = "5xx Errors", color = "#d62728" }],
+          [".", "HTTPCode_Target_4XX_Count", { stat = "Sum", label = "4xx Errors", color = "#ff7f0e" }]
+        ]
+        period = 300
+        stat   = "Average"
+        region = var.aws_region
+        title  = "ALB Performance"
+      }
+    }
+  ]
+
+  # jsondecode(jsonencode(...)) coerces each branch to type `any`, allowing
+  # Terraform's ternary operator to accept lists whose inner tuples differ in
+  # length (e.g. lambda_widgets[0].metrics has 5 items vs fargate's 2 items).
+  platform_widgets = var.compute_platform == "lambda" ? jsondecode(jsonencode(local.lambda_widgets)) : jsondecode(jsonencode(local.fargate_widgets))
+}
+
 # CloudWatch Dashboard
 resource "aws_cloudwatch_dashboard" "main" {
   dashboard_name = "${var.stack_name}-${var.environment}"
 
   dashboard_body = jsonencode({
     widgets = concat(
-      var.compute_platform == "lambda" ? [
-        # Lambda metrics
-        {
-          type = "metric"
-          properties = {
-            metrics = [
-              ["AWS/Lambda", "Invocations", { stat = "Sum", label = "Total Invocations" }],
-              [".", "Errors", { stat = "Sum", label = "Errors", color = "#d62728" }],
-              [".", "Throttles", { stat = "Sum", label = "Throttles", color = "#ff7f0e" }],
-              [".", "Duration", { stat = "Average", label = "Avg Duration (ms)" }],
-              [".", "ConcurrentExecutions", { stat = "Maximum", label = "Peak Concurrency" }]
-            ]
-            period = 300
-            stat   = "Average"
-            region = var.aws_region
-            title  = "Lambda Performance"
-            yAxis = {
-              left = { min = 0 }
-            }
-          }
-        },
-        {
-          type = "metric"
-          properties = {
-            metrics = [
-              ["AWS/Lambda", "Errors", { stat = "Sum" }],
-              [".", "Invocations", { stat = "Sum" }]
-            ]
-            period = 300
-            stat   = "Sum"
-            region = var.aws_region
-            title  = "Lambda Error Rate"
-            yAxis = {
-              left = { min = 0, max = 100 }
-            }
-            view = "singleValue"
-          }
-        }
-        ] : [
-        # ECS Fargate metrics
-        {
-          type = "metric"
-          properties = {
-            metrics = [
-              ["AWS/ECS", "CPUUtilization", { stat = "Average", label = "CPU %" }],
-              [".", "MemoryUtilization", { stat = "Average", label = "Memory %" }]
-            ]
-            period = 300
-            stat   = "Average"
-            region = var.aws_region
-            title  = "ECS Resource Utilization"
-          }
-        },
-        {
-          type = "metric"
-          properties = {
-            metrics = [
-              ["AWS/ApplicationELB", "TargetResponseTime", { stat = "Average", label = "Response Time (s)" }],
-              [".", "RequestCount", { stat = "Sum", label = "Request Count" }],
-              [".", "HTTPCode_Target_5XX_Count", { stat = "Sum", label = "5xx Errors", color = "#d62728" }],
-              [".", "HTTPCode_Target_4XX_Count", { stat = "Sum", label = "4xx Errors", color = "#ff7f0e" }]
-            ]
-            period = 300
-            stat   = "Average"
-            region = var.aws_region
-            title  = "ALB Performance"
-          }
-        }
-      ],
+      local.platform_widgets,
       [
         # Database metrics
         {

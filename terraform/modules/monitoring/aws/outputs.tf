@@ -116,4 +116,5 @@ output "email_subscription_arns" {
 output "slack_subscription_arn" {
   description = "ARN of Slack subscription to the SNS topic (if configured)"
   value       = var.slack_webhook_url != "" ? aws_sns_topic_subscription.slack[0].arn : null
+  sensitive   = true
 }
