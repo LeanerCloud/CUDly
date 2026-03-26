@@ -152,8 +152,8 @@ jobs:
         id: outputs
         run: |
           cd terraform/environments/aws
-          echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null || echo "")" >> $GITHUB_OUTPUT
-          echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null || echo "")" >> $GITHUB_OUTPUT
+          echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
+          echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
 
       - name: Save deployment info
         run: |

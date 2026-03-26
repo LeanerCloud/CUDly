@@ -129,7 +129,7 @@ jobs:
           terraform apply -auto-approve tfplan
 
           # Get service URL
-          SERVICE_URL=$(terraform output -raw cloud_run_service_url 2>/dev/null || echo "")
+          SERVICE_URL=$(terraform output -raw cloud_run_service_url 2>/dev/null | grep -v '::' || echo "")
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
       - name: Release state lock on failure

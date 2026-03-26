@@ -170,9 +170,9 @@ jobs:
         id: outputs
         run: |
           cd terraform/environments/aws
-          echo "function_url=$(terraform output -raw lambda_function_url 2>/dev/null || echo "")" >> $GITHUB_OUTPUT
-          echo "function_name=$(terraform output -raw lambda_function_name 2>/dev/null || echo "")" >> $GITHUB_OUTPUT
-          echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null || echo "")" >> $GITHUB_OUTPUT
+          echo "function_url=$(terraform output -raw lambda_function_url 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
+          echo "function_name=$(terraform output -raw lambda_function_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
+          echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null | grep -v '::' || echo "")" >> $GITHUB_OUTPUT
 
       - name: Save deployment info
         run: |
