@@ -194,11 +194,11 @@ jobs:
           terraform apply -auto-approve tfplan
 
           # Get app URL
-          APP_URL=$(terraform output -raw app_url 2>/dev/null || echo "")
+          APP_URL=$(terraform output -raw container_app_url 2>/dev/null | grep -v '::' || echo "")
           echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
 
           # Get app name
-          APP_NAME=$(terraform output -raw container_app_name 2>/dev/null || echo "")
+          APP_NAME=$(terraform output -raw container_app_name 2>/dev/null | grep -v '::' || echo "")
           echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
 
       - name: Release state lock on failure
