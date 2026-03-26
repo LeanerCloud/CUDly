@@ -54,6 +54,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: feat/multicloud-web-frontend
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -76,12 +78,15 @@ jobs:
 
       - name: Force-delete all staging ECR repos
         run: |
-          for REPO in $(aws ecr describe-repositories --query "repositories[?starts_with(repositoryName,'cudly-staging') || repositoryName=='cudly'].repositoryName" --output text 2>/dev/null); do
+          for REPO in $(aws ecr describe-repositories \
+            --query "repositories[?starts_with(repositoryName,'cudly-staging') || repositoryName=='cudly'].repositoryName" \
+            --output text 2>/dev/null); do
             echo "Force-deleting ECR repo $REPO..."
-            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null || echo "  Failed to delete $REPO"
+            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
+              || echo "  Failed to delete $REPO (may already be gone)"
           done
 
-      - name: Disable RDS deletion protection
+      - name: Disable RDS deletion protection before destroy
         run: |
           for INSTANCE_ID in $(aws rds describe-db-instances \
             --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
@@ -90,7 +95,6 @@ jobs:
             aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
               --no-deletion-protection --apply-immediately 2>/dev/null || true
           done
-          sleep 30
 
       - name: Terraform Destroy
         env:
@@ -112,6 +116,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: feat/multicloud-web-frontend
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -134,12 +140,15 @@ jobs:
 
       - name: Force-delete all staging ECR repos
         run: |
-          for REPO in $(aws ecr describe-repositories --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" --output text 2>/dev/null); do
+          for REPO in $(aws ecr describe-repositories \
+            --query "repositories[?starts_with(repositoryName,'cudly-staging') || repositoryName=='cudly'].repositoryName" \
+            --output text 2>/dev/null); do
             echo "Force-deleting ECR repo $REPO..."
-            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null || echo "  Failed to delete $REPO"
+            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
+              || echo "  Failed to delete $REPO (may already be gone)"
           done
 
-      - name: Disable RDS deletion protection
+      - name: Disable RDS deletion protection before destroy
         run: |
           for INSTANCE_ID in $(aws rds describe-db-instances \
             --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
@@ -148,7 +157,6 @@ jobs:
             aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
               --no-deletion-protection --apply-immediately 2>/dev/null || true
           done
-          sleep 30
 
       - name: Terraform Destroy
         env:
@@ -173,6 +181,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: feat/multicloud-web-frontend
 
       - name: Azure Login
         uses: azure/login@v2
@@ -235,6 +245,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: feat/multicloud-web-frontend
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
