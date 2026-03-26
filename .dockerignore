@@ -26,3 +26,14 @@ tmp/
 # Docker compose dev files
 docker-compose.yml
 Dockerfile.dev
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*.p12
+credentials/
+*.tfstate
+*.tfstate.backup
+.terraform/
