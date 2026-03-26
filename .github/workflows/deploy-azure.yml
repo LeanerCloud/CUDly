@@ -164,20 +164,24 @@ jobs:
             fi
           done
 
-      - name: Purge soft-deleted Key Vaults
+      - name: Remove orphaned or soft-deleted Key Vault
         run: |
           ENVIRONMENT="${{ needs.prepare.outputs.environment }}"
           KV_NAME="cudly-${ENVIRONMENT}-kv"
-          # Key Vaults with soft delete enabled retain the name for 7-90 days after deletion
-          # We must purge them before re-creating with the same name
+          # If the KV exists in Azure but not in Terraform state (orphaned from a failed run),
+          # delete it so Terraform can re-create it cleanly
+          KV_RG=$(az keyvault show --name "${KV_NAME}" --query "resourceGroup" -o tsv 2>/dev/null || echo "")
+          if [ -n "$KV_RG" ]; then
+            echo "Key Vault ${KV_NAME} exists in Azure (rg: ${KV_RG}) — deleting so Terraform can recreate it"
+            az keyvault delete --name "${KV_NAME}" --resource-group "${KV_RG}" 2>/dev/null || true
+          fi
+          # Purge any soft-deleted Key Vault (including the one we just deleted)
+          # so the name can be immediately reused
           DELETED=$(az keyvault list-deleted --query "[?name=='${KV_NAME}'].name" -o tsv 2>/dev/null || echo "")
           if [ -n "$DELETED" ]; then
             echo "Purging soft-deleted Key Vault ${KV_NAME}..."
             az keyvault purge --name "${KV_NAME}" --location "${{ env.AZURE_LOCATION }}" 2>/dev/null \
-              && echo "Purged ${KV_NAME}" \
-              || echo "Purge failed or already purged (continuing)"
-          else
-            echo "No soft-deleted Key Vault named ${KV_NAME} found"
+              && echo "Purged" || echo "Purge failed (continuing)"
           fi
 
       - name: Terraform Apply
