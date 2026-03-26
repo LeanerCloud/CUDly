@@ -84,13 +84,13 @@ services:
     networks:
       - cudly-network
 
-  # pgAdmin for database management (optional)
+  # pgAdmin for database management (local development only — do not expose in production)
   pgadmin:
-    image: dpage/pgadmin4:latest
+    image: dpage/pgadmin4:9.2
     container_name: cudly-pgadmin
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@cudly.local
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
       - "5050:80"
