@@ -143,6 +143,27 @@ jobs:
             -var="location=${{ env.AZURE_LOCATION }}" \
             -out=tfplan
 
+
+      - name: Wait for resource group deletion to complete
+        run: |
+          ENVIRONMENT="${{ needs.prepare.outputs.environment }}"
+          RG_NAME="cudly-${ENVIRONMENT}-rg"
+          echo "Checking resource group ${RG_NAME} state..."
+          for i in $(seq 1 30); do
+            STATE=$(az group show --name "${RG_NAME}" --query "properties.provisioningState" -o tsv 2>/dev/null || echo "NotFound")
+            if [ "$STATE" = "Deleting" ]; then
+              echo "  Resource group is being deleted ($i/30), waiting 30s..."
+              sleep 30
+            else
+              echo "  Resource group state: ${STATE} — proceeding"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Timed out waiting for resource group deletion"
+              exit 1
+            fi
+          done
+
       - name: Terraform Apply
         id: deploy
         env:
