@@ -3,8 +3,8 @@ package email
 import (
 	"bytes"
 	"fmt"
+	"html/template"
 	"net/url"
-	"text/template"
 )
 
 // templateFuncs provides common functions available in email templates.
