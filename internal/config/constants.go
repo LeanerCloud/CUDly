@@ -8,6 +8,9 @@ const (
 	// DefaultListLimit is the default number of items returned in list operations
 	DefaultListLimit = 100
 
+	// MaxListLimit is the maximum number of items allowed in a single list request
+	MaxListLimit = 1000
+
 	// DefaultExecutionTTLDays is how long execution records are kept
 	DefaultExecutionTTLDays = 30
 

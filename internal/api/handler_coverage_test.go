@@ -422,7 +422,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		// Password needs to be base64 encoded: "pass123" -> "cGFzczEyMw=="
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
-			Body:    `{"email": "newuser@example.com", "password": "cGFzczEyMw=="}`,
+			Body:    `{"email": "newuser@example.com", "password": "cGFzczEyMw==", "role": "user"}`,
 		}
 
 		result, err := router.createUserHandler(ctx, req, nil)

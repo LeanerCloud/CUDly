@@ -17,6 +17,9 @@ func (h *Handler) getHistory(ctx context.Context, params map[string]string) (any
 	if limitStr != "" {
 		fmt.Sscanf(limitStr, "%d", &limit)
 	}
+	if limit > config.MaxListLimit {
+		limit = config.MaxListLimit
+	}
 
 	var purchases []config.PurchaseHistoryRecord
 	var err error

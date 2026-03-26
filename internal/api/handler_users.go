@@ -47,6 +47,14 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, NewClientError(400, "invalid request body")
 	}
 
+	// Validate role against allowlist
+	switch createReq.Role {
+	case "admin", "user":
+		// valid
+	default:
+		return nil, NewClientError(400, "role must be one of: admin, user")
+	}
+
 	// Decode base64-encoded password
 	if decoded, err := decodeBase64Password(createReq.Password); err != nil {
 		return nil, err
