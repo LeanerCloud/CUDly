@@ -243,14 +243,14 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Don't reveal if email exists
-			logging.Debugf("Password reset requested for non-existent email: %s", email)
+			logging.Debugf("Password reset requested for non-existent email: %s", redactEmail(email))
 			return nil
 		}
 		return err
 	}
 	if user == nil {
 		// Don't reveal if email exists
-		logging.Debugf("Password reset requested for non-existent email: %s", email)
+		logging.Debugf("Password reset requested for non-existent email: %s", redactEmail(email))
 		return nil
 	}
 
@@ -359,4 +359,19 @@ func (s *Service) processPasswordReset(user *User, newPassword string) error {
 	user.Salt = ""
 	user.PasswordHash = passwordHash
 	return nil
+}
+
+// redactEmail returns a redacted version of an email address for safe logging.
+// e.g. "user@example.com" -> "us***@example.com"
+func redactEmail(email string) string {
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return "***"
+	}
+	local := email[:at]
+	domain := email[at:] // includes the '@'
+	if len(local) <= 2 {
+		return "***" + domain
+	}
+	return local[:2] + "***" + domain
 }

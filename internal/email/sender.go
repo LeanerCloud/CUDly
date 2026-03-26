@@ -4,6 +4,7 @@ package email
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -152,14 +153,14 @@ func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string)
 		logging.Warnf("Failed to check SES sandbox status: %v", err)
 		// Continue anyway - if we're not in sandbox, the send will work
 	} else if inSandbox {
-		logging.Infof("SES is in sandbox mode - checking if recipient %s is verified", toEmail)
+		logging.Infof("SES is in sandbox mode - checking if recipient %s is verified", redactEmail(toEmail))
 
 		// Check if recipient email is verified
 		verified, err := s.isEmailVerified(ctx, toEmail)
 		if err != nil {
 			logging.Warnf("Failed to check email verification status: %v", err)
 		} else if !verified {
-			logging.Warnf("Recipient email %s is not verified in sandbox mode - creating verification request", toEmail)
+			logging.Warnf("Recipient email %s is not verified in sandbox mode - creating verification request", redactEmail(toEmail))
 			if err := s.createVerificationRequest(ctx, toEmail); err != nil {
 				logging.Warnf("Failed to create verification request: %v", err)
 				return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent - please check inbox and click the verification link before trying again", toEmail)
@@ -167,7 +168,7 @@ func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string)
 			return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent to %s - please check inbox and click the verification link, then try the password reset again", toEmail, toEmail)
 		}
 
-		logging.Infof("Recipient email %s is verified - proceeding with send", toEmail)
+		logging.Infof("Recipient email %s is verified - proceeding with send", redactEmail(toEmail))
 	}
 
 	input := &sesv2.SendEmailInput{
@@ -196,7 +197,7 @@ func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string)
 		return fmt.Errorf("failed to send email via SES: %w", err)
 	}
 
-	logging.Debugf("Sent email to %s: %s", toEmail, subject)
+	logging.Debugf("Sent email to %s: %s", redactEmail(toEmail), subject)
 	return nil
 }
 
@@ -250,4 +251,19 @@ type SkippedExchange struct {
 	SourceRIID         string
 	SourceInstanceType string
 	Reason             string
+}
+
+// redactEmail returns a redacted version of an email address for safe logging.
+// e.g. "user@example.com" -> "us***@example.com"
+func redactEmail(email string) string {
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return "***"
+	}
+	local := email[:at]
+	domain := email[at:] // includes the '@'
+	if len(local) <= 2 {
+		return "***" + domain
+	}
+	return local[:2] + "***" + domain
 }

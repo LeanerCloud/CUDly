@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
@@ -139,10 +140,10 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 	if h.rateLimiter != nil {
 		allowed, err := h.rateLimiter.AllowWithEmail(ctx, pwdReq.Email, "forgot_password")
 		if err != nil {
-			logging.Warnf("Rate limiter error for email %s: %v", pwdReq.Email, err)
+			logging.Warnf("Rate limiter error for email %s: %v", redactEmail(pwdReq.Email), err)
 			// Continue on rate limiter errors to avoid blocking legitimate requests
 		} else if !allowed {
-			logging.Warnf("Rate limit exceeded for forgot password: %s", pwdReq.Email)
+			logging.Warnf("Rate limit exceeded for forgot password: %s", redactEmail(pwdReq.Email))
 			// Always return success message to prevent email enumeration
 			return map[string]string{"status": "if the email exists, a reset link has been sent"}, nil
 		}
@@ -159,6 +160,11 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	// Rate limiting: 10 attempts per IP per 15 minutes
+	if err := h.checkRateLimit(ctx, req, "reset_password"); err != nil {
+		return nil, err
 	}
 
 	var pwdResetReq PasswordResetConfirm
@@ -218,10 +224,31 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 	return map[string]string{"status": "profile updated"}, nil
 }
 
+// decodeChangePasswordRequest validates and decodes both passwords from a ChangePasswordRequest.
+func decodeChangePasswordRequest(pwdReq ChangePasswordRequest) (current, next string, err error) {
+	if pwdReq.CurrentPassword == "" || pwdReq.NewPassword == "" {
+		return "", "", NewClientError(400, "current password and new password are required")
+	}
+	current, err = decodeBase64Password(pwdReq.CurrentPassword)
+	if err != nil {
+		return "", "", err
+	}
+	next, err = decodeBase64Password(pwdReq.NewPassword)
+	if err != nil {
+		return "", "", err
+	}
+	return current, next, nil
+}
+
 // changePassword handles POST /api/auth/change-password
 func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	// Rate limiting: 10 attempts per IP per 15 minutes
+	if err := h.checkRateLimit(ctx, req, "change_password"); err != nil {
+		return nil, err
 	}
 
 	token := h.extractBearerToken(req)
@@ -239,15 +266,7 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Decode base64-encoded passwords - both required for change password
-	if pwdReq.CurrentPassword == "" || pwdReq.NewPassword == "" {
-		return nil, NewClientError(400, "current password and new password are required")
-	}
-	currentPassword, err := decodeBase64Password(pwdReq.CurrentPassword)
-	if err != nil {
-		return nil, err
-	}
-	newPassword, err := decodeBase64Password(pwdReq.NewPassword)
+	currentPassword, newPassword, err := decodeChangePasswordRequest(pwdReq)
 	if err != nil {
 		return nil, err
 	}
@@ -257,4 +276,19 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 	}
 
 	return map[string]string{"status": "password changed"}, nil
+}
+
+// redactEmail returns a redacted version of an email address for safe logging.
+// e.g. "user@example.com" -> "us***@example.com"
+func redactEmail(email string) string {
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return "***"
+	}
+	local := email[:at]
+	domain := email[at:] // includes the '@'
+	if len(local) <= 2 {
+		return "***" + domain
+	}
+	return local[:2] + "***" + domain
 }
