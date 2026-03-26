@@ -9,7 +9,7 @@ module "build" {
 
   # ECR registry configuration
   registry_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
-  image_name   = "cudly"
+  image_name   = module.registry.repository_name
 
   # Build configuration
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
