@@ -164,6 +164,22 @@ jobs:
             fi
           done
 
+      - name: Purge soft-deleted Key Vaults
+        run: |
+          ENVIRONMENT="${{ needs.prepare.outputs.environment }}"
+          KV_NAME="cudly-${ENVIRONMENT}-kv"
+          # Key Vaults with soft delete enabled retain the name for 7-90 days after deletion
+          # We must purge them before re-creating with the same name
+          DELETED=$(az keyvault list-deleted --query "[?name=='${KV_NAME}'].name" -o tsv 2>/dev/null || echo "")
+          if [ -n "$DELETED" ]; then
+            echo "Purging soft-deleted Key Vault ${KV_NAME}..."
+            az keyvault purge --name "${KV_NAME}" --location "${{ env.AZURE_LOCATION }}" 2>/dev/null \
+              && echo "Purged ${KV_NAME}" \
+              || echo "Purge failed or already purged (continuing)"
+          else
+            echo "No soft-deleted Key Vault named ${KV_NAME} found"
+          fi
+
       - name: Terraform Apply
         id: deploy
         env:
