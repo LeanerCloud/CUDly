@@ -76,31 +76,36 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
-      - name: Empty ECR repository before destroy
+      - name: Empty ECR repositories before destroy
         run: |
-          REPO="cudly-staging"
-          # Try the known staging repo name; also try legacy name without suffix
+          # Force-delete all staging ECR repos (known names + state-derived random-suffix name)
           for REPO_NAME in cudly-staging cudly; do
-            IMAGE_IDS=$(aws ecr list-images --repository-name "$REPO_NAME" \
-              --query 'imageIds[*]' --output json 2>/dev/null || echo "[]")
-            if [ "$IMAGE_IDS" != "null" ] && [ "$IMAGE_IDS" != "[]" ] && [ -n "$IMAGE_IDS" ]; then
-              echo "Deleting images from ECR repo $REPO_NAME..."
-              aws ecr batch-delete-image --repository-name "$REPO_NAME" \
-                --image-ids "$IMAGE_IDS" 2>/dev/null || true
+            if aws ecr delete-repository --repository-name "$REPO_NAME" --force 2>/dev/null; then
+              echo "Deleted ECR repo $REPO_NAME"
+            else
+              echo "Repo $REPO_NAME not found or already deleted, skipping"
             fi
           done
-          # Also try to find the staging ECR repo from state
+          # Also try to find the staging ECR repo from state (has random suffix)
           REPO_NAME=$(cd terraform/environments/aws && \
             terraform output -raw ecr_repository_name 2>/dev/null || echo "")
           if [ -n "$REPO_NAME" ] && [ "$REPO_NAME" != "cudly-staging" ] && [ "$REPO_NAME" != "cudly" ]; then
-            IMAGE_IDS=$(aws ecr list-images --repository-name "$REPO_NAME" \
-              --query 'imageIds[*]' --output json 2>/dev/null || echo "[]")
-            if [ "$IMAGE_IDS" != "null" ] && [ "$IMAGE_IDS" != "[]" ] && [ -n "$IMAGE_IDS" ]; then
-              echo "Deleting images from ECR repo $REPO_NAME..."
-              aws ecr batch-delete-image --repository-name "$REPO_NAME" \
-                --image-ids "$IMAGE_IDS" 2>/dev/null || true
+            if aws ecr delete-repository --repository-name "$REPO_NAME" --force 2>/dev/null; then
+              echo "Deleted ECR repo $REPO_NAME"
+            else
+              echo "Repo $REPO_NAME not found or already deleted, skipping"
             fi
           fi
+
+      - name: Disable RDS deletion protection before destroy
+        run: |
+          for INSTANCE_ID in $(aws rds describe-db-instances \
+            --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
+            --output text 2>/dev/null); do
+            echo "Disabling deletion protection on $INSTANCE_ID..."
+            aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
+              --no-deletion-protection --apply-immediately 2>/dev/null || true
+          done
 
       - name: Terraform Destroy
         env:
@@ -146,18 +151,26 @@ jobs:
 
       - name: Empty ECR repository before destroy
         run: |
-          # Get ECR repo name from Terraform output (random suffix)
+          # Force-delete ECR repo from state (has random suffix)
           REPO_NAME=$(cd terraform/environments/aws && \
             terraform output -raw ecr_repository_name 2>/dev/null || echo "")
           if [ -n "$REPO_NAME" ]; then
-            IMAGE_IDS=$(aws ecr list-images --repository-name "$REPO_NAME" \
-              --query 'imageIds[*]' --output json 2>/dev/null || echo "[]")
-            if [ "$IMAGE_IDS" != "null" ] && [ "$IMAGE_IDS" != "[]" ] && [ -n "$IMAGE_IDS" ]; then
-              echo "Deleting images from ECR repo $REPO_NAME..."
-              aws ecr batch-delete-image --repository-name "$REPO_NAME" \
-                --image-ids "$IMAGE_IDS" 2>/dev/null || true
+            if aws ecr delete-repository --repository-name "$REPO_NAME" --force 2>/dev/null; then
+              echo "Deleted ECR repo $REPO_NAME"
+            else
+              echo "Repo $REPO_NAME not found or already deleted, skipping"
             fi
           fi
+
+      - name: Disable RDS deletion protection before destroy
+        run: |
+          for INSTANCE_ID in $(aws rds describe-db-instances \
+            --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-staging')].DBInstanceIdentifier" \
+            --output text 2>/dev/null); do
+            echo "Disabling deletion protection on $INSTANCE_ID..."
+            aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
+              --no-deletion-protection --apply-immediately 2>/dev/null || true
+          done
 
       - name: Terraform Destroy
         env:
@@ -290,11 +303,18 @@ jobs:
               sleep 15
             done
           fi
-          # Remove the instance from Terraform state so destroy doesn't try to delete it again
+          # Remove Cloud SQL resources from Terraform state so destroy doesn't try to delete them again
           cd terraform/environments/gcp
           terraform state rm google_sql_database_instance.main 2>/dev/null || true
           terraform state rm google_sql_database.main 2>/dev/null || true
           terraform state rm google_sql_user.main 2>/dev/null || true
+          # Remove the Service Networking Connection from state and delete directly
+          # GCP needs extra time after Cloud SQL deletion to release VPC peering
+          terraform state rm module.networking.google_service_networking_connection.private_vpc_connection 2>/dev/null || true
+          gcloud services vpc-peerings delete \
+            --service=servicenetworking.googleapis.com \
+            --network=cudly-staging-vpc \
+            --project="$PROJECT" --quiet 2>/dev/null || echo "VPC peering already gone or not found"
 
       - name: Terraform Destroy
         env:
