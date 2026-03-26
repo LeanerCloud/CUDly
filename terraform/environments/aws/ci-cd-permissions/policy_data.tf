@@ -79,6 +79,7 @@ resource "aws_iam_policy" "data" {
         Action = [
           "rds:AddTagsToResource",
           "rds:CreateDBInstance",
+          "rds:CreateDBSnapshot",
           "rds:CreateDBSubnetGroup",
           "rds:DeleteDBInstance",
           "rds:DeleteDBSubnetGroup",
