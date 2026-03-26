@@ -92,7 +92,7 @@ variable "enable_function_url" {
 variable "function_url_auth_type" {
   description = "Function URL authorization type (NONE or AWS_IAM)"
   type        = string
-  default     = "AWS_IAM"
+  default     = "NONE"
 }
 
 variable "allowed_origins" {

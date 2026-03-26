@@ -213,7 +213,7 @@ variable "lambda_enable_function_url" {
 variable "lambda_function_url_auth_type" {
   description = "Function URL auth type (NONE or AWS_IAM)"
   type        = string
-  default     = "AWS_IAM"
+  default     = "NONE"
 }
 
 variable "lambda_allowed_origins" {
