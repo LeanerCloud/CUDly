@@ -106,7 +106,7 @@ func (h *Handler) extractBearerToken(req *events.LambdaFunctionURLRequest) strin
 	}
 
 	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
+		return auth[len("bearer "):]
 	}
 
 	return ""

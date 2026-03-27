@@ -150,6 +150,16 @@ func TestHandler_extractBearerToken(t *testing.T) {
 			headers:  map[string]string{"Authorization": "Bearer "},
 			expected: "",
 		},
+		{
+			name:     "lowercase bearer scheme",
+			headers:  map[string]string{"Authorization": "bearer my-token-lowercase"},
+			expected: "my-token-lowercase",
+		},
+		{
+			name:     "uppercase bearer scheme",
+			headers:  map[string]string{"Authorization": "BEARER my-token-upper"},
+			expected: "my-token-upper",
+		},
 	}
 
 	handler := &Handler{}
