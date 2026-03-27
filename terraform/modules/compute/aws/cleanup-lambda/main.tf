@@ -71,8 +71,8 @@ resource "aws_lambda_function" "cleanup" {
     variables = {
       DB_HOST            = var.db_host
       DB_PORT            = "5432"
-      DB_NAME            = "cudly"
-      DB_USER            = "cudly"
+      DB_NAME            = var.db_name
+      DB_USER            = var.db_username
       DB_PASSWORD_SECRET = var.db_password_secret_arn
       DB_SSL_MODE        = "require"
       SECRET_PROVIDER    = "aws"

@@ -13,6 +13,18 @@ variable "db_host" {
   type        = string
 }
 
+variable "db_name" {
+  description = "PostgreSQL database name"
+  type        = string
+  default     = "cudly"
+}
+
+variable "db_username" {
+  description = "PostgreSQL database username"
+  type        = string
+  default     = "cudly"
+}
+
 variable "db_password_secret_arn" {
   description = "ARN of the secret containing the database password"
   type        = string
