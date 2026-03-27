@@ -76,7 +76,7 @@ RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
 # ==============================================
 # TODO: Pin to SHA256 digest for reproducible builds:
 #   docker buildx imagetools inspect node:20.19-alpine3.21
-FROM node:20.19-alpine3.21 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:20.19-alpine3.21 AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
