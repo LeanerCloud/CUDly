@@ -1,57 +1,3 @@
-variable "stack_name" {
-  description = "Name prefix for all resources"
-  type        = string
-}
-
-variable "image_uri" {
-  description = "Docker image URI containing the cleanup Lambda handler"
-  type        = string
-}
-
-variable "db_host" {
-  description = "Database host (RDS Proxy endpoint recommended)"
-  type        = string
-}
-
-variable "db_password_secret_arn" {
-  description = "ARN of the secret containing the database password"
-  type        = string
-}
-
-variable "subnet_ids" {
-  description = "VPC subnet IDs for Lambda function"
-  type        = list(string)
-}
-
-variable "security_group_ids" {
-  description = "Security group IDs for Lambda function"
-  type        = list(string)
-}
-
-variable "schedule_expression" {
-  description = "EventBridge schedule expression (default: daily at 2 AM UTC)"
-  type        = string
-  default     = "cron(0 2 * * ? *)"
-}
-
-variable "timeout" {
-  description = "Lambda timeout in seconds"
-  type        = number
-  default     = 300
-}
-
-variable "memory_size" {
-  description = "Lambda memory size in MB"
-  type        = number
-  default     = 256
-}
-
-variable "tags" {
-  description = "Tags to apply to all resources"
-  type        = map(string)
-  default     = {}
-}
-
 # IAM role for cleanup Lambda
 resource "aws_iam_role" "cleanup" {
   name = "${var.stack_name}-cleanup-lambda"
@@ -102,7 +48,7 @@ resource "aws_iam_role_policy" "cleanup_secrets" {
 # CloudWatch log group
 resource "aws_cloudwatch_log_group" "cleanup" {
   name              = "/aws/lambda/${var.stack_name}-cleanup"
-  retention_in_days = 7
+  retention_in_days = 90
   tags              = var.tags
 }
 
@@ -195,25 +141,4 @@ resource "aws_cloudwatch_metric_alarm" "cleanup_errors" {
 
   alarm_description = "Cleanup Lambda function errors"
   tags              = var.tags
-}
-
-# Outputs
-output "function_arn" {
-  description = "ARN of the cleanup Lambda function"
-  value       = aws_lambda_function.cleanup.arn
-}
-
-output "function_name" {
-  description = "Name of the cleanup Lambda function"
-  value       = aws_lambda_function.cleanup.function_name
-}
-
-output "schedule_expression" {
-  description = "EventBridge schedule expression"
-  value       = var.schedule_expression
-}
-
-output "log_group_name" {
-  description = "CloudWatch log group name"
-  value       = aws_cloudwatch_log_group.cleanup.name
 }
