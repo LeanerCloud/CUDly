@@ -67,6 +67,7 @@ module.exports = (env, argv) => {
       new CopyWebpackPlugin({
         patterns: [
           { from: 'src/docs.html', to: 'docs/index.html' },
+          { from: 'src/docs.css', to: 'docs/docs.css' },
           { from: '../internal/api/openapi.yaml', to: 'openapi.yaml' }
         ]
       })

@@ -1,0 +1,5 @@
+/* Swagger UI page layout styles */
+html { box-sizing: border-box; overflow-y: scroll; }
+*, *:before, *:after { box-sizing: inherit; }
+body { margin: 0; background: #fafafa; }
+.topbar { display: none; }
