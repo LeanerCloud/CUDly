@@ -18,7 +18,7 @@ module "build" {
 
   # Build configuration
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
-  platform    = "linux/amd64"           # Azure Container Apps and AKS use amd64
+  # platform not set — auto-detected from builder host (Container Apps and AKS support arm64 and amd64)
 
   # Registry login for ACR using admin credentials
   registry_login_command = "echo '${nonsensitive(azurerm_container_registry.main.admin_password)}' | docker login ${azurerm_container_registry.main.login_server} -u ${azurerm_container_registry.main.admin_username} --password-stdin"

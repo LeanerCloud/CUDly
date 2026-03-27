@@ -20,6 +20,17 @@ variable "image_uri" {
   type        = string
 }
 
+variable "cpu_architecture" {
+  description = "ECS task CPU architecture (arm64 or x86_64)"
+  type        = string
+  default     = "x86_64"
+
+  validation {
+    condition     = contains(["arm64", "x86_64"], var.cpu_architecture)
+    error_message = "cpu_architecture must be 'arm64' or 'x86_64'."
+  }
+}
+
 variable "cpu" {
   description = "Fargate CPU units (256, 512, 1024, 2048, 4096)"
   type        = number

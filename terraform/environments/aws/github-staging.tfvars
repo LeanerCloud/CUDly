@@ -18,7 +18,6 @@ compute_platform    = "lambda"
 enable_docker_build = true # Build image via Terraform build module (no separate CI build step)
 
 # Lambda Configuration
-lambda_architecture           = "arm64"
 lambda_memory_size            = 1024
 lambda_timeout                = 60
 lambda_reserved_concurrency   = -1

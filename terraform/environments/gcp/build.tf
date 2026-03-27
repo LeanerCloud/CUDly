@@ -13,7 +13,7 @@ module "build" {
 
   # Build configuration
   source_path = "${path.root}/../../.." # Root of the project (where Dockerfile is)
-  platform    = "linux/amd64"           # Cloud Run and GKE use amd64
+  # platform not set — auto-detected from builder host (Cloud Run and GKE support arm64 and amd64)
 
   # Registry login for Artifact Registry
   registry_login_command = "gcloud auth configure-docker ${var.region}-docker.pkg.dev"

@@ -18,7 +18,6 @@ compute_platform    = "lambda"
 enable_docker_build = true # Build and push image via terraform apply on the runner
 
 # Lambda Configuration
-lambda_architecture           = "arm64"
 lambda_memory_size            = 512
 lambda_timeout                = 60
 lambda_reserved_concurrency   = -1

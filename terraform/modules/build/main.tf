@@ -3,6 +3,20 @@
 
 terraform {
   required_version = ">= 1.5"
+
+  required_providers {
+    external = {
+      source  = "hashicorp/external"
+      version = "~> 2.0"
+    }
+  }
+}
+
+# Detect builder architecture at plan time.
+# Used to auto-select the target platform when var.platform is not set explicitly,
+# so native builds are used on platforms that support multiple architectures.
+data "external" "host_arch" {
+  program = ["${path.module}/scripts/detect-arch.sh"]
 }
 
 # Generate image tag from git commit + timestamp
@@ -29,6 +43,9 @@ locals {
 
   # Full image URI
   image_uri = "${var.registry_url}/${var.image_name}:${local.image_tag}"
+
+  # Effective platform: use explicit var.platform when set, otherwise match the builder host
+  effective_platform = var.platform != "" ? var.platform : data.external.host_arch.result.platform
 }
 
 # Docker build and push (single step using buildx --push)
@@ -44,24 +61,44 @@ resource "terraform_data" "docker_build" {
     cmd_files = try(sha256(join("", [for f in fileset("${var.source_path}/cmd", "**/*.go") : filemd5("${var.source_path}/cmd/${f}")])), "none")
     pkg_files = try(sha256(join("", [for f in fileset("${var.source_path}/pkg", "**/*.go") : filemd5("${var.source_path}/pkg/${f}")])), "none")
 
-    # Force rebuild with image tag
+    # Force rebuild when image tag or target platform changes
     image_tag = local.image_tag
+    platform  = local.effective_platform
   }
 
   provisioner "local-exec" {
     working_dir = var.source_path
     command     = <<-EOT
       set -e
-      echo "🔐 Logging in to registry..."
+      echo "Logging in to registry..."
       ${var.registry_login_command}
 
-      echo "🔨 Building and pushing Docker image..."
+      # Detect host architecture to confirm native vs cross-compile
+      HOST_ARCH=$(uname -m)
+      case "$HOST_ARCH" in
+        x86_64)        HOST_PLATFORM="linux/amd64" ;;
+        arm64|aarch64) HOST_PLATFORM="linux/arm64" ;;
+        *)             HOST_PLATFORM="unknown" ;;
+      esac
+
+      TARGET_PLATFORM="${local.effective_platform}"
+
+      # Skip --platform when host matches target (native build)
+      if [ "$TARGET_PLATFORM" = "$HOST_PLATFORM" ]; then
+        PLATFORM_ARG=""
+        BUILD_MODE="native"
+      else
+        PLATFORM_ARG="--platform $TARGET_PLATFORM"
+        BUILD_MODE="cross-compiling from $HOST_PLATFORM"
+      fi
+
+      echo "Building and pushing Docker image..."
       echo "Image: ${local.image_uri}"
-      echo "Platform: ${var.platform != "" ? var.platform : "native"}"
+      echo "Platform: $TARGET_PLATFORM ($BUILD_MODE)"
       echo "Git commit: ${local.git_commit}"
 
       docker buildx build \
-        ${var.platform != "" ? "--platform ${var.platform}" : ""} \
+        $PLATFORM_ARG \
         --network=host \
         --tag ${local.image_uri} \
         --build-arg GIT_COMMIT=${local.git_commit} \
@@ -70,7 +107,7 @@ resource "terraform_data" "docker_build" {
         ${var.extra_build_args} \
         .
 
-      echo "✅ Docker image built and pushed successfully"
+      echo "Docker image built and pushed successfully"
       echo "Image URI: ${local.image_uri}"
     EOT
   }

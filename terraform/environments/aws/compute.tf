@@ -12,7 +12,7 @@ module "compute_lambda" {
 
   # Container image (from build module or var.image_uri)
   image_uri    = var.enable_docker_build ? module.build[0].image_uri : var.image_uri
-  architecture = var.lambda_architecture
+  architecture = local.effective_lambda_arch
   memory_size  = var.lambda_memory_size
   timeout      = var.lambda_timeout
 
@@ -86,7 +86,8 @@ module "compute_fargate" {
   region      = var.region
 
   # Container image (from build module or var.image_uri)
-  image_uri = var.enable_docker_build ? module.build[0].image_uri : var.image_uri
+  image_uri        = var.enable_docker_build ? module.build[0].image_uri : var.image_uri
+  cpu_architecture = local.effective_lambda_arch
 
   # Fargate resources
   cpu           = var.fargate_cpu

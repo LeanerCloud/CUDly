@@ -187,9 +187,14 @@ variable "admin_password" {
 # ==============================================
 
 variable "lambda_architecture" {
-  description = "Lambda architecture (x86_64 or arm64)"
+  description = "Lambda/Fargate CPU architecture (arm64 or x86_64). Empty string auto-detects from the builder host."
   type        = string
-  default     = "arm64"
+  default     = ""
+
+  validation {
+    condition     = contains(["arm64", "x86_64", ""], var.lambda_architecture)
+    error_message = "lambda_architecture must be 'arm64', 'x86_64', or '' (auto-detect)."
+  }
 }
 
 variable "lambda_memory_size" {
