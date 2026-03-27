@@ -691,7 +691,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(formatDateTime(rec.created_at)) + '</td>'
       + '<td>' + rec.source_count + 'x ' + escapeHtml(rec.source_instance_type) + '</td>'
       + '<td>' + rec.target_count + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
-      + '<td>' + rec.source_count + '</td>'
+      + '<td>' + rec.target_count + '</td>'
       + '<td>$' + escapeHtml(rec.payment_due) + '</td>'
       + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span></td>'
       + '<td>' + exchangeIdCell + '</td>'
