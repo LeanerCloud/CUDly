@@ -12,8 +12,7 @@
 #   - ECR_REPOSITORY: ECR repository name
 #
 # Triggered by:
-#   - Pushes to main or feat/multicloud-web-frontend branch
-#   - Manual workflow dispatch
+#   - Manual workflow dispatch only (push trigger disabled — Fargate is not the primary compute platform)
 #   - Workflow call from deploy-all.yml
 
 name: Deploy to AWS Fargate
@@ -27,8 +26,6 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  push:
-    branches: [main, feat/multicloud-web-frontend]
   workflow_dispatch:
     inputs:
       environment:

@@ -1,0 +1,98 @@
+# Destroy AWS Fargate Dev Resources (one-off)
+#
+# Destroys all Fargate dev resources tracked in the Terraform state.
+# Run once to clean up the dev Fargate environment.
+
+name: Destroy Fargate Dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_VERSION: '1.10.0'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  guard:
+    name: Confirm Destruction
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "destroy" ]; then
+            echo "You must type 'destroy' exactly to confirm. Got: '$CONFIRM'"
+            exit 1
+          fi
+
+  destroy:
+    name: Terraform Destroy (Fargate dev)
+    runs-on: ubuntu-24.04-arm
+    needs: guard
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+        run: |
+          printf '%s\nkey = "github-fargate-dev/terraform.tfstate"\n' "$TF_BACKEND" > /tmp/backend.tfbackend
+          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          if [ -n "$BUCKET" ]; then
+            aws s3 rm "s3://${BUCKET}/github-fargate-dev/terraform.tfstate.tflock" 2>/dev/null || true
+          fi
+          cd terraform/environments/aws
+          terraform init -backend-config=/tmp/backend.tfbackend
+
+      - name: Force-delete ECR repo
+        run: |
+          for REPO in $(aws ecr describe-repositories \
+            --query "repositories[?contains(repositoryName,'cudly-dev')].repositoryName" \
+            --output text 2>/dev/null); do
+            echo "Force-deleting ECR repo $REPO..."
+            aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
+              || echo "  Failed to delete $REPO (may already be gone)"
+          done
+
+      - name: Disable RDS deletion protection
+        run: |
+          for INSTANCE_ID in $(aws rds describe-db-instances \
+            --query "DBInstances[?starts_with(DBInstanceIdentifier,'cudly-dev')].DBInstanceIdentifier" \
+            --output text 2>/dev/null); do
+            echo "Disabling deletion protection on $INSTANCE_ID..."
+            aws rds modify-db-instance --db-instance-identifier "$INSTANCE_ID" \
+              --no-deletion-protection --apply-immediately 2>/dev/null || true
+          done
+
+      - name: Terraform Destroy
+        env:
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+        run: |
+          cd terraform/environments/aws
+          terraform destroy \
+            -var-file="github-dev.tfvars" \
+            -var="compute_platform=fargate" \
+            -auto-approve
