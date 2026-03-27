@@ -88,6 +88,7 @@ resource "aws_iam_policy" "compute" {
           "ecr:ListImages",
           "ecr:ListTagsForResource",
           "ecr:PutImage",
+          "ecr:PutImageTagMutability",
           "ecr:PutLifecyclePolicy",
           "ecr:SetRepositoryPolicy",
           "ecr:TagResource",
