@@ -206,9 +206,12 @@ jobs:
       - name: Rollback with Terraform
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+          ENVIRONMENT: ${{ inputs.environment }}
         run: |
+          printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
             -var-file="github-${{ inputs.environment }}.tfvars" \
@@ -256,9 +259,12 @@ jobs:
       - name: Rollback with Terraform
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+          ENVIRONMENT: ${{ inputs.environment }}
         run: |
+          printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/aws
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
             -var-file="github-${{ inputs.environment }}.tfvars" \
@@ -293,9 +299,12 @@ jobs:
       - name: Rollback with Terraform
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
+          ENVIRONMENT: ${{ inputs.environment }}
         run: |
+          printf '%s\nprefix = "github-%s"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/gcp
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
             -var-file="github-${{ inputs.environment }}.tfvars" \
@@ -331,9 +340,12 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           TF_VAR_key_vault_name: ${{ vars.KEY_VAULT_NAME }}
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
+          ENVIRONMENT: ${{ inputs.environment }}
         run: |
+          printf '%s\nkey = "github-%s.terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
           cd terraform/environments/azure
-          terraform init
+          terraform init -backend-config=/tmp/backend.tfbackend
 
           terraform apply -auto-approve \
             -var-file="github-${{ inputs.environment }}.tfvars" \

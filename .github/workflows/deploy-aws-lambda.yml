@@ -126,12 +126,6 @@ jobs:
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           printf '%s\nkey = "github-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
-          # Break any stale state lock from a previous failed run
-          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$BUCKET" ]; then
-            LOCK_KEY="github-${ENVIRONMENT}/terraform.tfstate.tflock"
-            aws s3 rm "s3://${BUCKET}/${LOCK_KEY}" 2>/dev/null || true
-          fi
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
