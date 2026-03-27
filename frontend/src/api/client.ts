@@ -28,6 +28,9 @@ async function sha256(message: string): Promise<string> {
  * Add x-amz-content-sha256 header for requests with body (required for CloudFront OAC)
  */
 export async function addContentHashHeader(headers: Record<string, string>, body: string): Promise<void> {
+  // crypto.subtle is only available in secure contexts (HTTPS).
+  // Skip on plain HTTP (e.g. ALB without TLS) — the header is only required for CloudFront OAC.
+  if (!crypto?.subtle) return;
   headers['x-amz-content-sha256'] = await sha256(body);
 }
 
