@@ -30,3 +30,10 @@ project_id = "your-gcp-project-id"
 # Set to "" to skip WIF setup.
 #
 github_repo = "LeanerCloud/CUDly"
+
+# ─── deploy_ref ────────────────────────────────────────────────────────────────
+# Git ref whose workflows are permitted to impersonate the deploy SA.
+# Only exact-match pushes to this branch can obtain a GCP token.
+# PRs, tags, forks, and workflow_dispatch from other refs are blocked.
+#
+deploy_ref = "refs/heads/main"

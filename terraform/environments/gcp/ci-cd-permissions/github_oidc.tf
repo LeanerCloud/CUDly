@@ -24,13 +24,15 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "google.subject"       = "assertion.sub"
     "attribute.actor"      = "assertion.actor"
     "attribute.repository" = "assertion.repository"
+    "attribute.ref"        = "assertion.ref"
   }
 
-  # Restrict to the specific GitHub repo — no other repo can impersonate this SA.
-  attribute_condition = "assertion.repository == '${var.github_repo}'"
+  # Restrict to the specific repo AND only allow the designated deploy branch.
+  # PRs, tags, forks, and workflow_dispatch from other refs are blocked.
+  attribute_condition = "assertion.repository == '${var.github_repo}' && assertion.ref == '${var.deploy_ref}'"
 }
 
-# Allow any workflow in the allowed repo to impersonate the deploy SA.
+# Allow workflows from the permitted repo+ref to impersonate the deploy SA.
 resource "google_service_account_iam_member" "github_actions" {
   count = var.github_repo != "" ? 1 : 0
 
