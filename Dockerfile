@@ -76,11 +76,11 @@ RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
 # ==============================================
 # TODO: Pin to SHA256 digest for reproducible builds:
 #   docker buildx imagetools inspect node:20.19-alpine3.21
-FROM --platform=$BUILDPLATFORM node:20.19-alpine3.21 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci && test -d node_modules/.bin/webpack
 COPY frontend/ ./
 RUN npm run build
 
