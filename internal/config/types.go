@@ -128,26 +128,28 @@ type PurchaseExecution struct {
 	CompletedAt      *time.Time             `json:"completed_at,omitempty" dynamodbav:"completed_at,omitempty"`
 	Error            string                 `json:"error,omitempty" dynamodbav:"error,omitempty"`
 	TTL              int64                  `json:"ttl,omitempty" dynamodbav:"ttl,omitempty"`
+	CloudAccountID   *string                `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 }
 
 // RecommendationRecord stores a recommendation with purchase status
 type RecommendationRecord struct {
-	ID           string  `json:"id" dynamodbav:"id"`
-	Provider     string  `json:"provider" dynamodbav:"provider"`
-	Service      string  `json:"service" dynamodbav:"service"`
-	Region       string  `json:"region" dynamodbav:"region"`
-	ResourceType string  `json:"resource_type" dynamodbav:"resource_type"`
-	Engine       string  `json:"engine,omitempty" dynamodbav:"engine,omitempty"`
-	Count        int     `json:"count" dynamodbav:"count"`
-	Term         int     `json:"term" dynamodbav:"term"`
-	Payment      string  `json:"payment" dynamodbav:"payment"`
-	UpfrontCost  float64 `json:"upfront_cost" dynamodbav:"upfront_cost"`
-	MonthlyCost  float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
-	Savings      float64 `json:"savings" dynamodbav:"savings"`
-	Selected     bool    `json:"selected" dynamodbav:"selected"`
-	Purchased    bool    `json:"purchased" dynamodbav:"purchased"`
-	PurchaseID   string  `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
-	Error        string  `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	ID             string  `json:"id" dynamodbav:"id"`
+	Provider       string  `json:"provider" dynamodbav:"provider"`
+	Service        string  `json:"service" dynamodbav:"service"`
+	Region         string  `json:"region" dynamodbav:"region"`
+	ResourceType   string  `json:"resource_type" dynamodbav:"resource_type"`
+	Engine         string  `json:"engine,omitempty" dynamodbav:"engine,omitempty"`
+	Count          int     `json:"count" dynamodbav:"count"`
+	Term           int     `json:"term" dynamodbav:"term"`
+	Payment        string  `json:"payment" dynamodbav:"payment"`
+	UpfrontCost    float64 `json:"upfront_cost" dynamodbav:"upfront_cost"`
+	MonthlyCost    float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
+	Savings        float64 `json:"savings" dynamodbav:"savings"`
+	Selected       bool    `json:"selected" dynamodbav:"selected"`
+	Purchased      bool    `json:"purchased" dynamodbav:"purchased"`
+	PurchaseID     string  `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
+	Error          string  `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	CloudAccountID *string `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 }
 
 // PurchaseHistoryRecord stores completed purchase information
@@ -168,6 +170,7 @@ type PurchaseHistoryRecord struct {
 	PlanID           string    `json:"plan_id,omitempty" dynamodbav:"plan_id,omitempty"`
 	PlanName         string    `json:"plan_name,omitempty" dynamodbav:"plan_name,omitempty"`
 	RampStep         int       `json:"ramp_step,omitempty" dynamodbav:"ramp_step,omitempty"`
+	CloudAccountID   *string   `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table
@@ -191,6 +194,7 @@ type RIExchangeRecord struct {
 	UpdatedAt          time.Time  `json:"updated_at"`
 	CompletedAt        *time.Time `json:"completed_at,omitempty"`
 	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	CloudAccountID     *string    `json:"cloud_account_id,omitempty"`
 }
 
 // ConfigSetting represents a configuration setting for the defaults system
@@ -201,4 +205,69 @@ type ConfigSetting struct {
 	Category    string    `json:"category"`
 	Description string    `json:"description"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// CloudAccount represents a single managed cloud account/subscription/project.
+type CloudAccount struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	ContactEmail string `json:"contact_email,omitempty"`
+	Enabled      bool   `json:"enabled"`
+	Provider     string `json:"provider"`
+	ExternalID   string `json:"external_id"`
+
+	// AWS-specific
+	AWSAuthMode   string `json:"aws_auth_mode,omitempty"`
+	AWSRoleARN    string `json:"aws_role_arn,omitempty"`
+	AWSExternalID string `json:"aws_external_id,omitempty"`
+	AWSBastionID  string `json:"aws_bastion_id,omitempty"`
+	AWSIsOrgRoot  bool   `json:"aws_is_org_root,omitempty"`
+
+	// Azure-specific
+	AzureSubscriptionID string `json:"azure_subscription_id,omitempty"`
+	AzureTenantID       string `json:"azure_tenant_id,omitempty"`
+	AzureClientID       string `json:"azure_client_id,omitempty"`
+
+	// GCP-specific
+	GCPProjectID   string `json:"gcp_project_id,omitempty"`
+	GCPClientEmail string `json:"gcp_client_email,omitempty"`
+
+	// Derived (not stored in DB)
+	CredentialsConfigured bool   `json:"credentials_configured"`
+	BastionAccountName    string `json:"bastion_account_name,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedBy string    `json:"created_by,omitempty"`
+}
+
+// CloudAccountFilter for ListCloudAccounts queries.
+type CloudAccountFilter struct {
+	Provider  *string
+	Enabled   *bool
+	Search    string  // substring match on name or external_id
+	BastionID *string // return accounts whose aws_bastion_id = *BastionID
+}
+
+// AccountServiceOverride is a sparse per-account override on top of the global ServiceConfig.
+// Nil pointer fields inherit the global value.
+type AccountServiceOverride struct {
+	ID             string    `json:"id"`
+	AccountID      string    `json:"account_id"`
+	Provider       string    `json:"provider"`
+	Service        string    `json:"service"`
+	Enabled        *bool     `json:"enabled,omitempty"`
+	Term           *int      `json:"term,omitempty"`
+	Payment        *string   `json:"payment,omitempty"`
+	Coverage       *float64  `json:"coverage,omitempty"`
+	RampSchedule   *string   `json:"ramp_schedule,omitempty"`
+	IncludeEngines []string  `json:"include_engines,omitempty"`
+	ExcludeEngines []string  `json:"exclude_engines,omitempty"`
+	IncludeRegions []string  `json:"include_regions,omitempty"`
+	ExcludeRegions []string  `json:"exclude_regions,omitempty"`
+	IncludeTypes   []string  `json:"include_types,omitempty"`
+	ExcludeTypes   []string  `json:"exclude_types,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
