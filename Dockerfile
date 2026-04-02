@@ -80,7 +80,7 @@ FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
-RUN npm ci && test -d node_modules/.bin/webpack
+RUN npm ci && test -x node_modules/.bin/webpack
 COPY frontend/ ./
 RUN npm run build
 
