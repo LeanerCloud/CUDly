@@ -25,6 +25,7 @@ resource "aws_iam_policy" "compute" {
           "lambda:UntagResource",
           "lambda:UpdateFunctionCode",
           "lambda:UpdateFunctionConfiguration",
+          "lambda:UpdateFunctionUrlConfig",
         ]
         Resource = "arn:aws:lambda:*:*:function:cudly-*"
       },
