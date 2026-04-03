@@ -15,6 +15,8 @@ var _ credentials.CredentialStore = (*MockCredentialStore)(nil) // compile-time 
 // MockConfigStore is a mock implementation of config.Store
 type MockConfigStore struct {
 	mock.Mock
+	// GetCloudAccountFn overrides GetCloudAccount when non-nil (used in not-found tests).
+	GetCloudAccountFn func(ctx context.Context, id string) (*config.CloudAccount, error)
 }
 
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -206,7 +208,10 @@ func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *confi
 	return nil
 }
 func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
-	return nil, nil
+	if m.GetCloudAccountFn != nil {
+		return m.GetCloudAccountFn(ctx, id)
+	}
+	return &config.CloudAccount{ID: id, Provider: "aws", AWSAuthMode: "access_keys"}, nil
 }
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
 	return nil

@@ -66,6 +66,11 @@ CREATE TRIGGER update_account_credentials_updated_at
     BEFORE UPDATE ON account_credentials
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Index for HasAccountCredentials query (WHERE account_id = $1 without credential_type).
+-- The UNIQUE(account_id, credential_type) index covers two-column lookups;
+-- this single-column index covers the existence check.
+CREATE INDEX idx_account_credentials_account ON account_credentials(account_id);
+
 -- ==========================================
 -- ACCOUNT SERVICE OVERRIDES
 -- ==========================================

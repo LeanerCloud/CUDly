@@ -77,7 +77,7 @@ func TestValidateServiceName(t *testing.T) {
 		{"valid service name", "rds", false},
 		{"valid service with hyphen", "elastic-cache", false},
 		{"valid service with numbers", "ec2", false},
-		{"valid mixed case", "RDS", false},
+		{"uppercase service is invalid", "RDS", true},
 		{"invalid with underscore", "elastic_cache", true},
 		{"invalid with special chars", "rds!", true},
 		{"invalid with spaces", "rds aurora", true},

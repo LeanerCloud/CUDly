@@ -191,8 +191,8 @@ func TestGetAccount_NotFound(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	setupAdminAuth(ctx, mockAuth)
 
-	// Default MockConfigStore returns nil, nil for GetCloudAccount
 	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return nil, nil }
 	handler := &Handler{auth: mockAuth, config: store}
 
 	result, err := handler.getAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")

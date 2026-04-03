@@ -46,10 +46,8 @@ func TestRouterDispatch_UpdateServiceOverride(t *testing.T) {
 }
 
 // TestRouterDispatch_UpdateAccount_RoutesCorrectly verifies PUT /api/accounts/:id
-// reaches updateAccount (not saveAccountServiceOverride).  Because the stub
-// GetCloudAccount returns nil (simulating "not found"), the handler returns
-// errNotFound — which proves updateAccount ran, not saveAccountServiceOverride
-// (which returns a non-nil AccountServiceOverride even on first save).
+// reaches updateAccount (not saveAccountServiceOverride).  The stub returns a
+// valid account so updateAccount succeeds — confirming the correct handler ran.
 func TestRouterDispatch_UpdateAccount_RoutesCorrectly(t *testing.T) {
 	ctx := context.Background()
 	r := setupRouterForDispatch(ctx)
@@ -57,8 +55,7 @@ func TestRouterDispatch_UpdateAccount_RoutesCorrectly(t *testing.T) {
 	accountID := "11111111-1111-1111-1111-111111111111"
 	req, method, path := routerReq("PUT", "/api/accounts/"+accountID, `{"name":"Updated","provider":"aws","external_id":"123456789012"}`)
 	_, err := r.Route(ctx, method, path, req)
-	// errNotFound is expected: stub GetCloudAccount returns nil → updateAccount returns not found
-	assert.True(t, IsNotFoundError(err), "expected not-found from updateAccount stub, got: %v", err)
+	require.NoError(t, err)
 }
 
 // ── Delete dispatch ──────────────────────────────────────────────────────────

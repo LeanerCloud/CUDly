@@ -268,7 +268,20 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
       const created = await api.createAccount(req);
       savedId = created.id;
     }
-    await saveAccountCredentialsIfFilled(savedId, provider);
+
+    // Credential save is best-effort: if it fails we still close the modal
+    // (the account was already persisted) and show a targeted warning so the
+    // user knows to retry just the credential step.
+    try {
+      await saveAccountCredentialsIfFilled(savedId, provider);
+    } catch (credErr) {
+      console.error('Account saved but credentials could not be stored:', credErr);
+      closeAccountModal();
+      await loadAccountsForProvider(provider);
+      alert(`Account saved, but credentials could not be stored: ${(credErr as Error).message}\nPlease edit the account to re-enter credentials.`);
+      return;
+    }
+
     closeAccountModal();
     await loadAccountsForProvider(provider);
   } catch (err) {

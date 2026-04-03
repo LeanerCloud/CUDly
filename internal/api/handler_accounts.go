@@ -297,6 +297,15 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 		return nil, fmt.Errorf("accounts: credential store not configured")
 	}
 
+	// Confirm the account exists so we return 404 rather than a FK violation.
+	acct, err := h.config.GetCloudAccount(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+	if acct == nil {
+		return nil, errNotFound
+	}
+
 	payloadBytes, err := json.Marshal(req.Payload)
 	if err != nil {
 		return nil, NewClientError(400, "invalid credentials payload")
@@ -319,16 +328,65 @@ func (h *Handler) testAccountCredentials(ctx context.Context, req *events.Lambda
 		return nil, err
 	}
 
-	ok, err := h.config.HasAccountCredentials(ctx, id)
+	acct, err := h.config.GetCloudAccount(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
+	if acct == nil {
+		return nil, errNotFound
+	}
 
+	// For role_arn and bastion auth modes, no stored secret is needed.
+	if acct.Provider == "aws" && acct.AWSAuthMode != "access_keys" {
+		if acct.AWSRoleARN == "" {
+			return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, nil
+		}
+		return AccountTestResult{OK: true, Message: "role assumption configured (no stored credential required)"}, nil
+	}
+
+	res, err := h.checkCredentialPresence(ctx, acct)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// checkCredentialPresence checks whether the expected credential is stored for an account.
+func (h *Handler) checkCredentialPresence(ctx context.Context, acct *config.CloudAccount) (AccountTestResult, error) {
+	if h.credStore != nil {
+		credType := credTypeForAccount(acct)
+		has, err := h.credStore.HasCredential(ctx, acct.ID, credType)
+		if err != nil {
+			return AccountTestResult{}, fmt.Errorf("accounts: check credential: %w", err)
+		}
+		if has {
+			return AccountTestResult{OK: true, Message: "credentials are configured"}, nil
+		}
+		return AccountTestResult{OK: false, Message: fmt.Sprintf("no %s credential stored", credType)}, nil
+	}
+
+	// Fallback when credStore is not wired (e.g. in unit tests).
+	ok, err := h.config.HasAccountCredentials(ctx, acct.ID)
+	if err != nil {
+		return AccountTestResult{}, fmt.Errorf("accounts: %w", err)
+	}
 	if ok {
 		return AccountTestResult{OK: true, Message: "credentials are configured"}, nil
 	}
-
 	return AccountTestResult{OK: false, Message: "no credentials configured"}, nil
+}
+
+// credTypeForAccount returns the expected credential_type for an account
+// based on its provider and auth mode.
+func credTypeForAccount(acct *config.CloudAccount) string {
+	switch acct.Provider {
+	case "azure":
+		return "azure_client_secret"
+	case "gcp":
+		return "gcp_service_account"
+	default: // aws
+		return "aws_access_keys"
+	}
 }
 
 // listAccountServiceOverrides handles GET /api/accounts/:id/service-overrides.
@@ -487,6 +545,12 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		return nil, NewClientError(400, "invalid request body")
 	}
 
+	for _, aid := range body.AccountIDs {
+		if err := validateUUID(aid); err != nil {
+			return nil, NewClientError(400, fmt.Sprintf("invalid account_id %q: must be a valid UUID", aid))
+		}
+	}
+
 	if err := h.config.SetPlanAccounts(ctx, id, body.AccountIDs); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -549,8 +613,11 @@ func parseServiceOverridePath(path string) (accountID, provider, service string,
 	provider = parts[2]
 	service = parts[3]
 
-	if provider == "" || service == "" {
-		return "", "", "", fmt.Errorf("provider and service must not be empty")
+	if !validAccountProviders[provider] {
+		return "", "", "", fmt.Errorf("invalid provider %q: must be one of aws, azure, gcp", provider)
+	}
+	if service == "" || !serviceNameRegex.MatchString(service) {
+		return "", "", "", fmt.Errorf("invalid service name %q: must be 1-64 lowercase alphanumeric characters or hyphens", service)
 	}
 
 	return accountID, provider, service, nil

@@ -1508,7 +1508,10 @@ func (s *PostgresStore) SaveAccountServiceOverride(ctx context.Context, o *Accou
 		o.ID = uuid.New().String()
 	}
 	now := time.Now()
-	o.CreatedAt = now
+	// Only set CreatedAt for new records; preserve the original creation time on updates.
+	if o.CreatedAt.IsZero() {
+		o.CreatedAt = now
+	}
 	o.UpdatedAt = now
 
 	query := `

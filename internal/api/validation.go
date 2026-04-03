@@ -31,8 +31,9 @@ var validProviders = map[string]bool{
 	"gcp":   true,
 }
 
-// serviceNameRegex validates service names (alphanumeric, hyphens) - requires at least one character
-var serviceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+// serviceNameRegex validates service override names: lowercase alphanumeric + hyphens, 1-64 chars.
+// Uppercase is rejected to prevent stored-XSS via mixed-case surprises and to keep names consistent.
+var serviceNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // regionNameRegex validates AWS/Azure/GCP region names - requires at least one character
 var regionNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
