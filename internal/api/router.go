@@ -60,7 +60,10 @@ func (r *Router) registerRoutes() {
 		// Purchase plans endpoints
 		{ExactPath: "/api/plans", Method: "GET", Handler: r.listPlansHandler},
 		{ExactPath: "/api/plans", Method: "POST", Handler: r.createPlanHandler},
+		// Suffix routes must precede generic prefix routes so they are matched first.
 		{PathPrefix: "/api/plans/", PathSuffix: "/purchases", Method: "POST", Handler: r.createPlannedPurchasesHandler},
+		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "GET", Handler: r.listPlanAccountsHandler},
+		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "PUT", Handler: r.setPlanAccountsHandler},
 		{PathPrefix: "/api/plans/", Method: "GET", Handler: r.getPlanHandler},
 		{PathPrefix: "/api/plans/", Method: "PUT", Handler: r.updatePlanHandler},
 		{PathPrefix: "/api/plans/", Method: "PATCH", Handler: r.patchPlanHandler},
@@ -123,10 +126,6 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/accounts/", Method: "PUT", Handler: r.updateAccountOrServiceOverrideHandler},
 		{PathPrefix: "/api/accounts/", Method: "DELETE", Handler: r.deleteAccountOrServiceOverrideHandler},
 		{PathPrefix: "/api/accounts/", Method: "GET", Handler: r.getAccountHandler},
-
-		// Plan ↔ Account association
-		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "GET", Handler: r.listPlanAccountsHandler},
-		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "PUT", Handler: r.setPlanAccountsHandler},
 
 		// Group management endpoints
 		{ExactPath: "/api/groups", Method: "GET", Handler: r.listGroupsHandler},

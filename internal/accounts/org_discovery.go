@@ -17,17 +17,26 @@ type OrgDiscoveryResult struct {
 	Errors   []error
 }
 
+// orgListAccountsClient is the minimal Organizations API surface needed for discovery.
+// *organizations.Client satisfies this interface.
+type orgListAccountsClient interface {
+	ListAccounts(ctx context.Context, params *organizations.ListAccountsInput, optFns ...func(*organizations.Options)) (*organizations.ListAccountsOutput, error)
+}
+
 // DiscoverOrgAccounts uses the AWS Organizations API on the management account
-// (identified by mgmtAccountID) to list all member accounts. It returns
-// CloudAccount records suitable for saving — they are NOT automatically persisted.
+// to list all member accounts. It returns CloudAccount records suitable for saving
+// — they are NOT automatically persisted.
 //
 // The caller is responsible for using the appropriate credentials for the
 // management account (e.g., resolved via the credentials package).
 func DiscoverOrgAccounts(ctx context.Context, cfg aws.Config) (*OrgDiscoveryResult, error) {
-	client := organizations.NewFromConfig(cfg)
+	return discoverWithClient(ctx, organizations.NewFromConfig(cfg))
+}
 
+// discoverWithClient performs org discovery using the provided client, enabling
+// unit testing with a mock client.
+func discoverWithClient(ctx context.Context, client orgListAccountsClient) (*OrgDiscoveryResult, error) {
 	var accounts []config.CloudAccount
-	var errs []error
 
 	paginator := organizations.NewListAccountsPaginator(client, &organizations.ListAccountsInput{})
 	for paginator.HasMorePages() {
@@ -47,7 +56,6 @@ func DiscoverOrgAccounts(ctx context.Context, cfg aws.Config) (*OrgDiscoveryResu
 				AWSAuthMode: "role_arn",
 			})
 		}
-		_ = errs // future: collect per-account errors
 	}
 
 	return &OrgDiscoveryResult{Accounts: accounts}, nil
