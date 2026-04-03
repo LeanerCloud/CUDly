@@ -16,7 +16,10 @@ func (h *Handler) getDashboardSummary(ctx context.Context, params map[string]str
 	provider := params["provider"]
 
 	// Parse account_ids (comma-separated); fall back to singular account_id for backward compat.
-	accountIDs := parseAccountIDs(params["account_ids"])
+	accountIDs, err := parseAccountIDs(params["account_ids"])
+	if err != nil {
+		return nil, NewClientError(400, err.Error())
+	}
 
 	// Resolve a single account_id for calculateCommitmentMetrics:
 	// - one ID supplied → use it directly

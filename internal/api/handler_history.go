@@ -14,7 +14,9 @@ func (h *Handler) getHistory(ctx context.Context, params map[string]string) (any
 	// Parse account_ids (comma-separated). GetPurchaseHistory/GetAllPurchaseHistory do not yet
 	// support multi-account filtering; the parameter is accepted and logged for observability.
 	// Per-account filtering will be wired to the store in a future step.
-	if accountIDs := parseAccountIDs(params["account_ids"]); len(accountIDs) > 0 {
+	if accountIDs, err := parseAccountIDs(params["account_ids"]); err != nil {
+		return nil, NewClientError(400, err.Error())
+	} else if len(accountIDs) > 0 {
 		logging.Infof("history: account_ids filter received (%d accounts); per-account filtering not yet implemented", len(accountIDs))
 	}
 

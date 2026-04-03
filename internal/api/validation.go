@@ -161,17 +161,23 @@ func validateRequestBodySize(body string) error {
 
 // parseAccountIDs splits a comma-separated account_ids query parameter into a slice.
 // Empty entries are removed. Returns nil when the input is empty.
-func parseAccountIDs(raw string) []string {
+// Returns an error if any value is not a valid UUID.
+func parseAccountIDs(raw string) ([]string, error) {
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	var ids []string
 	for _, id := range strings.Split(raw, ",") {
-		if trimmed := strings.TrimSpace(id); trimmed != "" {
-			ids = append(ids, trimmed)
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
 		}
+		if err := validateUUID(trimmed); err != nil {
+			return nil, fmt.Errorf("invalid account_ids: %q is not a valid UUID", trimmed)
+		}
+		ids = append(ids, trimmed)
 	}
-	return ids
+	return ids, nil
 }
 
 // decodeBase64Password decodes a base64-encoded password.
