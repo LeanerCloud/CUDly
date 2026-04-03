@@ -237,7 +237,7 @@ func TestSaveAccountCredentials_Success(t *testing.T) {
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
-	handler := &Handler{auth: mockAuth, config: store}
+	handler := &Handler{auth: mockAuth, config: store, credStore: &MockCredentialStore{}}
 
 	body := `{"credential_type":"aws_access_keys","payload":{"access_key_id":"AKIA...","secret_access_key":"secret"}}`
 	result, err := handler.saveAccountCredentials(ctx, adminRequest(body), "11111111-1111-1111-1111-111111111111")

@@ -5,9 +5,12 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/stretchr/testify/mock"
 )
+
+var _ credentials.CredentialStore = (*MockCredentialStore)(nil) // compile-time interface check
 
 // MockConfigStore is a mock implementation of config.Store
 type MockConfigStore struct {
@@ -243,6 +246,23 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 }
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	return nil, nil
+}
+
+// MockCredentialStore is a simple stub implementing credentials.CredentialStore.
+// SaveCredential always returns nil; other methods are no-ops.
+type MockCredentialStore struct{}
+
+func (m *MockCredentialStore) SaveCredential(_ context.Context, _, _ string, _ []byte) error {
+	return nil
+}
+func (m *MockCredentialStore) LoadRaw(_ context.Context, _, _ string) ([]byte, error) {
+	return nil, nil
+}
+func (m *MockCredentialStore) DeleteCredential(_ context.Context, _, _ string) error {
+	return nil
+}
+func (m *MockCredentialStore) HasCredential(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
 }
 
 // MockPurchaseManager is a mock implementation of purchase.Manager

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -18,6 +19,7 @@ import (
 // Handler processes HTTP requests
 type Handler struct {
 	config             config.StoreInterface
+	credStore          credentials.CredentialStore
 	purchase           PurchaseManagerInterface
 	scheduler          SchedulerInterface
 	auth               AuthServiceInterface
@@ -49,6 +51,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 
 	h := &Handler{
 		config:             cfg.ConfigStore,
+		credStore:          cfg.CredentialStore,
 		purchase:           cfg.PurchaseManager,
 		scheduler:          cfg.Scheduler,
 		auth:               cfg.AuthService,

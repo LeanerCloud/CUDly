@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
 
@@ -43,6 +44,7 @@ type RateLimiterInterface interface {
 // HandlerConfig holds configuration for the API handler
 type HandlerConfig struct {
 	ConfigStore               config.StoreInterface
+	CredentialStore           credentials.CredentialStore
 	PurchaseManager           PurchaseManagerInterface
 	Scheduler                 SchedulerInterface
 	AuthService               AuthServiceInterface

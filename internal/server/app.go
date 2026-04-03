@@ -15,6 +15,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/CUDly/internal/email"
@@ -360,9 +361,18 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 	app.Analytics = analytics.NewPostgresAnalyticsStore(dbConn)
 	log.Println("Initialized PostgreSQL analytics store")
 
+	// Initialize credential store (AES-256-GCM encrypted credential blobs)
+	encKey, err := credentials.KeyFromEnv()
+	if err != nil {
+		return fmt.Errorf("failed to load credential encryption key: %w", err)
+	}
+	credStore := credentials.NewCredentialStore(dbConn.Pool(), encKey)
+	log.Println("Initialized encrypted credential store")
+
 	// Update API handler with new config store, scheduler, and rate limiter
 	app.API = api.NewHandler(api.HandlerConfig{
 		ConfigStore:               app.Config,
+		CredentialStore:           credStore,
 		PurchaseManager:           app.Purchase,
 		Scheduler:                 app.Scheduler,
 		AuthService:               newAuthServiceAdapter(app.Auth),

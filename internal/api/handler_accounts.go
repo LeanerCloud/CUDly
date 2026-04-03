@@ -293,12 +293,16 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 		return nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, gcp_service_account")
 	}
 
+	if h.credStore == nil {
+		return nil, fmt.Errorf("accounts: credential store not configured")
+	}
+
 	payloadBytes, err := json.Marshal(req.Payload)
 	if err != nil {
 		return nil, NewClientError(400, "invalid credentials payload")
 	}
 
-	if err := h.config.SaveAccountCredential(ctx, id, req.CredentialType, string(payloadBytes)); err != nil {
+	if err := h.credStore.SaveCredential(ctx, id, req.CredentialType, payloadBytes); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
@@ -367,7 +371,10 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 	}
 
 	now := time.Now()
-	existing, _ := h.config.GetAccountServiceOverride(ctx, accountID, provider, service)
+	existing, err := h.config.GetAccountServiceOverride(ctx, accountID, provider, service)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: get existing override: %w", err)
+	}
 
 	override := buildServiceOverride(accountID, provider, service, req, existing, now)
 
