@@ -18,7 +18,13 @@ jest.mock('../api', () => ({
   getConfig: jest.fn(),
   updateConfig: jest.fn(),
   saveAzureCredentials: jest.fn(),
-  saveGCPCredentials: jest.fn()
+  saveGCPCredentials: jest.fn(),
+  listAccounts: jest.fn(),
+  createAccount: jest.fn(),
+  updateAccount: jest.fn(),
+  deleteAccount: jest.fn(),
+  testAccountCredentials: jest.fn(),
+  saveAccountCredentials: jest.fn()
 }));
 
 import * as api from '../api';
@@ -265,7 +271,7 @@ describe('Settings Module', () => {
       const validGCPJson = JSON.stringify({
         type: 'service_account',
         project_id: 'my-project',
-        private_key: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
+        private_key: 'test-private-key-placeholder',
         client_email: 'test@my-project.iam.gserviceaccount.com'
       });
 
@@ -771,7 +777,7 @@ describe('Settings Module', () => {
       const validJson = JSON.stringify({
         type: 'service_account',
         project_id: 'my-project',
-        private_key: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
+        private_key: 'test-private-key-placeholder',
         client_email: 'test@my-project.iam.gserviceaccount.com'
       });
 
@@ -794,7 +800,7 @@ describe('Settings Module', () => {
       const validJson = JSON.stringify({
         type: 'service_account',
         project_id: 'my-project',
-        private_key: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
+        private_key: 'test-private-key-placeholder',
         client_email: 'test@my-project.iam.gserviceaccount.com'
       });
 
