@@ -167,3 +167,29 @@ export {
   updateRIExchangeConfig,
   getRIExchangeHistory
 } from './riexchange';
+
+// Re-export accounts functions and types
+export type {
+  CloudAccount,
+  CloudAccountRequest,
+  AccountListFilters,
+  AccountCredentialsRequest,
+  AccountTestResult,
+  AccountServiceOverride,
+  AccountServiceOverrideRequest
+} from './accounts';
+
+export {
+  listAccounts,
+  createAccount,
+  getAccount,
+  updateAccount,
+  deleteAccount,
+  saveAccountCredentials,
+  testAccountCredentials,
+  listAccountServiceOverrides,
+  saveAccountServiceOverride,
+  deleteAccountServiceOverride,
+  listPlanAccounts,
+  setPlanAccounts
+} from './accounts';

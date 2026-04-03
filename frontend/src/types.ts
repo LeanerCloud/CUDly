@@ -9,6 +9,7 @@ import * as api from './api';
 export interface AppState {
   currentUser: api.User | null;
   currentProvider: api.Provider | 'all';
+  currentAccountIDs: string[]; // selected account UUIDs; empty = all accounts
   currentRecommendations: api.Recommendation[];
   selectedRecommendations: Set<number>;
   savingsChart: Chart | null;

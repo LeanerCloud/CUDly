@@ -8,6 +8,7 @@ import type { AppState } from './types';
 export const state: AppState = {
   currentUser: null,
   currentProvider: 'all',
+  currentAccountIDs: [],
   currentRecommendations: [],
   selectedRecommendations: new Set(),
   savingsChart: null
@@ -61,4 +62,12 @@ export function getSavingsChart() {
 
 export function setSavingsChart(chart: AppState['savingsChart']) {
   state.savingsChart = chart;
+}
+
+export function getCurrentAccountIDs(): string[] {
+  return [...state.currentAccountIDs];
+}
+
+export function setCurrentAccountIDs(ids: string[]) {
+  state.currentAccountIDs = ids;
 }
