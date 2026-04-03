@@ -574,8 +574,9 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 		INSERT INTO purchase_executions (
 			plan_id, execution_id, status, step_number, scheduled_date,
 			notification_sent, approval_token, recommendations,
-			total_upfront_cost, estimated_savings, completed_at, error, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+			cloud_account_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -586,6 +587,7 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 			completed_at = $11,
 			error = $12,
 			expires_at = $13,
+			cloud_account_id = $14,
 			updated_at = NOW()
 	`
 
@@ -603,6 +605,7 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 		execution.CompletedAt,
 		execution.Error,
 		timeFromTTL(execution.TTL),
+		execution.CloudAccountID,
 	)
 
 	if err != nil {
@@ -617,7 +620,8 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
-		       total_upfront_cost, estimated_savings, completed_at, error, expires_at
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -632,7 +636,8 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
-		       total_upfront_cost, estimated_savings, completed_at, error, expires_at
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -654,7 +659,8 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
-		       total_upfront_cost, estimated_savings, completed_at, error, expires_at
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -699,6 +705,7 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 			&completedAt,
 			&exec.Error,
 			&expiresAt,
+			&exec.CloudAccountID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
