@@ -113,6 +113,21 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/users/", Method: "PUT", Handler: r.updateUserHandler},
 		{PathPrefix: "/api/users/", Method: "DELETE", Handler: r.deleteUserHandler},
 
+		// Cloud Account endpoints (more-specific suffix routes must precede generic prefix routes)
+		{ExactPath: "/api/accounts/discover-org", Method: "POST", Handler: r.discoverOrgAccountsHandler},
+		{ExactPath: "/api/accounts", Method: "GET", Handler: r.listAccountsHandler},
+		{ExactPath: "/api/accounts", Method: "POST", Handler: r.createAccountHandler},
+		{PathPrefix: "/api/accounts/", PathSuffix: "/credentials", Method: "POST", Handler: r.saveAccountCredentialsHandler},
+		{PathPrefix: "/api/accounts/", PathSuffix: "/test", Method: "POST", Handler: r.testAccountCredentialsHandler},
+		{PathPrefix: "/api/accounts/", PathSuffix: "/service-overrides", Method: "GET", Handler: r.listAccountServiceOverridesHandler},
+		{PathPrefix: "/api/accounts/", Method: "PUT", Handler: r.updateAccountOrServiceOverrideHandler},
+		{PathPrefix: "/api/accounts/", Method: "DELETE", Handler: r.deleteAccountOrServiceOverrideHandler},
+		{PathPrefix: "/api/accounts/", Method: "GET", Handler: r.getAccountHandler},
+
+		// Plan ↔ Account association
+		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "GET", Handler: r.listPlanAccountsHandler},
+		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "PUT", Handler: r.setPlanAccountsHandler},
+
 		// Group management endpoints
 		{ExactPath: "/api/groups", Method: "GET", Handler: r.listGroupsHandler},
 		{ExactPath: "/api/groups", Method: "POST", Handler: r.createGroupHandler},
@@ -469,4 +484,63 @@ func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.Lambda
 // formatNotFoundError creates a detailed not found error message
 func formatNotFoundError(method, path string) error {
 	return fmt.Errorf("%w: %s %s", errNotFound, method, path)
+}
+
+// Cloud Account route wrappers.
+
+func (r *Router) listAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.listAccounts(ctx, req)
+}
+
+func (r *Router) createAccountHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.createAccount(ctx, req)
+}
+
+func (r *Router) discoverOrgAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.discoverOrgAccounts(ctx, req)
+}
+
+func (r *Router) getAccountHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getAccount(ctx, req, params["id"])
+}
+
+// updateAccountOrServiceOverrideHandler handles PUT /api/accounts/:id and
+// PUT /api/accounts/:id/service-overrides/:provider/:service.
+// The router puts everything after /api/accounts/ into params["id"].
+func (r *Router) updateAccountOrServiceOverrideHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if strings.Contains(params["id"], "/service-overrides/") {
+		return r.h.saveAccountServiceOverride(ctx, req, params["id"])
+	}
+	return r.h.updateAccount(ctx, req, params["id"])
+}
+
+// deleteAccountOrServiceOverrideHandler handles DELETE /api/accounts/:id and
+// DELETE /api/accounts/:id/service-overrides/:provider/:service.
+func (r *Router) deleteAccountOrServiceOverrideHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if strings.Contains(params["id"], "/service-overrides/") {
+		return r.h.deleteAccountServiceOverride(ctx, req, params["id"])
+	}
+	return r.h.deleteAccount(ctx, req, params["id"])
+}
+
+func (r *Router) saveAccountCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.saveAccountCredentials(ctx, req, params["id"])
+}
+
+func (r *Router) testAccountCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.testAccountCredentials(ctx, req, params["id"])
+}
+
+func (r *Router) listAccountServiceOverridesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.listAccountServiceOverrides(ctx, req, params["id"])
+}
+
+// Plan ↔ Account association wrappers.
+
+func (r *Router) listPlanAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.listPlanAccounts(ctx, req, params["id"])
+}
+
+func (r *Router) setPlanAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.setPlanAccounts(ctx, req, params["id"])
 }
