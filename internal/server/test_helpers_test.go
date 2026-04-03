@@ -116,3 +116,49 @@ func (m *mockConfigStoreForHealth) CancelAllPendingExchanges(ctx context.Context
 func (m *mockConfigStoreForHealth) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }
+
+func (m *mockConfigStoreForHealth) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) DeleteCloudAccount(ctx context.Context, id string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
+	return "", nil
+}
+func (m *mockConfigStoreForHealth) DeleteAccountCredentials(ctx context.Context, accountID string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) HasAccountCredentials(ctx context.Context, accountID string) (bool, error) {
+	return false, nil
+}
+func (m *mockConfigStoreForHealth) GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
+	return nil, nil
+}

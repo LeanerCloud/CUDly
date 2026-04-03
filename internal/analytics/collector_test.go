@@ -218,6 +218,52 @@ func (m *mockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 	return nil, nil
 }
 
+func (m *mockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	return nil
+}
+func (m *mockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	return nil
+}
+func (m *mockConfigStore) DeleteCloudAccount(ctx context.Context, id string) error {
+	return nil
+}
+func (m *mockConfigStore) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {
+	return nil
+}
+func (m *mockConfigStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
+	return "", nil
+}
+func (m *mockConfigStore) DeleteAccountCredentials(ctx context.Context, accountID string) error {
+	return nil
+}
+func (m *mockConfigStore) HasAccountCredentials(ctx context.Context, accountID string) (bool, error) {
+	return false, nil
+}
+func (m *mockConfigStore) GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
+	return nil
+}
+func (m *mockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
+	return nil
+}
+func (m *mockConfigStore) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	return nil
+}
+func (m *mockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
+	return nil, nil
+}
+
 // TestNewCollector tests the NewCollector function
 func TestNewCollector(t *testing.T) {
 	t.Run("returns error when analytics store is nil", func(t *testing.T) {

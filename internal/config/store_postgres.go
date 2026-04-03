@@ -1171,6 +1171,497 @@ func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string
 }
 
 // ==========================================
+// CLOUD ACCOUNTS
+// ==========================================
+
+// CreateCloudAccount inserts a new cloud account record.
+func (s *PostgresStore) CreateCloudAccount(ctx context.Context, account *CloudAccount) error {
+	if account.ID == "" {
+		account.ID = uuid.New().String()
+	}
+	now := time.Now()
+	account.CreatedAt = now
+	account.UpdatedAt = now
+
+	query := `
+		INSERT INTO cloud_accounts (
+			id, name, description, contact_email, enabled,
+			provider, external_id,
+			aws_auth_mode, aws_role_arn, aws_external_id, aws_bastion_id, aws_is_org_root,
+			azure_subscription_id, azure_tenant_id, azure_client_id,
+			gcp_project_id, gcp_client_email,
+			created_at, updated_at, created_by
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7,
+			$8, $9, $10, $11, $12,
+			$13, $14, $15,
+			$16, $17,
+			$18, $19, $20
+		)
+	`
+
+	_, err := s.db.Exec(ctx, query,
+		account.ID,
+		account.Name,
+		nullStringFromString(account.Description),
+		nullStringFromString(account.ContactEmail),
+		account.Enabled,
+		account.Provider,
+		account.ExternalID,
+		nullStringFromString(account.AWSAuthMode),
+		nullStringFromString(account.AWSRoleARN),
+		nullStringFromString(account.AWSExternalID),
+		nullStringFromString(account.AWSBastionID),
+		account.AWSIsOrgRoot,
+		nullStringFromString(account.AzureSubscriptionID),
+		nullStringFromString(account.AzureTenantID),
+		nullStringFromString(account.AzureClientID),
+		nullStringFromString(account.GCPProjectID),
+		nullStringFromString(account.GCPClientEmail),
+		account.CreatedAt,
+		account.UpdatedAt,
+		nullStringFromString(account.CreatedBy),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create cloud account: %w", err)
+	}
+	return nil
+}
+
+// GetCloudAccount returns a single cloud account by ID with credentials_configured derived.
+func (s *PostgresStore) GetCloudAccount(ctx context.Context, id string) (*CloudAccount, error) {
+	query := `
+		SELECT
+			ca.id, ca.name, COALESCE(ca.description,''), COALESCE(ca.contact_email,''),
+			ca.enabled, ca.provider, ca.external_id,
+			COALESCE(ca.aws_auth_mode,''), COALESCE(ca.aws_role_arn,''),
+			COALESCE(ca.aws_external_id,''), COALESCE(ca.aws_bastion_id::text,''),
+			ca.aws_is_org_root,
+			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
+			COALESCE(ca.azure_client_id,''),
+			COALESCE(ca.gcp_project_id,''), COALESCE(ca.gcp_client_email,''),
+			ca.created_at, ca.updated_at, COALESCE(ca.created_by::text,''),
+			EXISTS(SELECT 1 FROM account_credentials ac WHERE ac.account_id = ca.id) AS credentials_configured
+		FROM cloud_accounts ca
+		WHERE ca.id = $1
+	`
+
+	var account CloudAccount
+	err := s.db.QueryRow(ctx, query, id).Scan(
+		&account.ID, &account.Name, &account.Description, &account.ContactEmail,
+		&account.Enabled, &account.Provider, &account.ExternalID,
+		&account.AWSAuthMode, &account.AWSRoleARN, &account.AWSExternalID, &account.AWSBastionID,
+		&account.AWSIsOrgRoot,
+		&account.AzureSubscriptionID, &account.AzureTenantID, &account.AzureClientID,
+		&account.GCPProjectID, &account.GCPClientEmail,
+		&account.CreatedAt, &account.UpdatedAt, &account.CreatedBy,
+		&account.CredentialsConfigured,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get cloud account: %w", err)
+	}
+	return &account, nil
+}
+
+// UpdateCloudAccount updates mutable fields of a cloud account.
+func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAccount) error {
+	account.UpdatedAt = time.Now()
+	query := `
+		UPDATE cloud_accounts SET
+			name = $2,
+			description = $3,
+			contact_email = $4,
+			enabled = $5,
+			aws_auth_mode = $6,
+			aws_role_arn = $7,
+			aws_external_id = $8,
+			aws_bastion_id = $9,
+			aws_is_org_root = $10,
+			azure_subscription_id = $11,
+			azure_tenant_id = $12,
+			azure_client_id = $13,
+			gcp_project_id = $14,
+			gcp_client_email = $15,
+			updated_at = $16
+		WHERE id = $1
+	`
+	tag, err := s.db.Exec(ctx, query,
+		account.ID,
+		account.Name,
+		nullStringFromString(account.Description),
+		nullStringFromString(account.ContactEmail),
+		account.Enabled,
+		nullStringFromString(account.AWSAuthMode),
+		nullStringFromString(account.AWSRoleARN),
+		nullStringFromString(account.AWSExternalID),
+		nullStringFromString(account.AWSBastionID),
+		account.AWSIsOrgRoot,
+		nullStringFromString(account.AzureSubscriptionID),
+		nullStringFromString(account.AzureTenantID),
+		nullStringFromString(account.AzureClientID),
+		nullStringFromString(account.GCPProjectID),
+		nullStringFromString(account.GCPClientEmail),
+		account.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update cloud account: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("cloud account not found: %s", account.ID)
+	}
+	return nil
+}
+
+// DeleteCloudAccount deletes a cloud account. Cascades to credentials and overrides.
+func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete cloud account: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("cloud account not found: %s", id)
+	}
+	return nil
+}
+
+// ListCloudAccounts returns accounts matching the filter, with credentials_configured derived.
+func (s *PostgresStore) ListCloudAccounts(ctx context.Context, filter CloudAccountFilter) ([]CloudAccount, error) {
+	query := `
+		SELECT
+			ca.id, ca.name, COALESCE(ca.description,''), COALESCE(ca.contact_email,''),
+			ca.enabled, ca.provider, ca.external_id,
+			COALESCE(ca.aws_auth_mode,''), COALESCE(ca.aws_role_arn,''),
+			COALESCE(ca.aws_external_id,''), COALESCE(ca.aws_bastion_id::text,''),
+			ca.aws_is_org_root,
+			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
+			COALESCE(ca.azure_client_id,''),
+			COALESCE(ca.gcp_project_id,''), COALESCE(ca.gcp_client_email,''),
+			ca.created_at, ca.updated_at, COALESCE(ca.created_by::text,''),
+			EXISTS(SELECT 1 FROM account_credentials ac WHERE ac.account_id = ca.id) AS credentials_configured
+		FROM cloud_accounts ca
+		WHERE 1=1
+	`
+	args := []any{}
+	i := 1
+
+	if filter.Provider != nil {
+		query += fmt.Sprintf(" AND ca.provider = $%d", i)
+		args = append(args, *filter.Provider)
+		i++
+	}
+	if filter.Enabled != nil {
+		query += fmt.Sprintf(" AND ca.enabled = $%d", i)
+		args = append(args, *filter.Enabled)
+		i++
+	}
+	if filter.Search != "" {
+		query += fmt.Sprintf(" AND (ca.name ILIKE $%d OR ca.external_id ILIKE $%d)", i, i+1)
+		like := "%" + filter.Search + "%"
+		args = append(args, like, like)
+		i += 2
+	}
+	if filter.BastionID != nil {
+		query += fmt.Sprintf(" AND ca.aws_bastion_id = $%d", i)
+		args = append(args, *filter.BastionID)
+		i++
+	}
+	_ = i // suppress "declared but not used" if no more conditions follow
+
+	query += " ORDER BY ca.name"
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list cloud accounts: %w", err)
+	}
+	defer rows.Close()
+
+	accounts := make([]CloudAccount, 0)
+	for rows.Next() {
+		var a CloudAccount
+		if err := rows.Scan(
+			&a.ID, &a.Name, &a.Description, &a.ContactEmail,
+			&a.Enabled, &a.Provider, &a.ExternalID,
+			&a.AWSAuthMode, &a.AWSRoleARN, &a.AWSExternalID, &a.AWSBastionID,
+			&a.AWSIsOrgRoot,
+			&a.AzureSubscriptionID, &a.AzureTenantID, &a.AzureClientID,
+			&a.GCPProjectID, &a.GCPClientEmail,
+			&a.CreatedAt, &a.UpdatedAt, &a.CreatedBy,
+			&a.CredentialsConfigured,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan cloud account: %w", err)
+		}
+		accounts = append(accounts, a)
+	}
+	return accounts, rows.Err()
+}
+
+// ==========================================
+// ACCOUNT CREDENTIALS
+// ==========================================
+
+// SaveAccountCredential upserts an encrypted credential blob for an account.
+func (s *PostgresStore) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {
+	query := `
+		INSERT INTO account_credentials (id, account_id, credential_type, encrypted_blob)
+		VALUES (uuid_generate_v4(), $1, $2, $3)
+		ON CONFLICT (account_id, credential_type) DO UPDATE SET
+			encrypted_blob = $3,
+			updated_at = NOW()
+	`
+	_, err := s.db.Exec(ctx, query, accountID, credentialType, encryptedBlob)
+	if err != nil {
+		return fmt.Errorf("failed to save account credential: %w", err)
+	}
+	return nil
+}
+
+// GetAccountCredential returns the encrypted blob for an account credential.
+func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
+	var blob string
+	err := s.db.QueryRow(ctx,
+		`SELECT encrypted_blob FROM account_credentials WHERE account_id = $1 AND credential_type = $2`,
+		accountID, credentialType,
+	).Scan(&blob)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get account credential: %w", err)
+	}
+	return blob, nil
+}
+
+// DeleteAccountCredentials removes all credential records for an account.
+func (s *PostgresStore) DeleteAccountCredentials(ctx context.Context, accountID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM account_credentials WHERE account_id = $1`, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to delete account credentials: %w", err)
+	}
+	return nil
+}
+
+// HasAccountCredentials returns true if at least one credential exists for the account.
+func (s *PostgresStore) HasAccountCredentials(ctx context.Context, accountID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM account_credentials WHERE account_id = $1)`,
+		accountID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check account credentials: %w", err)
+	}
+	return exists, nil
+}
+
+// ==========================================
+// ACCOUNT SERVICE OVERRIDES
+// ==========================================
+
+// GetAccountServiceOverride returns a single override, or nil if none exists.
+func (s *PostgresStore) GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*AccountServiceOverride, error) {
+	query := `
+		SELECT id, account_id, provider, service,
+			enabled, term, payment, coverage, ramp_schedule,
+			include_engines, exclude_engines, include_regions, exclude_regions,
+			include_types, exclude_types,
+			created_at, updated_at
+		FROM account_service_overrides
+		WHERE account_id = $1 AND provider = $2 AND service = $3
+	`
+	var o AccountServiceOverride
+	var incEngines, excEngines, incRegions, excRegions, incTypes, excTypes []string
+	err := s.db.QueryRow(ctx, query, accountID, provider, service).Scan(
+		&o.ID, &o.AccountID, &o.Provider, &o.Service,
+		&o.Enabled, &o.Term, &o.Payment, &o.Coverage, &o.RampSchedule,
+		&incEngines, &excEngines, &incRegions, &excRegions, &incTypes, &excTypes,
+		&o.CreatedAt, &o.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get service override: %w", err)
+	}
+	o.IncludeEngines = incEngines
+	o.ExcludeEngines = excEngines
+	o.IncludeRegions = incRegions
+	o.ExcludeRegions = excRegions
+	o.IncludeTypes = incTypes
+	o.ExcludeTypes = excTypes
+	return &o, nil
+}
+
+// SaveAccountServiceOverride upserts an account service override.
+func (s *PostgresStore) SaveAccountServiceOverride(ctx context.Context, o *AccountServiceOverride) error {
+	if o.ID == "" {
+		o.ID = uuid.New().String()
+	}
+	now := time.Now()
+	o.CreatedAt = now
+	o.UpdatedAt = now
+
+	query := `
+		INSERT INTO account_service_overrides (
+			id, account_id, provider, service,
+			enabled, term, payment, coverage, ramp_schedule,
+			include_engines, exclude_engines, include_regions, exclude_regions,
+			include_types, exclude_types,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		ON CONFLICT (account_id, provider, service) DO UPDATE SET
+			enabled = $5, term = $6, payment = $7, coverage = $8, ramp_schedule = $9,
+			include_engines = $10, exclude_engines = $11,
+			include_regions = $12, exclude_regions = $13,
+			include_types = $14, exclude_types = $15,
+			updated_at = NOW()
+	`
+	_, err := s.db.Exec(ctx, query,
+		o.ID, o.AccountID, o.Provider, o.Service,
+		o.Enabled, o.Term, o.Payment, o.Coverage, o.RampSchedule,
+		o.IncludeEngines, o.ExcludeEngines, o.IncludeRegions, o.ExcludeRegions,
+		o.IncludeTypes, o.ExcludeTypes,
+		o.CreatedAt, o.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save service override: %w", err)
+	}
+	return nil
+}
+
+// DeleteAccountServiceOverride removes an override, reverting to global defaults.
+func (s *PostgresStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
+	_, err := s.db.Exec(ctx,
+		`DELETE FROM account_service_overrides WHERE account_id = $1 AND provider = $2 AND service = $3`,
+		accountID, provider, service,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete service override: %w", err)
+	}
+	return nil
+}
+
+// ListAccountServiceOverrides returns all overrides for an account.
+func (s *PostgresStore) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]AccountServiceOverride, error) {
+	query := `
+		SELECT id, account_id, provider, service,
+			enabled, term, payment, coverage, ramp_schedule,
+			include_engines, exclude_engines, include_regions, exclude_regions,
+			include_types, exclude_types,
+			created_at, updated_at
+		FROM account_service_overrides
+		WHERE account_id = $1
+		ORDER BY provider, service
+	`
+	rows, err := s.db.Query(ctx, query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list service overrides: %w", err)
+	}
+	defer rows.Close()
+
+	overrides := make([]AccountServiceOverride, 0)
+	for rows.Next() {
+		var o AccountServiceOverride
+		var incEngines, excEngines, incRegions, excRegions, incTypes, excTypes []string
+		if err := rows.Scan(
+			&o.ID, &o.AccountID, &o.Provider, &o.Service,
+			&o.Enabled, &o.Term, &o.Payment, &o.Coverage, &o.RampSchedule,
+			&incEngines, &excEngines, &incRegions, &excRegions, &incTypes, &excTypes,
+			&o.CreatedAt, &o.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan service override: %w", err)
+		}
+		o.IncludeEngines = incEngines
+		o.ExcludeEngines = excEngines
+		o.IncludeRegions = incRegions
+		o.ExcludeRegions = excRegions
+		o.IncludeTypes = incTypes
+		o.ExcludeTypes = excTypes
+		overrides = append(overrides, o)
+	}
+	return overrides, rows.Err()
+}
+
+// ==========================================
+// PLAN ACCOUNTS
+// ==========================================
+
+// SetPlanAccounts replaces the full account list for a plan atomically.
+func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err = tx.Exec(ctx, `DELETE FROM plan_accounts WHERE plan_id = $1`, planID); err != nil {
+		return fmt.Errorf("failed to clear plan accounts: %w", err)
+	}
+
+	for _, accountID := range accountIDs {
+		if _, err = tx.Exec(ctx,
+			`INSERT INTO plan_accounts (plan_id, account_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			planID, accountID,
+		); err != nil {
+			return fmt.Errorf("failed to insert plan account: %w", err)
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit plan accounts: %w", err)
+	}
+	return nil
+}
+
+// GetPlanAccounts returns all cloud accounts associated with a plan.
+func (s *PostgresStore) GetPlanAccounts(ctx context.Context, planID string) ([]CloudAccount, error) {
+	query := `
+		SELECT
+			ca.id, ca.name, COALESCE(ca.description,''), COALESCE(ca.contact_email,''),
+			ca.enabled, ca.provider, ca.external_id,
+			COALESCE(ca.aws_auth_mode,''), COALESCE(ca.aws_role_arn,''),
+			COALESCE(ca.aws_external_id,''), COALESCE(ca.aws_bastion_id::text,''),
+			ca.aws_is_org_root,
+			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
+			COALESCE(ca.azure_client_id,''),
+			COALESCE(ca.gcp_project_id,''), COALESCE(ca.gcp_client_email,''),
+			ca.created_at, ca.updated_at, COALESCE(ca.created_by::text,''),
+			EXISTS(SELECT 1 FROM account_credentials ac WHERE ac.account_id = ca.id) AS credentials_configured
+		FROM cloud_accounts ca
+		JOIN plan_accounts pa ON pa.account_id = ca.id
+		WHERE pa.plan_id = $1
+		ORDER BY ca.name
+	`
+	rows, err := s.db.Query(ctx, query, planID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get plan accounts: %w", err)
+	}
+	defer rows.Close()
+
+	accounts := make([]CloudAccount, 0)
+	for rows.Next() {
+		var a CloudAccount
+		if err := rows.Scan(
+			&a.ID, &a.Name, &a.Description, &a.ContactEmail,
+			&a.Enabled, &a.Provider, &a.ExternalID,
+			&a.AWSAuthMode, &a.AWSRoleARN, &a.AWSExternalID, &a.AWSBastionID,
+			&a.AWSIsOrgRoot,
+			&a.AzureSubscriptionID, &a.AzureTenantID, &a.AzureClientID,
+			&a.GCPProjectID, &a.GCPClientEmail,
+			&a.CreatedAt, &a.UpdatedAt, &a.CreatedBy,
+			&a.CredentialsConfigured,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan plan account: %w", err)
+		}
+		accounts = append(accounts, a)
+	}
+	return accounts, rows.Err()
+}
+
+// ==========================================
 // HELPER FUNCTIONS
 // ==========================================
 

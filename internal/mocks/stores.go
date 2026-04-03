@@ -404,5 +404,109 @@ func (m *MockAuthStore) Ping(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// Cloud accounts
+
+func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	args := m.Called(ctx, account)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.CloudAccount), args.Error(1)
+}
+
+func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	args := m.Called(ctx, account)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) DeleteCloudAccount(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.CloudAccount), args.Error(1)
+}
+
+// Account credentials
+
+func (m *MockConfigStore) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {
+	args := m.Called(ctx, accountID, credentialType, encryptedBlob)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
+	args := m.Called(ctx, accountID, credentialType)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockConfigStore) DeleteAccountCredentials(ctx context.Context, accountID string) error {
+	args := m.Called(ctx, accountID)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) HasAccountCredentials(ctx context.Context, accountID string) (bool, error) {
+	args := m.Called(ctx, accountID)
+	return args.Bool(0), args.Error(1)
+}
+
+// Account service overrides
+
+func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
+	args := m.Called(ctx, accountID, provider, service)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.AccountServiceOverride), args.Error(1)
+}
+
+func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
+	args := m.Called(ctx, override)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
+	args := m.Called(ctx, accountID, provider, service)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
+	args := m.Called(ctx, accountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.AccountServiceOverride), args.Error(1)
+}
+
+// Plan ↔ account association
+
+func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	args := m.Called(ctx, planID, accountIDs)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
+	args := m.Called(ctx, planID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.CloudAccount), args.Error(1)
+}
+
+// CleanupOldExecutions mocks the CleanupOldExecutions operation
+func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
+	args := m.Called(ctx, retentionDays)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // Compile-time interface compliance check
 var _ auth.StoreInterface = (*MockAuthStore)(nil)

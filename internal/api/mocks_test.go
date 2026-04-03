@@ -199,6 +199,52 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
 }
 
+func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	return nil
+}
+func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	return nil
+}
+func (m *MockConfigStore) DeleteCloudAccount(ctx context.Context, id string) error {
+	return nil
+}
+func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {
+	return nil
+}
+func (m *MockConfigStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
+	return "", nil
+}
+func (m *MockConfigStore) DeleteAccountCredentials(ctx context.Context, accountID string) error {
+	return nil
+}
+func (m *MockConfigStore) HasAccountCredentials(ctx context.Context, accountID string) (bool, error) {
+	return false, nil
+}
+func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
+	return nil
+}
+func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
+	return nil
+}
+func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	return nil
+}
+func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
+	return nil, nil
+}
+
 // MockPurchaseManager is a mock implementation of purchase.Manager
 type MockPurchaseManager struct {
 	mock.Mock

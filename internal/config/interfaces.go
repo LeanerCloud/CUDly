@@ -46,4 +46,27 @@ type StoreInterface interface {
 	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
 	CancelAllPendingExchanges(ctx context.Context) (int64, error)
 	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]RIExchangeRecord, error)
+
+	// Cloud accounts
+	CreateCloudAccount(ctx context.Context, account *CloudAccount) error
+	GetCloudAccount(ctx context.Context, id string) (*CloudAccount, error)
+	UpdateCloudAccount(ctx context.Context, account *CloudAccount) error
+	DeleteCloudAccount(ctx context.Context, id string) error
+	ListCloudAccounts(ctx context.Context, filter CloudAccountFilter) ([]CloudAccount, error)
+
+	// Account credentials (encrypted blobs; never returned via API)
+	SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error
+	GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error)
+	DeleteAccountCredentials(ctx context.Context, accountID string) error
+	HasAccountCredentials(ctx context.Context, accountID string) (bool, error)
+
+	// Account service overrides
+	GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*AccountServiceOverride, error)
+	SaveAccountServiceOverride(ctx context.Context, override *AccountServiceOverride) error
+	DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error
+	ListAccountServiceOverrides(ctx context.Context, accountID string) ([]AccountServiceOverride, error)
+
+	// Plan ↔ account association
+	SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error
+	GetPlanAccounts(ctx context.Context, planID string) ([]CloudAccount, error)
 }
