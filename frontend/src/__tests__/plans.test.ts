@@ -16,7 +16,10 @@ jest.mock('../api', () => ({
   pausePlannedPurchase: jest.fn(),
   resumePlannedPurchase: jest.fn(),
   deletePlannedPurchase: jest.fn(),
-  createPlannedPurchases: jest.fn()
+  createPlannedPurchases: jest.fn(),
+  listPlanAccounts: jest.fn().mockResolvedValue([]),
+  setPlanAccounts: jest.fn().mockResolvedValue(undefined),
+  listAccounts: jest.fn().mockResolvedValue([])
 }));
 
 // Mock state module

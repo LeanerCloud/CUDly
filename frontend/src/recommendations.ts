@@ -11,6 +11,36 @@ import type { RecommendationsResponse, LocalRecommendation, RecommendationsSumma
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
 
 /**
+ * Reset account filter select to just the "All Accounts" option and repopulate
+ */
+function resetAccountSelect(select: HTMLSelectElement): void {
+  while (select.options.length > 1) select.remove(1);
+}
+
+/**
+ * Populate the recommendations account filter select
+ */
+async function populateRecommendationsAccountFilter(provider?: string): Promise<void> {
+  const select = document.getElementById('recommendations-account-filter') as HTMLSelectElement | null;
+  if (!select) return;
+  try {
+    const filter = provider && provider !== 'all' ? { provider: provider as api.Provider } : undefined;
+    const accounts = await api.listAccounts(filter);
+    const current = select.value;
+    resetAccountSelect(select);
+    accounts.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = `${a.name} (${a.external_id})`;
+      select.appendChild(opt);
+    });
+    select.value = current;
+  } catch {
+    // Non-critical — filter just won't be populated
+  }
+}
+
+/**
  * Get the recommendations currently loaded in the purchase modal
  */
 export function getPurchaseModalRecommendations(): LocalRecommendation[] {
@@ -36,9 +66,21 @@ export function setupRecommendationsHandlers(): void {
     providerFilter.addEventListener('change', () => {
       state.setCurrentProvider(providerFilter.value as 'all' | 'aws' | 'azure' | 'gcp');
       updateServiceFilterVisibility(providerFilter.value);
+      void populateRecommendationsAccountFilter(providerFilter.value);
       void loadRecommendations();
     });
   }
+
+  const accountFilter = document.getElementById('recommendations-account-filter') as HTMLSelectElement | null;
+  if (accountFilter) {
+    accountFilter.addEventListener('change', () => {
+      const val = accountFilter.value;
+      state.setCurrentAccountIDs(val ? [val] : []);
+      void loadRecommendations();
+    });
+  }
+
+  void populateRecommendationsAccountFilter(state.getCurrentProvider());
 
   // Setup service filter handler
   const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement | null;
@@ -93,11 +135,13 @@ export async function loadRecommendations(): Promise<void> {
     const regionFilter = document.getElementById('region-filter') as HTMLSelectElement | null;
     const minSavingsFilter = document.getElementById('min-savings-filter') as HTMLInputElement | null;
 
+    const accountIDs = state.getCurrentAccountIDs();
     const filters: api.RecommendationFilters = {
       provider: state.getCurrentProvider(),
       service: serviceFilter?.value,
       region: regionFilter?.value,
-      minSavings: minSavingsFilter?.value ? parseInt(minSavingsFilter.value, 10) : undefined
+      minSavings: minSavingsFilter?.value ? parseInt(minSavingsFilter.value, 10) : undefined,
+      account_ids: accountIDs.length > 0 ? accountIDs : undefined
     };
 
     const data = await api.getRecommendations(filters) as unknown as RecommendationsResponse;

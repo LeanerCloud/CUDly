@@ -394,6 +394,7 @@ async function editPlan(planId: string): Promise<void> {
       (document.getElementById('ramp-interval-days') as HTMLInputElement).value = String(rampSchedule.step_interval_days || 7);
     }
 
+    void setupPlanAccountsSection(backendPlan.id);
     document.getElementById('plan-modal')?.classList.remove('hidden');
   } catch (error) {
     console.error('Failed to load plan:', error);
@@ -451,10 +452,18 @@ export async function savePlan(e: Event): Promise<void> {
   }
 
   try {
+    let savedPlanId = planId;
     if (planId) {
       await api.updatePlan(planId, plan as unknown as api.CreatePlanRequest);
     } else {
-      await api.createPlan(plan as unknown as api.CreatePlanRequest);
+      const created = await api.createPlan(plan as unknown as api.CreatePlanRequest) as unknown as { id: string };
+      savedPlanId = created.id;
+    }
+
+    const accountIdsField = document.getElementById('plan-account-ids') as HTMLInputElement | null;
+    const accountIds = accountIdsField?.value ? accountIdsField.value.split(',').filter(Boolean) : [];
+    if (savedPlanId) {
+      await api.setPlanAccounts(savedPlanId, accountIds);
     }
 
     closePlanModal();
@@ -472,6 +481,115 @@ export async function savePlan(e: Event): Promise<void> {
  */
 export function closePlanModal(): void {
   document.getElementById('plan-modal')?.classList.add('hidden');
+}
+
+// Selected accounts for the plan modal
+let planSelectedAccounts: Array<{ id: string; name: string; external_id: string }> = [];
+
+/**
+ * Render selected account chips in the plan modal
+ */
+function renderPlanAccountChips(): void {
+  const container = document.getElementById('plan-accounts-selected');
+  if (!container) return;
+  container.textContent = '';
+  planSelectedAccounts.forEach(acct => {
+    const chip = document.createElement('span');
+    chip.className = 'account-chip';
+    chip.textContent = `${acct.name} (${acct.external_id})`;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = '\u00d7';
+    removeBtn.addEventListener('click', () => {
+      planSelectedAccounts = planSelectedAccounts.filter(a => a.id !== acct.id);
+      renderPlanAccountChips();
+      updatePlanAccountIdsField();
+    });
+    chip.appendChild(removeBtn);
+    container.appendChild(chip);
+  });
+}
+
+/**
+ * Update hidden plan-account-ids field
+ */
+function updatePlanAccountIdsField(): void {
+  const field = document.getElementById('plan-account-ids') as HTMLInputElement | null;
+  if (field) field.value = planSelectedAccounts.map(a => a.id).join(',');
+}
+
+let planAccountSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Handle plan account search input
+ */
+async function handlePlanAccountSearch(value: string): Promise<void> {
+  const suggestions = document.getElementById('plan-account-suggestions');
+  if (!suggestions) return;
+
+  if (!value.trim()) {
+    suggestions.classList.add('hidden');
+    return;
+  }
+
+  try {
+    const accounts = await api.listAccounts({ search: value });
+    suggestions.textContent = '';
+    if (accounts.length === 0) {
+      suggestions.classList.add('hidden');
+      return;
+    }
+    accounts.forEach(a => {
+      if (planSelectedAccounts.some(s => s.id === a.id)) return;
+      const item = document.createElement('div');
+      item.className = 'account-suggestion-item';
+      item.textContent = `${a.name} (${a.external_id})`;
+      item.addEventListener('click', () => {
+        planSelectedAccounts.push({ id: a.id, name: a.name, external_id: a.external_id });
+        renderPlanAccountChips();
+        updatePlanAccountIdsField();
+        suggestions.classList.add('hidden');
+        (document.getElementById('plan-account-search') as HTMLInputElement).value = '';
+      });
+      suggestions.appendChild(item);
+    });
+    suggestions.classList.remove('hidden');
+  } catch {
+    suggestions.classList.add('hidden');
+  }
+}
+
+/**
+ * Set up plan accounts section in the modal
+ */
+async function setupPlanAccountsSection(planId?: string): Promise<void> {
+  planSelectedAccounts = [];
+
+  if (planId) {
+    try {
+      const existingAccounts = await api.listPlanAccounts(planId);
+      planSelectedAccounts = existingAccounts.map(a => ({ id: a.id, name: a.name, external_id: a.external_id }));
+    } catch {
+      // Non-critical — section just starts empty
+    }
+  }
+
+  renderPlanAccountChips();
+  updatePlanAccountIdsField();
+
+  const searchInput = document.getElementById('plan-account-search') as HTMLInputElement | null;
+  if (searchInput) {
+    // Remove previous listeners by replacing node
+    const newInput = searchInput.cloneNode(true) as HTMLInputElement;
+    searchInput.parentNode?.replaceChild(newInput, searchInput);
+    newInput.addEventListener('input', () => {
+      if (planAccountSearchTimer) clearTimeout(planAccountSearchTimer);
+      planAccountSearchTimer = setTimeout(() => {
+        void handlePlanAccountSearch(newInput.value);
+      }, 300);
+    });
+  }
 }
 
 /**
@@ -494,6 +612,8 @@ export function openCreatePlanModal(): void {
   // Generate initial plan name
   updatePlanNameFromSchedule();
 
+  void setupPlanAccountsSection();
+
   document.getElementById('plan-modal')?.classList.remove('hidden');
 }
 
@@ -511,6 +631,8 @@ export function openNewPlanModal(): void {
 
   // Generate initial plan name
   updatePlanNameFromSchedule();
+
+  void setupPlanAccountsSection();
 
   document.getElementById('plan-modal')?.classList.remove('hidden');
 }

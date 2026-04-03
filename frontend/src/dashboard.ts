@@ -12,6 +12,29 @@ import type { DashboardSummary, UpcomingPurchase, ServiceSavings } from './types
 Chart.register(...registerables);
 
 /**
+ * Populate an account filter select element
+ */
+async function populateAccountFilter(selectId: string, provider?: string): Promise<void> {
+  const select = document.getElementById(selectId) as HTMLSelectElement | null;
+  if (!select) return;
+  try {
+    const filter = provider && provider !== 'all' ? { provider: provider as api.Provider } : undefined;
+    const accounts = await api.listAccounts(filter);
+    const current = select.value;
+    select.innerHTML = '<option value="">All Accounts</option>';
+    accounts.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = `${a.name} (${a.external_id})`;
+      select.appendChild(opt);
+    });
+    select.value = current;
+  } catch {
+    // Non-critical — filter just won't be populated
+  }
+}
+
+/**
  * Setup dashboard event handlers
  */
 export function setupDashboardHandlers(): void {
@@ -22,9 +45,21 @@ export function setupDashboardHandlers(): void {
 
     providerFilter.addEventListener('change', () => {
       state.setCurrentProvider(providerFilter.value as 'all' | 'aws' | 'azure' | 'gcp');
+      void populateAccountFilter('dashboard-account-filter', providerFilter.value);
       void loadDashboard();
     });
   }
+
+  const accountFilter = document.getElementById('dashboard-account-filter') as HTMLSelectElement | null;
+  if (accountFilter) {
+    accountFilter.addEventListener('change', () => {
+      const val = accountFilter.value;
+      state.setCurrentAccountIDs(val ? [val] : []);
+      void loadDashboard();
+    });
+  }
+
+  void populateAccountFilter('dashboard-account-filter', state.getCurrentProvider());
 }
 
 /**
@@ -34,7 +69,7 @@ export async function loadDashboard(): Promise<void> {
   try {
     const currentProvider = state.getCurrentProvider();
     const [summaryData, upcomingData] = await Promise.all([
-      api.getDashboardSummary(currentProvider),
+      api.getDashboardSummary(currentProvider, state.getCurrentAccountIDs()),
       api.getUpcomingPurchases()
     ]);
 

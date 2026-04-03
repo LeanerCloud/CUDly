@@ -6,13 +6,16 @@ import { loadRecommendations, openPurchaseModal, refreshRecommendations, setupRe
 // Mock the api module
 jest.mock('../api', () => ({
   getRecommendations: jest.fn(),
-  refreshRecommendations: jest.fn()
+  refreshRecommendations: jest.fn(),
+  listAccounts: jest.fn().mockResolvedValue([])
 }));
 
 // Mock state module
 jest.mock('../state', () => ({
   getCurrentProvider: jest.fn().mockReturnValue('all'),
   setCurrentProvider: jest.fn(),
+  getCurrentAccountIDs: jest.fn().mockReturnValue([]),
+  setCurrentAccountIDs: jest.fn(),
   getRecommendations: jest.fn().mockReturnValue([]),
   setRecommendations: jest.fn(),
   getSelectedRecommendations: jest.fn().mockReturnValue(new Set()),

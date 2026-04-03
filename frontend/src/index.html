@@ -44,6 +44,13 @@
                                 </select>
                             </label>
                         </div>
+                        <div class="filter-group">
+                            <label>Account:
+                                <select id="dashboard-account-filter">
+                                    <option value="">All Accounts</option>
+                                </select>
+                            </label>
+                        </div>
                     </div>
                 </section>
                 <section id="summary"></section>
@@ -104,6 +111,13 @@
                             </label>
                             <label>Min Savings:
                                 <input type="number" id="min-savings-filter" placeholder="$0" min="0">
+                            </label>
+                        </div>
+                        <div class="filter-group">
+                            <label>Account:
+                                <select id="recommendations-account-filter">
+                                    <option value="">All Accounts</option>
+                                </select>
                             </label>
                         </div>
                         <div class="action-group">
@@ -191,6 +205,11 @@
                                     <option value="aws">AWS</option>
                                     <option value="azure">Azure</option>
                                     <option value="gcp">GCP</option>
+                                </select>
+                            </label>
+                            <label>Account:
+                                <select id="history-account-filter">
+                                    <option value="">All Accounts</option>
                                 </select>
                             </label>
                             <button id="load-history-btn">Load History</button>
@@ -379,6 +398,8 @@
                                     <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
                                 </div>
                             </div>
+                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-aws-account-btn">+ Add Account</button></h4>
+                            <div id="aws-accounts-list" class="accounts-list"></div>
                             <h4 class="subsection-title">Service Defaults</h4>
                             <div class="service-defaults-grid">
                                 <div class="service-default-card">
@@ -427,6 +448,8 @@
                                     <button type="button" class="btn btn-small" id="azure-configure-btn">Configure</button>
                                 </div>
                             </div>
+                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-azure-account-btn">+ Add Account</button></h4>
+                            <div id="azure-accounts-list" class="accounts-list"></div>
                             <h4 class="subsection-title">Service Defaults</h4>
                             <div class="service-defaults-grid">
                                 <div class="service-default-card">
@@ -461,6 +484,8 @@
                                     <button type="button" class="btn btn-small" id="gcp-configure-btn">Configure</button>
                                 </div>
                             </div>
+                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-gcp-account-btn">+ Add Account</button></h4>
+                            <div id="gcp-accounts-list" class="accounts-list"></div>
                             <h4 class="subsection-title">Service Defaults</h4>
                             <div class="service-defaults-grid">
                                 <div class="service-default-card">
@@ -779,6 +804,17 @@
                         </div>
                     </div>
 
+                    <div class="form-section">
+                        <h3>Target Accounts</h3>
+                        <p class="help-text">Leave empty to target all enabled accounts for the selected provider.</p>
+                        <div class="plan-accounts-search">
+                            <input type="text" id="plan-account-search" placeholder="Search accounts to add...">
+                            <div id="plan-account-suggestions" class="account-suggestions hidden"></div>
+                        </div>
+                        <div id="plan-accounts-selected" class="selected-accounts"></div>
+                        <input type="hidden" id="plan-account-ids" value="">
+                    </div>
+
                     <div class="modal-buttons">
                         <button type="button" id="close-plan-modal-btn">Cancel</button>
                         <button type="submit" class="primary">Save Plan</button>
@@ -900,6 +936,75 @@
                     <div class="modal-buttons">
                         <button type="button" onclick="window.closeGroupModal()">Cancel</button>
                         <button type="submit" class="primary">Save Group</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Cloud Account Modal -->
+        <div id="account-modal" class="modal hidden">
+            <div class="modal-content modal-wide">
+                <h2 id="account-modal-title">Add Account</h2>
+                <form id="account-form">
+                    <input type="hidden" id="account-id">
+                    <input type="hidden" id="account-provider">
+
+                    <div class="form-section">
+                        <label>Name: <input type="text" id="account-name" required placeholder="Production AWS"></label>
+                        <label>Description: <textarea id="account-description" placeholder="Optional description"></textarea></label>
+                        <label>Contact Email: <input type="email" id="account-contact-email" placeholder="team@example.com"></label>
+                        <label>Account / Subscription / Project ID: <input type="text" id="account-external-id" required placeholder="123456789012"></label>
+                        <label class="toggle-row">
+                            Enabled:
+                            <label class="toggle-label"><input type="checkbox" id="account-enabled" checked><span class="slider"></span></label>
+                        </label>
+                    </div>
+
+                    <!-- AWS-specific fields -->
+                    <div class="form-section" id="account-aws-fields">
+                        <h3>AWS Authentication</h3>
+                        <label>Auth Mode:
+                            <select id="account-aws-auth-mode">
+                                <option value="access_keys">Access Keys</option>
+                                <option value="role_arn">IAM Role ARN</option>
+                                <option value="bastion">Bastion Account</option>
+                            </select>
+                        </label>
+                        <div id="account-aws-keys-fields">
+                            <label>Access Key ID: <input type="text" id="account-aws-access-key-id" placeholder="AKIAIOSFODNN7EXAMPLE"></label>
+                            <label>Secret Access Key: <input type="password" id="account-aws-secret-access-key" placeholder="Secret key"></label>
+                        </div>
+                        <div id="account-aws-role-fields" class="hidden">
+                            <label>Role ARN: <input type="text" id="account-aws-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>External ID (optional): <input type="text" id="account-aws-external-id" placeholder="Optional external ID"></label>
+                        </div>
+                        <div id="account-aws-bastion-fields" class="hidden">
+                            <label>Bastion Account: <select id="account-aws-bastion-id"><option value="">Select bastion account...</option></select></label>
+                            <label>Role ARN in target: <input type="text" id="account-aws-bastion-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                        </div>
+                        <label class="toggle-row">
+                            AWS Org Root:
+                            <label class="toggle-label"><input type="checkbox" id="account-aws-is-org-root"><span class="slider"></span></label>
+                        </label>
+                    </div>
+
+                    <!-- Azure-specific fields -->
+                    <div class="form-section hidden" id="account-azure-fields">
+                        <h3>Azure Authentication</h3>
+                        <label>Tenant ID: <input type="text" id="account-azure-tenant-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
+                        <label>Client ID: <input type="text" id="account-azure-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
+                        <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
+                    </div>
+
+                    <!-- GCP-specific fields -->
+                    <div class="form-section hidden" id="account-gcp-fields">
+                        <h3>GCP Authentication</h3>
+                        <label>Service Account JSON: <textarea id="account-gcp-service-account-json" rows="6" placeholder='{"type":"service_account",...}'></textarea></label>
+                    </div>
+
+                    <div class="modal-buttons">
+                        <button type="button" id="close-account-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Save Account</button>
                     </div>
                 </form>
             </div>

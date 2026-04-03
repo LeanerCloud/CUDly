@@ -62,6 +62,7 @@ export interface RecommendationFilters {
   service?: string;
   region?: string;
   minSavings?: number;
+  account_ids?: string[];
 }
 
 // Plan types
@@ -116,6 +117,7 @@ export interface HistoryFilters {
   end?: string;
   provider?: Provider;
   planId?: string;
+  account_ids?: string[];
 }
 
 // Config types
@@ -336,6 +338,7 @@ export interface SavingsAnalyticsFilters {
   interval?: 'hourly' | 'daily' | 'weekly' | 'monthly';
   provider?: Provider;
   service?: string;
+  account_ids?: string[];
 }
 
 // RI Exchange Types

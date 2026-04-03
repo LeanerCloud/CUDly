@@ -5,6 +5,278 @@
 import * as api from './api';
 import type { ConfigResponse } from './types';
 
+type AccountProvider = 'aws' | 'azure' | 'gcp';
+
+// Track which provider's account is being edited (for the modal)
+let accountModalProvider: AccountProvider = 'aws';
+
+/**
+ * Load and render accounts list for a provider
+ */
+export async function loadAccountsForProvider(provider: AccountProvider): Promise<void> {
+  const container = document.getElementById(`${provider}-accounts-list`);
+  if (!container) return;
+  try {
+    const accounts = await api.listAccounts({ provider });
+    renderAccountsList(container, accounts, provider);
+  } catch {
+    container.textContent = 'Failed to load accounts.';
+  }
+}
+
+/**
+ * Render accounts list into a container element
+ */
+function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): void {
+  if (!accounts || accounts.length === 0) {
+    container.textContent = 'No accounts configured.';
+    return;
+  }
+  container.textContent = '';
+  accounts.forEach(account => {
+    const row = document.createElement('div');
+    row.className = 'account-row';
+
+    const info = document.createElement('span');
+    info.className = 'account-info';
+    info.textContent = `${account.name} (${account.external_id})${account.enabled ? '' : ' [disabled]'}`;
+    row.appendChild(info);
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn btn-small';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openAccountModal(provider, account));
+    row.appendChild(editBtn);
+
+    const testBtn = document.createElement('button');
+    testBtn.type = 'button';
+    testBtn.className = 'btn btn-small';
+    testBtn.textContent = 'Test';
+    testBtn.addEventListener('click', () => void testAccount(account.id, testBtn));
+    row.appendChild(testBtn);
+
+    container.appendChild(row);
+  });
+}
+
+/**
+ * Test account credentials
+ */
+async function testAccount(accountId: string, btn: HTMLButtonElement): Promise<void> {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  try {
+    const result = await api.testAccountCredentials(accountId);
+    btn.textContent = result.ok ? 'OK' : 'Failed';
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.disabled = false;
+    }, 3000);
+  } catch {
+    btn.textContent = 'Error';
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.disabled = false;
+    }, 3000);
+  }
+}
+
+/**
+ * Open account modal for add or edit
+ */
+function openAccountModal(provider: AccountProvider, account?: api.CloudAccount): void {
+  accountModalProvider = provider;
+  const modal = document.getElementById('account-modal');
+  if (!modal) return;
+
+  const title = document.getElementById('account-modal-title');
+  if (title) title.textContent = account ? 'Edit Account' : 'Add Account';
+
+  (document.getElementById('account-id') as HTMLInputElement).value = account?.id ?? '';
+  (document.getElementById('account-provider') as HTMLInputElement).value = provider;
+  (document.getElementById('account-name') as HTMLInputElement).value = account?.name ?? '';
+  (document.getElementById('account-description') as HTMLTextAreaElement).value = account?.description ?? '';
+  (document.getElementById('account-contact-email') as HTMLInputElement).value = account?.contact_email ?? '';
+  (document.getElementById('account-external-id') as HTMLInputElement).value = account?.external_id ?? '';
+  (document.getElementById('account-enabled') as HTMLInputElement).checked = account?.enabled ?? true;
+
+  // Show/hide provider-specific fields
+  const awsFields = document.getElementById('account-aws-fields');
+  const azureFields = document.getElementById('account-azure-fields');
+  const gcpFields = document.getElementById('account-gcp-fields');
+  if (awsFields) awsFields.classList.toggle('hidden', provider !== 'aws');
+  if (azureFields) azureFields.classList.toggle('hidden', provider !== 'azure');
+  if (gcpFields) gcpFields.classList.toggle('hidden', provider !== 'gcp');
+
+  if (provider === 'aws') {
+    populateAwsAccountFields(account);
+  } else if (provider === 'azure') {
+    (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value = account?.azure_tenant_id ?? '';
+    (document.getElementById('account-azure-client-id') as HTMLInputElement).value = account?.azure_client_id ?? '';
+    (document.getElementById('account-azure-client-secret') as HTMLInputElement).value = '';
+  }
+
+  modal.classList.remove('hidden');
+}
+
+/**
+ * Populate AWS-specific fields in the account modal
+ */
+function populateAwsAccountFields(account?: api.CloudAccount): void {
+  const authMode = (account?.aws_auth_mode ?? 'access_keys') as string;
+  const authModeSelect = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
+  if (authModeSelect) authModeSelect.value = authMode;
+
+  (document.getElementById('account-aws-access-key-id') as HTMLInputElement).value = '';
+  (document.getElementById('account-aws-secret-access-key') as HTMLInputElement).value = '';
+  (document.getElementById('account-aws-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
+  (document.getElementById('account-aws-external-id') as HTMLInputElement).value = account?.aws_external_id ?? '';
+  (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
+  (document.getElementById('account-aws-is-org-root') as HTMLInputElement).checked = account?.aws_is_org_root ?? false;
+
+  updateAwsAuthModeFields(authMode);
+}
+
+/**
+ * Show/hide AWS auth mode sub-fields
+ */
+function updateAwsAuthModeFields(mode: string): void {
+  const keysFields = document.getElementById('account-aws-keys-fields');
+  const roleFields = document.getElementById('account-aws-role-fields');
+  const bastionFields = document.getElementById('account-aws-bastion-fields');
+
+  keysFields?.classList.toggle('hidden', mode !== 'access_keys');
+  roleFields?.classList.toggle('hidden', mode !== 'role_arn');
+  bastionFields?.classList.toggle('hidden', mode !== 'bastion');
+
+  if (mode === 'bastion') {
+    void populateBastionAccountDropdown();
+  }
+}
+
+/**
+ * Populate bastion account dropdown with AWS accounts
+ */
+async function populateBastionAccountDropdown(): Promise<void> {
+  const select = document.getElementById('account-aws-bastion-id') as HTMLSelectElement | null;
+  if (!select) return;
+  try {
+    const accounts = await api.listAccounts({ provider: 'aws' });
+    while (select.options.length > 1) select.remove(1);
+    accounts.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = `${a.name} (${a.external_id})`;
+      select.appendChild(opt);
+    });
+  } catch {
+    // Non-critical
+  }
+}
+
+/**
+ * Close the account modal
+ */
+function closeAccountModal(): void {
+  const modal = document.getElementById('account-modal');
+  modal?.classList.add('hidden');
+}
+
+/**
+ * Build the account request from the modal form
+ */
+function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest {
+  const req: api.CloudAccountRequest = {
+    name: (document.getElementById('account-name') as HTMLInputElement).value.trim(),
+    description: (document.getElementById('account-description') as HTMLTextAreaElement).value.trim() || undefined,
+    contact_email: (document.getElementById('account-contact-email') as HTMLInputElement).value.trim() || undefined,
+    provider,
+    external_id: (document.getElementById('account-external-id') as HTMLInputElement).value.trim(),
+    enabled: (document.getElementById('account-enabled') as HTMLInputElement).checked
+  };
+
+  if (provider === 'aws') {
+    const authMode = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement).value;
+    req.aws_auth_mode = authMode;
+    req.aws_is_org_root = (document.getElementById('account-aws-is-org-root') as HTMLInputElement).checked;
+    if (authMode === 'role_arn') {
+      req.aws_role_arn = (document.getElementById('account-aws-role-arn') as HTMLInputElement).value.trim();
+      req.aws_external_id = (document.getElementById('account-aws-external-id') as HTMLInputElement).value.trim() || undefined;
+    } else if (authMode === 'bastion') {
+      req.aws_bastion_id = (document.getElementById('account-aws-bastion-id') as HTMLSelectElement).value;
+      req.aws_role_arn = (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value.trim();
+    }
+  } else if (provider === 'azure') {
+    req.azure_tenant_id = (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value.trim();
+    req.azure_client_id = (document.getElementById('account-azure-client-id') as HTMLInputElement).value.trim();
+  }
+
+  return req;
+}
+
+/**
+ * Build and save credentials from the account modal form (if filled)
+ */
+async function saveAccountCredentialsIfFilled(accountId: string, provider: AccountProvider): Promise<void> {
+  if (provider === 'aws') {
+    const authMode = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement).value;
+    if (authMode === 'access_keys') {
+      const keyId = (document.getElementById('account-aws-access-key-id') as HTMLInputElement).value.trim();
+      const secretKey = (document.getElementById('account-aws-secret-access-key') as HTMLInputElement).value;
+      if (keyId && secretKey) {
+        await api.saveAccountCredentials(accountId, {
+          credential_type: 'aws_access_keys',
+          payload: { access_key_id: keyId, secret_access_key: secretKey }
+        });
+      }
+    }
+  } else if (provider === 'azure') {
+    const secret = (document.getElementById('account-azure-client-secret') as HTMLInputElement).value;
+    if (secret) {
+      await api.saveAccountCredentials(accountId, {
+        credential_type: 'azure_client_secret',
+        payload: { client_secret: secret }
+      });
+    }
+  } else if (provider === 'gcp') {
+    const jsonText = (document.getElementById('account-gcp-service-account-json') as HTMLTextAreaElement).value.trim();
+    if (jsonText) {
+      await api.saveAccountCredentials(accountId, {
+        credential_type: 'gcp_service_account',
+        payload: JSON.parse(jsonText) as Record<string, unknown>
+      });
+    }
+  }
+}
+
+/**
+ * Handle account form submission
+ */
+async function handleAccountFormSubmit(e: Event): Promise<void> {
+  e.preventDefault();
+  const provider = accountModalProvider;
+  const accountId = (document.getElementById('account-id') as HTMLInputElement).value;
+  const req = buildAccountRequest(provider);
+
+  try {
+    let savedId = accountId;
+    if (accountId) {
+      await api.updateAccount(accountId, req);
+    } else {
+      const created = await api.createAccount(req);
+      savedId = created.id;
+    }
+    await saveAccountCredentialsIfFilled(savedId, provider);
+    closeAccountModal();
+    await loadAccountsForProvider(provider);
+  } catch (err) {
+    console.error('Failed to save account:', err);
+    alert(`Failed to save account: ${(err as Error).message}`);
+  }
+}
+
 /**
  * Set up settings event handlers
  */
@@ -53,6 +325,27 @@ export function setupSettingsHandlers(): void {
   });
   gcpModal?.addEventListener('click', (e) => {
     if (e.target === gcpModal) closeGCPCredsModal();
+  });
+
+  // Account management buttons
+  document.getElementById('add-aws-account-btn')?.addEventListener('click', () => openAccountModal('aws'));
+  document.getElementById('add-azure-account-btn')?.addEventListener('click', () => openAccountModal('azure'));
+  document.getElementById('add-gcp-account-btn')?.addEventListener('click', () => openAccountModal('gcp'));
+
+  // Account form submit handler
+  document.getElementById('account-form')?.addEventListener('submit', (e) => void handleAccountFormSubmit(e));
+
+  // Account modal close
+  document.getElementById('close-account-modal-btn')?.addEventListener('click', closeAccountModal);
+
+  // AWS auth mode change handler
+  const awsAuthMode = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
+  awsAuthMode?.addEventListener('change', () => updateAwsAuthModeFields(awsAuthMode.value));
+
+  // Close account modal when clicking outside
+  const accountModal = document.getElementById('account-modal');
+  accountModal?.addEventListener('click', (e) => {
+    if (e.target === accountModal) closeAccountModal();
   });
 }
 
@@ -210,6 +503,11 @@ export async function loadGlobalSettings(): Promise<void> {
 
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');
+
+    // Load accounts for all providers (non-blocking)
+    void loadAccountsForProvider('aws');
+    void loadAccountsForProvider('azure');
+    void loadAccountsForProvider('gcp');
   } catch (error) {
     console.error('Failed to load settings:', error);
     if (loadingEl) loadingEl.classList.add('hidden');

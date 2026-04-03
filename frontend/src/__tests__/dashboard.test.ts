@@ -22,12 +22,15 @@ jest.mock('../api', () => ({
   getDashboardSummary: jest.fn(),
   getUpcomingPurchases: jest.fn(),
   getPurchaseDetails: jest.fn(),
-  cancelPurchase: jest.fn()
+  cancelPurchase: jest.fn(),
+  listAccounts: jest.fn().mockResolvedValue([])
 }));
 
 // Mock state module
 jest.mock('../state', () => ({
   getCurrentProvider: jest.fn().mockReturnValue('all'),
+  getCurrentAccountIDs: jest.fn().mockReturnValue([]),
+  setCurrentAccountIDs: jest.fn(),
   getSavingsChart: jest.fn().mockReturnValue(null),
   setSavingsChart: jest.fn()
 }));
@@ -74,7 +77,7 @@ describe('Dashboard Module', () => {
 
       await loadDashboard();
 
-      expect(api.getDashboardSummary).toHaveBeenCalledWith('all');
+      expect(api.getDashboardSummary).toHaveBeenCalledWith('all', []);
       expect(api.getUpcomingPurchases).toHaveBeenCalled();
     });
 
@@ -201,7 +204,7 @@ describe('Dashboard Module', () => {
 
       await loadDashboard();
 
-      expect(api.getDashboardSummary).toHaveBeenCalledWith('aws');
+      expect(api.getDashboardSummary).toHaveBeenCalledWith('aws', []);
     });
 
     test('renders view details and cancel buttons for upcoming purchases', async () => {
