@@ -231,6 +231,22 @@ function formatBackendRampSchedule(ramp: BackendPlan['ramp_schedule']): string {
   }
 }
 
+async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<void> {
+  try {
+    const accounts = await api.listPlanAccounts(planId);
+    if (accounts.length === 0) return;
+    const detailsEl = cardEl.querySelector('.plan-details');
+    if (!detailsEl) return;
+    const names = accounts.map(a => escapeHtml(a.name)).join(', ');
+    const div = document.createElement('div');
+    div.className = 'plan-detail';
+    div.innerHTML = `<span class="plan-detail-label">Accounts</span><span class="plan-detail-value">${names}</span>`;
+    detailsEl.appendChild(div);
+  } catch {
+    // Non-critical --- just do not show account names
+  }
+}
+
 function renderPlans(plans: LocalPlan[]): void {
   const container = document.getElementById('plans-list');
   if (!container) return;
@@ -302,6 +318,12 @@ function renderPlans(plans: LocalPlan[]): void {
       </div>
     `;
   }).join('');
+
+  // Asynchronously populate account names per plan
+  container.querySelectorAll<HTMLElement>('.plan-card').forEach((card, idx) => {
+    const plan = plans[idx] as unknown as BackendPlan;
+    if (plan.id) void loadPlanAccountNames(plan.id, card);
+  });
 
   // Add event listeners
   container.querySelectorAll<HTMLInputElement>('[data-action="toggle-plan"]').forEach(toggle => {
