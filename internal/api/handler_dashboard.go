@@ -8,11 +8,30 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
 
 func (h *Handler) getDashboardSummary(ctx context.Context, params map[string]string) (*DashboardSummaryResponse, error) {
 	provider := params["provider"]
+
+	// Parse account_ids (comma-separated); fall back to singular account_id for backward compat.
+	accountIDs := parseAccountIDs(params["account_ids"])
+
+	// Resolve a single account_id for calculateCommitmentMetrics:
+	// - one ID supplied → use it directly
+	// - multiple IDs → pass empty to return all (multi-account filtering is a future step)
+	// - none supplied → fall back to legacy singular param
+	effectiveAccountID := params["account_id"]
+	switch len(accountIDs) {
+	case 1:
+		effectiveAccountID = accountIDs[0]
+	case 0:
+		// keep legacy value
+	default:
+		logging.Infof("dashboard: multi-account filter requested (%d accounts); returning unfiltered metrics until per-account breakdown is implemented", len(accountIDs))
+		effectiveAccountID = ""
+	}
 
 	// Get recommendations to calculate potential savings
 	queryParams := scheduler.RecommendationQueryParams{
@@ -44,7 +63,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, params map[string]str
 	}
 
 	// Calculate metrics from purchase history
-	activeCommitments, committedMonthly, ytdSavings := h.calculateCommitmentMetrics(ctx, params["account_id"])
+	activeCommitments, committedMonthly, ytdSavings := h.calculateCommitmentMetrics(ctx, effectiveAccountID)
 
 	return &DashboardSummaryResponse{
 		PotentialMonthlySavings: totalSavings,

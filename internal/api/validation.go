@@ -159,6 +159,21 @@ func validateRequestBodySize(body string) error {
 	return nil
 }
 
+// parseAccountIDs splits a comma-separated account_ids query parameter into a slice.
+// Empty entries are removed. Returns nil when the input is empty.
+func parseAccountIDs(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var ids []string
+	for _, id := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			ids = append(ids, trimmed)
+		}
+	}
+	return ids
+}
+
 // decodeBase64Password decodes a base64-encoded password.
 // Returns the decoded password or an error if decoding fails.
 // If the input is empty, returns empty string with no error.

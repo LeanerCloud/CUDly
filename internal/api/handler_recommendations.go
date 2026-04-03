@@ -21,6 +21,11 @@ func (h *Handler) getRecommendations(ctx context.Context, params map[string]stri
 		return nil, err
 	}
 
+	// Parse account_ids (comma-separated). RecommendationQueryParams does not yet support
+	// account-level filtering; the parameter is accepted here so the frontend receives a clean
+	// response rather than an error. Per-account filtering will be wired in a future step.
+	_ = parseAccountIDs(params["account_ids"])
+
 	// Build query params from request parameters
 	queryParams := scheduler.RecommendationQueryParams{
 		Provider: params["provider"],

@@ -6,10 +6,18 @@ import (
 	"fmt"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
 // History handlers
 func (h *Handler) getHistory(ctx context.Context, params map[string]string) (any, error) {
+	// Parse account_ids (comma-separated). GetPurchaseHistory/GetAllPurchaseHistory do not yet
+	// support multi-account filtering; the parameter is accepted and logged for observability.
+	// Per-account filtering will be wired to the store in a future step.
+	if accountIDs := parseAccountIDs(params["account_ids"]); len(accountIDs) > 0 {
+		logging.Infof("history: account_ids filter received (%d accounts); per-account filtering not yet implemented", len(accountIDs))
+	}
+
 	accountID := params["account_id"]
 	limitStr := params["limit"]
 
