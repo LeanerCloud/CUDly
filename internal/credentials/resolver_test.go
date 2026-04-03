@@ -153,10 +153,15 @@ func TestResolveAWSCredentialProvider_RoleARN_STSError(t *testing.T) {
 		AWSRoleARN:  "arn:aws:iam::123456789012:role/CUDly",
 	}
 
+	// stscreds.NewAssumeRoleProvider defers the STS call to credential retrieval time.
+	// Construction must succeed; the error surfaces when Retrieve() is called.
 	stsClient := &mockSTSClient{err: errors.New("access denied")}
-	_, err := ResolveAWSCredentialProvider(context.Background(), account, newMockStore(), stsClient)
+	provider, err := ResolveAWSCredentialProvider(context.Background(), account, newMockStore(), stsClient)
+	require.NoError(t, err, "construction must succeed; STS error is deferred to Retrieve()")
+
+	_, err = provider.Retrieve(context.Background())
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "AssumeRole")
+	assert.Contains(t, err.Error(), "access denied")
 }
 
 func TestResolveAWSCredentialProvider_UnsupportedMode(t *testing.T) {

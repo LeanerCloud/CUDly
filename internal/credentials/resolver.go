@@ -8,6 +8,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -86,13 +87,15 @@ func resolveAccessKeyProvider(ctx context.Context, account *config.CloudAccount,
 	return credentials.NewStaticCredentialsProvider(payload.AccessKeyID, payload.SecretAccessKey, ""), nil
 }
 
-// resolveRoleARNProvider assumes the role in account.AWSRoleARN using the given base
-// provider (or ambient credentials if baseProvider is nil).
+// resolveRoleARNProvider returns an auto-refreshing credential provider that
+// assumes account.AWSRoleARN using stsClient. stscreds.AssumeRoleProvider
+// transparently refreshes credentials before they expire, avoiding the
+// 1-hour STS token expiry problem of static credentials.
 func resolveRoleARNProvider(
-	ctx context.Context,
+	_ context.Context,
 	account *config.CloudAccount,
 	stsClient STSClient,
-	baseProvider aws.CredentialsProvider,
+	_ aws.CredentialsProvider,
 ) (aws.CredentialsProvider, error) {
 	if account.AWSRoleARN == "" {
 		return nil, fmt.Errorf("credentials: aws_role_arn is required for role_arn auth mode (account %s)", account.ID)
@@ -102,25 +105,14 @@ func resolveRoleARNProvider(
 	if len(sessionSuffix) > 8 {
 		sessionSuffix = sessionSuffix[:8]
 	}
-	input := &sts.AssumeRoleInput{
-		RoleArn:         &account.AWSRoleARN,
-		RoleSessionName: aws.String("cudly-" + sessionSuffix),
-	}
-	if account.AWSExternalID != "" {
-		input.ExternalId = &account.AWSExternalID
-	}
 
-	out, err := stsClient.AssumeRole(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("credentials: AssumeRole(%s): %w", account.AWSRoleARN, err)
-	}
-
-	creds := out.Credentials
-	return credentials.NewStaticCredentialsProvider(
-		*creds.AccessKeyId,
-		*creds.SecretAccessKey,
-		*creds.SessionToken,
-	), nil
+	provider := stscreds.NewAssumeRoleProvider(stsClient, account.AWSRoleARN, func(o *stscreds.AssumeRoleOptions) {
+		o.RoleSessionName = "cudly-" + sessionSuffix
+		if account.AWSExternalID != "" {
+			o.ExternalID = aws.String(account.AWSExternalID)
+		}
+	})
+	return provider, nil
 }
 
 func resolveBastionProvider(
