@@ -1,0 +1,4 @@
+ALTER TABLE global_config
+  ADD COLUMN IF NOT EXISTS auto_collect BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS collection_schedule VARCHAR(32) NOT NULL DEFAULT 'daily',
+  ADD COLUMN IF NOT EXISTS notification_days_before INTEGER NOT NULL DEFAULT 3;

@@ -35,7 +35,8 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		SELECT enabled_providers, notification_email, approval_required,
 		       default_term, default_payment, default_coverage, default_ramp_schedule,
 		       ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
-		       ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days
+		       ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
+		       auto_collect, collection_schedule, notification_days_before
 		FROM global_config
 		WHERE id = 1
 	`
@@ -57,12 +58,15 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		&config.RIExchangeMaxPerExchangeUSD,
 		&config.RIExchangeMaxDailyUSD,
 		&config.RIExchangeLookbackDays,
+		&config.AutoCollect,
+		&config.CollectionSchedule,
+		&config.NotificationDaysBefore,
 	)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			// Return default config if none exists.
-			// Values must align with DefaultSettings in defaults.go.
+			// Values must align with DefaultSettings in defaults.go and DB DEFAULT clauses.
 			return &GlobalConfig{
 				EnabledProviders:               []string{},
 				ApprovalRequired:               true,
@@ -73,6 +77,9 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 				RIExchangeMode:                 "manual",
 				RIExchangeUtilizationThreshold: 95.0,
 				RIExchangeLookbackDays:         30,
+				AutoCollect:                    true,
+				CollectionSchedule:             "daily",
+				NotificationDaysBefore:         3,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get global config: %w", err)
@@ -94,8 +101,9 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			id, enabled_providers, notification_email, approval_required,
 			default_term, default_payment, default_coverage, default_ramp_schedule,
 			ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
-			ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
+			auto_collect, collection_schedule, notification_days_before
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -110,6 +118,9 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			ri_exchange_max_per_exchange_usd = $11,
 			ri_exchange_max_daily_usd = $12,
 			ri_exchange_lookback_days = $13,
+			auto_collect = $14,
+			collection_schedule = $15,
+			notification_days_before = $16,
 			updated_at = NOW()
 	`
 
@@ -141,6 +152,9 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		config.RIExchangeMaxPerExchangeUSD,
 		config.RIExchangeMaxDailyUSD,
 		riExchangeLookbackDays,
+		config.AutoCollect,
+		config.CollectionSchedule,
+		config.NotificationDaysBefore,
 	)
 
 	if err != nil {

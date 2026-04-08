@@ -7,13 +7,16 @@ import (
 
 // GlobalConfig represents the global CUDly configuration
 type GlobalConfig struct {
-	EnabledProviders    []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
-	NotificationEmail   *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
-	ApprovalRequired    bool     `json:"approval_required" dynamodbav:"approval_required"`
-	DefaultTerm         int      `json:"default_term" dynamodbav:"default_term"`
-	DefaultPayment      string   `json:"default_payment" dynamodbav:"default_payment"`
-	DefaultCoverage     float64  `json:"default_coverage" dynamodbav:"default_coverage"`
-	DefaultRampSchedule string   `json:"default_ramp_schedule" dynamodbav:"default_ramp_schedule"`
+	EnabledProviders       []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
+	NotificationEmail      *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
+	AutoCollect            bool     `json:"auto_collect"`
+	CollectionSchedule     string   `json:"collection_schedule"`
+	NotificationDaysBefore int      `json:"notification_days_before"`
+	ApprovalRequired       bool     `json:"approval_required" dynamodbav:"approval_required"`
+	DefaultTerm            int      `json:"default_term" dynamodbav:"default_term"`
+	DefaultPayment         string   `json:"default_payment" dynamodbav:"default_payment"`
+	DefaultCoverage        float64  `json:"default_coverage" dynamodbav:"default_coverage"`
+	DefaultRampSchedule    string   `json:"default_ramp_schedule" dynamodbav:"default_ramp_schedule"`
 
 	// RI Exchange automation settings
 	RIExchangeEnabled              bool    `json:"ri_exchange_enabled" dynamodbav:"ri_exchange_enabled"`

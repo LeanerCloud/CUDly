@@ -16,6 +16,9 @@ var ValidPaymentOptions = []string{"no-upfront", "partial-upfront", "all-upfront
 // ValidRampScheduleTypes lists all supported ramp schedule types
 var ValidRampScheduleTypes = []string{"immediate", "weekly", "monthly", "custom"}
 
+// ValidCollectionSchedules lists all valid collection schedule values
+var ValidCollectionSchedules = []string{"", "hourly", "daily", "weekly"}
+
 // Validate validates the GlobalConfig
 func (c *GlobalConfig) Validate() error {
 	if err := c.validateProviders(); err != nil {
@@ -30,7 +33,16 @@ func (c *GlobalConfig) Validate() error {
 	if err := validatePaymentOption(c.DefaultPayment); err != nil {
 		return err
 	}
-	return validateCoverage(c.DefaultCoverage)
+	if err := validateCoverage(c.DefaultCoverage); err != nil {
+		return err
+	}
+	if !isValidCollectionSchedule(c.CollectionSchedule) {
+		return fmt.Errorf("invalid collection_schedule: %q (valid: hourly, daily, weekly)", c.CollectionSchedule)
+	}
+	if c.NotificationDaysBefore < 0 || c.NotificationDaysBefore > MaxNotificationDaysBefore {
+		return fmt.Errorf("notification_days_before must be between 0 and %d, got: %d", MaxNotificationDaysBefore, c.NotificationDaysBefore)
+	}
+	return nil
 }
 
 // validateProviders checks that all enabled providers are valid
@@ -226,6 +238,15 @@ func isValidProvider(p string) bool {
 func isValidPaymentOption(p string) bool {
 	for _, valid := range ValidPaymentOptions {
 		if p == valid {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidCollectionSchedule(s string) bool {
+	for _, valid := range ValidCollectionSchedules {
+		if s == valid {
 			return true
 		}
 	}
