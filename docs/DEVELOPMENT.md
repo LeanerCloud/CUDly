@@ -97,6 +97,22 @@ Configured in docker-compose.yml:
   - `gcp`: GCP Secret Manager
   - `azure`: Azure Key Vault
 
+### Multi-Account Credential Encryption
+
+CUDly encrypts stored cloud account credentials with AES-256-GCM. The encryption key must be provided via one of:
+
+- **Local dev** — set `CREDENTIAL_ENCRYPTION_KEY` to a 64-character hex string (32 bytes):
+
+  ```bash
+  export CREDENTIAL_ENCRYPTION_KEY=$(openssl rand -hex 32)
+  ```
+
+  Add this to your `docker-compose.yml` or `.env` file for local use.
+
+- **Production (AWS Lambda)** — set `CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN` to the ARN of an AWS Secrets Manager secret whose value is the 64-char hex key. Terraform creates this secret automatically when `create_credential_encryption_key = true` is set in `secrets.tf`. See [Deployment Guide](DEPLOYMENT.md#multi-account-credential-encryption) and `specs/multi-account-execution/iac.md` for details.
+
+If neither variable is set, the application falls back to an insecure dev key and logs a warning. **Never use the dev key in production.**
+
 ### Application
 
 - `ENVIRONMENT`: Environment name (default: `development`)

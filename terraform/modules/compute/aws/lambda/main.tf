@@ -181,6 +181,8 @@ resource "aws_iam_role_policy" "secrets_access" {
           "${var.database_password_secret_arn}*",
           var.admin_password_secret_arn,
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}*" : "",
+          var.credential_encryption_key_secret_arn,
+          var.credential_encryption_key_secret_arn != "" ? "${var.credential_encryption_key_secret_arn}*" : "",
         ])
       },
       {
@@ -271,6 +273,48 @@ resource "aws_iam_role_policy" "ri_exchange" {
           "savingsplans:CreateSavingsPlan",
         ]
         Resource = "*"
+      }
+    ]
+  })
+}
+
+# Cross-account role assumption for multi-account plan execution
+resource "aws_iam_role_policy" "cross_account_sts" {
+  count = var.enable_cross_account_sts ? 1 : 0
+
+  name_prefix = "${var.stack_name}-cross-account-sts-"
+  role        = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = "arn:aws:iam::*:role/*"
+        # Recommendation: scope to a naming convention in production to reduce blast radius:
+        # Resource = "arn:aws:iam::*:role/CUDly*"
+        # Note: ExternalId validation is enforced at the application layer (resolver.go),
+        # not here, because Lambda assumes roles on behalf of many target accounts.
+      }
+    ]
+  })
+}
+
+# AWS Organizations ListAccounts for org-root account discovery
+resource "aws_iam_role_policy" "org_discovery" {
+  count = var.enable_org_discovery ? 1 : 0
+
+  name_prefix = "${var.stack_name}-org-discovery-"
+  role        = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["organizations:ListAccounts", "organizations:DescribeOrganization"]
+        Resource = "*" # Organizations API does not support resource-level restrictions
       }
     ]
   })

@@ -148,6 +148,35 @@ resource "aws_secretsmanager_secret_version" "session_secret" {
 }
 
 # ==============================================
+# Credential Encryption Key (Multi-Account)
+# ==============================================
+
+resource "aws_secretsmanager_secret" "credential_encryption_key" {
+  count = var.create_credential_encryption_key ? 1 : 0
+
+  name_prefix             = "${var.stack_name}-credential-enc-key-"
+  description             = "AES-256-GCM key for encrypting cloud account credentials"
+  recovery_window_in_days = var.recovery_window_days
+
+  tags = merge(var.tags, {
+    Name        = "${var.stack_name}-credential-enc-key"
+    ManagedBy   = "terraform"
+    Environment = var.environment
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "credential_encryption_key" {
+  count = var.create_credential_encryption_key ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.credential_encryption_key[0].id
+  secret_string = var.credential_encryption_key
+
+  lifecycle {
+    ignore_changes = [secret_string] # Allow out-of-band rotation without Terraform drift
+  }
+}
+
+# ==============================================
 # Additional Custom Secrets
 # ==============================================
 

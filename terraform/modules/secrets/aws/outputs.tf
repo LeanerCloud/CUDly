@@ -64,6 +64,11 @@ output "secret_read_policy_name" {
   value       = aws_iam_policy.secret_read.name
 }
 
+output "credential_encryption_key_secret_arn" {
+  description = "ARN of the credential encryption key secret; empty string if not created"
+  value       = var.create_credential_encryption_key ? aws_secretsmanager_secret.credential_encryption_key[0].arn : ""
+}
+
 output "rotation_lambda_arn" {
   description = "ARN of rotation Lambda function (if created)"
   value       = var.enable_secret_rotation ? aws_lambda_function.rotation[0].arn : null

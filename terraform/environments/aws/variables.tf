@@ -268,6 +268,22 @@ variable "ri_exchange_schedule" {
 }
 
 # ==============================================
+# Multi-Account Configuration
+# ==============================================
+
+variable "credential_encryption_key" {
+  description = "AES-256-GCM key for account credential encryption (64-char hex = 32 bytes). Generate with: openssl rand -hex 32"
+  type        = string
+  sensitive   = true
+}
+
+variable "max_account_parallelism" {
+  description = "Maximum number of cloud accounts to process in parallel during plan fan-out"
+  type        = number
+  default     = 10
+}
+
+# ==============================================
 # Additional Configuration
 # ==============================================
 

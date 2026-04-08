@@ -143,6 +143,24 @@ variable "additional_env_vars" {
   default     = {}
 }
 
+variable "credential_encryption_key_secret_arn" {
+  description = "ARN of Secrets Manager secret holding the AES-256-GCM credential encryption key"
+  type        = string
+  default     = ""
+}
+
+variable "enable_cross_account_sts" {
+  description = "Allow Lambda to assume roles in remote AWS accounts (required for multi-account support)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_org_discovery" {
+  description = "Allow Lambda to call AWS Organizations ListAccounts for member account discovery"
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

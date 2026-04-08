@@ -74,6 +74,18 @@ secret_recovery_window_days = 7
 additional_secrets = {}
 
 # ==============================================
+# Multi-Account Credential Encryption
+# ==============================================
+
+# AES-256-GCM key for encrypting stored cloud account credentials.
+# Generate with: openssl rand -hex 32
+# In CI/CD, source this from a secrets vault rather than committing to tfvars.
+credential_encryption_key = "REPLACE_WITH_64_CHAR_HEX_STRING"
+
+# Maximum number of cloud accounts to process in parallel during plan fan-out.
+max_account_parallelism = 10
+
+# ==============================================
 # Frontend (CloudFront + S3)
 # ==============================================
 

@@ -20,6 +20,10 @@ module "secrets" {
   # Optional: Add additional secrets
   additional_secrets = var.additional_secrets
 
+  # Credential encryption key for multi-account support
+  create_credential_encryption_key = true
+  credential_encryption_key        = var.credential_encryption_key
+
   # Secret rotation disabled in dev (enable in prod)
   enable_secret_rotation = false
 

@@ -108,3 +108,16 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "create_credential_encryption_key" {
+  description = "Whether to create a Secrets Manager secret for the credential encryption key"
+  type        = bool
+  default     = false
+}
+
+variable "credential_encryption_key" {
+  description = "AES-256-GCM key for account credential encryption (64-char hex = 32 bytes). Generate with: openssl rand -hex 32"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

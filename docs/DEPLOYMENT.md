@@ -64,13 +64,13 @@ Terraform automatically handles: Docker image build/push (via build module), fro
 ## Platform Comparison
 
 | Provider | Serverless | Containers/Kubernetes | Status |
-|----------|-----------|----------------------|--------|
+| -------- | --------- | --------------------- | ------ |
 | **AWS** | Lambda | Fargate (ECS) | Fully implemented |
 | **Azure** | Container Apps | AKS | Container Apps implemented |
 | **GCP** | Cloud Run | GKE | Cloud Run implemented |
 
 | | Lambda | Fargate | Container Apps | Cloud Run |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | **Timeout** | 15 min max | Unlimited | Unlimited | 60 min max |
 | **Memory** | 128-10240 MB | 512-30720 MB | 0.5-4 GB | 128 MB-32 GB |
 | **CPU** | Tied to memory | 256-4096 units | 0.25-2 vCPU | 1-8 vCPU |
@@ -365,7 +365,7 @@ You can run Fargate alongside an existing Lambda deployment for comparison testi
 ### Architecture
 
 | | Lambda (`dev`) | Fargate (`fargate-dev`) |
-|---|---|---|
+| --- | --- | --- |
 | **VPC** | 10.0.0.0/16 | 10.1.0.0/16 (separate) |
 | **Compute** | Lambda + Function URL | ECS Fargate + ALB |
 | **Database** | Aurora via RDS Proxy | Aurora via direct endpoint |
@@ -477,7 +477,7 @@ curl "$CF_URL/api/health"    # X-Cache: Miss from cloudfront (API)
 ### AWS Lambda (low traffic, ~100K requests/month)
 
 | Resource | Monthly Cost |
-|----------|-------------|
+| -------- | ------------ |
 | Lambda | ~$0.20 |
 | Aurora Serverless v2 (0.5 ACU) | ~$43.80 |
 | RDS Proxy | ~$10.95 |
@@ -488,7 +488,7 @@ curl "$CF_URL/api/health"    # X-Cache: Miss from cloudfront (API)
 ### AWS Fargate (2 tasks, 24/7)
 
 | Resource | Monthly Cost |
-|----------|-------------|
+| -------- | ------------ |
 | Fargate (0.25 vCPU, 0.5GB x 2) | ~$21.90 |
 | ALB | ~$16.20 |
 | Aurora Serverless v2 (0.5 ACU) | ~$43.80 |
@@ -498,7 +498,7 @@ curl "$CF_URL/api/health"    # X-Cache: Miss from cloudfront (API)
 ### Multi-Cloud Comparison (Serverless, Dev)
 
 | Platform | Estimated Monthly Cost |
-|----------|----------------------|
+| -------- | --------------------- |
 | AWS Lambda | ~$57 |
 | GCP Cloud Run | ~$13-27 |
 | Azure Container Apps | ~$18-32 |
@@ -604,6 +604,38 @@ aws rds describe-db-proxies --db-proxy-name cudly-dev-proxy
 # Check database cluster
 aws rds describe-db-clusters --db-cluster-identifier cudly-dev-postgres
 ```
+
+### Multi-Account Credential Encryption
+
+Multi-account support requires an AES-256-GCM encryption key for stored cloud account credentials. Terraform creates the key secret automatically (see `specs/multi-account-execution/iac.md`).
+
+**New environment variables (AWS Lambda):**
+
+| Variable | Source | Purpose |
+| -------- | ------ | ------- |
+| `CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN` | Terraform → Lambda env | ARN of Secrets Manager secret holding the 32-byte AES key |
+| `CREDENTIAL_ENCRYPTION_KEY` | Direct (local dev only) | 64-char hex key; bypasses Secrets Manager |
+| `CUDLY_MAX_ACCOUNT_PARALLELISM` | Terraform → Lambda env | Fan-out goroutine cap for parallel account execution (default: `10`) |
+
+**Migration 000011** (`000011_cloud_accounts`) adds:
+
+- `cloud_accounts` — central registry for all managed accounts (AWS/Azure/GCP)
+- `account_credentials` — encrypted credential material
+- `account_service_overrides` — sparse per-account service config overrides
+- `plan_accounts` — M2M join: which accounts a purchase plan targets
+- `cloud_account_id` FK column on `purchase_executions`, `purchase_history`, `savings_snapshots`, `ri_exchange_history`
+
+If `DB_AUTO_MIGRATE=true` (the default), migration 000011 runs automatically on Lambda cold start. To run manually:
+
+```bash
+DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id cudly-dev-db-password-* --query SecretString --output text | jq -r .password)
+RDS_ENDPOINT=$(cd terraform/environments/aws && terraform output -raw database_proxy_endpoint)
+
+migrate -path internal/database/postgres/migrations \
+  -database "postgresql://cudly:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
+```
+
+---
 
 ### Migrations Not Running
 
