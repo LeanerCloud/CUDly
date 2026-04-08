@@ -343,13 +343,6 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		return fmt.Errorf("failed to create auth service")
 	}
 
-	// Re-initialize Scheduler with PostgreSQL config store
-	app.Scheduler = scheduler.NewScheduler(scheduler.SchedulerConfig{
-		ConfigStore:     app.Config,
-		PurchaseManager: app.Purchase,
-		EmailSender:     app.Email,
-	})
-
 	// Initialize distributed rate limiter for Lambda (multi-instance)
 	// For Fargate/containers, we already have in-memory rate limiter from startup
 	if app.appConfig.IsLambda {
@@ -368,6 +361,37 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 	}
 	credStore := credentials.NewCredentialStore(dbConn.Pool(), encKey)
 	log.Println("Initialized encrypted credential store")
+
+	// Re-initialize purchase manager with multi-account deps now that credStore is available.
+	// The initial manager (created before DB connect) lacks CredentialStore and AssumeRoleSTS,
+	// so the multi-account fan-out guard (m.credStore != nil) would always be false without this.
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config for cross-account STS: %w", err)
+	}
+	app.Purchase = purchase.NewManager(purchase.ManagerConfig{
+		ConfigStore:               app.Config,
+		EmailSender:               app.Email,
+		STSClient:                 sts.NewFromConfig(awsCfg),
+		AssumeRoleSTS:             sts.NewFromConfig(awsCfg),
+		CredentialStore:           credStore,
+		NotificationDaysBefore:    app.appConfig.NotificationDaysBefore,
+		DefaultTerm:               app.appConfig.DefaultTerm,
+		DefaultPaymentOption:      app.appConfig.DefaultPaymentOption,
+		DefaultCoverage:           app.appConfig.DefaultCoverage,
+		DefaultRampSchedule:       app.appConfig.DefaultRampSchedule,
+		AzureCredentialsSecretARN: app.appConfig.AzureCredentialsSecretARN,
+		GCPCredentialsSecretARN:   app.appConfig.GCPCredentialsSecretARN,
+		DashboardURL:              app.appConfig.DashboardURL,
+	})
+	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
+
+	// Re-initialize scheduler to pick up the updated purchase manager.
+	app.Scheduler = scheduler.NewScheduler(scheduler.SchedulerConfig{
+		ConfigStore:     app.Config,
+		PurchaseManager: app.Purchase,
+		EmailSender:     app.Email,
+	})
 
 	// Update API handler with new config store, scheduler, and rate limiter
 	app.API = api.NewHandler(api.HandlerConfig{
