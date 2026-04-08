@@ -215,14 +215,23 @@ func (r *Router) extractParams(route Route, path string) map[string]string {
 // Handler wrappers that adapt the old handlers to the new RouteHandler signature
 
 func (r *Router) dashboardSummaryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getDashboardSummary(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) upcomingPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getUpcomingPurchases(ctx)
 }
 
 func (r *Router) getConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getConfig(ctx)
 }
 
@@ -231,6 +240,9 @@ func (r *Router) updateConfigHandler(ctx context.Context, req *events.LambdaFunc
 }
 
 func (r *Router) getServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getServiceConfig(ctx, params["id"])
 }
 
@@ -247,10 +259,16 @@ func (r *Router) saveGCPCredentialsHandler(ctx context.Context, req *events.Lamb
 }
 
 func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getRecommendations(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.scheduler.CollectRecommendations(ctx)
 }
 
@@ -321,18 +339,30 @@ func (r *Router) deletePlannedPurchaseHandler(ctx context.Context, req *events.L
 }
 
 func (r *Router) getHistoryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getHistory(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) getHistoryAnalyticsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getHistoryAnalytics(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) getHistoryBreakdownHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.getHistoryBreakdown(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) triggerAnalyticsCollectionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if _, err := r.h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	return r.h.triggerAnalyticsCollection(ctx, req.QueryStringParameters)
 }
 

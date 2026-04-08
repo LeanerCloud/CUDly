@@ -33,6 +33,7 @@ on:
       - 'cmd/**'
       - 'internal/**'
       - 'providers/**'
+      - 'frontend/**'
       - 'Dockerfile'
       - 'terraform/modules/compute/aws/lambda/**'
       - 'terraform/modules/database/aws/**'
