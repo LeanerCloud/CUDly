@@ -318,6 +318,7 @@ func TestHandler_HandleRequest_PutServiceConfig(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
+	mockStore.On("GetServiceConfig", mock.Anything, "aws", "rds").Return(nil, nil)
 	mockStore.On("SaveServiceConfig", mock.Anything, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}

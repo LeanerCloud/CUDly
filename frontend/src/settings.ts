@@ -294,9 +294,14 @@ function openAccountModal(provider: AccountProvider, account?: api.CloudAccount)
   if (provider === 'aws') {
     populateAwsAccountFields(account);
   } else if (provider === 'azure') {
+    const azureAuthMode = account?.azure_auth_mode ?? 'client_secret';
+    const azureAuthSelect = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
+    if (azureAuthSelect) azureAuthSelect.value = azureAuthMode;
     (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value = account?.azure_tenant_id ?? '';
     (document.getElementById('account-azure-client-id') as HTMLInputElement).value = account?.azure_client_id ?? '';
     (document.getElementById('account-azure-client-secret') as HTMLInputElement).value = '';
+    (document.getElementById('account-azure-wif-private-key') as HTMLTextAreaElement | null ?? { value: '' }).value = '';
+    updateAzureAuthModeFields(azureAuthMode);
   }
 
   modal.classList.remove('hidden');
@@ -335,6 +340,16 @@ function updateAwsAuthModeFields(mode: string, bastionId?: string): void {
   if (mode === 'bastion') {
     void populateBastionAccountDropdown(bastionId);
   }
+}
+
+/**
+ * Show/hide Azure auth mode sub-fields
+ */
+function updateAzureAuthModeFields(mode: string): void {
+  const secretFields = document.getElementById('account-azure-secret-fields');
+  const wifFields = document.getElementById('account-azure-wif-fields');
+  secretFields?.classList.toggle('hidden', mode !== 'client_secret');
+  wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
 }
 
 /**
@@ -392,6 +407,7 @@ function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest
     }
   } else if (provider === 'azure') {
     req.azure_subscription_id = req.external_id; // external_id IS the subscription ID for Azure
+    req.azure_auth_mode = (document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null)?.value || 'client_secret';
     req.azure_tenant_id = (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value.trim();
     req.azure_client_id = (document.getElementById('account-azure-client-id') as HTMLInputElement).value.trim();
   } else if (provider === 'gcp') {
@@ -418,12 +434,25 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
       }
     }
   } else if (provider === 'azure') {
-    const secret = (document.getElementById('account-azure-client-secret') as HTMLInputElement).value;
-    if (secret) {
-      await api.saveAccountCredentials(accountId, {
-        credential_type: 'azure_client_secret',
-        payload: { client_secret: secret }
-      });
+    const azureMode = (document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null)?.value ?? 'client_secret';
+    if (azureMode === 'managed_identity') {
+      // No credential to store
+    } else if (azureMode === 'workload_identity_federation') {
+      const pem = (document.getElementById('account-azure-wif-private-key') as HTMLTextAreaElement | null)?.value.trim();
+      if (pem) {
+        await api.saveAccountCredentials(accountId, {
+          credential_type: 'azure_wif_private_key',
+          payload: { private_key_pem: pem }
+        });
+      }
+    } else {
+      const secret = (document.getElementById('account-azure-client-secret') as HTMLInputElement).value;
+      if (secret) {
+        await api.saveAccountCredentials(accountId, {
+          credential_type: 'azure_client_secret',
+          payload: { client_secret: secret }
+        });
+      }
     }
   } else if (provider === 'gcp') {
     const jsonText = (document.getElementById('account-gcp-service-account-json') as HTMLTextAreaElement).value.trim();
@@ -567,6 +596,10 @@ export function setupSettingsHandlers(): void {
   // AWS auth mode change handler
   const awsAuthMode = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
   awsAuthMode?.addEventListener('change', () => updateAwsAuthModeFields(awsAuthMode.value));
+
+  // Azure auth mode change handler
+  const azureAuthMode = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
+  azureAuthMode?.addEventListener('change', () => updateAzureAuthModeFields(azureAuthMode.value));
 
   // Close account modal when clicking outside
   const accountModal = document.getElementById('account-modal');
@@ -791,7 +824,14 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
         ? ((document.getElementById(paymentId) as HTMLSelectElement)?.value || 'all-upfront')
         : settings.default_payment;
       const base = loadedServiceConfigs.find(s => s.provider === provider && s.service === service);
-      const cfg: api.ServiceConfig = { ...base, provider, service, enabled: base?.enabled ?? true, term, payment, coverage: base?.coverage ?? settings.default_coverage };
+      const cfg: api.ServiceConfig = {
+        provider,
+        service,
+        enabled: base?.enabled ?? true,
+        term,
+        payment,
+        coverage: settings.default_coverage,
+      };
       return api.updateServiceConfig(provider, service, cfg);
     });
     await Promise.all(serviceSaves);

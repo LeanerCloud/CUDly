@@ -157,6 +157,7 @@ func TestHandler_updateServiceConfig(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -343,6 +344,7 @@ func TestHandler_updateServiceConfig_SaveError(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(assert.AnError)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}

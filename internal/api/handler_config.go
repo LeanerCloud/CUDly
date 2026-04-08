@@ -124,6 +124,17 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 		cfg.Service = parts[1]
 	}
 
+	// Merge: preserve existing filter fields, overlay the 4 UI-editable fields.
+	// The frontend only sends enabled/term/payment/coverage; a full UPSERT would
+	// zero out ramp_schedule, include_engines, etc. that were set elsewhere.
+	if existing, err := h.config.GetServiceConfig(ctx, cfg.Provider, cfg.Service); err == nil && existing != nil {
+		existing.Enabled = cfg.Enabled
+		existing.Term = cfg.Term
+		existing.Payment = cfg.Payment
+		existing.Coverage = cfg.Coverage
+		cfg = *existing
+	}
+
 	// Validate the configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
