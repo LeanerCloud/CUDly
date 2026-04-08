@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CUDly Cross-Account Role — deploy this in every target AWS account that CUDly
+  should manage. It creates an IAM role that trusts the CUDly Lambda execution
+  role in the primary (hub) account to assume it via STS, then grants the
+  permissions needed to query and purchase Reserved Instances and Savings Plans.
+
+# =============================================================================
+# Parameters
+# =============================================================================
+
+Parameters:
+  PrimaryAccountId:
+    Type: String
+    Description: >
+      12-digit AWS account ID of the CUDly primary (hub) account.
+      The Lambda execution role in this account will be trusted.
+    AllowedPattern: "^[0-9]{12}$"
+    ConstraintDescription: Must be a 12-digit AWS account ID.
+
+  PrimaryRoleName:
+    Type: String
+    Default: CUDly-LambdaRole
+    Description: >
+      Exact name of the Lambda execution role in the primary account.
+      Default matches a primary CUDly stack deployed with the stack name "CUDly".
+      If your stack was deployed with a different name, set this to
+      "<StackName>-LambdaRole".
+
+  ExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: >
+      STS ExternalId for defense-in-depth (confused-deputy protection).
+      Generate with: openssl rand -hex 16
+      Record this value — you will need it when registering the account in CUDly.
+
+  RoleName:
+    Type: String
+    Default: CUDly
+    Description: >
+      Name for the cross-account IAM role created in this account.
+      Must start with "CUDly" to match the sts:AssumeRole resource scope in the
+      primary account's Lambda policy (arn:aws:iam::*:role/CUDly*).
+
+# =============================================================================
+# Resources
+# =============================================================================
+
+Resources:
+
+  CUDlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${PrimaryAccountId}:role/lambda/${PrimaryRoleName}"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+
+  CUDlyPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${RoleName}-Policy"
+      Roles:
+        - !Ref CUDlyRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # STS — caller identity (used by the /test endpoint)
+          - Sid: STSCallerIdentity
+            Effect: Allow
+            Action:
+              - sts:GetCallerIdentity
+            Resource: "*"
+
+          # Cost Explorer — recommendations and utilisation
+          - Sid: CostExplorer
+            Effect: Allow
+            Action:
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetReservationUtilization
+              - ce:GetReservationCoverage
+              - ce:GetSavingsPlansPurchaseRecommendation
+              - ce:GetSavingsPlansUtilization
+              - ce:GetSavingsPlansCoverage
+            Resource: "*"
+
+          # EC2 Reserved Instances
+          - Sid: EC2ReservedInstances
+            Effect: Allow
+            Action:
+              - ec2:DescribeReservedInstancesOfferings
+              - ec2:DescribeReservedInstances
+              - ec2:PurchaseReservedInstancesOffering
+              - ec2:DescribeRegions
+              - ec2:DescribeInstanceTypeOfferings
+            Resource: "*"
+
+          # RDS Reserved Instances
+          - Sid: RDSReservedInstances
+            Effect: Allow
+            Action:
+              - rds:DescribeReservedDBInstancesOfferings
+              - rds:DescribeReservedDBInstances
+              - rds:PurchaseReservedDBInstancesOffering
+              - rds:DescribeDBInstances
+            Resource: "*"
+
+          # ElastiCache Reserved Nodes
+          - Sid: ElastiCacheReservedNodes
+            Effect: Allow
+            Action:
+              - elasticache:DescribeReservedCacheNodesOfferings
+              - elasticache:DescribeReservedCacheNodes
+              - elasticache:PurchaseReservedCacheNodesOffering
+            Resource: "*"
+
+          # OpenSearch Reserved Instances
+          - Sid: OpenSearchReservedInstances
+            Effect: Allow
+            Action:
+              - es:DescribeReservedInstanceOfferings
+              - es:DescribeReservedInstances
+              - es:PurchaseReservedInstanceOffering
+            Resource: "*"
+
+          # Redshift Reserved Nodes
+          - Sid: RedshiftReservedNodes
+            Effect: Allow
+            Action:
+              - redshift:DescribeReservedNodeOfferings
+              - redshift:DescribeReservedNodes
+              - redshift:PurchaseReservedNodeOffering
+            Resource: "*"
+
+          # MemoryDB Reserved Nodes
+          - Sid: MemoryDBReservedNodes
+            Effect: Allow
+            Action:
+              - memorydb:DescribeReservedNodesOfferings
+              - memorydb:DescribeReservedNodes
+              - memorydb:PurchaseReservedNodesOffering
+            Resource: "*"
+
+          # Savings Plans
+          - Sid: SavingsPlans
+            Effect: Allow
+            Action:
+              - savingsplans:DescribeSavingsPlans
+              - savingsplans:CreateSavingsPlan
+              - savingsplans:DescribeSavingsPlansOfferingRates
+            Resource: "*"
+
+# =============================================================================
+# Outputs
+# =============================================================================
+
+Outputs:
+  RoleArn:
+    Description: >
+      ARN of the CUDly cross-account role. Provide this value when registering
+      this account in the CUDly Settings > Accounts UI or via the API
+      (aws_role_arn field).
+    Value: !GetAtt CUDlyRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RoleArn"
+
+  RoleName:
+    Description: Name of the created IAM role.
+    Value: !Ref CUDlyRole
