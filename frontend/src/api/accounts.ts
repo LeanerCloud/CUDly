@@ -18,6 +18,7 @@ export interface CloudAccount {
   aws_external_id?: string;
   aws_bastion_id?: string;
   aws_is_org_root?: boolean;
+  azure_auth_mode?: 'client_secret' | 'managed_identity' | 'workload_identity_federation';
   azure_subscription_id?: string;
   azure_tenant_id?: string;
   azure_client_id?: string;
@@ -40,6 +41,7 @@ export interface CloudAccountRequest {
   aws_external_id?: string;
   aws_bastion_id?: string;
   aws_is_org_root?: boolean;
+  azure_auth_mode?: string;
   azure_subscription_id?: string;
   azure_tenant_id?: string;
   azure_client_id?: string;
@@ -54,7 +56,7 @@ export interface AccountListFilters {
 }
 
 export interface AccountCredentialsRequest {
-  credential_type: 'aws_access_keys' | 'azure_client_secret' | 'gcp_service_account';
+  credential_type: 'aws_access_keys' | 'azure_client_secret' | 'azure_wif_private_key' | 'gcp_service_account';
   payload: Record<string, unknown>;
 }
 
