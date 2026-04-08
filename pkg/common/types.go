@@ -2,6 +2,7 @@
 package common
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -111,6 +112,13 @@ type Recommendation struct {
 	// Metadata
 	SourceRecommendation string    `json:"source_recommendation,omitempty" csv:"SourceRecommendation"`
 	Timestamp            time.Time `json:"timestamp,omitempty" csv:"Timestamp"`
+
+	// Break-even in months (populated by cloud parsers where available; used by scorer filter)
+	BreakEvenMonths float64 `json:"break_even_months,omitempty" csv:"BreakEvenMonths"`
+
+	// RawRecommendation holds the original cloud API response bytes for audit/debugging.
+	// omitempty ensures nil is absent from JSON (not written as null).
+	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty" csv:"-"`
 }
 
 // ServiceDetails is an interface for service-specific details
@@ -283,4 +291,27 @@ func (d SavingsPlanDetails) GetServiceType() ServiceType {
 
 func (d SavingsPlanDetails) GetDetailDescription() string {
 	return d.PlanType
+}
+
+// AuditRecord is one line in the JSON-lines audit log.
+// Status values: "success", "error", "skipped" (dry-run), "skipped_covered" (idempotency).
+type AuditRecord struct {
+	RunID             string          `json:"run_id"`
+	Provider          ProviderType    `json:"provider"`
+	AccountID         string          `json:"account_id"`
+	AccountName       string          `json:"account_name"`
+	Region            string          `json:"region"`
+	Service           string          `json:"service"`
+	ResourceType      string          `json:"resource_type"`
+	CommitmentType    CommitmentType  `json:"commitment_type"`
+	Term              int             `json:"term_months"`
+	Count             int             `json:"count"`
+	EstimatedCost     float64         `json:"estimated_cost"`
+	EstimatedSavings  float64         `json:"estimated_savings"`
+	CommitmentID      string          `json:"commitment_id"`
+	Status            string          `json:"status"`
+	ErrorMessage      string          `json:"error_message"`
+	Timestamp         time.Time       `json:"timestamp"`
+	DryRun            bool            `json:"dry_run"`
+	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty"`
 }
