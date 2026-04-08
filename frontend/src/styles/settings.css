@@ -187,3 +187,29 @@
     border-radius: 4px;
     font-size: 0.85rem;
 }
+
+/* Per-section save bar */
+.fieldset-save-bar {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 1rem;
+    margin-top: 1rem;
+    border-top: 1px solid #e0e0e0;
+}
+
+/* Dirty (changed but unsaved) field highlight */
+input.dirty,
+select.dirty {
+    border-color: #f4a261 !important;
+    background-color: #fffbf5 !important;
+    box-shadow: 0 0 0 2px rgba(244, 162, 97, 0.25);
+}
+
+/* Dirty highlight for checkbox containers */
+.setting-input.dirty {
+    background-color: #fffbf5;
+    border-radius: 4px;
+    padding: 2px 8px;
+    outline: 2px solid #f4a261;
+    outline-offset: 2px;
+}

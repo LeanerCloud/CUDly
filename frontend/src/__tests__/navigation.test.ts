@@ -17,7 +17,8 @@ jest.mock('../history', () => ({
   initHistoryDateRange: jest.fn()
 }));
 jest.mock('../settings', () => ({
-  loadGlobalSettings: jest.fn().mockResolvedValue(undefined)
+  loadGlobalSettings: jest.fn().mockResolvedValue(undefined),
+  isUnsavedChanges: jest.fn().mockReturnValue(false)
 }));
 
 import { loadDashboard } from '../dashboard';

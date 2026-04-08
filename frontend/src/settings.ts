@@ -10,6 +10,63 @@ type AccountProvider = 'aws' | 'azure' | 'gcp';
 // Track which provider's account is being edited (for the modal)
 let accountModalProvider: AccountProvider = 'aws';
 
+// Fields that are persisted to the backend via saveGlobalSettings.
+// Used for dirty tracking and unsaved-changes detection.
+const TRACKED_FIELDS = [
+  'provider-aws', 'provider-azure', 'provider-gcp',
+  'setting-notification-email', 'setting-auto-collect',
+  'setting-collection-schedule', 'setting-notification-days',
+  'setting-default-term', 'setting-default-payment', 'setting-default-coverage',
+];
+
+// Snapshot of field values at last save (or initial load).
+let savedSnapshot: Record<string, string> = {};
+
+function getFieldValue(id: string): string {
+  const el = document.getElementById(id);
+  if (!el) return '';
+  if (el instanceof HTMLInputElement) {
+    return el.type === 'checkbox' ? String(el.checked) : el.value;
+  }
+  if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) return el.value;
+  return '';
+}
+
+function snapshotAllFields(): void {
+  TRACKED_FIELDS.forEach(id => { savedSnapshot[id] = getFieldValue(id); });
+}
+
+function updateDirtyMarkers(): void {
+  TRACKED_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const dirty = getFieldValue(id) !== savedSnapshot[id];
+    if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+      // Highlight the containing setting-input div for checkboxes
+      el.closest<HTMLElement>('.setting-input')?.classList.toggle('dirty', dirty);
+    } else {
+      el.classList.toggle('dirty', dirty);
+    }
+  });
+}
+
+/** Returns true if any tracked field has been changed since the last save/load. */
+export function isUnsavedChanges(): boolean {
+  return TRACKED_FIELDS.some(id => getFieldValue(id) !== savedSnapshot[id]);
+}
+
+function setupDirtyTracking(): void {
+  TRACKED_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => updateDirtyMarkers());
+    // Also listen to input for text fields so highlighting is immediate
+    if (el instanceof HTMLInputElement && el.type !== 'checkbox') {
+      el.addEventListener('input', () => updateDirtyMarkers());
+    }
+  });
+}
+
 /**
  * Load and render accounts list for a provider
  */
@@ -340,6 +397,17 @@ export function setupSettingsHandlers(): void {
     if (e.target === gcpModal) closeGCPCredsModal();
   });
 
+  // Per-section save buttons — each triggers a full form submit
+  ['save-general-btn', 'save-defaults-btn', 'save-aws-btn', 'save-azure-btn', 'save-gcp-btn'].forEach(id => {
+    document.getElementById(id)?.addEventListener('click', () => {
+      const form = document.getElementById('global-settings-form') as HTMLFormElement | null;
+      form?.requestSubmit();
+    });
+  });
+
+  // Set up dirty-field tracking
+  setupDirtyTracking();
+
   // Account management buttons
   document.getElementById('add-aws-account-btn')?.addEventListener('click', () => openAccountModal('aws'));
   document.getElementById('add-azure-account-btn')?.addEventListener('click', () => openAccountModal('azure'));
@@ -517,6 +585,10 @@ export async function loadGlobalSettings(): Promise<void> {
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');
 
+    // Establish the clean baseline for dirty tracking
+    snapshotAllFields();
+    updateDirtyMarkers();
+
     // Load accounts for all providers (non-blocking)
     void loadAccountsForProvider('aws');
     void loadAccountsForProvider('azure');
@@ -555,6 +627,8 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 
   try {
     await api.updateConfig(settings);
+    snapshotAllFields();
+    updateDirtyMarkers();
     alert('Settings saved successfully');
   } catch (error) {
     console.error('Failed to save settings:', error);

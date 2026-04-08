@@ -6,7 +6,7 @@ import { loadDashboard } from './dashboard';
 import { loadRecommendations } from './recommendations';
 import { loadPlans } from './plans';
 import { initHistoryDateRange } from './history';
-import { loadGlobalSettings } from './settings';
+import { loadGlobalSettings, isUnsavedChanges } from './settings';
 import { loadUsers } from './users';
 import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
@@ -16,6 +16,12 @@ import { loadRIExchange, loadAutomationSettings } from './riexchange';
  * Switch between tabs
  */
 export function switchTab(tabName: string): void {
+  // Warn when navigating away from settings with unsaved changes
+  const currentTab = document.querySelector<HTMLButtonElement>('.tab-btn.active')?.dataset['tab'];
+  if (currentTab === 'settings' && tabName !== 'settings' && isUnsavedChanges()) {
+    if (!confirm('You have unsaved settings changes. Leave without saving?')) return;
+  }
+
   document.querySelectorAll<HTMLButtonElement>('.tab-btn').forEach(btn => {
     const isActive = btn.dataset['tab'] === tabName;
     btn.classList.toggle('active', isActive);
