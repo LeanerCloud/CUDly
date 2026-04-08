@@ -15,7 +15,8 @@ jest.mock('../navigation', () => ({
 jest.mock('../utils', () => ({
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
-  escapeHtml: jest.fn((str) => str || '')
+  escapeHtml: jest.fn((str) => str || ''),
+  populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
 
 import * as api from '../api';

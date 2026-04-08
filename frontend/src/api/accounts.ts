@@ -164,6 +164,16 @@ export async function deleteAccountServiceOverride(
   );
 }
 
+export interface OrgDiscoveryResult {
+  job_id?: string;
+  status?: string;
+  message?: string;
+}
+
+export async function discoverOrgAccounts(): Promise<OrgDiscoveryResult> {
+  return apiRequest<OrgDiscoveryResult>('/accounts/discover-org', { method: 'POST' });
+}
+
 export async function listPlanAccounts(planId: string): Promise<CloudAccount[]> {
   return apiRequest<CloudAccount[]>(`/plans/${planId}/accounts`);
 }

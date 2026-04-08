@@ -3,33 +3,14 @@
  */
 
 import * as api from './api';
-import { formatCurrency, formatDate, escapeHtml } from './utils';
+import { formatCurrency, formatDate, escapeHtml, populateAccountFilter } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
-/**
- * Populate the history account filter select
- */
-async function populateHistoryAccountFilter(provider?: string): Promise<void> {
-  const select = document.getElementById('history-account-filter') as HTMLSelectElement | null;
-  if (!select) return;
-  try {
-    const filter = provider && provider !== '' ? { provider: provider as api.Provider } : undefined;
-    const accounts = await api.listAccounts(filter);
-    const current = select.value;
-    while (select.options.length > 1) select.remove(1);
-    accounts.forEach(a => {
-      const opt = document.createElement('option');
-      opt.value = a.id;
-      opt.textContent = `${a.name} (${a.external_id})`;
-      select.appendChild(opt);
-    });
-    select.value = current;
-  } catch {
-    // Non-critical — filter just won't be populated
-  }
+function populateHistoryAccountFilter(provider?: string): Promise<void> {
+  return populateAccountFilter('history-account-filter', api.listAccounts, provider);
 }
 
 /**

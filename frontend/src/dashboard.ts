@@ -5,34 +5,11 @@
 import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, getDateParts, escapeHtml } from './utils';
+import { formatCurrency, getDateParts, escapeHtml, populateAccountFilter } from './utils';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings } from './types';
 
 // Register Chart.js components
 Chart.register(...registerables);
-
-/**
- * Populate an account filter select element
- */
-async function populateAccountFilter(selectId: string, provider?: string): Promise<void> {
-  const select = document.getElementById(selectId) as HTMLSelectElement | null;
-  if (!select) return;
-  try {
-    const filter = provider && provider !== 'all' ? { provider: provider as api.Provider } : undefined;
-    const accounts = await api.listAccounts(filter);
-    const current = select.value;
-    select.innerHTML = '<option value="">All Accounts</option>';
-    accounts.forEach(a => {
-      const opt = document.createElement('option');
-      opt.value = a.id;
-      opt.textContent = `${a.name} (${a.external_id})`;
-      select.appendChild(opt);
-    });
-    select.value = current;
-  } catch {
-    // Non-critical — filter just won't be populated
-  }
-}
 
 /**
  * Setup dashboard event handlers
@@ -45,7 +22,7 @@ export function setupDashboardHandlers(): void {
 
     providerFilter.addEventListener('change', () => {
       state.setCurrentProvider(providerFilter.value as 'all' | 'aws' | 'azure' | 'gcp');
-      void populateAccountFilter('dashboard-account-filter', providerFilter.value);
+      void populateAccountFilter('dashboard-account-filter', api.listAccounts, providerFilter.value);
       void loadDashboard();
     });
   }
@@ -59,7 +36,7 @@ export function setupDashboardHandlers(): void {
     });
   }
 
-  void populateAccountFilter('dashboard-account-filter', state.getCurrentProvider());
+  void populateAccountFilter('dashboard-account-filter', api.listAccounts, state.getCurrentProvider());
 }
 
 /**

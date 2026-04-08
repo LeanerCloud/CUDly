@@ -134,6 +134,25 @@
             <div id="plans-tab" class="tab-content" role="tabpanel">
                 <section id="plans-header" class="card">
                     <h2>Purchase Plans</h2>
+                    <div class="controls-bar">
+                        <div class="filter-group">
+                            <label>Provider:
+                                <select id="plans-provider-filter">
+                                    <option value="">All Providers</option>
+                                    <option value="aws">AWS</option>
+                                    <option value="azure">Azure</option>
+                                    <option value="gcp">GCP</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="filter-group">
+                            <label>Account:
+                                <select id="plans-account-filter">
+                                    <option value="">All Accounts</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
                     <button id="new-plan-btn" class="primary">New Plan</button>
                 </section>
                 <section id="plans-list"></section>
@@ -404,7 +423,7 @@
                                     <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
                                 </div>
                             </div>
-                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-aws-account-btn">+ Add Account</button></h4>
+                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-aws-account-btn">+ Add Account</button> <button type="button" class="btn btn-small" id="discover-org-accounts-btn">Discover Org Accounts</button></h4>
                             <div id="aws-accounts-list" class="accounts-list"></div>
                             <h4 class="subsection-title">Service Defaults</h4>
                             <div class="service-defaults-grid">

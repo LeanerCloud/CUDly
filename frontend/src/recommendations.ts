@@ -4,40 +4,14 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, escapeHtml } from './utils';
+import { formatCurrency, escapeHtml, populateAccountFilter } from './utils';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
 
-/**
- * Reset account filter select to just the "All Accounts" option and repopulate
- */
-function resetAccountSelect(select: HTMLSelectElement): void {
-  while (select.options.length > 1) select.remove(1);
-}
-
-/**
- * Populate the recommendations account filter select
- */
-async function populateRecommendationsAccountFilter(provider?: string): Promise<void> {
-  const select = document.getElementById('recommendations-account-filter') as HTMLSelectElement | null;
-  if (!select) return;
-  try {
-    const filter = provider && provider !== 'all' ? { provider: provider as api.Provider } : undefined;
-    const accounts = await api.listAccounts(filter);
-    const current = select.value;
-    resetAccountSelect(select);
-    accounts.forEach(a => {
-      const opt = document.createElement('option');
-      opt.value = a.id;
-      opt.textContent = `${a.name} (${a.external_id})`;
-      select.appendChild(opt);
-    });
-    select.value = current;
-  } catch {
-    // Non-critical — filter just won't be populated
-  }
+function populateRecommendationsAccountFilter(provider?: string): Promise<void> {
+  return populateAccountFilter('recommendations-account-filter', api.listAccounts, provider);
 }
 
 /**

@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, getStatusBadge, escapeHtml, formatCurrency } from './utils';
+import { formatDate, getStatusBadge, escapeHtml, formatCurrency, populateAccountFilter } from './utils';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
@@ -16,7 +16,13 @@ import { populateTermSelect, populatePaymentSelect, isValidCombination, normaliz
 export async function loadPlans(): Promise<void> {
   try {
     const data = await api.getPlans() as unknown as PlansResponse;
-    renderPlans(data.plans || []);
+    let plans = data.plans || [];
+
+    // Client-side provider filter
+    const providerFilter = (document.getElementById('plans-provider-filter') as HTMLSelectElement | null)?.value;
+    if (providerFilter) plans = plans.filter(p => p.provider === providerFilter);
+
+    renderPlans(plans);
   } catch (error) {
     console.error('Failed to load plans:', error);
     const list = document.getElementById('plans-list');
@@ -972,7 +978,26 @@ async function handleAddPurchases(e: Event): Promise<void> {
 /**
  * Setup plan form event handlers (provider-aware service dropdown)
  */
+function populatePlansAccountFilter(provider?: string): Promise<void> {
+  return populateAccountFilter('plans-account-filter', api.listAccounts, provider);
+}
+
 export function setupPlanHandlers(): void {
+  const plansProviderFilter = document.getElementById('plans-provider-filter') as HTMLSelectElement | null;
+  if (plansProviderFilter) {
+    plansProviderFilter.addEventListener('change', () => {
+      void populatePlansAccountFilter(plansProviderFilter.value);
+      void loadPlans();
+    });
+  }
+
+  const plansAccountFilter = document.getElementById('plans-account-filter') as HTMLSelectElement | null;
+  if (plansAccountFilter) {
+    plansAccountFilter.addEventListener('change', () => void loadPlans());
+  }
+
+  void populatePlansAccountFilter();
+
   const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
   const serviceSelect = document.getElementById('plan-service') as HTMLSelectElement | null;
 

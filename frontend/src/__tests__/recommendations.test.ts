@@ -27,7 +27,8 @@ jest.mock('../state', () => ({
 // Mock utils
 jest.mock('../utils', () => ({
   formatCurrency: jest.fn((val) => `$${val || 0}`),
-  escapeHtml: jest.fn((str) => str || '')
+  escapeHtml: jest.fn((str) => str || ''),
+  populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
 
 import * as api from '../api';

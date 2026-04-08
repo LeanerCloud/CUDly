@@ -2,6 +2,8 @@
  * Utility functions for CUDly dashboard
  */
 
+import type { CloudAccount, AccountListFilters } from './api';
+
 /**
  * Format a number as currency
  */
@@ -141,6 +143,37 @@ export function isValidEmail(email: string | null | undefined): boolean {
   if (!email) return false;
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
+}
+
+/**
+ * Populate a `<select>` element with cloud accounts, filtering by provider.
+ * Preserves the current selection. Non-critical — silently ignores API errors.
+ */
+export async function populateAccountFilter(
+  selectId: string,
+  listAccountsFn: (filter?: AccountListFilters) => Promise<CloudAccount[]>,
+  provider?: string
+): Promise<void> {
+  const select = document.getElementById(selectId) as HTMLSelectElement | null;
+  if (!select) return;
+  try {
+    const filter: AccountListFilters | undefined =
+      provider && provider !== 'all' && provider !== ''
+        ? { provider: provider as AccountListFilters['provider'] }
+        : undefined;
+    const accounts = await listAccountsFn(filter);
+    const current = select.value;
+    while (select.options.length > 1) select.remove(1);
+    accounts.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = `${a.name} (${a.external_id})`;
+      select.appendChild(opt);
+    });
+    select.value = current;
+  } catch {
+    // Non-critical — filter just won't be populated
+  }
 }
 
 export type RampSchedule = 'immediate' | 'weekly-25pct' | 'monthly-10pct' | 'custom';

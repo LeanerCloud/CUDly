@@ -47,7 +47,8 @@ jest.mock('../utils', () => ({
   formatRampSchedule: jest.fn((val) => val || 'Unknown'),
   getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
   escapeHtml: jest.fn((str) => str || ''),
-  formatCurrency: jest.fn((val) => `$${val || 0}`)
+  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
 
 import * as api from '../api';

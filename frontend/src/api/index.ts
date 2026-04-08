@@ -178,7 +178,8 @@ export type {
   AccountCredentialsRequest,
   AccountTestResult,
   AccountServiceOverride,
-  AccountServiceOverrideRequest
+  AccountServiceOverrideRequest,
+  OrgDiscoveryResult
 } from './accounts';
 
 export {
@@ -192,6 +193,7 @@ export {
   listAccountServiceOverrides,
   saveAccountServiceOverride,
   deleteAccountServiceOverride,
+  discoverOrgAccounts,
   listPlanAccounts,
   setPlanAccounts
 } from './accounts';

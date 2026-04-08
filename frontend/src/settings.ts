@@ -137,8 +137,108 @@ function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[]
     testBtn.addEventListener('click', () => void testAccount(account.id, testBtn));
     row.appendChild(testBtn);
 
+    const credsBtn = document.createElement('button');
+    credsBtn.type = 'button';
+    credsBtn.className = 'btn btn-small';
+    credsBtn.textContent = 'Credentials';
+    credsBtn.addEventListener('click', () => openAccountModal(provider, account));
+    row.appendChild(credsBtn);
+
+    const overridesBtn = document.createElement('button');
+    overridesBtn.type = 'button';
+    overridesBtn.className = 'btn btn-small';
+    overridesBtn.textContent = 'Overrides';
+    const overridesPanel = document.createElement('div');
+    overridesPanel.className = 'account-overrides-panel hidden';
+    overridesBtn.addEventListener('click', () => {
+      const hidden = overridesPanel.classList.toggle('hidden');
+      if (!hidden) void loadOverridesPanel(account.id, overridesPanel);
+    });
+    row.appendChild(overridesBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn btn-small btn-danger';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', () => void deleteAccount(account.id, provider, container));
+    row.appendChild(deleteBtn);
+
     container.appendChild(row);
+    container.appendChild(overridesPanel);
   });
+}
+
+/**
+ * Load and render the service overrides panel for an account
+ */
+async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promise<void> {
+  panel.textContent = 'Loading\u2026';
+  try {
+    const overrides = await api.listAccountServiceOverrides(accountId);
+    panel.textContent = '';
+    if (!overrides || overrides.length === 0) {
+      const msg = document.createElement('p');
+      msg.className = 'help-text';
+      msg.textContent = 'No service overrides set. All services use global defaults.';
+      panel.appendChild(msg);
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'overrides-table';
+    const thead = table.createTHead();
+    const hrow = thead.insertRow();
+    ['Service', 'Term', 'Payment', 'Coverage', ''].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      hrow.appendChild(th);
+    });
+    const tbody = table.createTBody();
+    overrides.forEach(o => {
+      const tr = tbody.insertRow();
+      [
+        `${o.provider}/${o.service}`,
+        o.term !== undefined ? `${o.term}yr` : '\u2014',
+        o.payment ?? '\u2014',
+        o.coverage !== undefined ? `${o.coverage}%` : '\u2014',
+      ].forEach(text => {
+        const td = tr.insertCell();
+        td.textContent = text;
+      });
+      const actionTd = tr.insertCell();
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'btn btn-small btn-danger';
+      resetBtn.textContent = 'Reset';
+      resetBtn.addEventListener('click', async () => {
+        if (!confirm(`Reset ${o.provider}/${o.service} override to global default?`)) return;
+        try {
+          await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
+          await loadOverridesPanel(accountId, panel);
+        } catch (err) {
+          alert(`Failed to reset override: ${(err as Error).message}`);
+        }
+      });
+      actionTd.appendChild(resetBtn);
+    });
+    panel.appendChild(table);
+  } catch (err) {
+    panel.textContent = `Failed to load overrides: ${(err as Error).message}`;
+  }
+}
+
+/**
+ * Delete an account after confirmation
+ */
+async function deleteAccount(accountId: string, provider: AccountProvider, _container: HTMLElement): Promise<void> {
+  if (!confirm('Delete this account? This also removes its credentials and service overrides.')) return;
+  try {
+    await api.deleteAccount(accountId);
+    await loadAccountsForProvider(provider);
+  } catch (err) {
+    console.error('Failed to delete account:', err);
+    alert(`Failed to delete account: ${(err as Error).message}`);
+    void loadAccountsForProvider(provider);
+  }
 }
 
 /**
@@ -217,13 +317,13 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
   (document.getElementById('account-aws-is-org-root') as HTMLInputElement).checked = account?.aws_is_org_root ?? false;
 
-  updateAwsAuthModeFields(authMode);
+  updateAwsAuthModeFields(authMode, account?.aws_bastion_id);
 }
 
 /**
  * Show/hide AWS auth mode sub-fields
  */
-function updateAwsAuthModeFields(mode: string): void {
+function updateAwsAuthModeFields(mode: string, bastionId?: string): void {
   const keysFields = document.getElementById('account-aws-keys-fields');
   const roleFields = document.getElementById('account-aws-role-fields');
   const bastionFields = document.getElementById('account-aws-bastion-fields');
@@ -233,14 +333,14 @@ function updateAwsAuthModeFields(mode: string): void {
   bastionFields?.classList.toggle('hidden', mode !== 'bastion');
 
   if (mode === 'bastion') {
-    void populateBastionAccountDropdown();
+    void populateBastionAccountDropdown(bastionId);
   }
 }
 
 /**
- * Populate bastion account dropdown with AWS accounts
+ * Populate bastion account dropdown with AWS accounts, optionally pre-selecting one
  */
-async function populateBastionAccountDropdown(): Promise<void> {
+async function populateBastionAccountDropdown(selectedId?: string): Promise<void> {
   const select = document.getElementById('account-aws-bastion-id') as HTMLSelectElement | null;
   if (!select) return;
   try {
@@ -252,6 +352,7 @@ async function populateBastionAccountDropdown(): Promise<void> {
       opt.textContent = `${a.name} (${a.external_id})`;
       select.appendChild(opt);
     });
+    if (selectedId) select.value = selectedId;
   } catch {
     // Non-critical
   }
@@ -290,8 +391,11 @@ function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest
       req.aws_role_arn = (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value.trim();
     }
   } else if (provider === 'azure') {
+    req.azure_subscription_id = req.external_id; // external_id IS the subscription ID for Azure
     req.azure_tenant_id = (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value.trim();
     req.azure_client_id = (document.getElementById('account-azure-client-id') as HTMLInputElement).value.trim();
+  } else if (provider === 'gcp') {
+    req.gcp_project_id = req.external_id; // external_id IS the project ID for GCP
   }
 
   return req;
@@ -372,6 +476,20 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
 }
 
 /**
+ * Trigger org account discovery from the management (org root) account
+ */
+async function handleDiscoverOrgAccounts(): Promise<void> {
+  try {
+    const result = await api.discoverOrgAccounts();
+    alert(`Org discovery started: ${result.message || result.status}`);
+    await loadAccountsForProvider('aws');
+  } catch (err) {
+    console.error('Org discovery failed:', err);
+    alert(`Org discovery failed: ${(err as Error).message}`);
+  }
+}
+
+/**
  * Set up settings event handlers
  */
 export function setupSettingsHandlers(): void {
@@ -436,6 +554,9 @@ export function setupSettingsHandlers(): void {
   document.getElementById('add-aws-account-btn')?.addEventListener('click', () => openAccountModal('aws'));
   document.getElementById('add-azure-account-btn')?.addEventListener('click', () => openAccountModal('azure'));
   document.getElementById('add-gcp-account-btn')?.addEventListener('click', () => openAccountModal('gcp'));
+
+  // Org discovery button
+  document.getElementById('discover-org-accounts-btn')?.addEventListener('click', () => void handleDiscoverOrgAccounts());
 
   // Account form submit handler
   document.getElementById('account-form')?.addEventListener('submit', (e) => void handleAccountFormSubmit(e));
