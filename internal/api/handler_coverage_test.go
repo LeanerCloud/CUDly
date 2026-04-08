@@ -581,12 +581,10 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockClient := new(MockAnalyticsClient)
 		mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
 
-		h := &Handler{analyticsClient: mockClient, apiKey: "test-key"}
+		h := &Handler{analyticsClient: mockClient}
 		router := NewRouter(h)
 
-		req := &events.LambdaFunctionURLRequest{
-			Headers: map[string]string{"x-api-key": "test-key"},
-		}
+		req := &events.LambdaFunctionURLRequest{}
 		result, err := router.getHistoryAnalyticsHandler(ctx, req, map[string]string{})
 		require.NoError(t, err)
 		assert.NotNil(t, result)
@@ -596,12 +594,10 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockClient := new(MockAnalyticsClient)
 		mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(map[string]BreakdownValue{}, nil)
 
-		h := &Handler{analyticsClient: mockClient, apiKey: "test-key"}
+		h := &Handler{analyticsClient: mockClient}
 		router := NewRouter(h)
 
-		req := &events.LambdaFunctionURLRequest{
-			Headers: map[string]string{"x-api-key": "test-key"},
-		}
+		req := &events.LambdaFunctionURLRequest{}
 		result, err := router.getHistoryBreakdownHandler(ctx, req, map[string]string{})
 		require.NoError(t, err)
 		assert.NotNil(t, result)
@@ -611,12 +607,10 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockCollector := new(MockAnalyticsCollector)
 		mockCollector.On("Collect", ctx).Return(nil)
 
-		h := &Handler{analyticsCollector: mockCollector, apiKey: "test-key"}
+		h := &Handler{analyticsCollector: mockCollector}
 		router := NewRouter(h)
 
-		req := &events.LambdaFunctionURLRequest{
-			Headers: map[string]string{"x-api-key": "test-key"},
-		}
+		req := &events.LambdaFunctionURLRequest{}
 		result, err := router.triggerAnalyticsCollectionHandler(ctx, req, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, result)

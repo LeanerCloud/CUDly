@@ -11,6 +11,23 @@ import (
 // RouteHandler is a function that handles a matched route
 type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error)
 
+// AuthLevel controls how Router.Route() enforces authentication.
+// The zero value is AuthAdmin — secure by default.
+// Any Route without an explicit Auth field requires admin access.
+type AuthLevel int
+
+const (
+	// AuthAdmin requires admin role (API key or admin bearer token).
+	// Zero value — any Route without an explicit Auth field gets this.
+	AuthAdmin AuthLevel = iota
+	// AuthUser requires any authenticated user. Use for self-service
+	// endpoints (logout, profile, API key management).
+	AuthUser
+	// AuthPublic requires no authentication. Must also be listed in
+	// isPublicEndpoint() for middleware bypass.
+	AuthPublic
+)
+
 // Route defines a routing rule
 type Route struct {
 	// Pattern matching fields
@@ -21,6 +38,10 @@ type Route struct {
 
 	// Handler function
 	Handler RouteHandler
+
+	// Auth controls authentication level. Defaults to AuthAdmin (0) — secure by default.
+	// Explicitly set to AuthUser or AuthPublic to relax the requirement.
+	Auth AuthLevel
 }
 
 // Router manages request routing
@@ -71,8 +92,8 @@ func (r *Router) registerRoutes() {
 
 		// Purchase actions
 		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler},
-		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler},
-		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler},
+		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler, Auth: AuthPublic},
+		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 
 		// Planned purchases endpoints (must come before generic /api/purchases/{id})
 		{ExactPath: "/api/purchases/planned", Method: "GET", Handler: r.getPlannedPurchasesHandler},
@@ -93,21 +114,21 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/analytics/collect", Method: "POST", Handler: r.triggerAnalyticsCollectionHandler},
 
 		// Auth endpoints
-		{ExactPath: "/api/auth/login", Method: "POST", Handler: r.loginHandler},
-		{ExactPath: "/api/auth/logout", Method: "POST", Handler: r.logoutHandler},
-		{ExactPath: "/api/auth/me", Method: "GET", Handler: r.getCurrentUserHandler},
-		{ExactPath: "/api/auth/check-admin", Method: "GET", Handler: r.checkAdminExistsHandler},
-		{ExactPath: "/api/auth/setup-admin", Method: "POST", Handler: r.setupAdminHandler},
-		{ExactPath: "/api/auth/forgot-password", Method: "POST", Handler: r.forgotPasswordHandler},
-		{ExactPath: "/api/auth/reset-password", Method: "POST", Handler: r.resetPasswordHandler},
-		{ExactPath: "/api/auth/profile", Method: "PUT", Handler: r.updateProfileHandler},
-		{ExactPath: "/api/auth/change-password", Method: "POST", Handler: r.changePasswordHandler},
+		{ExactPath: "/api/auth/login", Method: "POST", Handler: r.loginHandler, Auth: AuthPublic},
+		{ExactPath: "/api/auth/logout", Method: "POST", Handler: r.logoutHandler, Auth: AuthUser},
+		{ExactPath: "/api/auth/me", Method: "GET", Handler: r.getCurrentUserHandler, Auth: AuthUser},
+		{ExactPath: "/api/auth/check-admin", Method: "GET", Handler: r.checkAdminExistsHandler, Auth: AuthPublic},
+		{ExactPath: "/api/auth/setup-admin", Method: "POST", Handler: r.setupAdminHandler, Auth: AuthPublic},
+		{ExactPath: "/api/auth/forgot-password", Method: "POST", Handler: r.forgotPasswordHandler, Auth: AuthPublic},
+		{ExactPath: "/api/auth/reset-password", Method: "POST", Handler: r.resetPasswordHandler, Auth: AuthPublic},
+		{ExactPath: "/api/auth/profile", Method: "PUT", Handler: r.updateProfileHandler, Auth: AuthUser},
+		{ExactPath: "/api/auth/change-password", Method: "POST", Handler: r.changePasswordHandler, Auth: AuthUser},
 
-		// API Key endpoints
-		{ExactPath: "/api/api-keys", Method: "GET", Handler: r.listAPIKeysHandler},
-		{ExactPath: "/api/api-keys", Method: "POST", Handler: r.createAPIKeyHandler},
-		{PathPrefix: "/api/api-keys/", PathSuffix: "/revoke", Method: "POST", Handler: r.revokeAPIKeyHandler},
-		{PathPrefix: "/api/api-keys/", Method: "DELETE", Handler: r.deleteAPIKeyHandler},
+		// API Key endpoints (self-service — any authenticated user)
+		{ExactPath: "/api/api-keys", Method: "GET", Handler: r.listAPIKeysHandler, Auth: AuthUser},
+		{ExactPath: "/api/api-keys", Method: "POST", Handler: r.createAPIKeyHandler, Auth: AuthUser},
+		{PathPrefix: "/api/api-keys/", PathSuffix: "/revoke", Method: "POST", Handler: r.revokeAPIKeyHandler, Auth: AuthUser},
+		{PathPrefix: "/api/api-keys/", Method: "DELETE", Handler: r.deleteAPIKeyHandler, Auth: AuthUser},
 
 		// User management endpoints
 		{ExactPath: "/api/users", Method: "GET", Handler: r.listUsersHandler},
@@ -143,26 +164,32 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/ri-exchange/config", Method: "GET", Handler: r.getRIExchangeConfigHandler},
 		{ExactPath: "/api/ri-exchange/config", Method: "PUT", Handler: r.updateRIExchangeConfigHandler},
 		{ExactPath: "/api/ri-exchange/history", Method: "GET", Handler: r.getRIExchangeHistoryHandler},
-		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler},
-		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler},
+		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
+		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
 
 		// Health check (both root and /api paths)
-		{ExactPath: "/health", Handler: r.healthCheckHandler},
-		{ExactPath: "/api/health", Handler: r.healthCheckHandler},
+		{ExactPath: "/health", Handler: r.healthCheckHandler, Auth: AuthPublic},
+		{ExactPath: "/api/health", Handler: r.healthCheckHandler, Auth: AuthPublic},
 
 		// Public info endpoint
-		{ExactPath: "/api/info", Method: "GET", Handler: r.getPublicInfoHandler},
+		{ExactPath: "/api/info", Method: "GET", Handler: r.getPublicInfoHandler, Auth: AuthPublic},
 
 		// API documentation (Swagger UI + raw spec)
-		{PathPrefix: "/api/docs", Method: "GET", Handler: r.docsHandler},
-		{PathPrefix: "/docs", Method: "GET", Handler: r.docsHandler},
+		{PathPrefix: "/api/docs", Method: "GET", Handler: r.docsHandler, Auth: AuthPublic},
+		{PathPrefix: "/docs", Method: "GET", Handler: r.docsHandler, Auth: AuthPublic},
 	}
 }
 
-// Route finds and executes the matching route handler
+// Route finds and executes the matching route handler.
+// Routes with Auth == AuthAdmin (the default) require admin access before the handler is called.
 func (r *Router) Route(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (any, error) {
 	for _, route := range r.routes {
 		if r.matches(route, method, path) {
+			if route.Auth == AuthAdmin {
+				if _, err := r.h.requireAdmin(ctx, req); err != nil {
+					return nil, err
+				}
+			}
 			params := r.extractParams(route, path)
 			return route.Handler(ctx, req, params)
 		}
@@ -215,23 +242,14 @@ func (r *Router) extractParams(route Route, path string) map[string]string {
 // Handler wrappers that adapt the old handlers to the new RouteHandler signature
 
 func (r *Router) dashboardSummaryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getDashboardSummary(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) upcomingPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getUpcomingPurchases(ctx)
 }
 
 func (r *Router) getConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getConfig(ctx)
 }
 
@@ -240,9 +258,6 @@ func (r *Router) updateConfigHandler(ctx context.Context, req *events.LambdaFunc
 }
 
 func (r *Router) getServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getServiceConfig(ctx, params["id"])
 }
 
@@ -259,16 +274,10 @@ func (r *Router) saveGCPCredentialsHandler(ctx context.Context, req *events.Lamb
 }
 
 func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getRecommendations(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.scheduler.CollectRecommendations(ctx)
 }
 
@@ -339,30 +348,18 @@ func (r *Router) deletePlannedPurchaseHandler(ctx context.Context, req *events.L
 }
 
 func (r *Router) getHistoryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getHistory(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) getHistoryAnalyticsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getHistoryAnalytics(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) getHistoryBreakdownHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.getHistoryBreakdown(ctx, req.QueryStringParameters)
 }
 
 func (r *Router) triggerAnalyticsCollectionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	if _, err := r.h.requireAdmin(ctx, req); err != nil {
-		return nil, err
-	}
 	return r.h.triggerAnalyticsCollection(ctx, req.QueryStringParameters)
 }
 
