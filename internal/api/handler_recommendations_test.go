@@ -29,6 +29,6 @@ func TestHandler_getRecommendations(t *testing.T) {
 	result, err := handler.getRecommendations(ctx, params)
 	require.NoError(t, err)
 
-	assert.Equal(t, 0, result.Count)
-	assert.Equal(t, float64(0), result.TotalSavings)
+	assert.Equal(t, 0, result.Summary.TotalCount)
+	assert.Equal(t, float64(0), result.Summary.TotalMonthlySavings)
 }

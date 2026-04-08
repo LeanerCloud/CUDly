@@ -122,7 +122,7 @@ describe('Recommendations Module', () => {
             region: 'us-east-1',
             count: 5,
             term: 1,
-            monthly_savings: 100,
+            savings: 100,
             upfront_cost: 500
           }
         ],
@@ -166,7 +166,7 @@ describe('Recommendations Module', () => {
 
     test('stores recommendations in state', async () => {
       const mockRecs = [
-        { provider: 'aws', service: 'ec2', monthly_savings: 100 }
+        { provider: 'aws', service: 'ec2', savings: 100 }
       ];
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -205,7 +205,7 @@ describe('Recommendations Module', () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [
-          { provider: 'aws', service: 'ec2', monthly_savings: 100 }
+          { provider: 'aws', service: 'ec2', savings: 100 }
         ],
         regions: []
       });
@@ -221,7 +221,7 @@ describe('Recommendations Module', () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [
-          { provider: 'aws', service: 'ec2', monthly_savings: 100 }
+          { provider: 'aws', service: 'ec2', savings: 100 }
         ],
         regions: []
       });
@@ -236,7 +236,7 @@ describe('Recommendations Module', () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [
-          { provider: 'aws', service: 'ec2', monthly_savings: 2000 }
+          { provider: 'aws', service: 'ec2', savings: 2000 }
         ],
         regions: []
       });
@@ -249,8 +249,8 @@ describe('Recommendations Module', () => {
 
     test('select-all checkbox selects all recommendations when checked', async () => {
       const mockRecs = [
-        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, monthly_savings: 100, upfront_cost: 500 },
-        { provider: 'aws', service: 'rds', resource_type: 'db.t3.medium', region: 'us-east-1', count: 2, term: 1, monthly_savings: 200, upfront_cost: 1000 }
+        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+        { provider: 'aws', service: 'rds', resource_type: 'db.t3.medium', region: 'us-east-1', count: 2, term: 1, savings: 200, upfront_cost: 1000 }
       ];
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -270,7 +270,7 @@ describe('Recommendations Module', () => {
 
     test('select-all checkbox clears all recommendations when unchecked', async () => {
       const mockRecs = [
-        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, monthly_savings: 100, upfront_cost: 500 }
+        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 }
       ];
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -289,7 +289,7 @@ describe('Recommendations Module', () => {
 
     test('individual row checkbox adds recommendation when checked', async () => {
       const mockRecs = [
-        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, monthly_savings: 100, upfront_cost: 500 }
+        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 }
       ];
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -308,7 +308,7 @@ describe('Recommendations Module', () => {
 
     test('individual row checkbox removes recommendation when unchecked', async () => {
       const mockRecs = [
-        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, monthly_savings: 100, upfront_cost: 500 }
+        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 }
       ];
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -327,7 +327,7 @@ describe('Recommendations Module', () => {
 
     test('purchase button opens modal for that recommendation', async () => {
       const mockRecs = [
-        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, monthly_savings: 100, upfront_cost: 500 }
+        { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 }
       ];
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -350,7 +350,7 @@ describe('Recommendations Module', () => {
 
     test('renders engine info when present', async () => {
       const mockRecs = [
-        { provider: 'aws', service: 'rds', resource_type: 'db.t3.medium', region: 'us-east-1', count: 1, term: 1, monthly_savings: 100, upfront_cost: 500, engine: 'mysql' }
+        { provider: 'aws', service: 'rds', resource_type: 'db.t3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500, engine: 'mysql' }
       ];
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -368,7 +368,7 @@ describe('Recommendations Module', () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [
-          { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, monthly_savings: 500, upfront_cost: 500 }
+          { provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 500, upfront_cost: 500 }
         ],
         regions: []
       });
@@ -390,7 +390,7 @@ describe('Recommendations Module', () => {
           region: 'us-east-1',
           count: 5,
           term: 1,
-          monthly_savings: 100,
+          savings: 100,
           upfront_cost: 500
         }
       ];
@@ -403,8 +403,8 @@ describe('Recommendations Module', () => {
 
     test('shows purchase summary', () => {
       const recommendations = [
-        { provider: 'aws' as const, service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5, term: 1, monthly_savings: 100, upfront_cost: 500 },
-        { provider: 'aws' as const, service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', count: 2, term: 1, monthly_savings: 200, upfront_cost: 1000 }
+        { provider: 'aws' as const, service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5, term: 1, savings: 100, upfront_cost: 500 },
+        { provider: 'aws' as const, service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', count: 2, term: 1, savings: 200, upfront_cost: 1000 }
       ];
 
       openPurchaseModal(recommendations);
@@ -416,7 +416,7 @@ describe('Recommendations Module', () => {
 
     test('lists individual recommendations', () => {
       const recommendations = [
-        { provider: 'aws' as const, service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5, term: 1, monthly_savings: 100, upfront_cost: 500 }
+        { provider: 'aws' as const, service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5, term: 1, savings: 100, upfront_cost: 500 }
       ];
 
       openPurchaseModal(recommendations);

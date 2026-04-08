@@ -9,6 +9,8 @@ import type { RecommendationsResponse, LocalRecommendation, RecommendationsSumma
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
+// Cache of account ID → name for column display
+let accountNamesCache: Map<string, string> = new Map();
 
 function populateRecommendationsAccountFilter(provider?: string): Promise<void> {
   return populateAccountFilter('recommendations-account-filter', api.listAccounts, provider);
@@ -118,7 +120,11 @@ export async function loadRecommendations(): Promise<void> {
       account_ids: accountIDs.length > 0 ? accountIDs : undefined
     };
 
-    const data = await api.getRecommendations(filters) as unknown as RecommendationsResponse;
+    const [data, accounts] = await Promise.all([
+      api.getRecommendations(filters) as unknown as RecommendationsResponse,
+      api.listAccounts().catch(() => [])
+    ]);
+    accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
     state.setRecommendations((data.recommendations || []) as unknown as api.Recommendation[]);
     state.clearSelectedRecommendations();
 
@@ -178,6 +184,7 @@ function renderRecommendationsList(recommendations: LocalRecommendation[]): void
             <input type="checkbox" id="select-all-recs">
           </th>
           <th>Provider</th>
+          <th>Account</th>
           <th>Service</th>
           <th>Resource Type</th>
           <th>Region</th>
@@ -190,20 +197,22 @@ function renderRecommendationsList(recommendations: LocalRecommendation[]): void
       </thead>
       <tbody>
         ${recommendations.map((rec, index) => {
-          const savingsClass = rec.monthly_savings > 1000 ? 'high-savings' : rec.monthly_savings > 100 ? 'medium-savings' : '';
+          const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
           const isSelected = selectedRecs.has(index);
+          const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '—';
           return `
           <tr class="${savingsClass} ${isSelected ? 'selected' : ''}">
             <td class="checkbox-col">
               <input type="checkbox" data-index="${index}" ${isSelected ? 'checked' : ''}>
             </td>
             <td><span class="provider-badge ${rec.provider}">${rec.provider.toUpperCase()}</span></td>
+            <td>${escapeHtml(accountName)}</td>
             <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
             <td>${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</td>
             <td>${escapeHtml(rec.region)}</td>
             <td>${rec.count}</td>
             <td>${rec.term} year</td>
-            <td class="savings">${formatCurrency(rec.monthly_savings)}</td>
+            <td class="savings">${formatCurrency(rec.savings)}</td>
             <td>${formatCurrency(rec.upfront_cost)}</td>
             <td>
               <button data-action="purchase" data-index="${index}">Purchase</button>
@@ -264,7 +273,7 @@ export function openPurchaseModal(recommendations: LocalRecommendation[]): void 
   const container = document.getElementById('purchase-details');
   if (!container) return;
 
-  const totalSavings = recommendations.reduce((sum, r) => sum + (r.monthly_savings || 0), 0);
+  const totalSavings = recommendations.reduce((sum, r) => sum + (r.savings || 0), 0);
   const totalUpfront = recommendations.reduce((sum, r) => sum + (r.upfront_cost || 0), 0);
 
   container.innerHTML = `
@@ -287,7 +296,7 @@ export function openPurchaseModal(recommendations: LocalRecommendation[]): void 
               <td>${escapeHtml(r.resource_type)}</td>
               <td>${escapeHtml(r.region)}</td>
               <td>${r.count}</td>
-              <td class="savings">${formatCurrency(r.monthly_savings)}</td>
+              <td class="savings">${formatCurrency(r.savings)}</td>
             </tr>
           `).join('')}
         </tbody>

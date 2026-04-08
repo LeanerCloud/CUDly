@@ -1,0 +1,99 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+
+  "metadata": {
+    "description": "CUDly Cross-Subscription Role Assignments — deploy this in every target Azure subscription that CUDly should manage. It grants the CUDly service principal the permissions needed to query reservation recommendations and purchase Azure Reservations."
+  },
+
+  "parameters": {
+    "servicePrincipalObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of the CUDly Azure AD service principal. Obtain with: az ad sp show --id <appId> --query id -o tsv"
+      }
+    },
+    "roleAssignmentGuidPrefix": {
+      "type": "string",
+      "defaultValue": "[newGuid()]",
+      "metadata": {
+        "description": "Base GUID used to derive deterministic role assignment names. Leave at default to auto-generate."
+      }
+    }
+  },
+
+  "variables": {
+    "subscriptionScope": "[concat('/subscriptions/', subscription().subscriptionId)]",
+
+    "roles": {
+      "reader":                     "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7')]",
+      "costManagementReader":        "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/72fafb9e-0641-4937-9268-a91bfd8191a3')]",
+      "reservationPurchaser":        "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/f7b75c60-3036-4b75-91c3-6b41c27c1689')]",
+      "reservationReader":           "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/582fc458-8989-419f-a480-75249a578f9d')]"
+    }
+  },
+
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('servicePrincipalObjectId'), 'reader', subscription().subscriptionId)]",
+      "properties": {
+        "roleDefinitionId": "[variables('roles').reader]",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "CUDly — enumerate subscription resources and locations"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('servicePrincipalObjectId'), 'costManagementReader', subscription().subscriptionId)]",
+      "properties": {
+        "roleDefinitionId": "[variables('roles').costManagementReader]",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "CUDly — read cost and reservation utilisation data"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('servicePrincipalObjectId'), 'reservationPurchaser', subscription().subscriptionId)]",
+      "properties": {
+        "roleDefinitionId": "[variables('roles').reservationPurchaser]",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "CUDly — purchase Azure Reservations"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('servicePrincipalObjectId'), 'reservationReader', subscription().subscriptionId)]",
+      "properties": {
+        "roleDefinitionId": "[variables('roles').reservationReader]",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "CUDly — read existing Azure Reservations"
+      }
+    }
+  ],
+
+  "outputs": {
+    "subscriptionId": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]",
+      "metadata": {
+        "description": "Azure subscription ID to provide when registering this account in CUDly (azure_subscription_id field)."
+      }
+    },
+    "tenantId": {
+      "type": "string",
+      "value": "[subscription().tenantId]",
+      "metadata": {
+        "description": "Azure AD tenant ID to provide when registering this account in CUDly (azure_tenant_id field)."
+      }
+    }
+  }
+}

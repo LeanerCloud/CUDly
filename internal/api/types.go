@@ -311,11 +311,19 @@ type StatusResponse struct {
 	Status string `json:"status"`
 }
 
+// RecommendationsSummary holds aggregate statistics for recommendations
+type RecommendationsSummary struct {
+	TotalCount          int     `json:"total_count"`
+	TotalMonthlySavings float64 `json:"total_monthly_savings"`
+	TotalUpfrontCost    float64 `json:"total_upfront_cost"`
+	AvgPaybackMonths    float64 `json:"avg_payback_months"`
+}
+
 // RecommendationsResponse holds the recommendations response
 type RecommendationsResponse struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
-	TotalSavings    float64                       `json:"total_savings"`
-	Count           int                           `json:"count"`
+	Summary         RecommendationsSummary        `json:"summary"`
+	Regions         []string                      `json:"regions"`
 }
 
 // PlansResponse holds the purchase plans response

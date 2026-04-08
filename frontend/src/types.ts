@@ -58,8 +58,9 @@ export interface LocalRecommendation {
   region: string;
   count: number;
   term: number;
-  monthly_savings: number;
+  savings: number;
   upfront_cost: number;
+  cloud_account_id?: string;
 }
 
 export interface RecommendationsSummary {

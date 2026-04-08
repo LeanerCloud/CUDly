@@ -255,7 +255,7 @@ async function handleExecutePurchase(): Promise<void> {
     instance_type: r.resource_type,
     current_cost: 0,
     recommended_cost: 0,
-    estimated_savings: r.monthly_savings,
+    estimated_savings: r.savings,
     term_years: r.term,
     payment_option: 'all-upfront' as api.PaymentOption,
     coverage: 100,

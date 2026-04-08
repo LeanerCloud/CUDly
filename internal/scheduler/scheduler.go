@@ -250,9 +250,10 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, globalCfg *co
 
 // RecommendationQueryParams holds query parameters for filtering recommendations
 type RecommendationQueryParams struct {
-	Provider string
-	Service  string
-	Region   string
+	Provider   string
+	Service    string
+	Region     string
+	AccountIDs []string // filter by cloud account UUIDs; empty = all accounts
 }
 
 // GetRecommendations fetches recommendations from all configured providers with optional filtering
@@ -294,9 +295,9 @@ func shouldIncludeProvider(providerName, filter string) bool {
 	return filter == "" || filter == providerName
 }
 
-// filterRecommendations filters recommendations by service and region
+// filterRecommendations filters recommendations by service, region, and account
 func filterRecommendations(recs []config.RecommendationRecord, params RecommendationQueryParams) []config.RecommendationRecord {
-	if params.Service == "" && params.Region == "" {
+	if params.Service == "" && params.Region == "" && len(params.AccountIDs) == 0 {
 		return recs
 	}
 
@@ -317,6 +318,21 @@ func shouldIncludeRecommendation(rec config.RecommendationRecord, params Recomme
 	}
 	if params.Region != "" && rec.Region != params.Region {
 		return false
+	}
+	if len(params.AccountIDs) > 0 {
+		if rec.CloudAccountID == nil {
+			return false
+		}
+		matched := false
+		for _, id := range params.AccountIDs {
+			if *rec.CloudAccountID == id {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	return true
 }
