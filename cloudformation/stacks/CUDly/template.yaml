@@ -1,0 +1,965 @@
+# Copyright (c) 2024 LeanerCloud
+# CUDly - Multi-Cloud Commitment & Usage Discount Manager
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CUDly: Automated Reserved Instance and Savings Plans purchase manager for AWS, Azure, and GCP"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Notifications
+        Parameters:
+          - EmailAddress
+          - NotificationDaysBeforePurchase
+
+      - Label:
+          default: Purchase Defaults
+        Parameters:
+          - DefaultTerm
+          - DefaultPaymentOption
+          - DefaultCoverage
+          - DefaultRampSchedule
+
+      - Label:
+          default: Cost Dashboard
+        Parameters:
+          - EnableDashboard
+          - DashboardDomainName
+          - DashboardHostedZoneId
+
+      - Label:
+          default: Deployment Configuration
+        Parameters:
+          - LambdaImageUri
+          - CpuArchitecture
+          - LambdaMemorySize
+          - LogRetentionPeriod
+          - ExecutionFrequency
+
+    ParameterLabels:
+      EmailAddress:
+        default: Notification email address
+      EnableDashboard:
+        default: Enable the web dashboard?
+      DashboardDomainName:
+        default: Custom domain for dashboard (optional)
+      DashboardHostedZoneId:
+        default: Route53 Hosted Zone ID for custom domain
+
+Parameters:
+  EmailAddress:
+    Type: String
+    Default: user@example.com
+    Description: Email address for purchase notifications and savings reports
+
+  NotificationDaysBeforePurchase:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    MaxValue: 14
+    Description: Days before scheduled purchase to send notification email
+
+  DefaultTerm:
+    Type: Number
+    Default: 3
+    AllowedValues:
+      - 1
+      - 3
+    Description: Default commitment term in years
+
+  DefaultPaymentOption:
+    Type: String
+    Default: no-upfront
+    AllowedValues:
+      - all-upfront
+      - partial-upfront
+      - no-upfront
+    Description: Default payment option for commitments
+
+  DefaultCoverage:
+    Type: Number
+    Default: 80
+    MinValue: 0
+    MaxValue: 100
+    Description: Default percentage of recommendations to purchase
+
+  DefaultRampSchedule:
+    Type: String
+    Default: immediate
+    AllowedValues:
+      - immediate
+      - weekly-25pct
+      - monthly-10pct
+    Description: Default ramp-up schedule for gradual adoption
+
+  EnableDashboard:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable the CUDly web dashboard
+
+  DashboardDomainName:
+    Type: String
+    Default: ""
+    Description: Optional custom domain for the dashboard (e.g., cudly.example.com)
+
+  DashboardHostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route53 Hosted Zone ID for DNS validation (required if using custom domain)
+
+  LambdaImageUri:
+    Type: String
+    Description: Full Docker image URI for the Lambda function (account.dkr.ecr.region.amazonaws.com/repo:tag)
+
+  CpuArchitecture:
+    Type: String
+    Default: x86_64
+    AllowedValues:
+      - x86_64
+      - arm64
+    Description: CPU architecture for Lambda function
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+    MinValue: 128
+    MaxValue: 3008
+    Description: Memory allocated to Lambda function (MB)
+
+  LogRetentionPeriod:
+    Type: Number
+    Default: 30
+    Description: CloudWatch Logs retention period (days)
+
+  ExecutionFrequency:
+    Type: String
+    Default: "rate(1 day)"
+    Description: How often to check for new recommendations
+
+Conditions:
+  DeployDashboard:
+    Fn::Equals:
+      - Ref: EnableDashboard
+      - "true"
+
+  HasCustomDomain:
+    Fn::And:
+      - Condition: DeployDashboard
+      - Fn::Not:
+          - Fn::Equals:
+              - Ref: DashboardDomainName
+              - ""
+      - Fn::Not:
+          - Fn::Equals:
+              - Ref: DashboardHostedZoneId
+              - ""
+
+  Arm64:
+    Fn::Equals:
+      - Ref: CpuArchitecture
+      - arm64
+
+Resources:
+  # =============================================================================
+  # DynamoDB Tables
+  # =============================================================================
+
+  ConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-Config"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Config"
+
+  PurchasePlansTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-PurchasePlans"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PurchasePlans"
+
+  PurchaseHistoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-PurchaseHistory"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PurchaseHistory"
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-Users"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: Email
+          AttributeType: S
+        - AttributeName: Role
+          AttributeType: S
+        - AttributeName: PasswordResetToken
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      GlobalSecondaryIndexes:
+        - IndexName: EmailIndex
+          KeySchema:
+            - AttributeName: Email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: RoleIndex
+          KeySchema:
+            - AttributeName: Role
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+        - IndexName: ResetTokenIndex
+          KeySchema:
+            - AttributeName: PasswordResetToken
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Users"
+
+  GroupsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-Groups"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Groups"
+
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-Sessions"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: UserID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      GlobalSecondaryIndexes:
+        - IndexName: UserIDIndex
+          KeySchema:
+            - AttributeName: UserID
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+      TimeToLiveSpecification:
+        AttributeName: ExpiresAtEpoch
+        Enabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Sessions"
+
+  # =============================================================================
+  # Secrets Manager
+  # =============================================================================
+
+  APIKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-APIKey"
+      Description: API Key for CUDly Dashboard authentication
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  AzureCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-AzureCredentials"
+      Description: Azure Service Principal credentials for commitment management
+      SecretString: '{"tenant_id":"","client_id":"","client_secret":"","subscription_id":""}'
+
+  GCPCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-GCPCredentials"
+      Description: GCP Service Account credentials for commitment management
+      SecretString: '{"type":"service_account","project_id":"","private_key_id":"","private_key":"","client_email":""}'
+
+  # =============================================================================
+  # Note: ECR Repository is created by the deploy CLI before stack creation
+  # to allow pushing the Lambda image first
+  # =============================================================================
+
+  # =============================================================================
+  # Lambda Execution Role
+  # =============================================================================
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-LambdaRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /lambda/
+
+  LambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-LambdaPolicy"
+      Roles:
+        - Ref: LambdaExecutionRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # CloudWatch Logs - scoped to this Lambda's log group
+          - Sid: CloudWatchLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*:*"
+
+          # Cost Explorer for recommendations
+          - Sid: CostExplorer
+            Effect: Allow
+            Action:
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetReservationUtilization
+              - ce:GetReservationCoverage
+              - ce:GetSavingsPlansPurchaseRecommendation
+              - ce:GetSavingsPlansUtilization
+              - ce:GetSavingsPlansCoverage
+            Resource: "*"
+
+          # RDS Reserved Instances
+          - Sid: RDSReservedInstances
+            Effect: Allow
+            Action:
+              - rds:DescribeReservedDBInstancesOfferings
+              - rds:DescribeReservedDBInstances
+              - rds:PurchaseReservedDBInstancesOffering
+              - rds:DescribeDBInstances
+            Resource: "*"
+
+          # ElastiCache Reserved Nodes
+          - Sid: ElastiCacheReservedNodes
+            Effect: Allow
+            Action:
+              - elasticache:DescribeReservedCacheNodesOfferings
+              - elasticache:DescribeReservedCacheNodes
+              - elasticache:PurchaseReservedCacheNodesOffering
+            Resource: "*"
+
+          # EC2 Reserved Instances
+          - Sid: EC2ReservedInstances
+            Effect: Allow
+            Action:
+              - ec2:DescribeReservedInstancesOfferings
+              - ec2:DescribeReservedInstances
+              - ec2:PurchaseReservedInstancesOffering
+              - ec2:DescribeRegions
+              - ec2:DescribeInstanceTypeOfferings
+            Resource: "*"
+
+          # OpenSearch Reserved Instances
+          - Sid: OpenSearchReservedInstances
+            Effect: Allow
+            Action:
+              - es:DescribeReservedInstanceOfferings
+              - es:DescribeReservedInstances
+              - es:PurchaseReservedInstanceOffering
+            Resource: "*"
+
+          # Redshift Reserved Nodes
+          - Sid: RedshiftReservedNodes
+            Effect: Allow
+            Action:
+              - redshift:DescribeReservedNodeOfferings
+              - redshift:DescribeReservedNodes
+              - redshift:PurchaseReservedNodeOffering
+            Resource: "*"
+
+          # MemoryDB Reserved Nodes
+          - Sid: MemoryDBReservedNodes
+            Effect: Allow
+            Action:
+              - memorydb:DescribeReservedNodesOfferings
+              - memorydb:DescribeReservedNodes
+              - memorydb:PurchaseReservedNodesOffering
+            Resource: "*"
+
+          # Savings Plans
+          - Sid: SavingsPlans
+            Effect: Allow
+            Action:
+              - savingsplans:DescribeSavingsPlans
+              - savingsplans:CreateSavingsPlan
+              - savingsplans:DescribeSavingsPlansOfferingRates
+            Resource: "*"
+
+          # Account discovery
+          - Sid: AccountDiscovery
+            Effect: Allow
+            Action:
+              - sts:GetCallerIdentity
+              - organizations:ListAccounts
+              - organizations:DescribeAccount
+            Resource: "*"
+
+          # Cross-account role assumption for multi-account plans
+          - Sid: CrossAccountAssumeRole
+            Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource: "arn:aws:iam::*:role/CUDly*"
+
+          # DynamoDB access
+          - Sid: DynamoDBAccess
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:UpdateItem
+              - dynamodb:BatchWriteItem
+              - dynamodb:BatchGetItem
+            Resource:
+              - !GetAtt ConfigTable.Arn
+              - !GetAtt PurchasePlansTable.Arn
+              - !GetAtt PurchaseHistoryTable.Arn
+              - !GetAtt UsersTable.Arn
+              - !Sub "${UsersTable.Arn}/index/*"
+              - !GetAtt GroupsTable.Arn
+              - !GetAtt SessionsTable.Arn
+              - !Sub "${SessionsTable.Arn}/index/*"
+
+          # Secrets Manager
+          - Sid: SecretsManager
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource:
+              - !Ref APIKeySecret
+              - !Ref AzureCredentialsSecret
+              - !Ref GCPCredentialsSecret
+
+          # SNS for email notifications
+          - Sid: SNSPublish
+            Effect: Allow
+            Action:
+              - sns:Publish
+            Resource:
+              - !Ref NotificationTopic
+
+          # SES for email (if used)
+          - Sid: SESEmail
+            Effect: Allow
+            Action:
+              - ses:SendEmail
+              - ses:SendTemplatedEmail
+            Resource: "*"
+
+  # =============================================================================
+  # Lambda Function
+  # =============================================================================
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-Handler"
+      PackageType: Image
+      Architectures:
+        - !If [Arm64, arm64, x86_64]
+      Code:
+        ImageUri: !Ref LambdaImageUri
+      Description: CUDly - Multi-cloud commitment and discount manager
+      Environment:
+        Variables:
+          # Configuration
+          CONFIG_TABLE: !Ref ConfigTable
+          PLANS_TABLE: !Ref PurchasePlansTable
+          HISTORY_TABLE: !Ref PurchaseHistoryTable
+          USERS_TABLE: !Ref UsersTable
+          GROUPS_TABLE: !Ref GroupsTable
+          SESSIONS_TABLE: !Ref SessionsTable
+          API_KEY_SECRET_ARN: !Ref APIKeySecret
+          AZURE_CREDENTIALS_SECRET_ARN: !Ref AzureCredentialsSecret
+          GCP_CREDENTIALS_SECRET_ARN: !Ref GCPCredentialsSecret
+          NOTIFICATION_TOPIC_ARN: !Ref NotificationTopic
+          # Defaults
+          DEFAULT_TERM: !Ref DefaultTerm
+          DEFAULT_PAYMENT_OPTION: !Ref DefaultPaymentOption
+          DEFAULT_COVERAGE: !Ref DefaultCoverage
+          DEFAULT_RAMP_SCHEDULE: !Ref DefaultRampSchedule
+          NOTIFICATION_DAYS_BEFORE: !Ref NotificationDaysBeforePurchase
+          EMAIL_ADDRESS: !Ref EmailAddress
+          # Dashboard
+          ENABLE_DASHBOARD: !Ref EnableDashboard
+          DASHBOARD_BUCKET: !If [DeployDashboard, !Ref DashboardBucket, ""]
+          # CORS and Dashboard URL
+          # Note: When using a custom domain, CORS is restricted to that domain.
+          # Without a custom domain, CORS defaults to "*" (set at runtime).
+          # For production, always configure a custom domain for security.
+          CORS_ALLOWED_ORIGIN: !If [HasCustomDomain, !Sub "https://${DashboardDomainName}", ""]
+          DASHBOARD_URL: !If [HasCustomDomain, !Sub "https://${DashboardDomainName}", ""]
+      MemorySize: !Ref LambdaMemorySize
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 900
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Lambda"
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${LambdaFunction}"
+      RetentionInDays: !Ref LogRetentionPeriod
+
+  # =============================================================================
+  # Lambda Function URL (for API)
+  # =============================================================================
+
+  LambdaFunctionUrl:
+    Type: AWS::Lambda::Url
+    Condition: DeployDashboard
+    Properties:
+      AuthType: AWS_IAM
+      TargetFunctionArn: !GetAtt LambdaFunction.Arn
+      Cors:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - "*"
+        AllowHeaders:
+          - "*"
+
+  # Permission for CloudFront OAC to invoke Lambda - must be created AFTER the distribution
+  LambdaFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Condition: DeployDashboard
+    DependsOn: DashboardDistribution
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref LambdaFunction
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DashboardDistribution}"
+      FunctionUrlAuthType: AWS_IAM
+
+  # =============================================================================
+  # Scheduled Execution
+  # =============================================================================
+
+  ScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-ScheduledExecution"
+      Description: Scheduled execution for CUDly recommendation collection
+      ScheduleExpression: !Ref ExecutionFrequency
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "collect_recommendations"}'
+
+  ScheduledRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledRule.Arn
+
+  # Daily check for scheduled purchases
+  PurchaseCheckRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-PurchaseCheck"
+      Description: Daily check for scheduled automated purchases
+      ScheduleExpression: "rate(1 day)"
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "process_scheduled_purchases"}'
+
+  PurchaseCheckPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PurchaseCheckRule.Arn
+
+  # =============================================================================
+  # SNS Topic for Notifications
+  # =============================================================================
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-Notifications"
+      KmsMasterKeyId: alias/aws/sns
+      Subscription:
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+
+  # =============================================================================
+  # S3 Bucket for Dashboard
+  # =============================================================================
+
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Condition: DeployDashboard
+    DeletionPolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  DashboardBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: DeployDashboard
+    Properties:
+      Bucket: !Ref DashboardBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${DashboardBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DashboardDistribution}"
+
+  # =============================================================================
+  # CloudFront Distribution
+  # =============================================================================
+
+  DashboardOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: DeployDashboard
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-dashboard-oac"
+        Description: OAC for CUDly Dashboard S3 bucket
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # OAC for Lambda Function URL - ensures only CloudFront can invoke Lambda
+  LambdaOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: DeployDashboard
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-lambda-oac"
+        Description: OAC for CUDly Lambda Function URL
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  DirectoryIndexFunction:
+    Type: AWS::CloudFront::Function
+    Condition: DeployDashboard
+    Properties:
+      Name: !Sub "${AWS::StackName}-directory-index"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Rewrite directory requests to include index.html
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+
+          // Check if URI ends with / or has no extension (directory request)
+          if (uri.endsWith('/')) {
+            request.uri = uri + 'index.html';
+          } else if (!uri.includes('.') && !uri.startsWith('/api')) {
+            // No extension and not an API request - treat as directory
+            request.uri = uri + '/index.html';
+          }
+
+          return request;
+        }
+
+  DashboardDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: DeployDashboard
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases:
+          !If
+            - HasCustomDomain
+            - - !Ref DashboardDomainName
+            - !Ref "AWS::NoValue"
+        ViewerCertificate:
+          !If
+            - HasCustomDomain
+            - AcmCertificateArn: !Ref DashboardCertificate
+              SslSupportMethod: sni-only
+              MinimumProtocolVersion: TLSv1.2_2021
+            - CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt DashboardBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId: !Ref DashboardOAC
+          - Id: APIOrigin
+            DomainName: !Select [2, !Split ["/", !GetAtt LambdaFunctionUrl.FunctionUrl]]
+            OriginAccessControlId: !Ref LambdaOAC
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt DirectoryIndexFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: "/api/*"
+            TargetOriginId: APIOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+          - PathPattern: "/docs*"
+            TargetOriginId: APIOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized (docs can be cached)
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+        PriceClass: PriceClass_100
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  # =============================================================================
+  # Custom Domain Resources (Optional)
+  # =============================================================================
+
+  DashboardCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref DashboardDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DashboardDomainName
+          HostedZoneId: !Ref DashboardHostedZoneId
+
+  DashboardDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCustomDomain
+    Properties:
+      HostedZoneId: !Ref DashboardHostedZoneId
+      Name: !Ref DashboardDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt DashboardDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront hosted zone ID
+        EvaluateTargetHealth: false
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the CUDly Lambda function
+    Value: !GetAtt LambdaFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaArn"
+
+  ConfigTableName:
+    Description: Name of the configuration DynamoDB table
+    Value: !Ref ConfigTable
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigTable"
+
+  PurchasePlansTableName:
+    Description: Name of the purchase plans DynamoDB table
+    Value: !Ref PurchasePlansTable
+    Export:
+      Name: !Sub "${AWS::StackName}-PlansTable"
+
+  PurchaseHistoryTableName:
+    Description: Name of the purchase history DynamoDB table
+    Value: !Ref PurchaseHistoryTable
+    Export:
+      Name: !Sub "${AWS::StackName}-HistoryTable"
+
+  APIKeySecretArn:
+    Description: ARN of the API Key secret
+    Value: !Ref APIKeySecret
+    Export:
+      Name: !Sub "${AWS::StackName}-APIKeySecret"
+
+  NotificationTopicArn:
+    Description: ARN of the SNS notification topic
+    Value: !Ref NotificationTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-NotificationTopic"
+
+  DashboardURL:
+    Condition: DeployDashboard
+    Description: URL of the CUDly Dashboard
+    Value:
+      !If
+        - HasCustomDomain
+        - !Sub "https://${DashboardDomainName}"
+        - !Sub "https://${DashboardDistribution.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-DashboardURL"
+
+  DashboardBucketName:
+    Condition: DeployDashboard
+    Description: Name of the S3 bucket for dashboard static files
+    Value: !Ref DashboardBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-DashboardBucket"
+
+  LambdaFunctionURL:
+    Condition: DeployDashboard
+    Description: Lambda Function URL for API access
+    Value: !GetAtt LambdaFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaFunctionURL"
+
+  UsersTableName:
+    Description: Name of the users DynamoDB table
+    Value: !Ref UsersTable
+    Export:
+      Name: !Sub "${AWS::StackName}-UsersTable"
+
+  GroupsTableName:
+    Description: Name of the groups DynamoDB table
+    Value: !Ref GroupsTable
+    Export:
+      Name: !Sub "${AWS::StackName}-GroupsTable"
+
+  SessionsTableName:
+    Description: Name of the sessions DynamoDB table
+    Value: !Ref SessionsTable
+    Export:
+      Name: !Sub "${AWS::StackName}-SessionsTable"
