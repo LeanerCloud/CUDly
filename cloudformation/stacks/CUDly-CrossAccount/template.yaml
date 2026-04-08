@@ -24,8 +24,9 @@ Parameters:
     Description: >
       Exact name of the Lambda execution role in the primary account.
       Default matches a primary CUDly stack deployed with the stack name "CUDly".
-      If your stack was deployed with a different name, set this to
-      "<StackName>-LambdaRole".
+      If your stack was deployed with a different name, set this to the full role
+      name (without path prefix). For Terraform-managed stacks this is typically
+      the full role name including the stack suffix.
 
   ExternalId:
     Type: String
@@ -60,7 +61,7 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Sub "arn:aws:iam::${PrimaryAccountId}:role/lambda/${PrimaryRoleName}"
+              AWS: !Sub "arn:aws:iam::${PrimaryAccountId}:role/${PrimaryRoleName}"
             Action: sts:AssumeRole
             Condition:
               StringEquals:
