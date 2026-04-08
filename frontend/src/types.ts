@@ -181,6 +181,7 @@ export interface SavingsBreakdownValue {
 // Settings types
 export interface ConfigResponse {
   global?: GlobalConfig;
+  services?: api.ServiceConfig[];
   credentials?: CredentialsConfig;
 }
 

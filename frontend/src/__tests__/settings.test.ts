@@ -499,10 +499,11 @@ describe('Settings Module', () => {
         enabled_providers: ['aws', 'gcp'],
         notification_email: 'test@test.com',
         auto_collect: true,
+        collection_schedule: 'daily',
         default_term: 3,
         default_payment: 'all-upfront',
         default_coverage: 80,
-        notification_days: 3
+        notification_days_before: 3
       });
     });
 

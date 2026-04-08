@@ -125,10 +125,20 @@ export interface Config {
   enabled_providers: Provider[];
   notification_email: string;
   auto_collect: boolean;
+  collection_schedule: string;
   default_term: number;
   default_payment: PaymentOption;
   default_coverage: number;
-  notification_days: number;
+  notification_days_before: number;
+}
+
+export interface ServiceConfig {
+  provider: string;
+  service: string;
+  enabled: boolean;
+  term: number;
+  payment: string;
+  coverage: number;
 }
 
 export interface PublicInfo {

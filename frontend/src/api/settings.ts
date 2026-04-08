@@ -3,13 +3,24 @@
  */
 
 import { apiRequest } from './client';
-import type { Config, AzureCredentials, GCPCredentials } from './types';
+import type { Config, ServiceConfig, AzureCredentials, GCPCredentials } from './types';
+import type { ConfigResponse } from '../types';
 
 /**
  * Get global configuration
  */
-export async function getConfig(): Promise<Config> {
-  return apiRequest<Config>('/config');
+export async function getConfig(): Promise<ConfigResponse> {
+  return apiRequest<ConfigResponse>('/config');
+}
+
+/**
+ * Update per-service configuration
+ */
+export async function updateServiceConfig(provider: string, service: string, cfg: ServiceConfig): Promise<void> {
+  return apiRequest<void>(`/config/service/${provider}/${service}`, {
+    method: 'PUT',
+    body: JSON.stringify(cfg)
+  });
 }
 
 /**

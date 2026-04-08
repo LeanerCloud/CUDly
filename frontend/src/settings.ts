@@ -3,7 +3,6 @@
  */
 
 import * as api from './api';
-import type { ConfigResponse } from './types';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -530,7 +529,7 @@ export async function loadGlobalSettings(): Promise<void> {
   if (errorEl) errorEl.classList.add('hidden');
 
   try {
-    const data = await api.getConfig() as unknown as ConfigResponse;
+    const data = await api.getConfig();
 
     if (data.global) {
       const providers = data.global.enabled_providers || [];
@@ -619,10 +618,11 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     enabled_providers: enabledProviders,
     notification_email: (document.getElementById('setting-notification-email') as HTMLInputElement | null)?.value || '',
     auto_collect: (document.getElementById('setting-auto-collect') as HTMLInputElement | null)?.checked ?? true,
+    collection_schedule: (document.getElementById('setting-collection-schedule') as HTMLSelectElement | null)?.value || 'daily',
     default_term: parseInt((document.getElementById('setting-default-term') as HTMLSelectElement | null)?.value || '3', 10),
     default_payment: ((document.getElementById('setting-default-payment') as HTMLSelectElement | null)?.value || 'all-upfront') as api.PaymentOption,
     default_coverage: parseInt((document.getElementById('setting-default-coverage') as HTMLInputElement | null)?.value || '80', 10),
-    notification_days: parseInt((document.getElementById('setting-notification-days') as HTMLInputElement | null)?.value || '3', 10)
+    notification_days_before: parseInt((document.getElementById('setting-notification-days') as HTMLInputElement | null)?.value || '3', 10)
   };
 
   try {

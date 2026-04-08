@@ -762,10 +762,11 @@ describe('Config API', () => {
         enabled_providers: ['aws', 'azure'],
         notification_email: 'test@example.com',
         auto_collect: true,
+        collection_schedule: 'daily',
         default_term: 3,
         default_payment: 'all-upfront',
         default_coverage: 80,
-        notification_days: 3
+        notification_days_before: 3
       };
       await updateConfig(config);
 

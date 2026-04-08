@@ -19,6 +19,7 @@ export type {
   PurchaseHistory,
   HistoryFilters,
   Config,
+  ServiceConfig,
   PublicInfo,
   PurchaseResult,
   PurchaseDetails,
@@ -152,6 +153,7 @@ export {
 export {
   getConfig,
   updateConfig,
+  updateServiceConfig,
   saveAzureCredentials,
   saveGCPCredentials
 } from './settings';
