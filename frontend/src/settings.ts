@@ -9,6 +9,24 @@ type AccountProvider = 'aws' | 'azure' | 'gcp';
 // Track which provider's account is being edited (for the modal)
 let accountModalProvider: AccountProvider = 'aws';
 
+// Per-service field definitions — used for loading and saving service configs.
+const SERVICE_FIELDS = [
+  { provider: 'aws', service: 'ec2',          termId: 'aws-ec2-term',          paymentId: 'aws-ec2-payment' },
+  { provider: 'aws', service: 'rds',          termId: 'aws-rds-term',          paymentId: 'aws-rds-payment' },
+  { provider: 'aws', service: 'elasticache',  termId: 'aws-elasticache-term',  paymentId: 'aws-elasticache-payment' },
+  { provider: 'aws', service: 'opensearch',   termId: 'aws-opensearch-term',   paymentId: 'aws-opensearch-payment' },
+  { provider: 'aws', service: 'redshift',     termId: 'aws-redshift-term',     paymentId: 'aws-redshift-payment' },
+  { provider: 'aws', service: 'savingsplans', termId: 'aws-savingsplans-term', paymentId: 'aws-savingsplans-payment' },
+  { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: null },
+  { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: null },
+  { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: null },
+  { provider: 'azure', service: 'redis',      termId: 'azure-redis-term',      paymentId: null },
+  { provider: 'gcp',   service: 'compute',    termId: 'gcp-compute-term',      paymentId: null },
+  { provider: 'gcp',   service: 'sql',        termId: 'gcp-sql-term',          paymentId: null },
+  { provider: 'gcp',   service: 'memorystore',termId: 'gcp-memorystore-term',  paymentId: null },
+  { provider: 'gcp',   service: 'storage',    termId: 'gcp-storage-term',      paymentId: null },
+] as const;
+
 // Fields that are persisted to the backend via saveGlobalSettings.
 // Used for dirty tracking and unsaved-changes detection.
 const TRACKED_FIELDS = [
@@ -16,10 +34,17 @@ const TRACKED_FIELDS = [
   'setting-notification-email', 'setting-auto-collect',
   'setting-collection-schedule', 'setting-notification-days',
   'setting-default-term', 'setting-default-payment', 'setting-default-coverage',
+  // Per-service fields
+  ...SERVICE_FIELDS.map(f => f.termId),
+  ...SERVICE_FIELDS.filter(f => f.paymentId !== null).map(f => f.paymentId as string),
 ];
 
 // Snapshot of field values at last save (or initial load).
 let savedSnapshot: Record<string, string> = {};
+
+// Cached service configs from last load — used as base when saving to preserve
+// non-UI fields (ramp_schedule, include_engines, etc.) that SaveServiceConfig replaces entirely.
+let loadedServiceConfigs: api.ServiceConfig[] = [];
 
 function getFieldValue(id: string): string {
   const el = document.getElementById(id);
@@ -567,6 +592,17 @@ export async function loadGlobalSettings(): Promise<void> {
       updateCollectionScheduleVisibility();
     }
 
+    if (data.services) {
+      loadedServiceConfigs = data.services;
+      for (const svc of data.services) {
+        const key = `${svc.provider}-${svc.service}`;
+        const termEl = document.getElementById(`${key}-term`) as HTMLSelectElement | null;
+        if (termEl) termEl.value = String(svc.term);
+        const paymentEl = document.getElementById(`${key}-payment`) as HTMLSelectElement | null;
+        if (paymentEl) paymentEl.value = svc.payment;
+      }
+    }
+
     if (data.credentials) {
       const azureStatus = document.getElementById('azure-creds-status');
       const gcpStatus = document.getElementById('gcp-creds-status');
@@ -627,6 +663,18 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 
   try {
     await api.updateConfig(settings);
+
+    const serviceSaves = SERVICE_FIELDS.map(({ provider, service, termId, paymentId }) => {
+      const term = parseInt((document.getElementById(termId) as HTMLSelectElement)?.value || '3', 10);
+      const payment = paymentId
+        ? ((document.getElementById(paymentId) as HTMLSelectElement)?.value || 'all-upfront')
+        : settings.default_payment;
+      const base = loadedServiceConfigs.find(s => s.provider === provider && s.service === service);
+      const cfg: api.ServiceConfig = { ...base, provider, service, enabled: base?.enabled ?? true, term, payment, coverage: base?.coverage ?? settings.default_coverage };
+      return api.updateServiceConfig(provider, service, cfg);
+    });
+    await Promise.all(serviceSaves);
+
     snapshotAllFields();
     updateDirtyMarkers();
     alert('Settings saved successfully');

@@ -17,6 +17,7 @@ import {
 jest.mock('../api', () => ({
   getConfig: jest.fn(),
   updateConfig: jest.fn(),
+  updateServiceConfig: jest.fn().mockResolvedValue(undefined),
   saveAzureCredentials: jest.fn(),
   saveGCPCredentials: jest.fn(),
   listAccounts: jest.fn(),
@@ -463,6 +464,28 @@ describe('Settings Module', () => {
       const formEl = document.getElementById('global-settings-form');
       expect(formEl?.classList.contains('hidden')).toBe(false);
     });
+
+    test('populates service card selects from data.services', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: {
+          enabled_providers: ['aws'],
+          default_term: 3,
+          default_payment: 'all-upfront',
+          default_coverage: 80,
+          notification_days_before: 3
+        },
+        services: [
+          { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 70 },
+          { provider: 'aws', service: 'rds', enabled: true, term: 3, payment: 'all-upfront', coverage: 80 }
+        ]
+      });
+
+      await loadGlobalSettings();
+
+      expect((document.getElementById('aws-ec2-term') as HTMLSelectElement).value).toBe('1');
+      expect((document.getElementById('aws-ec2-payment') as HTMLSelectElement).value).toBe('no-upfront');
+      expect((document.getElementById('aws-rds-term') as HTMLSelectElement).value).toBe('3');
+    });
   });
 
   describe('saveGlobalSettings', () => {
@@ -539,7 +562,18 @@ describe('Settings Module', () => {
       // Should still call updateConfig with default values
       expect(api.updateConfig).toHaveBeenCalled();
     });
-  });
+
+    test('calls updateServiceConfig once per service field (14 calls)', async () => {
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (api.updateServiceConfig as jest.Mock).mockResolvedValue(undefined);
+      window.alert = jest.fn();
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      expect(api.updateServiceConfig).toHaveBeenCalledTimes(14);
+    });
+  }); // end saveGlobalSettings
 
   describe('resetSettings', () => {
     beforeEach(() => {
