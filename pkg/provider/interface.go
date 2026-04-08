@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // Provider represents a cloud provider (AWS, Azure, GCP)
@@ -72,9 +73,10 @@ type Credentials interface {
 
 // ProviderConfig represents configuration for a provider
 type ProviderConfig struct {
-	Name           string
-	Profile        string
-	Region         string
-	CredentialPath string
-	Endpoint       string // For custom endpoints
+	Name                   string
+	Profile                string
+	Region                 string
+	CredentialPath         string
+	Endpoint               string                  // For custom endpoints
+	AWSCredentialsProvider aws.CredentialsProvider // optional: override ambient AWS credentials
 }

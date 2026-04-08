@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
@@ -23,6 +24,8 @@ type ManagerConfig struct {
 	ConfigStore               config.StoreInterface
 	EmailSender               email.SenderInterface
 	STSClient                 STSClient
+	AssumeRoleSTS             credentials.STSClient // used for cross-account role assumption
+	CredentialStore           credentials.CredentialStore
 	ProviderFactory           provider.FactoryInterface
 	NotificationDaysBefore    int
 	DefaultTerm               int
@@ -39,6 +42,8 @@ type Manager struct {
 	config          config.StoreInterface
 	email           email.SenderInterface
 	stsClient       STSClient
+	assumeRoleSTS   credentials.STSClient
+	credStore       credentials.CredentialStore
 	providerFactory provider.FactoryInterface
 	notifyDays      int
 	defaults        PurchaseDefaults
@@ -77,6 +82,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		config:          cfg.ConfigStore,
 		email:           cfg.EmailSender,
 		stsClient:       cfg.STSClient,
+		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		credStore:       cfg.CredentialStore,
 		providerFactory: factory,
 		notifyDays:      cfg.NotificationDaysBefore,
 		defaults: PurchaseDefaults{

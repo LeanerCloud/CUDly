@@ -63,13 +63,14 @@ func (r *realOrganizationsPaginator) NextPage(ctx context.Context, optFns ...fun
 
 // AWSProvider implements the Provider interface for AWS
 type AWSProvider struct {
-	cfg          aws.Config
-	profile      string
-	region       string
-	configLoader ConfigLoader
-	stsClient    STSClient
-	ec2Client    EC2Client
-	orgPaginator OrganizationsPaginator
+	cfg                 aws.Config
+	profile             string
+	region              string
+	configLoader        ConfigLoader
+	stsClient           STSClient
+	ec2Client           EC2Client
+	orgPaginator        OrganizationsPaginator
+	credentialsProvider aws.CredentialsProvider // optional override for per-account execution
 }
 
 // NewAWSProvider creates a new AWS provider instance
@@ -79,6 +80,7 @@ func NewAWSProvider(config *provider.ProviderConfig) (*AWSProvider, error) {
 	if config != nil {
 		p.profile = config.Profile
 		p.region = config.Region
+		p.credentialsProvider = config.AWSCredentialsProvider
 	}
 
 	return p, nil
@@ -127,6 +129,10 @@ func (p *AWSProvider) IsConfigured() bool {
 
 	if p.region != "" {
 		opts = append(opts, config.WithRegion(p.region))
+	}
+
+	if p.credentialsProvider != nil {
+		opts = append(opts, config.WithCredentialsProvider(p.credentialsProvider))
 	}
 
 	// Use injected config loader if available (for testing)

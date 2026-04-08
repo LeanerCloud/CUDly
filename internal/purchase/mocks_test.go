@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
@@ -155,6 +156,10 @@ func (m *MockServiceClient) GetValidResourceTypes(ctx context.Context) ([]string
 // MockConfigStore is a mock implementation of config.StoreInterface
 type MockConfigStore struct {
 	mock.Mock
+	// GetPlanAccountsFn overrides GetPlanAccounts when non-nil (used in multi-account tests).
+	GetPlanAccountsFn func(ctx context.Context, planID string) ([]config.CloudAccount, error)
+	// SavePurchaseExecutionFn overrides SavePurchaseExecution when non-nil.
+	SavePurchaseExecutionFn func(ctx context.Context, exec *config.PurchaseExecution) error
 }
 
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -223,6 +228,9 @@ func (m *MockConfigStore) ListPurchasePlans(ctx context.Context) ([]config.Purch
 }
 
 func (m *MockConfigStore) SavePurchaseExecution(ctx context.Context, exec *config.PurchaseExecution) error {
+	if m.SavePurchaseExecutionFn != nil {
+		return m.SavePurchaseExecutionFn(ctx, exec)
+	}
 	args := m.Called(ctx, exec)
 	return args.Error(0)
 }
@@ -385,6 +393,9 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 	return nil
 }
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
+	if m.GetPlanAccountsFn != nil {
+		return m.GetPlanAccountsFn(ctx, planID)
+	}
 	return nil, nil
 }
 
@@ -464,3 +475,45 @@ func (m *MockSTSClient) GetCallerIdentity(ctx context.Context, params *sts.GetCa
 
 // Verify MockSTSClient implements STSClient
 var _ STSClient = (*MockSTSClient)(nil)
+
+// MockCredentialStore is a stub credentials.CredentialStore used in tests.
+// All methods are no-ops; individual tests may override behaviour via fields.
+type MockCredentialStore struct {
+	LoadRawFn func(ctx context.Context, accountID, credType string) ([]byte, error)
+}
+
+var _ credentials.CredentialStore = (*MockCredentialStore)(nil)
+
+func (m *MockCredentialStore) SaveCredential(_ context.Context, _, _ string, _ []byte) error {
+	return nil
+}
+
+func (m *MockCredentialStore) DeleteCredential(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *MockCredentialStore) HasCredential(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockCredentialStore) LoadRaw(ctx context.Context, accountID, credType string) ([]byte, error) {
+	if m.LoadRawFn != nil {
+		return m.LoadRawFn(ctx, accountID, credType)
+	}
+	return nil, nil
+}
+
+// MockAssumeRoleSTS is a stub credentials.STSClient (AssumeRole only) used in tests.
+type MockAssumeRoleSTS struct {
+	mock.Mock
+}
+
+var _ credentials.STSClient = (*MockAssumeRoleSTS)(nil)
+
+func (m *MockAssumeRoleSTS) AssumeRole(ctx context.Context, params *sts.AssumeRoleInput, optFns ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sts.AssumeRoleOutput), args.Error(1)
+}

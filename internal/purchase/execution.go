@@ -3,16 +3,26 @@ package purchase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/execution"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/google/uuid"
 )
 
-// executePurchase performs the actual purchase
+// executePurchase performs the actual purchase.
+// When the plan has associated cloud accounts and a credential store is configured,
+// it fans out execution in parallel — one goroutine per account, each with its own
+// PurchaseExecution record tagged with cloud_account_id.
+// If no accounts are configured or no credential store is available, it falls back
+// to single-account execution using ambient credentials.
 func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) error {
 	logging.Infof("Executing purchase for plan %s, step %d", exec.PlanID, exec.StepNumber)
 
@@ -24,8 +34,21 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 		return fmt.Errorf("plan not found: %s", exec.PlanID)
 	}
 
+	// Fan out across plan accounts when accounts are configured and credentials available.
+	// Skip fan-out if this execution is already tagged with a specific account (re-entrant call).
+	if m.credStore != nil && exec.CloudAccountID == nil {
+		accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
+		if err != nil {
+			logging.Warnf("Failed to load plan accounts for plan %s, falling back to single-account execution: %v", exec.PlanID, err)
+		}
+		if len(accounts) > 0 {
+			return m.executeMultiAccount(ctx, exec, plan, accounts)
+		}
+	}
+
+	// Single-account (legacy) path.
 	accountID := m.getAWSAccountID(ctx)
-	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID)
+	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, nil)
 
 	if len(purchaseErrors) > 0 {
 		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
@@ -38,7 +61,92 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	return nil
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string) (float64, float64, []string) {
+// executeMultiAccount fans out executePurchase across all plan accounts in parallel.
+// Each account gets its own PurchaseExecution record tagged with cloud_account_id.
+func (m *Manager) executeMultiAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, accounts []config.CloudAccount) error {
+	results := execution.RunForAccounts(ctx, accounts, func(ctx context.Context, account config.CloudAccount) (struct{}, error) {
+		return struct{}{}, m.executeForAccount(ctx, baseExec, plan, account)
+	})
+
+	var errs []string
+	for _, r := range results {
+		if r.Err != nil {
+			errs = append(errs, fmt.Sprintf("account %s: %v", r.AccountID, r.Err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("multi-account execution: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// executeForAccount runs a single plan execution for one cloud account.
+// It creates a new PurchaseExecution record tagged with cloud_account_id, resolves
+// per-account credentials, executes purchases, and saves the result.
+func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, account config.CloudAccount) error {
+	// Create a per-account copy of the execution record with an independent
+	// Recommendations slice so concurrent goroutines don't race on writes.
+	acctID := account.ID
+	acctExec := *baseExec
+	acctExec.ExecutionID = uuid.New().String()
+	acctExec.CloudAccountID = &acctID
+	recs := make([]config.RecommendationRecord, len(baseExec.Recommendations))
+	copy(recs, baseExec.Recommendations)
+	acctExec.Recommendations = recs
+
+	// Resolve per-account credentials for AWS accounts.
+	var provCfg *provider.ProviderConfig
+	if account.Provider == "aws" && m.assumeRoleSTS != nil {
+		awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &account, m.credStore, m.assumeRoleSTS)
+		if err != nil {
+			logging.Warnf("Failed to resolve credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
+		} else {
+			provCfg = &provider.ProviderConfig{
+				Name:                   "aws",
+				AWSCredentialsProvider: awsCreds,
+			}
+		}
+	}
+
+	accountID := account.ExternalID // AWS 12-digit account ID
+	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
+
+	if len(purchaseErrors) > 0 {
+		acctExec.Status = "failed"
+		acctExec.Error = strings.Join(purchaseErrors, "; ")
+	} else {
+		now := time.Now()
+		acctExec.Status = "completed"
+		acctExec.CompletedAt = &now
+	}
+
+	if err := m.config.SavePurchaseExecution(ctx, &acctExec); err != nil {
+		logging.Errorf("Failed to save per-account execution for account %s: %v", account.ID, err)
+	}
+
+	if len(purchaseErrors) > 0 {
+		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
+	}
+
+	if err := m.sendPurchaseNotification(ctx, &acctExec, plan, totalSavings, totalUpfront); err != nil {
+		logging.Errorf("Failed to send confirmation for account %s: %v", account.ID, err)
+	}
+	return nil
+}
+
+// planProvider derives the cloud provider from the plan's Services map.
+// Service keys use the "provider:service" format (e.g. "aws:ec2").
+// Returns the first provider found, or empty string if no services are configured.
+func planProvider(plan *config.PurchasePlan) string {
+	for key := range plan.Services {
+		if i := strings.Index(key, ":"); i > 0 {
+			return key[:i]
+		}
+	}
+	return ""
+}
+
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {
 	var totalSavings, totalUpfront float64
 	var purchaseErrors []string
 
@@ -49,7 +157,7 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 
 		logging.Infof("Purchasing: %dx %s in %s", rec.Count, rec.ResourceType, rec.Region)
 
-		purchaseResult, err := m.executeSinglePurchase(ctx, rec)
+		purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg)
 		if err != nil {
 			logging.Errorf("Failed to purchase %s: %v", rec.ResourceType, err)
 			exec.Recommendations[i].Error = err.Error()
@@ -122,10 +230,11 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 	return data
 }
 
-// executeSinglePurchase executes a single purchase using the appropriate provider
-func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord) (common.PurchaseResult, error) {
+// executeSinglePurchase executes a single purchase using the appropriate provider.
+// provCfg carries optional per-account credentials; pass nil to use ambient credentials.
+func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig) (common.PurchaseResult, error) {
 	// Create the provider
-	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(ctx, rec.Provider, nil)
+	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(ctx, rec.Provider, provCfg)
 	if err != nil {
 		return common.PurchaseResult{}, fmt.Errorf("failed to create %s provider: %w", rec.Provider, err)
 	}
