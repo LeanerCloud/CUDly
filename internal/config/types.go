@@ -231,10 +231,12 @@ type CloudAccount struct {
 	AzureSubscriptionID string `json:"azure_subscription_id,omitempty"`
 	AzureTenantID       string `json:"azure_tenant_id,omitempty"`
 	AzureClientID       string `json:"azure_client_id,omitempty"`
+	AzureAuthMode       string `json:"azure_auth_mode,omitempty"`
 
 	// GCP-specific
 	GCPProjectID   string `json:"gcp_project_id,omitempty"`
 	GCPClientEmail string `json:"gcp_client_email,omitempty"`
+	GCPAuthMode    string `json:"gcp_auth_mode,omitempty"`
 
 	// Derived (not stored in DB)
 	CredentialsConfigured bool   `json:"credentials_configured"`
