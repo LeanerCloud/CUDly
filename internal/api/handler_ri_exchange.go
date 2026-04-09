@@ -372,6 +372,12 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 		return nil, fmt.Errorf("failed to load exchange history: %w", err)
 	}
 
+	// Strip approval tokens — single-use secrets must not be included in
+	// a read-only response that could be cached, logged, or screen-shared.
+	for i := range records {
+		records[i].ApprovalToken = ""
+	}
+
 	return &RIExchangeHistoryResponse{Records: records}, nil
 }
 
@@ -442,6 +448,9 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		return h.failExchange(ctx, id, "config load failed")
 	}
 
+	if globalCfg.RIExchangeMaxDailyUSD == 0 {
+		return h.failExchange(ctx, id, "daily spending cap is not configured (RIExchangeMaxDailyUSD is 0)")
+	}
 	if reason := checkDailyCap(dailySpendStr, record.PaymentDue, globalCfg.RIExchangeMaxDailyUSD); reason != "" {
 		return h.failExchange(ctx, id, reason)
 	}
