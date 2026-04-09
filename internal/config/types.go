@@ -221,11 +221,12 @@ type CloudAccount struct {
 	ExternalID   string `json:"external_id"`
 
 	// AWS-specific
-	AWSAuthMode   string `json:"aws_auth_mode,omitempty"`
-	AWSRoleARN    string `json:"aws_role_arn,omitempty"`
-	AWSExternalID string `json:"aws_external_id,omitempty"`
-	AWSBastionID  string `json:"aws_bastion_id,omitempty"`
-	AWSIsOrgRoot  bool   `json:"aws_is_org_root,omitempty"`
+	AWSAuthMode             string `json:"aws_auth_mode,omitempty"`
+	AWSRoleARN              string `json:"aws_role_arn,omitempty"`
+	AWSExternalID           string `json:"aws_external_id,omitempty"`
+	AWSBastionID            string `json:"aws_bastion_id,omitempty"`
+	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file,omitempty"`
+	AWSIsOrgRoot            bool   `json:"aws_is_org_root,omitempty"`
 
 	// Azure-specific
 	AzureSubscriptionID string `json:"azure_subscription_id,omitempty"`

@@ -1208,17 +1208,17 @@ func (s *PostgresStore) CreateCloudAccount(ctx context.Context, account *CloudAc
 		INSERT INTO cloud_accounts (
 			id, name, description, contact_email, enabled,
 			provider, external_id,
-			aws_auth_mode, aws_role_arn, aws_external_id, aws_bastion_id, aws_is_org_root,
+			aws_auth_mode, aws_role_arn, aws_external_id, aws_bastion_id, aws_web_identity_token_file, aws_is_org_root,
 			azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
 			gcp_project_id, gcp_client_email, gcp_auth_mode,
 			created_at, updated_at, created_by
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7,
-			$8, $9, $10, $11, $12,
-			$13, $14, $15, $16,
-			$17, $18, $19,
-			$20, $21, $22
+			$8, $9, $10, $11, $12, $13,
+			$14, $15, $16, $17,
+			$18, $19, $20,
+			$21, $22, $23
 		)
 	`
 
@@ -1234,6 +1234,7 @@ func (s *PostgresStore) CreateCloudAccount(ctx context.Context, account *CloudAc
 		nullStringFromString(account.AWSRoleARN),
 		nullStringFromString(account.AWSExternalID),
 		nullStringFromString(account.AWSBastionID),
+		nullStringFromString(account.AWSWebIdentityTokenFile),
 		account.AWSIsOrgRoot,
 		nullStringFromString(account.AzureSubscriptionID),
 		nullStringFromString(account.AzureTenantID),
@@ -1260,6 +1261,7 @@ func (s *PostgresStore) GetCloudAccount(ctx context.Context, id string) (*CloudA
 			ca.enabled, ca.provider, ca.external_id,
 			COALESCE(ca.aws_auth_mode,''), COALESCE(ca.aws_role_arn,''),
 			COALESCE(ca.aws_external_id,''), COALESCE(ca.aws_bastion_id::text,''),
+			COALESCE(ca.aws_web_identity_token_file,''),
 			ca.aws_is_org_root,
 			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
 			COALESCE(ca.azure_client_id,''), COALESCE(ca.azure_auth_mode,''),
@@ -1275,6 +1277,7 @@ func (s *PostgresStore) GetCloudAccount(ctx context.Context, id string) (*CloudA
 		&account.ID, &account.Name, &account.Description, &account.ContactEmail,
 		&account.Enabled, &account.Provider, &account.ExternalID,
 		&account.AWSAuthMode, &account.AWSRoleARN, &account.AWSExternalID, &account.AWSBastionID,
+		&account.AWSWebIdentityTokenFile,
 		&account.AWSIsOrgRoot,
 		&account.AzureSubscriptionID, &account.AzureTenantID, &account.AzureClientID, &account.AzureAuthMode,
 		&account.GCPProjectID, &account.GCPClientEmail, &account.GCPAuthMode,
@@ -1303,15 +1306,16 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 			aws_role_arn = $7,
 			aws_external_id = $8,
 			aws_bastion_id = $9,
-			aws_is_org_root = $10,
-			azure_subscription_id = $11,
-			azure_tenant_id = $12,
-			azure_client_id = $13,
-			azure_auth_mode = $14,
-			gcp_project_id = $15,
-			gcp_client_email = $16,
-			gcp_auth_mode = $17,
-			updated_at = $18
+			aws_web_identity_token_file = $10,
+			aws_is_org_root = $11,
+			azure_subscription_id = $12,
+			azure_tenant_id = $13,
+			azure_client_id = $14,
+			azure_auth_mode = $15,
+			gcp_project_id = $16,
+			gcp_client_email = $17,
+			gcp_auth_mode = $18,
+			updated_at = $19
 		WHERE id = $1
 	`
 	tag, err := s.db.Exec(ctx, query,
@@ -1324,6 +1328,7 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 		nullStringFromString(account.AWSRoleARN),
 		nullStringFromString(account.AWSExternalID),
 		nullStringFromString(account.AWSBastionID),
+		nullStringFromString(account.AWSWebIdentityTokenFile),
 		account.AWSIsOrgRoot,
 		nullStringFromString(account.AzureSubscriptionID),
 		nullStringFromString(account.AzureTenantID),
@@ -1363,6 +1368,7 @@ func (s *PostgresStore) ListCloudAccounts(ctx context.Context, filter CloudAccou
 			ca.enabled, ca.provider, ca.external_id,
 			COALESCE(ca.aws_auth_mode,''), COALESCE(ca.aws_role_arn,''),
 			COALESCE(ca.aws_external_id,''), COALESCE(ca.aws_bastion_id::text,''),
+			COALESCE(ca.aws_web_identity_token_file,''),
 			ca.aws_is_org_root,
 			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
 			COALESCE(ca.azure_client_id,''), COALESCE(ca.azure_auth_mode,''),
@@ -1413,6 +1419,7 @@ func (s *PostgresStore) ListCloudAccounts(ctx context.Context, filter CloudAccou
 			&a.ID, &a.Name, &a.Description, &a.ContactEmail,
 			&a.Enabled, &a.Provider, &a.ExternalID,
 			&a.AWSAuthMode, &a.AWSRoleARN, &a.AWSExternalID, &a.AWSBastionID,
+			&a.AWSWebIdentityTokenFile,
 			&a.AWSIsOrgRoot,
 			&a.AzureSubscriptionID, &a.AzureTenantID, &a.AzureClientID, &a.AzureAuthMode,
 			&a.GCPProjectID, &a.GCPClientEmail, &a.GCPAuthMode,
@@ -1654,6 +1661,7 @@ func (s *PostgresStore) GetPlanAccounts(ctx context.Context, planID string) ([]C
 			ca.enabled, ca.provider, ca.external_id,
 			COALESCE(ca.aws_auth_mode,''), COALESCE(ca.aws_role_arn,''),
 			COALESCE(ca.aws_external_id,''), COALESCE(ca.aws_bastion_id::text,''),
+			COALESCE(ca.aws_web_identity_token_file,''),
 			ca.aws_is_org_root,
 			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
 			COALESCE(ca.azure_client_id,''), COALESCE(ca.azure_auth_mode,''),
@@ -1678,6 +1686,7 @@ func (s *PostgresStore) GetPlanAccounts(ctx context.Context, planID string) ([]C
 			&a.ID, &a.Name, &a.Description, &a.ContactEmail,
 			&a.Enabled, &a.Provider, &a.ExternalID,
 			&a.AWSAuthMode, &a.AWSRoleARN, &a.AWSExternalID, &a.AWSBastionID,
+			&a.AWSWebIdentityTokenFile,
 			&a.AWSIsOrgRoot,
 			&a.AzureSubscriptionID, &a.AzureTenantID, &a.AzureClientID, &a.AzureAuthMode,
 			&a.GCPProjectID, &a.GCPClientEmail, &a.GCPAuthMode,
