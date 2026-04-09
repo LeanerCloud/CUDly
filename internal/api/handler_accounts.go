@@ -30,9 +30,11 @@ type CloudAccountRequest struct {
 	AzureSubscriptionID string `json:"azure_subscription_id"`
 	AzureTenantID       string `json:"azure_tenant_id"`
 	AzureClientID       string `json:"azure_client_id"`
+	AzureAuthMode       string `json:"azure_auth_mode"`
 	// GCP
 	GCPProjectID   string `json:"gcp_project_id"`
 	GCPClientEmail string `json:"gcp_client_email"`
+	GCPAuthMode    string `json:"gcp_auth_mode"`
 }
 
 // CredentialsRequest is the request body for the save-credentials endpoint.
@@ -64,9 +66,11 @@ type AccountServiceOverrideRequest struct {
 
 // validCredentialTypes is the set of accepted credential type names.
 var validCredentialTypes = map[string]bool{
-	"aws_access_keys":     true,
-	"azure_client_secret": true,
-	"gcp_service_account": true,
+	"aws_access_keys":              true,
+	"azure_client_secret":          true,
+	"azure_wif_private_key":        true,
+	"gcp_service_account":          true,
+	"gcp_workload_identity_config": true,
 }
 
 // listAccounts handles GET /api/accounts.
@@ -183,8 +187,10 @@ func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 		AzureSubscriptionID: req.AzureSubscriptionID,
 		AzureTenantID:       req.AzureTenantID,
 		AzureClientID:       req.AzureClientID,
+		AzureAuthMode:       req.AzureAuthMode,
 		GCPProjectID:        req.GCPProjectID,
 		GCPClientEmail:      req.GCPClientEmail,
+		GCPAuthMode:         req.GCPAuthMode,
 	}
 
 	if req.Enabled != nil {
@@ -290,7 +296,7 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 	}
 
 	if !validCredentialTypes[req.CredentialType] {
-		return nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, gcp_service_account")
+		return nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, azure_wif_private_key, gcp_service_account, gcp_workload_identity_config")
 	}
 
 	if h.credStore == nil {
@@ -318,16 +324,38 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 	return nil, nil
 }
 
+// ambientCredResult returns the test result for auth modes that don't require a stored
+// credential (role ARN, managed identity, application default). The second return value
+// is true when the check was handled and the caller should return immediately.
+func ambientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
+	switch acct.Provider {
+	case "aws":
+		if acct.AWSAuthMode != "access_keys" {
+			if acct.AWSRoleARN == "" {
+				return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
+			}
+			return AccountTestResult{OK: true, Message: "role assumption configured (no stored credential required)"}, true
+		}
+	case "azure":
+		if acct.AzureAuthMode == "managed_identity" {
+			return AccountTestResult{OK: true, Message: "managed identity configured (no stored credential required)"}, true
+		}
+	case "gcp":
+		if acct.GCPAuthMode == "application_default" {
+			return AccountTestResult{OK: true, Message: "application default credentials configured (no stored credential required)"}, true
+		}
+	}
+	return AccountTestResult{}, false
+}
+
 // testAccountCredentials handles POST /api/accounts/:id/test.
 func (h *Handler) testAccountCredentials(ctx context.Context, req *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
-
 	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
 	}
-
 	acct, err := h.config.GetCloudAccount(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
@@ -335,15 +363,9 @@ func (h *Handler) testAccountCredentials(ctx context.Context, req *events.Lambda
 	if acct == nil {
 		return nil, errNotFound
 	}
-
-	// For role_arn and bastion auth modes, no stored secret is needed.
-	if acct.Provider == "aws" && acct.AWSAuthMode != "access_keys" {
-		if acct.AWSRoleARN == "" {
-			return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, nil
-		}
-		return AccountTestResult{OK: true, Message: "role assumption configured (no stored credential required)"}, nil
+	if res, ok := ambientCredResult(acct); ok {
+		return res, nil
 	}
-
 	res, err := h.checkCredentialPresence(ctx, acct)
 	if err != nil {
 		return nil, err
@@ -381,8 +403,14 @@ func (h *Handler) checkCredentialPresence(ctx context.Context, acct *config.Clou
 func credTypeForAccount(acct *config.CloudAccount) string {
 	switch acct.Provider {
 	case "azure":
+		if acct.AzureAuthMode == "workload_identity_federation" {
+			return "azure_wif_private_key"
+		}
 		return "azure_client_secret"
 	case "gcp":
+		if acct.GCPAuthMode == "workload_identity_federation" {
+			return "gcp_workload_identity_config"
+		}
 		return "gcp_service_account"
 	default: // aws
 		return "aws_access_keys"
