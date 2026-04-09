@@ -74,6 +74,32 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	return &StatusResponse{Status: "updated"}, nil
 }
 
+// mergeServiceConfig loads any existing service config and overlays the four
+// UI-editable fields (Enabled, Term, Payment, Coverage) from cfg onto it, so
+// that filter fields set outside the UI (RampSchedule, IncludeEngines, etc.)
+// are not zeroed on every settings save.
+//
+// A "not found" error means no existing record — cfg is returned unchanged.
+// Any other DB error is returned to prevent a partial write from clobbering
+// previously configured filter fields.
+func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig) (config.ServiceConfig, error) {
+	existing, err := store.GetServiceConfig(ctx, cfg.Provider, cfg.Service)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return cfg, nil // new record — no existing fields to preserve
+		}
+		return cfg, fmt.Errorf("failed to read existing service config before update: %w", err)
+	}
+	if existing != nil {
+		existing.Enabled = cfg.Enabled
+		existing.Term = cfg.Term
+		existing.Payment = cfg.Payment
+		existing.Coverage = cfg.Coverage
+		return *existing, nil
+	}
+	return cfg, nil
+}
+
 func (h *Handler) getServiceConfig(ctx context.Context, service string) (any, error) {
 	// Validate for path traversal attacks
 	if err := validateServicePath(service); err != nil {
@@ -127,13 +153,11 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 	// Merge: preserve existing filter fields, overlay the 4 UI-editable fields.
 	// The frontend only sends enabled/term/payment/coverage; a full UPSERT would
 	// zero out ramp_schedule, include_engines, etc. that were set elsewhere.
-	if existing, err := h.config.GetServiceConfig(ctx, cfg.Provider, cfg.Service); err == nil && existing != nil {
-		existing.Enabled = cfg.Enabled
-		existing.Term = cfg.Term
-		existing.Payment = cfg.Payment
-		existing.Coverage = cfg.Coverage
-		cfg = *existing
+	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg)
+	if mergeErr != nil {
+		return nil, mergeErr
 	}
+	cfg = merged
 
 	// Validate the configuration
 	if err := cfg.Validate(); err != nil {
