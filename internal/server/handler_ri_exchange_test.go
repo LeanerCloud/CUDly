@@ -786,6 +786,9 @@ func (m *mockEmailSender) SendPurchaseConfirmation(context.Context, email.Notifi
 func (m *mockEmailSender) SendPurchaseFailedNotification(context.Context, email.NotificationData) error {
 	return nil
 }
+func (m *mockEmailSender) SendPurchaseApprovalRequest(context.Context, email.NotificationData) error {
+	return nil
+}
 func (m *mockEmailSender) SendPasswordResetEmail(context.Context, string, string) error {
 	return nil
 }

@@ -269,15 +269,11 @@ async function handleExecutePurchase(): Promise<void> {
   }
 
   try {
-    const result = await api.executePurchase(apiRecs);
+    await api.executePurchase(apiRecs);
     closePurchaseModal();
     clearPurchaseModalRecommendations();
 
-    if (result.status === 'completed') {
-      alert('Purchase executed successfully!');
-    } else {
-      alert(`Purchase submitted. Status: ${result.status}. Execution ID: ${result.execution_id}`);
-    }
+    alert('Purchase submitted — check your email to approve.');
     await loadDashboard();
   } catch (error) {
     const err = error as Error;

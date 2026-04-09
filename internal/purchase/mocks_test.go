@@ -457,6 +457,11 @@ func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 	return args.Error(0)
 }
 
+func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
 // Verify MockEmailSender implements email.SenderInterface
 var _ email.SenderInterface = (*MockEmailSender)(nil)
 

@@ -278,3 +278,39 @@ func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNot
 	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
 	return s.SendNotification(ctx, subject, body)
 }
+
+const purchaseApprovalRequestTemplate = `CUDly - Purchase Approval Required
+====================================
+
+A direct purchase of {{len .Recommendations}} commitment(s) has been submitted and requires your approval.
+
+Summary:
+--------
+Total Upfront Cost: ${{printf "%.2f" .TotalUpfrontCost}}
+Estimated Monthly Savings: ${{printf "%.2f" .TotalSavings}}
+
+Commitments:
+{{range .Recommendations}}
+- {{.Count}}x {{.ResourceType}}{{if .Engine}} ({{.Engine}}){{end}} in {{.Region}}
+  Service: {{.Service}} | Est. Savings: ${{printf "%.2f" .MonthlySavings}}/month
+{{end}}
+
+To approve this purchase, click the link below:
+{{.DashboardURL}}/api/purchases/approve/{{.ExecutionID}}?token={{.ApprovalToken}}
+
+To cancel this purchase, click the link below:
+{{.DashboardURL}}/api/purchases/cancel/{{.ExecutionID}}?token={{.ApprovalToken}}
+
+This is an automated message from CUDly. Do not share these links.
+`
+
+// SendPurchaseApprovalRequest sends an email asking the user to approve a direct purchase
+func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
+	body, err := RenderPurchaseApprovalRequestEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase approval request email: %w", err)
+	}
+
+	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
+	return s.SendNotification(ctx, subject, body)
+}

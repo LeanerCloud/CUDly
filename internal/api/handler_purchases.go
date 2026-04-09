@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 )
@@ -362,6 +364,9 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, fmt.Errorf("failed to save execution: %w", err)
 	}
 
+	// Send approval email (non-blocking; failure is logged but doesn't abort the response)
+	h.sendPurchaseApprovalEmail(ctx, execution, execReq.Recommendations, totalUpfront, totalSavings)
+
 	return map[string]any{
 		"execution_id":         executionID,
 		"status":               "pending",
@@ -370,4 +375,38 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		"estimated_savings":    totalSavings,
 		"message":              "Purchase execution created and pending approval",
 	}, nil
+}
+
+// sendPurchaseApprovalEmail sends an approval-request email for a newly created execution.
+// Errors are logged but do not propagate — email failure must not block the API response.
+func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) {
+	if h.emailNotifier == nil {
+		return
+	}
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil || globalCfg.NotificationEmail == nil || *globalCfg.NotificationEmail == "" {
+		return
+	}
+	summaries := make([]email.RecommendationSummary, 0, len(recs))
+	for _, rec := range recs {
+		summaries = append(summaries, email.RecommendationSummary{
+			Service:        rec.Service,
+			ResourceType:   rec.ResourceType,
+			Engine:         rec.Engine,
+			Region:         rec.Region,
+			Count:          rec.Count,
+			MonthlySavings: rec.Savings,
+		})
+	}
+	data := email.NotificationData{
+		DashboardURL:     h.dashboardURL,
+		ApprovalToken:    execution.ApprovalToken,
+		ExecutionID:      execution.ExecutionID,
+		TotalSavings:     totalSavings,
+		TotalUpfrontCost: totalUpfront,
+		Recommendations:  summaries,
+	}
+	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
+		logging.Errorf("Failed to send purchase approval email: %v", err)
+	}
 }

@@ -73,3 +73,8 @@ func RenderRIExchangePendingApprovalEmail(data RIExchangeNotificationData) (stri
 func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, error) {
 	return renderTemplate("ri-exchange-completed", riExchangeCompletedTemplate, data)
 }
+
+// RenderPurchaseApprovalRequestEmail renders the purchase approval request email template
+func RenderPurchaseApprovalRequestEmail(data NotificationData) (string, error) {
+	return renderTemplate("purchase-approval-request", purchaseApprovalRequestTemplate, data)
+}

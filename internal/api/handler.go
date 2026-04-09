@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
+	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -29,6 +30,8 @@ type Handler struct {
 	apiKey             string // Cached API key
 	corsAllowedOrigin  string // CORS allowed origin
 	rateLimiter        RateLimiterInterface
+	emailNotifier      email.SenderInterface       // Optional: purchase approval emails
+	dashboardURL       string                      // Base URL for approval/cancel links
 	analyticsClient    AnalyticsClientInterface    // Optional: S3/Athena analytics client
 	analyticsCollector AnalyticsCollectorInterface // Optional: Hourly collector
 
@@ -60,6 +63,8 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		gcpCredsARN:        cfg.GCPCredentialsSecretARN,
 		corsAllowedOrigin:  corsOrigin,
 		rateLimiter:        cfg.RateLimiter,
+		emailNotifier:      cfg.EmailNotifier,
+		dashboardURL:       cfg.DashboardURL,
 		analyticsClient:    cfg.AnalyticsClient,
 		analyticsCollector: cfg.AnalyticsCollector,
 	}

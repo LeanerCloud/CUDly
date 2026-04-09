@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
+	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
 
@@ -55,6 +56,8 @@ type HandlerConfig struct {
 	DashboardBucket           string
 	CORSAllowedOrigin         string // CORS allowed origin (default "*")
 	RateLimiter               RateLimiterInterface
+	EmailNotifier             email.SenderInterface // Optional: used to send purchase approval emails
+	DashboardURL              string                // Base URL for approval/cancel links in emails
 	// Analytics configuration (optional)
 	AnalyticsClient    AnalyticsClientInterface
 	AnalyticsCollector AnalyticsCollectorInterface

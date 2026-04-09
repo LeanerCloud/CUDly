@@ -277,5 +277,15 @@ func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchang
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
+// SendPurchaseApprovalRequest sends a purchase approval request email via SMTP
+func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
+	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
+	body, err := RenderPurchaseApprovalRequestEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase approval request email: %w", err)
+	}
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+}
+
 // Verify that SMTPSender implements SenderInterface
 var _ SenderInterface = (*SMTPSender)(nil)

@@ -175,6 +175,8 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		DashboardBucket:           cfg.DashboardBucket,
 		CORSAllowedOrigin:         cfg.CORSAllowedOrigin,
 		RateLimiter:               rateLimiter,
+		EmailNotifier:             deps.EmailSender,
+		DashboardURL:              cfg.DashboardURL,
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -407,6 +409,8 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		DashboardBucket:           app.appConfig.DashboardBucket,
 		CORSAllowedOrigin:         app.appConfig.CORSAllowedOrigin,
 		RateLimiter:               app.RateLimiter,
+		EmailNotifier:             app.Email,
+		DashboardURL:              app.appConfig.DashboardURL,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")

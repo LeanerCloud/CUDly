@@ -19,6 +19,7 @@ type SenderInterface interface {
 	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
 	SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error
 	SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error
+	SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error
 }
 
 // Verify that Sender implements SenderInterface

@@ -319,6 +319,11 @@ func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 	return args.Error(0)
 }
 
+func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
 // MockPurchaseManager is a mock implementation of purchase.Manager
 type MockPurchaseManager struct {
 	mock.Mock

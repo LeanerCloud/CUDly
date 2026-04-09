@@ -296,6 +296,9 @@ func (n *noopEmailSender) SendRIExchangePendingApproval(ctx context.Context, dat
 func (n *noopEmailSender) SendRIExchangeCompleted(ctx context.Context, data email.RIExchangeNotificationData) error {
 	return nil
 }
+func (n *noopEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+	return nil
+}
 
 func TestLoadApplicationConfig(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {

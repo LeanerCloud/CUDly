@@ -205,6 +205,7 @@ func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string)
 type NotificationData struct {
 	DashboardURL      string
 	ApprovalToken     string
+	ExecutionID       string
 	TotalSavings      float64
 	TotalUpfrontCost  float64
 	Recommendations   []RecommendationSummary
