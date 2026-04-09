@@ -21,11 +21,12 @@ type CloudAccountRequest struct {
 	ExternalID   string `json:"external_id"`
 	Enabled      *bool  `json:"enabled"`
 	// AWS
-	AWSAuthMode   string `json:"aws_auth_mode"`
-	AWSRoleARN    string `json:"aws_role_arn"`
-	AWSExternalID string `json:"aws_external_id"`
-	AWSBastionID  string `json:"aws_bastion_id"`
-	AWSIsOrgRoot  bool   `json:"aws_is_org_root"`
+	AWSAuthMode             string `json:"aws_auth_mode"`
+	AWSRoleARN              string `json:"aws_role_arn"`
+	AWSExternalID           string `json:"aws_external_id"`
+	AWSBastionID            string `json:"aws_bastion_id"`
+	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
+	AWSIsOrgRoot            bool   `json:"aws_is_org_root"`
 	// Azure
 	AzureSubscriptionID string `json:"azure_subscription_id"`
 	AzureTenantID       string `json:"azure_tenant_id"`
@@ -174,23 +175,24 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 // cloudAccountFromRequest maps a CloudAccountRequest to a config.CloudAccount.
 func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 	a := &config.CloudAccount{
-		Name:                req.Name,
-		Description:         req.Description,
-		ContactEmail:        req.ContactEmail,
-		Provider:            req.Provider,
-		ExternalID:          req.ExternalID,
-		AWSAuthMode:         req.AWSAuthMode,
-		AWSRoleARN:          req.AWSRoleARN,
-		AWSExternalID:       req.AWSExternalID,
-		AWSBastionID:        req.AWSBastionID,
-		AWSIsOrgRoot:        req.AWSIsOrgRoot,
-		AzureSubscriptionID: req.AzureSubscriptionID,
-		AzureTenantID:       req.AzureTenantID,
-		AzureClientID:       req.AzureClientID,
-		AzureAuthMode:       req.AzureAuthMode,
-		GCPProjectID:        req.GCPProjectID,
-		GCPClientEmail:      req.GCPClientEmail,
-		GCPAuthMode:         req.GCPAuthMode,
+		Name:                    req.Name,
+		Description:             req.Description,
+		ContactEmail:            req.ContactEmail,
+		Provider:                req.Provider,
+		ExternalID:              req.ExternalID,
+		AWSAuthMode:             req.AWSAuthMode,
+		AWSRoleARN:              req.AWSRoleARN,
+		AWSExternalID:           req.AWSExternalID,
+		AWSBastionID:            req.AWSBastionID,
+		AWSWebIdentityTokenFile: req.AWSWebIdentityTokenFile,
+		AWSIsOrgRoot:            req.AWSIsOrgRoot,
+		AzureSubscriptionID:     req.AzureSubscriptionID,
+		AzureTenantID:           req.AzureTenantID,
+		AzureClientID:           req.AzureClientID,
+		AzureAuthMode:           req.AzureAuthMode,
+		GCPProjectID:            req.GCPProjectID,
+		GCPClientEmail:          req.GCPClientEmail,
+		GCPAuthMode:             req.GCPAuthMode,
 	}
 
 	if req.Enabled != nil {
@@ -330,6 +332,12 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 func ambientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
 	switch acct.Provider {
 	case "aws":
+		if acct.AWSAuthMode == "workload_identity_federation" {
+			if acct.AWSRoleARN == "" {
+				return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
+			}
+			return AccountTestResult{OK: true, Message: "web identity federation configured (no stored credential required)"}, true
+		}
 		if acct.AWSAuthMode != "access_keys" {
 			if acct.AWSRoleARN == "" {
 				return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
