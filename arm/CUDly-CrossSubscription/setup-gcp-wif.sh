@@ -97,10 +97,14 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
       --workload-identity-pool="$POOL_ID" \
       --account-id="$AWS_ACCOUNT_ID" --quiet
   else
+    # --attribute-mapping is required; without it no subject claims are mapped and
+    # all token exchanges will be rejected at runtime despite successful pool setup.
     gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
       --project="$PROJECT" --location=global \
       --workload-identity-pool="$POOL_ID" \
-      --issuer-uri="$ISSUER_URI" --quiet
+      --issuer-uri="$ISSUER_URI" \
+      --attribute-mapping="google.subject=assertion.sub" \
+      --quiet
   fi
 else
   echo "Reusing existing provider '${PROVIDER_ID}'"

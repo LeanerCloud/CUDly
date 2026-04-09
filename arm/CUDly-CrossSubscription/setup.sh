@@ -72,19 +72,32 @@ echo ""
 # ── Credential setup ──────────────────────────────────────────────────────────
 CLIENT_SECRET=""
 if [[ "$MODE" == "wif" ]]; then
+  # Use a per-run temp directory to avoid predictable /tmp paths.
+  WORK_DIR=$(mktemp -d)
+  trap 'command -v shred >/dev/null && shred -u "${WORK_DIR}/cudly-wif.key" 2>/dev/null; rm -rf "$WORK_DIR"' EXIT
+
   echo "Generating self-signed certificate for workload identity federation..."
-  openssl genrsa -out /tmp/cudly-wif.key 2048 2>/dev/null
-  openssl req -new -x509 -key /tmp/cudly-wif.key -out /tmp/cudly-wif.crt \
+  openssl genrsa -out "${WORK_DIR}/cudly-wif.key" 2048 2>/dev/null
+  openssl req -new -x509 -key "${WORK_DIR}/cudly-wif.key" -out "${WORK_DIR}/cudly-wif.crt" \
     -days 730 -subj "/CN=CUDly-WIF" 2>/dev/null
-  CERT_B64=$(base64 < /tmp/cudly-wif.crt | tr -d '\n')
+  CERT_B64=$(base64 < "${WORK_DIR}/cudly-wif.crt" | tr -d '\n')
   az ad app credential reset --id "$APP_ID" --cert "$CERT_B64" --append --output none
-  printf '\n=== Private Key PEM (store as azure_wif_private_key in CUDly) ===\n'
-  cat /tmp/cudly-wif.key
-  printf '=== end of private key ===\n\n'
-  # Portable secure delete (macOS srm not available everywhere; overwrite then remove)
-  KEY_SIZE=$(wc -c < /tmp/cudly-wif.key)
-  dd if=/dev/zero of=/tmp/cudly-wif.key bs=1 count="$KEY_SIZE" conv=notrunc 2>/dev/null
-  rm -f /tmp/cudly-wif.key /tmp/cudly-wif.crt
+
+  # WARNING: The private key below will appear in terminal scrollback and any session
+  # recording. Do NOT run this script in CI/CD or any environment that captures stdout.
+  printf '\n=== Private Key PEM (store as azure_wif_private_key in CUDly) ===\n' >&2
+  cat "${WORK_DIR}/cudly-wif.key"
+  printf '=== end of private key — copy it now, it will be deleted from disk ===\n\n' >&2
+  # shred (Linux) preferred; dd overwrite as fallback for macOS
+  if command -v shred >/dev/null; then
+    shred -u "${WORK_DIR}/cudly-wif.key" 2>/dev/null
+  else
+    KEY_SIZE=$(wc -c < "${WORK_DIR}/cudly-wif.key")
+    dd if=/dev/zero of="${WORK_DIR}/cudly-wif.key" bs=1 count="$KEY_SIZE" conv=notrunc 2>/dev/null
+    rm -f "${WORK_DIR}/cudly-wif.key"
+  fi
+  rm -f "${WORK_DIR}/cudly-wif.crt"
+  trap - EXIT  # key already deleted; cancel trap
 else
   echo "Creating client secret (valid 2 years)..."
   CLIENT_SECRET=$(az ad app credential reset \
