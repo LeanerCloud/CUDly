@@ -302,6 +302,17 @@ function openAccountModal(provider: AccountProvider, account?: api.CloudAccount)
     (document.getElementById('account-azure-client-secret') as HTMLInputElement).value = '';
     (document.getElementById('account-azure-wif-private-key') as HTMLTextAreaElement | null ?? { value: '' }).value = '';
     updateAzureAuthModeFields(azureAuthMode);
+  } else if (provider === 'gcp') {
+    const gcpMode = account?.gcp_auth_mode ?? 'service_account_key';
+    const gcpAuthSelect = document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null;
+    if (gcpAuthSelect) gcpAuthSelect.value = gcpMode;
+    const gcpEmailEl = document.getElementById('account-gcp-client-email') as HTMLInputElement | null;
+    if (gcpEmailEl) gcpEmailEl.value = account?.gcp_client_email ?? '';
+    const gcpJsonEl = document.getElementById('account-gcp-service-account-json') as HTMLTextAreaElement | null;
+    if (gcpJsonEl) gcpJsonEl.value = '';
+    const wifConfig = document.getElementById('account-gcp-wif-config') as HTMLTextAreaElement | null;
+    if (wifConfig) wifConfig.value = '';
+    updateGCPAuthModeFields(gcpMode);
   }
 
   modal.classList.remove('hidden');
@@ -349,6 +360,16 @@ function updateAzureAuthModeFields(mode: string): void {
   const secretFields = document.getElementById('account-azure-secret-fields');
   const wifFields = document.getElementById('account-azure-wif-fields');
   secretFields?.classList.toggle('hidden', mode !== 'client_secret');
+  wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
+}
+
+/**
+ * Show/hide GCP auth mode sub-fields
+ */
+function updateGCPAuthModeFields(mode: string): void {
+  const keyFields = document.getElementById('account-gcp-key-fields');
+  const wifFields = document.getElementById('account-gcp-wif-fields');
+  keyFields?.classList.toggle('hidden', mode !== 'service_account_key');
   wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
 }
 
@@ -412,6 +433,8 @@ function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest
     req.azure_client_id = (document.getElementById('account-azure-client-id') as HTMLInputElement).value.trim();
   } else if (provider === 'gcp') {
     req.gcp_project_id = req.external_id; // external_id IS the project ID for GCP
+    req.gcp_auth_mode = (document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null)?.value || 'service_account_key';
+    req.gcp_client_email = (document.getElementById('account-gcp-client-email') as HTMLInputElement | null)?.value.trim() ?? '';
   }
 
   return req;
@@ -455,12 +478,33 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
       }
     }
   } else if (provider === 'gcp') {
-    const jsonText = (document.getElementById('account-gcp-service-account-json') as HTMLTextAreaElement).value.trim();
-    if (jsonText) {
-      await api.saveAccountCredentials(accountId, {
-        credential_type: 'gcp_service_account',
-        payload: JSON.parse(jsonText) as Record<string, unknown>
-      });
+    const gcpMode = (document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null)?.value ?? 'service_account_key';
+    if (gcpMode === 'application_default') {
+      // No credential to store
+    } else if (gcpMode === 'workload_identity_federation') {
+      const config = (document.getElementById('account-gcp-wif-config') as HTMLTextAreaElement | null)?.value.trim();
+      if (config) {
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(config) as Record<string, unknown>;
+        } catch {
+          alert('GCP WIF config is not valid JSON');
+          return;
+        }
+        await api.saveAccountCredentials(accountId, { credential_type: 'gcp_workload_identity_config', payload: parsed });
+      }
+    } else {
+      const jsonText = (document.getElementById('account-gcp-service-account-json') as HTMLTextAreaElement | null)?.value.trim() ?? '';
+      if (jsonText) {
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(jsonText) as Record<string, unknown>;
+        } catch {
+          alert('Service account JSON is not valid JSON');
+          return;
+        }
+        await api.saveAccountCredentials(accountId, { credential_type: 'gcp_service_account', payload: parsed });
+      }
     }
   }
 }
@@ -600,6 +644,10 @@ export function setupSettingsHandlers(): void {
   // Azure auth mode change handler
   const azureAuthMode = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
   azureAuthMode?.addEventListener('change', () => updateAzureAuthModeFields(azureAuthMode.value));
+
+  // GCP auth mode change handler
+  const gcpAuthMode = document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null;
+  gcpAuthMode?.addEventListener('change', () => updateGCPAuthModeFields(gcpAuthMode.value));
 
   // Close account modal when clicking outside
   const accountModal = document.getElementById('account-modal');

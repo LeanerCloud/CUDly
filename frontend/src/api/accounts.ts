@@ -24,6 +24,7 @@ export interface CloudAccount {
   azure_client_id?: string;
   gcp_project_id?: string;
   gcp_client_email?: string;
+  gcp_auth_mode?: 'service_account_key' | 'application_default' | 'workload_identity_federation';
   credentials_configured: boolean;
   created_at: string;
   updated_at: string;
@@ -47,6 +48,7 @@ export interface CloudAccountRequest {
   azure_client_id?: string;
   gcp_project_id?: string;
   gcp_client_email?: string;
+  gcp_auth_mode?: string;
 }
 
 export interface AccountListFilters {
@@ -56,7 +58,7 @@ export interface AccountListFilters {
 }
 
 export interface AccountCredentialsRequest {
-  credential_type: 'aws_access_keys' | 'azure_client_secret' | 'azure_wif_private_key' | 'gcp_service_account';
+  credential_type: 'aws_access_keys' | 'azure_client_secret' | 'azure_wif_private_key' | 'gcp_service_account' | 'gcp_workload_identity_config';
   payload: Record<string, unknown>;
 }
 
