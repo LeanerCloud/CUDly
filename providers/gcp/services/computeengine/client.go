@@ -193,8 +193,8 @@ func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params com
 	}
 	defer recClient.Close()
 
-	// Recommender name for Compute Engine CUD recommendations
-	parent := fmt.Sprintf("projects/%s/locations/%s/recommenders/google.compute.commitment.UsageCommitmentRecommender",
+	// Recommender ID for GCP CUD recommendations
+	parent := fmt.Sprintf("projects/%s/locations/%s/recommenders/google.billing.CostInsight.commitmentRecommender",
 		c.projectID, c.region)
 
 	req := &recommenderpb.ListRecommendationsRequest{
@@ -310,6 +310,70 @@ func (c *ComputeEngineClient) convertGCPCommitmentToCommon(commitment *computepb
 	return com
 }
 
+// ResourceCommitment represents a single resource within a GCP commitment.
+type ResourceCommitment struct {
+	Amount int64  // number of vCPUs or memory in MB
+	Type   string // "VCPU" or "MEMORY_MB"
+}
+
+// CommitmentRequest represents a single GCP commitment to create.
+type CommitmentRequest struct {
+	Name      string // unique per region+project
+	Plan      string // "TWELVE_MONTH" or "THIRTY_SIX_MONTH"
+	Region    string
+	Resources []ResourceCommitment
+}
+
+// GroupCommitments groups recommendations by project+region+term into CommitmentRequests.
+// GCP requires both VCPU and MEMORY_MB in a single commitments.insert call.
+// Each recommendation's Count is treated as vCPU count; memory is estimated at 4 GB per vCPU.
+func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
+	type key struct{ account, region, term string }
+	type agg struct {
+		vcpus int64
+		plan  string
+	}
+	groups := make(map[key]*agg)
+
+	for _, rec := range recs {
+		if rec.Service != common.ServiceCompute || rec.Provider != common.ProviderGCP {
+			continue
+		}
+		k := key{account: rec.Account, region: rec.Region, term: rec.Term}
+		if _, ok := groups[k]; !ok {
+			plan := "TWELVE_MONTH"
+			if rec.Term == "3yr" || rec.Term == "3" {
+				plan = "THIRTY_SIX_MONTH"
+			}
+			groups[k] = &agg{plan: plan}
+		}
+		groups[k].vcpus += int64(rec.Count)
+	}
+
+	result := make([]CommitmentRequest, 0, len(groups))
+	for k, a := range groups {
+		result = append(result, CommitmentRequest{
+			Name:   fmt.Sprintf("cud-%s-%d", k.region, time.Now().UnixNano()),
+			Plan:   a.plan,
+			Region: k.region,
+			Resources: []ResourceCommitment{
+				{Type: "VCPU", Amount: a.vcpus},
+				{Type: "MEMORY_MB", Amount: a.vcpus * 4096},
+			},
+		})
+	}
+	return result
+}
+
+// isResourceExhausted reports whether the error represents a RESOURCE_EXHAUSTED (429) response.
+func isResourceExhausted(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "ResourceExhausted") || strings.Contains(s, "RESOURCE_EXHAUSTED") || strings.Contains(s, "429")
+}
+
 // PurchaseCommitment purchases a Compute Engine CUD
 func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
@@ -339,7 +403,7 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 		plan = "THIRTY_SIX_MONTH"
 	}
 
-	// Create commitment request
+	// GCP requires both VCPU and MEMORY_MB in a single commitment insert.
 	commitment := &computepb.Commitment{
 		Name:        stringPtr(fmt.Sprintf("cud-%d", time.Now().Unix())),
 		Plan:        stringPtr(plan),
@@ -347,28 +411,42 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 		Description: stringPtr(fmt.Sprintf("CUD for %s", rec.ResourceType)),
 		Resources: []*computepb.ResourceCommitment{
 			{
-				Type:   stringPtr(rec.ResourceType),
+				Type:   stringPtr("VCPU"),
 				Amount: int64Ptr(int64(rec.Count)),
+			},
+			{
+				Type:   stringPtr("MEMORY_MB"),
+				Amount: int64Ptr(int64(rec.Count) * 4096),
 			},
 		},
 	}
 
-	req := &computepb.InsertRegionCommitmentRequest{
+	insertReq := &computepb.InsertRegionCommitmentRequest{
 		Project:            c.projectID,
 		Region:             c.region,
 		CommitmentResource: commitment,
 	}
 
-	op, err := svc.Insert(ctx, req)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create commitment: %w", err)
-		return result, result.Error
-	}
+	// Exponential backoff on RESOURCE_EXHAUSTED: 1s, 2s, 4s (max 3 retries = 4 total attempts).
+	backoff := time.Second
+	const maxRetries = 3
+	for attempt := 0; ; attempt++ {
+		op, err := svc.Insert(ctx, insertReq)
+		if err != nil {
+			if isResourceExhausted(err) && attempt < maxRetries {
+				time.Sleep(backoff)
+				backoff *= 2
+				continue
+			}
+			result.Error = fmt.Errorf("failed to create commitment: %w", err)
+			return result, result.Error
+		}
 
-	// Wait for operation to complete
-	if err := op.Wait(ctx); err != nil {
-		result.Error = fmt.Errorf("commitment creation failed: %w", err)
-		return result, result.Error
+		if err := op.Wait(ctx); err != nil {
+			result.Error = fmt.Errorf("commitment creation failed: %w", err)
+			return result, result.Error
+		}
+		break
 	}
 
 	result.Success = true
