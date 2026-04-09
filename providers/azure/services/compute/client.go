@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
+	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
@@ -55,6 +57,10 @@ type ComputeClient struct {
 	recommendationsPager RecommendationsPager
 	reservationsPager    ReservationsDetailsPager
 	resourceSKUsPager    ResourceSKUsPager
+
+	// Microsoft.Capacity provider registration check (cached per client lifetime)
+	capacityProviderOnce sync.Once
+	capacityProviderErr  error
 }
 
 // NewClient creates a new Azure Compute client
@@ -231,29 +237,96 @@ func (c *ComputeClient) convertVMReservation(detail *armconsumption.ReservationD
 	return commitment
 }
 
-// PurchaseCommitment purchases a VM Reserved Instance
-func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
-	result := common.PurchaseResult{
-		Recommendation: rec,
-		DryRun:         false,
-		Success:        false,
-		Timestamp:      time.Now(),
+// providerRegistrationState is the JSON shape returned by the ARM providers API.
+type providerRegistrationState struct {
+	RegistrationState string `json:"registrationState"`
+}
+
+// ensureCapacityProviderRegistered checks that the Microsoft.Capacity resource provider
+// is registered in the subscription. The check is performed once per client lifetime.
+// An error is logged but does not block the purchase attempt.
+func (c *ComputeClient) ensureCapacityProviderRegistered(ctx context.Context) {
+	c.capacityProviderOnce.Do(func() {
+		c.capacityProviderErr = c.checkAndRegisterCapacityProvider(ctx)
+		if c.capacityProviderErr != nil {
+			log.Printf("WARNING: Microsoft.Capacity provider registration check failed: %v", c.capacityProviderErr)
+		}
+	})
+}
+
+// checkAndRegisterCapacityProvider performs the actual provider registration check.
+func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) error {
+	if c.cred == nil {
+		return nil // skip in test environments without credentials
 	}
 
-	reservationOrderID := fmt.Sprintf("vm-reservation-%d", time.Now().Unix())
-	apiVersion := "2022-11-01"
-	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
-		reservationOrderID, apiVersion)
+	token, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{
+		Scopes: []string{"https://management.azure.com/.default"},
+	})
+	if err != nil {
+		return fmt.Errorf("get token: %w", err)
+	}
 
+	apiVersion := "2021-04-01"
+	checkURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/providers/Microsoft.Capacity?api-version=%s",
+		c.subscriptionID, apiVersion,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token.Token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("check provider: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var state providerRegistrationState
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return fmt.Errorf("decode provider state: %w", err)
+	}
+
+	if state.RegistrationState == "Registered" {
+		return nil
+	}
+
+	// Trigger registration
+	registerURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/providers/Microsoft.Capacity/register?api-version=%s",
+		c.subscriptionID, apiVersion,
+	)
+	regReq, err := http.NewRequestWithContext(ctx, http.MethodPost, registerURL, nil)
+	if err != nil {
+		return fmt.Errorf("build register request: %w", err)
+	}
+	regReq.Header.Set("Authorization", "Bearer "+token.Token)
+	regResp, err := c.httpClient.Do(regReq)
+	if err != nil {
+		return fmt.Errorf("register provider: %w", err)
+	}
+	regResp.Body.Close()
+
+	log.Printf("Triggered Microsoft.Capacity provider registration (was: %q)", state.RegistrationState)
+	return nil
+}
+
+const (
+	purchaseMaxAttempts = 3
+	purchaseRetryDelay  = 2 * time.Second
+)
+
+// buildReservationBody builds the JSON body for a reservation PUT request.
+func (c *ComputeClient) buildReservationBody(rec common.Recommendation) ([]byte, error) {
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
 		termYears = 3
 	}
-
 	requestBody := map[string]interface{}{
-		"sku": map[string]string{
-			"name": rec.ResourceType,
-		},
+		"sku":      map[string]string{"name": rec.ResourceType},
 		"location": c.region,
 		"properties": map[string]interface{}{
 			"reservedResourceType": "VirtualMachines",
@@ -265,16 +338,60 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 			"renew":                false,
 		},
 	}
+	return json.Marshal(requestBody)
+}
 
-	bodyBytes, err := json.Marshal(requestBody)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to marshal request: %w", err)
-		return result, result.Error
+// isSuccessStatus reports whether the HTTP status code is a successful purchase response.
+func isSuccessStatus(code int) bool {
+	return code == http.StatusOK || code == http.StatusCreated || code == http.StatusAccepted
+}
+
+// doPurchaseWithRetry executes the reservation PUT with 409-retry logic.
+// Returns the successful response body (for future use) or an error.
+func (c *ComputeClient) doPurchaseWithRetry(ctx context.Context, purchaseURL string, bodyBytes []byte, bearerToken string) error {
+	for attempt := 1; attempt <= purchaseMaxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "PUT", purchaseURL, strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to purchase reservation: %w", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusConflict && attempt < purchaseMaxAttempts {
+			log.Printf("reservation purchase returned 409 (attempt %d/%d), retrying in %s", attempt, purchaseMaxAttempts, purchaseRetryDelay)
+			time.Sleep(purchaseRetryDelay)
+			continue
+		}
+		if !isSuccessStatus(resp.StatusCode) {
+			return fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil
+	}
+	return fmt.Errorf("reservation purchase failed after %d attempts (409 Conflict)", purchaseMaxAttempts)
+}
+
+// PurchaseCommitment purchases a VM Reserved Instance
+func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+	result := common.PurchaseResult{
+		Recommendation: rec,
+		DryRun:         false,
+		Success:        false,
+		Timestamp:      time.Now(),
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", purchaseURL, strings.NewReader(string(bodyBytes)))
+	// Ensure Microsoft.Capacity provider is registered (cached after first call).
+	c.ensureCapacityProviderRegistered(ctx)
+
+	bodyBytes, err := c.buildReservationBody(rec)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to create request: %w", err)
+		result.Error = fmt.Errorf("failed to marshal request: %w", err)
 		return result, result.Error
 	}
 
@@ -286,27 +403,18 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		return result, result.Error
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token.Token)
-	req.Header.Set("Content-Type", "application/json")
+	reservationOrderID := uuid.New().String()
+	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=2022-11-01",
+		reservationOrderID)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to purchase reservation: %w", err)
-		return result, result.Error
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		result.Error = fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
+	if err := c.doPurchaseWithRetry(ctx, purchaseURL, bodyBytes, token.Token); err != nil {
+		result.Error = err
 		return result, result.Error
 	}
 
 	result.Success = true
 	result.CommitmentID = reservationOrderID
 	result.Cost = rec.CommitmentCost
-
 	return result, nil
 }
 
