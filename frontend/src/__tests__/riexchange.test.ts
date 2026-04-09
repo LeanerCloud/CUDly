@@ -1,5 +1,5 @@
 /**
- * RI Exchange module tests — fillQuoteFromRI
+ * RI Exchange module tests — openExchangeModal and fillQuoteFromRI
  */
 
 // Mock the api module defensively (riexchange.ts imports it)
@@ -14,90 +14,93 @@ jest.mock('../api', () => ({
   updateRIExchangeConfig: jest.fn(),
 }));
 
-import { fillQuoteFromRI } from '../riexchange';
+import { fillQuoteFromRI, openExchangeModal } from '../riexchange';
 
-function createInput(id: string): HTMLInputElement {
-  const el = document.createElement('input');
-  el.id = id;
-  document.body.appendChild(el);
-  return el;
+function createModal(): HTMLDivElement {
+  const modal = document.createElement('div');
+  modal.id = 'ri-exchange-modal';
+  modal.className = 'modal hidden';
+  const content = document.createElement('div');
+  content.className = 'modal-content';
+  modal.appendChild(content);
+  document.body.appendChild(modal);
+  return modal;
 }
 
-function createDiv(id: string): HTMLDivElement {
-  const el = document.createElement('div');
-  el.id = id;
-  document.body.appendChild(el);
-  return el;
-}
-
-describe('fillQuoteFromRI', () => {
-  let riIdsInput: HTMLInputElement;
-  let targetInput: HTMLInputElement;
-  let countInput: HTMLInputElement;
-  let executeSection: HTMLDivElement;
-  let quoteResult: HTMLDivElement;
-  let quoteSection: HTMLDivElement;
+describe('openExchangeModal', () => {
+  let modal: HTMLDivElement;
 
   beforeEach(() => {
-    riIdsInput = createInput('ri-exchange-ri-ids');
-    targetInput = createInput('ri-exchange-target-offering');
-    countInput = createInput('ri-exchange-target-count');
-    executeSection = createDiv('ri-exchange-execute-section');
-    quoteResult = createDiv('ri-exchange-quote-result');
-    quoteSection = createDiv('ri-exchange-quote-section');
-
-    // jsdom doesn't implement scrollIntoView — define it as a mock
-    Element.prototype.scrollIntoView = jest.fn();
-    jest.useFakeTimers();
+    modal = createModal();
   });
 
   afterEach(() => {
-    jest.useRealTimers();
-    jest.restoreAllMocks();
     document.body.innerHTML = '';
   });
 
-  it('populates RI ID input with given value', () => {
+  it('removes hidden class to show the modal', () => {
+    openExchangeModal('ri-abc123', 2);
+    expect(modal.classList.contains('hidden')).toBe(false);
+  });
+
+  it('displays the RI ID in the modal content', () => {
+    openExchangeModal('ri-abc123', 2);
+    expect(modal.textContent).toContain('ri-abc123');
+  });
+
+  it('pre-fills count input with given count', () => {
+    openExchangeModal('ri-abc123', 5);
+    const countInput = modal.querySelector<HTMLInputElement>('#modal-exchange-count');
+    expect(countInput?.value).toBe('5');
+  });
+
+  it('pre-fills target input with suggestedTargetType when provided', () => {
+    openExchangeModal('ri-abc123', 2, 'm5.large');
+    const targetInput = modal.querySelector<HTMLInputElement>('#modal-exchange-target');
+    expect(targetInput?.value).toBe('m5.large');
+  });
+
+  it('leaves target input empty when suggestedTargetType is not provided', () => {
+    openExchangeModal('ri-abc123', 2);
+    const targetInput = modal.querySelector<HTMLInputElement>('#modal-exchange-target');
+    expect(targetInput?.value).toBe('');
+  });
+
+  it('hides modal when cancel button is clicked', () => {
+    openExchangeModal('ri-abc123', 2);
+    const cancelBtn = Array.from(modal.querySelectorAll('button')).find(b => b.textContent === 'Cancel');
+    cancelBtn?.click();
+    expect(modal.classList.contains('hidden')).toBe(true);
+  });
+
+  it('does not throw when modal element is missing', () => {
+    document.body.innerHTML = '';
+    expect(() => openExchangeModal('ri-abc123', 2)).not.toThrow();
+  });
+});
+
+describe('fillQuoteFromRI', () => {
+  let modal: HTMLDivElement;
+
+  beforeEach(() => {
+    modal = createModal();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('opens the exchange modal', () => {
     fillQuoteFromRI('ri-abc123', 2);
-    expect(riIdsInput.value).toBe('ri-abc123');
+    expect(modal.classList.contains('hidden')).toBe(false);
   });
 
-  it('clears target offering input', () => {
-    targetInput.value = 'old-offering';
-    fillQuoteFromRI('ri-abc123', 2);
-    expect(targetInput.value).toBe('');
+  it('displays the RI ID in the modal', () => {
+    fillQuoteFromRI('ri-xyz', 3);
+    expect(modal.textContent).toContain('ri-xyz');
   });
 
-  it('populates count input with given count', () => {
-    fillQuoteFromRI('ri-abc123', 5);
-    expect(countInput.value).toBe('5');
-  });
-
-  it('adds hidden class to execute section', () => {
-    executeSection.classList.remove('hidden');
-    fillQuoteFromRI('ri-abc123', 1);
-    expect(executeSection.classList.contains('hidden')).toBe(true);
-  });
-
-  it('clears quote result container', () => {
-    quoteResult.textContent = 'stale result';
-    fillQuoteFromRI('ri-abc123', 1);
-    expect(quoteResult.textContent).toBe('');
-  });
-
-  it('scrolls quote section into view', () => {
-    fillQuoteFromRI('ri-abc123', 1);
-    expect(quoteSection.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth' });
-  });
-
-  it('focuses target offering input after 500ms', () => {
-    fillQuoteFromRI('ri-abc123', 1);
-    expect(document.activeElement).not.toBe(targetInput);
-    jest.advanceTimersByTime(500);
-    expect(document.activeElement).toBe(targetInput);
-  });
-
-  it('does not throw when DOM elements are missing', () => {
+  it('does not throw when modal is missing', () => {
     document.body.innerHTML = '';
     expect(() => fillQuoteFromRI('ri-abc123', 1)).not.toThrow();
   });

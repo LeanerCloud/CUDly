@@ -141,18 +141,18 @@ function renderRIsTable(container: HTMLElement): void {
             <td>${escapeHtml(ri.offering_type)}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
-            <td><button class="btn-small" data-action="quote-ri" data-ri-id="${escapeHtml(ri.reserved_instance_id)}" data-count="${ri.instance_count}" aria-label="Get Quote for ${escapeHtml(ri.reserved_instance_id)}">Get Quote</button></td>
+            <td><button class="btn-small" data-action="quote-ri" data-ri-id="${escapeHtml(ri.reserved_instance_id)}" data-count="${ri.instance_count}" aria-label="Exchange ${escapeHtml(ri.reserved_instance_id)}">Exchange</button></td>
           </tr>`;
         }).join('')}
       </tbody>
     </table>
   `;
 
-  // Attach "Get Quote" handlers for individual RIs
+  // Attach "Exchange" handlers for individual RIs
   container.querySelectorAll<HTMLButtonElement>('[data-action="quote-ri"]').forEach(btn => {
     btn.addEventListener('click', () => {
       const count = parseInt(btn.dataset['count'] || '1', 10);
-      fillQuoteFromRI(btn.dataset['riId'] || '', isNaN(count) ? 1 : count);
+      openExchangeModal(btn.dataset['riId'] || '', isNaN(count) ? 1 : count);
     });
   });
 }
@@ -207,7 +207,7 @@ function renderRecommendations(container: HTMLElement): void {
             <td>${rec.normalized_used.toFixed(1)} / ${rec.normalized_purchased.toFixed(1)}</td>
             <td>${escapeHtml(rec.reason)}</td>
             <td>
-              <button data-action="fill-quote" data-index="${idx}">Get Quote</button>
+              <button class="btn-small" data-action="fill-quote" data-index="${idx}">Exchange</button>
             </td>
           </tr>`;
         }).join('')}
@@ -215,7 +215,7 @@ function renderRecommendations(container: HTMLElement): void {
     </table>
   `;
 
-  // Attach "Get Quote" handlers
+  // Attach "Exchange" handlers
   container.querySelectorAll<HTMLButtonElement>('[data-action="fill-quote"]').forEach(btn => {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset['index'] || '0', 10);
@@ -226,40 +226,227 @@ function renderRecommendations(container: HTMLElement): void {
 }
 
 function fillQuoteFromRecommendation(rec: ReshapeRecommendation): void {
-  const riIdsInput = document.getElementById('ri-exchange-ri-ids') as HTMLInputElement | null;
-  const targetInput = document.getElementById('ri-exchange-target-offering') as HTMLInputElement | null;
-  const countInput = document.getElementById('ri-exchange-target-count') as HTMLInputElement | null;
-
-  if (riIdsInput) riIdsInput.value = rec.source_ri_id;
-  if (targetInput) targetInput.value = '';
-  if (countInput) countInput.value = String(rec.target_count);
-
-  // Scroll the quote form into view
-  document.getElementById('ri-exchange-quote-section')?.scrollIntoView({ behavior: 'smooth' });
+  openExchangeModal(rec.source_ri_id, rec.target_count, rec.target_instance_type);
 }
 
 export function fillQuoteFromRI(riId: string, count: number): void {
-  const riIdsInput = document.getElementById('ri-exchange-ri-ids') as HTMLInputElement | null;
-  const targetInput = document.getElementById('ri-exchange-target-offering') as HTMLInputElement | null;
-  const countInput = document.getElementById('ri-exchange-target-count') as HTMLInputElement | null;
+  openExchangeModal(riId, count);
+}
 
-  if (riIdsInput) riIdsInput.value = riId;
-  if (targetInput) targetInput.value = '';
-  if (countInput) countInput.value = String(count);
+// ──────────────────────────────────────────────
+// RI Exchange Modal
+// ──────────────────────────────────────────────
 
-  // Clear stale quote/execute state from previous interactions
-  const executeSection = document.getElementById('ri-exchange-execute-section');
-  if (executeSection) executeSection.classList.add('hidden');
-  const quoteResult = document.getElementById('ri-exchange-quote-result');
-  if (quoteResult) quoteResult.textContent = '';
+export function openExchangeModal(riId: string, count: number, suggestedTargetType?: string): void {
+  const modalEl = document.getElementById('ri-exchange-modal');
+  if (!modalEl) return;
+  const modal = modalEl; // non-null const for use in closures
 
-  // Scroll first, then focus after scroll completes to avoid double-scroll jank
-  // (focus() on off-screen elements triggers an instant browser scroll)
-  const quoteSection = document.getElementById('ri-exchange-quote-section');
-  if (quoteSection) {
-    quoteSection.scrollIntoView({ behavior: 'smooth' });
-    setTimeout(() => { targetInput?.focus(); }, 500);
+  const content = modal.querySelector('.modal-content');
+  if (!content) return;
+
+  // Scoped state for this modal session
+  let modalQuote: ExchangeQuoteSummary | null = null;
+  let modalQuoteReq: { ri_ids: string[]; target_offering_id: string; target_count: number } | null = null;
+
+  // Build header
+  const h3 = document.createElement('h3');
+  h3.textContent = 'RI Exchange';
+  content.textContent = '';
+  content.appendChild(h3);
+
+  // RI ID display
+  const riRow = document.createElement('div');
+  riRow.className = 'setting-row';
+  const riLabel = document.createElement('label');
+  riLabel.textContent = 'RI ID: ';
+  const riSpan = document.createElement('span');
+  riSpan.className = 'monospace';
+  riSpan.textContent = riId;
+  riLabel.appendChild(riSpan);
+  riRow.appendChild(riLabel);
+  content.appendChild(riRow);
+
+  // Count input
+  const countRow = document.createElement('div');
+  countRow.className = 'setting-row';
+  const countLabel = document.createElement('label');
+  countLabel.textContent = 'Target Count: ';
+  const countInput = document.createElement('input');
+  countInput.type = 'number';
+  countInput.min = '1';
+  countInput.value = String(count);
+  countInput.id = 'modal-exchange-count';
+  countLabel.appendChild(countInput);
+  countRow.appendChild(countLabel);
+  content.appendChild(countRow);
+
+  // Target offering ID input
+  const targetRow = document.createElement('div');
+  targetRow.className = 'setting-row';
+  const targetLabel = document.createElement('label');
+  targetLabel.textContent = 'Target Offering ID: ';
+  const targetInput = document.createElement('input');
+  targetInput.type = 'text';
+  targetInput.id = 'modal-exchange-target';
+  targetInput.placeholder = 'e.g. t3.medium';
+  if (suggestedTargetType) targetInput.value = suggestedTargetType;
+  targetLabel.appendChild(targetInput);
+  targetRow.appendChild(targetLabel);
+  content.appendChild(targetRow);
+
+  // Result container
+  const resultContainer = document.createElement('div');
+  resultContainer.id = 'modal-exchange-result';
+  content.appendChild(resultContainer);
+
+  // Execute button (hidden until valid quote)
+  const executeBtn = document.createElement('button');
+  executeBtn.className = 'btn primary hidden';
+  executeBtn.textContent = 'Execute Exchange';
+
+  // Buttons row
+  const btnRow = document.createElement('div');
+  btnRow.className = 'modal-buttons';
+
+  const quoteBtn = document.createElement('button');
+  quoteBtn.className = 'btn primary';
+  quoteBtn.textContent = 'Get Quote';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn';
+  cancelBtn.textContent = 'Cancel';
+
+  btnRow.appendChild(quoteBtn);
+  btnRow.appendChild(executeBtn);
+  btnRow.appendChild(cancelBtn);
+  content.appendChild(btnRow);
+
+  // Show modal
+  modal.classList.remove('hidden');
+
+  cancelBtn.addEventListener('click', () => {
+    modal.classList.add('hidden');
+  });
+
+  quoteBtn.addEventListener('click', () => {
+    void submitModalQuote();
+  });
+
+  executeBtn.addEventListener('click', () => {
+    void submitModalExecute();
+  });
+
+  async function submitModalQuote(): Promise<void> {
+    const targetOfferingId = targetInput.value.trim();
+    const rawCount = parseInt(countInput.value, 10);
+    const targetCount = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;
+
+    if (!targetOfferingId) {
+      setResultText(resultContainer, 'Please enter a target offering ID.', 'error');
+      return;
+    }
+
+    setResultText(resultContainer, 'Getting exchange quote...', 'loading');
+    executeBtn.classList.add('hidden');
+
+    try {
+      modalQuote = await api.getExchangeQuote({
+        ri_ids: [riId],
+        target_offering_id: targetOfferingId,
+        target_count: targetCount,
+      });
+      modalQuoteReq = { ri_ids: [riId], target_offering_id: targetOfferingId, target_count: targetCount };
+      renderModalQuoteResult(resultContainer, modalQuote);
+      if (modalQuote.IsValidExchange) executeBtn.classList.remove('hidden');
+    } catch (error) {
+      const err = error as Error;
+      setResultText(resultContainer, 'Quote failed: ' + err.message, 'error');
+    }
   }
+
+  async function submitModalExecute(): Promise<void> {
+    if (!modalQuote || !modalQuoteReq) return;
+
+    setResultText(resultContainer, 'Executing exchange...', 'loading');
+    executeBtn.disabled = true;
+
+    try {
+      const result = await api.executeExchange({
+        ri_ids: modalQuoteReq.ri_ids,
+        target_offering_id: modalQuoteReq.target_offering_id,
+        target_count: modalQuoteReq.target_count,
+        max_payment_due_usd: modalQuote.PaymentDueRaw,
+      });
+
+      setResultText(resultContainer, 'Exchange completed. ID: ' + result.exchange_id, 'success-message');
+      executeBtn.classList.add('hidden');
+      modalQuote = null;
+      modalQuoteReq = null;
+
+      setTimeout(() => {
+        modal.classList.add('hidden');
+        void loadConvertibleRIs();
+        void loadExchangeHistory();
+      }, 2000);
+    } catch (error) {
+      const err = error as Error;
+      setResultText(resultContainer, 'Exchange failed: ' + err.message, 'error');
+      executeBtn.disabled = false;
+    }
+  }
+}
+
+function setResultText(container: HTMLElement, message: string, cls: string): void {
+  container.textContent = '';
+  const p = document.createElement('p');
+  p.className = cls;
+  p.textContent = message;
+  container.appendChild(p);
+}
+
+function renderModalQuoteResult(container: HTMLElement, quote: ExchangeQuoteSummary): void {
+  container.textContent = '';
+
+  const div = document.createElement('div');
+  div.className = 'quote-summary ' + (quote.IsValidExchange ? 'quote-valid' : 'quote-invalid');
+
+  const h4 = document.createElement('h4');
+  h4.textContent = quote.IsValidExchange ? 'Valid Exchange' : 'Invalid Exchange';
+  div.appendChild(h4);
+
+  if (quote.ValidationFailureReason) {
+    const p = document.createElement('p');
+    p.className = 'error';
+    p.textContent = quote.ValidationFailureReason;
+    div.appendChild(p);
+  }
+
+  const rows: [string, string][] = [
+    ['Currency', quote.CurrencyCode],
+    ['Payment Due', quote.PaymentDueRaw],
+    ['Source Hourly Price', quote.SourceHourlyPriceRaw],
+    ['Target Hourly Price', quote.TargetHourlyPriceRaw],
+  ];
+  if (quote.OutputReservedInstancesExp) {
+    rows.push(['New RI Expiry', quote.OutputReservedInstancesExp]);
+  }
+
+  const details = document.createElement('div');
+  details.className = 'quote-details';
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    row.className = 'quote-row';
+    const span = document.createElement('span');
+    span.textContent = label + ':';
+    const strong = document.createElement('strong');
+    strong.textContent = value;
+    row.appendChild(span);
+    row.appendChild(strong);
+    details.appendChild(row);
+  }
+  div.appendChild(details);
+  container.appendChild(div);
 }
 
 // ──────────────────────────────────────────────
