@@ -10,6 +10,7 @@ import (
 	"cloud.google.com/go/compute/apiv1/computepb"
 	"cloud.google.com/go/resourcemanager/apiv3"
 	"cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/cloudresourcemanager/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
@@ -128,6 +129,13 @@ func NewProviderWithProject(ctx context.Context, projectID string, opts ...optio
 		projectID:  projectID,
 		clientOpts: opts,
 	}
+}
+
+// NewProviderWithCredentials creates a GCP provider that uses the supplied token source
+// instead of Application Default Credentials. Use this for service account key or
+// workload identity federation modes.
+func NewProviderWithCredentials(ctx context.Context, projectID string, ts oauth2.TokenSource) *GCPProvider {
+	return NewProviderWithProject(ctx, projectID, option.WithTokenSource(ts))
 }
 
 // SetProjectsClient sets the projects client (for testing)

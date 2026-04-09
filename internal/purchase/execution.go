@@ -13,6 +13,8 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	azureprovider "github.com/LeanerCloud/CUDly/providers/azure"
+	gcpprovider "github.com/LeanerCloud/CUDly/providers/gcp"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 )
@@ -34,9 +36,11 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 		return fmt.Errorf("plan not found: %s", exec.PlanID)
 	}
 
-	// Fan out across plan accounts when accounts are configured and credentials available.
+	// Fan out across plan accounts when accounts are configured.
+	// ADC and managed_identity modes do not require a credential store, so we cannot
+	// gate fan-out on m.credStore != nil.
 	// Skip fan-out if this execution is already tagged with a specific account (re-entrant call).
-	if m.credStore != nil && exec.CloudAccountID == nil {
+	if exec.CloudAccountID == nil {
 		accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
 		if err != nil {
 			logging.Warnf("Failed to load plan accounts for plan %s, falling back to single-account execution: %v", exec.PlanID, err)
@@ -94,21 +98,8 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	copy(recs, baseExec.Recommendations)
 	acctExec.Recommendations = recs
 
-	// Resolve per-account credentials for AWS accounts.
-	var provCfg *provider.ProviderConfig
-	if account.Provider == "aws" && m.assumeRoleSTS != nil {
-		awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &account, m.credStore, m.assumeRoleSTS)
-		if err != nil {
-			logging.Warnf("Failed to resolve credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
-		} else {
-			provCfg = &provider.ProviderConfig{
-				Name:                   "aws",
-				AWSCredentialsProvider: awsCreds,
-			}
-		}
-	}
-
-	accountID := account.ExternalID // AWS 12-digit account ID
+	provCfg := m.resolveAccountProvider(ctx, account)
+	accountID := account.ExternalID // Provider-specific account identifier (AWS account ID / Azure subscription ID / GCP project ID)
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
 
 	if len(purchaseErrors) > 0 {
@@ -132,6 +123,67 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		logging.Errorf("Failed to send confirmation for account %s: %v", account.ID, err)
 	}
 	return nil
+}
+
+// resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
+// for the given account, or nil to fall back to ambient credentials.
+func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
+	switch account.Provider {
+	case "aws":
+		return m.resolveAWSProvider(ctx, account)
+	case "azure":
+		return m.resolveAzureProvider(ctx, account)
+	case "gcp":
+		return m.resolveGCPProvider(ctx, account)
+	}
+	return nil
+}
+
+func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
+	if m.assumeRoleSTS == nil {
+		return nil
+	}
+	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &account, m.credStore, m.assumeRoleSTS)
+	if err != nil {
+		logging.Warnf("Failed to resolve AWS credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
+		return nil
+	}
+	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}
+}
+
+func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
+	if account.AzureAuthMode != "managed_identity" && m.credStore == nil {
+		return nil
+	}
+	azCred, err := credentials.ResolveAzureTokenCredential(ctx, &account, m.credStore)
+	if err != nil {
+		logging.Warnf("Failed to resolve Azure credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
+		return nil
+	}
+	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: account.AzureSubscriptionID})
+	if err != nil {
+		logging.Warnf("Failed to create Azure provider for account %s (%s): %v", account.ID, account.Name, err)
+		return nil
+	}
+	azProv.SetCredential(azCred)
+	return &provider.ProviderConfig{ProviderOverride: azProv}
+}
+
+func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
+	if account.GCPAuthMode != "application_default" && m.credStore == nil {
+		return nil
+	}
+	gcpTS, err := credentials.ResolveGCPTokenSource(ctx, &account, m.credStore)
+	if err != nil {
+		logging.Warnf("Failed to resolve GCP credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
+		return nil
+	}
+	if gcpTS == nil {
+		// application_default: factory will pick up ADC automatically with nil provCfg.
+		return nil
+	}
+	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
+	return &provider.ProviderConfig{ProviderOverride: gcpProv}
 }
 
 // planProvider derives the cloud provider from the plan's Services map.

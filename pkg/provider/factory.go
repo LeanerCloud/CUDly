@@ -6,8 +6,13 @@ import (
 	"fmt"
 )
 
-// CreateProvider creates a provider instance by name
+// CreateProvider creates a provider instance by name.
+// If config.ProviderOverride is set, it is returned directly without consulting
+// the registry — this allows callers to inject a pre-built, pre-authenticated provider.
 func CreateProvider(name string, config *ProviderConfig) (Provider, error) {
+	if config != nil && config.ProviderOverride != nil {
+		return config.ProviderOverride, nil
+	}
 	if config == nil {
 		config = &ProviderConfig{Name: name}
 	}

@@ -2,8 +2,18 @@ package credentials
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -16,8 +26,12 @@ import (
 const (
 	CredTypeAWSAccessKeys     = "aws_access_keys"
 	CredTypeAzureClientSecret = "azure_client_secret"
+	CredTypeAzureWIF          = "azure_wif_private_key"
 	CredTypeGCPServiceAccount = "gcp_service_account"
+	CredTypeGCPWIFConfig      = "gcp_workload_identity_config"
 )
+
+const gcpCloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
 // awsAccessKeyPayload is the JSON structure stored for CredTypeAWSAccessKeys.
 type awsAccessKeyPayload struct {
@@ -159,4 +173,102 @@ func ResolveGCPCredentials(ctx context.Context, account *config.CloudAccount, st
 		return nil, fmt.Errorf("credentials: no service account stored for account %s", account.ID)
 	}
 	return raw, nil
+}
+
+// ResolveAzureTokenCredential returns an azcore.TokenCredential for the account.
+// Routes by AzureAuthMode:
+//   - managed_identity  → ManagedIdentityCredential (no stored cred needed)
+//   - workload_identity_federation → loads RSA private key PEM, builds client assertion
+//   - client_secret (default) → loads stored secret and returns ClientSecretCredential
+func ResolveAzureTokenCredential(ctx context.Context, account *config.CloudAccount, store CredentialStore) (azcore.TokenCredential, error) {
+	switch account.AzureAuthMode {
+	case "managed_identity":
+		return azidentity.NewManagedIdentityCredential(nil)
+	case "workload_identity_federation":
+		if store == nil {
+			return nil, fmt.Errorf("credentials: credential store required for azure wif account %s", account.ID)
+		}
+		raw, err := store.LoadRaw(ctx, account.ID, CredTypeAzureWIF)
+		if err != nil {
+			return nil, fmt.Errorf("credentials: load azure wif key for account %s: %w", account.ID, err)
+		}
+		if raw == nil {
+			return nil, fmt.Errorf("credentials: no wif key stored for account %s", account.ID)
+		}
+		return buildAzureWIFCredential(account, raw)
+	default: // "client_secret" or empty
+		if store == nil {
+			return nil, fmt.Errorf("credentials: credential store required for azure client_secret account %s", account.ID)
+		}
+		if account.AzureTenantID == "" || account.AzureClientID == "" {
+			return nil, fmt.Errorf("credentials: azure_tenant_id and azure_client_id required for client_secret mode (account %s)", account.ID)
+		}
+		creds, err := ResolveAzureCredentials(ctx, account, store)
+		if err != nil {
+			return nil, err
+		}
+		return azidentity.NewClientSecretCredential(account.AzureTenantID, account.AzureClientID, creds.ClientSecret, nil)
+	}
+}
+
+// buildAzureWIFCredential creates a client-assertion credential using a stored RSA private key PEM.
+func buildAzureWIFCredential(account *config.CloudAccount, pemKey []byte) (azcore.TokenCredential, error) {
+	block, _ := pem.Decode(pemKey)
+	if block == nil {
+		return nil, fmt.Errorf("credentials: invalid PEM key for account %s", account.ID)
+	}
+	var rsaKey *rsa.PrivateKey
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		var ok bool
+		if rsaKey, ok = key.(*rsa.PrivateKey); !ok {
+			return nil, fmt.Errorf("credentials: expected RSA key for account %s", account.ID)
+		}
+	} else if rsaKey, err = x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
+		return nil, fmt.Errorf("credentials: parse rsa key for account %s: %w", account.ID, err)
+	}
+	tenantID := account.AzureTenantID
+	clientID := account.AzureClientID
+	assertionFunc := func(_ context.Context) (string, error) {
+		now := time.Now()
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+			"aud": fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID),
+			"iss": clientID,
+			"sub": clientID,
+			"jti": fmt.Sprintf("%d", now.UnixNano()),
+			"nbf": now.Unix(),
+			"iat": now.Unix(),
+			"exp": now.Add(5 * time.Minute).Unix(),
+		})
+		return token.SignedString(rsaKey)
+	}
+	return azidentity.NewClientAssertionCredential(tenantID, clientID, assertionFunc, nil)
+}
+
+// ResolveGCPTokenSource returns an oauth2.TokenSource for the account.
+// Returns (nil, nil) for application_default mode — callers should use ADC directly.
+// For service_account_key and workload_identity_federation, loads JSON from the
+// credential store; google.CredentialsFromJSON handles both formats.
+func ResolveGCPTokenSource(ctx context.Context, account *config.CloudAccount, store CredentialStore) (oauth2.TokenSource, error) {
+	if account.GCPAuthMode == "application_default" {
+		return nil, nil
+	}
+	if store == nil {
+		return nil, fmt.Errorf("credentials: credential store required for gcp account %s", account.ID)
+	}
+	credType := CredTypeGCPServiceAccount
+	if account.GCPAuthMode == "workload_identity_federation" {
+		credType = CredTypeGCPWIFConfig
+	}
+	raw, err := store.LoadRaw(ctx, account.ID, credType)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: load gcp credentials for account %s: %w", account.ID, err)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
+	}
+	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: parse gcp credentials for account %s: %w", account.ID, err)
+	}
+	return creds.TokenSource, nil
 }

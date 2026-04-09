@@ -79,4 +79,8 @@ type ProviderConfig struct {
 	CredentialPath         string
 	Endpoint               string                  // For custom endpoints
 	AWSCredentialsProvider aws.CredentialsProvider // optional: override ambient AWS credentials
+	// ProviderOverride, if non-nil, is returned directly by CreateProvider without
+	// going through the registry. Use this to inject a pre-built, pre-authenticated
+	// provider (e.g. with a resolved azcore.TokenCredential or oauth2.TokenSource).
+	ProviderOverride Provider
 }
