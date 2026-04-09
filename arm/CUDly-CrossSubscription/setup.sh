@@ -18,15 +18,22 @@ set -euo pipefail
 
 APP_NAME="CUDly"
 SUBSCRIPTION_ID=""
+MODE="client_secret"   # or "wif" for certificate-based workload identity federation
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
     --subscription) SUBSCRIPTION_ID="$2"; shift 2 ;;
     --app-name)     APP_NAME="$2";        shift 2 ;;
+    --mode)         MODE="$2";            shift 2 ;;
     *) echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
+
+if [[ "$MODE" != "client_secret" && "$MODE" != "wif" ]]; then
+  echo "Error: --mode must be 'client_secret' or 'wif'" >&2
+  exit 1
+fi
 
 # ── Resolve subscription ───────────────────────────────────────────────────────
 if [[ -z "$SUBSCRIPTION_ID" ]]; then
@@ -62,13 +69,30 @@ fi
 echo "SP Object ID : $SP_OBJECT_ID"
 echo ""
 
-# ── Create client secret ───────────────────────────────────────────────────────
-echo "Creating client secret (valid 2 years)..."
-CLIENT_SECRET=$(az ad app credential reset \
-  --id "$APP_ID" \
-  --display-name "CUDly-$(date +%Y%m%d)" \
-  --years 2 \
-  --query password -o tsv)
+# ── Credential setup ──────────────────────────────────────────────────────────
+CLIENT_SECRET=""
+if [[ "$MODE" == "wif" ]]; then
+  echo "Generating self-signed certificate for workload identity federation..."
+  openssl genrsa -out /tmp/cudly-wif.key 2048 2>/dev/null
+  openssl req -new -x509 -key /tmp/cudly-wif.key -out /tmp/cudly-wif.crt \
+    -days 730 -subj "/CN=CUDly-WIF" 2>/dev/null
+  CERT_B64=$(base64 < /tmp/cudly-wif.crt | tr -d '\n')
+  az ad app credential reset --id "$APP_ID" --cert "$CERT_B64" --append --output none
+  printf '\n=== Private Key PEM (store as azure_wif_private_key in CUDly) ===\n'
+  cat /tmp/cudly-wif.key
+  printf '=== end of private key ===\n\n'
+  # Portable secure delete (macOS srm not available everywhere; overwrite then remove)
+  KEY_SIZE=$(wc -c < /tmp/cudly-wif.key)
+  dd if=/dev/zero of=/tmp/cudly-wif.key bs=1 count="$KEY_SIZE" conv=notrunc 2>/dev/null
+  rm -f /tmp/cudly-wif.key /tmp/cudly-wif.crt
+else
+  echo "Creating client secret (valid 2 years)..."
+  CLIENT_SECRET=$(az ad app credential reset \
+    --id "$APP_ID" \
+    --display-name "CUDly-$(date +%Y%m%d)" \
+    --years 2 \
+    --query password -o tsv)
+fi
 
 # ── Deploy ARM role assignments ────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -85,11 +109,18 @@ echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  CUDly Azure account registration values"
 echo "══════════════════════════════════════════════════════════════"
-echo "  provider           : azure"
+echo "  provider              : azure"
+echo "  azure_auth_mode       : ${MODE}"
 echo "  azure_subscription_id : ${SUBSCRIPTION_ID}"
 echo "  azure_tenant_id       : ${TENANT_ID}"
 echo "  azure_client_id       : ${APP_ID}"
-echo "  client_secret         : ${CLIENT_SECRET}"
-echo ""
-echo "  Save the client_secret now — it will not be shown again."
+if [[ "$MODE" == "client_secret" ]]; then
+  echo "  client_secret         : ${CLIENT_SECRET}"
+  echo ""
+  echo "  Save the client_secret now — it will not be shown again."
+else
+  echo ""
+  echo "  Store the private key PEM printed above as azure_wif_private_key in CUDly."
+  echo "  The private key was already deleted from disk."
+fi
 echo "══════════════════════════════════════════════════════════════"
