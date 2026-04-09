@@ -72,6 +72,10 @@ func (m *mockSTSClient) AssumeRole(_ context.Context, _ *sts.AssumeRoleInput, _ 
 	return m.out, m.err
 }
 
+func (m *mockSTSClient) AssumeRoleWithWebIdentity(_ context.Context, _ *sts.AssumeRoleWithWebIdentityInput, _ ...func(*sts.Options)) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	return nil, m.err
+}
+
 func TestResolveAWSCredentialProvider_AccessKeys(t *testing.T) {
 	store := newMockStore()
 	payload, _ := json.Marshal(awsAccessKeyPayload{

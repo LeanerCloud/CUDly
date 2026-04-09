@@ -522,3 +522,7 @@ func (m *MockAssumeRoleSTS) AssumeRole(ctx context.Context, params *sts.AssumeRo
 	}
 	return args.Get(0).(*sts.AssumeRoleOutput), args.Error(1)
 }
+
+func (m *MockAssumeRoleSTS) AssumeRoleWithWebIdentity(ctx context.Context, params *sts.AssumeRoleWithWebIdentityInput, optFns ...func(*sts.Options)) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	return nil, nil
+}

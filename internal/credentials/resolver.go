@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -56,10 +57,11 @@ type AzureCredentials struct {
 // String returns a redacted representation.
 func (c *AzureCredentials) String() string { return "[REDACTED AZURE CREDENTIALS]" }
 
-// STSClient is the minimal STS interface required for role assumption.
+// STSClient is the STS interface required for role assumption and web identity federation.
 // Satisfied by *sts.Client from github.com/aws/aws-sdk-go-v2/service/sts.
 type STSClient interface {
 	AssumeRole(ctx context.Context, params *sts.AssumeRoleInput, optFns ...func(*sts.Options)) (*sts.AssumeRoleOutput, error)
+	AssumeRoleWithWebIdentity(ctx context.Context, params *sts.AssumeRoleWithWebIdentityInput, optFns ...func(*sts.Options)) (*sts.AssumeRoleWithWebIdentityOutput, error)
 }
 
 // ResolveAWSCredentialProvider returns an aws.CredentialsProvider for the account.
@@ -81,6 +83,8 @@ func ResolveAWSCredentialProvider(
 		return resolveRoleARNProvider(ctx, account, stsClient, nil)
 	case "bastion":
 		return resolveBastionProvider(ctx, account, store, stsClient)
+	case "workload_identity_federation":
+		return resolveWebIdentityProvider(account, stsClient)
 	default:
 		return nil, fmt.Errorf("credentials: unsupported aws_auth_mode %q for account %s", account.AWSAuthMode, account.ID)
 	}
@@ -143,6 +147,34 @@ func resolveBastionProvider(
 	// loaded separately and passed in via stsClient which already uses bastion creds.
 	// This resolver simply assumes the target role using the provided stsClient.
 	return resolveRoleARNProvider(ctx, account, stsClient, nil)
+}
+
+// resolveWebIdentityProvider returns a credential provider that exchanges an OIDC token
+// for temporary AWS credentials via STS AssumeRoleWithWebIdentity.
+// The token file path comes from account.AWSWebIdentityTokenFile, with a fallback to
+// the AWS_WEB_IDENTITY_TOKEN_FILE environment variable (standard AKS/GKE projected token path).
+func resolveWebIdentityProvider(account *config.CloudAccount, stsClient STSClient) (aws.CredentialsProvider, error) {
+	if account.AWSRoleARN == "" {
+		return nil, fmt.Errorf("credentials: aws_role_arn required for workload_identity_federation mode (account %s)", account.ID)
+	}
+	tokenFile := account.AWSWebIdentityTokenFile
+	if tokenFile == "" {
+		tokenFile = os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+	}
+	if tokenFile == "" {
+		return nil, fmt.Errorf("credentials: aws_web_identity_token_file required for workload_identity_federation mode (account %s)", account.ID)
+	}
+	sessionSuffix := account.ID
+	if len(sessionSuffix) > 8 {
+		sessionSuffix = sessionSuffix[:8]
+	}
+	return stscreds.NewWebIdentityRoleProvider(stsClient, account.AWSRoleARN,
+		stscreds.IdentityTokenFile(tokenFile),
+		func(o *stscreds.WebIdentityRoleOptions) {
+			o.RoleSessionName = "cudly-" + sessionSuffix
+			// Note: WebIdentityRoleOptions does not have ExternalID;
+			// OIDC identity is verified by the token subject claim instead.
+		}), nil
 }
 
 // ResolveAzureCredentials decrypts and returns the Azure client secret for the account.
