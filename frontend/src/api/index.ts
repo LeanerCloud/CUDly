@@ -179,7 +179,8 @@ export type {
   AccountTestResult,
   AccountServiceOverride,
   AccountServiceOverrideRequest,
-  OrgDiscoveryResult
+  OrgDiscoveryResult,
+  FederationIaCResponse
 } from './accounts';
 
 export {
@@ -195,5 +196,6 @@ export {
   deleteAccountServiceOverride,
   discoverOrgAccounts,
   listPlanAccounts,
-  setPlanAccounts
+  setPlanAccounts,
+  getFederationIaC
 } from './accounts';

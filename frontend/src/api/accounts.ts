@@ -13,10 +13,11 @@ export interface CloudAccount {
   external_id: string;
   contact_email?: string;
   enabled: boolean;
-  aws_auth_mode?: 'access_keys' | 'role_arn' | 'bastion';
+  aws_auth_mode?: 'access_keys' | 'role_arn' | 'bastion' | 'workload_identity_federation';
   aws_role_arn?: string;
   aws_external_id?: string;
   aws_bastion_id?: string;
+  aws_web_identity_token_file?: string;
   aws_is_org_root?: boolean;
   azure_auth_mode?: 'client_secret' | 'managed_identity' | 'workload_identity_federation';
   azure_subscription_id?: string;
@@ -41,6 +42,7 @@ export interface CloudAccountRequest {
   aws_role_arn?: string;
   aws_external_id?: string;
   aws_bastion_id?: string;
+  aws_web_identity_token_file?: string;
   aws_is_org_root?: boolean;
   azure_auth_mode?: string;
   azure_subscription_id?: string;
@@ -176,6 +178,24 @@ export interface OrgDiscoveryResult {
 
 export async function discoverOrgAccounts(): Promise<OrgDiscoveryResult> {
   return apiRequest<OrgDiscoveryResult>('/accounts/discover-org', { method: 'POST' });
+}
+
+export interface FederationIaCResponse {
+  filename: string;
+  content: string;
+  content_type: string;
+  content_encoding?: string; // "base64" for binary content (zip bundles)
+}
+
+export async function getFederationIaC(
+  target: string,
+  source: string,
+  accountId: string,
+  format?: string,
+): Promise<FederationIaCResponse> {
+  const params = new URLSearchParams({ target, source, account_id: accountId });
+  if (format) params.set('format', format);
+  return apiRequest<FederationIaCResponse>(`/federation/iac?${params.toString()}`);
 }
 
 export async function listPlanAccounts(planId: string): Promise<CloudAccount[]> {
