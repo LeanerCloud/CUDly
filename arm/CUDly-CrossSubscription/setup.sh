@@ -83,11 +83,15 @@ if [[ "$MODE" == "wif" ]]; then
   CERT_B64=$(base64 < "${WORK_DIR}/cudly-wif.crt" | tr -d '\n')
   az ad app credential reset --id "$APP_ID" --cert "$CERT_B64" --append --output none
 
-  # WARNING: The private key below will appear in terminal scrollback and any session
+  # WARNING: The key+cert below will appear in terminal scrollback and any session
   # recording. Do NOT run this script in CI/CD or any environment that captures stdout.
-  printf '\n=== Private Key PEM (store as azure_wif_private_key in CUDly) ===\n' >&2
-  cat "${WORK_DIR}/cudly-wif.key"
-  printf '=== end of private key — copy it now, it will be deleted from disk ===\n\n' >&2
+  # Both blocks are written to stderr so stdout redirects do not capture them.
+  # Store the ENTIRE output (key PEM + certificate PEM) as azure_wif_private_key in CUDly.
+  # The certificate block provides the x5t thumbprint required by Azure AD client assertions.
+  printf '\n=== Key + Certificate PEM (store BOTH blocks as azure_wif_private_key in CUDly) ===\n' >&2
+  cat "${WORK_DIR}/cudly-wif.key" >&2
+  cat "${WORK_DIR}/cudly-wif.crt" >&2
+  printf '=== end — copy both blocks now, they will be deleted from disk ===\n\n' >&2
   # shred (Linux) preferred; dd overwrite as fallback for macOS
   if command -v shred >/dev/null; then
     shred -u "${WORK_DIR}/cudly-wif.key" 2>/dev/null
@@ -133,7 +137,8 @@ if [[ "$MODE" == "client_secret" ]]; then
   echo "  Save the client_secret now — it will not be shown again."
 else
   echo ""
-  echo "  Store the private key PEM printed above as azure_wif_private_key in CUDly."
-  echo "  The private key was already deleted from disk."
+  echo "  Store the key+certificate PEM printed above as azure_wif_private_key in CUDly."
+  echo "  Both PEM blocks are required (certificate provides x5t thumbprint for Azure AD)."
+  echo "  Both files were deleted from disk."
 fi
 echo "══════════════════════════════════════════════════════════════"

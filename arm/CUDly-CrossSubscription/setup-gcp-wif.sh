@@ -35,17 +35,22 @@ PROVIDER_TYPE=""   # "aws" or "oidc"
 SA_EMAIL=""
 AWS_ACCOUNT_ID=""
 ISSUER_URI=""
+# Optional: restrict which OIDC subject (sub claim) may impersonate the SA.
+# Example: "assertion.sub=='repo:my-org/my-repo:ref:refs/heads/main'" (GitHub Actions)
+# STRONGLY RECOMMENDED for public issuers to prevent privilege escalation.
+SUBJECT_CONDITION=""
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --project)        PROJECT="$2";        shift 2 ;;
-    --pool-id)        POOL_ID="$2";        shift 2 ;;
-    --provider-id)    PROVIDER_ID="$2";    shift 2 ;;
-    --provider-type)  PROVIDER_TYPE="$2";  shift 2 ;;
-    --sa-email)       SA_EMAIL="$2";       shift 2 ;;
-    --aws-account-id) AWS_ACCOUNT_ID="$2"; shift 2 ;;
-    --issuer-uri)     ISSUER_URI="$2";     shift 2 ;;
+    --project)           PROJECT="$2";           shift 2 ;;
+    --pool-id)           POOL_ID="$2";           shift 2 ;;
+    --provider-id)       PROVIDER_ID="$2";       shift 2 ;;
+    --provider-type)     PROVIDER_TYPE="$2";     shift 2 ;;
+    --sa-email)          SA_EMAIL="$2";          shift 2 ;;
+    --aws-account-id)    AWS_ACCOUNT_ID="$2";    shift 2 ;;
+    --issuer-uri)        ISSUER_URI="$2";        shift 2 ;;
+    --subject-condition) SUBJECT_CONDITION="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -99,12 +104,26 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
   else
     # --attribute-mapping is required; without it no subject claims are mapped and
     # all token exchanges will be rejected at runtime despite successful pool setup.
-    gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
-      --project="$PROJECT" --location=global \
-      --workload-identity-pool="$POOL_ID" \
-      --issuer-uri="$ISSUER_URI" \
-      --attribute-mapping="google.subject=assertion.sub" \
+    # --attribute-condition restricts which OIDC subjects can impersonate the SA.
+    # For public issuers (GitHub Actions, etc.) omitting --attribute-condition allows
+    # ANY token from the issuer to impersonate — pass --subject-condition to scope it.
+    if [[ -z "$SUBJECT_CONDITION" ]]; then
+      echo "WARNING: --subject-condition not set. Any OIDC token from '${ISSUER_URI}'" >&2
+      echo "         will be able to impersonate ${SA_EMAIL}." >&2
+      echo "         For public issuers pass e.g. --subject-condition \"assertion.sub=='<your-subject>'\"" >&2
+    fi
+    OIDC_ARGS=(
+      "$PROVIDER_ID"
+      --project="$PROJECT" --location=global
+      --workload-identity-pool="$POOL_ID"
+      --issuer-uri="$ISSUER_URI"
+      --attribute-mapping="google.subject=assertion.sub"
       --quiet
+    )
+    if [[ -n "$SUBJECT_CONDITION" ]]; then
+      OIDC_ARGS+=(--attribute-condition="$SUBJECT_CONDITION")
+    fi
+    gcloud iam workload-identity-pools providers create-oidc "${OIDC_ARGS[@]}"
   fi
 else
   echo "Reusing existing provider '${PROVIDER_ID}'"

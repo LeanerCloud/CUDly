@@ -3,7 +3,9 @@ package credentials
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha1" //nolint:gosec // SHA-1 required by RFC 7517 x5t thumbprint spec
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -243,21 +245,88 @@ func ResolveAzureTokenCredential(ctx context.Context, account *config.CloudAccou
 	}
 }
 
-// buildAzureWIFCredential creates a client-assertion credential using a stored RSA private key PEM.
-func buildAzureWIFCredential(account *config.CloudAccount, pemKey []byte) (azcore.TokenCredential, error) {
-	block, _ := pem.Decode(pemKey)
-	if block == nil {
-		return nil, fmt.Errorf("credentials: invalid PEM key for account %s", account.ID)
-	}
-	var rsaKey *rsa.PrivateKey
-	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-		var ok bool
-		if rsaKey, ok = key.(*rsa.PrivateKey); !ok {
-			return nil, fmt.Errorf("credentials: expected RSA key for account %s", account.ID)
+// parseRSAKeyBlock parses a single PEM block into an RSA private key.
+// Supports both PKCS1 ("RSA PRIVATE KEY") and PKCS8 ("PRIVATE KEY") formats.
+func parseRSAKeyBlock(accountID string, block *pem.Block) (*rsa.PrivateKey, error) {
+	if block.Type == "RSA PRIVATE KEY" {
+		k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("credentials: parse PKCS1 rsa key for account %s: %w", accountID, err)
 		}
-	} else if rsaKey, err = x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
-		return nil, fmt.Errorf("credentials: parse rsa key for account %s: %w", account.ID, err)
+		return k, nil
 	}
+	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: parse PKCS8 key for account %s: %w", accountID, err)
+	}
+	rk, ok := k.(*rsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("credentials: expected RSA key for account %s", accountID)
+	}
+	return rk, nil
+}
+
+// parsePEMBlob extracts an RSA private key and X.509 certificate from a concatenated
+// PEM blob. Both blocks must be present — the certificate is required to compute the
+// x5t thumbprint for Azure AD client assertions.
+func parsePEMBlob(accountID string, pemBlob []byte) (*rsa.PrivateKey, *x509.Certificate, error) {
+	var rsaKey *rsa.PrivateKey
+	var cert *x509.Certificate
+	rest := pemBlob
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		switch block.Type {
+		case "RSA PRIVATE KEY", "PRIVATE KEY":
+			k, err := parseRSAKeyBlock(accountID, block)
+			if err != nil {
+				return nil, nil, err
+			}
+			rsaKey = k
+		case "CERTIFICATE":
+			c, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, nil, fmt.Errorf("credentials: parse certificate for account %s: %w", accountID, err)
+			}
+			cert = c
+		}
+	}
+	if rsaKey == nil {
+		return nil, nil, fmt.Errorf("credentials: no private key found in PEM blob for account %s", accountID)
+	}
+	if cert == nil {
+		return nil, nil, fmt.Errorf("credentials: no certificate found in PEM blob for account %s — store key+cert together", accountID)
+	}
+	return rsaKey, cert, nil
+}
+
+// buildAzureWIFCredential creates a client-assertion credential using a stored PEM blob
+// that must contain both a PRIVATE KEY and a CERTIFICATE block (concatenated).
+// The certificate is registered with the Azure AD App Registration; the x5t thumbprint
+// (SHA-1 of the certificate's DER encoding) must be present in the JWT header per
+// RFC 7517 / AAD documentation, otherwise Azure AD returns AADSTS700027.
+//
+// Store format: key PEM block followed by certificate PEM block, e.g.:
+//
+//	-----BEGIN RSA PRIVATE KEY-----
+//	...
+//	-----END RSA PRIVATE KEY-----
+//	-----BEGIN CERTIFICATE-----
+//	...
+//	-----END CERTIFICATE-----
+func buildAzureWIFCredential(account *config.CloudAccount, pemBlob []byte) (azcore.TokenCredential, error) {
+	rsaKey, cert, err := parsePEMBlob(account.ID, pemBlob)
+	if err != nil {
+		return nil, err
+	}
+
+	// Compute x5t: base64url(SHA-1(cert.Raw)) as required by AAD client assertion.
+	thumbprint := sha1.Sum(cert.Raw) // #nosec G401 -- SHA-1 mandated by RFC 7517 x5t, not used for security
+	x5t := base64.RawURLEncoding.EncodeToString(thumbprint[:])
+
 	tenantID := account.AzureTenantID
 	clientID := account.AzureClientID
 	assertionFunc := func(_ context.Context) (string, error) {
@@ -271,6 +340,7 @@ func buildAzureWIFCredential(account *config.CloudAccount, pemKey []byte) (azcor
 			"iat": now.Unix(),
 			"exp": now.Add(5 * time.Minute).Unix(),
 		})
+		token.Header["x5t"] = x5t
 		return token.SignedString(rsaKey)
 	}
 	return azidentity.NewClientAssertionCredential(tenantID, clientID, assertionFunc, nil)

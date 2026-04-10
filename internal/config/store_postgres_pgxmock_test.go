@@ -694,7 +694,7 @@ func TestPGXMock_UpdateCloudAccount_Success(t *testing.T) {
 	ctx := context.Background()
 
 	acct := &CloudAccount{ID: "acct-id", Name: "Updated", Enabled: true, Provider: "aws"}
-	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(19)...).
+	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(20)...).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := store.UpdateCloudAccount(ctx, acct)
@@ -708,7 +708,7 @@ func TestPGXMock_UpdateCloudAccount_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	acct := &CloudAccount{ID: "missing-id", Name: "X", Provider: "aws"}
-	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(19)...).
+	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(20)...).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := store.UpdateCloudAccount(ctx, acct)

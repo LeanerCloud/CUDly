@@ -7,10 +7,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/stretchr/testify/assert"
@@ -208,7 +211,7 @@ func TestResolveAzureTokenCredential_WIF_NoStoredKey(t *testing.T) {
 
 func TestResolveAzureTokenCredential_WIF_WithValidKey(t *testing.T) {
 	store := newMockStore()
-	pemKey := generateTestRSAKeyPEM(t)
+	pemKey := generateTestKeyAndCertPEM(t) // must contain key+cert for x5t
 	store.data["acct1/azure_wif_private_key"] = pemKey
 
 	account := &config.CloudAccount{
@@ -243,6 +246,49 @@ func generateTestRSAKeyPKCS8PEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
 
+// generateTestKeyAndCertPEM returns a concatenated PEM blob with a PKCS1 RSA private key
+// followed by a self-signed certificate — the format expected by buildAzureWIFCredential.
+func generateTestKeyAndCertPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "CUDly-WIF-test"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	return append(keyPEM, certPEM...)
+}
+
+// generateTestKeyAndCertPKCS8PEM is the same as generateTestKeyAndCertPEM but uses PKCS8 key format.
+func generateTestKeyAndCertPKCS8PEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "CUDly-WIF-test"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	return append(keyPEM, certPEM...)
+}
+
 func generateECKeyPKCS8PEM(t *testing.T) []byte {
 	t.Helper()
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -253,25 +299,25 @@ func generateECKeyPKCS8PEM(t *testing.T) []byte {
 }
 
 func TestBuildAzureWIFCredential_ValidPKCS1Key(t *testing.T) {
-	pemKey := generateTestRSAKeyPEM(t)
+	pemBlob := generateTestKeyAndCertPEM(t) // key+cert concatenated
 	account := &config.CloudAccount{
 		ID:            "acct1",
 		AzureTenantID: "00000000-0000-0000-0000-000000000001",
 		AzureClientID: "00000000-0000-0000-0000-000000000002",
 	}
-	cred, err := buildAzureWIFCredential(account, pemKey)
+	cred, err := buildAzureWIFCredential(account, pemBlob)
 	require.NoError(t, err)
 	assert.NotNil(t, cred)
 }
 
 func TestBuildAzureWIFCredential_ValidPKCS8Key(t *testing.T) {
-	pemKey := generateTestRSAKeyPKCS8PEM(t)
+	pemBlob := generateTestKeyAndCertPKCS8PEM(t) // PKCS8 key+cert concatenated
 	account := &config.CloudAccount{
 		ID:            "acct1",
 		AzureTenantID: "00000000-0000-0000-0000-000000000001",
 		AzureClientID: "00000000-0000-0000-0000-000000000002",
 	}
-	cred, err := buildAzureWIFCredential(account, pemKey)
+	cred, err := buildAzureWIFCredential(account, pemBlob)
 	require.NoError(t, err)
 	assert.NotNil(t, cred)
 }
@@ -280,7 +326,16 @@ func TestBuildAzureWIFCredential_InvalidPEM(t *testing.T) {
 	account := &config.CloudAccount{ID: "acct1"}
 	_, err := buildAzureWIFCredential(account, []byte("not a pem"))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid PEM key")
+	assert.Contains(t, err.Error(), "no private key found in PEM blob")
+}
+
+func TestBuildAzureWIFCredential_NoCertificate(t *testing.T) {
+	// Key-only PEM — missing certificate block; should fail with informative error.
+	pemKey := generateTestRSAKeyPEM(t)
+	account := &config.CloudAccount{ID: "acct1"}
+	_, err := buildAzureWIFCredential(account, pemKey)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no certificate found in PEM blob")
 }
 
 func TestBuildAzureWIFCredential_NonRSAKey(t *testing.T) {
@@ -294,13 +349,12 @@ func TestBuildAzureWIFCredential_NonRSAKey(t *testing.T) {
 }
 
 func TestBuildAzureWIFCredential_InvalidDER(t *testing.T) {
-	// PEM block is present but DER content is garbage, so both ParsePKCS8PrivateKey
-	// and ParsePKCS1PrivateKey fail, exercising the final error return.
+	// PEM block is present but DER content is garbage.
 	garbage := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: []byte("garbage")})
 	account := &config.CloudAccount{ID: "acct1"}
 	_, err := buildAzureWIFCredential(account, garbage)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "parse rsa key")
+	assert.Contains(t, err.Error(), "parse PKCS1 rsa key")
 }
 
 // ---------------------------------------------------------------------------
