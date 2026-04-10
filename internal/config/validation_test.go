@@ -106,6 +106,65 @@ func TestGlobalConfig_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "invalid collection schedule",
+			config: GlobalConfig{
+				DefaultTerm:        3,
+				CollectionSchedule: "minutely",
+			},
+			wantErr: true,
+			errMsg:  "invalid collection_schedule",
+		},
+		{
+			name: "valid empty collection schedule",
+			config: GlobalConfig{
+				DefaultTerm:        3,
+				CollectionSchedule: "",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid hourly collection schedule",
+			config: GlobalConfig{
+				DefaultTerm:        3,
+				CollectionSchedule: "hourly",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid daily collection schedule",
+			config: GlobalConfig{
+				DefaultTerm:        3,
+				CollectionSchedule: "daily",
+			},
+			wantErr: false,
+		},
+		{
+			name: "notification days before negative",
+			config: GlobalConfig{
+				DefaultTerm:            3,
+				NotificationDaysBefore: -1,
+			},
+			wantErr: true,
+			errMsg:  "notification_days_before must be between 0",
+		},
+		{
+			name: "notification days before exceeds max",
+			config: GlobalConfig{
+				DefaultTerm:            3,
+				NotificationDaysBefore: MaxNotificationDaysBefore + 1,
+			},
+			wantErr: true,
+			errMsg:  "notification_days_before must be between 0",
+		},
+		{
+			name: "notification days before at max is valid",
+			config: GlobalConfig{
+				DefaultTerm:            3,
+				NotificationDaysBefore: MaxNotificationDaysBefore,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -345,6 +404,50 @@ func TestRampSchedule_Validate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "total steps must be between 0 and 100",
 		},
+		{
+			name: "weekly schedule with zero percent per step",
+			sched: RampSchedule{
+				Type:             "weekly",
+				PercentPerStep:   0,
+				StepIntervalDays: 7,
+				TotalSteps:       4,
+			},
+			wantErr: true,
+			errMsg:  "percent per step must be between",
+		},
+		{
+			name: "monthly schedule with zero percent per step",
+			sched: RampSchedule{
+				Type:             "monthly",
+				PercentPerStep:   0,
+				StepIntervalDays: 30,
+				TotalSteps:       10,
+			},
+			wantErr: true,
+			errMsg:  "percent per step must be between",
+		},
+		{
+			name: "custom schedule with negative percent per step",
+			sched: RampSchedule{
+				Type:             "custom",
+				PercentPerStep:   -5,
+				StepIntervalDays: 14,
+				TotalSteps:       5,
+			},
+			wantErr: true,
+			errMsg:  "percent per step must be between",
+		},
+		{
+			name: "custom schedule with percent over 100",
+			sched: RampSchedule{
+				Type:             "custom",
+				PercentPerStep:   150,
+				StepIntervalDays: 14,
+				TotalSteps:       5,
+			},
+			wantErr: true,
+			errMsg:  "percent per step must be between",
+		},
 	}
 
 	for _, tt := range tests {
@@ -459,6 +562,25 @@ func TestPurchasePlan_Validate(t *testing.T) {
 						Coverage: 50,
 					},
 				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "enabled plan with no services",
+			plan: PurchasePlan{
+				Name:     "Enabled Empty Plan",
+				Enabled:  true,
+				Services: map[string]ServiceConfig{},
+			},
+			wantErr: true,
+			errMsg:  "plan must have at least one service",
+		},
+		{
+			name: "disabled plan with no services is valid",
+			plan: PurchasePlan{
+				Name:     "Draft Plan",
+				Enabled:  false,
+				Services: map[string]ServiceConfig{},
 			},
 			wantErr: false,
 		},

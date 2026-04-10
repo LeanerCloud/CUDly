@@ -10,11 +10,21 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// dbConn is the minimal interface used by PostgresStore.
+// Both *database.Connection and pgxmock.PgxPoolIface satisfy this interface.
+type dbConn interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
 
 // PostgresStore implements StoreInterface using PostgreSQL
 type PostgresStore struct {
-	db *database.Connection
+	db dbConn
 }
 
 // NewPostgresStore creates a new PostgreSQL-backed config store

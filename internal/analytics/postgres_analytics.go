@@ -9,11 +9,21 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// dbConn is the minimal interface used by PostgresAnalyticsStore.
+// Both *database.Connection and pgxmock.PgxPoolIface satisfy this interface.
+type dbConn interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Acquire(ctx context.Context) (*pgxpool.Conn, error)
+}
 
 // PostgresAnalyticsStore implements AnalyticsStore using PostgreSQL
 type PostgresAnalyticsStore struct {
-	db *database.Connection
+	db dbConn
 }
 
 // NewPostgresAnalyticsStore creates a new PostgreSQL analytics store
