@@ -167,6 +167,9 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
 
+		// Federation IaC download endpoint
+		{ExactPath: "/api/federation/iac", Method: "GET", Handler: r.getFederationIaCHandler},
+
 		// Health check (both root and /api paths)
 		{ExactPath: "/health", Handler: r.healthCheckHandler, Auth: AuthPublic},
 		{ExactPath: "/api/health", Handler: r.healthCheckHandler, Auth: AuthPublic},
@@ -562,6 +565,10 @@ func (r *Router) listAccountServiceOverridesHandler(ctx context.Context, req *ev
 }
 
 // Plan ↔ Account association wrappers.
+
+func (r *Router) getFederationIaCHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.getFederationIaC(ctx, req)
+}
 
 func (r *Router) listPlanAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listPlanAccounts(ctx, req, params["id"])

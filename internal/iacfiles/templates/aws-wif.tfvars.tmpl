@@ -1,0 +1,15 @@
+# Terraform variables for iac/federation/aws-target/terraform
+# Target AWS account : {{.AccountName}} ({{.AccountExternalID}})
+# Source cloud       : {{.Source}}
+#
+# Usage:
+#   cd iac/federation/aws-target/terraform
+#   terraform init
+#   terraform apply -var-file={{.AccountSlug}}-aws-wif.tfvars
+
+oidc_issuer_url = "{{.OIDCIssuerURL}}"
+oidc_audience   = "{{.OIDCAudience}}"
+role_name       = "CUDly-{{.AccountSlug}}"
+
+# Optional: restrict trust to a specific workload subject claim
+# oidc_subject_claim = ""

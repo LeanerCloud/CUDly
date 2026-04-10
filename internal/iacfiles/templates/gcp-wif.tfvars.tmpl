@@ -1,0 +1,21 @@
+# Terraform variables for iac/federation/gcp-target/terraform
+# Target GCP project : {{.AccountName}} ({{.ProjectID}})
+# Source cloud       : {{.Source}}
+#
+# Usage:
+#   cd iac/federation/gcp-target/terraform
+#   terraform init
+#   terraform apply -var-file={{.AccountSlug}}-gcp-wif.tfvars
+#
+# After apply, run the gcloud_command output to generate the external account
+# credential JSON, then paste it into CUDly as gcp_workload_identity_config.
+
+project               = "{{.ProjectID}}"
+service_account_email = "{{.ServiceAccountEmail}}"
+{{- if eq .Source "aws"}}
+provider_type  = "aws"
+aws_account_id = "<SOURCE_AWS_ACCOUNT_ID>"  # AWS account number where CUDly runs
+{{- else}}
+provider_type   = "oidc"
+oidc_issuer_uri = "{{.OIDCIssuerURI}}"{{if eq .Source "azure"}}  # Azure: https://login.microsoftonline.com/<TENANT_ID>/v2.0{{end}}
+{{- end}}

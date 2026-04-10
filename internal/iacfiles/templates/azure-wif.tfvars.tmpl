@@ -1,0 +1,26 @@
+# Terraform variables for iac/federation/azure-target/terraform
+# Target Azure subscription: {{.AccountName}} ({{.SubscriptionID}})
+#
+# Usage:
+#   cd iac/federation/azure-target/terraform
+#   terraform init
+#   terraform apply -var-file={{.AccountSlug}}-azure-wif.tfvars
+
+subscription_id = "{{.SubscriptionID}}"
+tenant_id       = "{{.TenantID}}"
+
+# Generate an RSA private key and a self-signed certificate, then paste the
+# PEM-encoded certificate (NOT the key) into the value below.
+#
+# Steps:
+#   openssl genrsa -out cudly-wif.key 2048
+#   openssl req -new -x509 -key cudly-wif.key -out cudly-wif.crt -days 730 \
+#     -subj "/CN=CUDly-WIF"
+#   cat cudly-wif.crt   # ← paste the output as certificate_pem below
+#
+certificate_pem = <<EOF
+<PASTE CERTIFICATE PEM HERE>
+EOF
+
+# After terraform apply, store the contents of cudly-wif.key as
+# azure_wif_private_key in the CUDly account settings.

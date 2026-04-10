@@ -1,0 +1,16 @@
+# Terraform variable values for iac/federation/aws-cross-account/terraform
+# Target AWS account : {{.AccountName}} ({{.AccountExternalID}})
+# Source cloud       : AWS (cross-account IAM role assumption)
+#
+# Usage:
+#   cd iac/federation/aws-cross-account/terraform
+#   terraform init
+#   terraform apply -var-file={{.AccountSlug}}-aws-cross-account.tfvars
+#
+# After apply, set aws_auth_mode = "role_arn" and aws_role_arn to the output
+# role_arn value in the CUDly account settings.
+
+role_name = "CUDly-{{.AccountSlug}}"
+
+# AWS account ID where CUDly runs (the source account):
+source_account_id = "<SOURCE_AWS_ACCOUNT_ID>"

@@ -1,0 +1,17 @@
+# Terraform variable values for iac/federation/gcp-sa-impersonation/terraform
+# Target GCP project : {{.AccountName}} ({{.ProjectID}})
+# Source cloud       : GCP (service account impersonation)
+#
+# Usage:
+#   cd iac/federation/gcp-sa-impersonation/terraform
+#   terraform init
+#   terraform apply -var-file={{.AccountSlug}}-gcp-sa-impersonation.tfvars
+#
+# After apply, set gcp_auth_mode = "application_default" in the CUDly account
+# settings — the host service account will impersonate the target SA via ADC.
+
+project_id            = "{{.ProjectID}}"
+service_account_email = "{{.ServiceAccountEmail}}"
+
+# Full email of the service account that CUDly runs as on the source GCP project:
+source_service_account = "<SOURCE_SERVICE_ACCOUNT_EMAIL>"
