@@ -3,6 +3,7 @@
  */
 
 import * as api from './api';
+import { initFederationSections } from './federation';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -294,7 +295,7 @@ function openAccountModal(provider: AccountProvider, account?: api.CloudAccount)
   if (provider === 'aws') {
     populateAwsAccountFields(account);
   } else if (provider === 'azure') {
-    const azureAuthMode = account?.azure_auth_mode ?? 'client_secret';
+    const azureAuthMode = account?.azure_auth_mode ?? 'workload_identity_federation';
     const azureAuthSelect = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
     if (azureAuthSelect) azureAuthSelect.value = azureAuthMode;
     (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value = account?.azure_tenant_id ?? '';
@@ -303,7 +304,7 @@ function openAccountModal(provider: AccountProvider, account?: api.CloudAccount)
     (document.getElementById('account-azure-wif-private-key') as HTMLTextAreaElement | null ?? { value: '' }).value = '';
     updateAzureAuthModeFields(azureAuthMode);
   } else if (provider === 'gcp') {
-    const gcpMode = account?.gcp_auth_mode ?? 'service_account_key';
+    const gcpMode = account?.gcp_auth_mode ?? 'workload_identity_federation';
     const gcpAuthSelect = document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null;
     if (gcpAuthSelect) gcpAuthSelect.value = gcpMode;
     const gcpEmailEl = document.getElementById('account-gcp-client-email') as HTMLInputElement | null;
@@ -322,7 +323,7 @@ function openAccountModal(provider: AccountProvider, account?: api.CloudAccount)
  * Populate AWS-specific fields in the account modal
  */
 function populateAwsAccountFields(account?: api.CloudAccount): void {
-  const authMode = (account?.aws_auth_mode ?? 'access_keys') as string;
+  const authMode = (account?.aws_auth_mode ?? 'workload_identity_federation') as string;
   const authModeSelect = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
   if (authModeSelect) authModeSelect.value = authMode;
 
@@ -331,6 +332,8 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   (document.getElementById('account-aws-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
   (document.getElementById('account-aws-external-id') as HTMLInputElement).value = account?.aws_external_id ?? '';
   (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
+  (document.getElementById('account-aws-wif-role-arn') as HTMLInputElement | null)?.setAttribute('value', account?.aws_role_arn ?? '');
+  (document.getElementById('account-aws-wif-token-file') as HTMLInputElement | null)?.setAttribute('value', account?.aws_web_identity_token_file ?? '');
   (document.getElementById('account-aws-is-org-root') as HTMLInputElement).checked = account?.aws_is_org_root ?? false;
 
   updateAwsAuthModeFields(authMode, account?.aws_bastion_id);
@@ -343,10 +346,12 @@ function updateAwsAuthModeFields(mode: string, bastionId?: string): void {
   const keysFields = document.getElementById('account-aws-keys-fields');
   const roleFields = document.getElementById('account-aws-role-fields');
   const bastionFields = document.getElementById('account-aws-bastion-fields');
+  const wifFields = document.getElementById('account-aws-wif-fields');
 
   keysFields?.classList.toggle('hidden', mode !== 'access_keys');
   roleFields?.classList.toggle('hidden', mode !== 'role_arn');
   bastionFields?.classList.toggle('hidden', mode !== 'bastion');
+  wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
 
   if (mode === 'bastion') {
     void populateBastionAccountDropdown(bastionId);
@@ -425,6 +430,9 @@ function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest
     } else if (authMode === 'bastion') {
       req.aws_bastion_id = (document.getElementById('account-aws-bastion-id') as HTMLSelectElement).value;
       req.aws_role_arn = (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value.trim();
+    } else if (authMode === 'workload_identity_federation') {
+      req.aws_role_arn = (document.getElementById('account-aws-wif-role-arn') as HTMLInputElement | null)?.value.trim();
+      req.aws_web_identity_token_file = (document.getElementById('account-aws-wif-token-file') as HTMLInputElement | null)?.value.trim() || undefined;
     }
   } else if (provider === 'azure') {
     req.azure_subscription_id = req.external_id; // external_id IS the subscription ID for Azure
@@ -830,6 +838,9 @@ export async function loadGlobalSettings(): Promise<void> {
     void loadAccountsForProvider('aws');
     void loadAccountsForProvider('azure');
     void loadAccountsForProvider('gcp');
+
+    // Populate federation IaC download sections (non-blocking)
+    void initFederationSections();
   } catch (error) {
     console.error('Failed to load settings:', error);
     if (loadingEl) loadingEl.classList.add('hidden');

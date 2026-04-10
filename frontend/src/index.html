@@ -458,6 +458,26 @@
                                     <label>Payment: <select id="aws-savingsplans-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
                                 </div>
                             </div>
+                            <div class="federation-section">
+                                <h4 class="subsection-title">
+                                    Federation Setup
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Download pre-populated IaC to create IAM OIDC providers and CUDly IAM roles in each AWS account, so CUDly can authenticate from Azure or GCP without storing long-lived access keys.</span></span>
+                                </h4>
+                                <div class="setting-row">
+                                    <div class="setting-info">
+                                        <label for="aws-fed-source">CUDly runs on:</label>
+                                        <span class="info-icon">&#9432;<span class="tooltip-text">Select the cloud where CUDly is deployed. The downloaded IaC will be pre-configured with the correct OIDC issuer URL and audience for that source cloud.</span></span>
+                                    </div>
+                                    <div class="setting-input">
+                                        <select id="aws-fed-source">
+                                            <option value="aws" title="CUDly runs on AWS — downloads a cross-account IAM role Terraform module. Set aws_auth_mode=role_arn after applying.">AWS (cross-account IAM role)</option>
+                                            <option value="azure" title="CUDly runs on Azure — creates an IAM OIDC provider trusting Azure AD. Set aws_auth_mode=workload_identity_federation.">Azure (Managed Identity / Entra ID OIDC)</option>
+                                            <option value="gcp" title="CUDly runs on GCP — creates an IAM OIDC provider trusting Google. Set aws_auth_mode=workload_identity_federation.">GCP (Workload Identity OIDC)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div id="aws-federation-accounts" class="federation-accounts"></div>
+                            </div>
                             <div class="fieldset-save-bar">
                                 <button type="button" class="btn btn-primary" id="save-aws-btn">Save</button>
                             </div>
@@ -497,6 +517,14 @@
                                     <label>Term: <select id="azure-redis-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 </div>
                             </div>
+                            <div class="federation-section">
+                                <h4 class="subsection-title">
+                                    Federation Setup
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Download pre-populated IaC to create Azure App Registrations with certificate credentials. CUDly signs JWTs with an RSA private key; Azure validates them against the registered certificate — no client secrets stored.</span></span>
+                                </h4>
+                                <p class="federation-hint">Applies when CUDly runs on AWS or GCP and needs to manage Azure reservations without storing client secrets.</p>
+                                <div id="azure-federation-accounts" class="federation-accounts"></div>
+                            </div>
                             <div class="fieldset-save-bar">
                                 <button type="button" class="btn btn-primary" id="save-azure-btn">Save</button>
                             </div>
@@ -535,6 +563,26 @@
                                     <h5>Cloud Storage CUDs</h5>
                                     <label>Term: <select id="gcp-storage-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 </div>
+                            </div>
+                            <div class="federation-section">
+                                <h4 class="subsection-title">
+                                    Federation Setup
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Download pre-populated IaC to create GCP Workload Identity pools and providers. After applying, run the gcloud command from the Terraform output to generate the external-account credential JSON to paste into CUDly — no service account keys generated.</span></span>
+                                </h4>
+                                <div class="setting-row">
+                                    <div class="setting-info">
+                                        <label for="gcp-fed-source">CUDly runs on:</label>
+                                        <span class="info-icon">&#9432;<span class="tooltip-text">Select the cloud where CUDly is deployed. The downloaded .tfvars will include the correct OIDC issuer or AWS account ID for the Workload Identity Pool provider.</span></span>
+                                    </div>
+                                    <div class="setting-input">
+                                        <select id="gcp-fed-source">
+                                            <option value="aws" title="CUDly runs on AWS — the WIF pool provider will trust AWS STS tokens from the configured AWS account.">AWS (STS OIDC)</option>
+                                            <option value="azure" title="CUDly runs on Azure — the WIF pool provider will trust Azure AD OIDC tokens.">Azure (Entra ID OIDC)</option>
+                                            <option value="gcp" title="CUDly runs on GCP — use service account impersonation within GCP; no WIF pool needed.">GCP (SA impersonation)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div id="gcp-federation-accounts" class="federation-accounts"></div>
                             </div>
                             <div class="fieldset-save-bar">
                                 <button type="button" class="btn btn-primary" id="save-gcp-btn">Save</button>
@@ -1006,9 +1054,10 @@
                         <h3>AWS Authentication</h3>
                         <label>Auth Mode:
                             <select id="account-aws-auth-mode">
-                                <option value="access_keys">Access Keys</option>
-                                <option value="role_arn">IAM Role ARN</option>
-                                <option value="bastion">Bastion Account</option>
+                                <option value="workload_identity_federation" title="Exchange an OIDC token from Azure or GCP for temporary AWS credentials via STS AssumeRoleWithWebIdentity — no long-lived keys stored.">Workload Identity Federation (recommended)</option>
+                                <option value="role_arn" title="Assume an IAM role from another AWS account or the same account using the CUDly host's ambient credentials.">IAM Role ARN</option>
+                                <option value="bastion" title="Hop through a designated bastion AWS account that has an assumed-role trust into this target account.">Bastion Account</option>
+                                <option value="access_keys" title="Store static IAM access key ID and secret in CUDly. Avoid if possible — long-lived credentials.">Access Keys</option>
                             </select>
                         </label>
                         <div id="account-aws-keys-fields">
@@ -1023,6 +1072,11 @@
                             <label>Bastion Account: <select id="account-aws-bastion-id"><option value="">Select bastion account...</option></select></label>
                             <label>Role ARN in target: <input type="text" id="account-aws-bastion-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
                         </div>
+                        <div id="account-aws-wif-fields" class="hidden">
+                            <label>Role ARN: <input type="text" id="account-aws-wif-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>Token File Path: <input type="text" id="account-aws-wif-token-file" placeholder="/var/run/secrets/token"></label>
+                            <small>Path to the OIDC token file (Azure/GCP projected token). Leave blank to use AWS_WEB_IDENTITY_TOKEN_FILE env var.</small>
+                        </div>
                         <label class="toggle-row">
                             AWS Org Root:
                             <label class="toggle-label"><input type="checkbox" id="account-aws-is-org-root"><span class="slider"></span></label>
@@ -1032,9 +1086,26 @@
                     <!-- Azure-specific fields -->
                     <div class="form-section hidden" id="account-azure-fields">
                         <h3>Azure Authentication</h3>
+                        <label>Auth Mode:
+                            <select id="account-azure-auth-mode">
+                                <option value="workload_identity_federation" selected title="Authenticate using an RSA certificate assertion — no client secrets stored in CUDly. Requires an App Registration with a certificate credential.">Workload Identity Federation (recommended)</option>
+                                <option value="managed_identity" title="Use the Azure Managed Identity of the host VM or container. Only works when CUDly itself runs on Azure.">Managed Identity (Azure-hosted CUDly only)</option>
+                                <option value="client_secret" title="Store an Azure AD client secret in CUDly. Simple to set up but stores a long-lived credential.">Client Secret</option>
+                            </select>
+                        </label>
                         <label>Tenant ID: <input type="text" id="account-azure-tenant-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
                         <label>Client ID: <input type="text" id="account-azure-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
-                        <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
+                        <!-- client_secret mode -->
+                        <div id="account-azure-secret-fields" class="hidden">
+                            <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
+                        </div>
+                        <!-- workload_identity_federation mode -->
+                        <div id="account-azure-wif-fields">
+                            <label>RSA Private Key (PEM):
+                                <textarea id="account-azure-wif-private-key" rows="6" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+                            </label>
+                            <small>Generate with: <code>openssl genrsa -out cudly-wif.key 2048</code>. Register the matching self-signed certificate with the Azure App Registration. Download the IaC from the Azure Settings &rarr; Federation Setup section to automate this.</small>
+                        </div>
                     </div>
 
                     <!-- GCP-specific fields -->
@@ -1042,9 +1113,9 @@
                         <h3>GCP Authentication</h3>
                         <label>Auth Mode:
                             <select id="account-gcp-auth-mode">
-                                <option value="service_account_key">Service Account Key</option>
-                                <option value="application_default">Application Default (GCP-hosted CUDly only)</option>
-                                <option value="workload_identity_federation">Workload Identity Federation</option>
+                                <option value="workload_identity_federation" title="Exchange AWS or Azure credentials for GCP tokens via a Workload Identity Pool — no service account keys stored.">Workload Identity Federation (recommended)</option>
+                                <option value="application_default" title="Use GCP Application Default Credentials from the host environment. Only works when CUDly runs on GCP (GKE, Cloud Run, Compute Engine).">Application Default Credentials (GCP-hosted CUDly only)</option>
+                                <option value="service_account_key" title="Store a GCP service account JSON key in CUDly. Avoid if possible — long-lived credentials.">Service Account Key</option>
                             </select>
                         </label>
                         <label>Service Account Email (optional):
