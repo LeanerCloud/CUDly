@@ -23,7 +23,12 @@ variable "certificate_pem" {
     Generate with:
       openssl genrsa -out cudly-wif.key 2048
       openssl req -new -x509 -key cudly-wif.key -out cudly-wif.crt -days 730 -subj "/CN=CUDly-WIF"
-    Then paste the contents of cudly-wif.crt here and store cudly-wif.key in CUDly.
+    Then paste the contents of cudly-wif.crt here.
+
+    In CUDly, store the CONCATENATED blob of both PEM files as azure_wif_private_key:
+      cat cudly-wif.key cudly-wif.crt > cudly-wif-blob.pem
+    The certificate is required alongside the key so CUDly can compute the x5t thumbprint
+    required by Azure AD's client assertion protocol (RFC 7517).
   EOT
   type        = string
   sensitive   = false

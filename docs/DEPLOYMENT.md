@@ -625,6 +625,16 @@ Multi-account support requires an AES-256-GCM encryption key for stored cloud ac
 - `plan_accounts` — M2M join: which accounts a purchase plan targets
 - `cloud_account_id` FK column on `purchase_executions`, `purchase_history`, `savings_snapshots`, `ri_exchange_history`
 
+**Migration 000012** (`000012_global_config_fields`) adds `auto_collect`, `collection_schedule`, and `notification_days_before` columns to the `global_config` table.
+
+**Migration 000013** (`000013_add_running_status`) adds a `running` status value to the `purchase_executions` status enum.
+
+**Migration 000014** (`000014_azure_auth_mode`) adds `azure_auth_mode` column to `cloud_accounts`. Supported values: `client_secret`, `managed_identity`, `workload_identity_federation`.
+
+**Migration 000015** (`000015_gcp_auth_mode`) adds `gcp_auth_mode` column to `cloud_accounts`. Supported values: `service_account_key`, `application_default`, `workload_identity_federation`.
+
+**Migration 000016** (`000016_aws_wif`) adds `aws_web_identity_token_file` column to `cloud_accounts`, used for AWS Workload Identity Federation (token file path on the host platform).
+
 If `DB_AUTO_MIGRATE=true` (the default), migration 000011 runs automatically on Lambda cold start. To run manually:
 
 ```bash
