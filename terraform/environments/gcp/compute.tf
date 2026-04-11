@@ -63,7 +63,7 @@ module "compute_cloud_run" {
       CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.additional_secret_ids["credential-encryption-key"]
       FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                       = local.dashboard_url
-      CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "*"
+      CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
       SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
     },
     var.additional_env_vars
@@ -120,9 +120,13 @@ module "compute_gke" {
   auto_migrate               = var.auto_migrate
   additional_env_vars = merge(
     {
-      STATIC_DIR          = "/app/static"
-      DASHBOARD_URL       = local.dashboard_url
-      CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
+      STATIC_DIR                          = "/app/static"
+      SENDGRID_API_KEY_SECRET             = module.secrets.sendgrid_api_key_id
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.additional_secret_ids["credential-encryption-key"]
+      FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
+      DASHBOARD_URL                       = local.dashboard_url
+      CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
+      SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
     },
     var.additional_env_vars
   )

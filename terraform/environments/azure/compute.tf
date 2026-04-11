@@ -38,7 +38,7 @@ module "compute_container_apps" {
       AZURE_SMTP_PASSWORD_SECRET            = module.secrets.smtp_password_name
       FROM_EMAIL                            = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                         = local.dashboard_url
-      CORS_ALLOWED_ORIGIN                   = local.dashboard_url != "" ? local.dashboard_url : "*"
+      CORS_ALLOWED_ORIGIN                   = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
       SCHEDULED_TASK_SECRET                 = module.secrets.scheduled_task_secret_value
     },
     var.additional_env_vars
@@ -106,9 +106,14 @@ module "compute_aks" {
   auto_migrate               = var.auto_migrate
   additional_env_vars = merge(
     {
-      STATIC_DIR          = "/app/static"
-      DASHBOARD_URL       = local.dashboard_url
-      CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
+      STATIC_DIR                            = "/app/static"
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME = module.secrets.additional_secret_names["credential-encryption-key"]
+      AZURE_SMTP_USERNAME_SECRET            = module.secrets.smtp_username_name
+      AZURE_SMTP_PASSWORD_SECRET            = module.secrets.smtp_password_name
+      FROM_EMAIL                            = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.project_name}.example.com"
+      DASHBOARD_URL                         = local.dashboard_url
+      CORS_ALLOWED_ORIGIN                   = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
+      SCHEDULED_TASK_SECRET                 = module.secrets.scheduled_task_secret_value
     },
     var.additional_env_vars
   )

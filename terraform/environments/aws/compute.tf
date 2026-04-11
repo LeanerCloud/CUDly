@@ -60,7 +60,7 @@ module "compute_lambda" {
     {
       STATIC_DIR                           = "/app/static"
       DASHBOARD_URL                        = local.dashboard_url
-      CORS_ALLOWED_ORIGIN                  = local.dashboard_url != "" ? local.dashboard_url : "*"
+      CORS_ALLOWED_ORIGIN                  = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
       FROM_EMAIL                           = "noreply@${var.subdomain_zone_name}"
       CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN = module.secrets.credential_encryption_key_secret_arn
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
@@ -153,10 +153,12 @@ module "compute_fargate" {
   # Additional environment variables
   additional_env_vars = merge(
     {
-      STATIC_DIR          = "/app/static"
-      DASHBOARD_URL       = local.dashboard_url
-      CORS_ALLOWED_ORIGIN = local.dashboard_url != "" ? local.dashboard_url : "*"
-      FROM_EMAIL          = "noreply@${var.subdomain_zone_name}"
+      STATIC_DIR                           = "/app/static"
+      DASHBOARD_URL                        = local.dashboard_url
+      CORS_ALLOWED_ORIGIN                  = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
+      FROM_EMAIL                           = "noreply@${var.subdomain_zone_name}"
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN = module.secrets.credential_encryption_key_secret_arn
+      CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
     },
     var.additional_env_vars
   )
