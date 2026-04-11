@@ -385,3 +385,9 @@ variable "billing_account_id" {
   type        = string
   default     = ""
 }
+
+variable "max_account_parallelism" {
+  description = "Maximum number of cloud accounts to process in parallel during plan fan-out"
+  type        = number
+  default     = 10
+}

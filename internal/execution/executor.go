@@ -28,3 +28,22 @@ func RunForAccounts[T any](
 		return fn(ctx, byID[id])
 	})
 }
+
+// RunForAccountsWithConcurrency is like RunForAccounts but with an explicit
+// concurrency limit.
+func RunForAccountsWithConcurrency[T any](
+	ctx context.Context,
+	accounts []config.CloudAccount,
+	fn AccountExecutor[T],
+	maxConcurrency int,
+) []Result[T] {
+	ids := make([]string, len(accounts))
+	byID := make(map[string]config.CloudAccount, len(accounts))
+	for i, a := range accounts {
+		ids[i] = a.ID
+		byID[a.ID] = a
+	}
+	return FanOutWithConcurrency(ctx, ids, func(ctx context.Context, id string) (T, error) {
+		return fn(ctx, byID[id])
+	}, maxConcurrency)
+}

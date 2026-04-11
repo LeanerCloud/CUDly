@@ -3,6 +3,8 @@ package purchase
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,9 +69,9 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 // executeMultiAccount fans out executePurchase across all plan accounts in parallel.
 // Each account gets its own PurchaseExecution record tagged with cloud_account_id.
 func (m *Manager) executeMultiAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, accounts []config.CloudAccount) error {
-	results := execution.RunForAccounts(ctx, accounts, func(ctx context.Context, account config.CloudAccount) (struct{}, error) {
+	results := execution.RunForAccountsWithConcurrency(ctx, accounts, func(ctx context.Context, account config.CloudAccount) (struct{}, error) {
 		return struct{}{}, m.executeForAccount(ctx, baseExec, plan, account)
-	})
+	}, getMaxAccountParallelism())
 
 	var errs []string
 	for _, r := range results {
@@ -200,6 +202,17 @@ func planProvider(plan *config.PurchasePlan) string {
 		}
 	}
 	return ""
+}
+
+// getMaxAccountParallelism reads the CUDLY_MAX_ACCOUNT_PARALLELISM env var.
+// Returns DefaultMaxConcurrency if unset or invalid.
+func getMaxAccountParallelism() int {
+	if v := os.Getenv("CUDLY_MAX_ACCOUNT_PARALLELISM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return execution.DefaultMaxConcurrency
 }
 
 func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {

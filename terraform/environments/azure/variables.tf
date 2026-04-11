@@ -456,3 +456,9 @@ variable "email_custom_domain_name" {
   type        = string
   default     = ""
 }
+
+variable "max_account_parallelism" {
+  description = "Maximum number of cloud accounts to process in parallel during plan fan-out"
+  type        = number
+  default     = 10
+}

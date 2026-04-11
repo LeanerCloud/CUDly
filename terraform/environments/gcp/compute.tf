@@ -65,6 +65,7 @@ module "compute_cloud_run" {
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
       SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
+      CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
     },
     var.additional_env_vars
   )
@@ -127,6 +128,7 @@ module "compute_gke" {
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
       SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
+      CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
     },
     var.additional_env_vars
   )
