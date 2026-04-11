@@ -36,5 +36,15 @@ window.openCreateGroupModal = openCreateGroupModal;
 window.closeGroupModal = closeGroupModal;
 window.addPermission = addPermission;
 
+// Wire event listeners for buttons that previously used inline onclick
+// (CSP blocks inline event handlers when script-src is 'self' without 'unsafe-inline')
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('create-user-btn')?.addEventListener('click', openCreateUserModal);
+  document.getElementById('create-group-btn')?.addEventListener('click', openCreateGroupModal);
+  document.getElementById('close-user-modal-btn')?.addEventListener('click', closeUserModal);
+  document.getElementById('close-group-modal-btn')?.addEventListener('click', closeGroupModal);
+  document.getElementById('add-permission-btn')?.addEventListener('click', () => addPermission());
+});
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => void init());

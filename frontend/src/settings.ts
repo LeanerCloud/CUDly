@@ -734,7 +734,7 @@ function propagateTermToServices(term: string): void {
   const azureTermSelects = [
     'azure-vm-term',
     'azure-sql-term',
-    'azure-cosmos-term'
+    'azure-cosmosdb-term'
   ];
 
   // GCP services

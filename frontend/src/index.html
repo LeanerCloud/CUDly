@@ -631,13 +631,13 @@
                     <h2>User Management</h2>
                     <p class="settings-description">Manage users and their permissions.</p>
                     <div class="section-header">
-                        <button type="button" id="create-user-btn" class="primary" onclick="window.openCreateUserModal()">Create User</button>
+                        <button type="button" id="create-user-btn" class="primary">Create User</button>
                     </div>
                     <div id="users-list" class="mt-3"></div>
 
                     <h3 class="mt-4">Groups & Permissions</h3>
                     <div class="section-header">
-                        <button type="button" id="create-group-btn" class="primary" onclick="window.openCreateGroupModal()">Create Group</button>
+                        <button type="button" id="create-group-btn" class="primary">Create Group</button>
                     </div>
                     <div id="groups-list" class="mt-3"></div>
                 </section>
@@ -1013,7 +1013,7 @@
                         <small class="form-help">Hold Ctrl/Cmd to select multiple groups</small>
                     </div>
                     <div class="modal-buttons">
-                        <button type="button" onclick="window.closeUserModal()">Cancel</button>
+                        <button type="button" id="close-user-modal-btn">Cancel</button>
                         <button type="submit" class="primary">Save User</button>
                     </div>
                 </form>
@@ -1037,10 +1037,10 @@
                     <div class="form-group">
                         <label>Permissions</label>
                         <div id="permissions-list"></div>
-                        <button type="button" class="btn-small mt-2" onclick="window.addPermission()">Add Permission</button>
+                        <button type="button" class="btn-small mt-2" id="add-permission-btn">Add Permission</button>
                     </div>
                     <div class="modal-buttons">
-                        <button type="button" onclick="window.closeGroupModal()">Cancel</button>
+                        <button type="button" id="close-group-modal-btn">Cancel</button>
                         <button type="submit" class="primary">Save Group</button>
                     </div>
                 </form>
