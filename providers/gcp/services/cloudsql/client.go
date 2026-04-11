@@ -200,6 +200,10 @@ func (c *CloudSQLClient) GetExistingCommitments(ctx context.Context) ([]common.C
 		return nil, fmt.Errorf("failed to list SQL instances: %w", err)
 	}
 
+	if instances == nil {
+		return commitments, nil
+	}
+
 	for _, instance := range instances.Items {
 		// Check if instance has a commitment (long-term pricing plan)
 		if instance.Settings != nil && instance.Settings.PricingPlan == "PACKAGE" {

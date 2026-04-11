@@ -340,6 +340,8 @@ func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.Ser
 		return NewDatabaseClient(p.cred, subscriptionID, region), nil
 	case common.ServiceCache:
 		return NewCacheClient(p.cred, subscriptionID, region), nil
+	case common.ServiceNoSQL:
+		return NewCosmosDBClient(p.cred, subscriptionID, region), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}

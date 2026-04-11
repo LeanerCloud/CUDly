@@ -180,52 +180,10 @@ func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params commo
 
 // GetExistingCommitments retrieves existing Memorystore Redis commitments
 func (c *MemorystoreClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	redisSvc := c.redisService
-	if redisSvc == nil {
-		client, err := redis.NewCloudRedisClient(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create redis client: %w", err)
-		}
-		redisSvc = &realRedisService{client: client}
-	}
-	defer redisSvc.Close()
-
-	commitments := make([]common.Commitment, 0)
-
-	// List all Redis instances in the project/region
-	parent := fmt.Sprintf("projects/%s/locations/%s", c.projectID, c.region)
-	req := &redispb.ListInstancesRequest{
-		Parent: parent,
-	}
-
-	it := redisSvc.ListInstances(ctx, req)
-	for {
-		instance, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to list redis instances: %w", err)
-		}
-
-		// Check if instance has committed use pricing
-		if instance.ReservedIpRange != "" {
-			commitment := common.Commitment{
-				Provider:       common.ProviderGCP,
-				Account:        c.projectID,
-				CommitmentType: common.CommitmentCUD,
-				Service:        common.ServiceCache,
-				Region:         c.region,
-				CommitmentID:   instance.Name,
-				State:          strings.ToLower(instance.State.String()),
-				ResourceType:   instance.Tier.String(),
-			}
-
-			commitments = append(commitments, commitment)
-		}
-	}
-
-	return commitments, nil
+	// GCP Memorystore Redis does not expose commitment status via the Redis API.
+	// ReservedIpRange (previously used here) is the VPC peering CIDR, not a
+	// commitment indicator. Return empty until a proper detection method is available.
+	return nil, nil
 }
 
 // PurchaseCommitment purchases a Memorystore Redis commitment

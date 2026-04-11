@@ -351,9 +351,11 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 	}
 
 	result := make([]CommitmentRequest, 0, len(groups))
+	ts := time.Now().UnixNano()
+	counter := 0
 	for k, a := range groups {
 		result = append(result, CommitmentRequest{
-			Name:   fmt.Sprintf("cud-%s-%d", k.region, time.Now().UnixNano()),
+			Name:   fmt.Sprintf("cud-%s-%d-%d", k.region, ts, counter),
 			Plan:   a.plan,
 			Region: k.region,
 			Resources: []ResourceCommitment{
@@ -361,6 +363,7 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 				{Type: "MEMORY_MB", Amount: a.vcpus * 4096},
 			},
 		})
+		counter++
 	}
 	return result
 }

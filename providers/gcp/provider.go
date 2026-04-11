@@ -18,7 +18,9 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/cloudsql"
+	"github.com/LeanerCloud/CUDly/providers/gcp/services/cloudstorage"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/computeengine"
+	"github.com/LeanerCloud/CUDly/providers/gcp/services/memorystore"
 )
 
 // ProjectsClient interface for project operations (enables mocking)
@@ -378,6 +380,8 @@ func (p *GCPProvider) GetSupportedServices() []common.ServiceType {
 	return []common.ServiceType{
 		common.ServiceCompute,
 		common.ServiceRelationalDB,
+		common.ServiceCache,
+		common.ServiceStorage,
 	}
 }
 
@@ -388,6 +392,10 @@ func (p *GCPProvider) GetServiceClient(ctx context.Context, service common.Servi
 		return computeengine.NewClient(ctx, p.projectID, region, p.clientOpts...)
 	case common.ServiceRelationalDB:
 		return cloudsql.NewClient(ctx, p.projectID, region, p.clientOpts...)
+	case common.ServiceCache:
+		return memorystore.NewClient(ctx, p.projectID, region, p.clientOpts...)
+	case common.ServiceStorage:
+		return cloudstorage.NewClient(ctx, p.projectID, region, p.clientOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported service type for GCP: %s", service)
 	}

@@ -73,7 +73,11 @@ type Credentials interface {
 
 // ProviderConfig represents configuration for a provider
 type ProviderConfig struct {
-	Name                   string
+	Name string
+	// Profile carries provider-specific semantics:
+	//   - AWS: named profile from ~/.aws/credentials
+	//   - Azure: subscription ID
+	//   - GCP: project ID
 	Profile                string
 	Region                 string
 	CredentialPath         string

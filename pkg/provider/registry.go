@@ -3,6 +3,7 @@ package provider
 
 import (
 	"fmt"
+	"log"
 	"sync"
 )
 
@@ -61,6 +62,7 @@ func (r *Registry) GetProvider(name string) Provider {
 	// Create provider with default config
 	provider, err := factory(&ProviderConfig{Name: name})
 	if err != nil {
+		log.Printf("provider %q factory error: %v", name, err)
 		return nil
 	}
 
@@ -89,6 +91,7 @@ func (r *Registry) GetAllProviders() []Provider {
 	for name, factory := range r.providers {
 		provider, err := factory(&ProviderConfig{Name: name})
 		if err != nil {
+			log.Printf("provider %q factory error: %v", name, err)
 			continue
 		}
 		providers = append(providers, provider)
