@@ -118,7 +118,7 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
       const approveBtn = document.createElement('button');
       approveBtn.className = 'btn btn-small btn-primary';
       approveBtn.textContent = 'Approve';
-      approveBtn.addEventListener('click', () => handleApprove(reg, regs));
+      approveBtn.addEventListener('click', () => handleApprove(reg));
       actionsTd.appendChild(approveBtn);
 
       const rejectBtn = document.createElement('button');
@@ -166,7 +166,7 @@ export async function loadRegistrations(): Promise<void> {
   }
 }
 
-function handleApprove(reg: AccountRegistration, _regs: AccountRegistration[]): void {
+function handleApprove(reg: AccountRegistration): void {
   const syntheticAccount = registrationToAccount(reg);
 
   openAccountModal(reg.provider as AccountProvider, syntheticAccount, {

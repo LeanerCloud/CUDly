@@ -76,4 +76,5 @@ type StoreInterface interface {
 	GetAccountRegistrationByToken(ctx context.Context, token string) (*AccountRegistration, error)
 	ListAccountRegistrations(ctx context.Context, filter AccountRegistrationFilter) ([]AccountRegistration, error)
 	UpdateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
+	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string) error
 }

@@ -3,12 +3,17 @@ package config
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrRegistrationConflict is returned when a registration status transition fails
+// because another request already changed the status (concurrent modification).
+var ErrRegistrationConflict = errors.New("registration status conflict: already processed")
 
 // CreateAccountRegistration inserts a new registration request. Returns an error
 // wrapping "duplicate" when the partial unique index rejects a second pending
@@ -153,6 +158,47 @@ func (s *PostgresStore) UpdateAccountRegistration(ctx context.Context, reg *Acco
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update account registration: %w", err)
+	}
+	return nil
+}
+
+// TransitionRegistrationStatus atomically updates a registration's workflow fields
+// only if the current status matches fromStatus. Returns ErrRegistrationConflict
+// when 0 rows are affected (another request already changed the status).
+func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string) error {
+	reg.UpdatedAt = time.Now()
+
+	query := `
+		UPDATE account_registrations SET
+			status           = $2,
+			rejection_reason = $3,
+			cloud_account_id = $4,
+			reviewed_by      = $5,
+			reviewed_at      = $6,
+			updated_at       = $7
+		WHERE id = $1 AND status = $8
+	`
+
+	var reviewedAt sql.NullTime
+	if reg.ReviewedAt != nil {
+		reviewedAt = sql.NullTime{Time: *reg.ReviewedAt, Valid: true}
+	}
+
+	result, err := s.db.Exec(ctx, query,
+		reg.ID,
+		reg.Status,
+		nullStringFromString(reg.RejectionReason),
+		nullStringFromPtr(reg.CloudAccountID),
+		nullStringFromPtr(reg.ReviewedBy),
+		reviewedAt,
+		reg.UpdatedAt,
+		fromStatus,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to transition account registration status: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrRegistrationConflict
 	}
 	return nil
 }

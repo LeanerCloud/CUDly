@@ -414,6 +414,9 @@ func (m *MockConfigStore) ListAccountRegistrations(_ context.Context, _ config.A
 func (m *MockConfigStore) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
 	return nil
 }
+func (m *MockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string) error {
+	return nil
+}
 
 // Verify MockConfigStore implements config.StoreInterface
 var _ config.StoreInterface = (*MockConfigStore)(nil)

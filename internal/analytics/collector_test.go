@@ -278,6 +278,9 @@ func (m *mockConfigStore) ListAccountRegistrations(_ context.Context, _ config.A
 func (m *mockConfigStore) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
 	return nil
 }
+func (m *mockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string) error {
+	return nil
+}
 
 // TestNewCollector tests the NewCollector function
 func TestNewCollector(t *testing.T) {

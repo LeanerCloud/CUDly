@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -94,20 +95,17 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("registrations: %w", err)
 	}
 
-	// Fire-and-forget admin notification.
+	// Notify admin (synchronous, errors logged but not propagated).
 	if h.emailNotifier != nil {
-		go func() {
-			notifyErr := h.emailNotifier.SendRegistrationReceivedNotification(ctx, email.RegistrationNotificationData{
-				AccountName:  body.AccountName,
-				Provider:     body.Provider,
-				ExternalID:   body.ExternalID,
-				ContactEmail: body.ContactEmail,
-				DashboardURL: h.dashboardURL,
-			})
-			if notifyErr != nil {
-				logging.Warnf("failed to send registration notification: %v", notifyErr)
-			}
-		}()
+		if notifyErr := h.emailNotifier.SendRegistrationReceivedNotification(context.Background(), email.RegistrationNotificationData{
+			AccountName:  body.AccountName,
+			Provider:     body.Provider,
+			ExternalID:   body.ExternalID,
+			ContactEmail: body.ContactEmail,
+			DashboardURL: h.dashboardURL,
+		}); notifyErr != nil {
+			logging.Warnf("failed to send registration notification: %v", notifyErr)
+		}
 	}
 
 	return map[string]string{
@@ -181,27 +179,25 @@ func (h *Handler) getPendingRegistration(ctx context.Context, id string) (*confi
 	return reg, nil
 }
 
-// markRegistrationReviewed sets review metadata and persists the update.
-func (h *Handler) markRegistrationReviewed(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) error {
+// setReviewMetadata populates reviewer info from the current admin session.
+func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) {
 	reviewedAt := time.Now()
 	reg.ReviewedAt = &reviewedAt
 	session, _ := h.requireAdmin(ctx, httpReq)
 	if session != nil {
 		reg.ReviewedBy = &session.UserID
 	}
-	return h.config.UpdateAccountRegistration(ctx, reg)
 }
 
-// notifyRegistrant sends a fire-and-forget email about an approval or rejection.
-func (h *Handler) notifyRegistrant(ctx context.Context, reg *config.AccountRegistration, data email.RegistrationDecisionData) {
+// notifyRegistrant sends an email about an approval or rejection.
+// Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
+func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) {
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
-	go func() {
-		if err := h.emailNotifier.SendRegistrationDecisionNotification(ctx, reg.ContactEmail, data); err != nil {
-			logging.Warnf("failed to send registration decision notification: %v", err)
-		}
-	}()
+	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, data); err != nil {
+		logging.Warnf("failed to send registration decision notification: %v", err)
+	}
 }
 
 // approveRegistration handles POST /api/registrations/:id/approve.
@@ -221,6 +217,17 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		return nil, err
 	}
 
+	// Atomically transition to "approved" first — prevents double-approval.
+	reg.Status = "approved"
+	h.setReviewMetadata(ctx, reg, httpReq)
+	if err := h.config.TransitionRegistrationStatus(ctx, reg, "pending"); err != nil {
+		if errors.Is(err, config.ErrRegistrationConflict) {
+			return nil, NewClientError(409, "registration was already processed by another request")
+		}
+		return nil, fmt.Errorf("registrations: transition: %w", err)
+	}
+
+	// Create the cloud account (only one request reaches here).
 	now := time.Now()
 	account := cloudAccountFromRequest(acctReq)
 	account.ID = uuid.New().String()
@@ -232,13 +239,13 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		return nil, fmt.Errorf("registrations: create account: %w", err)
 	}
 
-	reg.Status = "approved"
+	// Link the cloud account to the registration record.
 	reg.CloudAccountID = &account.ID
-	if err := h.markRegistrationReviewed(ctx, reg, httpReq); err != nil {
-		return nil, fmt.Errorf("registrations: update: %w", err)
+	if err := h.config.UpdateAccountRegistration(ctx, reg); err != nil {
+		logging.Warnf("registration %s approved but failed to link cloud_account_id: %v", reg.ID, err)
 	}
 
-	h.notifyRegistrant(ctx, reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "approved",
 	})
@@ -262,11 +269,15 @@ func (h *Handler) rejectRegistration(ctx context.Context, httpReq *events.Lambda
 
 	reg.Status = "rejected"
 	reg.RejectionReason = body.Reason
-	if err := h.markRegistrationReviewed(ctx, reg, httpReq); err != nil {
-		return nil, fmt.Errorf("registrations: update: %w", err)
+	h.setReviewMetadata(ctx, reg, httpReq)
+	if err := h.config.TransitionRegistrationStatus(ctx, reg, "pending"); err != nil {
+		if errors.Is(err, config.ErrRegistrationConflict) {
+			return nil, NewClientError(409, "registration was already processed by another request")
+		}
+		return nil, fmt.Errorf("registrations: transition: %w", err)
 	}
 
-	h.notifyRegistrant(ctx, reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "rejected",
 		RejectionReason: body.Reason,

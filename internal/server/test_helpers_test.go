@@ -177,3 +177,6 @@ func (m *mockConfigStoreForHealth) ListAccountRegistrations(_ context.Context, _
 func (m *mockConfigStoreForHealth) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
 	return nil
 }
+func (m *mockConfigStoreForHealth) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string) error {
+	return nil
+}
