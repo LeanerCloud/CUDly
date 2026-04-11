@@ -79,19 +79,19 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -158,7 +158,7 @@ jobs:
           cat deployment-info.json
 
       - name: Upload deployment info
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: deployment-info-gcp-${{ needs.prepare.outputs.environment }}
           path: deployment-info.json
@@ -238,7 +238,7 @@ jobs:
 
     steps:
       - name: Download deployment info
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: deployment-info-gcp-${{ needs.prepare.outputs.environment }}
         continue-on-error: true

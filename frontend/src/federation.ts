@@ -127,7 +127,7 @@ function buildAWSFederationDownloads(source: string): void {
   container.appendChild(row);
 }
 
-function buildAzureFederationDownloads(): void {
+function buildAzureFederationDownloads(source: string): void {
   const container = document.getElementById('azure-federation-accounts');
   if (!container) return;
   clearContainer(container);
@@ -141,12 +141,12 @@ function buildAzureFederationDownloads(): void {
   actions.appendChild(makeDownloadBtn(
     'Terraform tfvars',
     'Download .tfvars for Azure WIF federation. Generate a cert, fill in subscription/tenant IDs, then terraform apply.',
-    'azure', 'aws',
+    'azure', source,
   ));
   actions.appendChild(makeDownloadBtn(
     'Download ZIP',
     'Download zip bundle with Terraform module + .tfvars for Azure WIF federation.',
-    'azure', 'aws', 'bundle',
+    'azure', source, 'bundle',
   ));
 
   row.appendChild(actions);
@@ -202,14 +202,19 @@ function buildGCPFederationDownloads(source: string): void {
  */
 export async function initFederationSections(): Promise<void> {
   const awsFedSource = document.getElementById('aws-fed-source') as HTMLSelectElement | null;
+  const azureFedSource = document.getElementById('azure-fed-source') as HTMLSelectElement | null;
   const gcpFedSource = document.getElementById('gcp-fed-source') as HTMLSelectElement | null;
 
   buildAWSFederationDownloads(awsFedSource?.value ?? 'aws');
-  buildAzureFederationDownloads();
+  buildAzureFederationDownloads(azureFedSource?.value ?? 'aws');
   buildGCPFederationDownloads(gcpFedSource?.value ?? 'aws');
 
   awsFedSource?.addEventListener('change', () => {
     buildAWSFederationDownloads(awsFedSource.value);
+  });
+
+  azureFedSource?.addEventListener('change', () => {
+    buildAzureFederationDownloads(azureFedSource.value);
   });
 
   gcpFedSource?.addEventListener('change', () => {

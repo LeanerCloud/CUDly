@@ -34,17 +34,17 @@ jobs:
 
       - name: Checkout
         if: steps.precheck.outputs.should_run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Go
         if: steps.precheck.outputs.should_run == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
       - name: Azure Login (OIDC)
         if: steps.precheck.outputs.should_run == 'true'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -66,7 +66,7 @@ jobs:
 
       - name: Upload report artifact
         if: always() && steps.precheck.outputs.should_run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: azure-sanity-report
           path: ${{ env.REPORT_PATH }}

@@ -523,6 +523,17 @@
                                     <span class="info-icon">&#9432;<span class="tooltip-text">Download pre-populated IaC to create Azure App Registrations with certificate credentials. CUDly signs JWTs with an RSA private key; Azure validates them against the registered certificate — no client secrets stored.</span></span>
                                 </h4>
                                 <p class="federation-hint">Applies when CUDly runs on AWS or GCP and needs to manage Azure reservations without storing client secrets.</p>
+                                <div class="setting-row">
+                                    <div class="setting-info">
+                                        <label for="azure-fed-source">CUDly runs on:</label>
+                                    </div>
+                                    <div class="setting-input">
+                                        <select id="azure-fed-source">
+                                            <option value="aws">AWS</option>
+                                            <option value="gcp">GCP</option>
+                                        </select>
+                                    </div>
+                                </div>
                                 <div id="azure-federation-accounts" class="federation-accounts"></div>
                             </div>
                             <div class="fieldset-save-bar">

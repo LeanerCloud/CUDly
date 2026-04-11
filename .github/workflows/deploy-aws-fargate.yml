@@ -87,16 +87,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -168,7 +168,7 @@ jobs:
           cat deployment-info.json
 
       - name: Upload deployment info
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: deployment-info-fargate-${{ needs.prepare.outputs.environment }}
           path: deployment-info.json
@@ -252,7 +252,7 @@ jobs:
 
     steps:
       - name: Download deployment info
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: deployment-info-fargate-${{ needs.prepare.outputs.environment }}
         continue-on-error: true
