@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/cosmos/armcosmos/v2"
+	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
@@ -242,7 +243,7 @@ func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 	}
 
 	// Build reservation purchase request
-	reservationOrderID := fmt.Sprintf("cosmos-reservation-%d", time.Now().Unix())
+	reservationOrderID := uuid.New().String()
 
 	// Construct the Azure Reservations API request
 	apiVersion := "2022-11-01"

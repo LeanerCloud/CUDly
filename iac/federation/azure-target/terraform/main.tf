@@ -3,11 +3,11 @@ terraform {
   required_providers {
     azuread = {
       source  = "hashicorp/azuread"
-      version = "~> 2.47"
+      version = "~> 3.8"
     }
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.95"
+      version = "~> 4.0"
     }
     http = {
       source  = "hashicorp/http"
@@ -43,6 +43,10 @@ resource "azuread_application_certificate" "cudly" {
   type           = "AsymmetricX509Cert"
   value          = var.certificate_pem
   end_date       = timeadd(plantimestamp(), "17520h") # 2 years
+
+  lifecycle {
+    ignore_changes = [end_date]
+  }
 }
 
 # Reservations Administrator is the built-in Azure role for purchasing and managing reservations.
