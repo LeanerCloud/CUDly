@@ -17,7 +17,7 @@ export interface CloudAccount {
   aws_role_arn?: string;
   aws_external_id?: string;
   aws_bastion_id?: string;
-  aws_bastion_account_name?: string;
+  bastion_account_name?: string;
   aws_web_identity_token_file?: string;
   aws_is_org_root?: boolean;
   azure_auth_mode?: 'client_secret' | 'managed_identity' | 'workload_identity_federation';
@@ -43,7 +43,7 @@ export interface CloudAccountRequest {
   aws_role_arn?: string;
   aws_external_id?: string;
   aws_bastion_id?: string;
-  aws_bastion_account_name?: string;
+  bastion_account_name?: string;
   aws_web_identity_token_file?: string;
   aws_is_org_root?: boolean;
   azure_auth_mode?: string;

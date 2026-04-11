@@ -74,11 +74,15 @@ export async function requestPasswordReset(email: string): Promise<void> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   await addContentHashHeader(headers, body);
 
-  await fetch(`${API_BASE}/auth/forgot-password`, {
+  const response = await fetch(`${API_BASE}/auth/forgot-password`, {
     method: 'POST',
     headers,
     body
   });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error || 'Failed to send password reset email');
+  }
 }
 
 /**

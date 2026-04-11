@@ -252,14 +252,15 @@ async function handleExecutePurchase(): Promise<void> {
     provider: r.provider,
     service: r.service,
     region: r.region,
-    instance_type: r.resource_type,
-    current_cost: 0,
-    recommended_cost: 0,
-    estimated_savings: r.savings,
-    term_years: r.term,
-    payment_option: 'all-upfront' as api.PaymentOption,
-    coverage: 100,
-    description: `${r.service} ${r.resource_type} in ${r.region} x${r.count}`
+    resource_type: r.resource_type,
+    count: r.count,
+    term: r.term,
+    payment: 'all-upfront',
+    upfront_cost: 0,
+    monthly_cost: 0,
+    savings: r.savings,
+    selected: true,
+    purchased: false,
   }));
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;

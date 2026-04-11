@@ -21,40 +21,46 @@ export interface LoginResponse {
 
 // Dashboard types
 export interface DashboardSummary {
-  total_savings: number;
-  monthly_savings: number;
-  active_plans: number;
-  pending_purchases: number;
-  recommendations_count: number;
-  savings_by_service: Record<string, number>;
-  savings_by_provider: Record<string, number>;
+  potential_monthly_savings: number;
+  total_recommendations: number;
+  active_commitments: number;
+  committed_monthly: number;
+  current_coverage: number;
+  target_coverage: number;
+  ytd_savings: number;
+  by_service: Record<string, { potential_savings: number; current_savings: number }>;
 }
 
 export interface UpcomingPurchase {
-  id: string;
-  plan_id: string;
+  execution_id: string;
   plan_name: string;
   scheduled_date: string;
-  provider: Provider;
+  provider: string;
   service: string;
+  step_number: number;
+  total_steps: number;
   estimated_savings: number;
-  status: string;
 }
 
 // Recommendation types
 export interface Recommendation {
   id: string;
-  provider: Provider;
+  provider: string;
   service: string;
   region: string;
-  instance_type?: string;
-  current_cost: number;
-  recommended_cost: number;
-  estimated_savings: number;
-  term_years: number;
-  payment_option: PaymentOption;
-  coverage: number;
-  description: string;
+  resource_type: string;
+  engine?: string;
+  count: number;
+  term: number;
+  payment: string;
+  upfront_cost: number;
+  monthly_cost: number;
+  savings: number;
+  selected: boolean;
+  purchased: boolean;
+  purchase_id?: string;
+  error?: string;
+  cloud_account_id?: string;
 }
 
 export interface RecommendationFilters {
@@ -66,50 +72,57 @@ export interface RecommendationFilters {
 }
 
 // Plan types
+export interface PlanRampSchedule {
+  type: string;
+  percent_per_step: number;
+  step_interval_days: number;
+  current_step: number;
+  total_steps: number;
+  start_date?: string;
+}
+
 export interface Plan {
   id: string;
   name: string;
-  description?: string;
-  provider: Provider;
-  service: string;
-  term: number;
-  payment_option: PaymentOption;
-  coverage: number;
-  ramp_schedule: RampSchedule;
-  auto_purchase: boolean;
   enabled: boolean;
-  notify_days: number;
+  auto_purchase: boolean;
+  notification_days_before: number;
+  services: Record<string, ServiceConfig>;
+  ramp_schedule: PlanRampSchedule;
   created_at: string;
   updated_at: string;
+  next_execution_date?: string;
+  last_execution_date?: string;
 }
 
 export interface CreatePlanRequest {
   name: string;
-  description?: string;
-  provider: Provider;
-  service: string;
-  term: number;
-  payment_option: PaymentOption;
-  coverage: number;
-  ramp_schedule: RampSchedule;
-  auto_purchase: boolean;
   enabled: boolean;
-  notify_days: number;
+  auto_purchase: boolean;
+  notification_days_before: number;
+  services: Record<string, ServiceConfig>;
+  ramp_schedule: PlanRampSchedule;
 }
 
 // History types
 export interface PurchaseHistory {
-  id: string;
-  plan_id: string;
-  plan_name: string;
-  executed_at: string;
-  provider: Provider;
+  account_id: string;
+  purchase_id: string;
+  timestamp: string;
+  provider: string;
   service: string;
   region: string;
+  resource_type: string;
+  count: number;
+  term: number;
+  payment: string;
   upfront_cost: number;
+  monthly_cost: number;
   estimated_savings: number;
-  status: 'completed' | 'failed' | 'pending';
-  error?: string;
+  plan_id?: string;
+  plan_name?: string;
+  ramp_step?: number;
+  cloud_account_id?: string;
 }
 
 export interface HistoryFilters {
@@ -123,13 +136,21 @@ export interface HistoryFilters {
 // Config types
 export interface Config {
   enabled_providers: Provider[];
-  notification_email: string;
+  notification_email?: string;
   auto_collect: boolean;
   collection_schedule: string;
+  notification_days_before: number;
+  approval_required?: boolean;
   default_term: number;
   default_payment: PaymentOption;
   default_coverage: number;
-  notification_days_before: number;
+  default_ramp_schedule?: string;
+  ri_exchange_enabled?: boolean;
+  ri_exchange_mode?: string;
+  ri_exchange_utilization_threshold?: number;
+  ri_exchange_max_per_exchange_usd?: number;
+  ri_exchange_max_daily_usd?: number;
+  ri_exchange_lookback_days?: number;
 }
 
 export interface ServiceConfig {
@@ -139,6 +160,13 @@ export interface ServiceConfig {
   term: number;
   payment: string;
   coverage: number;
+  ramp_schedule?: string;
+  include_engines?: string[];
+  exclude_engines?: string[];
+  include_regions?: string[];
+  exclude_regions?: string[];
+  include_types?: string[];
+  exclude_types?: string[];
 }
 
 export interface PublicInfo {

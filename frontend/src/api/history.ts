@@ -36,6 +36,7 @@ export async function getSavingsAnalytics(filters: SavingsAnalyticsFilters = {})
   if (filters.interval) params.set('interval', filters.interval);
   if (filters.provider) params.set('provider', filters.provider);
   if (filters.service) params.set('service', filters.service);
+  if (filters.account_ids && filters.account_ids.length > 0) params.set('account_ids', filters.account_ids.join(','));
 
   const queryString = params.toString();
   return apiRequest<SavingsAnalyticsResponse>(`/history/analytics${queryString ? '?' + queryString : ''}`);

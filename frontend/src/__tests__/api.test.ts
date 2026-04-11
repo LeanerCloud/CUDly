@@ -633,15 +633,11 @@ describe('Plans API', () => {
     test('sends POST with plan data', async () => {
       const plan: CreatePlanRequest = {
         name: 'Test Plan',
-        provider: 'aws',
-        service: 'ec2',
-        term: 3,
-        payment_option: 'all-upfront',
-        coverage: 80,
-        ramp_schedule: 'immediate',
-        auto_purchase: false,
         enabled: true,
-        notify_days: 3
+        auto_purchase: false,
+        notification_days_before: 3,
+        services: { 'aws:ec2': { provider: 'aws', service: 'ec2', enabled: true, term: 3, payment: 'all-upfront', coverage: 80 } },
+        ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
       };
       await createPlan(plan);
 
@@ -659,15 +655,11 @@ describe('Plans API', () => {
     test('sends PUT with plan data', async () => {
       const plan: CreatePlanRequest = {
         name: 'Updated Plan',
-        provider: 'aws',
-        service: 'rds',
-        term: 1,
-        payment_option: 'no-upfront',
-        coverage: 70,
-        ramp_schedule: 'weekly-25pct',
-        auto_purchase: true,
         enabled: true,
-        notify_days: 5
+        auto_purchase: true,
+        notification_days_before: 5,
+        services: { 'aws:rds': { provider: 'aws', service: 'rds', enabled: true, term: 1, payment: 'no-upfront', coverage: 70 } },
+        ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, current_step: 0, total_steps: 4 },
       };
       await updatePlan('plan-123', plan);
 
@@ -797,13 +789,15 @@ describe('Purchase API', () => {
         provider: 'aws',
         service: 'ec2',
         region: 'us-east-1',
-        current_cost: 100,
-        recommended_cost: 70,
-        estimated_savings: 30,
-        term_years: 3,
-        payment_option: 'all-upfront',
-        coverage: 80,
-        description: 'Test recommendation'
+        resource_type: 'm5.large',
+        count: 1,
+        term: 3,
+        payment: 'all-upfront',
+        upfront_cost: 100,
+        monthly_cost: 0,
+        savings: 30,
+        selected: true,
+        purchased: false,
       }];
       await executePurchase(recs);
 
