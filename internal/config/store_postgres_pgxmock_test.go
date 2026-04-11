@@ -361,17 +361,17 @@ func TestPGXMock_GetPurchaseHistory_Success(t *testing.T) {
 	cols := []string{
 		"account_id", "purchase_id", "timestamp", "provider", "service", "region",
 		"resource_type", "count", "term", "payment", "upfront_cost", "monthly_cost",
-		"estimated_savings", "plan_id", "plan_name", "ramp_step",
+		"estimated_savings", "plan_id", "plan_name", "ramp_step", "cloud_account_id",
 	}
 	rows := pgxmock.NewRows(cols).
 		AddRow("acc-1", "pur-1", now, "aws", "ec2", "us-east-1",
 			"m5.large", 2, 1, "no-upfront", 100.0, 50.0, 200.0,
 			sql.NullString{Valid: true, String: "plan-1"},
 			sql.NullString{Valid: true, String: "My Plan"},
-			1).
+			1, sql.NullString{Valid: true, String: "cloud-acct-1"}).
 		AddRow("acc-1", "pur-2", now, "aws", "rds", "us-west-2",
 			"db.t3.medium", 1, 3, "all-upfront", 200.0, 0.0, 100.0,
-			sql.NullString{}, sql.NullString{}, 0)
+			sql.NullString{}, sql.NullString{}, 0, sql.NullString{})
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	records, err := store.GetPurchaseHistory(ctx, "acc-1", 10)
@@ -484,9 +484,13 @@ func TestPGXMock_TransitionRIExchangeStatus_WrongStatus(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	// First query: check current status
-	statusRows := pgxmock.NewRows([]string{"status"}).AddRow("completed")
-	mock.ExpectQuery("SELECT status").WithArgs(pgxmock.AnyArg()).WillReturnRows(statusRows)
+	// UPDATE returns empty (status mismatch) → triggers diagnostic SELECT
+	emptyRows := pgxmock.NewRows(riExchangeCols)
+	mock.ExpectQuery("UPDATE").WithArgs(anyArgsCfg(3)...).WillReturnRows(emptyRows)
+
+	// Diagnostic query returns current status
+	diagRows := pgxmock.NewRows([]string{"status", "expired"}).AddRow("completed", false)
+	mock.ExpectQuery("SELECT status").WithArgs(pgxmock.AnyArg()).WillReturnRows(diagRows)
 
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing")
 	require.Error(t, err)
@@ -498,9 +502,12 @@ func TestPGXMock_TransitionRIExchangeStatus_RecordNotFound(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	// pgxmock simulates ErrNoRows by returning empty rows (QueryRow scans ErrNoRows)
-	mock.ExpectQuery("SELECT status").WithArgs(pgxmock.AnyArg()).
-		WillReturnError(errNoRows())
+	// UPDATE returns empty (not found) → triggers diagnostic SELECT
+	emptyRows := pgxmock.NewRows(riExchangeCols)
+	mock.ExpectQuery("UPDATE").WithArgs(anyArgsCfg(3)...).WillReturnRows(emptyRows)
+
+	// Diagnostic query returns ErrNoRows (record not found)
+	mock.ExpectQuery("SELECT status").WithArgs(pgxmock.AnyArg()).WillReturnError(errNoRows())
 
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing")
 	require.Error(t, err)
@@ -512,13 +519,13 @@ func TestPGXMock_TransitionRIExchangeStatus_Expired(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	// Check current status → matches fromStatus
-	statusRows := pgxmock.NewRows([]string{"status"}).AddRow("pending")
-	mock.ExpectQuery("SELECT status").WithArgs(pgxmock.AnyArg()).WillReturnRows(statusRows)
+	// UPDATE returns empty (expired) → triggers diagnostic SELECT
+	emptyRows := pgxmock.NewRows(riExchangeCols)
+	mock.ExpectQuery("UPDATE").WithArgs(anyArgsCfg(3)...).WillReturnRows(emptyRows)
 
-	// Check expiration → row found (not ErrNoRows) means expired
-	expiredRows := pgxmock.NewRows([]string{"1"}).AddRow(1)
-	mock.ExpectQuery("SELECT 1").WithArgs(pgxmock.AnyArg()).WillReturnRows(expiredRows)
+	// Diagnostic query: record exists but expired
+	diagRows := pgxmock.NewRows([]string{"status", "expired"}).AddRow("pending", true)
+	mock.ExpectQuery("SELECT status").WithArgs(pgxmock.AnyArg()).WillReturnRows(diagRows)
 
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing")
 	require.Error(t, err)
@@ -532,14 +539,7 @@ func TestPGXMock_TransitionRIExchangeStatus_Success(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 
-	// Check current status
-	statusRows := pgxmock.NewRows([]string{"status"}).AddRow("pending")
-	mock.ExpectQuery("SELECT status").WithArgs(pgxmock.AnyArg()).WillReturnRows(statusRows)
-
-	// Check expiration → ErrNoRows means not expired
-	mock.ExpectQuery("SELECT 1").WithArgs(pgxmock.AnyArg()).WillReturnError(errNoRows())
-
-	// UPDATE … RETURNING
+	// UPDATE succeeds → returns the updated record
 	updateRows := pgxmock.NewRows(riExchangeCols).AddRow(riExchangeRow(now)...)
 	mock.ExpectQuery("UPDATE").WithArgs(anyArgsCfg(3)...).WillReturnRows(updateRows)
 
@@ -1122,7 +1122,7 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(16)...).
+	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(17)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := store.SavePurchaseHistory(ctx, &PurchaseHistoryRecord{

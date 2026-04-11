@@ -651,6 +651,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
 		ORDER BY scheduled_date ASC
+		LIMIT 1000
 	`
 
 	return s.queryExecutions(ctx, query)
@@ -784,8 +785,8 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		INSERT INTO purchase_history (
 			account_id, purchase_id, timestamp, provider, service, region,
 			resource_type, count, term, payment, upfront_cost, monthly_cost,
-			estimated_savings, plan_id, plan_name, ramp_step
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -805,6 +806,7 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		nullStringFromString(record.PlanID),
 		nullStringFromString(record.PlanName),
 		record.RampStep,
+		record.CloudAccountID,
 	)
 
 	if err != nil {
@@ -819,7 +821,7 @@ func (s *PostgresStore) GetPurchaseHistory(ctx context.Context, accountID string
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
 		FROM purchase_history
 		WHERE account_id = $1
 		ORDER BY timestamp DESC
@@ -834,7 +836,7 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
 		FROM purchase_history
 		ORDER BY timestamp DESC
 		LIMIT $1
@@ -854,7 +856,7 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 	records := make([]PurchaseHistoryRecord, 0)
 	for rows.Next() {
 		var record PurchaseHistoryRecord
-		var planID, planName sql.NullString
+		var planID, planName, cloudAccountID sql.NullString
 
 		err := rows.Scan(
 			&record.AccountID,
@@ -873,6 +875,7 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 			&planID,
 			&planName,
 			&record.RampStep,
+			&cloudAccountID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase history: %w", err)
@@ -884,6 +887,9 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 		}
 		if planName.Valid {
 			record.PlanName = planName.String
+		}
+		if cloudAccountID.Valid {
+			record.CloudAccountID = &cloudAccountID.String
 		}
 
 		records = append(records, record)
@@ -902,13 +908,20 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 		record.ID = uuid.New().String()
 	}
 
+	now := time.Now()
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = now
+	}
+	record.UpdatedAt = now
+
 	query := `
 		INSERT INTO ri_exchange_history (
 			id, account_id, exchange_id, region, source_ri_ids,
 			source_instance_type, source_count, target_offering_id,
 			target_instance_type, target_count, payment_due,
-			status, approval_token, error, mode, completed_at, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			status, approval_token, error, mode, completed_at, expires_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -929,6 +942,8 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 		record.Mode,
 		record.CompletedAt,
 		record.ExpiresAt,
+		record.CreatedAt,
+		record.UpdatedAt,
 	)
 
 	if err != nil {
@@ -1003,37 +1018,13 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 	return s.queryRIExchangeRecords(ctx, query, since, limit)
 }
 
-// TransitionRIExchangeStatus atomically transitions an RI exchange record status
+// TransitionRIExchangeStatus atomically transitions an RI exchange record status.
+// Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
+// only if zero rows are returned.
 func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*RIExchangeRecord, error) {
-	// First check if the record exists
-	checkQuery := `SELECT status FROM ri_exchange_history WHERE id = $1`
-	var currentStatus string
-	err := s.db.QueryRow(ctx, checkQuery, id).Scan(&currentStatus)
-	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("ri exchange record not found: %s", id)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to check ri exchange status: %w", err)
-	}
-
-	if currentStatus != fromStatus {
-		return nil, fmt.Errorf("ri exchange status transition failed: expected status %q but current status is %q", fromStatus, currentStatus)
-	}
-
-	// Check if expired
-	expiredQuery := `SELECT 1 FROM ri_exchange_history WHERE id = $1 AND expires_at IS NOT NULL AND expires_at <= NOW()`
-	var isExpired int
-	err = s.db.QueryRow(ctx, expiredQuery, id).Scan(&isExpired)
-	if err == nil {
-		return nil, fmt.Errorf("ri exchange has expired")
-	}
-	if err != pgx.ErrNoRows {
-		return nil, fmt.Errorf("failed to check expiration: %w", err)
-	}
-
 	query := `
 		UPDATE ri_exchange_history
-		SET status = $3
+		SET status = $3, updated_at = NOW()
 		WHERE id = $1 AND status = $2 AND (expires_at IS NULL OR expires_at > NOW())
 		RETURNING id, account_id, exchange_id, region, source_ri_ids,
 		          source_instance_type, source_count, target_offering_id,
@@ -1048,10 +1039,30 @@ func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id strin
 	}
 
 	if len(records) == 0 {
-		return nil, fmt.Errorf("ri exchange status transition failed: record not found or expired")
+		// Diagnose: not found vs wrong status vs expired.
+		return nil, s.diagnoseTransitionFailure(ctx, id, fromStatus)
 	}
 
 	return &records[0], nil
+}
+
+// diagnoseTransitionFailure determines why a status transition returned zero rows.
+func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromStatus string) error {
+	var currentStatus string
+	var expired bool
+	err := s.db.QueryRow(ctx,
+		`SELECT status, (expires_at IS NOT NULL AND expires_at <= NOW()) FROM ri_exchange_history WHERE id = $1`, id,
+	).Scan(&currentStatus, &expired)
+	if err == pgx.ErrNoRows {
+		return fmt.Errorf("ri exchange record not found: %s", id)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to diagnose transition failure: %w", err)
+	}
+	if expired {
+		return fmt.Errorf("ri exchange has expired")
+	}
+	return fmt.Errorf("ri exchange status transition failed: expected status %q but current status is %q", fromStatus, currentStatus)
 }
 
 // CompleteRIExchange marks an RI exchange as completed
