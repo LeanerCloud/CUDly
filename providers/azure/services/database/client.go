@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/sql/armsql"
+	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
@@ -241,7 +242,7 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 	}
 
 	// Build reservation purchase request
-	reservationOrderID := fmt.Sprintf("sql-reservation-%d", time.Now().Unix())
+	reservationOrderID := uuid.New().String()
 
 	// Construct the Azure Reservations API request
 	apiVersion := "2022-11-01"

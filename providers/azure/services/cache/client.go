@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/redis/armredis/v3"
+	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
@@ -239,7 +240,7 @@ func (c *CacheClient) PurchaseCommitment(ctx context.Context, rec common.Recomme
 		Timestamp:      time.Now(),
 	}
 
-	reservationOrderID := fmt.Sprintf("redis-reservation-%d", time.Now().Unix())
+	reservationOrderID := uuid.New().String()
 	apiVersion := "2022-11-01"
 	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
 		reservationOrderID, apiVersion)
