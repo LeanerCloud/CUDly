@@ -121,18 +121,16 @@ resource "aws_iam_role" "cudly" {
             Federated = aws_iam_openid_connect_provider.cudly.arn
           }
           Action = "sts:AssumeRoleWithWebIdentity"
-          Condition = merge(
-            {
-              StringEquals = {
-                "${trimprefix(var.oidc_issuer_url, "https://")}:aud" = local.audience
-              }
-            },
-            var.oidc_subject_claim != "" ? {
-              StringEquals = {
-                "${trimprefix(var.oidc_issuer_url, "https://")}:sub" = var.oidc_subject_claim
-              }
-            } : {}
-          )
+          Condition = {
+            StringEquals = merge(
+              {
+                "${trimsuffix(trimprefix(var.oidc_issuer_url, "https://"), "/")}:aud" = local.audience
+              },
+              var.oidc_subject_claim != "" ? {
+                "${trimsuffix(trimprefix(var.oidc_issuer_url, "https://"), "/")}:sub" = var.oidc_subject_claim
+              } : {}
+            )
+          }
         }
       ],
       []

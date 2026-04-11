@@ -1,6 +1,18 @@
 variable "source_account_id" {
   description = "AWS account ID where CUDly runs (the source account that will assume this role)."
   type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.source_account_id))
+    error_message = "source_account_id must be exactly 12 digits."
+  }
+}
+
+variable "external_id" {
+  description = "External ID for confused deputy protection. Auto-generated if empty."
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 variable "role_name" {

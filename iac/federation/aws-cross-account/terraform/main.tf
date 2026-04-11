@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.0"
+    }
     http = {
       source  = "hashicorp/http"
       version = ">= 3.4"
@@ -12,10 +16,15 @@ terraform {
   }
 }
 
+resource "random_uuid" "external_id" {
+  count = var.external_id == "" ? 1 : 0
+}
+
 locals {
-  # Prefer the specific execution role ARN if provided; fall back to the account root
-  # (allows any IAM principal in the source account — less secure, use only for testing).
+  # Prefer the specific execution role ARN if provided; fall back to the account root.
   trust_principal = var.cudly_execution_role_arn != "" ? var.cudly_execution_role_arn : "arn:aws:iam::${var.source_account_id}:root"
+  # Auto-generate external ID for confused deputy protection if not provided.
+  effective_external_id = var.external_id != "" ? var.external_id : random_uuid.external_id[0].result
 }
 
 data "aws_iam_policy_document" "trust" {
@@ -25,6 +34,11 @@ data "aws_iam_policy_document" "trust" {
     principals {
       type        = "AWS"
       identifiers = [local.trust_principal]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "sts:ExternalId"
+      values   = [local.effective_external_id]
     }
   }
 }
@@ -59,6 +73,7 @@ resource "aws_iam_role_policy" "cudly" {
         "savingsplans:DescribeSavingsPlansOfferings", "savingsplans:DescribeSavingsPlansOfferingRates",
         "es:PurchaseReservedInstanceOffering", "es:DescribeReservedInstanceOfferings",
         "es:DescribeReservedInstances",
+        "ec2:DescribeRegions",
       ]
     }]
   })

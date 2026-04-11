@@ -3,12 +3,19 @@ output "role_arn" {
   value       = aws_iam_role.cudly.arn
 }
 
+output "external_id" {
+  description = "External ID for confused deputy protection. Use as aws_external_id in CUDly."
+  value       = local.effective_external_id
+  sensitive   = true
+}
+
 output "cudly_account_registration" {
   description = "Values to use when registering this account in CUDly"
   value       = <<-EOT
-    provider      : aws
-    aws_auth_mode : role_arn
-    aws_role_arn  : ${aws_iam_role.cudly.arn}
+    provider        : aws
+    aws_auth_mode   : role_arn
+    aws_role_arn    : ${aws_iam_role.cudly.arn}
+    aws_external_id : (see 'external_id' output — sensitive)
   EOT
 }
 
