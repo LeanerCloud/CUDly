@@ -175,6 +175,7 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/registrations", Method: "GET", Handler: r.listRegistrationsHandler},
 		{PathPrefix: "/api/registrations/", PathSuffix: "/approve", Method: "POST", Handler: r.approveRegistrationHandler},
 		{PathPrefix: "/api/registrations/", PathSuffix: "/reject", Method: "POST", Handler: r.rejectRegistrationHandler},
+		{PathPrefix: "/api/registrations/", Method: "DELETE", Handler: r.deleteRegistrationHandler},
 		{PathPrefix: "/api/registrations/", Method: "GET", Handler: r.getRegistrationHandler},
 
 		// Federation IaC download endpoint
@@ -604,6 +605,10 @@ func (r *Router) approveRegistrationHandler(ctx context.Context, req *events.Lam
 
 func (r *Router) rejectRegistrationHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.rejectRegistration(ctx, req, params["id"])
+}
+
+func (r *Router) deleteRegistrationHandler(ctx context.Context, _ *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.deleteRegistration(ctx, params["id"])
 }
 
 func (r *Router) listPlanAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

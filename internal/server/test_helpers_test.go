@@ -180,3 +180,6 @@ func (m *mockConfigStoreForHealth) UpdateAccountRegistration(_ context.Context, 
 func (m *mockConfigStoreForHealth) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string) error {
 	return nil
 }
+func (m *mockConfigStoreForHealth) DeleteAccountRegistration(_ context.Context, _ string) error {
+	return nil
+}

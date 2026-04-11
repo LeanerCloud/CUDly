@@ -26,6 +26,9 @@ data "http" "cudly_registration" {
 
   request_body = local.reg_payload
 
+  # Defer to apply phase — ensure Azure resources are created before registering.
+  depends_on = [azurerm_role_assignment.cudly_reservations]
+
   lifecycle {
     postcondition {
       condition     = contains([200, 201, 409], self.status_code)

@@ -139,6 +139,14 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
       span.title = reg.rejection_reason;
       actionsTd.appendChild(span);
     }
+    // Delete button (available for any status)
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn btn-small';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.style.marginLeft = '4px';
+    deleteBtn.addEventListener('click', () => void handleDelete(reg));
+    actionsTd.appendChild(deleteBtn);
+
     row.appendChild(actionsTd);
     tbody.appendChild(row);
   }
@@ -175,6 +183,16 @@ function handleApprove(reg: AccountRegistration): void {
       await loadRegistrations();
     },
   });
+}
+
+async function handleDelete(reg: AccountRegistration): Promise<void> {
+  if (!confirm(`Delete registration for "${reg.account_name}" (${reg.provider} / ${reg.external_id})?`)) return;
+  try {
+    await api.deleteRegistration(reg.id);
+    await loadRegistrations();
+  } catch {
+    alert('Failed to delete registration.');
+  }
 }
 
 async function handleReject(reg: AccountRegistration): Promise<void> {

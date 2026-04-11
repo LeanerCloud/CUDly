@@ -57,3 +57,7 @@ export async function rejectRegistration(id: string, reason?: string): Promise<A
     body: JSON.stringify({ reason: reason || '' }),
   });
 }
+
+export async function deleteRegistration(id: string): Promise<void> {
+  await apiRequest<void>(`/registrations/${id}`, { method: 'DELETE' });
+}

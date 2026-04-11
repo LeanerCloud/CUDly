@@ -547,5 +547,10 @@ func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg 
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) DeleteAccountRegistration(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // Compile-time interface compliance check
 var _ auth.StoreInterface = (*MockAuthStore)(nil)

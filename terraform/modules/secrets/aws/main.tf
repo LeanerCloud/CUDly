@@ -151,6 +151,17 @@ resource "aws_secretsmanager_secret_version" "session_secret" {
 # Credential Encryption Key (Multi-Account)
 # ==============================================
 
+resource "random_bytes" "credential_encryption_key" {
+  count  = var.create_credential_encryption_key && var.credential_encryption_key == "" ? 1 : 0
+  length = 32
+}
+
+locals {
+  credential_encryption_key = var.credential_encryption_key != "" ? var.credential_encryption_key : (
+    length(random_bytes.credential_encryption_key) > 0 ? random_bytes.credential_encryption_key[0].hex : ""
+  )
+}
+
 resource "aws_secretsmanager_secret" "credential_encryption_key" {
   count = var.create_credential_encryption_key ? 1 : 0
 
@@ -169,7 +180,7 @@ resource "aws_secretsmanager_secret_version" "credential_encryption_key" {
   count = var.create_credential_encryption_key ? 1 : 0
 
   secret_id     = aws_secretsmanager_secret.credential_encryption_key[0].id
-  secret_string = var.credential_encryption_key
+  secret_string = local.credential_encryption_key
 
   lifecycle {
     ignore_changes = [secret_string] # Allow out-of-band rotation without Terraform drift

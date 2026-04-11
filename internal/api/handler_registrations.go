@@ -286,6 +286,24 @@ func (h *Handler) rejectRegistration(ctx context.Context, httpReq *events.Lambda
 	return reg, nil
 }
 
+// deleteRegistration handles DELETE /api/registrations/:id.
+func (h *Handler) deleteRegistration(ctx context.Context, id string) (any, error) {
+	if err := validateUUID(id); err != nil {
+		return nil, err
+	}
+	reg, err := h.config.GetAccountRegistration(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("registrations: %w", err)
+	}
+	if reg == nil {
+		return nil, NewClientError(404, "registration not found")
+	}
+	if err := h.config.DeleteAccountRegistration(ctx, id); err != nil {
+		return nil, fmt.Errorf("registrations: delete: %w", err)
+	}
+	return map[string]string{"status": "deleted"}, nil
+}
+
 // validateRegistrationRequest checks required fields for a registration submission.
 func validateRegistrationRequest(req RegistrationRequest) error {
 	if !validAccountProviders[req.Provider] {

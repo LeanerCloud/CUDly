@@ -272,9 +272,10 @@ variable "ri_exchange_schedule" {
 # ==============================================
 
 variable "credential_encryption_key" {
-  description = "AES-256-GCM key for account credential encryption (64-char hex = 32 bytes). Generate with: openssl rand -hex 32"
+  description = "AES-256-GCM key for account credential encryption (64-char hex = 32 bytes). Auto-generated if empty."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "max_account_parallelism" {

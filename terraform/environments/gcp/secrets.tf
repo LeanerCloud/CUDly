@@ -1,4 +1,19 @@
 # ==============================================
+# Credential Encryption Key (auto-generate if not provided)
+# ==============================================
+
+resource "random_bytes" "credential_encryption_key" {
+  count  = var.credential_encryption_key == "" ? 1 : 0
+  length = 32
+}
+
+locals {
+  credential_encryption_key = var.credential_encryption_key != "" ? var.credential_encryption_key : (
+    length(random_bytes.credential_encryption_key) > 0 ? random_bytes.credential_encryption_key[0].hex : ""
+  )
+}
+
+# ==============================================
 # Secrets Management
 # ==============================================
 
@@ -17,7 +32,7 @@ module "secrets" {
   create_session_secret = true
 
   additional_secrets = {
-    "credential-encryption-key" = var.credential_encryption_key
+    "credential-encryption-key" = local.credential_encryption_key
   }
 
   # IAM permissions for compute service account are handled in compute modules

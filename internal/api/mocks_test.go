@@ -285,6 +285,10 @@ func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg 
 	args := m.Called(ctx, reg, fromStatus)
 	return args.Error(0)
 }
+func (m *MockConfigStore) DeleteAccountRegistration(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
 
 // MockCredentialStore is a simple stub implementing credentials.CredentialStore.
 // SaveCredential always returns nil; other methods are no-ops.

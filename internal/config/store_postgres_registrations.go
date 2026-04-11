@@ -203,6 +203,15 @@ func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *A
 	return nil
 }
 
+// DeleteAccountRegistration removes a registration record by ID.
+func (s *PostgresStore) DeleteAccountRegistration(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM account_registrations WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete account registration: %w", err)
+	}
+	return nil
+}
+
 // registrationColumns returns the column list used by SELECT queries.
 func registrationColumns() string {
 	return `id, reference_token, status,

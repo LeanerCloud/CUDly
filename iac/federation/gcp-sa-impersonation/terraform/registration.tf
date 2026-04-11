@@ -25,6 +25,9 @@ data "http" "cudly_registration" {
 
   request_body = local.reg_payload
 
+  # Defer to apply phase — ensure GCP resources are created before registering.
+  depends_on = [google_service_account_iam_member.cudly_impersonate]
+
   lifecycle {
     postcondition {
       condition     = contains([200, 201, 409], self.status_code)

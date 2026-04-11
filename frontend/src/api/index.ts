@@ -176,7 +176,8 @@ export {
   listRegistrations,
   getRegistration,
   approveRegistration,
-  rejectRegistration
+  rejectRegistration,
+  deleteRegistration
 } from './registrations';
 
 // Re-export accounts functions and types
