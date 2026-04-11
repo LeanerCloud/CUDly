@@ -4,6 +4,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -64,6 +65,8 @@ func (r *realOrganizationsPaginator) NextPage(ctx context.Context, optFns ...fun
 // AWSProvider implements the Provider interface for AWS
 type AWSProvider struct {
 	cfg                 aws.Config
+	cfgOnce             sync.Once
+	cfgErr              error // non-nil if config loading failed
 	profile             string
 	region              string
 	configLoader        ConfigLoader
@@ -116,26 +119,30 @@ func (p *AWSProvider) DisplayName() string {
 	return "Amazon Web Services"
 }
 
-// IsConfigured checks if AWS credentials are available
+// IsConfigured checks if AWS credentials are available. The config is loaded at most
+// once (thread-safe via sync.Once) to avoid data races on concurrent calls.
 func (p *AWSProvider) IsConfigured() bool {
+	p.cfgOnce.Do(func() {
+		p.cfgErr = p.loadConfig()
+	})
+	return p.cfgErr == nil
+}
+
+// loadConfig loads the AWS SDK config. Called at most once via cfgOnce.
+func (p *AWSProvider) loadConfig() error {
 	ctx := context.Background()
 
-	// Try to load AWS config
 	var opts []func(*config.LoadOptions) error
-
 	if p.profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(p.profile))
 	}
-
 	if p.region != "" {
 		opts = append(opts, config.WithRegion(p.region))
 	}
-
 	if p.credentialsProvider != nil {
 		opts = append(opts, config.WithCredentialsProvider(p.credentialsProvider))
 	}
 
-	// Use injected config loader if available (for testing)
 	var loader ConfigLoader
 	if p.configLoader != nil {
 		loader = p.configLoader
@@ -145,11 +152,10 @@ func (p *AWSProvider) IsConfigured() bool {
 
 	cfg, err := loader.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		return false
+		return err
 	}
-
 	p.cfg = cfg
-	return true
+	return nil
 }
 
 // GetCredentials returns AWS credentials
@@ -238,6 +244,10 @@ func (p *AWSProvider) appendOrgAccounts(ctx context.Context, accounts []common.A
 
 // GetAccounts returns all accessible AWS accounts
 func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
+	if !p.IsConfigured() {
+		return nil, fmt.Errorf("AWS is not configured")
+	}
+
 	var stsClient STSClient
 	if p.stsClient != nil {
 		stsClient = p.stsClient
@@ -266,6 +276,10 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 
 // GetRegions returns all available AWS regions using EC2 DescribeRegions API
 func (p *AWSProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
+	if !p.IsConfigured() {
+		return nil, fmt.Errorf("AWS is not configured")
+	}
+
 	// Use injected EC2 client if available (for testing)
 	var client EC2Client
 	if p.ec2Client != nil {
