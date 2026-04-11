@@ -263,6 +263,21 @@ func (m *mockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 func (m *mockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	return nil, nil
 }
+func (m *mockConfigStore) CreateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}
+func (m *mockConfigStore) GetAccountRegistration(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetAccountRegistrationByToken(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) ListAccountRegistrations(_ context.Context, _ config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}
 
 // TestNewCollector tests the NewCollector function
 func TestNewCollector(t *testing.T) {

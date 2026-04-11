@@ -599,6 +599,23 @@
                     <div id="ri-exchange-automation-settings"></div>
                 </section>
 
+                <!-- Account Registrations Section (Admin Only) -->
+                <section id="registrations-section" class="admin-only">
+                    <h2>Account Registrations</h2>
+                    <p class="settings-description">Review and approve target accounts that registered via federation IaC deployment.</p>
+                    <div class="controls-bar">
+                        <label>Status:
+                            <select id="registrations-status-filter">
+                                <option value="pending">Pending</option>
+                                <option value="">All</option>
+                                <option value="approved">Approved</option>
+                                <option value="rejected">Rejected</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div id="registrations-list" class="mt-3"></div>
+                </section>
+
                 <!-- API Keys Section (Admin Only) -->
                 <section id="apikeys-section" class="admin-only">
                     <h2>API Keys Management</h2>

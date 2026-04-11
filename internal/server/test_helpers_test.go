@@ -162,3 +162,18 @@ func (m *mockConfigStoreForHealth) SetPlanAccounts(ctx context.Context, planID s
 func (m *mockConfigStoreForHealth) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	return nil, nil
 }
+func (m *mockConfigStoreForHealth) CreateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) GetAccountRegistration(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) GetAccountRegistrationByToken(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) ListAccountRegistrations(_ context.Context, _ config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}

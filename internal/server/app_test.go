@@ -299,6 +299,12 @@ func (n *noopEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 func (n *noopEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
 	return nil
 }
+func (n *noopEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+	return nil
+}
+func (n *noopEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+	return nil
+}
 
 func TestLoadApplicationConfig(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {

@@ -252,6 +252,35 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	return nil, nil
 }
+func (m *MockConfigStore) CreateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
+	args := m.Called(ctx, reg)
+	return args.Error(0)
+}
+func (m *MockConfigStore) GetAccountRegistration(ctx context.Context, id string) (*config.AccountRegistration, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.AccountRegistration), args.Error(1)
+}
+func (m *MockConfigStore) GetAccountRegistrationByToken(ctx context.Context, token string) (*config.AccountRegistration, error) {
+	args := m.Called(ctx, token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.AccountRegistration), args.Error(1)
+}
+func (m *MockConfigStore) ListAccountRegistrations(ctx context.Context, filter config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.AccountRegistration), args.Error(1)
+}
+func (m *MockConfigStore) UpdateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
+	args := m.Called(ctx, reg)
+	return args.Error(0)
+}
 
 // MockCredentialStore is a simple stub implementing credentials.CredentialStore.
 // SaveCredential always returns nil; other methods are no-ops.

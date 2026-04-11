@@ -757,5 +757,11 @@ func (s *stubEmailNotifier) SendRIExchangeCompleted(_ context.Context, _ email.R
 func (s *stubEmailNotifier) SendPurchaseApprovalRequest(_ context.Context, _ email.NotificationData) error {
 	return nil
 }
+func (s *stubEmailNotifier) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+	return nil
+}
+func (s *stubEmailNotifier) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+	return nil
+}
 
 var _ email.SenderInterface = (*stubEmailNotifier)(nil)

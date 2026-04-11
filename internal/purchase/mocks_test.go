@@ -399,6 +399,22 @@ func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([
 	return nil, nil
 }
 
+func (m *MockConfigStore) CreateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}
+func (m *MockConfigStore) GetAccountRegistration(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) GetAccountRegistrationByToken(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) ListAccountRegistrations(_ context.Context, _ config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}
+
 // Verify MockConfigStore implements config.StoreInterface
 var _ config.StoreInterface = (*MockConfigStore)(nil)
 
@@ -460,6 +476,12 @@ func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
+}
+func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+	return nil
+}
+func (m *MockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+	return nil
 }
 
 // Verify MockEmailSender implements email.SenderInterface

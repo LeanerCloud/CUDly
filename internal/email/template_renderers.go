@@ -78,3 +78,13 @@ func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, er
 func RenderPurchaseApprovalRequestEmail(data NotificationData) (string, error) {
 	return renderTemplate("purchase-approval-request", purchaseApprovalRequestTemplate, data)
 }
+
+// RenderRegistrationReceivedEmail renders the admin notification for a new registration.
+func RenderRegistrationReceivedEmail(data RegistrationNotificationData) (string, error) {
+	return renderTemplate("registration-received", registrationReceivedTemplate, data)
+}
+
+// RenderRegistrationDecisionEmail renders the registrant notification for approval/rejection.
+func RenderRegistrationDecisionEmail(data RegistrationDecisionData) (string, error) {
+	return renderTemplate("registration-decision", registrationDecisionTemplate, data)
+}

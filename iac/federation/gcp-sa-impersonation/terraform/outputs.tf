@@ -12,3 +12,9 @@ output "cudly_account_registration" {
     gcp_client_email  : ${var.service_account_email}
   EOT
 }
+
+output "registration_response" {
+  description = "CUDly registration API response (contains reference_token for status checks)"
+  value       = local.do_register ? data.http.cudly_registration[0].response_body : "Skipped (cudly_api_url or contact_email not set)"
+  sensitive   = false
+}

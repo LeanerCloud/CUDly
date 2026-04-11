@@ -25,6 +25,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
+		"/api/register/", // GET /api/register/:token (trailing slash avoids matching /api/registrations)
 		"/docs",
 		"/api/docs",
 	}
@@ -32,6 +33,10 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		if strings.HasPrefix(path, ep) {
 			return true
 		}
+	}
+	// Exact match for POST /api/register (no trailing slash).
+	if path == "/api/register" {
+		return true
 	}
 	return false
 }
@@ -129,6 +134,7 @@ func (h *Handler) requiresCSRFValidation(method, path string) bool {
 		"/api/purchases/cancel/",    // Token-based auth
 		"/api/ri-exchange/approve/", // Token-based auth
 		"/api/ri-exchange/reject/",  // Token-based auth
+		"/api/register",             // Public registration (no session)
 	}
 
 	for _, exempt := range csrfExemptPaths {

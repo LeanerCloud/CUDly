@@ -170,6 +170,15 @@ export {
   getRIExchangeHistory
 } from './riexchange';
 
+// Re-export registrations functions and types
+export type { AccountRegistration } from './registrations';
+export {
+  listRegistrations,
+  getRegistration,
+  approveRegistration,
+  rejectRegistration
+} from './registrations';
+
 // Re-export accounts functions and types
 export type {
   CloudAccount,

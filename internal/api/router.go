@@ -167,6 +167,16 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
 
+		// Account self-registration (public, called by Terraform during federation IaC apply)
+		{ExactPath: "/api/register", Method: "POST", Handler: r.submitRegistrationHandler, Auth: AuthPublic},
+		{PathPrefix: "/api/register/", Method: "GET", Handler: r.getRegistrationStatusHandler, Auth: AuthPublic},
+
+		// Admin registration management (suffix routes before generic prefix)
+		{ExactPath: "/api/registrations", Method: "GET", Handler: r.listRegistrationsHandler},
+		{PathPrefix: "/api/registrations/", PathSuffix: "/approve", Method: "POST", Handler: r.approveRegistrationHandler},
+		{PathPrefix: "/api/registrations/", PathSuffix: "/reject", Method: "POST", Handler: r.rejectRegistrationHandler},
+		{PathPrefix: "/api/registrations/", Method: "GET", Handler: r.getRegistrationHandler},
+
 		// Federation IaC download endpoint
 		{ExactPath: "/api/federation/iac", Method: "GET", Handler: r.getFederationIaCHandler},
 
@@ -568,6 +578,32 @@ func (r *Router) listAccountServiceOverridesHandler(ctx context.Context, req *ev
 
 func (r *Router) getFederationIaCHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
 	return r.h.getFederationIaC(ctx, req)
+}
+
+// Account self-registration wrappers.
+
+func (r *Router) submitRegistrationHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.submitRegistration(ctx, req)
+}
+
+func (r *Router) getRegistrationStatusHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getRegistrationStatus(ctx, params["id"])
+}
+
+func (r *Router) listRegistrationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.listRegistrations(ctx, req)
+}
+
+func (r *Router) getRegistrationHandler(ctx context.Context, _ *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getRegistration(ctx, params["id"])
+}
+
+func (r *Router) approveRegistrationHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.approveRegistration(ctx, req, params["id"])
+}
+
+func (r *Router) rejectRegistrationHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.rejectRegistration(ctx, req, params["id"])
 }
 
 func (r *Router) listPlanAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

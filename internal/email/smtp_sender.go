@@ -287,5 +287,25 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
+// SendRegistrationReceivedNotification sends an email to the admin for a new registration via SMTP.
+func (s *SMTPSender) SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error {
+	subject := fmt.Sprintf("CUDly - New Account Registration: %s (%s)", data.AccountName, data.Provider)
+	body, err := RenderRegistrationReceivedEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render registration received email: %w", err)
+	}
+	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+}
+
+// SendRegistrationDecisionNotification sends approval/rejection to the registrant via SMTP.
+func (s *SMTPSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error {
+	subject := fmt.Sprintf("CUDly - Account Registration %s", data.Decision)
+	body, err := RenderRegistrationDecisionEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render registration decision email: %w", err)
+	}
+	return s.SendToEmail(ctx, toEmail, subject, body)
+}
+
 // Verify that SMTPSender implements SenderInterface
 var _ SenderInterface = (*SMTPSender)(nil)

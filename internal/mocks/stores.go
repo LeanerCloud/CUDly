@@ -508,5 +508,39 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *MockConfigStore) CreateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
+	args := m.Called(ctx, reg)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) GetAccountRegistration(ctx context.Context, id string) (*config.AccountRegistration, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.AccountRegistration), args.Error(1)
+}
+
+func (m *MockConfigStore) GetAccountRegistrationByToken(ctx context.Context, token string) (*config.AccountRegistration, error) {
+	args := m.Called(ctx, token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.AccountRegistration), args.Error(1)
+}
+
+func (m *MockConfigStore) ListAccountRegistrations(ctx context.Context, filter config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.AccountRegistration), args.Error(1)
+}
+
+func (m *MockConfigStore) UpdateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
+	args := m.Called(ctx, reg)
+	return args.Error(0)
+}
+
 // Compile-time interface compliance check
 var _ auth.StoreInterface = (*MockAuthStore)(nil)

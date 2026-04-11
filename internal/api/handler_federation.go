@@ -33,6 +33,7 @@ type federationIaCData struct {
 	ProjectID           string
 	ServiceAccountEmail string
 	OIDCIssuerURI       string
+	CUDlyAPIURL         string
 }
 
 // FederationIaCResponse is returned by the /api/federation/iac endpoint.
@@ -133,6 +134,7 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 		AccountExternalID: account.ExternalID,
 		AccountSlug:       slug,
 		Source:            source,
+		CUDlyAPIURL:       h.dashboardURL,
 	}
 
 	if err = populateIaCData(&data, target, source, account); err != nil {

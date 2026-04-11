@@ -7,8 +7,15 @@ import { initFederationSections } from './federation';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
+/** Options for the account modal (used by the registrations approval flow). */
+export interface AccountModalOptions {
+  onSave?: (provider: AccountProvider, request: api.CloudAccountRequest) => Promise<void>;
+}
+
 // Track which provider's account is being edited (for the modal)
 let accountModalProvider: AccountProvider = 'aws';
+// Optional callback for the registrations approval flow.
+let accountModalOnSave: AccountModalOptions['onSave'] | undefined;
 
 // Per-service field definitions — used for loading and saving service configs.
 const SERVICE_FIELDS = [
@@ -268,8 +275,9 @@ async function testAccount(accountId: string, btn: HTMLButtonElement): Promise<v
 /**
  * Open account modal for add or edit
  */
-function openAccountModal(provider: AccountProvider, account?: api.CloudAccount): void {
+export function openAccountModal(provider: AccountProvider, account?: api.CloudAccount, options?: AccountModalOptions): void {
   accountModalProvider = provider;
+  accountModalOnSave = options?.onSave;
   const modal = document.getElementById('account-modal');
   if (!modal) return;
 
@@ -407,6 +415,7 @@ async function populateBastionAccountDropdown(selectedId?: string): Promise<void
 function closeAccountModal(): void {
   const modal = document.getElementById('account-modal');
   modal?.classList.add('hidden');
+  accountModalOnSave = undefined;
 }
 
 /**
@@ -523,8 +532,22 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
 async function handleAccountFormSubmit(e: Event): Promise<void> {
   e.preventDefault();
   const provider = accountModalProvider;
-  const accountId = (document.getElementById('account-id') as HTMLInputElement).value;
   const req = buildAccountRequest(provider);
+
+  // If a custom onSave callback was provided (e.g., registration approval),
+  // delegate to it instead of the normal create/update flow.
+  if (accountModalOnSave) {
+    try {
+      await accountModalOnSave(provider, req);
+      closeAccountModal();
+    } catch (err) {
+      console.error('Custom save failed:', err);
+      alert(`Failed to save: ${(err as Error).message}`);
+    }
+    return;
+  }
+
+  const accountId = (document.getElementById('account-id') as HTMLInputElement).value;
 
   try {
     let savedId = accountId;
@@ -841,6 +864,9 @@ export async function loadGlobalSettings(): Promise<void> {
 
     // Populate federation IaC download sections (non-blocking)
     void initFederationSections();
+
+    // Load pending account registrations (non-blocking)
+    void import('./modules/registrations').then(m => m.initRegistrations());
   } catch (error) {
     console.error('Failed to load settings:', error);
     if (loadingEl) loadingEl.classList.add('hidden');

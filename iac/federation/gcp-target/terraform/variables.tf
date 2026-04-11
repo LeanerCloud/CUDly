@@ -48,3 +48,21 @@ variable "service_account_email" {
   description = "Email of the GCP service account CUDly will impersonate."
   type        = string
 }
+
+variable "cudly_api_url" {
+  description = "CUDly API base URL for automatic account registration. Leave empty to skip registration."
+  type        = string
+  default     = ""
+}
+
+variable "account_name" {
+  description = "Human-readable name for this account in CUDly."
+  type        = string
+  default     = ""
+}
+
+variable "contact_email" {
+  description = "Contact email for registration notifications."
+  type        = string
+  default     = ""
+}

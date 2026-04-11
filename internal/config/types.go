@@ -277,3 +277,40 @@ type AccountServiceOverride struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
+
+// AccountRegistration represents a self-service registration request from a
+// target account owner. Submitted via POST /api/register during Terraform apply
+// of the federation IaC, then approved or rejected by a CUDly admin.
+type AccountRegistration struct {
+	ID                  string     `json:"id"`
+	ReferenceToken      string     `json:"reference_token"`
+	Status              string     `json:"status"` // pending, approved, rejected
+	Provider            string     `json:"provider"`
+	ExternalID          string     `json:"external_id"`
+	AccountName         string     `json:"account_name"`
+	ContactEmail        string     `json:"contact_email"`
+	Description         string     `json:"description,omitempty"`
+	SourceProvider      string     `json:"source_provider,omitempty"`
+	AWSRoleARN          string     `json:"aws_role_arn,omitempty"`
+	AWSAuthMode         string     `json:"aws_auth_mode,omitempty"`
+	AzureSubscriptionID string     `json:"azure_subscription_id,omitempty"`
+	AzureTenantID       string     `json:"azure_tenant_id,omitempty"`
+	AzureClientID       string     `json:"azure_client_id,omitempty"`
+	AzureAuthMode       string     `json:"azure_auth_mode,omitempty"`
+	GCPProjectID        string     `json:"gcp_project_id,omitempty"`
+	GCPClientEmail      string     `json:"gcp_client_email,omitempty"`
+	GCPAuthMode         string     `json:"gcp_auth_mode,omitempty"`
+	RejectionReason     string     `json:"rejection_reason,omitempty"`
+	CloudAccountID      *string    `json:"cloud_account_id,omitempty"`
+	ReviewedBy          *string    `json:"reviewed_by,omitempty"`
+	ReviewedAt          *time.Time `json:"reviewed_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+// AccountRegistrationFilter for ListAccountRegistrations queries.
+type AccountRegistrationFilter struct {
+	Status   *string
+	Provider *string
+	Search   string
+}

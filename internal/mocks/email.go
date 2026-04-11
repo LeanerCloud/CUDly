@@ -66,6 +66,16 @@ func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data 
 	return args.Error(0)
 }
 
+func (m *MockEmailSender) SendRegistrationReceivedNotification(ctx context.Context, data email.RegistrationNotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+func (m *MockEmailSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data email.RegistrationDecisionData) error {
+	args := m.Called(ctx, toEmail, data)
+	return args.Error(0)
+}
+
 // EmailSenderAPI defines the interface for email sender operations
 type EmailSenderAPI interface {
 	SendNotification(ctx context.Context, subject, message string) error

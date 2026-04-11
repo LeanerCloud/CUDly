@@ -20,6 +20,8 @@ type SenderInterface interface {
 	SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error
 	SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error
 	SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error
+	SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error
+	SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error
 }
 
 // Verify that Sender implements SenderInterface

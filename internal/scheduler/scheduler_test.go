@@ -263,6 +263,21 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	return nil, nil
 }
+func (m *MockConfigStore) CreateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}
+func (m *MockConfigStore) GetAccountRegistration(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) GetAccountRegistrationByToken(_ context.Context, _ string) (*config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) ListAccountRegistrations(_ context.Context, _ config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
+	return nil
+}
 
 // MockEmailSender is a mock implementation of email.Sender
 type MockEmailSender struct {
@@ -322,6 +337,12 @@ func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
+}
+func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+	return nil
+}
+func (m *MockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+	return nil
 }
 
 // MockPurchaseManager is a mock implementation of purchase.Manager

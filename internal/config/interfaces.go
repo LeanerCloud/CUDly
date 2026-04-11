@@ -69,4 +69,11 @@ type StoreInterface interface {
 	// Plan ↔ account association
 	SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error
 	GetPlanAccounts(ctx context.Context, planID string) ([]CloudAccount, error)
+
+	// Account registrations (self-service enrollment via federation IaC)
+	CreateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
+	GetAccountRegistration(ctx context.Context, id string) (*AccountRegistration, error)
+	GetAccountRegistrationByToken(ctx context.Context, token string) (*AccountRegistration, error)
+	ListAccountRegistrations(ctx context.Context, filter AccountRegistrationFilter) ([]AccountRegistration, error)
+	UpdateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
 }
