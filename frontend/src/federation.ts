@@ -15,9 +15,7 @@ import { getFederationIaC } from './api';
 // ---------------------------------------------------------------------------
 
 function downloadFile(filename: string, content: string | ArrayBuffer, contentType: string): void {
-  const blob = content instanceof ArrayBuffer
-    ? new Blob([content], { type: contentType })
-    : new Blob([content], { type: contentType });
+  const blob = new Blob([content], { type: contentType });
   const a    = document.createElement('a');
   a.href     = URL.createObjectURL(blob);
   a.download = filename;

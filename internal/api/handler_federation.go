@@ -116,15 +116,7 @@ func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunction
 	}
 
 	slug := "target"
-	apiURL := h.dashboardURL
-	if apiURL == "" {
-		// Derive from the request (Lambda function URL or custom domain).
-		scheme := "https"
-		if host := req.Headers["host"]; host != "" {
-			apiURL = scheme + "://" + host
-		}
-	}
-	data := buildGenericIaCData(target, source, apiURL)
+	data := buildGenericIaCData(target, source, h.dashboardURL)
 
 	switch {
 	case format == "bundle":
@@ -187,7 +179,7 @@ func federationIaCParams(q map[string]string) (target, source, format string, er
 // shellEscape escapes a string for safe use inside a double-quoted bash argument.
 // It escapes characters that have special meaning in double-quoted strings: \, $, `, "
 func shellEscape(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`, `{`, `\{`, `}`, `\}`)
 	return r.Replace(s)
 }
 

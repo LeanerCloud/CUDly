@@ -24,6 +24,9 @@ data "http" "cudly_registration" {
 
   request_body = local.reg_payload
 
+  # Ensure all IAM resources are created before registering.
+  depends_on = [aws_iam_role_policy_attachment.cudly]
+
   lifecycle {
     postcondition {
       condition     = contains([200, 201, 409], self.status_code)

@@ -283,7 +283,15 @@ func (h *Handler) rejectRegistration(ctx context.Context, httpReq *events.Lambda
 		RejectionReason: body.Reason,
 	})
 
-	return reg, nil
+	// Return a filtered view — don't expose reference_token to admin.
+	return map[string]any{
+		"id":               reg.ID,
+		"status":           reg.Status,
+		"provider":         reg.Provider,
+		"external_id":      reg.ExternalID,
+		"account_name":     reg.AccountName,
+		"rejection_reason": reg.RejectionReason,
+	}, nil
 }
 
 // deleteRegistration handles DELETE /api/registrations/:id.
@@ -317,6 +325,9 @@ func validateRegistrationRequest(req RegistrationRequest) error {
 	}
 	if req.ContactEmail == "" {
 		return NewClientError(400, "contact_email is required")
+	}
+	if !strings.Contains(req.ContactEmail, "@") || len(req.ContactEmail) < 5 {
+		return NewClientError(400, "contact_email must be a valid email address")
 	}
 	return nil
 }

@@ -132,6 +132,11 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
       span.className = 'text-muted';
       span.textContent = 'Account created';
       actionsTd.appendChild(span);
+    } else if (reg.status === 'approved') {
+      const span = document.createElement('span');
+      span.className = 'text-muted';
+      span.textContent = 'Approved (account pending link)';
+      actionsTd.appendChild(span);
     } else if (reg.rejection_reason) {
       const span = document.createElement('span');
       span.className = 'text-muted';
