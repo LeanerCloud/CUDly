@@ -97,18 +97,9 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	// Get the execution and set status to paused
-	execution, err := h.config.GetExecutionByID(ctx, executionID)
-	if err != nil {
-		return nil, fmt.Errorf("execution not found: %w", err)
-	}
-	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
-	}
-
-	execution.Status = "paused"
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-		return nil, fmt.Errorf("failed to pause execution: %w", err)
+	// Atomically transition to paused
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "running"}, "paused"); err != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be paused: %v", executionID, err))
 	}
 
 	return &StatusResponse{Status: "paused"}, nil
@@ -125,22 +116,9 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	// Get the execution and set status back to pending
-	execution, err := h.config.GetExecutionByID(ctx, executionID)
-	if err != nil {
-		return nil, fmt.Errorf("execution not found: %w", err)
-	}
-	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
-	}
-
-	if execution.Status != "paused" {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be resumed from status %q (only 'paused' executions can be resumed)", executionID, execution.Status))
-	}
-
-	execution.Status = "pending"
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-		return nil, fmt.Errorf("failed to resume execution: %w", err)
+	// Atomically transition from paused back to pending
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending"); err != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, err))
 	}
 
 	return &StatusResponse{Status: "resumed"}, nil
@@ -181,18 +159,9 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	// Get the execution and set status to cancelled
-	execution, err := h.config.GetExecutionByID(ctx, executionID)
-	if err != nil {
-		return nil, fmt.Errorf("execution not found: %w", err)
-	}
-	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
-	}
-
-	execution.Status = "cancelled"
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-		return nil, fmt.Errorf("failed to cancel execution: %w", err)
+	// Atomically transition to cancelled
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled"); err != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
 	}
 
 	return &StatusResponse{Status: "cancelled"}, nil

@@ -490,10 +490,6 @@ resource "aws_ecs_task_definition" "main" {
             value = join(",", var.allowed_origins)
           },
           {
-            name  = "CORS_ALLOWED_ORIGIN"
-            value = length(var.allowed_origins) > 0 ? var.allowed_origins[0] : "*"
-          },
-          {
             name  = "DB_PASSWORD_SECRET"
             value = var.database_password_secret_arn
           },

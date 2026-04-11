@@ -5,7 +5,7 @@
 import * as api from '../api';
 import type { Permission } from '../api';
 import { currentEditingGroup, setCurrentEditingGroup } from './state';
-import { showError, showSuccess } from '../users/utils';
+import { escapeHtml, showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 
 /**
@@ -134,7 +134,7 @@ export function addPermission(permission?: Permission): void {
         </select>
       </label>
       <label>Resource:
-        <input type="text" class="perm-resource" value="${permission?.resource || '*'}" required placeholder="*">
+        <input type="text" class="perm-resource" value="${escapeHtml(permission?.resource || '*')}" required placeholder="*">
       </label>
       <button type="button" class="btn-small btn-danger remove-permission-btn">Remove</button>
     </div>
@@ -142,18 +142,18 @@ export function addPermission(permission?: Permission): void {
       <h4>Constraints (Optional)</h4>
       <div class="form-row">
         <label>Providers (comma-separated):
-          <input type="text" class="perm-providers" value="${permission?.constraints?.providers?.join(', ') || ''}" placeholder="aws, azure, gcp">
+          <input type="text" class="perm-providers" value="${escapeHtml(permission?.constraints?.providers?.join(', ') || '')}" placeholder="aws, azure, gcp">
         </label>
         <label>Services (comma-separated):
-          <input type="text" class="perm-services" value="${permission?.constraints?.services?.join(', ') || ''}" placeholder="ec2, rds">
+          <input type="text" class="perm-services" value="${escapeHtml(permission?.constraints?.services?.join(', ') || '')}" placeholder="ec2, rds">
         </label>
       </div>
       <div class="form-row">
         <label>Regions (comma-separated):
-          <input type="text" class="perm-regions" value="${permission?.constraints?.regions?.join(', ') || ''}" placeholder="us-east-1, us-west-2">
+          <input type="text" class="perm-regions" value="${escapeHtml(permission?.constraints?.regions?.join(', ') || '')}" placeholder="us-east-1, us-west-2">
         </label>
         <label>Max Amount ($):
-          <input type="number" class="perm-max-amount" value="${permission?.constraints?.max_amount || ''}" placeholder="10000" min="0">
+          <input type="number" class="perm-max-amount" value="${escapeHtml(String(permission?.constraints?.max_amount || ''))}" placeholder="10000" min="0">
         </label>
       </div>
     </div>

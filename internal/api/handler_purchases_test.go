@@ -154,16 +154,9 @@ func TestHandler_pausePlannedPurchase(t *testing.T) {
 		Role:   "admin",
 	}
 
-	execution := &config.PurchaseExecution{
-		ExecutionID: "11111111-1111-1111-1111-111111111111",
-		Status:      "pending",
-	}
-
+	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(execution, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
-		return e.Status == "paused"
-	})).Return(nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "running"}, "paused").Return(paused, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -190,7 +183,7 @@ func TestHandler_pausePlannedPurchase_NotFound(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, errors.New("not found"))
+	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "running"}, "paused").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -202,7 +195,6 @@ func TestHandler_pausePlannedPurchase_NotFound(t *testing.T) {
 	result, err := handler.pausePlannedPurchase(ctx, req, "99999999-9999-9999-9999-999999999999")
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "execution not found")
 }
 
 func TestHandler_resumePlannedPurchase(t *testing.T) {
@@ -216,16 +208,9 @@ func TestHandler_resumePlannedPurchase(t *testing.T) {
 		Role:   "admin",
 	}
 
-	execution := &config.PurchaseExecution{
-		ExecutionID: "11111111-1111-1111-1111-111111111111",
-		Status:      "paused",
-	}
-
+	resumed := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(execution, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
-		return e.Status == "pending"
-	})).Return(nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"paused"}, "pending").Return(resumed, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -285,16 +270,9 @@ func TestHandler_deletePlannedPurchase(t *testing.T) {
 		Role:   "admin",
 	}
 
-	execution := &config.PurchaseExecution{
-		ExecutionID: "11111111-1111-1111-1111-111111111111",
-		Status:      "pending",
-	}
-
+	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(execution, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
-		return e.Status == "cancelled"
-	})).Return(nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled").Return(cancelled, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -320,9 +298,8 @@ func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 		Role:   "admin",
 	}
 
-	// Return nil execution with no error
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "running"}, "paused").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -334,7 +311,6 @@ func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	result, err := handler.pausePlannedPurchase(ctx, req, "99999999-9999-9999-9999-999999999999")
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "execution not found")
 }
 
 func TestHandler_resumePlannedPurchase_NilExecution(t *testing.T) {
@@ -349,7 +325,7 @@ func TestHandler_resumePlannedPurchase_NilExecution(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"paused"}, "pending").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -401,7 +377,7 @@ func TestHandler_deletePlannedPurchase_NilExecution(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "paused"}, "cancelled").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 

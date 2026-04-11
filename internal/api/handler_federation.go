@@ -24,8 +24,9 @@ type federationIaCData struct {
 	AccountSlug       string
 	Source            string
 	// AWS WIF / cross-account
-	OIDCIssuerURL string
-	OIDCAudience  string
+	OIDCIssuerURL  string
+	OIDCIssuerHost string // issuer URL without https:// prefix (used as IAM condition key)
+	OIDCAudience   string
 	// Azure-specific
 	SubscriptionID string
 	TenantID       string
@@ -151,6 +152,7 @@ func buildGenericIaCData(target, source, dashboardURL string) federationIaCData 
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, "")
+		data.OIDCIssuerHost = strings.TrimPrefix(data.OIDCIssuerURL, "https://")
 		data.OIDCAudience = awsOIDCAudience(source)
 	case "gcp":
 		data.OIDCIssuerURI = gcpOIDCIssuerURI(source, "")
@@ -278,6 +280,7 @@ func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug s
 	// injection via account names or OIDC URLs containing shell metacharacters.
 	escapedData := data
 	escapedData.OIDCIssuerURL = shellEscape(data.OIDCIssuerURL)
+	escapedData.OIDCIssuerHost = shellEscape(data.OIDCIssuerHost)
 	escapedData.OIDCAudience = shellEscape(data.OIDCAudience)
 	escapedData.AccountSlug = shellEscape(data.AccountSlug)
 	escapedData.AccountName = shellEscape(data.AccountName)

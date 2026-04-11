@@ -42,16 +42,11 @@ resource "azuread_application_certificate" "cudly" {
   application_id = azuread_application.cudly.id
   type           = "AsymmetricX509Cert"
   value          = var.certificate_pem
-  end_date       = timeadd(plantimestamp(), "17520h") # 2 years
-
-  lifecycle {
-    ignore_changes = [end_date]
-  }
 }
 
 # Reservations Administrator is the built-in Azure role for purchasing and managing reservations.
 resource "azurerm_role_assignment" "cudly_reservations" {
   scope                = "/subscriptions/${var.subscription_id}"
-  role_definition_name = "Reservations Administrator"
+  role_definition_name = "Reservation Purchaser"
   principal_id         = azuread_service_principal.cudly.object_id
 }
