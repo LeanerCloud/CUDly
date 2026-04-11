@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -106,29 +107,23 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 //   - format=""         → single file (tfvars, JSON, or sh)
 //   - format="cf-params" → CloudFormation parameters JSON (aws target only)
 //   - format="bundle"   → zip with tfvars + Terraform module + CF template/script
-func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
-	q := req.QueryStringParameters
-	target, source, accountID, format, err := federationIaCParams(q)
-	if err != nil {
-		return nil, err
-	}
+//
+// loadFederationAccount validates the account_id, loads the account, and builds the template data.
+func (h *Handler) loadFederationAccount(ctx context.Context, accountID, target, source string) (federationIaCData, string, error) {
 	if err := validateUUID(accountID); err != nil {
-		return nil, NewClientError(400, "account_id must be a valid UUID")
+		return federationIaCData{}, "", NewClientError(400, "account_id must be a valid UUID")
 	}
-
 	account, err := h.config.GetCloudAccount(ctx, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("federation iac: get account %s: %w", accountID, err)
+		return federationIaCData{}, "", fmt.Errorf("federation iac: get account %s: %w", accountID, err)
 	}
 	if account == nil {
-		return nil, NewClientError(404, "account not found")
+		return federationIaCData{}, "", NewClientError(404, "account not found")
 	}
-
 	slug := slugify(account.Name)
 	if slug == "" {
 		slug = slugify(account.ID)
 	}
-
 	data := federationIaCData{
 		AccountName:       account.Name,
 		AccountExternalID: account.ExternalID,
@@ -136,25 +131,46 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 		Source:            source,
 		CUDlyAPIURL:       h.dashboardURL,
 	}
-
 	if err = populateIaCData(&data, target, source, account); err != nil {
-		return nil, err
+		return federationIaCData{}, "", err
 	}
-
-	if format == "bundle" {
-		return h.buildFederationBundle(data, target, source, slug)
-	}
-
-	tmplPath, filename, contentType, err := singleFileSpec(target, source, format, slug)
-	if err != nil {
-		return nil, err
-	}
-	content, err := renderTemplate(tmplPath, data)
-	if err != nil {
-		return nil, fmt.Errorf("federation iac: %w", err)
-	}
-	return &FederationIaCResponse{Filename: filename, Content: content, ContentType: contentType}, nil
+	return data, slug, nil
 }
+
+func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
+	target, source, accountID, format, err := federationIaCParams(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
+	}
+	data, slug, err := h.loadFederationAccount(ctx, accountID, target, source)
+	if err != nil {
+		return nil, err
+	}
+
+	switch {
+	case format == "bundle":
+		return h.buildFederationBundle(data, target, source, slug)
+	case format == "cf-params" && target == "aws":
+		content, err := buildCFParamsJSON(data)
+		if err != nil {
+			return nil, fmt.Errorf("federation iac: %w", err)
+		}
+		return &FederationIaCResponse{Filename: slug + "-aws-wif-cf-params.json", Content: content, ContentType: "application/json"}, nil
+	default:
+		tmplPath, filename, contentType, err := singleFileSpec(target, source, format, slug)
+		if err != nil {
+			return nil, err
+		}
+		content, err := renderTemplate(tmplPath, data)
+		if err != nil {
+			return nil, fmt.Errorf("federation iac: %w", err)
+		}
+		return &FederationIaCResponse{Filename: filename, Content: content, ContentType: contentType}, nil
+	}
+}
+
+// validFederationSources is the allowlist of valid source cloud providers.
+var validFederationSources = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
 // federationIaCParams validates and extracts query parameters from the request.
 func federationIaCParams(q map[string]string) (target, source, accountID, format string, err error) {
@@ -162,10 +178,20 @@ func federationIaCParams(q map[string]string) (target, source, accountID, format
 	if target == "" || source == "" {
 		return "", "", "", "", NewClientError(400, "target and source query parameters are required")
 	}
+	if !validFederationSources[source] {
+		return "", "", "", "", NewClientError(400, "source must be aws, azure, or gcp")
+	}
 	if accountID == "" {
 		return "", "", "", "", NewClientError(400, "account_id query parameter is required")
 	}
 	return target, source, accountID, format, nil
+}
+
+// shellEscape escapes a string for safe use inside a double-quoted bash argument.
+// It escapes characters that have special meaning in double-quoted strings: \, $, `, "
+func shellEscape(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
+	return r.Replace(s)
 }
 
 // populateIaCData fills target-specific fields on data from the account record.
@@ -277,14 +303,22 @@ func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug s
 	if err = addBytesToZip(zw, "cloudformation/template.yaml", cfTemplate); err != nil {
 		return fmt.Errorf("bundle: write cf template: %w", err)
 	}
-	cfParams, err := renderTemplate("templates/aws-wif-cf-params.json.tmpl", data)
+	cfParams, err := buildCFParamsJSON(data)
 	if err != nil {
 		return fmt.Errorf("bundle: %w", err)
 	}
 	if err = addStringToZip(zw, "cloudformation/"+slug+"-cf-params.json", cfParams); err != nil {
 		return fmt.Errorf("bundle: write cf params: %w", err)
 	}
-	deployScript, err := renderTemplate("templates/aws-cfn-deploy.sh.tmpl", data)
+	// Shell-escape template values before rendering the deploy script to prevent
+	// injection via account names or OIDC URLs containing shell metacharacters.
+	escapedData := data
+	escapedData.OIDCIssuerURL = shellEscape(data.OIDCIssuerURL)
+	escapedData.OIDCAudience = shellEscape(data.OIDCAudience)
+	escapedData.AccountSlug = shellEscape(data.AccountSlug)
+	escapedData.AccountName = shellEscape(data.AccountName)
+	escapedData.AccountExternalID = shellEscape(data.AccountExternalID)
+	deployScript, err := renderTemplate("templates/aws-cfn-deploy.sh.tmpl", escapedData)
 	if err != nil {
 		return fmt.Errorf("bundle: %w", err)
 	}
@@ -389,27 +423,47 @@ func buildBundleReadme(data federationIaCData, target, source string) string {
 }
 
 // ---------------------------------------------------------------------------
+// CF params JSON helper — uses encoding/json for correct escaping
+// ---------------------------------------------------------------------------
+
+type cfParam struct {
+	ParameterKey   string `json:"ParameterKey"`
+	ParameterValue string `json:"ParameterValue"`
+}
+
+// buildCFParamsJSON produces the CloudFormation parameter overrides JSON using
+// encoding/json, which correctly escapes special characters in values.
+func buildCFParamsJSON(data federationIaCData) (string, error) {
+	params := []cfParam{
+		{ParameterKey: "OIDCIssuerURL", ParameterValue: data.OIDCIssuerURL},
+		{ParameterKey: "OIDCIssuerHost", ParameterValue: strings.TrimPrefix(data.OIDCIssuerURL, "https://")},
+		{ParameterKey: "OIDCAudience", ParameterValue: data.OIDCAudience},
+		{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
+	}
+	out, err := json.MarshalIndent(params, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal cf params: %w", err)
+	}
+	return string(out) + "\n", nil
+}
+
+// ---------------------------------------------------------------------------
 // Zip helpers
 // ---------------------------------------------------------------------------
 
 func addDirToZip(zw *zip.Writer, fsys fs.ReadFileFS, srcDir, destPrefix string) error {
-	entries, err := fs.ReadDir(fsys, srcDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	return fs.WalkDir(fsys, srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
 		}
-		b, err := fsys.ReadFile(srcDir + "/" + entry.Name())
+		b, err := fsys.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if err = addBytesToZip(zw, destPrefix+"/"+entry.Name(), b); err != nil {
-			return err
-		}
-	}
-	return nil
+		// Compute the relative path from srcDir to this file.
+		rel := strings.TrimPrefix(path, srcDir+"/")
+		return addBytesToZip(zw, destPrefix+"/"+rel, b)
+	})
 }
 
 func addBytesToZip(zw *zip.Writer, name string, content []byte) error {

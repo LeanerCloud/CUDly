@@ -566,6 +566,69 @@ func TestResolveGCPTokenSource_ServiceAccountKey_ValidJSON(t *testing.T) {
 	assert.NotNil(t, src)
 }
 
+func TestResolveWebIdentityProvider_PathTraversal(t *testing.T) {
+	account := &config.CloudAccount{
+		ID:                      "acct1",
+		AWSAuthMode:             "workload_identity_federation",
+		AWSRoleARN:              "arn:aws:iam::123456789012:role/test",
+		AWSWebIdentityTokenFile: "../../../etc/shadow",
+	}
+	_, err := ResolveAWSCredentialProvider(context.Background(), account, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "absolute path")
+}
+
+func TestResolveWebIdentityProvider_RelativePath(t *testing.T) {
+	account := &config.CloudAccount{
+		ID:                      "acct1",
+		AWSAuthMode:             "workload_identity_federation",
+		AWSRoleARN:              "arn:aws:iam::123456789012:role/test",
+		AWSWebIdentityTokenFile: "relative/path/token",
+	}
+	_, err := ResolveAWSCredentialProvider(context.Background(), account, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "absolute path")
+}
+
+func TestResolveAccessKeyProvider_NilStore(t *testing.T) {
+	account := &config.CloudAccount{
+		ID:          "acct1",
+		AWSAuthMode: "access_keys",
+	}
+	_, err := ResolveAWSCredentialProvider(context.Background(), account, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credential store required")
+}
+
+func TestParsePEMBlob_DuplicateKeys(t *testing.T) {
+	key1, _ := rsa.GenerateKey(rand.Reader, 2048)
+	key2, _ := rsa.GenerateKey(rand.Reader, 2048)
+	blob := append(
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key1)}),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key2)})...,
+	)
+	_, _, err := parsePEMBlob("test-acct", blob)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple private key")
+}
+
+func TestParsePEMBlob_DuplicateCerts(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	blob := append(keyPEM, certPEM...)
+	blob = append(blob, certPEM...) // second cert
+	_, _, err := parsePEMBlob("test-acct", blob)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple certificate")
+}
+
 // minimalRSAPEM returns a minimal RSA private key PEM for use in JSON
 // (newlines replaced with \n literal so it fits in a JSON string).
 func minimalRSAPEM() string {

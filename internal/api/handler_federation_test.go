@@ -277,3 +277,53 @@ func TestGetFederationIaC_UnknownTarget(t *testing.T) {
 	}))
 	require.Error(t, err)
 }
+
+func TestGetFederationIaC_InvalidSource(t *testing.T) {
+	h := federationHandler(awsAccount())
+	ctx := context.Background()
+
+	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+		"target": "aws", "source": "badcloud", "account_id": fedAwsAccountID,
+	}))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "source must be")
+}
+
+func TestGetFederationIaC_CFParams_ValidJSON(t *testing.T) {
+	// Account with characters that would break text/template JSON rendering.
+	acct := awsAccount()
+	acct.Name = `test "account" with $pecial chars`
+	acct.AzureTenantID = "tenant-abc"
+	h := federationHandler(acct)
+	ctx := context.Background()
+
+	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+		"target": "aws", "source": "azure", "account_id": fedAwsAccountID, "format": "cf-params",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "application/json", res.ContentType)
+
+	// Verify the output is valid JSON.
+	var params []map[string]string
+	require.NoError(t, json.Unmarshal([]byte(res.Content), &params), "CF params must be valid JSON even with special characters in account name")
+	assert.GreaterOrEqual(t, len(params), 3, "should have at least 3 parameters")
+}
+
+func TestShellEscape(t *testing.T) {
+	tests := []struct {
+		input, expected string
+	}{
+		{`hello`, `hello`},
+		{`he"llo`, `he\"llo`},
+		{"he`llo", "he\\`llo"},
+		{`$HOME`, `\$HOME`},
+		{`back\slash`, `back\\slash`},
+		{`$(rm -rf /)`, `\$(rm -rf /)`},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.expected, shellEscape(tt.input), "input: %q", tt.input)
+	}
+}

@@ -10,11 +10,14 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
@@ -169,6 +172,10 @@ func resolveWebIdentityProvider(account *config.CloudAccount, stsClient STSClien
 	if tokenFile == "" {
 		return nil, fmt.Errorf("credentials: aws_web_identity_token_file required for workload_identity_federation mode (account %s)", account.ID)
 	}
+	// Validate token file path to prevent directory traversal.
+	if strings.Contains(tokenFile, "..") || !filepath.IsAbs(tokenFile) {
+		return nil, fmt.Errorf("credentials: aws_web_identity_token_file must be an absolute path without '..' (account %s)", account.ID)
+	}
 	sessionSuffix := account.ID
 	if len(sessionSuffix) > 8 {
 		sessionSuffix = sessionSuffix[:8]
@@ -282,19 +289,10 @@ func parsePEMBlob(accountID string, pemBlob []byte) (*rsa.PrivateKey, *x509.Cert
 		if block == nil {
 			break
 		}
-		switch block.Type {
-		case "RSA PRIVATE KEY", "PRIVATE KEY":
-			k, err := parseRSAKeyBlock(accountID, block)
-			if err != nil {
-				return nil, nil, err
-			}
-			rsaKey = k
-		case "CERTIFICATE":
-			c, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return nil, nil, fmt.Errorf("credentials: parse certificate for account %s: %w", accountID, err)
-			}
-			cert = c
+		var err error
+		rsaKey, cert, err = processPEMBlock(accountID, block, rsaKey, cert)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 	if rsaKey == nil {
@@ -304,6 +302,31 @@ func parsePEMBlob(accountID string, pemBlob []byte) (*rsa.PrivateKey, *x509.Cert
 		return nil, nil, fmt.Errorf("credentials: no certificate found in PEM blob for account %s — store key+cert together", accountID)
 	}
 	return rsaKey, cert, nil
+}
+
+func processPEMBlock(accountID string, block *pem.Block, existingKey *rsa.PrivateKey, existingCert *x509.Certificate) (*rsa.PrivateKey, *x509.Certificate, error) {
+	switch block.Type {
+	case "RSA PRIVATE KEY", "PRIVATE KEY":
+		if existingKey != nil {
+			return nil, nil, fmt.Errorf("credentials: multiple private key blocks in PEM blob for account %s", accountID)
+		}
+		k, err := parseRSAKeyBlock(accountID, block)
+		if err != nil {
+			return nil, nil, err
+		}
+		return k, existingCert, nil
+	case "CERTIFICATE":
+		if existingCert != nil {
+			return nil, nil, fmt.Errorf("credentials: multiple certificate blocks in PEM blob for account %s", accountID)
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("credentials: parse certificate for account %s: %w", accountID, err)
+		}
+		return existingKey, c, nil
+	default:
+		return existingKey, existingCert, nil
+	}
 }
 
 // buildAzureWIFCredential creates a client-assertion credential using a stored PEM blob
@@ -338,7 +361,7 @@ func buildAzureWIFCredential(account *config.CloudAccount, pemBlob []byte) (azco
 			"aud": fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID),
 			"iss": clientID,
 			"sub": clientID,
-			"jti": fmt.Sprintf("%d", now.UnixNano()),
+			"jti": uuid.NewString(),
 			"nbf": now.Unix(),
 			"iat": now.Unix(),
 			"exp": now.Add(5 * time.Minute).Unix(),
