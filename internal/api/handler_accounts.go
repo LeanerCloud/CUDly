@@ -275,6 +275,15 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 		return nil, err
 	}
 
+	// Verify account exists before deleting (return 404 instead of silent success).
+	existing, err := h.config.GetCloudAccount(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+	if existing == nil {
+		return nil, errNotFound
+	}
+
 	if err := h.config.DeleteCloudAccount(ctx, id); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -332,18 +341,7 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 func ambientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
 	switch acct.Provider {
 	case "aws":
-		if acct.AWSAuthMode == "workload_identity_federation" {
-			if acct.AWSRoleARN == "" {
-				return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
-			}
-			return AccountTestResult{OK: true, Message: "web identity federation configured (no stored credential required)"}, true
-		}
-		if acct.AWSAuthMode != "access_keys" {
-			if acct.AWSRoleARN == "" {
-				return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
-			}
-			return AccountTestResult{OK: true, Message: "role assumption configured (no stored credential required)"}, true
-		}
+		return awsAmbientCredResult(acct)
 	case "azure":
 		if acct.AzureAuthMode == "managed_identity" {
 			return AccountTestResult{OK: true, Message: "managed identity configured (no stored credential required)"}, true
@@ -352,6 +350,22 @@ func ambientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
 		if acct.GCPAuthMode == "application_default" {
 			return AccountTestResult{OK: true, Message: "application default credentials configured (no stored credential required)"}, true
 		}
+	}
+	return AccountTestResult{}, false
+}
+
+func awsAmbientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
+	switch acct.AWSAuthMode {
+	case "workload_identity_federation":
+		if acct.AWSRoleARN == "" {
+			return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
+		}
+		return AccountTestResult{OK: true, Message: "web identity federation configured (no stored credential required)"}, true
+	case "role_arn", "bastion":
+		if acct.AWSRoleARN == "" {
+			return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
+		}
+		return AccountTestResult{OK: true, Message: "role assumption configured (no stored credential required)"}, true
 	}
 	return AccountTestResult{}, false
 }
@@ -633,7 +647,7 @@ func parseServiceOverridePath(path string) (accountID, provider, service string,
 
 	parts := strings.Split(path, "/")
 	// Expect: [accountID, "service-overrides", provider, service]
-	if len(parts) < 4 {
+	if len(parts) != 4 {
 		return "", "", "", fmt.Errorf("invalid service override path: expected uuid/service-overrides/provider/service")
 	}
 

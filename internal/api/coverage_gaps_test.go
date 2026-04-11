@@ -455,18 +455,23 @@ func TestAmbientCredResult(t *testing.T) {
 			msgContains: "web identity",
 		},
 		{
-			name:        "aws non-access_keys no ARN",
-			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "iam_role"},
+			name:        "aws role_arn no ARN",
+			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "role_arn"},
 			wantOK:      false,
 			wantFound:   true,
 			msgContains: "aws_role_arn",
 		},
 		{
-			name:        "aws non-access_keys with ARN",
-			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "iam_role", AWSRoleARN: "arn:aws:iam::123456789012:role/R"},
+			name:        "aws role_arn with ARN",
+			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::123456789012:role/R"},
 			wantOK:      true,
 			wantFound:   true,
 			msgContains: "role assumption",
+		},
+		{
+			name:      "aws unknown mode — not handled (falls through to credential check)",
+			acct:      &config.CloudAccount{Provider: "aws", AWSAuthMode: "unknown_mode"},
+			wantFound: false,
 		},
 		{
 			name:      "aws access_keys — not handled",
