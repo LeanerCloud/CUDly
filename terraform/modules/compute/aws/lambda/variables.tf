@@ -98,7 +98,7 @@ variable "function_url_auth_type" {
 variable "allowed_origins" {
   description = "Allowed origins for CORS"
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }
 
 variable "reserved_concurrent_executions" {

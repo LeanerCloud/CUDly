@@ -205,7 +205,7 @@ variable "additional_env_vars" {
 variable "allowed_origins" {
   description = "CORS allowed origins"
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }
 
 variable "enable_execute_command" {

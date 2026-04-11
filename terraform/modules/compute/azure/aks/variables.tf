@@ -136,7 +136,7 @@ variable "auto_migrate" {
 variable "allowed_origins" {
   description = "List of allowed CORS origins"
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }
 
 variable "additional_env_vars" {

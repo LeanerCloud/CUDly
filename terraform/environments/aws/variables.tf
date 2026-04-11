@@ -224,7 +224,7 @@ variable "lambda_function_url_auth_type" {
 variable "lambda_allowed_origins" {
   description = "CORS allowed origins"
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }
 
 variable "lambda_reserved_concurrency" {

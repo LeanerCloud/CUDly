@@ -134,7 +134,7 @@ variable "enable_admin_password_writer" {
 variable "allowed_origins" {
   description = "List of allowed CORS origins"
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }
 
 variable "vpc_connector_id" {
