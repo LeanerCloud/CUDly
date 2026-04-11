@@ -245,8 +245,10 @@ jobs:
       # Optional: Send notification to Slack, Discord, email, etc.
       # - name: Send notification
       #   if: always()
-      #   uses: 8398a7/action-slack@v3
+      #   uses: slackapi/slack-github-action@v2
       #   with:
-      #     status: ${{ job.status }}
-      #     text: Multi-cloud deployment to ${{ needs.determine-deployment.outputs.environment }} completed
-      #     webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      #     method: chat.postMessage
+      #     token: ${{ secrets.SLACK_BOT_TOKEN }}
+      #     payload: |
+      #       channel: ${{ secrets.SLACK_CHANNEL_ID }}
+      #       text: "Multi-cloud deployment to ${{ needs.determine-deployment.outputs.environment }}: ${{ job.status }}"
