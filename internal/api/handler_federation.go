@@ -111,6 +111,9 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	if err != nil {
 		return nil, err
 	}
+	if err := validateUUID(accountID); err != nil {
+		return nil, NewClientError(400, "account_id must be a valid UUID")
+	}
 
 	account, err := h.config.GetCloudAccount(ctx, accountID)
 	if err != nil {

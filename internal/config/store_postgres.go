@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
@@ -1404,8 +1405,10 @@ func (s *PostgresStore) ListCloudAccounts(ctx context.Context, filter CloudAccou
 		i++
 	}
 	if filter.Search != "" {
-		query += fmt.Sprintf(" AND (ca.name ILIKE $%d OR ca.external_id ILIKE $%d)", i, i+1)
-		like := "%" + filter.Search + "%"
+		// Escape ILIKE wildcards so user-supplied % and _ are treated as literals.
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(filter.Search)
+		query += fmt.Sprintf(" AND (ca.name ILIKE $%d ESCAPE '\\' OR ca.external_id ILIKE $%d ESCAPE '\\')", i, i+1)
+		like := "%" + escaped + "%"
 		args = append(args, like, like)
 		i += 2
 	}

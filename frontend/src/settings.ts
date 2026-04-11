@@ -332,8 +332,10 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   (document.getElementById('account-aws-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
   (document.getElementById('account-aws-external-id') as HTMLInputElement).value = account?.aws_external_id ?? '';
   (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
-  (document.getElementById('account-aws-wif-role-arn') as HTMLInputElement | null)?.setAttribute('value', account?.aws_role_arn ?? '');
-  (document.getElementById('account-aws-wif-token-file') as HTMLInputElement | null)?.setAttribute('value', account?.aws_web_identity_token_file ?? '');
+  const wifRoleEl = document.getElementById('account-aws-wif-role-arn') as HTMLInputElement | null;
+  if (wifRoleEl) wifRoleEl.value = account?.aws_role_arn ?? '';
+  const wifTokenEl = document.getElementById('account-aws-wif-token-file') as HTMLInputElement | null;
+  if (wifTokenEl) wifTokenEl.value = account?.aws_web_identity_token_file ?? '';
   (document.getElementById('account-aws-is-org-root') as HTMLInputElement).checked = account?.aws_is_org_root ?? false;
 
   updateAwsAuthModeFields(authMode, account?.aws_bastion_id);
@@ -496,8 +498,7 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
         try {
           parsed = JSON.parse(config) as Record<string, unknown>;
         } catch {
-          alert('GCP WIF config is not valid JSON');
-          return;
+          throw new Error('GCP WIF config is not valid JSON');
         }
         await api.saveAccountCredentials(accountId, { credential_type: 'gcp_workload_identity_config', payload: parsed });
       }
@@ -508,8 +509,7 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
         try {
           parsed = JSON.parse(jsonText) as Record<string, unknown>;
         } catch {
-          alert('Service account JSON is not valid JSON');
-          return;
+          throw new Error('Service account JSON is not valid JSON');
         }
         await api.saveAccountCredentials(accountId, { credential_type: 'gcp_service_account', payload: parsed });
       }

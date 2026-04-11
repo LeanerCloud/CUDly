@@ -93,6 +93,9 @@ func ResolveAWSCredentialProvider(
 }
 
 func resolveAccessKeyProvider(ctx context.Context, account *config.CloudAccount, store CredentialStore) (aws.CredentialsProvider, error) {
+	if store == nil {
+		return nil, fmt.Errorf("credentials: credential store required for access_keys mode (account %s)", account.ID)
+	}
 	raw, err := store.LoadRaw(ctx, account.ID, CredTypeAWSAccessKeys)
 	if err != nil {
 		return nil, fmt.Errorf("credentials: load access keys for account %s: %w", account.ID, err)

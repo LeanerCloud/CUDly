@@ -201,34 +201,10 @@ func (p *AWSProvider) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-// GetAccounts returns all accessible AWS accounts
-func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
-	accounts := make([]common.Account, 0)
-
-	// Use injected STS client if available (for testing)
-	var stsClient STSClient
-	if p.stsClient != nil {
-		stsClient = p.stsClient
-	} else {
-		stsClient = sts.NewFromConfig(p.cfg)
-	}
-
-	// Get current account
-	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current account: %w", err)
-	}
-
-	// Add current account
-	accounts = append(accounts, common.Account{
-		Provider:    common.ProviderAWS,
-		ID:          *identity.Account,
-		Name:        *identity.Account,
-		DisplayName: *identity.Account,
-		IsDefault:   true,
-	})
-
-	// Use injected paginator if available (for testing), otherwise create real paginator
+// appendOrgAccounts adds organization member accounts to the slice, skipping the
+// current account (already added as the default) and suspended accounts with nil fields.
+// Returns the accounts unchanged if not in an organization or lacking permissions.
+func (p *AWSProvider) appendOrgAccounts(ctx context.Context, accounts []common.Account, currentAccountID string) []common.Account {
 	var paginator OrganizationsPaginator
 	if p.orgPaginator != nil {
 		paginator = p.orgPaginator
@@ -239,20 +215,15 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 		}
 	}
 
-	// Try to list organization accounts
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			// Not in an organization or no permissions, return just current account
-			return accounts, nil
+			return accounts // not in an org or no permissions
 		}
-
 		for _, acc := range output.Accounts {
-			// Skip the current account as we already added it
-			if *acc.Id == *identity.Account {
+			if acc.Id == nil || acc.Name == nil || *acc.Id == currentAccountID {
 				continue
 			}
-
 			accounts = append(accounts, common.Account{
 				Provider:    common.ProviderAWS,
 				ID:          *acc.Id,
@@ -262,8 +233,35 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 			})
 		}
 	}
+	return accounts
+}
 
-	return accounts, nil
+// GetAccounts returns all accessible AWS accounts
+func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
+	var stsClient STSClient
+	if p.stsClient != nil {
+		stsClient = p.stsClient
+	} else {
+		stsClient = sts.NewFromConfig(p.cfg)
+	}
+
+	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current account: %w", err)
+	}
+	if identity.Account == nil {
+		return nil, fmt.Errorf("STS GetCallerIdentity returned nil account")
+	}
+
+	accounts := []common.Account{{
+		Provider:    common.ProviderAWS,
+		ID:          *identity.Account,
+		Name:        *identity.Account,
+		DisplayName: *identity.Account,
+		IsDefault:   true,
+	}}
+
+	return p.appendOrgAccounts(ctx, accounts, *identity.Account), nil
 }
 
 // GetRegions returns all available AWS regions using EC2 DescribeRegions API

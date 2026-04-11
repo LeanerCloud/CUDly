@@ -1060,7 +1060,7 @@
                                 <option value="access_keys" title="Store static IAM access key ID and secret in CUDly. Avoid if possible — long-lived credentials.">Access Keys</option>
                             </select>
                         </label>
-                        <div id="account-aws-keys-fields">
+                        <div id="account-aws-keys-fields" class="hidden">
                             <label>Access Key ID: <input type="text" id="account-aws-access-key-id" placeholder="AKIAIOSFODNN7EXAMPLE"></label>
                             <label>Secret Access Key: <input type="password" id="account-aws-secret-access-key" placeholder="Secret key"></label>
                         </div>
@@ -1100,7 +1100,7 @@
                             <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
                         </div>
                         <!-- workload_identity_federation mode -->
-                        <div id="account-azure-wif-fields">
+                        <div id="account-azure-wif-fields" class="hidden">
                             <label>RSA Private Key (PEM):
                                 <textarea id="account-azure-wif-private-key" rows="6" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
                             </label>
@@ -1122,7 +1122,7 @@
                             <input type="email" id="account-gcp-client-email" placeholder="name@project.iam.gserviceaccount.com">
                         </label>
                         <!-- service_account_key mode -->
-                        <div id="account-gcp-key-fields">
+                        <div id="account-gcp-key-fields" class="hidden">
                             <label>Service Account JSON:
                                 <textarea id="account-gcp-service-account-json" rows="6" placeholder='{"type":"service_account",...}'></textarea>
                             </label>

@@ -112,7 +112,9 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	}
 
 	if err := m.config.SavePurchaseExecution(ctx, &acctExec); err != nil {
-		logging.Errorf("Failed to save per-account execution for account %s: %v", account.ID, err)
+		// The purchase succeeded on the cloud provider side but the audit record is lost.
+		// This is a data integrity issue — alert strongly so operators can reconcile.
+		logging.Errorf("AUDIT LOSS: failed to save execution record for account %s (purchases may have been made with no record): %v", account.ID, err)
 	}
 
 	if len(purchaseErrors) > 0 {
@@ -140,7 +142,9 @@ func (m *Manager) resolveAccountProvider(ctx context.Context, account config.Clo
 }
 
 func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
-	if m.assumeRoleSTS == nil {
+	// access_keys loads from the credential store and does not need assumeRoleSTS.
+	// All other modes (role_arn, bastion, workload_identity_federation) require STS.
+	if account.AWSAuthMode != "access_keys" && m.assumeRoleSTS == nil {
 		return nil
 	}
 	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &account, m.credStore, m.assumeRoleSTS)
