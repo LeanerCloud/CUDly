@@ -315,6 +315,14 @@ func (m *MockCredentialStore) HasCredential(_ context.Context, _, _ string) (boo
 	return false, nil
 }
 
+func (m *MockCredentialStore) EncryptPayload(plaintext []byte) (string, error) {
+	return string(plaintext), nil // no-op: return plaintext as "encrypted" for tests
+}
+
+func (m *MockCredentialStore) DecryptPayload(ciphertext string) ([]byte, error) {
+	return []byte(ciphertext), nil // no-op: return ciphertext as "decrypted" for tests
+}
+
 // MockPurchaseManager is a mock implementation of purchase.Manager
 type MockPurchaseManager struct {
 	mock.Mock

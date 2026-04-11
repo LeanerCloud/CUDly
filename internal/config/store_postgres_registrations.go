@@ -34,6 +34,7 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 			aws_role_arn, aws_auth_mode,
 			azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
 			gcp_project_id, gcp_client_email, gcp_auth_mode,
+			reg_credential_type, reg_credential_payload,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3,
@@ -42,7 +43,8 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 			$10, $11,
 			$12, $13, $14, $15,
 			$16, $17, $18,
-			$19, $20
+			$19, $20,
+			$21, $22
 		)
 	`
 
@@ -55,6 +57,7 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 		nullStringFromString(reg.AzureClientID), nullStringFromString(reg.AzureAuthMode),
 		nullStringFromString(reg.GCPProjectID), nullStringFromString(reg.GCPClientEmail),
 		nullStringFromString(reg.GCPAuthMode),
+		nullStringFromString(reg.RegCredentialType), nullStringFromString(reg.RegCredentialPayload),
 		reg.CreatedAt, reg.UpdatedAt,
 	)
 	if err != nil {
@@ -220,6 +223,7 @@ func registrationColumns() string {
 		aws_role_arn, aws_auth_mode,
 		azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
 		gcp_project_id, gcp_client_email, gcp_auth_mode,
+		reg_credential_type, reg_credential_payload,
 		rejection_reason, cloud_account_id, reviewed_by, reviewed_at,
 		created_at, updated_at`
 }
@@ -235,6 +239,7 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 	var awsRoleARN, awsAuthMode sql.NullString
 	var azureSubID, azureTenantID, azureClientID, azureAuthMode sql.NullString
 	var gcpProjectID, gcpClientEmail, gcpAuthMode sql.NullString
+	var regCredType, regCredPayload sql.NullString
 	var rejectionReason sql.NullString
 	var cloudAccountID, reviewedBy sql.NullString
 	var reviewedAt sql.NullTime
@@ -246,6 +251,7 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 		&awsRoleARN, &awsAuthMode,
 		&azureSubID, &azureTenantID, &azureClientID, &azureAuthMode,
 		&gcpProjectID, &gcpClientEmail, &gcpAuthMode,
+		&regCredType, &regCredPayload,
 		&rejectionReason, &cloudAccountID, &reviewedBy, &reviewedAt,
 		&reg.CreatedAt, &reg.UpdatedAt,
 	)
@@ -264,6 +270,9 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 	reg.GCPProjectID = gcpProjectID.String
 	reg.GCPClientEmail = gcpClientEmail.String
 	reg.GCPAuthMode = gcpAuthMode.String
+	reg.RegCredentialType = regCredType.String
+	reg.RegCredentialPayload = regCredPayload.String
+	reg.HasCredentials = regCredType.Valid && regCredType.String != ""
 	reg.RejectionReason = rejectionReason.String
 	if cloudAccountID.Valid {
 		reg.CloudAccountID = &cloudAccountID.String

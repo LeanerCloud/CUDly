@@ -544,6 +544,14 @@ func (m *MockCredentialStore) LoadRaw(ctx context.Context, accountID, credType s
 	return nil, nil
 }
 
+func (m *MockCredentialStore) EncryptPayload(plaintext []byte) (string, error) {
+	return string(plaintext), nil // no-op: return plaintext as "encrypted" for tests
+}
+
+func (m *MockCredentialStore) DecryptPayload(ciphertext string) ([]byte, error) {
+	return []byte(ciphertext), nil // no-op: return ciphertext as "decrypted" for tests
+}
+
 // MockAssumeRoleSTS is a stub credentials.STSClient (AssumeRole only) used in tests.
 type MockAssumeRoleSTS struct {
 	mock.Mock

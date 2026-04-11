@@ -62,6 +62,14 @@ func (m *mockCredentialStore) HasCredential(_ context.Context, accountID, credTy
 	return ok, nil
 }
 
+func (m *mockCredentialStore) EncryptPayload(plaintext []byte) (string, error) {
+	return string(plaintext), nil // no-op: return plaintext as "encrypted" for tests
+}
+
+func (m *mockCredentialStore) DecryptPayload(ciphertext string) ([]byte, error) {
+	return []byte(ciphertext), nil // no-op: return ciphertext as "decrypted" for tests
+}
+
 // mockSTSClient implements STSClient for testing.
 type mockSTSClient struct {
 	out *sts.AssumeRoleOutput

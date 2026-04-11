@@ -111,6 +111,14 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
 
     const statusTd = document.createElement('td');
     statusTd.appendChild(createStatusBadge(reg.status));
+    if (reg.has_credentials) {
+      const credBadge = document.createElement('span');
+      credBadge.className = 'status-badge badge-info';
+      credBadge.textContent = 'creds';
+      credBadge.title = 'Credentials included — will be auto-stored on approval';
+      credBadge.style.marginLeft = '4px';
+      statusTd.appendChild(credBadge);
+    }
     row.appendChild(statusTd);
 
     const actionsTd = document.createElement('td');

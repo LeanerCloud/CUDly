@@ -26,6 +26,13 @@ type CredentialStore interface {
 
 	// HasCredential reports whether any credential exists for accountID/credType.
 	HasCredential(ctx context.Context, accountID, credType string) (bool, error)
+
+	// EncryptPayload encrypts plaintext using the store's AES-256-GCM key.
+	// Used to encrypt credential data in the account_registrations table.
+	EncryptPayload(plaintext []byte) (string, error)
+
+	// DecryptPayload decrypts a ciphertext blob encrypted by EncryptPayload.
+	DecryptPayload(ciphertext string) ([]byte, error)
 }
 
 // NewCredentialStore creates a CredentialStore backed by PostgreSQL.
@@ -85,6 +92,14 @@ func (s *pgCredentialStore) DeleteCredential(ctx context.Context, accountID, cre
 		return fmt.Errorf("credentials: delete credential: %w", err)
 	}
 	return nil
+}
+
+func (s *pgCredentialStore) EncryptPayload(plaintext []byte) (string, error) {
+	return Encrypt(s.key, plaintext)
+}
+
+func (s *pgCredentialStore) DecryptPayload(ciphertext string) ([]byte, error) {
+	return Decrypt(s.key, ciphertext)
 }
 
 func (s *pgCredentialStore) HasCredential(ctx context.Context, accountID, credType string) (bool, error) {

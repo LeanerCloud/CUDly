@@ -34,6 +34,8 @@ type RegistrationRequest struct {
 	GCPProjectID        string `json:"gcp_project_id"`
 	GCPClientEmail      string `json:"gcp_client_email"`
 	GCPAuthMode         string `json:"gcp_auth_mode"`
+	CredentialType      string `json:"credential_type"`
+	CredentialPayload   string `json:"credential_payload"`
 }
 
 // RegistrationStatusResponse is the limited public response for GET /api/register/:token.
@@ -86,7 +88,14 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		GCPProjectID:        body.GCPProjectID,
 		GCPClientEmail:      body.GCPClientEmail,
 		GCPAuthMode:         body.GCPAuthMode,
+		RegCredentialType:   body.CredentialType,
 	}
+
+	encrypted, encErr := h.encryptRegistrationCredential(body.CredentialPayload)
+	if encErr != nil {
+		return nil, fmt.Errorf("registrations: encrypt credential: %w", encErr)
+	}
+	reg.RegCredentialPayload = encrypted
 
 	if err := h.config.CreateAccountRegistration(ctx, reg); err != nil {
 		if strings.Contains(err.Error(), "duplicate") {
@@ -189,6 +198,31 @@ func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegi
 	}
 }
 
+// storeRegistrationCredentials decrypts and stores credentials from the registration
+// record into the account_credentials table. Errors are logged, not propagated.
+func (h *Handler) storeRegistrationCredentials(ctx context.Context, reg *config.AccountRegistration, accountID string) {
+	if reg.RegCredentialPayload == "" || reg.RegCredentialType == "" || h.credStore == nil {
+		return
+	}
+	plaintext, err := h.credStore.DecryptPayload(reg.RegCredentialPayload)
+	if err != nil {
+		logging.Warnf("registration %s: failed to decrypt credential payload: %v", reg.ID, err)
+		return
+	}
+	if err := h.credStore.SaveCredential(ctx, accountID, reg.RegCredentialType, plaintext); err != nil {
+		logging.Warnf("registration %s: failed to store credential: %v", reg.ID, err)
+	}
+}
+
+// encryptRegistrationCredential encrypts the credential payload for storage in the
+// registration table. Returns empty string if no credential is provided.
+func (h *Handler) encryptRegistrationCredential(payload string) (string, error) {
+	if payload == "" || h.credStore == nil {
+		return "", nil
+	}
+	return h.credStore.EncryptPayload([]byte(payload))
+}
+
 // notifyRegistrant sends an email about an approval or rejection.
 // Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
 func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) {
@@ -231,7 +265,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	now := time.Now()
 	account := cloudAccountFromRequest(acctReq)
 	account.ID = uuid.New().String()
-	account.Enabled = false
+	account.Enabled = reg.RegCredentialPayload != "" // Auto-enable if credentials are included.
 	account.CreatedAt = now
 	account.UpdatedAt = now
 
@@ -239,8 +273,12 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		return nil, fmt.Errorf("registrations: create account: %w", err)
 	}
 
-	// Link the cloud account to the registration record.
+	// Auto-store credentials if the registration included them.
+	h.storeRegistrationCredentials(ctx, reg, account.ID)
+
+	// Link the cloud account and wipe the credential payload from the registration record.
 	reg.CloudAccountID = &account.ID
+	reg.RegCredentialPayload = "" // Don't keep encrypted credentials longer than needed.
 	if err := h.config.UpdateAccountRegistration(ctx, reg); err != nil {
 		logging.Warnf("registration %s approved but failed to link cloud_account_id: %v", reg.ID, err)
 	}
