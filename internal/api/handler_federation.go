@@ -117,7 +117,14 @@ func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunction
 	}
 
 	slug := "target"
-	data := buildGenericIaCData(target, source, h.dashboardURL)
+	apiURL := h.dashboardURL
+	if apiURL == "" {
+		// Derive from Lambda Function URL context (trusted, not Host header).
+		if domain := req.RequestContext.DomainName; domain != "" {
+			apiURL = "https://" + domain
+		}
+	}
+	data := buildGenericIaCData(target, source, apiURL)
 
 	switch {
 	case format == "bundle":
