@@ -139,6 +139,14 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
+	args := m.Called(ctx, executionID, fromStatuses, toStatus)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
+}
+
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

@@ -9,7 +9,7 @@
 # Requirements: AWS CLI v2, credentials for account {{.AccountExternalID}}
 set -euo pipefail
 
-STACK_NAME="${STACK_NAME:-CUDly-{{.AccountSlug}}-WIF}"
+: "${STACK_NAME:=CUDly-{{.AccountSlug}}-WIF}"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 PROFILE_ARG=""
 

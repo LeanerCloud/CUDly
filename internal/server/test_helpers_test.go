@@ -86,6 +86,10 @@ func (m *mockConfigStoreForHealth) CleanupOldExecutions(ctx context.Context, ret
 	return 0, nil
 }
 
+func (m *mockConfigStoreForHealth) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	return nil
 }

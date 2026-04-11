@@ -187,6 +187,10 @@ func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	return 0, nil
 }
 
+func (m *mockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	return nil
 }

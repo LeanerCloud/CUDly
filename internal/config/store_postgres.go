@@ -640,6 +640,36 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 	return nil
 }
 
+// TransitionExecutionStatus atomically transitions an execution from one of the
+// allowed statuses to a new status. Returns the updated record, or an error if
+// the execution was not found or not in an allowed status.
+func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*PurchaseExecution, error) {
+	query := `
+		UPDATE purchase_executions
+		SET status = $2, updated_at = NOW()
+		WHERE execution_id = $1 AND status = ANY($3)
+		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
+		          notification_sent, approval_token, recommendations,
+		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		          cloud_account_id
+	`
+
+	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(records) == 0 {
+		existing, existErr := s.GetExecutionByID(ctx, executionID)
+		if existErr != nil || existing == nil {
+			return nil, fmt.Errorf("execution not found: %s", executionID)
+		}
+		return nil, fmt.Errorf("execution %s cannot transition from %q to %q", executionID, existing.Status, toStatus)
+	}
+
+	return &records[0], nil
+}
+
 // GetPendingExecutions retrieves all pending purchase executions
 func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error) {
 	query := `

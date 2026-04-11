@@ -157,27 +157,10 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	// Get the execution
-	execution, err := h.config.GetExecutionByID(ctx, executionID)
-	if err != nil {
-		return nil, fmt.Errorf("execution not found: %w", err)
-	}
-	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
-	}
-
-	// Only allow transitioning from pending or paused to running
-	if execution.Status != "pending" && execution.Status != "paused" {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be run from status %q (only 'pending' or 'paused' executions can be started)", executionID, execution.Status))
-	}
-
-	// TODO: This is a TOCTOU race — two concurrent callers can both transition to
-	// "running". Fix by adding an atomic TransitionExecutionStatus(id, fromStatuses, toStatus)
-	// to the store layer, similar to TransitionRIExchangeStatus.
-	// Set status to running and trigger execution
-	execution.Status = "running"
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-		return nil, fmt.Errorf("failed to update execution: %w", err)
+	// Atomically transition to running — only one concurrent caller can succeed.
+	// TransitionExecutionStatus handles not-found and wrong-status cases.
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "running"); err != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be started: %v", executionID, err))
 	}
 
 	return map[string]any{

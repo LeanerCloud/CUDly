@@ -903,9 +903,8 @@ func TestHandler_HandleRequest_RunPlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	execution := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}
-	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(execution, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.Anything).Return(nil)
+	transitioned := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "running"}
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "running").Return(transitioned, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 

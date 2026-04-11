@@ -95,6 +95,15 @@ func (m *MockConfigStore) SavePurchaseExecution(ctx context.Context, exec *confi
 	return args.Error(0)
 }
 
+// TransitionExecutionStatus mocks the TransitionExecutionStatus operation
+func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
+	args := m.Called(ctx, executionID, fromStatuses, toStatus)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
+}
+
 // GetPendingExecutions mocks the GetPendingExecutions operation
 func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.PurchaseExecution, error) {
 	args := m.Called(ctx)
