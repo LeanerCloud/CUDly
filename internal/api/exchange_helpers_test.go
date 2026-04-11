@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,37 +71,18 @@ func TestHandler_getFederationIaC_MissingTarget(t *testing.T) {
 	assert.Contains(t, err.Error(), "target")
 }
 
-func TestHandler_getFederationIaC_MissingAccountID(t *testing.T) {
+func TestHandler_getFederationIaC_SuccessWithoutAccountID(t *testing.T) {
 	ctx := context.Background()
-	h := &Handler{}
+	h := &Handler{config: new(MockConfigStore)}
 	req := &events.LambdaFunctionURLRequest{
 		QueryStringParameters: map[string]string{
 			"target": "aws",
 			"source": "gcp",
 		},
 	}
-	_, err := h.getFederationIaC(ctx, req)
-	assert.Error(t, err)
-}
-
-func TestHandler_getFederationIaC_AccountNotFound(t *testing.T) {
-	ctx := context.Background()
-	mockStore := new(MockConfigStore)
-	mockStore.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
-		return nil, nil
-	}
-
-	h := &Handler{config: mockStore}
-	req := &events.LambdaFunctionURLRequest{
-		QueryStringParameters: map[string]string{
-			"target":     "aws",
-			"source":     "gcp",
-			"account_id": "11111111-1111-1111-1111-111111111111",
-		},
-	}
-	_, err := h.getFederationIaC(ctx, req)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "account not found")
+	res, err := h.getFederationIaC(ctx, req)
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "aws-wif.tfvars")
 }
 
 func TestRouter_getFederationIaCHandler(t *testing.T) {

@@ -178,8 +178,8 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/registrations/", Method: "DELETE", Handler: r.deleteRegistrationHandler},
 		{PathPrefix: "/api/registrations/", Method: "GET", Handler: r.getRegistrationHandler},
 
-		// Federation IaC download endpoint
-		{ExactPath: "/api/federation/iac", Method: "GET", Handler: r.getFederationIaCHandler},
+		// Federation IaC download endpoint (public — generic templates, no secrets)
+		{ExactPath: "/api/federation/iac", Method: "GET", Handler: r.getFederationIaCHandler, Auth: AuthPublic},
 
 		// Health check (both root and /api paths)
 		{ExactPath: "/health", Handler: r.healthCheckHandler, Auth: AuthPublic},

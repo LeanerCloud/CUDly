@@ -3,27 +3,28 @@
  *
  * Builds per-provider federation subsections inside the Settings page.
  * IaC file content is fetched from the backend (GET /api/federation/iac),
- * which renders templates embedded from internal/iacfiles/templates/.
+ * which renders generic templates. Target account owners fill in their own
+ * values via terraform -var flags when applying.
  * All DOM manipulation uses safe createElement/textContent/appendChild methods.
  */
 
-import type { CloudAccount } from './api/accounts';
-import { listAccounts, getFederationIaC } from './api';
+import { getFederationIaC } from './api';
 
 // ---------------------------------------------------------------------------
 // Download helper
 // ---------------------------------------------------------------------------
 
-function downloadFile(filename: string, content: string | ArrayBuffer, mimeType = 'text/plain'): void {
-  const blob = new Blob([content], { type: mimeType });
-  const url  = URL.createObjectURL(blob);
+function downloadFile(filename: string, content: string | ArrayBuffer, contentType: string): void {
+  const blob = content instanceof ArrayBuffer
+    ? new Blob([content], { type: contentType })
+    : new Blob([content], { type: contentType });
   const a    = document.createElement('a');
-  a.href     = url;
+  a.href     = URL.createObjectURL(blob);
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  URL.revokeObjectURL(a.href);
 }
 
 // ---------------------------------------------------------------------------
@@ -31,15 +32,13 @@ function downloadFile(filename: string, content: string | ArrayBuffer, mimeType 
 // ---------------------------------------------------------------------------
 
 /**
- * Create a download button that fetches IaC content from the backend when clicked.
- * Shows a brief "loading…" state while the request is in flight.
+ * Create a download button that fetches generic IaC content from the backend.
  */
 function makeDownloadBtn(
   label: string,
   tooltipText: string,
   target: string,
   source: string,
-  accountId: string,
   format?: string,
 ): HTMLButtonElement {
   const btn       = document.createElement('button');
@@ -52,7 +51,7 @@ function makeDownloadBtn(
     btn.disabled    = true;
     btn.textContent = 'Loading…';
 
-    getFederationIaC(target, source, accountId, format)
+    getFederationIaC(target, source, format)
       .then(res => {
         if (res.content_encoding === 'base64') {
           const binaryStr = atob(res.content);
@@ -76,192 +75,121 @@ function makeDownloadBtn(
   return btn;
 }
 
-function makeAccountRow(account: CloudAccount, buttons: HTMLButtonElement[]): HTMLElement {
-  const row       = document.createElement('div');
-  row.className   = 'federation-account-row';
-
-  const info      = document.createElement('div');
-  info.className  = 'federation-account-info';
-
-  const nameSpan  = document.createElement('span');
-  nameSpan.className   = 'federation-account-name';
-  nameSpan.textContent = account.name;
-
-  const idSpan    = document.createElement('span');
-  idSpan.className   = 'federation-account-id';
-  idSpan.textContent = account.external_id;
-
-  info.appendChild(nameSpan);
-  info.appendChild(document.createTextNode(' '));
-  info.appendChild(idSpan);
-
-  const actions   = document.createElement('div');
-  actions.className = 'federation-account-actions';
-  buttons.forEach(btn => actions.appendChild(btn));
-
-  row.appendChild(info);
-  row.appendChild(actions);
-  return row;
-}
-
 function clearContainer(el: HTMLElement): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
-function emptyMessage(text: string): HTMLParagraphElement {
-  const p       = document.createElement('p');
-  p.className   = 'federation-empty';
-  p.textContent = text;
-  return p;
-}
-
 // ---------------------------------------------------------------------------
-// Section builders
+// Section builders — generic downloads (not per-account)
 // ---------------------------------------------------------------------------
 
-function buildAWSFederationAccounts(accounts: CloudAccount[], source: string): void {
+function buildAWSFederationDownloads(source: string): void {
   const container = document.getElementById('aws-federation-accounts');
   if (!container) return;
   clearContainer(container);
 
-  if (accounts.length === 0) {
-    container.appendChild(
-      emptyMessage('No AWS accounts registered. Add accounts above to generate federation IaC.'),
-    );
-    return;
-  }
+  const row = document.createElement('div');
+  row.className = 'federation-account-row';
+
+  const actions = document.createElement('div');
+  actions.className = 'federation-account-actions';
 
   if (source === 'aws') {
-    // Same-cloud: cross-account IAM role assumption
-    accounts.forEach(account => {
-      const tfvarsBtn = makeDownloadBtn(
-        'Terraform tfvars',
-        'Download pre-filled .tfvars for iac/federation/aws-cross-account/terraform. ' +
-        'Creates a cross-account IAM role in this target account. ' +
-        'Set aws_auth_mode=role_arn in CUDly after applying.',
-        'aws', 'aws', account.id,
-      );
-      const bundleBtn = makeDownloadBtn(
-        'Download ZIP',
-        'Download a zip bundle containing the Terraform module files and pre-filled .tfvars. ' +
-        'Unzip, fill in source_account_id, then run: cd terraform && terraform init && terraform apply.',
-        'aws', 'aws', account.id, 'bundle',
-      );
-      container.appendChild(makeAccountRow(account, [tfvarsBtn, bundleBtn]));
-    });
-    return;
+    actions.appendChild(makeDownloadBtn(
+      'Terraform tfvars',
+      'Download .tfvars for cross-account IAM role assumption. Fill in source_account_id and run terraform apply in the target account.',
+      'aws', 'aws',
+    ));
+    actions.appendChild(makeDownloadBtn(
+      'Download ZIP',
+      'Download zip bundle with Terraform module + .tfvars for cross-account federation.',
+      'aws', 'aws', 'bundle',
+    ));
+  } else {
+    actions.appendChild(makeDownloadBtn(
+      'Terraform tfvars',
+      'Download .tfvars for IAM OIDC WIF federation. Fill in your target account details and run terraform apply.',
+      'aws', source,
+    ));
+    actions.appendChild(makeDownloadBtn(
+      'CloudFormation params',
+      'Download CloudFormation parameters JSON for the AWS WIF template.',
+      'aws', source, 'cf-params',
+    ));
+    actions.appendChild(makeDownloadBtn(
+      'Download ZIP',
+      'Download zip bundle with Terraform module, .tfvars, CloudFormation template + deploy script.',
+      'aws', source, 'bundle',
+    ));
   }
 
-  // Cross-cloud: OIDC WIF
-  accounts.forEach(account => {
-    const tfvarsBtn = makeDownloadBtn(
-      'Terraform tfvars',
-      'Download pre-filled .tfvars for iac/federation/aws-target/terraform. ' +
-      'Sets up an IAM OIDC provider and CUDly IAM role in this AWS account.',
-      'aws', source, account.id,
-    );
-
-    const cfBtn = makeDownloadBtn(
-      'CloudFormation params',
-      'Download pre-filled parameters JSON for iac/federation/aws-target/cloudformation/template.yaml.',
-      'aws', source, account.id, 'cf-params',
-    );
-
-    const bundleBtn = makeDownloadBtn(
-      'Download ZIP',
-      'Download a zip bundle with the Terraform module, pre-filled .tfvars, ' +
-      'CloudFormation template + parameters, and a ready-to-run deploy-cfn.sh script.',
-      'aws', source, account.id, 'bundle',
-    );
-
-    container.appendChild(makeAccountRow(account, [tfvarsBtn, cfBtn, bundleBtn]));
-  });
+  row.appendChild(actions);
+  container.appendChild(row);
 }
 
-function buildAzureFederationAccounts(accounts: CloudAccount[]): void {
+function buildAzureFederationDownloads(): void {
   const container = document.getElementById('azure-federation-accounts');
   if (!container) return;
   clearContainer(container);
 
-  if (accounts.length === 0) {
-    container.appendChild(
-      emptyMessage('No Azure accounts registered. Add accounts above to generate federation IaC.'),
-    );
-    return;
-  }
+  const row = document.createElement('div');
+  row.className = 'federation-account-row';
 
-  accounts.forEach(account => {
-    const tfvarsBtn = makeDownloadBtn(
-      'Terraform tfvars',
-      'Download pre-filled .tfvars for iac/federation/azure-target/terraform. ' +
-      'Creates an Azure App Registration with a certificate credential and grants the ' +
-      '"Reservations Administrator" role on the subscription.',
-      'azure', 'any', account.id,
-    );
+  const actions = document.createElement('div');
+  actions.className = 'federation-account-actions';
 
-    const bundleBtn = makeDownloadBtn(
-      'Download ZIP',
-      'Download a zip bundle containing the Terraform module files and pre-filled .tfvars. ' +
-      'Generate an RSA key + cert first (see tfvars comments), then terraform apply.',
-      'azure', 'any', account.id, 'bundle',
-    );
+  actions.appendChild(makeDownloadBtn(
+    'Terraform tfvars',
+    'Download .tfvars for Azure WIF federation. Generate a cert, fill in subscription/tenant IDs, then terraform apply.',
+    'azure', 'any',
+  ));
+  actions.appendChild(makeDownloadBtn(
+    'Download ZIP',
+    'Download zip bundle with Terraform module + .tfvars for Azure WIF federation.',
+    'azure', 'any', 'bundle',
+  ));
 
-    container.appendChild(makeAccountRow(account, [tfvarsBtn, bundleBtn]));
-  });
+  row.appendChild(actions);
+  container.appendChild(row);
 }
 
-function buildGCPFederationAccounts(accounts: CloudAccount[], source: string): void {
+function buildGCPFederationDownloads(source: string): void {
   const container = document.getElementById('gcp-federation-accounts');
   if (!container) return;
   clearContainer(container);
 
-  if (accounts.length === 0) {
-    container.appendChild(
-      emptyMessage('No GCP accounts registered. Add accounts above to generate federation IaC.'),
-    );
-    return;
-  }
+  const row = document.createElement('div');
+  row.className = 'federation-account-row';
+
+  const actions = document.createElement('div');
+  actions.className = 'federation-account-actions';
 
   if (source === 'gcp') {
-    // Same-cloud: service account impersonation
-    accounts.forEach(account => {
-      const tfvarsBtn = makeDownloadBtn(
-        'Terraform tfvars',
-        'Download pre-filled .tfvars for iac/federation/gcp-sa-impersonation/terraform. ' +
-        'Grants your source GCP service account the iam.serviceAccountTokenCreator role ' +
-        'on this project\'s service account. Set gcp_auth_mode=application_default in CUDly after applying.',
-        'gcp', 'gcp', account.id,
-      );
-      const bundleBtn = makeDownloadBtn(
-        'Download ZIP',
-        'Download a zip bundle with the Terraform module and pre-filled .tfvars. ' +
-        'Fill in source_service_account, then terraform apply.',
-        'gcp', 'gcp', account.id, 'bundle',
-      );
-      container.appendChild(makeAccountRow(account, [tfvarsBtn, bundleBtn]));
-    });
-    return;
+    actions.appendChild(makeDownloadBtn(
+      'Terraform tfvars',
+      'Download .tfvars for GCP SA impersonation. Fill in source/target service account emails, then terraform apply.',
+      'gcp', 'gcp',
+    ));
+    actions.appendChild(makeDownloadBtn(
+      'Download ZIP',
+      'Download zip bundle with Terraform module + .tfvars for GCP SA impersonation.',
+      'gcp', 'gcp', 'bundle',
+    ));
+  } else {
+    actions.appendChild(makeDownloadBtn(
+      'Terraform tfvars',
+      'Download .tfvars for GCP WIF federation. Fill in project/SA details, then terraform apply.',
+      'gcp', source,
+    ));
+    actions.appendChild(makeDownloadBtn(
+      'Download ZIP',
+      'Download zip bundle with Terraform module + .tfvars for GCP WIF federation.',
+      'gcp', source, 'bundle',
+    ));
   }
 
-  // Cross-cloud: WIF pool + provider
-  accounts.forEach(account => {
-    const tfvarsBtn = makeDownloadBtn(
-      'Terraform tfvars',
-      'Download pre-filled .tfvars for iac/federation/gcp-target/terraform. ' +
-      'Creates a Workload Identity Pool and provider, and grants the service account ' +
-      '"roles/iam.workloadIdentityUser" binding. No service account keys generated.',
-      'gcp', source, account.id,
-    );
-
-    const bundleBtn = makeDownloadBtn(
-      'Download ZIP',
-      'Download a zip bundle with the Terraform module and pre-filled .tfvars. ' +
-      'After terraform apply, run the gcloud_command output to generate the WIF credential JSON.',
-      'gcp', source, account.id, 'bundle',
-    );
-
-    container.appendChild(makeAccountRow(account, [tfvarsBtn, bundleBtn]));
-  });
+  row.appendChild(actions);
+  container.appendChild(row);
 }
 
 // ---------------------------------------------------------------------------
@@ -269,38 +197,22 @@ function buildGCPFederationAccounts(accounts: CloudAccount[], source: string): v
 // ---------------------------------------------------------------------------
 
 /**
- * Load accounts and render the federation subsections within each provider
- * fieldset in the Settings page. Safe to call multiple times (re-renders).
+ * Render the federation download subsections within each provider fieldset
+ * in the Settings page. No account loading needed — templates are generic.
  */
 export async function initFederationSections(): Promise<void> {
-  let awsAccounts:   CloudAccount[] = [];
-  let azureAccounts: CloudAccount[] = [];
-  let gcpAccounts:   CloudAccount[] = [];
-
-  try {
-    [awsAccounts, azureAccounts, gcpAccounts] = await Promise.all([
-      listAccounts({ provider: 'aws' }),
-      listAccounts({ provider: 'azure' }),
-      listAccounts({ provider: 'gcp' }),
-    ]);
-  } catch (err) {
-    console.error('Federation: failed to load accounts', err);
-    return;
-  }
-
   const awsFedSource = document.getElementById('aws-fed-source') as HTMLSelectElement | null;
   const gcpFedSource = document.getElementById('gcp-fed-source') as HTMLSelectElement | null;
 
-  buildAWSFederationAccounts(awsAccounts, awsFedSource?.value ?? 'aws');
-  buildAzureFederationAccounts(azureAccounts);
-  buildGCPFederationAccounts(gcpAccounts, gcpFedSource?.value ?? 'aws');
+  buildAWSFederationDownloads(awsFedSource?.value ?? 'aws');
+  buildAzureFederationDownloads();
+  buildGCPFederationDownloads(gcpFedSource?.value ?? 'aws');
 
-  // Re-render affected section when source cloud changes
   awsFedSource?.addEventListener('change', () => {
-    buildAWSFederationAccounts(awsAccounts, awsFedSource.value);
+    buildAWSFederationDownloads(awsFedSource.value);
   });
 
   gcpFedSource?.addEventListener('change', () => {
-    buildGCPFederationAccounts(gcpAccounts, gcpFedSource.value);
+    buildGCPFederationDownloads(gcpFedSource.value);
   });
 }

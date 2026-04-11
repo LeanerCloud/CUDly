@@ -192,10 +192,9 @@ export interface FederationIaCResponse {
 export async function getFederationIaC(
   target: string,
   source: string,
-  accountId: string,
   format?: string,
 ): Promise<FederationIaCResponse> {
-  const params = new URLSearchParams({ target, source, account_id: accountId });
+  const params = new URLSearchParams({ target, source });
   if (format) params.set('format', format);
   return apiRequest<FederationIaCResponse>(`/federation/iac?${params.toString()}`);
 }

@@ -25,7 +25,8 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
-		"/api/register/", // GET /api/register/:token (trailing slash avoids matching /api/registrations)
+		"/api/register/",      // GET /api/register/:token (trailing slash avoids matching /api/registrations)
+		"/api/federation/iac", // Generic IaC templates (no secrets)
 		"/docs",
 		"/api/docs",
 	}

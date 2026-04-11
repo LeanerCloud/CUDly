@@ -13,7 +13,6 @@ import (
 	"text/template"
 
 	cudlyiac "github.com/LeanerCloud/CUDly/iac"
-	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/iacfiles"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -102,50 +101,22 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 }
 
 // getFederationIaC handles GET /api/federation/iac
-// Query params: target, source, account_id, format
+// Query params: target, source, format (all required except format)
 //
-//   - format=""         → single file (tfvars, JSON, or sh)
+// Generates generic IaC templates for self-registration. Target account owners
+// fill in their own values via -var flags when running terraform apply.
+//
+//   - format=""         → single file (tfvars)
 //   - format="cf-params" → CloudFormation parameters JSON (aws target only)
 //   - format="bundle"   → zip with tfvars + Terraform module + CF template/script
-//
-// loadFederationAccount validates the account_id, loads the account, and builds the template data.
-func (h *Handler) loadFederationAccount(ctx context.Context, accountID, target, source string) (federationIaCData, string, error) {
-	if err := validateUUID(accountID); err != nil {
-		return federationIaCData{}, "", NewClientError(400, "account_id must be a valid UUID")
-	}
-	account, err := h.config.GetCloudAccount(ctx, accountID)
+func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
+	target, source, format, err := federationIaCParams(req.QueryStringParameters)
 	if err != nil {
-		return federationIaCData{}, "", fmt.Errorf("federation iac: get account %s: %w", accountID, err)
+		return nil, err
 	}
-	if account == nil {
-		return federationIaCData{}, "", NewClientError(404, "account not found")
-	}
-	slug := slugify(account.Name)
-	if slug == "" {
-		slug = slugify(account.ID)
-	}
-	data := federationIaCData{
-		AccountName:       account.Name,
-		AccountExternalID: account.ExternalID,
-		AccountSlug:       slug,
-		Source:            source,
-		CUDlyAPIURL:       h.dashboardURL,
-	}
-	if err = populateIaCData(&data, target, source, account); err != nil {
-		return federationIaCData{}, "", err
-	}
-	return data, slug, nil
-}
 
-func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
-	target, source, accountID, format, err := federationIaCParams(req.QueryStringParameters)
-	if err != nil {
-		return nil, err
-	}
-	data, slug, err := h.loadFederationAccount(ctx, accountID, target, source)
-	if err != nil {
-		return nil, err
-	}
+	slug := "target"
+	data := buildGenericIaCData(target, source, h.dashboardURL)
 
 	switch {
 	case format == "bundle":
@@ -169,22 +140,37 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	}
 }
 
+// buildGenericIaCData builds template data with source-specific OIDC values.
+// Account-specific fields are left empty — the user provides them at apply time.
+func buildGenericIaCData(target, source, dashboardURL string) federationIaCData {
+	data := federationIaCData{
+		AccountSlug: "target",
+		Source:      source,
+		CUDlyAPIURL: dashboardURL,
+	}
+	switch target {
+	case "aws":
+		data.OIDCIssuerURL = awsOIDCIssuer(source, "")
+		data.OIDCAudience = awsOIDCAudience(source)
+	case "gcp":
+		data.OIDCIssuerURI = gcpOIDCIssuerURI(source, "")
+	}
+	return data
+}
+
 // validFederationSources is the allowlist of valid source cloud providers.
 var validFederationSources = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
 // federationIaCParams validates and extracts query parameters from the request.
-func federationIaCParams(q map[string]string) (target, source, accountID, format string, err error) {
-	target, source, accountID, format = q["target"], q["source"], q["account_id"], q["format"]
+func federationIaCParams(q map[string]string) (target, source, format string, err error) {
+	target, source, format = q["target"], q["source"], q["format"]
 	if target == "" || source == "" {
-		return "", "", "", "", NewClientError(400, "target and source query parameters are required")
+		return "", "", "", NewClientError(400, "target and source query parameters are required")
 	}
 	if !validFederationSources[source] {
-		return "", "", "", "", NewClientError(400, "source must be aws, azure, or gcp")
+		return "", "", "", NewClientError(400, "source must be aws, azure, or gcp")
 	}
-	if accountID == "" {
-		return "", "", "", "", NewClientError(400, "account_id query parameter is required")
-	}
-	return target, source, accountID, format, nil
+	return target, source, format, nil
 }
 
 // shellEscape escapes a string for safe use inside a double-quoted bash argument.
@@ -194,33 +180,8 @@ func shellEscape(s string) string {
 	return r.Replace(s)
 }
 
-// populateIaCData fills target-specific fields on data from the account record.
-func populateIaCData(data *federationIaCData, target, source string, account *config.CloudAccount) error {
-	switch target {
-	case "aws":
-		data.OIDCIssuerURL = awsOIDCIssuer(source, account.AzureTenantID)
-		data.OIDCAudience = awsOIDCAudience(source)
-	case "azure":
-		data.SubscriptionID = account.AzureSubscriptionID
-		if data.SubscriptionID == "" {
-			data.SubscriptionID = account.ExternalID
-		}
-		data.TenantID = account.AzureTenantID
-	case "gcp":
-		data.ProjectID = account.GCPProjectID
-		if data.ProjectID == "" {
-			data.ProjectID = account.ExternalID
-		}
-		data.ServiceAccountEmail = account.GCPClientEmail
-		if data.ServiceAccountEmail == "" {
-			data.ServiceAccountEmail = "cudly@" + data.ProjectID + ".iam.gserviceaccount.com"
-		}
-		data.OIDCIssuerURI = gcpOIDCIssuerURI(source, account.AzureTenantID)
-	default:
-		return NewClientError(400, "target must be aws, azure, or gcp")
-	}
-	return nil
-}
+// validFederationTargets is the allowlist of valid target cloud providers.
+var validFederationTargets = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
 // singleFileSpec returns the template path, output filename, and content-type for a
 // single-file IaC download (i.e. format is "" or "cf-params").
