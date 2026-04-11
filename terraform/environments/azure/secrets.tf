@@ -21,7 +21,9 @@ module "secrets" {
   admin_password             = var.admin_password
   create_jwt_secret          = true
   create_session_secret      = true
-  additional_secrets         = nonsensitive(var.additional_secrets)
+  additional_secrets = merge(nonsensitive(var.additional_secrets), {
+    "credential-encryption-key" = var.credential_encryption_key
+  })
   log_analytics_workspace_id = null # Diagnostics configured separately after workspace creation
 
   tags = local.common_tags

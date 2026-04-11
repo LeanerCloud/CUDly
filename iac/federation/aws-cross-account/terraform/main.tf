@@ -8,13 +8,19 @@ terraform {
   }
 }
 
+locals {
+  # Prefer the specific execution role ARN if provided; fall back to the account root
+  # (allows any IAM principal in the source account — less secure, use only for testing).
+  trust_principal = var.cudly_execution_role_arn != "" ? var.cudly_execution_role_arn : "arn:aws:iam::${var.source_account_id}:root"
+}
+
 data "aws_iam_policy_document" "trust" {
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRole"]
     principals {
       type        = "AWS"
-      identifiers = ["arn:aws:iam::${var.source_account_id}:root"]
+      identifiers = [local.trust_principal]
     }
   }
 }

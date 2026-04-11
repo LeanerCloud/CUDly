@@ -147,6 +147,12 @@ variable "additional_secrets" {
   sensitive   = true
 }
 
+variable "credential_encryption_key" {
+  description = "AES-256-GCM key for account credential encryption (64-char hex = 32 bytes). Generate with: openssl rand -hex 32"
+  type        = string
+  sensitive   = true
+}
+
 # ==============================================
 # Database (PostgreSQL Flexible Server)
 # ==============================================

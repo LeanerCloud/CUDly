@@ -58,12 +58,13 @@ module "compute_cloud_run" {
   # Additional environment variables
   additional_env_vars = merge(
     {
-      STATIC_DIR              = "/app/static"
-      SENDGRID_API_KEY_SECRET = module.secrets.sendgrid_api_key_id
-      FROM_EMAIL              = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
-      DASHBOARD_URL           = local.dashboard_url
-      CORS_ALLOWED_ORIGIN     = local.dashboard_url != "" ? local.dashboard_url : "*"
-      SCHEDULED_TASK_SECRET   = module.secrets.scheduled_task_secret_value
+      STATIC_DIR                          = "/app/static"
+      SENDGRID_API_KEY_SECRET             = module.secrets.sendgrid_api_key_id
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.additional_secret_ids["credential-encryption-key"]
+      FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
+      DASHBOARD_URL                       = local.dashboard_url
+      CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "*"
+      SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
     },
     var.additional_env_vars
   )

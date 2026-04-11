@@ -8,10 +8,19 @@ Parameters:
   OIDCIssuerURL:
     Type: String
     Description: >
-      OIDC issuer URL of the source identity provider.
+      Full OIDC issuer URL (with https://) — used for the IAM OIDC provider Url property.
       Azure AD: https://login.microsoftonline.com/<tenant_id>/v2.0
       GCP:      https://accounts.google.com
     AllowedPattern: "https://.*"
+
+  OIDCIssuerHost:
+    Type: String
+    Description: >
+      OIDC issuer host and path WITHOUT the https:// prefix — used as the IAM condition key.
+      AWS IAM condition keys strip the scheme, so this must match exactly.
+      Azure AD: login.microsoftonline.com/<tenant_id>/v2.0
+      GCP:      accounts.google.com
+    AllowedPattern: "^[^/].*"
 
   OIDCAudience:
     Type: String
@@ -20,6 +29,15 @@ Parameters:
       Azure: api://<client_id>  or  <client_id>
       GCP:   https://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>
     Default: ""
+
+  OIDCThumbprint:
+    Type: String
+    Description: >
+      SHA-1 thumbprint of the OIDC provider root CA certificate.
+      For GCP (accounts.google.com) use: 08745487e891c19e3078c1f2a07e452950ef36f6
+      For Azure AD use the thumbprint of the DigiCert Global Root CA.
+      Leave as zeros only for well-known providers where AWS auto-validates the chain.
+    Default: "0000000000000000000000000000000000000000"
 
   RoleName:
     Type: String
@@ -37,10 +55,7 @@ Resources:
       ClientIdList:
         - !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
       ThumbprintList:
-        # Placeholder thumbprint — AWS fetches the real OIDC document and validates
-        # the TLS chain automatically for well-known providers (Azure AD, Google).
-        # For custom issuers replace this with the actual root CA thumbprint.
-        - "0000000000000000000000000000000000000000"
+        - !Ref OIDCThumbprint
 
   CUDlyPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -118,7 +133,8 @@ Resources:
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
-                !Sub "${OIDCIssuerURL}:aud":
+                # Condition keys use issuer host WITHOUT https:// (AWS IAM requirement)
+                !Sub "${OIDCIssuerHost}:aud":
                   !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
       ManagedPolicyArns:
         - !Ref CUDlyPolicy

@@ -16,6 +16,10 @@ module "secrets" {
   create_jwt_secret     = true
   create_session_secret = true
 
+  additional_secrets = {
+    "credential-encryption-key" = var.credential_encryption_key
+  }
+
   # IAM permissions for compute service account are handled in compute modules
   # Setting to null to avoid circular dependency
   cloud_run_service_account_email = null
