@@ -720,31 +720,8 @@ function updateCollectionScheduleVisibility(): void {
  * Propagate default term to all service-specific term selects
  */
 function propagateTermToServices(term: string): void {
-  // AWS services
-  const awsTermSelects = [
-    'aws-ec2-term',
-    'aws-rds-term',
-    'aws-elasticache-term',
-    'aws-opensearch-term',
-    'aws-redshift-term',
-    'aws-savingsplans-term'
-  ];
-
-  // Azure services
-  const azureTermSelects = [
-    'azure-vm-term',
-    'azure-sql-term',
-    'azure-cosmosdb-term'
-  ];
-
-  // GCP services
-  const gcpTermSelects = [
-    'gcp-compute-term',
-    'gcp-sql-term'
-  ];
-
-  [...awsTermSelects, ...azureTermSelects, ...gcpTermSelects].forEach(id => {
-    const select = document.getElementById(id) as HTMLSelectElement | null;
+  SERVICE_FIELDS.forEach(({ termId }) => {
+    const select = document.getElementById(termId) as HTMLSelectElement | null;
     if (select) {
       select.value = term;
     }

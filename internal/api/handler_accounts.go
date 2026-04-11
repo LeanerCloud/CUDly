@@ -148,6 +148,16 @@ func (h *Handler) createAccount(ctx context.Context, httpReq *events.LambdaFunct
 	return account, nil
 }
 
+var validAWSAuthModes = map[string]bool{
+	"access_keys": true, "role_arn": true, "bastion": true, "workload_identity_federation": true,
+}
+var validAzureAuthModes = map[string]bool{
+	"client_secret": true, "managed_identity": true, "workload_identity_federation": true,
+}
+var validGCPAuthModes = map[string]bool{
+	"service_account": true, "application_default": true, "workload_identity_federation": true,
+}
+
 // validAccountProviders is the set of concrete providers for an account (excludes empty/"all").
 var validAccountProviders = map[string]bool{
 	"aws":   true,
@@ -169,6 +179,25 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 		return NewClientError(400, "external_id is required")
 	}
 
+	return validateAuthMode(req)
+}
+
+// validateAuthMode checks that the provider-specific auth mode is a known value.
+func validateAuthMode(req CloudAccountRequest) error {
+	switch req.Provider {
+	case "aws":
+		if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
+			return NewClientError(400, "invalid aws_auth_mode")
+		}
+	case "azure":
+		if req.AzureAuthMode != "" && !validAzureAuthModes[req.AzureAuthMode] {
+			return NewClientError(400, "invalid azure_auth_mode")
+		}
+	case "gcp":
+		if req.GCPAuthMode != "" && !validGCPAuthModes[req.GCPAuthMode] {
+			return NewClientError(400, "invalid gcp_auth_mode")
+		}
+	}
 	return nil
 }
 

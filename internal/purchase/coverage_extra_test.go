@@ -54,7 +54,8 @@ func TestResolveAccountProvider_UnknownProvider(t *testing.T) {
 		Provider: "unknown-cloud",
 	}
 	result, err := m.resolveAccountProvider(context.Background(), account)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown cloud provider")
 	assert.Nil(t, result)
 }
 

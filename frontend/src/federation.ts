@@ -141,12 +141,12 @@ function buildAzureFederationDownloads(): void {
   actions.appendChild(makeDownloadBtn(
     'Terraform tfvars',
     'Download .tfvars for Azure WIF federation. Generate a cert, fill in subscription/tenant IDs, then terraform apply.',
-    'azure', 'any',
+    'azure', 'aws',
   ));
   actions.appendChild(makeDownloadBtn(
     'Download ZIP',
     'Download zip bundle with Terraform module + .tfvars for Azure WIF federation.',
-    'azure', 'any', 'bundle',
+    'azure', 'aws', 'bundle',
   ));
 
   row.appendChild(actions);

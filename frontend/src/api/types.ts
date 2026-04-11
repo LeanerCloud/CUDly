@@ -252,6 +252,7 @@ export interface APIGroup {
   name: string;
   description: string;
   permissions: Permission[];
+  allowed_accounts?: string[];
   created_at?: string;
   updated_at?: string;
 }
@@ -272,12 +273,14 @@ export interface CreateGroupRequest {
   name: string;
   description?: string;
   permissions: Permission[];
+  allowed_accounts?: string[];
 }
 
 export interface UpdateGroupRequest {
   name?: string;
   description?: string;
   permissions?: Permission[];
+  allowed_accounts?: string[];
 }
 
 // Credential Types

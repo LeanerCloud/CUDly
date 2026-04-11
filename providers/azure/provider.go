@@ -201,6 +201,10 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 
 // GetAccounts returns all accessible Azure subscriptions
 func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
+	if !p.IsConfigured() {
+		return nil, fmt.Errorf("Azure is not configured")
+	}
+
 	// Use injected client if available (for testing)
 	var subClient SubscriptionsClient
 	if p.subscriptionsClient != nil {

@@ -142,8 +142,9 @@ func (m *Manager) resolveAccountProvider(ctx context.Context, account config.Clo
 		return m.resolveAzureProvider(ctx, account)
 	case "gcp":
 		return m.resolveGCPProvider(ctx, account)
+	default:
+		return nil, fmt.Errorf("credentials: unknown cloud provider %q for account %s", account.Provider, account.ID)
 	}
-	return nil, nil
 }
 
 func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
@@ -249,6 +250,7 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 		PlanID:           exec.PlanID,
 		PlanName:         plan.Name,
 		RampStep:         exec.StepNumber,
+		CloudAccountID:   exec.CloudAccountID,
 	}
 	if err := m.config.SavePurchaseHistory(ctx, historyRecord); err != nil {
 		logging.Errorf("Failed to save history: %v", err)

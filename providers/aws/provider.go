@@ -322,7 +322,7 @@ func (p *AWSProvider) GetDefaultRegion() string {
 	if p.region != "" {
 		return p.region
 	}
-	if p.cfg.Region != "" {
+	if p.IsConfigured() && p.cfg.Region != "" {
 		return p.cfg.Region
 	}
 	return "us-east-1"

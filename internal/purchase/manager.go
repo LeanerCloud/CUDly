@@ -117,7 +117,10 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	}
 	if !wasMultiAccount {
 		if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
-			logging.Errorf("Failed to save execution status: %v", err)
+			logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
+			if execErr == nil {
+				execErr = fmt.Errorf("audit loss: %w", err)
+			}
 		}
 	}
 	if execErr == nil {

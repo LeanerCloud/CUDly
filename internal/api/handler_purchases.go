@@ -171,6 +171,9 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be run from status %q (only 'pending' or 'paused' executions can be started)", executionID, execution.Status))
 	}
 
+	// TODO: This is a TOCTOU race — two concurrent callers can both transition to
+	// "running". Fix by adding an atomic TransitionExecutionStatus(id, fromStatuses, toStatus)
+	// to the store layer, similar to TransitionRIExchangeStatus.
 	// Set status to running and trigger execution
 	execution.Status = "running"
 	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {

@@ -6,4 +6,5 @@ DROP INDEX IF EXISTS idx_savings_snapshots_cloud_account;
 
 -- Reverse: restore NOT NULL DEFAULT '' on aws_web_identity_token_file.
 ALTER TABLE cloud_accounts ALTER COLUMN aws_web_identity_token_file SET DEFAULT '';
+UPDATE cloud_accounts SET aws_web_identity_token_file = '' WHERE aws_web_identity_token_file IS NULL;
 ALTER TABLE cloud_accounts ALTER COLUMN aws_web_identity_token_file SET NOT NULL;

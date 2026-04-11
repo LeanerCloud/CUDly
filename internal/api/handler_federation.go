@@ -116,7 +116,15 @@ func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunction
 	}
 
 	slug := "target"
-	data := buildGenericIaCData(target, source, h.dashboardURL)
+	apiURL := h.dashboardURL
+	if apiURL == "" {
+		// Derive from the request (Lambda function URL or custom domain).
+		scheme := "https"
+		if host := req.Headers["host"]; host != "" {
+			apiURL = scheme + "://" + host
+		}
+	}
+	data := buildGenericIaCData(target, source, apiURL)
 
 	switch {
 	case format == "bundle":
@@ -169,6 +177,9 @@ func federationIaCParams(q map[string]string) (target, source, format string, er
 	}
 	if !validFederationSources[source] {
 		return "", "", "", NewClientError(400, "source must be aws, azure, or gcp")
+	}
+	if !validFederationTargets[target] {
+		return "", "", "", NewClientError(400, "target must be aws, azure, or gcp")
 	}
 	return target, source, format, nil
 }
