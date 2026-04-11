@@ -13,29 +13,33 @@ terraform {
 }
 
 data "google_project" "current" {
-  project_id = var.project
+  project_id = var.project != "" ? var.project : null
+}
+
+locals {
+  project = var.project != "" ? var.project : data.google_project.current.project_id
 }
 
 resource "google_project_service" "iam" {
-  project            = var.project
+  project            = local.project
   service            = "iam.googleapis.com"
   disable_on_destroy = false
 }
 
 resource "google_project_service" "iamcredentials" {
-  project            = var.project
+  project            = local.project
   service            = "iamcredentials.googleapis.com"
   disable_on_destroy = false
 }
 
 resource "google_project_service" "sts" {
-  project            = var.project
+  project            = local.project
   service            = "sts.googleapis.com"
   disable_on_destroy = false
 }
 
 resource "google_iam_workload_identity_pool" "cudly" {
-  project                   = var.project
+  project                   = local.project
   workload_identity_pool_id = var.pool_id
   display_name              = "CUDly WIF pool"
 
@@ -47,7 +51,7 @@ resource "google_iam_workload_identity_pool" "cudly" {
 }
 
 resource "google_iam_workload_identity_pool_provider" "cudly" {
-  project                            = var.project
+  project                            = local.project
   workload_identity_pool_id          = google_iam_workload_identity_pool.cudly.workload_identity_pool_id
   workload_identity_pool_provider_id = var.provider_id
 
@@ -91,7 +95,7 @@ resource "google_iam_workload_identity_pool_provider" "cudly" {
 
 # Use _member (not _binding) to add one member without replacing existing bindings.
 resource "google_service_account_iam_member" "cudly_wif" {
-  service_account_id = "projects/${var.project}/serviceAccounts/${var.service_account_email}"
+  service_account_id = "projects/${local.project}/serviceAccounts/${var.service_account_email}"
   role               = "roles/iam.workloadIdentityUser"
   # For AWS: always use wildcard principalSet — role restriction is enforced by
   # attribute_condition on the provider (session ARNs include variable session

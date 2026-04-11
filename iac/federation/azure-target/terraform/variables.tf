@@ -1,11 +1,13 @@
 variable "subscription_id" {
-  description = "Azure subscription ID where CUDly will purchase reservations."
+  description = "Azure subscription ID. Auto-detected from CLI context when empty."
   type        = string
+  default     = ""
 }
 
 variable "tenant_id" {
-  description = "Azure AD tenant ID."
+  description = "Azure AD tenant ID. Auto-detected from CLI context when empty."
   type        = string
+  default     = ""
 }
 
 variable "app_display_name" {

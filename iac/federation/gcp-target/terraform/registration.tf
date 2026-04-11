@@ -1,6 +1,6 @@
 locals {
   do_register      = var.cudly_api_url != "" && var.contact_email != ""
-  reg_account_name = var.account_name != "" ? var.account_name : "GCP ${var.project}"
+  reg_account_name = var.account_name != "" ? var.account_name : "GCP ${local.project}"
 
   # Construct the GCP WIF credential config JSON (replaces manual gcloud command).
   gcp_wif_config = var.provider_type == "aws" ? jsonencode({
@@ -28,11 +28,11 @@ locals {
 
   reg_payload = local.do_register ? jsonencode({
     provider           = "gcp"
-    external_id        = var.project
+    external_id        = local.project
     account_name       = local.reg_account_name
     contact_email      = var.contact_email
     description        = "Registered via Terraform federation IaC (gcp-target/wif)"
-    gcp_project_id     = var.project
+    gcp_project_id     = local.project
     gcp_client_email   = var.service_account_email
     gcp_auth_mode      = "workload_identity_federation"
     credential_type    = "gcp_workload_identity_config"

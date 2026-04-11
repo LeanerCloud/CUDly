@@ -1,6 +1,7 @@
 variable "project" {
-  description = "GCP project ID where the Workload Identity Pool will be created."
+  description = "GCP project ID where the Workload Identity Pool will be created. Auto-detected from CLI context when empty."
   type        = string
+  default     = ""
 }
 
 variable "pool_id" {

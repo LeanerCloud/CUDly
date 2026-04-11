@@ -47,12 +47,21 @@ locals {
 }
 
 provider "azurerm" {
-  subscription_id = var.subscription_id
+  subscription_id = var.subscription_id != "" ? var.subscription_id : null
   features {}
 }
 
 provider "azuread" {
-  tenant_id = var.tenant_id
+  tenant_id = var.tenant_id != "" ? var.tenant_id : null
+}
+
+# Auto-detect subscription and tenant from CLI context.
+data "azurerm_subscription" "current" {}
+data "azuread_client_config" "current" {}
+
+locals {
+  subscription_id = var.subscription_id != "" ? var.subscription_id : data.azurerm_subscription.current.subscription_id
+  tenant_id       = var.tenant_id != "" ? var.tenant_id : data.azuread_client_config.current.tenant_id
 }
 
 # App Registration
@@ -76,7 +85,7 @@ resource "azuread_application_certificate" "cudly" {
 
 # Reservations Administrator is the built-in Azure role for purchasing and managing reservations.
 resource "azurerm_role_assignment" "cudly_reservations" {
-  scope                = "/subscriptions/${var.subscription_id}"
+  scope                = "/subscriptions/${local.subscription_id}"
   role_definition_name = "Reservation Purchaser"
   principal_id         = azuread_service_principal.cudly.object_id
 }
