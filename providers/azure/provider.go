@@ -4,6 +4,7 @@ package azure
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
@@ -86,6 +87,8 @@ func (r *realCredentialProvider) NewDefaultAzureCredential() (azcore.TokenCreden
 // AzureProvider implements the Provider interface for Azure
 type AzureProvider struct {
 	cred                azcore.TokenCredential
+	credOnce            sync.Once
+	credErr             error
 	subscriptionID      string
 	region              string // Default region for operations
 	subscriptionsClient SubscriptionsClient
@@ -130,29 +133,28 @@ func (p *AzureProvider) DisplayName() string {
 	return "Microsoft Azure"
 }
 
-// IsConfigured checks if Azure credentials are available
+// IsConfigured checks if Azure credentials are available. Thread-safe via sync.Once.
 func (p *AzureProvider) IsConfigured() bool {
-	// If credential is already set, we're configured
+	// If credential was injected via SetCredential, skip the Once path.
 	if p.cred != nil {
 		return true
 	}
 
-	// Use injected credential provider if available (for testing)
-	var credProvider CredentialProvider
-	if p.credProvider != nil {
-		credProvider = p.credProvider
-	} else {
-		credProvider = &realCredentialProvider{}
-	}
-
-	// Try to create default Azure credential
-	cred, err := credProvider.NewDefaultAzureCredential()
-	if err != nil {
-		return false
-	}
-
-	p.cred = cred
-	return true
+	p.credOnce.Do(func() {
+		var credProvider CredentialProvider
+		if p.credProvider != nil {
+			credProvider = p.credProvider
+		} else {
+			credProvider = &realCredentialProvider{}
+		}
+		cred, err := credProvider.NewDefaultAzureCredential()
+		if err != nil {
+			p.credErr = err
+			return
+		}
+		p.cred = cred
+	})
+	return p.credErr == nil
 }
 
 // GetCredentials returns Azure credentials
@@ -244,7 +246,10 @@ func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, erro
 func (p *AzureProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
 	// Get first subscription to query available locations
 	accounts, err := p.GetAccounts(ctx)
-	if err != nil || len(accounts) == 0 {
+	if err != nil {
+		return nil, fmt.Errorf("no Azure subscriptions found to query regions: %w", err)
+	}
+	if len(accounts) == 0 {
 		return nil, fmt.Errorf("no Azure subscriptions found to query regions")
 	}
 

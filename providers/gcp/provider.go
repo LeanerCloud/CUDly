@@ -278,8 +278,10 @@ func (p *GCPProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 	for _, project := range projects {
 		if project.LifecycleState == "ACTIVE" {
 			accounts = append(accounts, common.Account{
-				ID:   project.ProjectId,
-				Name: project.Name,
+				Provider:  common.ProviderGCP,
+				ID:        project.ProjectId,
+				Name:      project.Name,
+				IsDefault: project.ProjectId == p.projectID,
 			})
 		}
 	}
@@ -287,8 +289,10 @@ func (p *GCPProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 	// If no projects found, return at least the default project
 	if len(accounts) == 0 {
 		accounts = append(accounts, common.Account{
-			ID:   p.projectID,
-			Name: p.projectID,
+			Provider:  common.ProviderGCP,
+			ID:        p.projectID,
+			Name:      p.projectID,
+			IsDefault: true,
 		})
 	}
 
