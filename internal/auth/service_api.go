@@ -21,12 +21,13 @@ type APIUser struct {
 
 // APIGroup is the group type for API responses
 type APIGroup struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Permissions []APIPermission `json:"permissions"`
-	CreatedAt   string          `json:"created_at,omitempty"`
-	UpdatedAt   string          `json:"updated_at,omitempty"`
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description,omitempty"`
+	Permissions     []APIPermission `json:"permissions"`
+	AllowedAccounts []string        `json:"allowed_accounts,omitempty"`
+	CreatedAt       string          `json:"created_at,omitempty"`
+	UpdatedAt       string          `json:"updated_at,omitempty"`
 }
 
 // APIPermission is the permission type for API responses
@@ -62,16 +63,18 @@ type APIUpdateUserRequest struct {
 
 // APICreateGroupRequest is the request type for creating groups via API
 type APICreateGroupRequest struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Permissions []APIPermission `json:"permissions"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description,omitempty"`
+	Permissions     []APIPermission `json:"permissions"`
+	AllowedAccounts []string        `json:"allowed_accounts,omitempty"`
 }
 
 // APIUpdateGroupRequest is the request type for updating groups via API
 type APIUpdateGroupRequest struct {
-	Name        string          `json:"name,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Permissions []APIPermission `json:"permissions,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	Description     string          `json:"description,omitempty"`
+	Permissions     []APIPermission `json:"permissions,omitempty"`
+	AllowedAccounts []string        `json:"allowed_accounts,omitempty"`
 }
 
 // Conversion helpers
@@ -100,12 +103,13 @@ func groupToAPIGroup(g *Group) *APIGroup {
 		apiPerms[i] = permissionToAPIPermission(p)
 	}
 	return &APIGroup{
-		ID:          g.ID,
-		Name:        g.Name,
-		Description: g.Description,
-		Permissions: apiPerms,
-		CreatedAt:   g.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   g.UpdatedAt.Format(time.RFC3339),
+		ID:              g.ID,
+		Name:            g.Name,
+		Description:     g.Description,
+		Permissions:     apiPerms,
+		AllowedAccounts: g.AllowedAccounts,
+		CreatedAt:       g.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:       g.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
@@ -217,9 +221,10 @@ func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface any) (any, er
 		perms[i] = apiPermissionToPermission(p)
 	}
 	group := &Group{
-		Name:        req.Name,
-		Description: req.Description,
-		Permissions: perms,
+		Name:            req.Name,
+		Description:     req.Description,
+		Permissions:     perms,
+		AllowedAccounts: req.AllowedAccounts,
 	}
 	// Use empty string for createdBy since we don't have user context here
 	if err := s.CreateGroup(ctx, group, ""); err != nil {
@@ -254,6 +259,9 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterfa
 			perms[i] = apiPermissionToPermission(p)
 		}
 		group.Permissions = perms
+	}
+	if req.AllowedAccounts != nil {
+		group.AllowedAccounts = req.AllowedAccounts
 	}
 
 	group.UpdatedAt = time.Now()
