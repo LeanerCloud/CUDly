@@ -591,7 +591,7 @@ export function updateUserUI(): void {
 
     const adminOnly = currentUser.role === 'admin';
     document.querySelectorAll<HTMLElement>('.admin-only').forEach(el => {
-      el.style.display = adminOnly ? '' : 'none';
+      el.classList.toggle('visible', adminOnly);
     });
   } else {
     // Hide user info when not logged in

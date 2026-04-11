@@ -294,7 +294,7 @@ describe('Auth Module', () => {
 
       const adminElements = document.querySelectorAll<HTMLElement>('.admin-only');
       adminElements.forEach(el => {
-        expect(el.style.display).toBe('');
+        expect(el.classList.contains('visible')).toBe(true);
       });
     });
 
@@ -309,7 +309,7 @@ describe('Auth Module', () => {
 
       const adminElements = document.querySelectorAll<HTMLElement>('.admin-only');
       adminElements.forEach(el => {
-        expect(el.style.display).toBe('none');
+        expect(el.classList.contains('visible')).toBe(false);
       });
     });
 
