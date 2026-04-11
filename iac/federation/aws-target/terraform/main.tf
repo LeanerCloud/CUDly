@@ -39,6 +39,7 @@ resource "aws_iam_policy" "cudly" {
           "ec2:DescribeInstanceTypeOfferings",
           "ec2:GetReservedInstancesExchangeQuote",
           "ec2:AcceptReservedInstancesExchangeQuote",
+          "ec2:DescribeRegions",
         ]
         Resource = "*"
       },

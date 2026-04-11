@@ -38,6 +38,14 @@ Parameters:
       For Azure AD use the thumbprint of the DigiCert Global Root CA.
       Leave as zeros only for well-known providers where AWS auto-validates the chain.
     Default: "0000000000000000000000000000000000000000"
+    AllowedPattern: "^[0-9a-fA-F]{40}$"
+
+  OIDCSubjectClaim:
+    Type: String
+    Description: >
+      Optional subject (sub) claim to restrict which identity can assume the role.
+      Leave empty to allow any authenticated subject from this issuer.
+    Default: ""
 
   RoleName:
     Type: String
@@ -46,6 +54,7 @@ Parameters:
 
 Conditions:
   HasAudience: !Not [!Equals [!Ref OIDCAudience, ""]]
+  HasSubject: !Not [!Equals [!Ref OIDCSubjectClaim, ""]]
 
 Resources:
   OIDCProvider:
@@ -74,6 +83,7 @@ Resources:
               - ec2:DescribeInstanceTypeOfferings
               - ec2:GetReservedInstancesExchangeQuote
               - ec2:AcceptReservedInstancesExchangeQuote
+              - ec2:DescribeRegions
             Resource: "*"
           - Sid: RDSReservations
             Effect: Allow
@@ -127,15 +137,26 @@ Resources:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
-            Principal:
-              Federated: !GetAtt OIDCProvider.Arn
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                # Condition keys use issuer host WITHOUT https:// (AWS IAM requirement)
-                !Sub "${OIDCIssuerHost}:aud":
-                  !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
+          # Use Fn::If to conditionally include :sub restriction alongside :aud
+          - !If
+            - HasSubject
+            - Effect: Allow
+              Principal:
+                Federated: !GetAtt OIDCProvider.Arn
+              Action: sts:AssumeRoleWithWebIdentity
+              Condition:
+                StringEquals:
+                  !Sub "${OIDCIssuerHost}:aud":
+                    !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
+                  !Sub "${OIDCIssuerHost}:sub": !Ref OIDCSubjectClaim
+            - Effect: Allow
+              Principal:
+                Federated: !GetAtt OIDCProvider.Arn
+              Action: sts:AssumeRoleWithWebIdentity
+              Condition:
+                StringEquals:
+                  !Sub "${OIDCIssuerHost}:aud":
+                    !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
       ManagedPolicyArns:
         - !Ref CUDlyPolicy
 
