@@ -25,28 +25,27 @@ import (
 // PurchaseExecution record tagged with cloud_account_id.
 // If no accounts are configured or no credential store is available, it falls back
 // to single-account execution using ambient credentials.
-func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) error {
+// executePurchase runs the purchase for a single execution. Returns wasMultiAccount=true when
+// fan-out was used (per-account records are already saved; caller should skip root record save).
+func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) (wasMultiAccount bool, err error) {
 	logging.Infof("Executing purchase for plan %s, step %d", exec.PlanID, exec.StepNumber)
 
 	plan, err := m.config.GetPurchasePlan(ctx, exec.PlanID)
 	if err != nil {
-		return fmt.Errorf("failed to get plan: %w", err)
+		return false, fmt.Errorf("failed to get plan: %w", err)
 	}
 	if plan == nil {
-		return fmt.Errorf("plan not found: %s", exec.PlanID)
+		return false, fmt.Errorf("plan not found: %s", exec.PlanID)
 	}
 
 	// Fan out across plan accounts when accounts are configured.
-	// ADC and managed_identity modes do not require a credential store, so we cannot
-	// gate fan-out on m.credStore != nil.
-	// Skip fan-out if this execution is already tagged with a specific account (re-entrant call).
 	if exec.CloudAccountID == nil {
 		accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
 		if err != nil {
-			logging.Warnf("Failed to load plan accounts for plan %s, falling back to single-account execution: %v", exec.PlanID, err)
+			return false, fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
 		}
 		if len(accounts) > 0 {
-			return m.executeMultiAccount(ctx, exec, plan, accounts)
+			return true, m.executeMultiAccount(ctx, exec, plan, accounts)
 		}
 	}
 
@@ -55,14 +54,14 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, nil)
 
 	if len(purchaseErrors) > 0 {
-		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
+		return false, fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 
 	if err := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); err != nil {
 		logging.Errorf("Failed to send confirmation: %v", err)
 	}
 
-	return nil
+	return false, nil
 }
 
 // executeMultiAccount fans out executePurchase across all plan accounts in parallel.
@@ -98,8 +97,15 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	copy(recs, baseExec.Recommendations)
 	acctExec.Recommendations = recs
 
-	provCfg := m.resolveAccountProvider(ctx, account)
-	accountID := account.ExternalID // Provider-specific account identifier (AWS account ID / Azure subscription ID / GCP project ID)
+	provCfg, err := m.resolveAccountProvider(ctx, account)
+	if err != nil {
+		acctExec.Status = "failed"
+		acctExec.Error = err.Error()
+		_ = m.config.SavePurchaseExecution(ctx, &acctExec)
+		return fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
+	}
+
+	accountID := account.ExternalID
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
 
 	if len(purchaseErrors) > 0 {
@@ -112,9 +118,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	}
 
 	if err := m.config.SavePurchaseExecution(ctx, &acctExec); err != nil {
-		// The purchase succeeded on the cloud provider side but the audit record is lost.
-		// This is a data integrity issue — alert strongly so operators can reconcile.
-		logging.Errorf("AUDIT LOSS: failed to save execution record for account %s (purchases may have been made with no record): %v", account.ID, err)
+		return fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, err)
 	}
 
 	if len(purchaseErrors) > 0 {
@@ -128,8 +132,9 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 }
 
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
-// for the given account, or nil to fall back to ambient credentials.
-func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
+// for the given account. Returns an error if credential resolution fails — callers
+// must NOT fall back to ambient credentials on error.
+func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
 	switch account.Provider {
 	case "aws":
 		return m.resolveAWSProvider(ctx, account)
@@ -138,56 +143,49 @@ func (m *Manager) resolveAccountProvider(ctx context.Context, account config.Clo
 	case "gcp":
 		return m.resolveGCPProvider(ctx, account)
 	}
-	return nil
+	return nil, nil
 }
 
-func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
-	// access_keys loads from the credential store and does not need assumeRoleSTS.
-	// All other modes (role_arn, bastion, workload_identity_federation) require STS.
+func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
 	if account.AWSAuthMode != "access_keys" && m.assumeRoleSTS == nil {
-		return nil
+		return nil, fmt.Errorf("credentials: STS client not configured for non-access_keys mode (account %s)", account.ID)
 	}
 	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &account, m.credStore, m.assumeRoleSTS)
 	if err != nil {
-		logging.Warnf("Failed to resolve AWS credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
-		return nil
+		return nil, fmt.Errorf("credentials: resolve AWS for account %s (%s): %w", account.ID, account.Name, err)
 	}
-	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}
+	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
 }
 
-func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
+func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
 	if account.AzureAuthMode != "managed_identity" && m.credStore == nil {
-		return nil
+		return nil, fmt.Errorf("credentials: credential store required for non-managed_identity Azure account %s", account.ID)
 	}
 	azCred, err := credentials.ResolveAzureTokenCredential(ctx, &account, m.credStore)
 	if err != nil {
-		logging.Warnf("Failed to resolve Azure credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
-		return nil
+		return nil, fmt.Errorf("credentials: resolve Azure for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: account.AzureSubscriptionID})
 	if err != nil {
-		logging.Warnf("Failed to create Azure provider for account %s (%s): %v", account.ID, account.Name, err)
-		return nil
+		return nil, fmt.Errorf("credentials: create Azure provider for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	azProv.SetCredential(azCred)
-	return &provider.ProviderConfig{ProviderOverride: azProv}
+	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
 }
 
-func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) *provider.ProviderConfig {
+func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
 	if account.GCPAuthMode != "application_default" && m.credStore == nil {
-		return nil
+		return nil, fmt.Errorf("credentials: credential store required for non-ADC GCP account %s", account.ID)
 	}
 	gcpTS, err := credentials.ResolveGCPTokenSource(ctx, &account, m.credStore)
 	if err != nil {
-		logging.Warnf("Failed to resolve GCP credentials for account %s (%s), using ambient: %v", account.ID, account.Name, err)
-		return nil
+		return nil, fmt.Errorf("credentials: resolve GCP for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	if gcpTS == nil {
-		// application_default: factory will pick up ADC automatically with nil provCfg.
-		return nil
+		return nil, nil
 	}
 	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
-	return &provider.ProviderConfig{ProviderOverride: gcpProv}
+	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
 }
 
 // planProvider derives the cloud provider from the plan's Services map.

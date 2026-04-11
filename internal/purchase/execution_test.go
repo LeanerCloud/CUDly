@@ -81,7 +81,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 
 	// Verify that only selected recommendation was purchased
@@ -114,7 +114,7 @@ func TestManager_ExecutePurchase_PlanNotFound(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "plan not found")
 
@@ -140,7 +140,7 @@ func TestManager_ExecutePurchase_GetPlanError(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get plan")
 
@@ -178,7 +178,7 @@ func TestManager_ExecutePurchase_NoRecommendations(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -361,7 +361,11 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
-	credStore := &MockCredentialStore{}
+	credStore := &MockCredentialStore{
+		LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`), nil
+		},
+	}
 
 	plan := &config.PurchasePlan{
 		ID:           "plan-multi",
@@ -424,7 +428,7 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 		// assumeRoleSTS is nil → access_keys path, no role assumption needed
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 
 	// The original exec record should be unchanged (fan-out creates per-account copies).

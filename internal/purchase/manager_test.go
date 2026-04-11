@@ -293,7 +293,7 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(nil, errors.New("plan not found")).Once()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(nil, nil).Once()
+	// updatePlanProgress is NOT called when execution fails
 
 	manager := &Manager{
 		config:       mockStore,

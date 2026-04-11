@@ -53,7 +53,8 @@ func TestResolveAccountProvider_UnknownProvider(t *testing.T) {
 		ID:       "acc-1",
 		Provider: "unknown-cloud",
 	}
-	result := m.resolveAccountProvider(context.Background(), account)
+	result, err := m.resolveAccountProvider(context.Background(), account)
+	assert.NoError(t, err)
 	assert.Nil(t, result)
 }
 
@@ -68,12 +69,13 @@ func TestResolveAWSProvider_NoSTS(t *testing.T) {
 		AWSAuthMode: "assume_role",
 		AWSRoleARN:  "arn:aws:iam::123456789012:role/testrole",
 	}
-	result := m.resolveAWSProvider(context.Background(), account)
-	// Without STS, returns nil
+	result, err := m.resolveAWSProvider(context.Background(), account)
+	// Without STS, returns error (not silent nil)
+	assert.Error(t, err)
 	assert.Nil(t, result)
 }
 
-// Tests for resolveAzureProvider without credStore and not managed_identity
+// Tests for resolveAzureProvider without credStore and not managed_identity — returns error
 func TestResolveAzureProvider_NoCredStoreNoManagedIdentity(t *testing.T) {
 	m := &Manager{
 		credStore: nil,
@@ -83,11 +85,12 @@ func TestResolveAzureProvider_NoCredStoreNoManagedIdentity(t *testing.T) {
 		Provider:      "azure",
 		AzureAuthMode: "service_principal", // not managed_identity
 	}
-	result := m.resolveAzureProvider(context.Background(), account)
+	result, err := m.resolveAzureProvider(context.Background(), account)
+	assert.Error(t, err)
 	assert.Nil(t, result)
 }
 
-// Tests for resolveGCPProvider without credStore and not application_default
+// Tests for resolveGCPProvider without credStore and not application_default — returns error
 func TestResolveGCPProvider_NoCredStoreNoADC(t *testing.T) {
 	m := &Manager{
 		credStore: nil,
@@ -97,7 +100,8 @@ func TestResolveGCPProvider_NoCredStoreNoADC(t *testing.T) {
 		Provider:    "gcp",
 		GCPAuthMode: "service_account_key", // not application_default
 	}
-	result := m.resolveGCPProvider(context.Background(), account)
+	result, err := m.resolveGCPProvider(context.Background(), account)
+	assert.Error(t, err)
 	assert.Nil(t, result)
 }
 
@@ -112,11 +116,10 @@ func TestResolveGCPProvider_ApplicationDefault(t *testing.T) {
 		GCPAuthMode:  "application_default",
 		GCPProjectID: "my-project",
 	}
-	// application_default with nil credStore → tries to resolve, falls back
-	result := m.resolveGCPProvider(context.Background(), account)
-	// May return nil (error resolving GCP token source without real ADC)
-	// The important thing is it doesn't panic
-	_ = result
+	// application_default → returns (nil, nil) since ADC is ambient
+	result, err := m.resolveGCPProvider(context.Background(), account)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
 }
 
 // Tests for handleExecutePurchase: execution found + status "approved" → success path
@@ -340,7 +343,7 @@ func TestManager_ExecuteSinglePurchase_ProviderError(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "some purchases failed")
 	assert.Equal(t, "failed to create aws provider: provider unavailable", exec.Recommendations[0].Error)
@@ -389,7 +392,7 @@ func TestManager_ExecuteSinglePurchase_ServiceClientError(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "some purchases failed")
 	assert.Contains(t, exec.Recommendations[0].Error, "failed to get service client")
@@ -441,7 +444,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "some purchases failed")
 	assert.Contains(t, exec.Recommendations[0].Error, "purchase was not successful")
@@ -494,7 +497,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful_WithError(t *testin
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	assert.Error(t, err)
 	assert.Contains(t, exec.Recommendations[0].Error, "capacity limit exceeded")
 }
@@ -550,7 +553,7 @@ func TestManager_ExecuteSinglePurchase_WithEngine(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 	assert.True(t, exec.Recommendations[0].Purchased)
 	assert.Equal(t, "ri-engine-001", exec.Recommendations[0].PurchaseID)
@@ -608,7 +611,7 @@ func TestManager_SavePurchaseHistory_Error(t *testing.T) {
 	}
 
 	// Should succeed even though history save failed
-	err := manager.executePurchase(ctx, exec)
+	_, err := manager.executePurchase(ctx, exec)
 	require.NoError(t, err)
 	assert.True(t, exec.Recommendations[0].Purchased)
 }

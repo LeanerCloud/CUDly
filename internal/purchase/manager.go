@@ -96,6 +96,38 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 }
 
+// finalizeExecution sets the status and completion time on an execution based on the error.
+func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr error) {
+	if execErr != nil {
+		exec.Status = "failed"
+		exec.Error = execErr.Error()
+	} else {
+		completedAt := time.Now()
+		exec.Status = "completed"
+		exec.CompletedAt = &completedAt
+	}
+}
+
+// executeAndFinalize runs a purchase and handles status updates, record saving, and progress.
+func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseExecution) error {
+	wasMultiAccount, execErr := m.executePurchase(ctx, exec)
+	m.finalizeExecution(exec, execErr)
+	if execErr != nil {
+		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)
+	}
+	if !wasMultiAccount {
+		if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
+			logging.Errorf("Failed to save execution status: %v", err)
+		}
+	}
+	if execErr == nil {
+		if err := m.updatePlanProgress(ctx, exec.PlanID); err != nil {
+			logging.Errorf("Failed to update plan progress: %v", err)
+		}
+	}
+	return execErr
+}
+
 // ProcessScheduledPurchases checks for and executes scheduled purchases
 func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult, error) {
 	logging.Info("Processing scheduled purchases...")
@@ -128,28 +160,12 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 
 		logging.Infof("Executing scheduled purchase: %s", exec.ExecutionID)
 
-		// Execute the purchase
-		if err := m.executePurchase(ctx, &exec); err != nil {
-			logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, err)
-			exec.Status = "failed"
-			exec.Error = err.Error()
+		// Execute the purchase and handle post-execution bookkeeping.
+		if execErr := m.executeAndFinalize(ctx, &exec); execErr != nil {
 			failed++
-			errors = append(errors, fmt.Sprintf("%s: %v", exec.ExecutionID, err))
+			errors = append(errors, fmt.Sprintf("%s: %v", exec.ExecutionID, execErr))
 		} else {
-			exec.Status = "completed"
-			completedAt := time.Now()
-			exec.CompletedAt = &completedAt
 			executed++
-		}
-
-		// Update execution record
-		if err := m.config.SavePurchaseExecution(ctx, &exec); err != nil {
-			logging.Errorf("Failed to save execution status: %v", err)
-		}
-
-		// Update plan's ramp schedule if applicable
-		if err := m.updatePlanProgress(ctx, exec.PlanID); err != nil {
-			logging.Errorf("Failed to update plan progress: %v", err)
 		}
 	}
 

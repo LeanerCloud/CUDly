@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
@@ -85,29 +84,20 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) e
 	}
 
 	logging.Infof("Executing purchase from async message: %s", msg.ExecutionID)
-	purchaseErr := m.executePurchase(ctx, execution)
-	if purchaseErr != nil {
-		execution.Status = "failed"
-		execution.Error = purchaseErr.Error()
-	} else {
-		execution.Status = "completed"
-		completedAt := time.Now()
-		execution.CompletedAt = &completedAt
-	}
+	wasMultiAccount, purchaseErr := m.executePurchase(ctx, execution)
+	m.finalizeExecution(execution, purchaseErr)
 
-	// Save the updated execution — return error so SQS keeps the message
-	// visible for retry if persistence fails, preventing lost failure records.
-	if saveErr := m.config.SavePurchaseExecution(ctx, execution); saveErr != nil {
-		logging.Errorf("Failed to save execution status: %v", saveErr)
-		return fmt.Errorf("failed to save execution status for %s: %w", msg.ExecutionID, saveErr)
+	if !wasMultiAccount {
+		if saveErr := m.config.SavePurchaseExecution(ctx, execution); saveErr != nil {
+			logging.Errorf("Failed to save execution status: %v", saveErr)
+			return fmt.Errorf("failed to save execution status for %s: %w", msg.ExecutionID, saveErr)
+		}
 	}
-
-	// Update plan progress
-	if err := m.updatePlanProgress(ctx, execution.PlanID); err != nil {
-		logging.Errorf("Failed to update plan progress: %v", err)
+	if purchaseErr == nil {
+		if err := m.updatePlanProgress(ctx, execution.PlanID); err != nil {
+			logging.Errorf("Failed to update plan progress: %v", err)
+		}
 	}
-
-	// Return purchase error so SQS can retry the message on purchase failure.
 	return purchaseErr
 }
 
