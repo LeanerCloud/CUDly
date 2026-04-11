@@ -12,9 +12,11 @@ terraform {
   }
 }
 
-data "google_project" "current" {
-  project_id = var.project != "" ? var.project : null
+provider "google" {
+  project = var.project
 }
+
+data "google_project" "current" {}
 
 locals {
   project = var.project != "" ? var.project : data.google_project.current.project_id
