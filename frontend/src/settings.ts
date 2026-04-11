@@ -733,22 +733,14 @@ function propagateTermToServices(term: string): void {
  * Note: Only AWS services have payment options; Azure/GCP use full upfront only
  */
 function propagatePaymentToServices(payment: string): void {
-  // Only AWS services have payment options
-  const awsPaymentSelects = [
-    'aws-ec2-payment',
-    'aws-rds-payment',
-    'aws-elasticache-payment',
-    'aws-opensearch-payment',
-    'aws-redshift-payment',
-    'aws-savingsplans-payment'
-  ];
-
-  awsPaymentSelects.forEach(id => {
-    const select = document.getElementById(id) as HTMLSelectElement | null;
-    if (select) {
-      select.value = payment;
-    }
-  });
+  SERVICE_FIELDS
+    .filter(f => f.paymentId !== null)
+    .forEach(({ paymentId }) => {
+      const select = document.getElementById(paymentId!) as HTMLSelectElement | null;
+      if (select) {
+        select.value = payment;
+      }
+    });
 }
 
 /**

@@ -179,7 +179,7 @@ func federationIaCParams(q map[string]string) (target, source, format string, er
 // shellEscape escapes a string for safe use inside a double-quoted bash argument.
 // It escapes characters that have special meaning in double-quoted strings: \, $, `, "
 func shellEscape(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`, `{`, `\{`, `}`, `\}`)
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
 	return r.Replace(s)
 }
 

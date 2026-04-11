@@ -183,6 +183,7 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 		return nil, fmt.Errorf("credentials: resolve GCP for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	if gcpTS == nil {
+		// ADC mode: no explicit token source — use ambient credentials
 		return nil, nil
 	}
 	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
