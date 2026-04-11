@@ -19,6 +19,11 @@ aws_account_id = "<SOURCE_AWS_ACCOUNT_ID>"  # AWS account number where CUDly run
 provider_type   = "oidc"
 oidc_issuer_uri = "{{.OIDCIssuerURI}}"{{if eq .Source "azure"}}  # Azure: https://login.microsoftonline.com/<TENANT_ID>/v2.0{{end}}
 {{- end}}
+{{- if eq .Source "aws"}}
+# aws_role_name = ""  # Recommended: restrict to specific IAM role (e.g. "CUDly-WIF")
+{{- else}}
+# oidc_subject  = ""  # Recommended: restrict to specific OIDC subject
+{{- end}}
 
 # --- CUDly auto-registration (optional) ---
 cudly_api_url = "{{.CUDlyAPIURL}}"
