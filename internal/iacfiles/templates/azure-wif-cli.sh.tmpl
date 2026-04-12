@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Create CUDly Azure App Registration + certificate (workload identity federation) via az cli.
+# Target Azure subscription: {{.AccountName}} ({{.SubscriptionID}})
+#
+# Usage:
+#   CERTIFICATE_PEM_PATH=./cudly-wif.crt bash {{.AccountSlug}}-azure-wif-cli.sh
+#
+# Requirements: az cli logged in to the target subscription, a self-signed cert.
+#
+# Generate a cert first if you don't have one:
+#   openssl genrsa -out cudly-wif.key 2048
+#   openssl req -new -x509 -key cudly-wif.key -out cudly-wif.crt -days 730 -subj "/CN=CUDly-WIF"
+#
+# Store the private key (cudly-wif.key) in CUDly as azure_wif_private_key after this script runs.
+set -euo pipefail
+
+APP_NAME="${APP_NAME:-CUDly-{{.AccountSlug}}}"
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-{{.SubscriptionID}}}"
+: "${CERTIFICATE_PEM_PATH:?set CERTIFICATE_PEM_PATH to the public certificate PEM file}"
+
+if [[ -n "${SUBSCRIPTION_ID}" && "${SUBSCRIPTION_ID}" != "<SUBSCRIPTION_ID>" ]]; then
+  az account set --subscription "${SUBSCRIPTION_ID}"
+fi
+SUBSCRIPTION_ID=$(az account show --query id --output tsv)
+TENANT_ID=$(az account show --query tenantId --output tsv)
+
+echo "Creating App Registration ${APP_NAME}..."
+APP_ID=$(az ad app create --display-name "${APP_NAME}" --sign-in-audience AzureADMyOrg --query appId --output tsv)
+
+echo "Uploading certificate..."
+az ad app credential reset \
+  --id "${APP_ID}" \
+  --cert "@${CERTIFICATE_PEM_PATH}" \
+  --append \
+  --output none
+
+echo "Creating service principal..."
+SP_OBJECT_ID=$(az ad sp create --id "${APP_ID}" --query id --output tsv)
+
+echo "Assigning 'Reservation Purchaser' role at subscription scope..."
+az role assignment create \
+  --assignee-object-id "${SP_OBJECT_ID}" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Reservation Purchaser" \
+  --scope "/subscriptions/${SUBSCRIPTION_ID}" \
+  --output none
+
+echo ""
+echo "=== Done ==="
+echo "subscription_id : ${SUBSCRIPTION_ID}"
+echo "tenant_id       : ${TENANT_ID}"
+echo "client_id       : ${APP_ID}"
+echo ""
+echo "In CUDly, set azure_auth_mode = workload_identity_federation and store the private key PEM as azure_wif_private_key."
+
+{{- if .CUDlyAPIURL}}
+if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
+  echo ""
+  echo "Registering account with CUDly..."
+  curl -sS -X POST "{{.CUDlyAPIURL}}/api/registrations" \
+    -H "Content-Type: application/json" \
+    -d "{\"provider\":\"azure\",\"account_id\":\"${SUBSCRIPTION_ID}\",\"account_name\":\"{{.AccountName}}\",\"contact_email\":\"${CUDLY_CONTACT_EMAIL}\",\"auth_mode\":\"workload_identity_federation\",\"tenant_id\":\"${TENANT_ID}\",\"client_id\":\"${APP_ID}\"}"
+fi
+{{- end}}

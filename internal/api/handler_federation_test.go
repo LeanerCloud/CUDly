@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -33,12 +34,12 @@ func TestSingleFileSpec_AWSCrossAccount(t *testing.T) {
 	assert.Equal(t, "text/plain", ct)
 }
 
-func TestSingleFileSpec_AWSWIFCFParams(t *testing.T) {
-	tmpl, fname, ct, err := singleFileSpec("aws", "azure", "cf-params", "prod")
-	require.NoError(t, err)
-	assert.Contains(t, tmpl, "aws-wif-cf-params.json.tmpl")
-	assert.Contains(t, fname, "cf-params.json")
-	assert.Equal(t, "application/json", ct)
+func TestSingleFileSpec_RejectsUnknownFormat(t *testing.T) {
+	_, _, _, err := singleFileSpec("aws", "azure", "cf-params", "prod")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
 }
 
 func TestSingleFileSpec_AzureWIF(t *testing.T) {
@@ -104,18 +105,49 @@ func TestGetFederationIaC_AWSWIF_Tfvars(t *testing.T) {
 	assert.Contains(t, res.Content, "oidc_issuer_url")
 }
 
-func TestGetFederationIaC_AWSWIF_CFParams(t *testing.T) {
+func TestGetFederationIaC_AWSWIF_CFNZip(t *testing.T) {
 	h := federationHandler()
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
-		"target": "aws", "source": "azure", "format": "cf-params",
+		"target": "aws", "source": "azure", "format": "cfn",
 	}))
 	require.NoError(t, err)
-	assert.Contains(t, res.Filename, "cf-params.json")
-	assert.Equal(t, "application/json", res.ContentType)
-	var params []map[string]string
-	require.NoError(t, json.Unmarshal([]byte(res.Content), &params))
+	assert.Contains(t, res.Filename, "aws-wif-cfn.zip")
+	assert.Equal(t, "application/zip", res.ContentType)
+	assert.Equal(t, "base64", res.ContentEncoding)
+
+	zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, f := range zr.File {
+		names[f.Name] = true
+	}
+	assert.True(t, names["cloudformation/template.yaml"], "cfn zip must contain CF template")
+	assert.True(t, names["cloudformation/deploy-cfn.sh"], "cfn zip must contain deploy script")
+	hasParams := false
+	for n := range names {
+		if strings.HasSuffix(n, "-cf-params.json") {
+			hasParams = true
+			break
+		}
+	}
+	assert.True(t, hasParams, "cfn zip must contain a cf-params.json file")
+}
+
+func TestGetFederationIaC_CFN_AWSCrossAccount_NotYetSupported(t *testing.T) {
+	h := federationHandler()
+	ctx := context.Background()
+
+	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+		"target": "aws", "source": "aws", "format": "cfn",
+	}))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
 }
 
 func TestGetFederationIaC_Bundle_AWSCrossAccount(t *testing.T) {
@@ -204,19 +236,115 @@ func TestGetFederationIaC_InvalidSource(t *testing.T) {
 	assert.Contains(t, ce.Error(), "source must be")
 }
 
-func TestGetFederationIaC_CFParams_ValidJSON(t *testing.T) {
+func TestGetFederationIaC_CFNZip_ParamsValidJSON(t *testing.T) {
 	h := federationHandler()
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
-		"target": "aws", "source": "azure", "format": "cf-params",
+		"target": "aws", "source": "azure", "format": "cfn",
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, "application/json", res.ContentType)
+
+	zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	require.NoError(t, err)
+
+	var paramsFile *zip.File
+	for _, f := range zr.File {
+		if strings.HasSuffix(f.Name, "-cf-params.json") {
+			paramsFile = f
+			break
+		}
+	}
+	require.NotNil(t, paramsFile, "cfn zip must contain a cf-params.json file")
+
+	rc, err := paramsFile.Open()
+	require.NoError(t, err)
+	defer rc.Close()
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(rc)
+	require.NoError(t, err)
 
 	var params []map[string]string
-	require.NoError(t, json.Unmarshal([]byte(res.Content), &params), "CF params must be valid JSON")
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &params), "CF params must be valid JSON")
 	assert.GreaterOrEqual(t, len(params), 3, "should have at least 3 parameters")
+}
+
+func TestSingleFileSpec_CLI_AllScenarios(t *testing.T) {
+	cases := []struct{ target, source, wantContains string }{
+		{"aws", "aws", "aws-cross-account-cli.sh"},
+		{"aws", "azure", "aws-wif-cli.sh"},
+		{"aws", "gcp", "aws-wif-cli.sh"},
+		{"azure", "aws", "azure-wif-cli.sh"},
+		{"azure", "gcp", "azure-wif-cli.sh"},
+		{"gcp", "gcp", "gcp-sa-impersonation-cli.sh"},
+		{"gcp", "aws", "gcp-wif-cli.sh"},
+		{"gcp", "azure", "gcp-wif-cli.sh"},
+	}
+	for _, tc := range cases {
+		_, fname, ct, err := singleFileSpec(tc.target, tc.source, "cli", "prod")
+		require.NoError(t, err, "target=%s source=%s", tc.target, tc.source)
+		assert.Contains(t, fname, tc.wantContains)
+		assert.Equal(t, "text/x-shellscript", ct)
+	}
+}
+
+func TestGetFederationIaC_CLI_AWSCrossAccount(t *testing.T) {
+	h := federationHandler()
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "aws", "source": "aws", "format": "cli",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "aws-cross-account-cli.sh")
+	assert.Equal(t, "text/x-shellscript", res.ContentType)
+	assert.Contains(t, res.Content, "#!/usr/bin/env bash")
+	assert.Contains(t, res.Content, "aws iam create-role")
+	assert.Contains(t, res.Content, "SOURCE_ACCOUNT_ID")
+}
+
+func TestGetFederationIaC_CLI_AWSWIF(t *testing.T) {
+	h := federationHandler()
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "aws", "source": "azure", "format": "cli",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "aws-wif-cli.sh")
+	assert.Contains(t, res.Content, "create-open-id-connect-provider")
+	assert.Contains(t, res.Content, "login.microsoftonline.com")
+}
+
+func TestGetFederationIaC_CLI_Azure(t *testing.T) {
+	h := federationHandler()
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "azure", "source": "aws", "format": "cli",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "azure-wif-cli.sh")
+	assert.Contains(t, res.Content, "az ad app create")
+	assert.Contains(t, res.Content, "Reservation Purchaser")
+}
+
+func TestGetFederationIaC_CLI_GCPSAImpersonation(t *testing.T) {
+	h := federationHandler()
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "gcp", "source": "gcp", "format": "cli",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "gcp-sa-impersonation-cli.sh")
+	assert.Contains(t, res.Content, "gcloud iam service-accounts")
+	assert.Contains(t, res.Content, "SOURCE_SERVICE_ACCOUNT")
+}
+
+func TestGetFederationIaC_CLI_GCPWIF(t *testing.T) {
+	h := federationHandler()
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "gcp", "source": "aws", "format": "cli",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "gcp-wif-cli.sh")
+	assert.Contains(t, res.Content, "workload-identity-pools create")
+	assert.Contains(t, res.Content, "create-aws")
 }
 
 func TestShellEscape(t *testing.T) {

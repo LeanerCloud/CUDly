@@ -78,11 +78,39 @@ function clearContainer(el: HTMLElement): void {
 }
 
 // ---------------------------------------------------------------------------
-// Section builders — generic downloads (not per-account)
+// Format matrix — which formats apply per target/source combination.
+// Dropdown values use "tfvars" as the DOM value; the download handler maps
+// it to an empty format= query param (the server's default).
 // ---------------------------------------------------------------------------
 
-function buildAWSFederationDownloads(source: string): void {
-  const container = document.getElementById('aws-federation-accounts');
+interface FormatOption {
+  value: string;  // DOM value; "tfvars" maps to empty format=
+  label: string;
+  title: string;
+}
+
+function formatOptionsFor(target: string, source: string): FormatOption[] {
+  const opts: FormatOption[] = [
+    { value: 'tfvars', label: 'Terraform tfvars', title: 'Single .tfvars file for Terraform.' },
+    { value: 'cli', label: 'CLI script', title: 'Self-contained shell script using the cloud\'s official CLI.' },
+  ];
+  // CloudFormation only applies for AWS WIF (source ≠ aws); cross-account CFN lands later.
+  if (target === 'aws' && source !== 'aws') {
+    opts.push({
+      value: 'cfn',
+      label: 'CloudFormation',
+      title: 'Zip with CloudFormation template, parameters, and deploy script.',
+    });
+  }
+  return opts;
+}
+
+// ---------------------------------------------------------------------------
+// Generic provider section builder — dropdown + Download + Bundle buttons
+// ---------------------------------------------------------------------------
+
+function buildFederationDownloads(target: string, source: string, containerID: string): void {
+  const container = document.getElementById(containerID);
   if (!container) return;
   clearContainer(container);
 
@@ -92,102 +120,79 @@ function buildAWSFederationDownloads(source: string): void {
   const actions = document.createElement('div');
   actions.className = 'federation-account-actions';
 
-  if (source === 'aws') {
-    actions.appendChild(makeDownloadBtn(
-      'Terraform tfvars',
-      'Download .tfvars for cross-account IAM role assumption. Fill in source_account_id and run terraform apply in the target account.',
-      'aws', 'aws',
-    ));
-    actions.appendChild(makeDownloadBtn(
-      'Download ZIP',
-      'Download zip bundle with Terraform module + .tfvars for cross-account federation.',
-      'aws', 'aws', 'bundle',
-    ));
-  } else {
-    actions.appendChild(makeDownloadBtn(
-      'Terraform tfvars',
-      'Download .tfvars for IAM OIDC WIF federation. Fill in your target account details and run terraform apply.',
-      'aws', source,
-    ));
-    actions.appendChild(makeDownloadBtn(
-      'CloudFormation params',
-      'Download CloudFormation parameters JSON for the AWS WIF template.',
-      'aws', source, 'cf-params',
-    ));
-    actions.appendChild(makeDownloadBtn(
-      'Download ZIP',
-      'Download zip bundle with Terraform module, .tfvars, CloudFormation template + deploy script.',
-      'aws', source, 'bundle',
-    ));
+  const select = document.createElement('select');
+  select.className = 'input-small';
+  for (const opt of formatOptionsFor(target, source)) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = opt.label;
+    o.title = opt.title;
+    select.appendChild(o);
   }
+
+  const downloadBtn = document.createElement('button');
+  downloadBtn.type = 'button';
+  downloadBtn.className = 'btn btn-small';
+  downloadBtn.textContent = 'Download';
+  downloadBtn.title = 'Download the selected IaC format.';
+  downloadBtn.addEventListener('click', () => {
+    const selected = select.value;
+    const format = selected === 'tfvars' ? undefined : selected;
+    runDownload(downloadBtn, target, source, format);
+  });
+
+  actions.appendChild(select);
+  actions.appendChild(downloadBtn);
+
+  // Always-available bundle shortcut (zip with tfvars + terraform module + cfn when applicable).
+  actions.appendChild(makeDownloadBtn(
+    'Download bundle (Terraform)',
+    'Zip bundle with Terraform module + .tfvars (and CloudFormation files for AWS WIF).',
+    target, source, 'bundle',
+  ));
 
   row.appendChild(actions);
   container.appendChild(row);
+}
+
+// runDownload fetches IaC from the backend and triggers a browser download.
+// Shared with makeDownloadBtn's click handler but parameterised at call time.
+function runDownload(btn: HTMLButtonElement, target: string, source: string, format?: string): void {
+  const originalLabel = btn.textContent ?? 'Download';
+  btn.disabled    = true;
+  btn.textContent = 'Loading…';
+
+  getFederationIaC(target, source, format)
+    .then(res => {
+      if (res.content_encoding === 'base64') {
+        const binaryStr = atob(res.content);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+        downloadFile(res.filename, bytes.buffer as ArrayBuffer, res.content_type);
+      } else {
+        downloadFile(res.filename, res.content, res.content_type);
+      }
+    })
+    .catch((err: unknown) => {
+      console.error('Federation IaC download failed:', err);
+      alert(`Failed to generate IaC: ${(err as Error).message}`);
+    })
+    .finally(() => {
+      btn.disabled    = false;
+      btn.textContent = originalLabel;
+    });
+}
+
+function buildAWSFederationDownloads(source: string): void {
+  buildFederationDownloads('aws', source, 'aws-federation-accounts');
 }
 
 function buildAzureFederationDownloads(source: string): void {
-  const container = document.getElementById('azure-federation-accounts');
-  if (!container) return;
-  clearContainer(container);
-
-  const row = document.createElement('div');
-  row.className = 'federation-account-row';
-
-  const actions = document.createElement('div');
-  actions.className = 'federation-account-actions';
-
-  actions.appendChild(makeDownloadBtn(
-    'Terraform tfvars',
-    'Download .tfvars for Azure WIF federation. Generate a cert, fill in subscription/tenant IDs, then terraform apply.',
-    'azure', source,
-  ));
-  actions.appendChild(makeDownloadBtn(
-    'Download ZIP',
-    'Download zip bundle with Terraform module + .tfvars for Azure WIF federation.',
-    'azure', source, 'bundle',
-  ));
-
-  row.appendChild(actions);
-  container.appendChild(row);
+  buildFederationDownloads('azure', source, 'azure-federation-accounts');
 }
 
 function buildGCPFederationDownloads(source: string): void {
-  const container = document.getElementById('gcp-federation-accounts');
-  if (!container) return;
-  clearContainer(container);
-
-  const row = document.createElement('div');
-  row.className = 'federation-account-row';
-
-  const actions = document.createElement('div');
-  actions.className = 'federation-account-actions';
-
-  if (source === 'gcp') {
-    actions.appendChild(makeDownloadBtn(
-      'Terraform tfvars',
-      'Download .tfvars for GCP SA impersonation. Fill in source/target service account emails, then terraform apply.',
-      'gcp', 'gcp',
-    ));
-    actions.appendChild(makeDownloadBtn(
-      'Download ZIP',
-      'Download zip bundle with Terraform module + .tfvars for GCP SA impersonation.',
-      'gcp', 'gcp', 'bundle',
-    ));
-  } else {
-    actions.appendChild(makeDownloadBtn(
-      'Terraform tfvars',
-      'Download .tfvars for GCP WIF federation. Fill in project/SA details, then terraform apply.',
-      'gcp', source,
-    ));
-    actions.appendChild(makeDownloadBtn(
-      'Download ZIP',
-      'Download zip bundle with Terraform module + .tfvars for GCP WIF federation.',
-      'gcp', source, 'bundle',
-    ));
-  }
-
-  row.appendChild(actions);
-  container.appendChild(row);
+  buildFederationDownloads('gcp', source, 'gcp-federation-accounts');
 }
 
 // ---------------------------------------------------------------------------

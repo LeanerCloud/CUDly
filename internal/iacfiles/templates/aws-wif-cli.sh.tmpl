@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Create CUDly OIDC IAM role (workload identity federation) via aws-cli.
+# Target AWS account : {{.AccountName}} ({{.AccountExternalID}})
+# Source cloud       : {{.Source}}
+#
+# Usage:
+#   bash {{.AccountSlug}}-aws-wif-cli.sh
+#
+# Requirements: aws-cli v2, credentials for target account {{.AccountExternalID}}.
+set -euo pipefail
+
+ROLE_NAME="${ROLE_NAME:-CUDly-{{.AccountSlug}}}"
+OIDC_ISSUER_URL="${OIDC_ISSUER_URL:-{{.OIDCIssuerURL}}}"
+OIDC_AUDIENCE="${OIDC_AUDIENCE:-{{.OIDCAudience}}}"
+PROFILE_ARG=""
+if [[ -n "${AWS_PROFILE:-}" ]]; then PROFILE_ARG="--profile ${AWS_PROFILE}"; fi
+
+OIDC_HOST=$(echo "${OIDC_ISSUER_URL}" | sed -E 's#^https://##; s#/$##')
+
+echo "Creating/ensuring OIDC provider for ${OIDC_ISSUER_URL}..."
+# shellcheck disable=SC2086
+EXISTING_PROVIDER=$(aws iam list-open-id-connect-providers $PROFILE_ARG \
+  --query "OpenIDConnectProviderList[?contains(Arn, '${OIDC_HOST}')].Arn | [0]" \
+  --output text 2>/dev/null || echo "None")
+if [[ "${EXISTING_PROVIDER}" == "None" || -z "${EXISTING_PROVIDER}" ]]; then
+  # shellcheck disable=SC2086
+  aws iam create-open-id-connect-provider $PROFILE_ARG \
+    --url "${OIDC_ISSUER_URL}" \
+    --client-id-list "${OIDC_AUDIENCE}" \
+    --thumbprint-list "0000000000000000000000000000000000000000" >/dev/null
+fi
+# shellcheck disable=SC2086
+PROVIDER_ARN=$(aws iam list-open-id-connect-providers $PROFILE_ARG \
+  --query "OpenIDConnectProviderList[?contains(Arn, '${OIDC_HOST}')].Arn | [0]" \
+  --output text)
+
+TRUST_POLICY=$(cat <<JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {"Federated": "${PROVIDER_ARN}"},
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {"StringEquals": {"${OIDC_HOST}:aud": "${OIDC_AUDIENCE}"}}
+  }]
+}
+JSON
+)
+
+PERMISSIONS_POLICY=$(cat <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Resource": "*",
+    "Action": [
+      "ec2:PurchaseReservedInstancesOffering","ec2:DescribeReservedInstancesOfferings",
+      "ec2:DescribeReservedInstances","ec2:DescribeInstanceTypeOfferings",
+      "ec2:GetReservedInstancesExchangeQuote","ec2:AcceptReservedInstancesExchangeQuote",
+      "rds:PurchaseReservedDBInstancesOffering","rds:DescribeReservedDBInstancesOfferings",
+      "rds:DescribeReservedDBInstances",
+      "elasticache:PurchaseReservedCacheNodesOffering",
+      "elasticache:DescribeReservedCacheNodesOfferings","elasticache:DescribeReservedCacheNodes",
+      "redshift:PurchaseReservedNodeOffering","redshift:DescribeReservedNodeOfferings",
+      "redshift:DescribeReservedNodes",
+      "memorydb:PurchaseReservedNodesOffering","memorydb:DescribeReservedNodesOfferings",
+      "memorydb:DescribeReservedNodes",
+      "savingsplans:CreateSavingsPlan","savingsplans:DescribeSavingsPlans",
+      "savingsplans:DescribeSavingsPlansOfferings","savingsplans:DescribeSavingsPlansOfferingRates",
+      "es:PurchaseReservedInstanceOffering","es:DescribeReservedInstanceOfferings",
+      "es:DescribeReservedInstances",
+      "ec2:DescribeRegions"
+    ]
+  }]
+}
+JSON
+)
+
+echo "Creating IAM role ${ROLE_NAME}..."
+# shellcheck disable=SC2086
+aws iam create-role $PROFILE_ARG \
+  --role-name "${ROLE_NAME}" \
+  --assume-role-policy-document "${TRUST_POLICY}" \
+  --description "Role assumed by CUDly via workload identity federation" \
+  --output json >/dev/null
+
+# shellcheck disable=SC2086
+aws iam put-role-policy $PROFILE_ARG \
+  --role-name "${ROLE_NAME}" \
+  --policy-name "CUDlyPermissions" \
+  --policy-document "${PERMISSIONS_POLICY}"
+
+# shellcheck disable=SC2086
+ROLE_ARN=$(aws iam get-role $PROFILE_ARG --role-name "${ROLE_NAME}" --query 'Role.Arn' --output text)
+echo ""
+echo "=== Done ==="
+echo "role_arn : ${ROLE_ARN}"
+echo ""
+echo "In CUDly, set aws_auth_mode = workload_identity_federation and paste the role_arn above."
+
+{{- if .CUDlyAPIURL}}
+if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
+  echo ""
+  echo "Registering account with CUDly..."
+  curl -sS -X POST "{{.CUDlyAPIURL}}/api/registrations" \
+    -H "Content-Type: application/json" \
+    -d "{\"provider\":\"aws\",\"account_id\":\"{{.AccountExternalID}}\",\"account_name\":\"{{.AccountName}}\",\"contact_email\":\"${CUDLY_CONTACT_EMAIL}\",\"auth_mode\":\"workload_identity_federation\",\"role_arn\":\"${ROLE_ARN}\"}"
+fi
+{{- end}}

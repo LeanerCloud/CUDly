@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Grant service account impersonation for CUDly via gcloud.
+# Target GCP project : {{.AccountName}} ({{.ProjectID}})
+# Source cloud       : GCP (service account impersonation)
+#
+# Usage:
+#   SOURCE_SERVICE_ACCOUNT=<email> bash {{.AccountSlug}}-gcp-sa-impersonation-cli.sh
+#
+# Requirements: gcloud CLI authenticated with a principal that has IAM admin on the target project.
+set -euo pipefail
+
+PROJECT_ID="${PROJECT_ID:-{{.ProjectID}}}"
+SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-{{.ServiceAccountEmail}}}"
+: "${PROJECT_ID:?set PROJECT_ID to the target GCP project}"
+: "${SERVICE_ACCOUNT_EMAIL:?set SERVICE_ACCOUNT_EMAIL to the CUDly service account in the target project}"
+: "${SOURCE_SERVICE_ACCOUNT:?set SOURCE_SERVICE_ACCOUNT to the CUDly host SA email in the source project}"
+
+gcloud config set project "${PROJECT_ID}"
+
+echo "Creating target service account ${SERVICE_ACCOUNT_EMAIL} (if missing)..."
+SA_NAME="${SERVICE_ACCOUNT_EMAIL%%@*}"
+gcloud iam service-accounts create "${SA_NAME}" \
+  --project="${PROJECT_ID}" \
+  --display-name="CUDly target SA" \
+  || echo "  (service account may already exist)"
+
+echo "Granting required roles to ${SERVICE_ACCOUNT_EMAIL}..."
+for role in roles/commerceorgpolicy.commitmentAdmin roles/billing.viewer; do
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+    --role="${role}" \
+    --condition=None \
+    --quiet \
+    --output=none || echo "  (role ${role} may already be bound or unavailable)"
+done
+
+echo "Granting token creator to source SA ${SOURCE_SERVICE_ACCOUNT}..."
+gcloud iam service-accounts add-iam-policy-binding "${SERVICE_ACCOUNT_EMAIL}" \
+  --member="serviceAccount:${SOURCE_SERVICE_ACCOUNT}" \
+  --role=roles/iam.serviceAccountTokenCreator \
+  --project="${PROJECT_ID}" \
+  --output=none
+
+echo ""
+echo "=== Done ==="
+echo "project_id            : ${PROJECT_ID}"
+echo "service_account_email : ${SERVICE_ACCOUNT_EMAIL}"
+echo ""
+echo "In CUDly, set gcp_auth_mode = application_default and the target SA email above."
+
+{{- if .CUDlyAPIURL}}
+if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
+  echo ""
+  echo "Registering account with CUDly..."
+  curl -sS -X POST "{{.CUDlyAPIURL}}/api/registrations" \
+    -H "Content-Type: application/json" \
+    -d "{\"provider\":\"gcp\",\"account_id\":\"${PROJECT_ID}\",\"account_name\":\"{{.AccountName}}\",\"contact_email\":\"${CUDLY_CONTACT_EMAIL}\",\"auth_mode\":\"application_default\",\"service_account_email\":\"${SERVICE_ACCOUNT_EMAIL}\"}"
+fi
+{{- end}}

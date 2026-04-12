@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Create CUDly cross-account IAM role via aws-cli.
+# Target AWS account : {{.AccountName}} ({{.AccountExternalID}})
+# Source cloud       : AWS (cross-account role assumption)
+#
+# Usage:
+#   SOURCE_ACCOUNT_ID=123456789012 EXTERNAL_ID=<uuid> bash {{.AccountSlug}}-aws-cross-account-cli.sh
+#
+# Requirements: aws-cli v2, credentials for target account {{.AccountExternalID}}.
+set -euo pipefail
+
+ROLE_NAME="${ROLE_NAME:-CUDly-{{.AccountSlug}}}"
+: "${SOURCE_ACCOUNT_ID:?set SOURCE_ACCOUNT_ID to the AWS account ID where CUDly runs}"
+: "${EXTERNAL_ID:?set EXTERNAL_ID to a random UUID for confused-deputy protection}"
+PROFILE_ARG=""
+if [[ -n "${AWS_PROFILE:-}" ]]; then PROFILE_ARG="--profile ${AWS_PROFILE}"; fi
+
+TRUST_POLICY=$(cat <<JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {"AWS": "arn:aws:iam::${SOURCE_ACCOUNT_ID}:root"},
+    "Action": "sts:AssumeRole",
+    "Condition": {"StringEquals": {"sts:ExternalId": "${EXTERNAL_ID}"}}
+  }]
+}
+JSON
+)
+
+PERMISSIONS_POLICY=$(cat <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Resource": "*",
+    "Action": [
+      "ec2:PurchaseReservedInstancesOffering","ec2:DescribeReservedInstancesOfferings",
+      "ec2:DescribeReservedInstances","ec2:DescribeInstanceTypeOfferings",
+      "ec2:GetReservedInstancesExchangeQuote","ec2:AcceptReservedInstancesExchangeQuote",
+      "rds:PurchaseReservedDBInstancesOffering","rds:DescribeReservedDBInstancesOfferings",
+      "rds:DescribeReservedDBInstances",
+      "elasticache:PurchaseReservedCacheNodesOffering",
+      "elasticache:DescribeReservedCacheNodesOfferings","elasticache:DescribeReservedCacheNodes",
+      "redshift:PurchaseReservedNodeOffering","redshift:DescribeReservedNodeOfferings",
+      "redshift:DescribeReservedNodes",
+      "memorydb:PurchaseReservedNodesOffering","memorydb:DescribeReservedNodesOfferings",
+      "memorydb:DescribeReservedNodes",
+      "savingsplans:CreateSavingsPlan","savingsplans:DescribeSavingsPlans",
+      "savingsplans:DescribeSavingsPlansOfferings","savingsplans:DescribeSavingsPlansOfferingRates",
+      "es:PurchaseReservedInstanceOffering","es:DescribeReservedInstanceOfferings",
+      "es:DescribeReservedInstances",
+      "ec2:DescribeRegions"
+    ]
+  }]
+}
+JSON
+)
+
+echo "Creating IAM role ${ROLE_NAME}..."
+# shellcheck disable=SC2086
+aws iam create-role $PROFILE_ARG \
+  --role-name "${ROLE_NAME}" \
+  --assume-role-policy-document "${TRUST_POLICY}" \
+  --description "Role assumed by CUDly via cross-account IAM role assumption" \
+  --output json >/dev/null
+
+# shellcheck disable=SC2086
+aws iam put-role-policy $PROFILE_ARG \
+  --role-name "${ROLE_NAME}" \
+  --policy-name "CUDlyPermissions" \
+  --policy-document "${PERMISSIONS_POLICY}"
+
+# shellcheck disable=SC2086
+ROLE_ARN=$(aws iam get-role $PROFILE_ARG --role-name "${ROLE_NAME}" --query 'Role.Arn' --output text)
+echo ""
+echo "=== Done ==="
+echo "role_arn   : ${ROLE_ARN}"
+echo "external_id: ${EXTERNAL_ID}"
+echo ""
+echo "In CUDly, set aws_auth_mode = role_arn and paste the role_arn above."
+
+{{- if .CUDlyAPIURL}}
+if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
+  echo ""
+  echo "Registering account with CUDly..."
+  curl -sS -X POST "{{.CUDlyAPIURL}}/api/registrations" \
+    -H "Content-Type: application/json" \
+    -d "{\"provider\":\"aws\",\"account_id\":\"{{.AccountExternalID}}\",\"account_name\":\"{{.AccountName}}\",\"contact_email\":\"${CUDLY_CONTACT_EMAIL}\",\"auth_mode\":\"role_arn\",\"role_arn\":\"${ROLE_ARN}\",\"external_id\":\"${EXTERNAL_ID}\"}"
+fi
+{{- end}}

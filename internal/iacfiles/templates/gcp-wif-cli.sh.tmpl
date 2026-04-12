@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Create CUDly GCP Workload Identity Pool + provider via gcloud.
+# Target GCP project : {{.AccountName}} ({{.ProjectID}})
+# Source cloud       : {{.Source}}
+#
+# Usage:
+#   SOURCE_AWS_ACCOUNT_ID=123456789012 bash {{.AccountSlug}}-gcp-wif-cli.sh    (source=aws)
+#   bash {{.AccountSlug}}-gcp-wif-cli.sh                                      (source=azure)
+#
+# Requirements: gcloud CLI authenticated with a principal that has IAM admin on the project.
+set -euo pipefail
+
+PROJECT_ID="${PROJECT_ID:-{{.ProjectID}}}"
+SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-{{.ServiceAccountEmail}}}"
+POOL_ID="${POOL_ID:-cudly-{{.AccountSlug}}}"
+PROVIDER_ID="${PROVIDER_ID:-cudly-{{.Source}}}"
+: "${PROJECT_ID:?set PROJECT_ID to the target GCP project}"
+: "${SERVICE_ACCOUNT_EMAIL:?set SERVICE_ACCOUNT_EMAIL to the CUDly service account in the target project}"
+
+gcloud config set project "${PROJECT_ID}"
+
+echo "Enabling required APIs..."
+gcloud services enable iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
+
+echo "Creating Workload Identity Pool ${POOL_ID}..."
+gcloud iam workload-identity-pools create "${POOL_ID}" \
+  --location=global \
+  --display-name="CUDly WIF pool" \
+  --project="${PROJECT_ID}" \
+  || echo "  (pool may already exist)"
+
+{{if eq .Source "aws"}}
+: "${SOURCE_AWS_ACCOUNT_ID:?set SOURCE_AWS_ACCOUNT_ID to the AWS account where CUDly runs}"
+echo "Creating AWS provider..."
+gcloud iam workload-identity-pools providers create-aws "${PROVIDER_ID}" \
+  --location=global \
+  --workload-identity-pool="${POOL_ID}" \
+  --account-id="${SOURCE_AWS_ACCOUNT_ID}" \
+  --attribute-mapping="google.subject=assertion.arn,attribute.aws_role=assertion.arn,attribute.account=assertion.account" \
+  --project="${PROJECT_ID}" \
+  || echo "  (provider may already exist)"
+{{else}}
+OIDC_ISSUER_URI="${OIDC_ISSUER_URI:-{{.OIDCIssuerURI}}}"
+: "${OIDC_ISSUER_URI:?set OIDC_ISSUER_URI to the source cloud OIDC issuer URI}"
+echo "Creating OIDC provider..."
+gcloud iam workload-identity-pools providers create-oidc "${PROVIDER_ID}" \
+  --location=global \
+  --workload-identity-pool="${POOL_ID}" \
+  --issuer-uri="${OIDC_ISSUER_URI}" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.aud=assertion.aud" \
+  --project="${PROJECT_ID}" \
+  || echo "  (provider may already exist)"
+{{end}}
+
+POOL_NAME=$(gcloud iam workload-identity-pools describe "${POOL_ID}" --location=global --project="${PROJECT_ID}" --format="value(name)")
+
+echo "Granting workloadIdentityUser on ${SERVICE_ACCOUNT_EMAIL}..."
+gcloud iam service-accounts add-iam-policy-binding "${SERVICE_ACCOUNT_EMAIL}" \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/${POOL_NAME}/*" \
+  --project="${PROJECT_ID}" \
+  --output=none
+
+echo ""
+echo "=== Done ==="
+echo "pool_name             : ${POOL_NAME}"
+echo "service_account_email : ${SERVICE_ACCOUNT_EMAIL}"
+echo ""
+echo "Generate the WIF credential JSON with 'gcloud iam workload-identity-pools create-cred-config',"
+echo "then paste it into CUDly as gcp_workload_identity_config."
+
+{{- if .CUDlyAPIURL}}
+if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
+  echo ""
+  echo "Registering account with CUDly..."
+  curl -sS -X POST "{{.CUDlyAPIURL}}/api/registrations" \
+    -H "Content-Type: application/json" \
+    -d "{\"provider\":\"gcp\",\"account_id\":\"${PROJECT_ID}\",\"account_name\":\"{{.AccountName}}\",\"contact_email\":\"${CUDLY_CONTACT_EMAIL}\",\"auth_mode\":\"workload_identity_federation\",\"service_account_email\":\"${SERVICE_ACCOUNT_EMAIL}\"}"
+fi
+{{- end}}

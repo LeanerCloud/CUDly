@@ -108,7 +108,7 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 // fill in their own values via -var flags when running terraform apply.
 //
 //   - format=""         → single file (tfvars)
-//   - format="cf-params" → CloudFormation parameters JSON (aws target only)
+//   - format="cfn"      → zip with CFN template + params + deploy script (aws target only)
 //   - format="bundle"   → zip with tfvars + Terraform module + CF template/script
 func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
 	target, source, format, err := federationIaCParams(req.QueryStringParameters)
@@ -126,26 +126,80 @@ func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunction
 	}
 	data := buildGenericIaCData(target, source, apiURL)
 
-	switch {
-	case format == "bundle":
-		return h.buildFederationBundle(data, target, source, slug)
-	case format == "cf-params" && target == "aws":
-		content, err := buildCFParamsJSON(data)
-		if err != nil {
-			return nil, fmt.Errorf("federation iac: %w", err)
-		}
-		return &FederationIaCResponse{Filename: slug + "-aws-wif-cf-params.json", Content: content, ContentType: "application/json"}, nil
-	default:
-		tmplPath, filename, contentType, err := singleFileSpec(target, source, format, slug)
-		if err != nil {
-			return nil, err
-		}
-		content, err := renderTemplate(tmplPath, data)
-		if err != nil {
-			return nil, fmt.Errorf("federation iac: %w", err)
-		}
-		return &FederationIaCResponse{Filename: filename, Content: content, ContentType: contentType}, nil
+	if formatNeedsZip(format) {
+		return h.buildZipResponse(data, target, source, format, slug)
 	}
+
+	tmplPath, filename, contentType, err := singleFileSpec(target, source, format, slug)
+	if err != nil {
+		return nil, err
+	}
+	renderData := data
+	if format == "cli" {
+		renderData = shellEscapeData(data)
+	}
+	content, err := renderTemplate(tmplPath, renderData)
+	if err != nil {
+		return nil, fmt.Errorf("federation iac: %w", err)
+	}
+	return &FederationIaCResponse{Filename: filename, Content: content, ContentType: contentType}, nil
+}
+
+// shellEscapeData returns a copy of data with all fields interpolated into CLI
+// shell templates escaped for safe use inside double-quoted bash strings.
+func shellEscapeData(data federationIaCData) federationIaCData {
+	d := data
+	d.AccountName = shellEscape(data.AccountName)
+	d.AccountExternalID = shellEscape(data.AccountExternalID)
+	d.AccountSlug = shellEscape(data.AccountSlug)
+	d.Source = shellEscape(data.Source)
+	d.OIDCIssuerURL = shellEscape(data.OIDCIssuerURL)
+	d.OIDCIssuerHost = shellEscape(data.OIDCIssuerHost)
+	d.OIDCAudience = shellEscape(data.OIDCAudience)
+	d.SubscriptionID = shellEscape(data.SubscriptionID)
+	d.TenantID = shellEscape(data.TenantID)
+	d.ProjectID = shellEscape(data.ProjectID)
+	d.ServiceAccountEmail = shellEscape(data.ServiceAccountEmail)
+	d.OIDCIssuerURI = shellEscape(data.OIDCIssuerURI)
+	d.CUDlyAPIURL = shellEscape(data.CUDlyAPIURL)
+	return d
+}
+
+// formatNeedsZip returns true for IaC formats that ship as multi-file zip archives.
+func formatNeedsZip(format string) bool {
+	switch format {
+	case "bundle", "cfn":
+		return true
+	}
+	return false
+}
+
+// buildZipResponse is the single encoder for zip-format IaC downloads. It dispatches
+// to the appropriate builder, which returns raw bytes + filename, then base64-wraps
+// the result into a FederationIaCResponse.
+func (h *Handler) buildZipResponse(data federationIaCData, target, source, format, slug string) (*FederationIaCResponse, error) {
+	var (
+		zipBytes []byte
+		filename string
+		err      error
+	)
+	switch format {
+	case "bundle":
+		zipBytes, filename, err = buildFederationBundle(data, target, source, slug)
+	case "cfn":
+		zipBytes, filename, err = buildCFNZip(data, target, source, slug)
+	default:
+		return nil, NewClientError(400, "unsupported zip format: "+format)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &FederationIaCResponse{
+		Filename:        filename,
+		Content:         base64.StdEncoding.EncodeToString(zipBytes),
+		ContentType:     "application/zip",
+		ContentEncoding: "base64",
+	}, nil
 }
 
 // buildGenericIaCData builds template data with source-specific OIDC values.
@@ -196,13 +250,25 @@ func shellEscape(s string) string {
 var validFederationTargets = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
 // singleFileSpec returns the template path, output filename, and content-type for a
-// single-file IaC download (i.e. format is "" or "cf-params").
+// single-file IaC download. Zip formats are intercepted earlier by formatNeedsZip
+// in getFederationIaC and never reach this function.
 func singleFileSpec(target, source, format, slug string) (tmplPath, filename, contentType string, err error) {
+	switch format {
+	case "":
+		return tfvarsSpec(target, source, slug)
+	case "cli":
+		return cliScriptSpec(target, source, slug)
+	default:
+		return "", "", "", NewClientError(400, "unsupported format: "+format)
+	}
+}
+
+// tfvarsSpec returns the Terraform tfvars template path + filename for the
+// target/source combination.
+func tfvarsSpec(target, source, slug string) (tmplPath, filename, contentType string, err error) {
 	switch {
 	case target == "aws" && source == "aws":
 		return "templates/aws-cross-account.tfvars.tmpl", slug + "-aws-cross-account.tfvars", "text/plain", nil
-	case target == "aws" && format == "cf-params":
-		return "templates/aws-wif-cf-params.json.tmpl", slug + "-aws-wif-cf-params.json", "application/json", nil
 	case target == "aws":
 		return "templates/aws-wif.tfvars.tmpl", slug + "-aws-wif.tfvars", "text/plain", nil
 	case target == "azure":
@@ -216,35 +282,77 @@ func singleFileSpec(target, source, format, slug string) (tmplPath, filename, co
 	}
 }
 
+// cliScriptSpec returns the CLI shell-script template path + filename for the
+// target/source combination. All CLI scripts are rendered with shell-escaped data.
+func cliScriptSpec(target, source, slug string) (tmplPath, filename, contentType string, err error) {
+	const ct = "text/x-shellscript"
+	switch {
+	case target == "aws" && source == "aws":
+		return "templates/aws-cross-account-cli.sh.tmpl", slug + "-aws-cross-account-cli.sh", ct, nil
+	case target == "aws":
+		return "templates/aws-wif-cli.sh.tmpl", slug + "-aws-wif-cli.sh", ct, nil
+	case target == "azure":
+		return "templates/azure-wif-cli.sh.tmpl", slug + "-azure-wif-cli.sh", ct, nil
+	case target == "gcp" && source == "gcp":
+		return "templates/gcp-sa-impersonation-cli.sh.tmpl", slug + "-gcp-sa-impersonation-cli.sh", ct, nil
+	case target == "gcp":
+		return "templates/gcp-wif-cli.sh.tmpl", slug + "-gcp-wif-cli.sh", ct, nil
+	default:
+		return "", "", "", NewClientError(400, fmt.Sprintf("unsupported target/source combination: %s/%s", target, source))
+	}
+}
+
 // buildFederationBundle creates a zip bundle containing:
 //   - The generated .tfvars file
 //   - The Terraform module files (main.tf, variables.tf, outputs.tf)
 //   - For aws-target: the CloudFormation template + parameters JSON + deploy script
-func (h *Handler) buildFederationBundle(data federationIaCData, target, source, slug string) (*FederationIaCResponse, error) {
+//
+// Returns the raw zip bytes and output filename. base64 wrapping happens in
+// buildZipResponse.
+func buildFederationBundle(data federationIaCData, target, source, slug string) ([]byte, string, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
 	if err := addBundleTerraform(zw, data, target, source, slug); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := addBundleCFN(zw, data, target, source, slug); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	readme := buildBundleReadme(data, target, source)
 	if err := addStringToZip(zw, "README.txt", readme); err != nil {
-		return nil, fmt.Errorf("bundle: write readme: %w", err)
+		return nil, "", fmt.Errorf("bundle: write readme: %w", err)
 	}
 	if err := zw.Close(); err != nil {
-		return nil, fmt.Errorf("bundle: finalize zip: %w", err)
+		return nil, "", fmt.Errorf("bundle: finalize zip: %w", err)
 	}
 
-	return &FederationIaCResponse{
-		Filename:        bundleZipName(target, source, slug),
-		Content:         base64.StdEncoding.EncodeToString(buf.Bytes()),
-		ContentType:     "application/zip",
-		ContentEncoding: "base64",
-	}, nil
+	return buf.Bytes(), bundleZipName(target, source, slug), nil
+}
+
+// buildCFNZip creates a self-contained CloudFormation zip with template.yaml,
+// the parameters JSON, and deploy-cfn.sh. Returns raw zip bytes + filename.
+//
+// Phase 0 only supports the AWS WIF (source ≠ aws) case. The cross-account
+// CFN template lands in Phase 2.
+func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, string, error) {
+	if target != "aws" {
+		return nil, "", NewClientError(400, "format=cfn requires target=aws")
+	}
+	if source == "aws" {
+		return nil, "", NewClientError(400, "format=cfn for source=aws (cross-account) is not yet supported")
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	if err := writeCFNFiles(zw, data, source, slug); err != nil {
+		return nil, "", err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, "", fmt.Errorf("cfn: finalize zip: %w", err)
+	}
+	return buf.Bytes(), slug + "-aws-wif-cfn.zip", nil
 }
 
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.
@@ -265,23 +373,37 @@ func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, 
 }
 
 // addBundleCFN adds CloudFormation files to the zip for AWS WIF (non-same-cloud) bundles.
+// This is a thin wrapper around writeCFNFiles, gated by the target/source guard.
 func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
 	if target != "aws" || source == "aws" {
 		return nil
 	}
+	return writeCFNFiles(zw, data, source, slug)
+}
+
+// writeCFNFiles writes the CloudFormation template, parameters JSON, and deploy
+// script into the given zip.Writer. Used by both addBundleCFN (for the bundle
+// format) and buildCFNZip (for format=cfn).
+//
+// Phase 0 only handles source != "aws" (AWS WIF from Azure/GCP); the
+// cross-account branch lands in Phase 2.
+func writeCFNFiles(zw *zip.Writer, data federationIaCData, source, slug string) error {
+	if source == "aws" {
+		return fmt.Errorf("cfn: cross-account template not yet implemented")
+	}
 	cfTemplate, err := cudlyiac.Modules.ReadFile("federation/aws-target/cloudformation/template.yaml")
 	if err != nil {
-		return fmt.Errorf("bundle: read cf template: %w", err)
+		return fmt.Errorf("cfn: read cf template: %w", err)
 	}
 	if err = addBytesToZip(zw, "cloudformation/template.yaml", cfTemplate); err != nil {
-		return fmt.Errorf("bundle: write cf template: %w", err)
+		return fmt.Errorf("cfn: write cf template: %w", err)
 	}
 	cfParams, err := buildCFParamsJSON(data)
 	if err != nil {
-		return fmt.Errorf("bundle: %w", err)
+		return fmt.Errorf("cfn: %w", err)
 	}
 	if err = addStringToZip(zw, "cloudformation/"+slug+"-cf-params.json", cfParams); err != nil {
-		return fmt.Errorf("bundle: write cf params: %w", err)
+		return fmt.Errorf("cfn: write cf params: %w", err)
 	}
 	// Shell-escape template values before rendering the deploy script to prevent
 	// injection via account names or OIDC URLs containing shell metacharacters.
@@ -294,10 +416,10 @@ func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug s
 	escapedData.AccountExternalID = shellEscape(data.AccountExternalID)
 	deployScript, err := renderTemplate("templates/aws-cfn-deploy.sh.tmpl", escapedData)
 	if err != nil {
-		return fmt.Errorf("bundle: %w", err)
+		return fmt.Errorf("cfn: %w", err)
 	}
 	if err = addStringToZip(zw, "cloudformation/deploy-cfn.sh", deployScript); err != nil {
-		return fmt.Errorf("bundle: write deploy script: %w", err)
+		return fmt.Errorf("cfn: write deploy script: %w", err)
 	}
 	return nil
 }
