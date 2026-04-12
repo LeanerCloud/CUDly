@@ -333,17 +333,10 @@ func buildFederationBundle(data federationIaCData, target, source, slug string) 
 
 // buildCFNZip creates a self-contained CloudFormation zip with template.yaml,
 // the parameters JSON, and deploy-cfn.sh. Returns raw zip bytes + filename.
-//
-// Phase 0 only supports the AWS WIF (source ≠ aws) case. The cross-account
-// CFN template lands in Phase 2.
 func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, string, error) {
 	if target != "aws" {
 		return nil, "", NewClientError(400, "format=cfn requires target=aws")
 	}
-	if source == "aws" {
-		return nil, "", NewClientError(400, "format=cfn for source=aws (cross-account) is not yet supported")
-	}
-
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	if err := writeCFNFiles(zw, data, source, slug); err != nil {
@@ -352,7 +345,11 @@ func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, s
 	if err := zw.Close(); err != nil {
 		return nil, "", fmt.Errorf("cfn: finalize zip: %w", err)
 	}
-	return buf.Bytes(), slug + "-aws-wif-cfn.zip", nil
+	zipName := slug + "-aws-wif-cfn.zip"
+	if source == "aws" {
+		zipName = slug + "-aws-cross-account-cfn.zip"
+	}
+	return buf.Bytes(), zipName, nil
 }
 
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.
@@ -372,10 +369,10 @@ func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, 
 	return nil
 }
 
-// addBundleCFN adds CloudFormation files to the zip for AWS WIF (non-same-cloud) bundles.
-// This is a thin wrapper around writeCFNFiles, gated by the target/source guard.
+// addBundleCFN adds CloudFormation files to the zip for AWS target bundles
+// (both cross-account and WIF). Thin wrapper around writeCFNFiles.
 func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
-	if target != "aws" || source == "aws" {
+	if target != "aws" {
 		return nil
 	}
 	return writeCFNFiles(zw, data, source, slug)
@@ -385,20 +382,23 @@ func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug s
 // script into the given zip.Writer. Used by both addBundleCFN (for the bundle
 // format) and buildCFNZip (for format=cfn).
 //
-// Phase 0 only handles source != "aws" (AWS WIF from Azure/GCP); the
-// cross-account branch lands in Phase 2.
+// Dispatches on source: "aws" → cross-account IAM role template; anything else
+// → AWS WIF template.
 func writeCFNFiles(zw *zip.Writer, data federationIaCData, source, slug string) error {
+	cfTemplatePath := "federation/aws-target/cloudformation/template.yaml"
+	deployTmplPath := "templates/aws-cfn-deploy.sh.tmpl"
 	if source == "aws" {
-		return fmt.Errorf("cfn: cross-account template not yet implemented")
+		cfTemplatePath = "federation/aws-cross-account/cloudformation/template.yaml"
+		deployTmplPath = "templates/aws-cross-account-cfn-deploy.sh.tmpl"
 	}
-	cfTemplate, err := cudlyiac.Modules.ReadFile("federation/aws-target/cloudformation/template.yaml")
+	cfTemplate, err := cudlyiac.Modules.ReadFile(cfTemplatePath)
 	if err != nil {
 		return fmt.Errorf("cfn: read cf template: %w", err)
 	}
 	if err = addBytesToZip(zw, "cloudformation/template.yaml", cfTemplate); err != nil {
 		return fmt.Errorf("cfn: write cf template: %w", err)
 	}
-	cfParams, err := buildCFParamsJSON(data)
+	cfParams, err := buildCFParamsJSON(data, source)
 	if err != nil {
 		return fmt.Errorf("cfn: %w", err)
 	}
@@ -407,14 +407,8 @@ func writeCFNFiles(zw *zip.Writer, data federationIaCData, source, slug string) 
 	}
 	// Shell-escape template values before rendering the deploy script to prevent
 	// injection via account names or OIDC URLs containing shell metacharacters.
-	escapedData := data
-	escapedData.OIDCIssuerURL = shellEscape(data.OIDCIssuerURL)
-	escapedData.OIDCIssuerHost = shellEscape(data.OIDCIssuerHost)
-	escapedData.OIDCAudience = shellEscape(data.OIDCAudience)
-	escapedData.AccountSlug = shellEscape(data.AccountSlug)
-	escapedData.AccountName = shellEscape(data.AccountName)
-	escapedData.AccountExternalID = shellEscape(data.AccountExternalID)
-	deployScript, err := renderTemplate("templates/aws-cfn-deploy.sh.tmpl", escapedData)
+	escapedData := shellEscapeData(data)
+	deployScript, err := renderTemplate(deployTmplPath, escapedData)
 	if err != nil {
 		return fmt.Errorf("cfn: %w", err)
 	}
@@ -479,9 +473,12 @@ func buildBundleReadme(data federationIaCData, target, source string) string {
 	switch {
 	case target == "aws" && source == "aws":
 		sb.WriteString("Contents:\n  terraform/           - Cross-account IAM role Terraform module\n")
-		sb.WriteString("  terraform/*.tfvars   - Pre-filled variable values for this account\n\n")
+		sb.WriteString("  terraform/*.tfvars   - Pre-filled variable values for this account\n")
+		sb.WriteString("  cloudformation/      - CloudFormation alternative\n\n")
 		sb.WriteString("Deploy (Terraform):\n")
 		sb.WriteString(fmt.Sprintf("  cd terraform && terraform init && terraform apply -var-file=%s-aws-cross-account.tfvars\n\n", data.AccountSlug))
+		sb.WriteString("Deploy (CloudFormation):\n")
+		sb.WriteString("  cd cloudformation && SOURCE_ACCOUNT_ID=<id> EXTERNAL_ID=<uuid> bash deploy-cfn.sh --region <region>\n\n")
 		sb.WriteString("After apply, set aws_auth_mode=role_arn and aws_role_arn in CUDly.\n")
 	case target == "aws":
 		sb.WriteString("Contents:\n  terraform/           - IAM OIDC provider + role Terraform module\n")
@@ -529,12 +526,24 @@ type cfParam struct {
 
 // buildCFParamsJSON produces the CloudFormation parameter overrides JSON using
 // encoding/json, which correctly escapes special characters in values.
-func buildCFParamsJSON(data federationIaCData) (string, error) {
-	params := []cfParam{
-		{ParameterKey: "OIDCIssuerURL", ParameterValue: data.OIDCIssuerURL},
-		{ParameterKey: "OIDCIssuerHost", ParameterValue: strings.TrimPrefix(data.OIDCIssuerURL, "https://")},
-		{ParameterKey: "OIDCAudience", ParameterValue: data.OIDCAudience},
-		{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
+//
+// Dispatches on source: "aws" → cross-account params (SourceAccountID, ExternalID);
+// anything else → AWS WIF params (OIDC values).
+func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
+	var params []cfParam
+	if source == "aws" {
+		params = []cfParam{
+			{ParameterKey: "SourceAccountID", ParameterValue: "<SOURCE_ACCOUNT_ID>"},
+			{ParameterKey: "ExternalID", ParameterValue: "<GENERATE_A_UUID>"},
+			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
+		}
+	} else {
+		params = []cfParam{
+			{ParameterKey: "OIDCIssuerURL", ParameterValue: data.OIDCIssuerURL},
+			{ParameterKey: "OIDCIssuerHost", ParameterValue: strings.TrimPrefix(data.OIDCIssuerURL, "https://")},
+			{ParameterKey: "OIDCAudience", ParameterValue: data.OIDCAudience},
+			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
+		}
 	}
 	out, err := json.MarshalIndent(params, "", "  ")
 	if err != nil {

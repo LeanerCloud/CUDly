@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  IAM role for CUDly cross-account access. Deploy this in the target AWS account
+  to allow CUDly running in a source AWS account to assume this role via
+  sts:AssumeRole with an external ID (confused-deputy protection).
+
+Parameters:
+  SourceAccountID:
+    Type: String
+    Description: AWS account ID where CUDly runs (the account allowed to assume this role).
+    AllowedPattern: "^[0-9]{12}$"
+
+  ExternalID:
+    Type: String
+    Description: >
+      Random string used as the sts:ExternalId condition to prevent confused-deputy
+      attacks. Generate a UUID and share it securely with the source account.
+    MinLength: 8
+    NoEcho: true
+
+  RoleName:
+    Type: String
+    Description: Name of the IAM role CUDly will assume.
+    Default: CUDly-CrossAccount
+
+Resources:
+  CUDlyPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${RoleName}-Policy"
+      Description: Permissions required by CUDly to purchase and manage AWS commitments
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EC2Reservations
+            Effect: Allow
+            Action:
+              - ec2:PurchaseReservedInstancesOffering
+              - ec2:DescribeReservedInstancesOfferings
+              - ec2:DescribeReservedInstances
+              - ec2:DescribeInstanceTypeOfferings
+              - ec2:GetReservedInstancesExchangeQuote
+              - ec2:AcceptReservedInstancesExchangeQuote
+              - ec2:DescribeRegions
+            Resource: "*"
+          - Sid: RDSReservations
+            Effect: Allow
+            Action:
+              - rds:PurchaseReservedDBInstancesOffering
+              - rds:DescribeReservedDBInstancesOfferings
+              - rds:DescribeReservedDBInstances
+            Resource: "*"
+          - Sid: ElastiCacheReservations
+            Effect: Allow
+            Action:
+              - elasticache:PurchaseReservedCacheNodesOffering
+              - elasticache:DescribeReservedCacheNodesOfferings
+              - elasticache:DescribeReservedCacheNodes
+            Resource: "*"
+          - Sid: RedshiftReservations
+            Effect: Allow
+            Action:
+              - redshift:PurchaseReservedNodeOffering
+              - redshift:DescribeReservedNodeOfferings
+              - redshift:DescribeReservedNodes
+            Resource: "*"
+          - Sid: MemoryDBReservations
+            Effect: Allow
+            Action:
+              - memorydb:PurchaseReservedNodesOffering
+              - memorydb:DescribeReservedNodesOfferings
+              - memorydb:DescribeReservedNodes
+            Resource: "*"
+          - Sid: SavingsPlans
+            Effect: Allow
+            Action:
+              - savingsplans:CreateSavingsPlan
+              - savingsplans:DescribeSavingsPlans
+              - savingsplans:DescribeSavingsPlansOfferings
+              - savingsplans:DescribeSavingsPlansOfferingRates
+            Resource: "*"
+          - Sid: OpenSearchReservations
+            Effect: Allow
+            Action:
+              - es:PurchaseReservedInstanceOffering
+              - es:DescribeReservedInstanceOfferings
+              - es:DescribeReservedInstances
+            Resource: "*"
+
+  CUDlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Role assumed by CUDly via cross-account IAM role assumption
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${SourceAccountID}:root"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalID
+      ManagedPolicyArns:
+        - !Ref CUDlyPolicy
+
+Outputs:
+  RoleARN:
+    Description: ARN of the CUDly IAM role — use as aws_role_arn in CUDly account registration
+    Value: !GetAtt CUDlyRole.Arn
+
+  CUDlyAccountRegistration:
+    Description: Values to use when registering this account in CUDly
+    Value: !Sub |
+      provider      : aws
+      aws_auth_mode : role_arn
+      external_id   : ${AWS::AccountId}
+      aws_role_arn  : ${CUDlyRole.Arn}

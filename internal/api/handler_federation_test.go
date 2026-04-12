@@ -137,17 +137,53 @@ func TestGetFederationIaC_AWSWIF_CFNZip(t *testing.T) {
 	assert.True(t, hasParams, "cfn zip must contain a cf-params.json file")
 }
 
-func TestGetFederationIaC_CFN_AWSCrossAccount_NotYetSupported(t *testing.T) {
+func TestGetFederationIaC_CFN_AWSCrossAccount(t *testing.T) {
 	h := federationHandler()
 	ctx := context.Background()
 
-	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
 		"target": "aws", "source": "aws", "format": "cfn",
 	}))
-	require.Error(t, err)
-	ce, ok := IsClientError(err)
-	require.True(t, ok)
-	assert.Equal(t, 400, ce.code)
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "aws-cross-account-cfn.zip")
+	assert.Equal(t, "application/zip", res.ContentType)
+	assert.Equal(t, "base64", res.ContentEncoding)
+
+	zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	require.NoError(t, err)
+	names := make(map[string][]byte)
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(rc)
+		rc.Close()
+		names[f.Name] = buf.Bytes()
+	}
+	assert.Contains(t, names, "cloudformation/template.yaml")
+	assert.Contains(t, names, "cloudformation/deploy-cfn.sh")
+	// Cross-account template has SourceAccountID parameter, not OIDCIssuerURL.
+	assert.Contains(t, string(names["cloudformation/template.yaml"]), "SourceAccountID")
+	assert.Contains(t, string(names["cloudformation/deploy-cfn.sh"]), "SOURCE_ACCOUNT_ID")
+	// Params JSON should reference SourceAccountID, not OIDC.
+	var paramsContent []byte
+	for n, b := range names {
+		if strings.HasSuffix(n, "-cf-params.json") {
+			paramsContent = b
+		}
+	}
+	require.NotNil(t, paramsContent)
+	var params []map[string]string
+	require.NoError(t, json.Unmarshal(paramsContent, &params))
+	paramKeys := make(map[string]bool)
+	for _, p := range params {
+		paramKeys[p["ParameterKey"]] = true
+	}
+	assert.True(t, paramKeys["SourceAccountID"])
+	assert.True(t, paramKeys["ExternalID"])
+	assert.False(t, paramKeys["OIDCIssuerURL"])
 }
 
 func TestGetFederationIaC_Bundle_AWSCrossAccount(t *testing.T) {
@@ -174,7 +210,8 @@ func TestGetFederationIaC_Bundle_AWSCrossAccount(t *testing.T) {
 	assert.True(t, names["terraform/variables.tf"], "zip must contain terraform/variables.tf")
 	assert.True(t, names["terraform/outputs.tf"], "zip must contain terraform/outputs.tf")
 	assert.True(t, names["README.txt"], "zip must contain README.txt")
-	assert.False(t, names["cloudformation/template.yaml"], "aws→aws bundle must not contain CF template")
+	assert.True(t, names["cloudformation/template.yaml"], "aws→aws bundle must include cross-account CF template")
+	assert.True(t, names["cloudformation/deploy-cfn.sh"], "aws→aws bundle must include deploy script")
 }
 
 func TestGetFederationIaC_Bundle_AWSWif(t *testing.T) {

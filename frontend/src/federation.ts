@@ -89,13 +89,13 @@ interface FormatOption {
   title: string;
 }
 
-function formatOptionsFor(target: string, source: string): FormatOption[] {
+function formatOptionsFor(target: string): FormatOption[] {
   const opts: FormatOption[] = [
     { value: 'tfvars', label: 'Terraform tfvars', title: 'Single .tfvars file for Terraform.' },
     { value: 'cli', label: 'CLI script', title: 'Self-contained shell script using the cloud\'s official CLI.' },
   ];
-  // CloudFormation only applies for AWS WIF (source ≠ aws); cross-account CFN lands later.
-  if (target === 'aws' && source !== 'aws') {
+  // CloudFormation applies for any AWS target (cross-account + WIF both supported).
+  if (target === 'aws') {
     opts.push({
       value: 'cfn',
       label: 'CloudFormation',
@@ -122,7 +122,7 @@ function buildFederationDownloads(target: string, source: string, containerID: s
 
   const select = document.createElement('select');
   select.className = 'input-small';
-  for (const opt of formatOptionsFor(target, source)) {
+  for (const opt of formatOptionsFor(target)) {
     const o = document.createElement('option');
     o.value = opt.value;
     o.textContent = opt.label;

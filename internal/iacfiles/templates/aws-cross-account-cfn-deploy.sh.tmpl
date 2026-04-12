@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Deploy CUDly AWS cross-account IAM role via CloudFormation
+# Target: {{.AccountName}} ({{.AccountExternalID}})
+#
+# Usage:
+#   SOURCE_ACCOUNT_ID=123456789012 EXTERNAL_ID=<uuid> \
+#     bash deploy-cfn.sh [--region <region>] [--profile <aws-profile>]
+#
+# Requirements: AWS CLI v2, credentials for the target account.
+set -euo pipefail
+
+: "${SOURCE_ACCOUNT_ID:?set SOURCE_ACCOUNT_ID to the AWS account where CUDly runs}"
+: "${EXTERNAL_ID:?set EXTERNAL_ID to a random UUID for confused-deputy protection}"
+
+: "${STACK_NAME:=CUDly-{{.AccountSlug}}-CrossAccount}"
+REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+PROFILE_ARG=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --region)  REGION="$2";  shift 2 ;;
+    --profile) PROFILE_ARG="--profile $2"; shift 2 ;;
+    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+  esac
+done
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "Deploying stack ${STACK_NAME} to ${REGION}..."
+
+# shellcheck disable=SC2086
+aws cloudformation deploy \
+  $PROFILE_ARG \
+  --region "$REGION" \
+  --template-file "$DIR/template.yaml" \
+  --stack-name "$STACK_NAME" \
+  --parameter-overrides \
+    "SourceAccountID=${SOURCE_ACCOUNT_ID}" \
+    "ExternalID=${EXTERNAL_ID}" \
+    "RoleName=CUDly-{{.AccountSlug}}" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --no-fail-on-empty-changeset
+
+echo ""
+echo "=== Stack outputs (${STACK_NAME}) ==="
+# shellcheck disable=SC2086
+aws cloudformation describe-stacks \
+  $PROFILE_ARG \
+  --region "$REGION" \
+  --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" \
+  --output table
