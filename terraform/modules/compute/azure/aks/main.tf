@@ -355,11 +355,6 @@ resource "kubernetes_deployment" "app" {
             value = join(",", var.allowed_origins)
           }
 
-          env {
-            name  = "CORS_ALLOWED_ORIGIN"
-            value = length(var.allowed_origins) > 0 ? var.allowed_origins[0] : "*"
-          }
-
           dynamic "env" {
             for_each = var.additional_env_vars
             content {
