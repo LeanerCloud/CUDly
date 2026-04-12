@@ -69,12 +69,14 @@ type APICreateGroupRequest struct {
 	AllowedAccounts []string        `json:"allowed_accounts,omitempty"`
 }
 
-// APIUpdateGroupRequest is the request type for updating groups via API
+// APIUpdateGroupRequest is the request type for updating groups via API.
+// AllowedAccounts has no omitempty: clients must be able to send an explicit
+// empty slice to clear account restrictions. Nil means "not sent".
 type APIUpdateGroupRequest struct {
 	Name            string          `json:"name,omitempty"`
 	Description     string          `json:"description,omitempty"`
 	Permissions     []APIPermission `json:"permissions,omitempty"`
-	AllowedAccounts []string        `json:"allowed_accounts,omitempty"`
+	AllowedAccounts []string        `json:"allowed_accounts"`
 }
 
 // Conversion helpers
