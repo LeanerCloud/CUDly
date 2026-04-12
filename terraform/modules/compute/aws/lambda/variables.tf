@@ -96,9 +96,14 @@ variable "function_url_auth_type" {
 }
 
 variable "allowed_origins" {
-  description = "Allowed origins for CORS"
+  description = "Allowed origins for CORS. Must be non-empty — Lambda Function URL CORS is infrastructure-enforced and rejects all requests with empty allow_origins."
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = length(var.allowed_origins) > 0
+    error_message = "allowed_origins must not be empty for Lambda Function URL CORS — set an explicit origin list in tfvars."
+  }
 }
 
 variable "reserved_concurrent_executions" {
