@@ -5,12 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
+
+// sourceCloud returns the cloud where CUDly is currently running, read from
+// the CUDLY_SOURCE_CLOUD env var (set by Terraform). Falls back to "aws".
+func sourceCloud() string {
+	if v := os.Getenv("CUDLY_SOURCE_CLOUD"); v != "" {
+		return v
+	}
+	return "aws"
+}
 
 // Configuration handlers
 func (h *Handler) getConfig(ctx context.Context) (*ConfigResponse, error) {
@@ -31,6 +41,7 @@ func (h *Handler) getConfig(ctx context.Context) (*ConfigResponse, error) {
 		Global:      globalCfg,
 		Services:    services,
 		Credentials: credStatus,
+		SourceCloud: sourceCloud(),
 	}, nil
 }
 

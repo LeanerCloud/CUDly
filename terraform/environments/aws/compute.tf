@@ -64,6 +64,7 @@ module "compute_lambda" {
       FROM_EMAIL                           = "noreply@${var.subdomain_zone_name}"
       CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN = module.secrets.credential_encryption_key_secret_arn
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
+      CUDLY_SOURCE_CLOUD                   = "aws"
     },
     var.additional_env_vars
   )
@@ -159,6 +160,7 @@ module "compute_fargate" {
       FROM_EMAIL                           = "noreply@${var.subdomain_zone_name}"
       CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN = module.secrets.credential_encryption_key_secret_arn
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
+      CUDLY_SOURCE_CLOUD                   = "aws"
     },
     var.additional_env_vars
   )

@@ -184,6 +184,7 @@ export interface ConfigResponse {
   global?: GlobalConfig;
   services?: api.ServiceConfig[];
   credentials?: CredentialsConfig;
+  source_cloud?: string;
 }
 
 export interface GlobalConfig {

@@ -279,6 +279,7 @@ type ConfigResponse struct {
 	Global      *config.GlobalConfig   `json:"global"`
 	Services    []config.ServiceConfig `json:"services"`
 	Credentials *CredentialsStatus     `json:"credentials,omitempty"`
+	SourceCloud string                 `json:"source_cloud,omitempty"`
 }
 
 // CredentialsStatus holds the status of cloud provider credentials
