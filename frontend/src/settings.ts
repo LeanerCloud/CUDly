@@ -691,17 +691,26 @@ export function setupSettingsHandlers(): void {
  * Update visibility of provider settings sections based on checkboxes
  */
 function updateProviderSettingsVisibility(): void {
-  const awsCheck = document.getElementById('provider-aws') as HTMLInputElement | null;
-  const azureCheck = document.getElementById('provider-azure') as HTMLInputElement | null;
-  const gcpCheck = document.getElementById('provider-gcp') as HTMLInputElement | null;
-
-  const awsSettings = document.getElementById('aws-settings');
-  const azureSettings = document.getElementById('azure-settings');
-  const gcpSettings = document.getElementById('gcp-settings');
-
-  if (awsSettings) awsSettings.classList.toggle('hidden', !awsCheck?.checked);
-  if (azureSettings) azureSettings.classList.toggle('hidden', !azureCheck?.checked);
-  if (gcpSettings) gcpSettings.classList.toggle('hidden', !gcpCheck?.checked);
+  const providers: Array<{ key: AccountProvider; checkId: string; settingsId: string; blockId: string }> = [
+    { key: 'aws',   checkId: 'provider-aws',   settingsId: 'aws-settings',   blockId: 'accounts-aws-block'   },
+    { key: 'azure', checkId: 'provider-azure', settingsId: 'azure-settings', blockId: 'accounts-azure-block' },
+    { key: 'gcp',   checkId: 'provider-gcp',   settingsId: 'gcp-settings',   blockId: 'accounts-gcp-block'   },
+  ];
+  for (const p of providers) {
+    const checked = (document.getElementById(p.checkId) as HTMLInputElement | null)?.checked ?? false;
+    // Per-provider settings section (credentials + service defaults): hide when disabled
+    document.getElementById(p.settingsId)?.classList.toggle('hidden', !checked);
+    // Per-provider accounts block in Accounts section: dim (not hide) when disabled
+    const block = document.getElementById(p.blockId);
+    if (block) {
+      const wasDisabled = block.classList.contains('provider-disabled');
+      block.classList.toggle('provider-disabled', !checked);
+      // Re-enabling: refresh the account list from the backend
+      if (wasDisabled && checked) {
+        void loadAccountsForProvider(p.key);
+      }
+    }
+  }
 }
 
 /**

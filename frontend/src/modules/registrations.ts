@@ -5,7 +5,7 @@
 import * as api from '../api';
 import type { AccountRegistration } from '../api/registrations';
 import type { CloudAccount, CloudAccountRequest } from '../api/accounts';
-import { openAccountModal } from '../settings';
+import { openAccountModal, loadAccountsForProvider } from '../settings';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -191,9 +191,12 @@ function handleApprove(reg: AccountRegistration): void {
   const syntheticAccount = registrationToAccount(reg);
 
   openAccountModal(reg.provider as AccountProvider, syntheticAccount, {
-    onSave: async (_provider: AccountProvider, request: CloudAccountRequest) => {
+    onSave: async (provider: AccountProvider, request: CloudAccountRequest) => {
       await api.approveRegistration(reg.id, request);
       await loadRegistrations();
+      // Refresh the provider's account list so the newly-approved account appears
+      // without requiring a page reload.
+      await loadAccountsForProvider(provider);
     },
   });
 }

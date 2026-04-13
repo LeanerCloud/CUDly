@@ -281,3 +281,26 @@ select.dirty {
     margin: 0;
     padding: 0.5rem 0;
 }
+
+/* Per-provider account block dimming when the provider is disabled in Global Config */
+.provider-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.provider-disabled-banner {
+    display: none;
+    background: #fff3cd;
+    color: #664d03;
+    border: 1px solid #ffecb5;
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+}
+
+.provider-disabled .provider-disabled-banner {
+    display: block;
+    /* The banner itself should still be readable inside a dimmed block */
+    opacity: 2;
+}
