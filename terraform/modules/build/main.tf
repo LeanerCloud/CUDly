@@ -97,8 +97,14 @@ resource "terraform_data" "docker_build" {
       echo "Platform: $TARGET_PLATFORM ($BUILD_MODE)"
       echo "Git commit: ${local.git_commit}"
 
-      docker buildx build \
+      # --provenance=false and --sbom=false force buildx to push a Docker v2 image
+       # manifest instead of an OCI image index (multi-platform manifest list).
+       # AWS Lambda rejects OCI manifest lists with "InvalidParameterValueException:
+       # The image manifest, config or layer media type ... is not supported."
+       docker buildx build \
         $PLATFORM_ARG \
+        --provenance=false \
+        --sbom=false \
         --network=host \
         --tag ${local.image_uri} \
         --build-arg GIT_COMMIT=${local.git_commit} \
