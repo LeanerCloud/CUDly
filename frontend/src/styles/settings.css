@@ -282,10 +282,16 @@ select.dirty {
     padding: 0.5rem 0;
 }
 
-/* Per-provider account block dimming when the provider is disabled in Global Config */
+/* Per-provider account block dimming when the provider is disabled in Global Config.
+ * We dim each direct child except the banner so the warning stays fully readable
+ * (CSS opacity is multiplicative down the tree — a child cannot exceed its parent's
+ * opacity, so we cannot dim the parent and un-dim the child). */
 .provider-disabled {
-    opacity: 0.5;
     pointer-events: none;
+}
+
+.provider-disabled > *:not(.provider-disabled-banner) {
+    opacity: 0.5;
 }
 
 .provider-disabled-banner {
@@ -297,10 +303,10 @@ select.dirty {
     padding: 0.5rem 0.75rem;
     margin-bottom: 0.75rem;
     font-size: 0.9rem;
+    /* Banner stays interactive-visible even inside a pointer-events:none parent */
+    pointer-events: auto;
 }
 
 .provider-disabled .provider-disabled-banner {
     display: block;
-    /* The banner itself should still be readable inside a dimmed block */
-    opacity: 2;
 }
