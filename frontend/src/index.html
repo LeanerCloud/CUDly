@@ -307,23 +307,6 @@
 
             <!-- Settings Tab -->
             <div id="settings-tab" class="tab-content" role="tabpanel">
-                <!-- Account Registrations (Admin Only) — shown first for visibility -->
-                <section id="registrations-section" class="admin-only card">
-                    <h2>Account Registrations</h2>
-                    <p class="settings-description">Review and approve target accounts that registered via federation IaC deployment.</p>
-                    <div class="controls-bar">
-                        <label>Status:
-                            <select id="registrations-status-filter">
-                                <option value="pending">Pending</option>
-                                <option value="">All</option>
-                                <option value="approved">Approved</option>
-                                <option value="rejected">Rejected</option>
-                            </select>
-                        </label>
-                    </div>
-                    <div id="registrations-list" class="mt-3"></div>
-                </section>
-
                 <section id="settings-section">
                     <h2>Global Configuration</h2>
                     <p class="settings-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
@@ -440,8 +423,6 @@
                                     <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
                                 </div>
                             </div>
-                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-aws-account-btn">+ Add Account</button> <button type="button" class="btn btn-small" id="discover-org-accounts-btn">Discover Org Accounts</button></h4>
-                            <div id="aws-accounts-list" class="accounts-list"></div>
                             <h4 class="subsection-title">Service Defaults</h4>
                             <div class="service-defaults-grid">
                                 <div class="service-default-card">
@@ -475,26 +456,6 @@
                                     <label>Payment: <select id="aws-savingsplans-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
                                 </div>
                             </div>
-                            <div class="federation-section">
-                                <h4 class="subsection-title">
-                                    Federation Setup
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Download pre-populated IaC to create IAM OIDC providers and CUDly IAM roles in each AWS account, so CUDly can authenticate from Azure or GCP without storing long-lived access keys.</span></span>
-                                </h4>
-                                <div class="setting-row">
-                                    <div class="setting-info">
-                                        <label for="aws-fed-source">CUDly runs on:</label>
-                                        <span class="info-icon">&#9432;<span class="tooltip-text">Select the cloud where CUDly is deployed. The downloaded IaC will be pre-configured with the correct OIDC issuer URL and audience for that source cloud.</span></span>
-                                    </div>
-                                    <div class="setting-input">
-                                        <select id="aws-fed-source">
-                                            <option value="aws" title="CUDly runs on AWS — downloads a cross-account IAM role Terraform module. Set aws_auth_mode=role_arn after applying.">AWS (cross-account IAM role)</option>
-                                            <option value="azure" title="CUDly runs on Azure — creates an IAM OIDC provider trusting Azure AD. Set aws_auth_mode=workload_identity_federation.">Azure (Managed Identity / Entra ID OIDC)</option>
-                                            <option value="gcp" title="CUDly runs on GCP — creates an IAM OIDC provider trusting Google. Set aws_auth_mode=workload_identity_federation.">GCP (Workload Identity OIDC)</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div id="aws-federation-accounts" class="federation-accounts"></div>
-                            </div>
                             <div class="fieldset-save-bar">
                                 <button type="button" class="btn btn-primary" id="save-aws-btn">Save</button>
                             </div>
@@ -513,8 +474,6 @@
                                     <button type="button" class="btn btn-small" id="azure-configure-btn">Configure</button>
                                 </div>
                             </div>
-                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-azure-account-btn">+ Add Account</button></h4>
-                            <div id="azure-accounts-list" class="accounts-list"></div>
                             <h4 class="subsection-title">Service Defaults</h4>
                             <div class="service-defaults-grid">
                                 <div class="service-default-card">
@@ -534,25 +493,6 @@
                                     <label>Term: <select id="azure-redis-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 </div>
                             </div>
-                            <div class="federation-section">
-                                <h4 class="subsection-title">
-                                    Federation Setup
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Download pre-populated IaC to create Azure App Registrations with certificate credentials. CUDly signs JWTs with an RSA private key; Azure validates them against the registered certificate — no client secrets stored.</span></span>
-                                </h4>
-                                <p class="federation-hint">Applies when CUDly runs on AWS or GCP and needs to manage Azure reservations without storing client secrets.</p>
-                                <div class="setting-row">
-                                    <div class="setting-info">
-                                        <label for="azure-fed-source">CUDly runs on:</label>
-                                    </div>
-                                    <div class="setting-input">
-                                        <select id="azure-fed-source">
-                                            <option value="aws">AWS</option>
-                                            <option value="gcp">GCP</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div id="azure-federation-accounts" class="federation-accounts"></div>
-                            </div>
                             <div class="fieldset-save-bar">
                                 <button type="button" class="btn btn-primary" id="save-azure-btn">Save</button>
                             </div>
@@ -571,8 +511,6 @@
                                     <button type="button" class="btn btn-small" id="gcp-configure-btn">Configure</button>
                                 </div>
                             </div>
-                            <h4 class="subsection-title">Accounts <button type="button" class="btn btn-small" id="add-gcp-account-btn">+ Add Account</button></h4>
-                            <div id="gcp-accounts-list" class="accounts-list"></div>
                             <h4 class="subsection-title">Service Defaults</h4>
                             <div class="service-defaults-grid">
                                 <div class="service-default-card">
@@ -592,26 +530,6 @@
                                     <label>Term: <select id="gcp-storage-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 </div>
                             </div>
-                            <div class="federation-section">
-                                <h4 class="subsection-title">
-                                    Federation Setup
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Download pre-populated IaC to create GCP Workload Identity pools and providers. After applying, run the gcloud command from the Terraform output to generate the external-account credential JSON to paste into CUDly — no service account keys generated.</span></span>
-                                </h4>
-                                <div class="setting-row">
-                                    <div class="setting-info">
-                                        <label for="gcp-fed-source">CUDly runs on:</label>
-                                        <span class="info-icon">&#9432;<span class="tooltip-text">Select the cloud where CUDly is deployed. The downloaded .tfvars will include the correct OIDC issuer or AWS account ID for the Workload Identity Pool provider.</span></span>
-                                    </div>
-                                    <div class="setting-input">
-                                        <select id="gcp-fed-source">
-                                            <option value="aws" title="CUDly runs on AWS — the WIF pool provider will trust AWS STS tokens from the configured AWS account.">AWS (STS OIDC)</option>
-                                            <option value="azure" title="CUDly runs on Azure — the WIF pool provider will trust Azure AD OIDC tokens.">Azure (Entra ID OIDC)</option>
-                                            <option value="gcp" title="CUDly runs on GCP — use service account impersonation within GCP; no WIF pool needed.">GCP (SA impersonation)</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div id="gcp-federation-accounts" class="federation-accounts"></div>
-                            </div>
                             <div class="fieldset-save-bar">
                                 <button type="button" class="btn btn-primary" id="save-gcp-btn">Save</button>
                             </div>
@@ -627,7 +545,75 @@
                     <div id="ri-exchange-automation-settings"></div>
                 </section>
 
-                <!-- Account Registrations Section (Admin Only) -->
+                <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->
+                <section id="accounts-section" class="admin-only card">
+                    <h2>Accounts</h2>
+                    <p class="settings-description">Onboard new cloud accounts via federation IaC, review pending registrations, and manage per-provider accounts.</p>
+
+                    <fieldset class="settings-category">
+                        <legend>Federation Setup (Add New Account)</legend>
+                        <p class="settings-description">Download pre-populated IaC to onboard a new account via workload identity federation. No long-lived credentials needed.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="federation-target-provider">Target cloud:</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">The cloud where the new account lives. The downloaded IaC will be pre-configured to trust CUDly's current deployment.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <select id="federation-target-provider">
+                                    <option value="aws">AWS</option>
+                                    <option value="azure">Azure</option>
+                                    <option value="gcp">GCP</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="federation-setup-panel" class="federation-accounts"></div>
+                    </fieldset>
+
+                    <fieldset class="settings-category">
+                        <legend>Pending Registrations</legend>
+                        <p class="settings-description">Review and approve target accounts that registered via federation IaC deployment.</p>
+                        <div class="controls-bar">
+                            <label>Status:
+                                <select id="registrations-status-filter">
+                                    <option value="pending">Pending</option>
+                                    <option value="">All</option>
+                                    <option value="approved">Approved</option>
+                                    <option value="rejected">Rejected</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div id="registrations-list" class="mt-3"></div>
+                    </fieldset>
+
+                    <fieldset id="accounts-aws-block" class="settings-category">
+                        <legend><span class="provider-badge aws">AWS</span> Accounts</legend>
+                        <div class="provider-disabled-banner">Provider is disabled — enable AWS in Global Config to manage these accounts.</div>
+                        <div class="controls-bar">
+                            <button type="button" class="btn btn-small" id="add-aws-account-btn">+ Add Account</button>
+                            <button type="button" class="btn btn-small" id="discover-org-accounts-btn">Discover Org Accounts</button>
+                        </div>
+                        <div id="aws-accounts-list" class="accounts-list"></div>
+                    </fieldset>
+
+                    <fieldset id="accounts-azure-block" class="settings-category">
+                        <legend><span class="provider-badge azure">Azure</span> Accounts</legend>
+                        <div class="provider-disabled-banner">Provider is disabled — enable Azure in Global Config to manage these accounts.</div>
+                        <div class="controls-bar">
+                            <button type="button" class="btn btn-small" id="add-azure-account-btn">+ Add Account</button>
+                        </div>
+                        <div id="azure-accounts-list" class="accounts-list"></div>
+                    </fieldset>
+
+                    <fieldset id="accounts-gcp-block" class="settings-category">
+                        <legend><span class="provider-badge gcp">GCP</span> Accounts</legend>
+                        <div class="provider-disabled-banner">Provider is disabled — enable GCP in Global Config to manage these accounts.</div>
+                        <div class="controls-bar">
+                            <button type="button" class="btn btn-small" id="add-gcp-account-btn">+ Add Account</button>
+                        </div>
+                        <div id="gcp-accounts-list" class="accounts-list"></div>
+                    </fieldset>
+                </section>
+
                 <!-- API Keys Section (Admin Only) -->
                 <section id="apikeys-section" class="admin-only">
                     <h2>API Keys Management</h2>

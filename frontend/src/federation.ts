@@ -183,44 +183,23 @@ function runDownload(btn: HTMLButtonElement, target: string, source: string, for
     });
 }
 
-function buildAWSFederationDownloads(source: string): void {
-  buildFederationDownloads('aws', source, 'aws-federation-accounts');
-}
-
-function buildAzureFederationDownloads(source: string): void {
-  buildFederationDownloads('azure', source, 'azure-federation-accounts');
-}
-
-function buildGCPFederationDownloads(source: string): void {
-  buildFederationDownloads('gcp', source, 'gcp-federation-accounts');
-}
-
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
 /**
- * Render the federation download subsections within each provider fieldset
- * in the Settings page. No account loading needed — templates are generic.
+ * Render the federation download panel in the consolidated Accounts section.
+ * The `source` parameter comes from the backend (CUDLY_SOURCE_CLOUD env var)
+ * and is fixed — users pick the target cloud via the dropdown.
  */
-export async function initFederationSections(): Promise<void> {
-  const awsFedSource = document.getElementById('aws-fed-source') as HTMLSelectElement | null;
-  const azureFedSource = document.getElementById('azure-fed-source') as HTMLSelectElement | null;
-  const gcpFedSource = document.getElementById('gcp-fed-source') as HTMLSelectElement | null;
+export async function initFederationPanel(source: string): Promise<void> {
+  const targetSelect = document.getElementById('federation-target-provider') as HTMLSelectElement | null;
+  if (!targetSelect) return;
 
-  buildAWSFederationDownloads(awsFedSource?.value ?? 'aws');
-  buildAzureFederationDownloads(azureFedSource?.value ?? 'aws');
-  buildGCPFederationDownloads(gcpFedSource?.value ?? 'aws');
+  const render = (): void => {
+    buildFederationDownloads(targetSelect.value, source, 'federation-setup-panel');
+  };
 
-  awsFedSource?.addEventListener('change', () => {
-    buildAWSFederationDownloads(awsFedSource.value);
-  });
-
-  azureFedSource?.addEventListener('change', () => {
-    buildAzureFederationDownloads(azureFedSource.value);
-  });
-
-  gcpFedSource?.addEventListener('change', () => {
-    buildGCPFederationDownloads(gcpFedSource.value);
-  });
+  render();
+  targetSelect.addEventListener('change', render);
 }

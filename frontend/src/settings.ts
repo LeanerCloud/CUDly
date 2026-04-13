@@ -3,7 +3,7 @@
  */
 
 import * as api from './api';
-import { initFederationSections } from './federation';
+import { initFederationPanel } from './federation';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -831,8 +831,9 @@ export async function loadGlobalSettings(): Promise<void> {
     void loadAccountsForProvider('azure');
     void loadAccountsForProvider('gcp');
 
-    // Populate federation IaC download sections (non-blocking)
-    void initFederationSections();
+    // Populate federation IaC download panel (non-blocking).
+    // Source comes from the backend CUDLY_SOURCE_CLOUD env var (set by Terraform).
+    void initFederationPanel(data.source_cloud ?? 'aws');
 
     // Load pending account registrations (non-blocking)
     void import('./modules/registrations').then(m => m.initRegistrations());
