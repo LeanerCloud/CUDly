@@ -174,7 +174,9 @@ export async function loadRegistrations(): Promise<void> {
   if (!container) return;
 
   const filterEl = document.getElementById('registrations-status-filter') as HTMLSelectElement | null;
-  const status = filterEl?.value || 'pending';
+  // Empty value = "All" (default). Don't coerce to "pending" — that would hide
+  // approved/rejected registrations after the user approves them.
+  const status = filterEl?.value ?? '';
 
   try {
     const regs = await api.listRegistrations(status || undefined);
