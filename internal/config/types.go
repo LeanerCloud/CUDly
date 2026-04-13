@@ -293,6 +293,7 @@ type AccountRegistration struct {
 	SourceProvider       string     `json:"source_provider,omitempty"`
 	AWSRoleARN           string     `json:"aws_role_arn,omitempty"`
 	AWSAuthMode          string     `json:"aws_auth_mode,omitempty"`
+	AWSExternalID        string     `json:"aws_external_id,omitempty"`
 	AzureSubscriptionID  string     `json:"azure_subscription_id,omitempty"`
 	AzureTenantID        string     `json:"azure_tenant_id,omitempty"`
 	AzureClientID        string     `json:"azure_client_id,omitempty"`

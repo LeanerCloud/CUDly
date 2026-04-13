@@ -27,6 +27,7 @@ type RegistrationRequest struct {
 	SourceProvider      string `json:"source_provider"`
 	AWSRoleARN          string `json:"aws_role_arn"`
 	AWSAuthMode         string `json:"aws_auth_mode"`
+	AWSExternalID       string `json:"aws_external_id"`
 	AzureSubscriptionID string `json:"azure_subscription_id"`
 	AzureTenantID       string `json:"azure_tenant_id"`
 	AzureClientID       string `json:"azure_client_id"`
@@ -81,6 +82,7 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		SourceProvider:      body.SourceProvider,
 		AWSRoleARN:          body.AWSRoleARN,
 		AWSAuthMode:         body.AWSAuthMode,
+		AWSExternalID:       body.AWSExternalID,
 		AzureSubscriptionID: body.AzureSubscriptionID,
 		AzureTenantID:       body.AzureTenantID,
 		AzureClientID:       body.AzureClientID,

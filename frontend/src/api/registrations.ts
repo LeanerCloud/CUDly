@@ -18,6 +18,7 @@ export interface AccountRegistration {
   source_provider?: Provider;
   aws_role_arn?: string;
   aws_auth_mode?: string;
+  aws_external_id?: string;
   azure_subscription_id?: string;
   azure_tenant_id?: string;
   azure_client_id?: string;

@@ -21,6 +21,7 @@ function registrationToAccount(reg: AccountRegistration): CloudAccount {
     enabled: false,
     aws_auth_mode: reg.aws_auth_mode as CloudAccount['aws_auth_mode'],
     aws_role_arn: reg.aws_role_arn,
+    aws_external_id: reg.aws_external_id,
     azure_subscription_id: reg.azure_subscription_id,
     azure_tenant_id: reg.azure_tenant_id,
     azure_client_id: reg.azure_client_id,

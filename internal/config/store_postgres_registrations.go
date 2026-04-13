@@ -31,7 +31,7 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 			id, reference_token, status,
 			provider, external_id, account_name, contact_email, description,
 			source_provider,
-			aws_role_arn, aws_auth_mode,
+			aws_role_arn, aws_auth_mode, aws_external_id,
 			azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
 			gcp_project_id, gcp_client_email, gcp_auth_mode,
 			reg_credential_type, reg_credential_payload,
@@ -40,11 +40,11 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 			$1, $2, $3,
 			$4, $5, $6, $7, $8,
 			$9,
-			$10, $11,
-			$12, $13, $14, $15,
-			$16, $17, $18,
-			$19, $20,
-			$21, $22
+			$10, $11, $12,
+			$13, $14, $15, $16,
+			$17, $18, $19,
+			$20, $21,
+			$22, $23
 		)
 	`
 
@@ -52,7 +52,7 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 		reg.ID, reg.ReferenceToken, reg.Status,
 		reg.Provider, reg.ExternalID, reg.AccountName, reg.ContactEmail, nullStringFromString(reg.Description),
 		nullStringFromString(reg.SourceProvider),
-		nullStringFromString(reg.AWSRoleARN), nullStringFromString(reg.AWSAuthMode),
+		nullStringFromString(reg.AWSRoleARN), nullStringFromString(reg.AWSAuthMode), nullStringFromString(reg.AWSExternalID),
 		nullStringFromString(reg.AzureSubscriptionID), nullStringFromString(reg.AzureTenantID),
 		nullStringFromString(reg.AzureClientID), nullStringFromString(reg.AzureAuthMode),
 		nullStringFromString(reg.GCPProjectID), nullStringFromString(reg.GCPClientEmail),
@@ -220,7 +220,7 @@ func registrationColumns() string {
 	return `id, reference_token, status,
 		provider, external_id, account_name, contact_email, description,
 		source_provider,
-		aws_role_arn, aws_auth_mode,
+		aws_role_arn, aws_auth_mode, aws_external_id,
 		azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
 		gcp_project_id, gcp_client_email, gcp_auth_mode,
 		reg_credential_type, reg_credential_payload,
@@ -236,7 +236,7 @@ type scannable interface {
 func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 	var reg AccountRegistration
 	var description, sourceProvider sql.NullString
-	var awsRoleARN, awsAuthMode sql.NullString
+	var awsRoleARN, awsAuthMode, awsExternalID sql.NullString
 	var azureSubID, azureTenantID, azureClientID, azureAuthMode sql.NullString
 	var gcpProjectID, gcpClientEmail, gcpAuthMode sql.NullString
 	var regCredType, regCredPayload sql.NullString
@@ -248,7 +248,7 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 		&reg.ID, &reg.ReferenceToken, &reg.Status,
 		&reg.Provider, &reg.ExternalID, &reg.AccountName, &reg.ContactEmail, &description,
 		&sourceProvider,
-		&awsRoleARN, &awsAuthMode,
+		&awsRoleARN, &awsAuthMode, &awsExternalID,
 		&azureSubID, &azureTenantID, &azureClientID, &azureAuthMode,
 		&gcpProjectID, &gcpClientEmail, &gcpAuthMode,
 		&regCredType, &regCredPayload,
@@ -263,6 +263,7 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 	reg.SourceProvider = sourceProvider.String
 	reg.AWSRoleARN = awsRoleARN.String
 	reg.AWSAuthMode = awsAuthMode.String
+	reg.AWSExternalID = awsExternalID.String
 	reg.AzureSubscriptionID = azureSubID.String
 	reg.AzureTenantID = azureTenantID.String
 	reg.AzureClientID = azureClientID.String
