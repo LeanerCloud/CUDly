@@ -399,3 +399,83 @@ func TestShellEscape(t *testing.T) {
 		assert.Equal(t, tt.expected, shellEscape(tt.input), "input: %q", tt.input)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Azure Bicep / ARM tests
+// ---------------------------------------------------------------------------
+
+func unzipResponse(t *testing.T, res *FederationIaCResponse) map[string][]byte {
+	t.Helper()
+	require.Equal(t, "application/zip", res.ContentType)
+	require.Equal(t, "base64", res.ContentEncoding)
+	zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	require.NoError(t, err)
+	files := make(map[string][]byte)
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(rc)
+		rc.Close()
+		files[f.Name] = buf.Bytes()
+	}
+	return files
+}
+
+func TestGetFederationIaC_AzureBicep(t *testing.T) {
+	h := federationHandler()
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "azure", "source": "aws", "format": "bicep",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "azure-wif-bicep.zip")
+
+	files := unzipResponse(t, res)
+	require.Contains(t, files, "azure-wif.bicep")
+	require.Contains(t, files, "azure-wif-bicep-params.json")
+	require.Contains(t, files, "deploy-azure.sh")
+	require.Contains(t, files, "README.txt")
+
+	assert.Contains(t, string(files["azure-wif.bicep"]), "targetScope = 'subscription'")
+	assert.Contains(t, string(files["azure-wif.bicep"]), "Microsoft.Authorization/roleAssignments")
+	assert.Contains(t, string(files["deploy-azure.sh"]), "az deployment sub create")
+
+	var params map[string]any
+	require.NoError(t, json.Unmarshal(files["azure-wif-bicep-params.json"], &params),
+		"params file must be valid JSON")
+	assert.Contains(t, params, "parameters")
+}
+
+func TestGetFederationIaC_AzureARM(t *testing.T) {
+	h := federationHandler()
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "azure", "source": "gcp", "format": "arm",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, res.Filename, "azure-wif-arm.zip")
+
+	files := unzipResponse(t, res)
+	require.Contains(t, files, "azure-wif.arm.json")
+	require.Contains(t, files, "azure-wif-bicep-params.json")
+	require.Contains(t, files, "deploy-azure.sh")
+
+	var armTemplate map[string]any
+	require.NoError(t, json.Unmarshal(files["azure-wif.arm.json"], &armTemplate),
+		"ARM template must be valid JSON")
+	assert.Contains(t, armTemplate, "parameters")
+	assert.Contains(t, armTemplate, "resources")
+}
+
+func TestGetFederationIaC_Bicep_RejectsNonAzure(t *testing.T) {
+	h := federationHandler()
+	_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "aws", "source": "azure", "format": "bicep",
+	}))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "target=azure")
+}

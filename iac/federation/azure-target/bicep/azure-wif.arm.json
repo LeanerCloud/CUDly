@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.33.93.31351",
+      "templateHash": "10746328641666471116"
+    }
+  },
+  "parameters": {
+    "servicePrincipalObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of the CUDly service principal created by the azure-wif-cli.sh script."
+      }
+    },
+    "roleDefinitionId": {
+      "type": "string",
+      "defaultValue": "f7b75c60-3036-4b75-91c3-3d7081ddda6e",
+      "metadata": {
+        "description": "Built-in role definition ID for Reservation Purchaser. Default is the well-known built-in role ID."
+      }
+    },
+    "roleAssignmentName": {
+      "type": "string",
+      "defaultValue": "[guid(subscription().id, parameters('servicePrincipalObjectId'), parameters('roleDefinitionId'))]",
+      "metadata": {
+        "description": "Deterministic GUID for the role assignment. Leave the default unless you need to avoid a collision."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[parameters('roleAssignmentName')]",
+      "properties": {
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionId'))]",
+        "description": "CUDly Reservation Purchaser — assigned via CUDly federation setup."
+      }
+    }
+  ],
+  "outputs": {
+    "roleAssignmentId": {
+      "type": "string",
+      "value": "[subscriptionResourceId('Microsoft.Authorization/roleAssignments', parameters('roleAssignmentName'))]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[parameters('servicePrincipalObjectId')]"
+    }
+  }
+}

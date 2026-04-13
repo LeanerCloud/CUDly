@@ -168,7 +168,7 @@ func shellEscapeData(data federationIaCData) federationIaCData {
 // formatNeedsZip returns true for IaC formats that ship as multi-file zip archives.
 func formatNeedsZip(format string) bool {
 	switch format {
-	case "bundle", "cfn":
+	case "bundle", "cfn", "bicep", "arm":
 		return true
 	}
 	return false
@@ -188,6 +188,8 @@ func (h *Handler) buildZipResponse(data federationIaCData, target, source, forma
 		zipBytes, filename, err = buildFederationBundle(data, target, source, slug)
 	case "cfn":
 		zipBytes, filename, err = buildCFNZip(data, target, source, slug)
+	case "bicep", "arm":
+		zipBytes, filename, err = buildAzureTemplateZip(format, data, target, slug)
 	default:
 		return nil, NewClientError(400, "unsupported zip format: "+format)
 	}
@@ -350,6 +352,101 @@ func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, s
 		zipName = slug + "-aws-cross-account-cfn.zip"
 	}
 	return buf.Bytes(), zipName, nil
+}
+
+// azureTemplateName maps a format to the static template filename inside
+// iac/federation/azure-target/bicep/. Returns "" for unknown formats.
+func azureTemplateName(format string) string {
+	switch format {
+	case "bicep":
+		return "azure-wif.bicep"
+	case "arm":
+		return "azure-wif.arm.json"
+	}
+	return ""
+}
+
+// buildAzureTemplateZip creates a zip containing the Azure Bicep or ARM template,
+// a rendered parameters file, the deploy-azure.sh wrapper script, and a README
+// describing the two-step flow (run azure-wif-cli.sh first to create the
+// identity, then deploy this template to assign the Reservation Purchaser role).
+//
+// format must be "bicep" or "arm". target must be "azure".
+func buildAzureTemplateZip(format string, data federationIaCData, target, slug string) ([]byte, string, error) {
+	if target != "azure" {
+		return nil, "", NewClientError(400, "format="+format+" requires target=azure")
+	}
+	templateName := azureTemplateName(format)
+	if templateName == "" {
+		return nil, "", NewClientError(400, "unsupported azure template format: "+format)
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	if err := writeAzureTemplateFiles(zw, data, format, templateName); err != nil {
+		return nil, "", err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, "", fmt.Errorf("azure %s: finalize zip: %w", format, err)
+	}
+	return buf.Bytes(), slug + "-azure-wif-" + format + ".zip", nil
+}
+
+// writeAzureTemplateFiles reads the static Azure template + deploy script,
+// renders the parameters file and README, and writes all four into the zip.
+func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, templateName string) error {
+	templateBytes, err := cudlyiac.Modules.ReadFile("federation/azure-target/bicep/" + templateName)
+	if err != nil {
+		return fmt.Errorf("azure %s: read template: %w", format, err)
+	}
+	deployScript, err := cudlyiac.Modules.ReadFile("federation/azure-target/bicep/deploy-azure.sh")
+	if err != nil {
+		return fmt.Errorf("azure %s: read deploy script: %w", format, err)
+	}
+	paramsJSON, err := renderTemplate("templates/azure-wif-bicep-params.json.tmpl", data)
+	if err != nil {
+		return fmt.Errorf("azure %s: render params: %w", format, err)
+	}
+	entries := []struct {
+		name    string
+		content []byte
+	}{
+		{templateName, templateBytes},
+		{"azure-wif-bicep-params.json", []byte(paramsJSON)},
+		{"deploy-azure.sh", deployScript},
+		{"README.txt", []byte(buildAzureTemplateReadme(data, format))},
+	}
+	for _, e := range entries {
+		if err = addBytesToZip(zw, e.name, e.content); err != nil {
+			return fmt.Errorf("azure %s: write %s: %w", format, e.name, err)
+		}
+	}
+	return nil
+}
+
+func buildAzureTemplateReadme(data federationIaCData, format string) string {
+	var sb strings.Builder
+	sb.WriteString("CUDly Azure Federation — ")
+	if format == "bicep" {
+		sb.WriteString("Bicep deployment\n")
+		sb.WriteString("===================================\n\n")
+	} else {
+		sb.WriteString("ARM deployment\n")
+		sb.WriteString("================================\n\n")
+	}
+	sb.WriteString(fmt.Sprintf("Account : %s (%s)\n\n", data.AccountName, data.AccountExternalID))
+	sb.WriteString("This archive assigns the 'Reservation Purchaser' built-in role to the CUDly\n")
+	sb.WriteString("service principal at the subscription scope. Identity setup (App Registration,\n")
+	sb.WriteString("service principal, certificate upload) is NOT performed by this template —\n")
+	sb.WriteString("that step requires Microsoft Graph API calls which are only available in the\n")
+	sb.WriteString("preview Bicep extension. Use the CUDly CLI script for the identity setup.\n\n")
+	sb.WriteString("Two-step deployment:\n\n")
+	sb.WriteString("  1. Download the 'CLI script' format from CUDly and run it:\n")
+	sb.WriteString("       bash " + data.AccountSlug + "-azure-wif-cli.sh\n")
+	sb.WriteString("     Note the service principal object ID that it prints.\n\n")
+	sb.WriteString("  2. Deploy this template:\n")
+	sb.WriteString("       SP_OBJECT_ID=<object-id-from-step-1> bash deploy-azure.sh --location <region>\n\n")
+	sb.WriteString("After deployment, set azure_auth_mode=workload_identity_federation in CUDly.\n")
+	return sb.String()
 }
 
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.

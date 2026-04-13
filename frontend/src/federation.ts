@@ -102,6 +102,19 @@ function formatOptionsFor(target: string): FormatOption[] {
       title: 'Zip with CloudFormation template, parameters, and deploy script.',
     });
   }
+  // Azure-specific DSLs: Bicep + its compiled ARM equivalent.
+  if (target === 'azure') {
+    opts.push({
+      value: 'bicep',
+      label: 'Bicep',
+      title: 'Zip with Bicep template, parameters, and deploy script. Run the CLI script first for identity setup.',
+    });
+    opts.push({
+      value: 'arm',
+      label: 'ARM Template',
+      title: 'Zip with ARM JSON template, parameters, and deploy script. Run the CLI script first for identity setup.',
+    });
+  }
   return opts;
 }
 
