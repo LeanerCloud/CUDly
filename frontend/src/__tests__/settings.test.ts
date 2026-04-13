@@ -28,6 +28,12 @@ jest.mock('../api', () => ({
   saveAccountCredentials: jest.fn()
 }));
 
+// Mock federation module — loadGlobalSettings fires initFederationPanel void-style,
+// and we don't want real federation code touching the test DOM.
+jest.mock('../federation', () => ({
+  initFederationPanel: jest.fn().mockResolvedValue(undefined),
+}));
+
 import * as api from '../api';
 
 describe('Settings Module', () => {
