@@ -1,4 +1,17 @@
-# Secret-free Azure Workload Identity Federation
+# Secret-free Workload Identity Federation
+
+## Scope
+
+The immediate trigger is the Azure target flow, but the same approach is used
+for **all three source clouds** CUDly can be deployed on:
+
+- CUDly on **AWS** → signs with AWS KMS asymmetric key
+- CUDly on **Azure** → signs with Azure Key Vault key
+- CUDly on **GCP** → signs with GCP Cloud KMS asymmetric key
+
+The runtime `Signer` interface is the same; the HTTP `.well-known/*`
+endpoints and the JWT assertion flow are cloud-agnostic. Only the signing
+backend and the deployment infrastructure differ per cloud.
 
 ## Problem
 
@@ -75,21 +88,36 @@ No PEMs, no passwords, no symmetric secrets.
 One commit per layer, each independently reviewable.
 
 1. **`specs/azure-wif-redesign.md`** (this file).
-2. **`terraform/modules/compute/aws/lambda/kms.tf`** — new KMS asymmetric key,
-   alias, IAM policy on the Lambda role for `kms:Sign` / `kms:GetPublicKey`,
-   wiring through a new `signing_key_id` output. New Lambda env var
-   `CUDLY_SIGNING_KEY_ID` (the KMS key ARN).
-3. **`internal/oidc/signer.go`** — `KMSSigner` with:
-   - `NewKMSSigner(ctx, keyARN)` fetches the public key once, caches it.
-   - `Sign(ctx, claims)` marshals the JWT header + claims, SHA-256 hashes the
-     signing input, calls `kms:Sign` with `RSASSA_PKCS1_V1_5_SHA_256`, returns
-     the compact serialized JWT.
-   - `PublicJWK()` returns the RFC 7517 JSON Web Key (`kty=RSA`, `use=sig`,
-     `alg=RS256`, `kid=<key-id-hash>`).
-4. **`internal/api/handler_oidc.go`** — two new routes, public (no auth):
+2. **`terraform/modules/compute/aws/lambda/signing-key.tf`** — new KMS
+   asymmetric key, alias, IAM policy on the Lambda role for `kms:Sign` /
+   `kms:GetPublicKey`, new Lambda env var `CUDLY_SIGNING_KEY_ID`. **DONE**.
+3. **`internal/oidc/signer.go`** — cloud-agnostic `Signer` interface:
+   - `Sign(ctx, digest []byte) ([]byte, error)` — raw RSA-PKCS1v15 over
+     SHA-256 digest. Called by the JWT minter.
+   - `PublicKey(ctx) (*rsa.PublicKey, error)` — used to build the JWK and
+     to compute a stable `kid`.
+   - `Algorithm() string` — currently always `RS256`.
+   Backed by three implementations:
+   - `AWSKMSSigner` — `aws-sdk-go-v2/service/kms`, `kms:Sign` with
+     `RSASSA_PKCS1_V1_5_SHA_256`, `kms:GetPublicKey` once at startup.
+   - `AzureKeyVaultSigner` — `azkeys.Client.Sign` with `RS256`,
+     `GetKey` to read the public half.
+   - `GCPKMSSigner` — `cloud.google.com/go/kms/apiv1`, `AsymmetricSign`
+     with digest SHA-256, `GetPublicKey` once at startup.
+   Plus a `LocalSigner` (in-process RSA key) used only in tests.
+4. **`internal/oidc/jwt.go`** — cloud-agnostic JWT minter that takes a
+   `Signer` and a `jwt.MapClaims`, builds the header (with the Signer's
+   `kid`), composes `base64url(header).base64url(claims)`, hashes it,
+   calls `Signer.Sign`, and returns the compact JWS.
+5. **`internal/oidc/factory.go`** — `NewSignerFromEnv(ctx)` reads
+   `CUDLY_SOURCE_CLOUD` and the per-cloud key env var
+   (`CUDLY_SIGNING_KEY_ID` for AWS, `CUDLY_SIGNING_KEY_VAULT_URL` +
+   `CUDLY_SIGNING_KEY_NAME` for Azure, `CUDLY_SIGNING_KEY_RESOURCE` for
+   GCP) and returns the appropriate implementation.
+6. **`internal/api/handler_oidc.go`** — two new routes, public (no auth):
    - `GET /.well-known/openid-configuration`
    - `GET /.well-known/jwks.json`
-5. **`internal/credentials/azure_federated.go`** — a new
+7. **`internal/credentials/azure_federated.go`** — a new
    `azcore.TokenCredential` that uses the signer to mint a client_assertion
    JWT and exchanges it at Azure's token endpoint via
    `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer`.
@@ -97,13 +125,17 @@ One commit per layer, each independently reviewable.
    `AzureAuthMode == "workload_identity_federation"` and **no** stored
    `azure_wif_private_key` credential is present (backward-compat: legacy
    cert-based accounts keep working during the transition).
-6. **`internal/iacfiles/templates/azure-wif-cli.sh.tmpl`** — drop the cert
+8. **`internal/iacfiles/templates/azure-wif-cli.sh.tmpl`** — drop the cert
    generation, the `az ad app credential reset`, and the certificate env-var
    prompt. Add `az ad app federated-credential create` using the CUDly
-   Lambda URL as the issuer and `cudly-controller` as the subject.
-7. Tests: unit tests for `KMSSigner` (with a fake KMS client), handler tests
-   for the two new routes, template rendering test asserting the new CLI
-   shape.
+   issuer URL and `cudly-controller` as the subject.
+9. **Infra for Azure and GCP CUDly deployments** — matching modules for
+   `terraform/modules/compute/azure/container-apps/` (Azure Key Vault key +
+   access policy) and `terraform/modules/compute/gcp/cloud-run/` (GCP KMS
+   asymmetric key + IAM binding), exposing the same `CUDLY_SIGNING_KEY_*`
+   env vars.
+10. Tests: unit tests for each Signer impl (with fakes), handler tests for
+   the two new routes, template rendering test asserting the new CLI shape.
 
 ## Subject value
 
