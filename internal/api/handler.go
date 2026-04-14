@@ -10,6 +10,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -34,6 +35,7 @@ type Handler struct {
 	dashboardURL       string                      // Base URL for approval/cancel links
 	analyticsClient    AnalyticsClientInterface    // Optional: S3/Athena analytics client
 	analyticsCollector AnalyticsCollectorInterface // Optional: Hourly collector
+	signer             oidc.Signer                 // Optional: OIDC issuer signer (backed by cloud KMS)
 
 	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
 	awsCfg     aws.Config // cached base AWS config (no region override)
@@ -77,6 +79,19 @@ func NewHandler(cfg HandlerConfig) *Handler {
 			h.apiKey = key
 		} else {
 			logging.Warnf("Failed to pre-load API key from Secrets Manager: %v", err)
+		}
+	}
+
+	// Construct the OIDC issuer signer from env. Deployments that haven't
+	// opted into the federated flow leave the signer nil, in which case
+	// the /.well-known/* handlers return 404.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if signer, err := oidc.NewSignerFromEnv(ctx); err != nil {
+			logging.Warnf("oidc signer init failed: %v", err)
+		} else if signer != nil {
+			h.signer = signer
 		}
 	}
 
