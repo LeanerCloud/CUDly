@@ -21,7 +21,7 @@ targetScope = 'subscription'
 param servicePrincipalObjectId string
 
 @description('Built-in role definition ID for Reservation Purchaser. Default is the well-known built-in role ID.')
-param roleDefinitionId string = 'f7b75c60-3036-4b75-91c3-3d7081ddda6e'
+param roleDefinitionId string = 'f7b75c60-3036-4b75-91c3-6b41c27c1689'
 
 @description('Deterministic GUID for the role assignment. Leave the default unless you need to avoid a collision.')
 param roleAssignmentName string = guid(subscription().id, servicePrincipalObjectId, roleDefinitionId)

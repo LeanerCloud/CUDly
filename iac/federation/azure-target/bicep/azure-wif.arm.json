@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.33.93.31351",
-      "templateHash": "10746328641666471116"
+      "templateHash": "17062318000117072148"
     }
   },
   "parameters": {
@@ -17,7 +17,7 @@
     },
     "roleDefinitionId": {
       "type": "string",
-      "defaultValue": "f7b75c60-3036-4b75-91c3-3d7081ddda6e",
+      "defaultValue": "f7b75c60-3036-4b75-91c3-6b41c27c1689",
       "metadata": {
         "description": "Built-in role definition ID for Reservation Purchaser. Default is the well-known built-in role ID."
       }

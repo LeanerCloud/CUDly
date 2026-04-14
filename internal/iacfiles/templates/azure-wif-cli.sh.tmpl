@@ -37,19 +37,15 @@ az ad app credential reset \
 echo "Creating service principal..."
 SP_OBJECT_ID=$(az ad sp create --id "${APP_ID}" --query id --output tsv)
 
-echo "Assigning 'Reservation Purchaser' role at subscription scope..."
-az role assignment create \
-  --assignee-object-id "${SP_OBJECT_ID}" \
-  --assignee-principal-type ServicePrincipal \
-  --role "Reservation Purchaser" \
-  --scope "/subscriptions/${SUBSCRIPTION_ID}" \
-  --output none
-
 echo ""
 echo "=== Done ==="
-echo "subscription_id : ${SUBSCRIPTION_ID}"
-echo "tenant_id       : ${TENANT_ID}"
-echo "client_id       : ${APP_ID}"
+echo "subscription_id    : ${SUBSCRIPTION_ID}"
+echo "tenant_id          : ${TENANT_ID}"
+echo "client_id          : ${APP_ID}"
+echo "sp_object_id       : ${SP_OBJECT_ID}"
+echo ""
+echo "Next: deploy the Bicep/ARM template to assign the Reservation Purchaser role at the subscription scope."
+echo "      SP_OBJECT_ID=${SP_OBJECT_ID} bash deploy-azure.sh --location <region>"
 echo ""
 echo "In CUDly, set azure_auth_mode = workload_identity_federation and store the private key PEM as azure_wif_private_key."
 
