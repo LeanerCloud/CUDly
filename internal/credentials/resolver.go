@@ -219,27 +219,41 @@ func ResolveGCPCredentials(ctx context.Context, account *config.CloudAccount, st
 	return raw, nil
 }
 
-// ResolveAzureTokenCredential returns an azcore.TokenCredential for the account.
+// ResolveAzureTokenCredential returns an azcore.TokenCredential for the
+// account using the legacy (cert-based or client-secret) path. Callers
+// that have access to an OIDC Signer should use
+// ResolveAzureTokenCredentialWithOpts instead so the secret-free
+// federated path is preferred.
+func ResolveAzureTokenCredential(
+	ctx context.Context,
+	account *config.CloudAccount,
+	store CredentialStore,
+) (azcore.TokenCredential, error) {
+	return ResolveAzureTokenCredentialWithOpts(ctx, account, store, AzureResolveOptions{})
+}
+
+// ResolveAzureTokenCredentialWithOpts is like ResolveAzureTokenCredential
+// but accepts per-deployment options. When AzureResolveOptions.Signer
+// and .IssuerURL are both set, accounts in workload_identity_federation
+// mode with no stored PEM are routed through BuildAzureFederatedCredential
+// (the secret-free path). Existing cert-based accounts keep working.
+//
 // Routes by AzureAuthMode:
 //   - managed_identity  → ManagedIdentityCredential (no stored cred needed)
-//   - workload_identity_federation → loads RSA private key PEM, builds client assertion
+//   - workload_identity_federation → federated (if no stored PEM and
+//     opts.Signer is set) or legacy cert client-assertion.
 //   - client_secret (default) → loads stored secret and returns ClientSecretCredential
-func ResolveAzureTokenCredential(ctx context.Context, account *config.CloudAccount, store CredentialStore) (azcore.TokenCredential, error) {
+func ResolveAzureTokenCredentialWithOpts(
+	ctx context.Context,
+	account *config.CloudAccount,
+	store CredentialStore,
+	opts AzureResolveOptions,
+) (azcore.TokenCredential, error) {
 	switch account.AzureAuthMode {
 	case "managed_identity":
 		return azidentity.NewManagedIdentityCredential(nil)
 	case "workload_identity_federation":
-		if store == nil {
-			return nil, fmt.Errorf("credentials: credential store required for azure wif account %s", account.ID)
-		}
-		raw, err := store.LoadRaw(ctx, account.ID, CredTypeAzureWIF)
-		if err != nil {
-			return nil, fmt.Errorf("credentials: load azure wif key for account %s: %w", account.ID, err)
-		}
-		if raw == nil {
-			return nil, fmt.Errorf("credentials: no wif key stored for account %s", account.ID)
-		}
-		return buildAzureWIFCredential(account, raw)
+		return resolveAzureWIFCredential(ctx, account, store, opts)
 	default: // "client_secret" or empty
 		if store == nil {
 			return nil, fmt.Errorf("credentials: credential store required for azure client_secret account %s", account.ID)

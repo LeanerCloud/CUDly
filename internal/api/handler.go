@@ -69,6 +69,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		dashboardURL:       cfg.DashboardURL,
 		analyticsClient:    cfg.AnalyticsClient,
 		analyticsCollector: cfg.AnalyticsCollector,
+		signer:             cfg.OIDCSigner,
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)
@@ -82,18 +83,9 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		}
 	}
 
-	// Construct the OIDC issuer signer from env. Deployments that haven't
-	// opted into the federated flow leave the signer nil, in which case
-	// the /.well-known/* handlers return 404.
-	{
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if signer, err := oidc.NewSignerFromEnv(ctx); err != nil {
-			logging.Warnf("oidc signer init failed: %v", err)
-		} else if signer != nil {
-			h.signer = signer
-		}
-	}
+	// The OIDC signer is constructed once at app startup (see
+	// internal/server/app.go) and passed in via cfg.OIDCSigner. Leave
+	// it nil to disable the /.well-known/* endpoints.
 
 	return h
 }

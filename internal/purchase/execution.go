@@ -164,7 +164,10 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 	if account.AzureAuthMode != "managed_identity" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-managed_identity Azure account %s", account.ID)
 	}
-	azCred, err := credentials.ResolveAzureTokenCredential(ctx, &account, m.credStore)
+	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &account, m.credStore, credentials.AzureResolveOptions{
+		Signer:    m.oidcSigner,
+		IssuerURL: m.oidcIssuerURL,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: resolve Azure for account %s (%s): %w", account.ID, account.Name, err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -35,6 +36,13 @@ type ManagerConfig struct {
 	AzureCredentialsSecretARN string
 	GCPCredentialsSecretARN   string
 	DashboardURL              string
+	// OIDCSigner and OIDCIssuerURL enable the secret-free Azure
+	// federated credential path. When both are set, Azure accounts in
+	// workload_identity_federation mode with no stored PEM are routed
+	// through BuildAzureFederatedCredential. Optional — when unset,
+	// the legacy cert-based path is used for backward compatibility.
+	OIDCSigner    oidc.Signer
+	OIDCIssuerURL string
 }
 
 // Manager handles purchase workflow
@@ -48,6 +56,8 @@ type Manager struct {
 	notifyDays      int
 	defaults        PurchaseDefaults
 	dashboardURL    string
+	oidcSigner      oidc.Signer
+	oidcIssuerURL   string
 }
 
 // PurchaseDefaults holds default purchase settings
@@ -92,7 +102,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 			Coverage:     cfg.DefaultCoverage,
 			RampSchedule: cfg.DefaultRampSchedule,
 		},
-		dashboardURL: cfg.DashboardURL,
+		dashboardURL:  cfg.DashboardURL,
+		oidcSigner:    cfg.OIDCSigner,
+		oidcIssuerURL: cfg.OIDCIssuerURL,
 	}
 }
 

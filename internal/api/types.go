@@ -9,6 +9,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
 
@@ -61,6 +62,10 @@ type HandlerConfig struct {
 	// Analytics configuration (optional)
 	AnalyticsClient    AnalyticsClientInterface
 	AnalyticsCollector AnalyticsCollectorInterface
+	// OIDCSigner is the cloud-agnostic signer that backs
+	// /.well-known/openid-configuration and /.well-known/jwks.json.
+	// Nil disables the OIDC issuer endpoints (they return 404).
+	OIDCSigner oidc.Signer
 }
 
 // AnalyticsClientInterface defines the interface for analytics queries

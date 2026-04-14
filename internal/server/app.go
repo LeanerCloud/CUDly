@@ -19,6 +19,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
@@ -51,6 +52,11 @@ type Application struct {
 	dbConnected    bool
 	dbErr          error
 	appConfig      ApplicationConfig
+
+	// OIDC signer (optional, backs /.well-known/* and the Azure
+	// federated credential path). Nil when the deployment has not
+	// opted into the federated flow.
+	signer oidc.Signer
 }
 
 // ApplicationConfig holds all env-based configuration for the application
@@ -120,6 +126,16 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		return nil, fmt.Errorf("database configuration required: DBConfig must be provided")
 	}
 
+	// Construct the OIDC issuer signer once per deployment. Nil means
+	// the deployment has not opted into the federated flow yet — all
+	// OIDC-dependent paths (handler_oidc.go, purchase manager Azure
+	// federated credential) fall back to their legacy behaviours.
+	signer, signerErr := oidc.NewSignerFromEnv(ctx)
+	if signerErr != nil {
+		log.Printf("oidc signer init failed (federated flow disabled): %v", signerErr)
+		signer = nil
+	}
+
 	// Initialize purchase manager
 	purchaseManager := purchase.NewManager(purchase.ManagerConfig{
 		ConfigStore:               deps.ConfigStore,
@@ -132,6 +148,8 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		DefaultRampSchedule:       cfg.DefaultRampSchedule,
 		AzureCredentialsSecretARN: cfg.AzureCredentialsSecretARN,
 		GCPCredentialsSecretARN:   cfg.GCPCredentialsSecretARN,
+		OIDCSigner:                signer,
+		OIDCIssuerURL:             cfg.DashboardURL,
 	})
 
 	// Initialize scheduler
@@ -177,6 +195,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		RateLimiter:               rateLimiter,
 		EmailNotifier:             deps.EmailSender,
 		DashboardURL:              cfg.DashboardURL,
+		OIDCSigner:                signer,
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -195,6 +214,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		dbConfig:       deps.DBConfig,
 		secretResolver: deps.SecretResolver,
 		appConfig:      cfg,
+		signer:         signer,
 	}, nil
 }
 
@@ -385,6 +405,8 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		AzureCredentialsSecretARN: app.appConfig.AzureCredentialsSecretARN,
 		GCPCredentialsSecretARN:   app.appConfig.GCPCredentialsSecretARN,
 		DashboardURL:              app.appConfig.DashboardURL,
+		OIDCSigner:                app.signer,
+		OIDCIssuerURL:             app.appConfig.DashboardURL,
 	})
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
@@ -411,6 +433,7 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		RateLimiter:               app.RateLimiter,
 		EmailNotifier:             app.Email,
 		DashboardURL:              app.appConfig.DashboardURL,
+		OIDCSigner:                app.signer,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")
