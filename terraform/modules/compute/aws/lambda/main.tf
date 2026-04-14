@@ -48,6 +48,7 @@ resource "aws_lambda_function" "main" {
         ADMIN_PASSWORD_SECRET = var.admin_password_secret_arn
         SECRET_PROVIDER       = "aws"
         AWS_REGION_CONFIG     = var.region
+        CUDLY_SIGNING_KEY_ID  = aws_kms_key.signing.arn
       },
       var.additional_env_vars
     )

@@ -27,3 +27,13 @@ output "log_group_name" {
   description = "CloudWatch log group name"
   value       = aws_cloudwatch_log_group.lambda.name
 }
+
+output "signing_key_arn" {
+  description = "KMS asymmetric key ARN used by the CUDly OIDC issuer"
+  value       = aws_kms_key.signing.arn
+}
+
+output "signing_key_id" {
+  description = "KMS asymmetric key ID used by the CUDly OIDC issuer"
+  value       = aws_kms_key.signing.key_id
+}
