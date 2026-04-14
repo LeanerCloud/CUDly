@@ -212,6 +212,34 @@ resource "aws_iam_policy" "compute" {
         ]
         Resource = "*"
       },
+      {
+        # KMS asymmetric signing key for the CUDly OIDC issuer.
+        # Broad KMS management perms scoped to Describe/Tag/Alias
+        # actions required by terraform-aws-provider on key create
+        # and update. Resource is "*" because KMS key ARNs are only
+        # known after creation.
+        Sid    = "KMSSigningKey"
+        Effect = "Allow"
+        Action = [
+          "kms:CreateAlias",
+          "kms:CreateKey",
+          "kms:DeleteAlias",
+          "kms:DescribeKey",
+          "kms:DisableKey",
+          "kms:EnableKey",
+          "kms:GetKeyPolicy",
+          "kms:GetKeyRotationStatus",
+          "kms:ListAliases",
+          "kms:ListResourceTags",
+          "kms:PutKeyPolicy",
+          "kms:ScheduleKeyDeletion",
+          "kms:TagResource",
+          "kms:UntagResource",
+          "kms:UpdateAlias",
+          "kms:UpdateKeyDescription",
+        ]
+        Resource = "*"
+      },
     ]
   })
 
