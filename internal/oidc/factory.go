@@ -46,25 +46,16 @@ func NewSignerFromEnv(ctx context.Context) (Signer, error) {
 		vaultURL := os.Getenv(envAzureVaultURL)
 		keyName := os.Getenv(envAzureKeyName)
 		if vaultURL == "" && keyName == "" {
-			return nil, nil
+			return nil, nil // issuer disabled
 		}
-		// TODO(azure-wif-redesign): implement AzureKeyVaultSigner using
-		// github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys.
-		// The Signer interface is stable; this just needs a Sign/
-		// GetPublicKey wrapper around the azkeys.Client. Tracked in
-		// specs/azure-wif-redesign.md §Implementation plan.
-		return nil, fmt.Errorf("oidc: Azure Key Vault signer not yet implemented (source_cloud=azure)")
+		return NewAzureKeyVaultSigner(ctx, vaultURL, keyName)
 
 	case "gcp":
 		keyResource := os.Getenv(envGCPKeyResource)
 		if keyResource == "" {
-			return nil, nil
+			return nil, nil // issuer disabled
 		}
-		// TODO(azure-wif-redesign): implement GCPKMSSigner using
-		// cloud.google.com/go/kms/apiv1. AsymmetricSign with
-		// RSA_SIGN_PKCS1_2048_SHA256 + GetPublicKey for the RSA pub.
-		// Tracked in specs/azure-wif-redesign.md §Implementation plan.
-		return nil, fmt.Errorf("oidc: GCP Cloud KMS signer not yet implemented (source_cloud=gcp)")
+		return NewGCPKMSSigner(ctx, keyResource)
 
 	default:
 		return nil, fmt.Errorf("oidc: unsupported CUDLY_SOURCE_CLOUD %q", sourceCloud)
