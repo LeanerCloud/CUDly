@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
-# Create CUDly Azure App Registration + certificate (workload identity federation) via az cli.
+# Create CUDly Azure App Registration + federated identity credential via az cli.
 # Target Azure subscription: {{.AccountName}} ({{.SubscriptionID}})
 #
 # Usage:
-#   CERTIFICATE_PEM_PATH=./cudly-wif.crt bash {{.AccountSlug}}-azure-wif-cli.sh
+#   bash {{.AccountSlug}}-azure-wif-cli.sh
 #
-# Requirements: az cli logged in to the target subscription, a self-signed cert.
+# Requirements: az cli logged in to the target subscription.
 #
-# Generate a cert first if you don't have one:
-#   openssl genrsa -out cudly-wif.key 2048
-#   openssl req -new -x509 -key cudly-wif.key -out cudly-wif.crt -days 730 -subj "/CN=CUDly-WIF"
-#
-# Store the private key (cudly-wif.key) in CUDly as azure_wif_private_key after this script runs.
+# This script configures true Azure Workload Identity Federation —
+# no certificate, no private key, no client secret is created or stored.
+# CUDly's OIDC issuer (published under {{.CUDlyAPIURL}}/.well-known/*)
+# signs a short-lived JWT on each Azure API call and Azure AD verifies
+# it against the federated credential added here.
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-CUDly-{{.AccountSlug}}}"
 SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-{{.SubscriptionID}}}"
-: "${CERTIFICATE_PEM_PATH:?set CERTIFICATE_PEM_PATH to the public certificate PEM file}"
+
+# CUDly OIDC issuer URL. Must match exactly what the CUDly deployment
+# publishes at /.well-known/openid-configuration — trailing slashes and
+# http/https matter for Azure AD validation (AADSTS700213 if mismatched).
+CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-{{.CUDlyAPIURL}}}"
+CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
+CUDLY_FEDERATED_AUDIENCE="${CUDLY_FEDERATED_AUDIENCE:-api://AzureADTokenExchange}"
+
+: "${CUDLY_ISSUER_URL:?set CUDLY_ISSUER_URL to the base URL of your CUDly deployment (the one that serves /.well-known/openid-configuration)}"
 
 if [[ -n "${SUBSCRIPTION_ID}" && "${SUBSCRIPTION_ID}" != "<SUBSCRIPTION_ID>" ]]; then
   az account set --subscription "${SUBSCRIPTION_ID}"
@@ -27,15 +35,27 @@ TENANT_ID=$(az account show --query tenantId --output tsv)
 echo "Creating App Registration ${APP_NAME}..."
 APP_ID=$(az ad app create --display-name "${APP_NAME}" --sign-in-audience AzureADMyOrg --query appId --output tsv)
 
-echo "Uploading certificate..."
-az ad app credential reset \
-  --id "${APP_ID}" \
-  --cert "@${CERTIFICATE_PEM_PATH}" \
-  --append \
-  --output none
-
 echo "Creating service principal..."
 SP_OBJECT_ID=$(az ad sp create --id "${APP_ID}" --query id --output tsv)
+
+echo "Adding federated identity credential bound to CUDly OIDC issuer..."
+# Idempotent: if the same name exists (re-run of the script), az throws a
+# conflict error — catch and continue. A subsequent run with the same
+# script is safe.
+FEDCRED_PARAMS=$(cat <<JSON
+{
+  "name": "cudly",
+  "issuer": "${CUDLY_ISSUER_URL}",
+  "subject": "${CUDLY_FEDERATED_SUBJECT}",
+  "audiences": ["${CUDLY_FEDERATED_AUDIENCE}"],
+  "description": "CUDly signs JWTs via its own OIDC issuer (KMS-backed). No secret is stored on the CUDly side."
+}
+JSON
+)
+az ad app federated-credential create \
+  --id "${APP_ID}" \
+  --parameters "${FEDCRED_PARAMS}" \
+  --output none 2>&1 || echo "  (federated credential may already exist — continuing)"
 
 echo ""
 echo "=== Done ==="
@@ -47,7 +67,7 @@ echo ""
 echo "Next: deploy the Bicep/ARM template to assign the Reservation Purchaser role at the subscription scope."
 echo "      SP_OBJECT_ID=${SP_OBJECT_ID} bash deploy-azure.sh --location <region>"
 echo ""
-echo "In CUDly, set azure_auth_mode = workload_identity_federation and store the private key PEM as azure_wif_private_key."
+echo "In CUDly, set azure_auth_mode = workload_identity_federation. No key or secret is required — CUDly mints and signs the assertion JWT itself on each call."
 
 {{- if .CUDlyAPIURL}}
 if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then

@@ -108,12 +108,23 @@ func TestCLITemplatesAutoRegister(t *testing.T) {
 				`"azure_client_id": "${APP_ID}"`,
 				`"external_id": "${SUBSCRIPTION_ID}"`,
 				`ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"`,
+				// Secret-free redesign: must use federated identity credential, not a cert upload.
+				"az ad app federated-credential create",
+				`"issuer": "${CUDLY_ISSUER_URL}"`,
+				`"subject": "${CUDLY_FEDERATED_SUBJECT}"`,
+				`"audiences": ["${CUDLY_FEDERATED_AUDIENCE}"]`,
+				// Issuer env var must default to the CUDly deployment URL.
+				`CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-https://cudly.example.com}"`,
 			},
 			mustNot: []string{
 				"/api/registrations",
 				`"auth_mode":`,
 				`"tenant_id":`,
 				`"client_id":`,
+				// Never the cert-based path.
+				"az ad app credential reset",
+				"CERTIFICATE_PEM_PATH",
+				"azure_wif_private_key",
 			},
 		},
 		{
