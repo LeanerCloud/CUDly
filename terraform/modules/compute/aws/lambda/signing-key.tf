@@ -37,6 +37,19 @@ resource "aws_iam_role_policy" "signing_key_access" {
           "kms:DescribeKey",
         ]
         Resource = [aws_kms_key.signing.arn]
+      },
+      {
+        # Needed so the Lambda can look up its own Function URL at
+        # cold start and prime the OIDC issuer cache. This closes the
+        # race where a scheduled task triggered before any inbound
+        # HTTP request would find oidc.IssuerURL() empty and fail to
+        # mint Azure AD client_assertion JWTs. Scoped to this function
+        # only via wildcard on the function-name prefix.
+        Effect = "Allow"
+        Action = [
+          "lambda:GetFunctionUrlConfig",
+        ]
+        Resource = "arn:aws:lambda:*:*:function:${var.stack_name}-api*"
       }
     ]
   })

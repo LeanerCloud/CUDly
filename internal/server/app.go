@@ -156,6 +156,24 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		signer = nil
 	}
 
+	// Prime the issuer URL cache. Priority order:
+	//  1. CUDLY_ISSUER_URL / DASHBOARD_URL via resolveOIDCIssuerURL
+	//  2. AWS Lambda self-lookup via lambda:GetFunctionUrlConfig
+	//
+	// The handler_oidc.go path is still a backstop (populates the
+	// cache from the first inbound request's DomainName), but doing
+	// it here means scheduled-task cold starts don't race the first
+	// inbound HTTP request.
+	if issuer := resolveOIDCIssuerURL(cfg); issuer != "" {
+		oidc.SetIssuerURL(issuer)
+	} else if cfg.IsLambda {
+		primeCtx, primeCancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := oidc.PrimeIssuerURLFromLambda(primeCtx); err != nil {
+			log.Printf("oidc issuer cache not primed from lambda: %v (falling back to request-driven populate)", err)
+		}
+		primeCancel()
+	}
+
 	// Initialize purchase manager
 	purchaseManager := purchase.NewManager(purchase.ManagerConfig{
 		ConfigStore:               deps.ConfigStore,
