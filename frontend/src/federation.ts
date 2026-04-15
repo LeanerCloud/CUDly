@@ -1,10 +1,10 @@
 /**
  * Federation Setup module for CUDly
  *
- * Builds per-provider federation subsections inside the Settings page.
- * IaC file content is fetched from the backend (GET /api/federation/iac),
- * which renders generic templates. Target account owners fill in their own
- * values via terraform -var flags when applying.
+ * Builds the target-cloud pills + per-format download buttons in the Settings →
+ * Accounts → Federation Setup panel. IaC content is fetched from the backend
+ * (GET /api/federation/iac) — target account owners fill in their own values
+ * via terraform -var flags when applying.
  * All DOM manipulation uses safe createElement/textContent/appendChild methods.
  */
 
@@ -25,102 +25,94 @@ function downloadFile(filename: string, content: string | ArrayBuffer, contentTy
   URL.revokeObjectURL(a.href);
 }
 
-// ---------------------------------------------------------------------------
-// DOM helpers — no innerHTML
-// ---------------------------------------------------------------------------
-
-/**
- * Create a download button that fetches generic IaC content from the backend.
- */
-function makeDownloadBtn(
-  label: string,
-  tooltipText: string,
-  target: string,
-  source: string,
-  format?: string,
-): HTMLButtonElement {
-  const btn       = document.createElement('button');
-  btn.type        = 'button';
-  btn.className   = 'btn btn-small';
-  btn.textContent = label;
-  btn.title       = tooltipText;
-
-  btn.addEventListener('click', () => {
-    btn.disabled    = true;
-    btn.textContent = 'Loading…';
-
-    getFederationIaC(target, source, format)
-      .then(res => {
-        if (res.content_encoding === 'base64') {
-          const binaryStr = atob(res.content);
-          const bytes = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-          downloadFile(res.filename, bytes.buffer as ArrayBuffer, res.content_type);
-        } else {
-          downloadFile(res.filename, res.content, res.content_type);
-        }
-      })
-      .catch((err: unknown) => {
-        console.error('Federation IaC download failed:', err);
-        alert(`Failed to generate IaC: ${(err as Error).message}`);
-      })
-      .finally(() => {
-        btn.disabled    = false;
-        btn.textContent = label;
-      });
-  });
-
-  return btn;
-}
-
 function clearContainer(el: HTMLElement): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
 // ---------------------------------------------------------------------------
-// Format matrix — which formats apply per target/source combination.
-// Dropdown values use "tfvars" as the DOM value; the download handler maps
-// it to an empty format= query param (the server's default).
+// Format matrix — which formats apply per target cloud.
 // ---------------------------------------------------------------------------
 
 interface FormatOption {
-  value: string;  // DOM value; "tfvars" maps to empty format=
-  label: string;
-  title: string;
+  value: string;     // backend format code
+  label: string;     // bold first line
+  sublabel: string;  // dim second line
+  title: string;     // tooltip
 }
 
 function formatOptionsFor(target: string): FormatOption[] {
+  const bundleSublabel = target === 'aws'
+    ? 'full Terraform module + variables + CloudFormation fallback'
+    : 'full Terraform module + variables';
+
   const opts: FormatOption[] = [
-    { value: 'tfvars', label: 'Terraform tfvars', title: 'Single .tfvars file for Terraform.' },
-    { value: 'cli', label: 'CLI script', title: 'Self-contained shell script using the cloud\'s official CLI.' },
+    {
+      value: 'bundle',
+      label: 'Terraform bundle',
+      sublabel: bundleSublabel,
+      title: 'Zip with Terraform module + .tfvars, ready to terraform apply.',
+    },
+    {
+      value: 'cli',
+      label: 'CLI script',
+      sublabel: 'self-contained shell script',
+      title: 'Self-contained shell script using the cloud\'s official CLI.',
+    },
   ];
-  // CloudFormation applies for any AWS target (cross-account + WIF both supported).
+
   if (target === 'aws') {
     opts.push({
       value: 'cfn',
       label: 'CloudFormation',
+      sublabel: 'template + params + deploy script (zip)',
       title: 'Zip with CloudFormation template, parameters, and deploy script.',
     });
   }
-  // Azure-specific DSLs: Bicep + its compiled ARM equivalent.
+
   if (target === 'azure') {
     opts.push({
       value: 'bicep',
       label: 'Bicep',
+      sublabel: 'template + params + deploy script (zip)',
       title: 'Zip with Bicep template, parameters, and deploy script. Run the CLI script first for identity setup.',
     });
     opts.push({
       value: 'arm',
       label: 'ARM Template',
+      sublabel: 'template + params + deploy script (zip)',
       title: 'Zip with ARM JSON template, parameters, and deploy script. Run the CLI script first for identity setup.',
     });
   }
+
   return opts;
 }
 
 // ---------------------------------------------------------------------------
-// Generic provider section builder — dropdown + Download + Bundle buttons
+// Format button rendering
 // ---------------------------------------------------------------------------
+
+function makeFormatButton(opt: FormatOption, target: string, source: string): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-small btn-multiline';
+  btn.title = opt.title;
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'label';
+  labelSpan.textContent = opt.label;
+  btn.appendChild(labelSpan);
+
+  const sublabelSpan = document.createElement('span');
+  sublabelSpan.className = 'sublabel';
+  sublabelSpan.textContent = opt.sublabel;
+  btn.appendChild(sublabelSpan);
+
+  btn.addEventListener('click', () => {
+    runDownload(btn, target, source, opt.value);
+  });
+
+  return btn;
+}
 
 function buildFederationDownloads(target: string, source: string, containerID: string): void {
   const container = document.getElementById(containerID);
@@ -128,52 +120,21 @@ function buildFederationDownloads(target: string, source: string, containerID: s
   clearContainer(container);
 
   const row = document.createElement('div');
-  row.className = 'federation-account-row';
+  row.className = 'federation-format-buttons';
 
-  const actions = document.createElement('div');
-  actions.className = 'federation-account-actions';
-
-  const select = document.createElement('select');
-  select.className = 'input-small';
   for (const opt of formatOptionsFor(target)) {
-    const o = document.createElement('option');
-    o.value = opt.value;
-    o.textContent = opt.label;
-    o.title = opt.title;
-    select.appendChild(o);
+    row.appendChild(makeFormatButton(opt, target, source));
   }
 
-  const downloadBtn = document.createElement('button');
-  downloadBtn.type = 'button';
-  downloadBtn.className = 'btn btn-small';
-  downloadBtn.textContent = 'Download';
-  downloadBtn.title = 'Download the selected IaC format.';
-  downloadBtn.addEventListener('click', () => {
-    const selected = select.value;
-    const format = selected === 'tfvars' ? undefined : selected;
-    runDownload(downloadBtn, target, source, format);
-  });
-
-  actions.appendChild(select);
-  actions.appendChild(downloadBtn);
-
-  // Always-available bundle shortcut (zip with tfvars + terraform module + cfn when applicable).
-  actions.appendChild(makeDownloadBtn(
-    'Download bundle (Terraform)',
-    'Zip bundle with Terraform module + .tfvars (and CloudFormation files for AWS WIF).',
-    target, source, 'bundle',
-  ));
-
-  row.appendChild(actions);
   container.appendChild(row);
 }
 
 // runDownload fetches IaC from the backend and triggers a browser download.
-// Shared with makeDownloadBtn's click handler but parameterised at call time.
-function runDownload(btn: HTMLButtonElement, target: string, source: string, format?: string): void {
-  const originalLabel = btn.textContent ?? 'Download';
-  btn.disabled    = true;
-  btn.textContent = 'Loading…';
+function runDownload(btn: HTMLButtonElement, target: string, source: string, format: string): void {
+  const labelEl = btn.querySelector<HTMLElement>('.label');
+  const originalLabel = labelEl?.textContent ?? '';
+  btn.disabled = true;
+  if (labelEl) labelEl.textContent = 'Loading…';
 
   getFederationIaC(target, source, format)
     .then(res => {
@@ -191,9 +152,61 @@ function runDownload(btn: HTMLButtonElement, target: string, source: string, for
       alert(`Failed to generate IaC: ${(err as Error).message}`);
     })
     .finally(() => {
-      btn.disabled    = false;
-      btn.textContent = originalLabel;
+      btn.disabled = false;
+      if (labelEl) labelEl.textContent = originalLabel;
     });
+}
+
+// ---------------------------------------------------------------------------
+// Target-cloud pills
+// ---------------------------------------------------------------------------
+
+interface TargetCloudOption {
+  value: string;
+  label: string;
+}
+
+const TARGET_CLOUDS = [
+  { value: 'aws',   label: 'AWS' },
+  { value: 'azure', label: 'Azure' },
+  { value: 'gcp',   label: 'GCP' },
+] as const satisfies readonly TargetCloudOption[];
+
+const DEFAULT_TARGET_CLOUD: string = TARGET_CLOUDS[0].value;
+
+function buildTargetCloudPills(
+  container: HTMLElement,
+  onSelect: (target: string) => void,
+): void {
+  clearContainer(container);
+
+  const buttons: HTMLButtonElement[] = [];
+
+  for (const cloud of TARGET_CLOUDS) {
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'btn btn-small target-cloud-pill';
+    pill.textContent = cloud.label;
+    pill.setAttribute('data-target', cloud.value);
+    pill.setAttribute('aria-pressed', 'false');
+    pill.addEventListener('click', () => {
+      for (const b of buttons) {
+        const selected = b === pill;
+        b.setAttribute('aria-pressed', selected ? 'true' : 'false');
+        b.classList.toggle('selected', selected);
+      }
+      onSelect(cloud.value);
+    });
+    buttons.push(pill);
+    container.appendChild(pill);
+  }
+
+  // Default selection: AWS (first option).
+  const first = buttons[0];
+  if (first) {
+    first.setAttribute('aria-pressed', 'true');
+    first.classList.add('selected');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,16 +216,16 @@ function runDownload(btn: HTMLButtonElement, target: string, source: string, for
 /**
  * Render the federation download panel in the consolidated Accounts section.
  * The `source` parameter comes from the backend (CUDLY_SOURCE_CLOUD env var)
- * and is fixed — users pick the target cloud via the dropdown.
+ * and is fixed — users pick the target cloud via the pill buttons.
  */
 export async function initFederationPanel(source: string): Promise<void> {
-  const targetSelect = document.getElementById('federation-target-provider') as HTMLSelectElement | null;
-  if (!targetSelect) return;
+  const pillContainer = document.getElementById('federation-target-cloud-pills');
+  if (!pillContainer) return;
 
-  const render = (): void => {
-    buildFederationDownloads(targetSelect.value, source, 'federation-setup-panel');
-  };
+  buildTargetCloudPills(pillContainer, target => {
+    buildFederationDownloads(target, source, 'federation-setup-panel');
+  });
 
-  render();
-  targetSelect.addEventListener('change', render);
+  // Initial render with the default target (AWS).
+  buildFederationDownloads(DEFAULT_TARGET_CLOUD, source, 'federation-setup-panel');
 }

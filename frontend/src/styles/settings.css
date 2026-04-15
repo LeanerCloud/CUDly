@@ -236,6 +236,55 @@ select.dirty {
     gap: 0.5rem;
 }
 
+.target-cloud-pills {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.target-cloud-pills .target-cloud-pill {
+    min-width: 4.5rem;
+    border: 1px solid #c8d6ea;
+    background: #f4f8fd;
+    color: #355273;
+    font-weight: 500;
+}
+
+.target-cloud-pills .target-cloud-pill[aria-pressed="true"],
+.target-cloud-pills .target-cloud-pill.selected {
+    background: #2e6bd9;
+    border-color: #2e6bd9;
+    color: white;
+}
+
+.federation-format-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+}
+
+.federation-format-buttons .btn-multiline {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    min-width: 11rem;
+    line-height: 1.2;
+}
+
+.federation-format-buttons .btn-multiline .label {
+    font-weight: 600;
+}
+
+.federation-format-buttons .btn-multiline .sublabel {
+    font-size: 0.72rem;
+    opacity: 0.72;
+    font-weight: normal;
+    margin-top: 0.15rem;
+}
+
 .federation-account-row {
     display: flex;
     align-items: center;
