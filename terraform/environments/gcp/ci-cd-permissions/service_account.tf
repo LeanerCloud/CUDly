@@ -20,6 +20,12 @@ locals {
     "roles/container.admin",
     "roles/resourcemanager.projectIamAdmin",
     "roles/serviceusage.serviceUsageAdmin",
+    # KMS admin is required for the CUDly OIDC issuer signing key
+    # (key ring + asymmetric crypto key + IAM bindings) that the
+    # cloud-run module creates in terraform/modules/compute/gcp/
+    # cloud-run/signing-key.tf. Without this, Terraform Apply 403s
+    # on cloudkms.keyRings.create.
+    "roles/cloudkms.admin",
   ])
 }
 
