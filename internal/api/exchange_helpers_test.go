@@ -78,11 +78,12 @@ func TestHandler_getFederationIaC_SuccessWithoutAccountID(t *testing.T) {
 		QueryStringParameters: map[string]string{
 			"target": "aws",
 			"source": "gcp",
+			"format": "cli",
 		},
 	}
 	res, err := h.getFederationIaC(ctx, req)
 	require.NoError(t, err)
-	assert.Contains(t, res.Filename, "aws-wif.tfvars")
+	assert.Contains(t, res.Filename, "aws-wif-cli.sh")
 }
 
 func TestRouter_getFederationIaCHandler(t *testing.T) {

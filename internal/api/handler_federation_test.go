@@ -26,12 +26,15 @@ func federationReq(params map[string]string) *events.LambdaFunctionURLRequest {
 // singleFileSpec tests
 // ---------------------------------------------------------------------------
 
-func TestSingleFileSpec_AWSCrossAccount(t *testing.T) {
-	tmpl, fname, ct, err := singleFileSpec("aws", "aws", "", "prod")
-	require.NoError(t, err)
-	assert.Contains(t, tmpl, "aws-cross-account.tfvars.tmpl")
-	assert.Contains(t, fname, "aws-cross-account.tfvars")
-	assert.Equal(t, "text/plain", ct)
+func TestSingleFileSpec_RejectsEmptyFormat(t *testing.T) {
+	// The legacy tfvars-only (format="") path was removed. singleFileSpec must
+	// now reject the empty format — the handler validates format upstream, but
+	// the helper also defends the boundary.
+	_, _, _, err := singleFileSpec("aws", "aws", "", "prod")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
 }
 
 func TestSingleFileSpec_RejectsUnknownFormat(t *testing.T) {
@@ -40,29 +43,6 @@ func TestSingleFileSpec_RejectsUnknownFormat(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
-}
-
-func TestSingleFileSpec_AzureWIF(t *testing.T) {
-	_, fname, _, err := singleFileSpec("azure", "aws", "", "prod")
-	require.NoError(t, err)
-	assert.Contains(t, fname, "azure-wif.tfvars")
-}
-
-func TestSingleFileSpec_GCPSAImpersonation(t *testing.T) {
-	_, fname, _, err := singleFileSpec("gcp", "gcp", "", "prod")
-	require.NoError(t, err)
-	assert.Contains(t, fname, "gcp-sa-impersonation.tfvars")
-}
-
-func TestSingleFileSpec_GCPWif(t *testing.T) {
-	_, fname, _, err := singleFileSpec("gcp", "aws", "", "prod")
-	require.NoError(t, err)
-	assert.Contains(t, fname, "gcp-wif.tfvars")
-}
-
-func TestSingleFileSpec_UnknownTarget(t *testing.T) {
-	_, _, _, err := singleFileSpec("unknown", "aws", "", "prod")
-	require.Error(t, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -80,29 +60,32 @@ func TestGetFederationIaC_MissingParams(t *testing.T) {
 	assert.Equal(t, 400, ce.code)
 }
 
-func TestGetFederationIaC_AWSCrossAccount_Tfvars(t *testing.T) {
+func TestGetFederationIaC_RejectsEmptyFormat(t *testing.T) {
+	// The legacy tfvars-only default was removed; an explicit format is required.
 	h := federationHandler()
 	ctx := context.Background()
 
-	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
 		"target": "aws", "source": "aws",
 	}))
-	require.NoError(t, err)
-	assert.Contains(t, res.Filename, "aws-cross-account.tfvars")
-	assert.Empty(t, res.ContentEncoding)
-	assert.Contains(t, res.Content, "role_name")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "format")
 }
 
-func TestGetFederationIaC_AWSWIF_Tfvars(t *testing.T) {
+func TestGetFederationIaC_RejectsUnknownFormat(t *testing.T) {
 	h := federationHandler()
 	ctx := context.Background()
 
-	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
-		"target": "aws", "source": "azure",
+	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
+		"target": "aws", "source": "aws", "format": "tfvars",
 	}))
-	require.NoError(t, err)
-	assert.Contains(t, res.Filename, "aws-wif.tfvars")
-	assert.Contains(t, res.Content, "oidc_issuer_url")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
 }
 
 func TestGetFederationIaC_AWSWIF_CFNZip(t *testing.T) {
@@ -264,7 +247,7 @@ func TestGetFederationIaC_InvalidSource(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
-		"target": "aws", "source": "badcloud",
+		"target": "aws", "source": "badcloud", "format": "cli",
 	}))
 	require.Error(t, err)
 	ce, ok := IsClientError(err)

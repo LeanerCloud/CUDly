@@ -102,14 +102,16 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 }
 
 // getFederationIaC handles GET /api/federation/iac
-// Query params: target, source, format (all required except format)
+// Query params: target, source, format — all required.
 //
 // Generates generic IaC templates for self-registration. Target account owners
 // fill in their own values via -var flags when running terraform apply.
 //
-//   - format=""         → single file (tfvars)
+//   - format="cli"      → self-contained shell script (single file)
 //   - format="cfn"      → zip with CFN template + params + deploy script (aws target only)
-//   - format="bundle"   → zip with tfvars + Terraform module + CF template/script
+//   - format="bicep"    → zip with Bicep template + params + deploy script (azure target only)
+//   - format="arm"      → zip with ARM JSON template + params + deploy script (azure target only)
+//   - format="bundle"   → zip with Terraform module + pre-filled tfvars (and CFN fallback on aws)
 func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
 	target, source, format, err := federationIaCParams(req.QueryStringParameters)
 	if err != nil {
@@ -226,17 +228,31 @@ func buildGenericIaCData(target, source, dashboardURL string) federationIaCData 
 // validFederationSources is the allowlist of valid source cloud providers.
 var validFederationSources = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
+// validFederationFormats is the allowlist of supported IaC format codes. The
+// legacy empty/"tfvars" single-file format was removed — the full bundle
+// supersedes it.
+var validFederationFormats = map[string]bool{
+	"cli":    true,
+	"bundle": true,
+	"cfn":    true,
+	"bicep":  true,
+	"arm":    true,
+}
+
 // federationIaCParams validates and extracts query parameters from the request.
 func federationIaCParams(q map[string]string) (target, source, format string, err error) {
 	target, source, format = q["target"], q["source"], q["format"]
-	if target == "" || source == "" {
-		return "", "", "", NewClientError(400, "target and source query parameters are required")
+	if target == "" || source == "" || format == "" {
+		return "", "", "", NewClientError(400, "target, source, and format query parameters are required")
 	}
 	if !validFederationSources[source] {
 		return "", "", "", NewClientError(400, "source must be aws, azure, or gcp")
 	}
 	if !validFederationTargets[target] {
 		return "", "", "", NewClientError(400, "target must be aws, azure, or gcp")
+	}
+	if !validFederationFormats[format] {
+		return "", "", "", NewClientError(400, "format must be one of: cli, bundle, cfn, bicep, arm")
 	}
 	return target, source, format, nil
 }
@@ -253,35 +269,13 @@ var validFederationTargets = map[string]bool{"aws": true, "azure": true, "gcp": 
 
 // singleFileSpec returns the template path, output filename, and content-type for a
 // single-file IaC download. Zip formats are intercepted earlier by formatNeedsZip
-// in getFederationIaC and never reach this function.
+// in getFederationIaC and never reach this function. Only "cli" is a valid single-file
+// format after the tfvars-only path was removed.
 func singleFileSpec(target, source, format, slug string) (tmplPath, filename, contentType string, err error) {
-	switch format {
-	case "":
-		return tfvarsSpec(target, source, slug)
-	case "cli":
+	if format == "cli" {
 		return cliScriptSpec(target, source, slug)
-	default:
-		return "", "", "", NewClientError(400, "unsupported format: "+format)
 	}
-}
-
-// tfvarsSpec returns the Terraform tfvars template path + filename for the
-// target/source combination.
-func tfvarsSpec(target, source, slug string) (tmplPath, filename, contentType string, err error) {
-	switch {
-	case target == "aws" && source == "aws":
-		return "templates/aws-cross-account.tfvars.tmpl", slug + "-aws-cross-account.tfvars", "text/plain", nil
-	case target == "aws":
-		return "templates/aws-wif.tfvars.tmpl", slug + "-aws-wif.tfvars", "text/plain", nil
-	case target == "azure":
-		return "templates/azure-wif.tfvars.tmpl", slug + "-azure-wif.tfvars", "text/plain", nil
-	case target == "gcp" && source == "gcp":
-		return "templates/gcp-sa-impersonation.tfvars.tmpl", slug + "-gcp-sa-impersonation.tfvars", "text/plain", nil
-	case target == "gcp":
-		return "templates/gcp-wif.tfvars.tmpl", slug + "-gcp-wif.tfvars", "text/plain", nil
-	default:
-		return "", "", "", NewClientError(400, fmt.Sprintf("unsupported target/source combination: %s/%s", target, source))
-	}
+	return "", "", "", NewClientError(400, "unsupported format: "+format)
 }
 
 // cliScriptSpec returns the CLI shell-script template path + filename for the
