@@ -7,7 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 )
@@ -417,11 +421,62 @@ func (h *Handler) testAccountCredentials(ctx context.Context, req *events.Lambda
 	if res, ok := ambientCredResult(acct); ok {
 		return res, nil
 	}
+	if res, ok := h.azureFederatedCredResult(ctx, acct); ok {
+		return res, nil
+	}
 	res, err := h.checkCredentialPresence(ctx, acct)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
+}
+
+// azureFederatedCredResult exercises the secret-free Azure federated
+// credential path end-to-end for accounts in workload_identity_federation
+// mode whose CUDly deployment has an OIDC signer + issuer configured and
+// no legacy PEM stored. It mints a client_assertion JWT via the KMS
+// signer, exchanges it at Azure AD's token endpoint, and reports the
+// result. Returns (result, true) when this path applies; (_, false)
+// means the caller should fall back to the presence check.
+func (h *Handler) azureFederatedCredResult(ctx context.Context, acct *config.CloudAccount) (AccountTestResult, bool) {
+	if acct.Provider != "azure" || acct.AzureAuthMode != "workload_identity_federation" {
+		return AccountTestResult{}, false
+	}
+	if h.signer == nil {
+		return AccountTestResult{}, false
+	}
+	issuer := oidc.IssuerURL()
+	if issuer == "" {
+		return AccountTestResult{}, false
+	}
+	// If a legacy PEM is stored, let the presence-check path handle it
+	// so cert-based accounts keep reporting the same shape.
+	if h.credStore != nil {
+		if has, _ := h.credStore.HasCredential(ctx, acct.ID, credentials.CredTypeAzureWIF); has {
+			return AccountTestResult{}, false
+		}
+	}
+
+	cred, err := credentials.BuildAzureFederatedCredential(h.signer, issuer, acct.AzureTenantID, acct.AzureClientID)
+	if err != nil {
+		return AccountTestResult{OK: false, Message: fmt.Sprintf("azure federated credential build failed: %v", err)}, true
+	}
+
+	// Actually exchange the JWT for an access token. This is the only
+	// path that proves the whole chain — KMS sign → Azure AD federated
+	// credential validation → access token — is healthy.
+	tokCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	tok, err := cred.GetToken(tokCtx, policy.TokenRequestOptions{
+		Scopes: []string{"https://management.azure.com/.default"},
+	})
+	if err != nil {
+		return AccountTestResult{OK: false, Message: fmt.Sprintf("azure token exchange failed: %v", err)}, true
+	}
+	if tok.Token == "" {
+		return AccountTestResult{OK: false, Message: "azure token exchange returned empty token"}, true
+	}
+	return AccountTestResult{OK: true, Message: "federated credential validated (KMS-signed JWT accepted by Azure AD)"}, true
 }
 
 // checkCredentialPresence checks whether the expected credential is stored for an account.
