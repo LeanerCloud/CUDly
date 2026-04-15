@@ -1403,13 +1403,40 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 }
 
 // DeleteCloudAccount deletes a cloud account. Cascades to credentials and overrides.
+// If an approved account_registrations row points at this account, it is reset to
+// 'pending' in the same transaction so the admin can re-approve through the normal
+// flow instead of being left with a dead-end "Approved (account pending link)" row.
 func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = $1`, id)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Reset any linked approved registration first (explicit NULL so we don't
+	// rely on the FK's ON DELETE SET NULL behaviour).
+	if _, err = tx.Exec(ctx, `
+		UPDATE account_registrations
+		   SET status           = 'pending',
+		       reviewed_by      = NULL,
+		       reviewed_at      = NULL,
+		       cloud_account_id = NULL
+		 WHERE cloud_account_id = $1
+		   AND status           = 'approved'
+	`, id); err != nil {
+		return fmt.Errorf("failed to reset linked registration: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete cloud account: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("cloud account not found: %s", id)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit cloud account deletion: %w", err)
 	}
 	return nil
 }

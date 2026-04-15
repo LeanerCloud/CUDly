@@ -723,8 +723,28 @@ func TestPGXMock_DeleteCloudAccount_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+
+	err := store.DeleteCloudAccount(ctx, "acct-id")
+	require.NoError(t, err)
+}
+
+func TestPGXMock_DeleteCloudAccount_WithLinkedRegistration(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
 
 	err := store.DeleteCloudAccount(ctx, "acct-id")
 	require.NoError(t, err)
@@ -735,8 +755,12 @@ func TestPGXMock_DeleteCloudAccount_NotFound(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectRollback()
 
 	err := store.DeleteCloudAccount(ctx, "missing")
 	require.Error(t, err)
