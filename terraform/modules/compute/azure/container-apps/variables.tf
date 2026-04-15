@@ -108,12 +108,12 @@ variable "database_password_secret_name" {
 }
 
 variable "key_vault_uri" {
-  description = "Key Vault URI"
+  description = "Key Vault URI (data-plane, e.g. https://<name>.vault.azure.net/)"
   type        = string
 }
 
-variable "signing_key_id" {
-  description = "Full Key Vault key ID of the OIDC issuer signing key (Microsoft.KeyVault/vaults/.../keys/<name>)"
+variable "key_vault_id" {
+  description = "Key Vault ARM resource ID (/subscriptions/.../providers/Microsoft.KeyVault/vaults/<name>) used as the RBAC scope for the OIDC signing-key Crypto User role."
   type        = string
 }
 

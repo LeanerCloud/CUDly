@@ -3,10 +3,22 @@
 # endpoints. The private half never leaves Cloud KMS. The public half
 # is published through Cloud Run's /.well-known/jwks.json endpoint.
 
+# Enable the Cloud KMS API before creating the key ring — fresh
+# projects and projects that have never used KMS before will 403
+# Error creating KeyRing: Cloud Key Management Service (KMS) API
+# has not been used in project <number> before or it is disabled.
+resource "google_project_service" "cloudkms" {
+  project            = var.project_id
+  service            = "cloudkms.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_kms_key_ring" "signing" {
   name     = "cudly-oidc-signing"
   location = var.region
   project  = var.project_id
+
+  depends_on = [google_project_service.cloudkms]
 }
 
 resource "google_kms_crypto_key" "signing" {

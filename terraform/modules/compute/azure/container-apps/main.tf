@@ -253,8 +253,14 @@ resource "azurerm_role_assignment" "reservations_purchaser" {
 # Key Vault Crypto User: allows the container app's managed identity
 # to call Sign + GetKey on the OIDC signing key. The key never leaves
 # the vault — the app only receives signatures computed inside Azure.
+# Scoped to the whole Key Vault (the ARM resource ID) rather than an
+# individual key, because azurerm_role_assignment.scope requires an
+# ARM resource ID and azurerm_key_vault_key.id returns the data-plane
+# URL, not ARM format. Vault-level grant is equivalent in practice —
+# the only consumer of this role is the container-app identity and
+# the only key in the vault that matters to it is the OIDC signer.
 resource "azurerm_role_assignment" "signing_key_crypto_user" {
-  scope                = var.signing_key_id
+  scope                = var.key_vault_id
   role_definition_name = "Key Vault Crypto User"
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
