@@ -68,7 +68,7 @@ gcloud iam service-accounts add-iam-policy-binding "${SERVICE_ACCOUNT_EMAIL}" \
   --role=roles/iam.workloadIdentityUser \
   --member="principal://iam.googleapis.com/${POOL_NAME}/subject/${CUDLY_FEDERATED_SUBJECT}" \
   --project="${PROJECT_ID}" \
-  --output=none
+  --format="none"
 
 echo ""
 echo "=== Done ==="
