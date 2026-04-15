@@ -112,6 +112,16 @@ variable "key_vault_uri" {
   type        = string
 }
 
+variable "signing_key_id" {
+  description = "Full Key Vault key ID of the OIDC issuer signing key (Microsoft.KeyVault/vaults/.../keys/<name>)"
+  type        = string
+}
+
+variable "signing_key_name" {
+  description = "Name of the OIDC issuer signing key in Key Vault"
+  type        = string
+}
+
 variable "auto_migrate" {
   description = "Auto-run database migrations on startup"
   type        = bool

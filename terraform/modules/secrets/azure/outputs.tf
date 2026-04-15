@@ -90,6 +90,16 @@ output "scheduled_task_secret_name" {
   value       = var.create_scheduled_task_secret ? azurerm_key_vault_secret.scheduled_task_secret[0].name : null
 }
 
+output "signing_key_name" {
+  description = "Name of the OIDC issuer signing key in Key Vault"
+  value       = azurerm_key_vault_key.signing.name
+}
+
+output "signing_key_id" {
+  description = "Full Key Vault key ID of the OIDC issuer signing key"
+  value       = azurerm_key_vault_key.signing.id
+}
+
 output "additional_secret_ids" {
   description = "Map of additional secret IDs"
   value       = { for k, v in azurerm_key_vault_secret.additional : k => v.id }

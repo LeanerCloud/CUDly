@@ -27,6 +27,8 @@ module "compute_container_apps" {
   database_username              = module.database.administrator_login
   database_password_secret_name  = module.secrets.database_password_secret_name
   key_vault_uri                  = module.secrets.key_vault_uri
+  signing_key_id                 = module.secrets.signing_key_id
+  signing_key_name               = module.secrets.signing_key_name
   auto_migrate                   = var.auto_migrate
   admin_email                    = var.admin_email
   admin_password_secret_name     = coalesce(module.secrets.admin_password_secret_name, "")

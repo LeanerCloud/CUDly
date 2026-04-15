@@ -131,6 +131,10 @@ resource "azurerm_container_app" "main" {
             AZURE_REGION          = var.location
             PORT                  = "8080"
             ALLOWED_ORIGINS       = join(",", var.allowed_origins)
+            # OIDC issuer signing key — see internal/oidc/azure_signer.go.
+            CUDLY_SOURCE_CLOUD          = "azure"
+            CUDLY_SIGNING_KEY_VAULT_URL = var.key_vault_uri
+            CUDLY_SIGNING_KEY_NAME      = var.signing_key_name
           },
           var.additional_env_vars
         )
@@ -243,6 +247,15 @@ resource "azurerm_role_assignment" "cost_management_reader" {
 resource "azurerm_role_assignment" "reservations_purchaser" {
   scope                = data.azurerm_subscription.current.id
   role_definition_name = "Reservation Purchaser"
+  principal_id         = azurerm_user_assigned_identity.container_app.principal_id
+}
+
+# Key Vault Crypto User: allows the container app's managed identity
+# to call Sign + GetKey on the OIDC signing key. The key never leaves
+# the vault — the app only receives signatures computed inside Azure.
+resource "azurerm_role_assignment" "signing_key_crypto_user" {
+  scope                = var.signing_key_id
+  role_definition_name = "Key Vault Crypto User"
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
 
