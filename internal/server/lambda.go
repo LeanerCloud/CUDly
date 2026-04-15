@@ -106,6 +106,14 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 		}, nil
 	}
 
+	// Intercept OIDC discovery endpoints before both the static-file
+	// fallback and the main API router. api.HandleOIDC does its own
+	// auth-less dispatch so the /.well-known/* paths don't leak into
+	// the API router tables or the security middleware.
+	if resp, handled := app.API.HandleOIDC(ctx, &request); handled {
+		return resp, nil
+	}
+
 	// Serve static files for non-API paths when STATIC_DIR is configured
 	reqPath := request.RawPath
 	if app.staticDir != "" && isStaticPath(reqPath) {

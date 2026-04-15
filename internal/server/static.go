@@ -171,9 +171,8 @@ func staticDirFromEnv() string {
 
 // isStaticPath returns true if the path should be handled by the static file
 // server rather than the API. API paths start with /api/ or are /health.
-// The OIDC issuer discovery endpoints (/.well-known/openid-configuration
-// and /.well-known/jwks.json) are also routed to the API handler — they
-// must be served as JSON, not as the SPA index fallback.
+// OIDC discovery paths (/.well-known/*) are intercepted earlier by the
+// transport layer via api.IsOIDCDiscoveryPath, so they never reach here.
 func isStaticPath(urlPath string) bool {
 	// Normalize double slashes (e.g. //health -> /health) that can arise
 	// when a trailing-slash base URL is concatenated with a path.
@@ -182,9 +181,6 @@ func isStaticPath(urlPath string) bool {
 		return false
 	}
 	if clean == "/health" {
-		return false
-	}
-	if strings.HasPrefix(clean, "/.well-known/") {
 		return false
 	}
 	return true

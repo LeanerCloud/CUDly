@@ -181,10 +181,12 @@ func (r *Router) registerRoutes() {
 		// Federation IaC download endpoint (public — generic templates, no secrets)
 		{ExactPath: "/api/federation/iac", Method: "GET", Handler: r.getFederationIaCHandler, Auth: AuthPublic},
 
-		// OIDC issuer (public — consumed by Azure AD / GCP WIF / etc.
-		// when verifying client_assertion JWTs minted by CUDly).
-		{ExactPath: "/.well-known/openid-configuration", Method: "GET", Handler: r.getOpenIDConfigurationHandler, Auth: AuthPublic},
-		{ExactPath: "/.well-known/jwks.json", Method: "GET", Handler: r.getJWKSHandler, Auth: AuthPublic},
+		// Note: /.well-known/openid-configuration and /.well-known/jwks.json
+		// are served by the transport layer (lambda.go / http.go) which
+		// calls api.Handler.HandleOIDC before dispatching to this router.
+		// That keeps the OIDC endpoints out of the API surface entirely —
+		// no auth middleware, no CSRF, no CORS layer — and avoids special
+		// cases in isPublicEndpoint / isStaticPath.
 
 		// Health check (both root and /api paths)
 		{ExactPath: "/health", Handler: r.healthCheckHandler, Auth: AuthPublic},
@@ -384,14 +386,6 @@ func (r *Router) triggerAnalyticsCollectionHandler(ctx context.Context, req *eve
 
 func (r *Router) loginHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.login(ctx, req)
-}
-
-func (r *Router) getOpenIDConfigurationHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getOpenIDConfiguration(ctx, req)
-}
-
-func (r *Router) getJWKSHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getJWKS(ctx, req)
 }
 
 func (r *Router) logoutHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
