@@ -96,6 +96,9 @@ resource "google_cloud_run_v2_service" "main" {
             GCP_PROJECT_ID        = var.project_id
             GCP_REGION            = var.region
             ALLOWED_ORIGINS       = join(",", var.allowed_origins)
+            # OIDC issuer signing key — see internal/oidc/gcp_signer.go.
+            CUDLY_SOURCE_CLOUD         = "gcp"
+            CUDLY_SIGNING_KEY_RESOURCE = local.signing_key_version_resource
           },
           var.additional_env_vars
         )
