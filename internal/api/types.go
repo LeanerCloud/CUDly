@@ -66,6 +66,10 @@ type HandlerConfig struct {
 	// /.well-known/openid-configuration and /.well-known/jwks.json.
 	// Nil disables the OIDC issuer endpoints (they return 404).
 	OIDCSigner oidc.Signer
+	// OIDCIssuerURL is the canonical issuer URL the OIDC handlers
+	// publish in the Discovery document. Must match what Azure AD
+	// federated credentials are registered with.
+	OIDCIssuerURL string
 }
 
 // AnalyticsClientInterface defines the interface for analytics queries

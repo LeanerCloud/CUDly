@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,9 +74,16 @@ type ApplicationConfig struct {
 	EnableDashboard           bool
 	DashboardBucket           string
 	DashboardURL              string
-	CORSAllowedOrigin         string
-	ScheduledTaskSecret       string
-	IsLambda                  bool
+	// IssuerURL is the canonical OIDC issuer URL published under
+	// /.well-known/* and used as the iss claim in JWTs minted by the
+	// KMS-backed signer. Falls back to DashboardURL. Set via the
+	// CUDLY_ISSUER_URL env var; in the AWS Lambda deploy the Terraform
+	// module wires this to the Function URL so the deployment is
+	// self-contained without needing a frontend domain.
+	IssuerURL           string
+	CORSAllowedOrigin   string
+	ScheduledTaskSecret string
+	IsLambda            bool
 }
 
 // ExternalDeps holds pre-built external dependencies that require infrastructure
@@ -91,6 +99,17 @@ type ExternalDeps struct {
 func isLambdaRuntime() bool {
 	// Lambda sets AWS_LAMBDA_RUNTIME_API when running
 	return os.Getenv("AWS_LAMBDA_RUNTIME_API") != ""
+}
+
+// resolveOIDCIssuerURL picks the canonical OIDC issuer URL for the
+// deployment. CUDLY_ISSUER_URL (set by the infra module to the
+// Function URL / Container App URL / Cloud Run URL) wins; DashboardURL
+// is the backstop.
+func resolveOIDCIssuerURL(cfg ApplicationConfig) string {
+	if cfg.IssuerURL != "" {
+		return strings.TrimRight(cfg.IssuerURL, "/")
+	}
+	return strings.TrimRight(cfg.DashboardURL, "/")
 }
 
 // LoadApplicationConfig reads all configuration from environment variables
@@ -113,6 +132,7 @@ func LoadApplicationConfig() ApplicationConfig {
 		EnableDashboard:           os.Getenv("ENABLE_DASHBOARD") == "true",
 		DashboardBucket:           os.Getenv("DASHBOARD_BUCKET"),
 		DashboardURL:              os.Getenv("DASHBOARD_URL"),
+		IssuerURL:                 os.Getenv("CUDLY_ISSUER_URL"),
 		CORSAllowedOrigin:         os.Getenv("CORS_ALLOWED_ORIGIN"),
 		ScheduledTaskSecret:       os.Getenv("SCHEDULED_TASK_SECRET"),
 		IsLambda:                  isLambdaRuntime(),
@@ -149,7 +169,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		AzureCredentialsSecretARN: cfg.AzureCredentialsSecretARN,
 		GCPCredentialsSecretARN:   cfg.GCPCredentialsSecretARN,
 		OIDCSigner:                signer,
-		OIDCIssuerURL:             cfg.DashboardURL,
+		OIDCIssuerURL:             resolveOIDCIssuerURL(cfg),
 	})
 
 	// Initialize scheduler
@@ -196,6 +216,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		EmailNotifier:             deps.EmailSender,
 		DashboardURL:              cfg.DashboardURL,
 		OIDCSigner:                signer,
+		OIDCIssuerURL:             resolveOIDCIssuerURL(cfg),
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -406,7 +427,7 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		GCPCredentialsSecretARN:   app.appConfig.GCPCredentialsSecretARN,
 		DashboardURL:              app.appConfig.DashboardURL,
 		OIDCSigner:                app.signer,
-		OIDCIssuerURL:             app.appConfig.DashboardURL,
+		OIDCIssuerURL:             resolveOIDCIssuerURL(app.appConfig),
 	})
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
@@ -434,6 +455,7 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		EmailNotifier:             app.Email,
 		DashboardURL:              app.appConfig.DashboardURL,
 		OIDCSigner:                app.signer,
+		OIDCIssuerURL:             resolveOIDCIssuerURL(app.appConfig),
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")

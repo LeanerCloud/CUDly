@@ -36,6 +36,7 @@ type Handler struct {
 	analyticsClient    AnalyticsClientInterface    // Optional: S3/Athena analytics client
 	analyticsCollector AnalyticsCollectorInterface // Optional: Hourly collector
 	signer             oidc.Signer                 // Optional: OIDC issuer signer (backed by cloud KMS)
+	issuerURL          string                      // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
 
 	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
 	awsCfg     aws.Config // cached base AWS config (no region override)
@@ -70,6 +71,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		analyticsClient:    cfg.AnalyticsClient,
 		analyticsCollector: cfg.AnalyticsCollector,
 		signer:             cfg.OIDCSigner,
+		issuerURL:          cfg.OIDCIssuerURL,
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)

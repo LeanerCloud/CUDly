@@ -29,6 +29,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/api/federation/iac", // Generic IaC templates (no secrets)
 		"/docs",
 		"/api/docs",
+		"/.well-known/", // OIDC issuer discovery + JWKS (served by handler_oidc.go, consumed by Azure AD)
 	}
 	for _, ep := range publicEndpoints {
 		if strings.HasPrefix(path, ep) {

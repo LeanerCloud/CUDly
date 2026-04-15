@@ -10,10 +10,29 @@ import (
 )
 
 // resolveIssuerURL returns the base URL at which this CUDly deployment
-// publishes its OIDC issuer. It prefers h.dashboardURL (the explicitly
-// configured dashboard URL the operator set) and falls back to the
-// trusted Function URL context domain.
+// publishes its OIDC issuer. Preference order:
+//  1. h.issuerURL (CUDLY_ISSUER_URL env var, if the operator set one)
+//  2. h.dashboardURL (operator-configured dashboard URL)
+//  3. the trusted Function URL context domain on the current request
+//     (this is the common case for AWS Lambda deployments — it's the
+//     only stable issuer value available since the Lambda env vars
+//     cannot reference the Function URL without a Terraform cycle)
+//
+// Whatever we resolve here is also persisted via oidc.SetIssuerURL so
+// the purchase manager's Azure federated credential path mints JWTs
+// with a matching iss claim.
 func (h *Handler) resolveIssuerURL(req *events.LambdaFunctionURLRequest) string {
+	if url := h.pickIssuerURL(req); url != "" {
+		oidc.SetIssuerURL(url)
+		return url
+	}
+	return ""
+}
+
+func (h *Handler) pickIssuerURL(req *events.LambdaFunctionURLRequest) string {
+	if h.issuerURL != "" {
+		return strings.TrimRight(h.issuerURL, "/")
+	}
 	if h.dashboardURL != "" {
 		return strings.TrimRight(h.dashboardURL, "/")
 	}

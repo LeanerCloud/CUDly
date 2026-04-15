@@ -49,6 +49,11 @@ resource "aws_lambda_function" "main" {
         SECRET_PROVIDER       = "aws"
         AWS_REGION_CONFIG     = var.region
         CUDLY_SIGNING_KEY_ID  = aws_kms_key.signing.arn
+        # CUDLY_ISSUER_URL is deliberately NOT wired here: referencing
+        # aws_lambda_function_url.main[0].function_url would create a
+        # cycle with aws_lambda_function.main. The server resolves the
+        # issuer URL lazily from the first inbound request's
+        # DomainName and caches it — see internal/oidc.IssuerCache.
       },
       var.additional_env_vars
     )

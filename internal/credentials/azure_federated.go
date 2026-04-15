@@ -43,12 +43,16 @@ type AzureResolveOptions struct {
 // the top-level switch simple.
 //
 // Routing:
-//   - opts.Signer + opts.IssuerURL set, no stored PEM → federated path
-//     (BuildAzureFederatedCredential), secret-free.
+//   - opts.Signer + issuer URL available, no stored PEM → federated
+//     path (BuildAzureFederatedCredential), secret-free.
 //   - opts.Signer set but a stored PEM exists → legacy cert path, for
 //     backward compatibility with accounts registered before the
 //     redesign.
 //   - opts.Signer not set → legacy cert path, requiring a stored PEM.
+//
+// The issuer URL comes from opts.IssuerURL if set, otherwise from the
+// package-level oidc.IssuerURL() cache populated by the first inbound
+// HTTP request — see internal/oidc/issuer_cache.go.
 func resolveAzureWIFCredential(
 	ctx context.Context,
 	account *config.CloudAccount,
@@ -57,10 +61,15 @@ func resolveAzureWIFCredential(
 ) (azcore.TokenCredential, error) {
 	raw, _ := loadOptionalWIFKey(ctx, store, account.ID)
 
+	issuerURL := opts.IssuerURL
+	if issuerURL == "" {
+		issuerURL = oidc.IssuerURL()
+	}
+
 	// Secret-free federated path — opt-in via signer+issuerURL, only
 	// when the account has no legacy PEM stored.
-	if opts.Signer != nil && opts.IssuerURL != "" && len(raw) == 0 {
-		return BuildAzureFederatedCredential(opts.Signer, opts.IssuerURL, account.AzureTenantID, account.AzureClientID)
+	if opts.Signer != nil && issuerURL != "" && len(raw) == 0 {
+		return BuildAzureFederatedCredential(opts.Signer, issuerURL, account.AzureTenantID, account.AzureClientID)
 	}
 
 	// Legacy cert-based path.
