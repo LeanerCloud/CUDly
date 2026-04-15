@@ -26,6 +26,7 @@ export interface AccountRegistration {
   gcp_project_id?: string;
   gcp_client_email?: string;
   gcp_auth_mode?: string;
+  gcp_wif_audience?: string;
   has_credentials?: boolean;
   rejection_reason?: string;
   cloud_account_id?: string;

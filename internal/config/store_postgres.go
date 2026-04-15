@@ -1262,15 +1262,15 @@ func (s *PostgresStore) CreateCloudAccount(ctx context.Context, account *CloudAc
 			provider, external_id,
 			aws_auth_mode, aws_role_arn, aws_external_id, aws_bastion_id, aws_web_identity_token_file, aws_is_org_root,
 			azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
-			gcp_project_id, gcp_client_email, gcp_auth_mode,
+			gcp_project_id, gcp_client_email, gcp_auth_mode, gcp_wif_audience,
 			created_at, updated_at, created_by
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7,
 			$8, $9, $10, $11, $12, $13,
 			$14, $15, $16, $17,
-			$18, $19, $20,
-			$21, $22, $23
+			$18, $19, $20, $21,
+			$22, $23, $24
 		)
 	`
 
@@ -1295,6 +1295,7 @@ func (s *PostgresStore) CreateCloudAccount(ctx context.Context, account *CloudAc
 		nullStringFromString(account.GCPProjectID),
 		nullStringFromString(account.GCPClientEmail),
 		nullStringFromString(account.GCPAuthMode),
+		nullStringFromString(account.GCPWIFAudience),
 		account.CreatedAt,
 		account.UpdatedAt,
 		nullStringFromString(account.CreatedBy),
@@ -1318,6 +1319,7 @@ func (s *PostgresStore) GetCloudAccount(ctx context.Context, id string) (*CloudA
 			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
 			COALESCE(ca.azure_client_id,''), COALESCE(ca.azure_auth_mode,''),
 			COALESCE(ca.gcp_project_id,''), COALESCE(ca.gcp_client_email,''), COALESCE(ca.gcp_auth_mode,''),
+			COALESCE(ca.gcp_wif_audience,''),
 			ca.created_at, ca.updated_at, COALESCE(ca.created_by::text,''),
 			EXISTS(SELECT 1 FROM account_credentials ac WHERE ac.account_id = ca.id) AS credentials_configured
 		FROM cloud_accounts ca
@@ -1333,6 +1335,7 @@ func (s *PostgresStore) GetCloudAccount(ctx context.Context, id string) (*CloudA
 		&account.AWSIsOrgRoot,
 		&account.AzureSubscriptionID, &account.AzureTenantID, &account.AzureClientID, &account.AzureAuthMode,
 		&account.GCPProjectID, &account.GCPClientEmail, &account.GCPAuthMode,
+		&account.GCPWIFAudience,
 		&account.CreatedAt, &account.UpdatedAt, &account.CreatedBy,
 		&account.CredentialsConfigured,
 	)
@@ -1368,7 +1371,8 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 			gcp_project_id = $17,
 			gcp_client_email = $18,
 			gcp_auth_mode = $19,
-			updated_at = $20
+			gcp_wif_audience = $20,
+			updated_at = $21
 		WHERE id = $1
 	`
 	tag, err := s.db.Exec(ctx, query,
@@ -1391,6 +1395,7 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 		nullStringFromString(account.GCPProjectID),
 		nullStringFromString(account.GCPClientEmail),
 		nullStringFromString(account.GCPAuthMode),
+		nullStringFromString(account.GCPWIFAudience),
 		account.UpdatedAt,
 	)
 	if err != nil {
@@ -1454,6 +1459,7 @@ func (s *PostgresStore) ListCloudAccounts(ctx context.Context, filter CloudAccou
 			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
 			COALESCE(ca.azure_client_id,''), COALESCE(ca.azure_auth_mode,''),
 			COALESCE(ca.gcp_project_id,''), COALESCE(ca.gcp_client_email,''), COALESCE(ca.gcp_auth_mode,''),
+			COALESCE(ca.gcp_wif_audience,''),
 			ca.created_at, ca.updated_at, COALESCE(ca.created_by::text,''),
 			EXISTS(SELECT 1 FROM account_credentials ac WHERE ac.account_id = ca.id) AS credentials_configured
 		FROM cloud_accounts ca
@@ -1506,6 +1512,7 @@ func (s *PostgresStore) ListCloudAccounts(ctx context.Context, filter CloudAccou
 			&a.AWSIsOrgRoot,
 			&a.AzureSubscriptionID, &a.AzureTenantID, &a.AzureClientID, &a.AzureAuthMode,
 			&a.GCPProjectID, &a.GCPClientEmail, &a.GCPAuthMode,
+			&a.GCPWIFAudience,
 			&a.CreatedAt, &a.UpdatedAt, &a.CreatedBy,
 			&a.CredentialsConfigured,
 		); err != nil {
@@ -1749,6 +1756,7 @@ func (s *PostgresStore) GetPlanAccounts(ctx context.Context, planID string) ([]C
 			COALESCE(ca.azure_subscription_id,''), COALESCE(ca.azure_tenant_id,''),
 			COALESCE(ca.azure_client_id,''), COALESCE(ca.azure_auth_mode,''),
 			COALESCE(ca.gcp_project_id,''), COALESCE(ca.gcp_client_email,''), COALESCE(ca.gcp_auth_mode,''),
+			COALESCE(ca.gcp_wif_audience,''),
 			ca.created_at, ca.updated_at, COALESCE(ca.created_by::text,''),
 			EXISTS(SELECT 1 FROM account_credentials ac WHERE ac.account_id = ca.id) AS credentials_configured
 		FROM cloud_accounts ca
@@ -1773,6 +1781,7 @@ func (s *PostgresStore) GetPlanAccounts(ctx context.Context, planID string) ([]C
 			&a.AWSIsOrgRoot,
 			&a.AzureSubscriptionID, &a.AzureTenantID, &a.AzureClientID, &a.AzureAuthMode,
 			&a.GCPProjectID, &a.GCPClientEmail, &a.GCPAuthMode,
+			&a.GCPWIFAudience,
 			&a.CreatedAt, &a.UpdatedAt, &a.CreatedBy,
 			&a.CredentialsConfigured,
 		); err != nil {

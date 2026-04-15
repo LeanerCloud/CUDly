@@ -35,6 +35,7 @@ type RegistrationRequest struct {
 	GCPProjectID        string `json:"gcp_project_id"`
 	GCPClientEmail      string `json:"gcp_client_email"`
 	GCPAuthMode         string `json:"gcp_auth_mode"`
+	GCPWIFAudience      string `json:"gcp_wif_audience"`
 	CredentialType      string `json:"credential_type"`
 	CredentialPayload   string `json:"credential_payload"`
 }
@@ -90,6 +91,7 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		GCPProjectID:        body.GCPProjectID,
 		GCPClientEmail:      body.GCPClientEmail,
 		GCPAuthMode:         body.GCPAuthMode,
+		GCPWIFAudience:      body.GCPWIFAudience,
 		RegCredentialType:   body.CredentialType,
 	}
 

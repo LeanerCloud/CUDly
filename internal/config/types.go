@@ -238,6 +238,12 @@ type CloudAccount struct {
 	GCPProjectID   string `json:"gcp_project_id,omitempty"`
 	GCPClientEmail string `json:"gcp_client_email,omitempty"`
 	GCPAuthMode    string `json:"gcp_auth_mode,omitempty"`
+	// GCPWIFAudience is the full Workload Identity Pool provider
+	// resource used as the STS audience when exchanging a CUDly
+	// KMS-signed JWT for a GCP access token. Only set for accounts
+	// using the secret-free workload_identity_federation path.
+	// Shape: //iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+	GCPWIFAudience string `json:"gcp_wif_audience,omitempty"`
 
 	// Derived (not stored in DB)
 	CredentialsConfigured bool   `json:"credentials_configured"`
@@ -301,6 +307,7 @@ type AccountRegistration struct {
 	GCPProjectID         string     `json:"gcp_project_id,omitempty"`
 	GCPClientEmail       string     `json:"gcp_client_email,omitempty"`
 	GCPAuthMode          string     `json:"gcp_auth_mode,omitempty"`
+	GCPWIFAudience       string     `json:"gcp_wif_audience,omitempty"` // Full WIF provider resource; only set for federated path.
 	RegCredentialType    string     `json:"reg_credential_type,omitempty"`
 	RegCredentialPayload string     `json:"-"`                         // never returned in API responses (encrypted at rest)
 	HasCredentials       bool       `json:"has_credentials,omitempty"` // derived: true when reg_credential_type is set

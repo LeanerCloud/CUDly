@@ -40,6 +40,7 @@ type CloudAccountRequest struct {
 	GCPProjectID   string `json:"gcp_project_id"`
 	GCPClientEmail string `json:"gcp_client_email"`
 	GCPAuthMode    string `json:"gcp_auth_mode"`
+	GCPWIFAudience string `json:"gcp_wif_audience"` // Full WIF provider resource, secret-free path only.
 }
 
 // CredentialsRequest is the request body for the save-credentials endpoint.
@@ -226,6 +227,7 @@ func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 		GCPProjectID:            req.GCPProjectID,
 		GCPClientEmail:          req.GCPClientEmail,
 		GCPAuthMode:             req.GCPAuthMode,
+		GCPWIFAudience:          req.GCPWIFAudience,
 	}
 
 	if req.Enabled != nil {

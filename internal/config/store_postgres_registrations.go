@@ -33,7 +33,7 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 			source_provider,
 			aws_role_arn, aws_auth_mode, aws_external_id,
 			azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
-			gcp_project_id, gcp_client_email, gcp_auth_mode,
+			gcp_project_id, gcp_client_email, gcp_auth_mode, gcp_wif_audience,
 			reg_credential_type, reg_credential_payload,
 			created_at, updated_at
 		) VALUES (
@@ -42,9 +42,9 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 			$9,
 			$10, $11, $12,
 			$13, $14, $15, $16,
-			$17, $18, $19,
-			$20, $21,
-			$22, $23
+			$17, $18, $19, $20,
+			$21, $22,
+			$23, $24
 		)
 	`
 
@@ -56,7 +56,7 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 		nullStringFromString(reg.AzureSubscriptionID), nullStringFromString(reg.AzureTenantID),
 		nullStringFromString(reg.AzureClientID), nullStringFromString(reg.AzureAuthMode),
 		nullStringFromString(reg.GCPProjectID), nullStringFromString(reg.GCPClientEmail),
-		nullStringFromString(reg.GCPAuthMode),
+		nullStringFromString(reg.GCPAuthMode), nullStringFromString(reg.GCPWIFAudience),
 		nullStringFromString(reg.RegCredentialType), nullStringFromString(reg.RegCredentialPayload),
 		reg.CreatedAt, reg.UpdatedAt,
 	)
@@ -222,7 +222,7 @@ func registrationColumns() string {
 		source_provider,
 		aws_role_arn, aws_auth_mode, aws_external_id,
 		azure_subscription_id, azure_tenant_id, azure_client_id, azure_auth_mode,
-		gcp_project_id, gcp_client_email, gcp_auth_mode,
+		gcp_project_id, gcp_client_email, gcp_auth_mode, gcp_wif_audience,
 		reg_credential_type, reg_credential_payload,
 		rejection_reason, cloud_account_id, reviewed_by, reviewed_at,
 		created_at, updated_at`
@@ -238,7 +238,7 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 	var description, sourceProvider sql.NullString
 	var awsRoleARN, awsAuthMode, awsExternalID sql.NullString
 	var azureSubID, azureTenantID, azureClientID, azureAuthMode sql.NullString
-	var gcpProjectID, gcpClientEmail, gcpAuthMode sql.NullString
+	var gcpProjectID, gcpClientEmail, gcpAuthMode, gcpWIFAudience sql.NullString
 	var regCredType, regCredPayload sql.NullString
 	var rejectionReason sql.NullString
 	var cloudAccountID, reviewedBy sql.NullString
@@ -250,7 +250,7 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 		&sourceProvider,
 		&awsRoleARN, &awsAuthMode, &awsExternalID,
 		&azureSubID, &azureTenantID, &azureClientID, &azureAuthMode,
-		&gcpProjectID, &gcpClientEmail, &gcpAuthMode,
+		&gcpProjectID, &gcpClientEmail, &gcpAuthMode, &gcpWIFAudience,
 		&regCredType, &regCredPayload,
 		&rejectionReason, &cloudAccountID, &reviewedBy, &reviewedAt,
 		&reg.CreatedAt, &reg.UpdatedAt,
@@ -271,6 +271,7 @@ func scanRegistrationRow(row scannable) (*AccountRegistration, error) {
 	reg.GCPProjectID = gcpProjectID.String
 	reg.GCPClientEmail = gcpClientEmail.String
 	reg.GCPAuthMode = gcpAuthMode.String
+	reg.GCPWIFAudience = gcpWIFAudience.String
 	reg.RegCredentialType = regCredType.String
 	reg.RegCredentialPayload = regCredPayload.String
 	reg.HasCredentials = regCredType.Valid && regCredType.String != ""

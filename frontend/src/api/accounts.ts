@@ -27,6 +27,7 @@ export interface CloudAccount {
   gcp_project_id?: string;
   gcp_client_email?: string;
   gcp_auth_mode?: 'service_account_key' | 'application_default' | 'workload_identity_federation';
+  gcp_wif_audience?: string;
   credentials_configured: boolean;
   created_at: string;
   updated_at: string;
@@ -53,6 +54,7 @@ export interface CloudAccountRequest {
   gcp_project_id?: string;
   gcp_client_email?: string;
   gcp_auth_mode?: string;
+  gcp_wif_audience?: string;
 }
 
 export interface AccountListFilters {

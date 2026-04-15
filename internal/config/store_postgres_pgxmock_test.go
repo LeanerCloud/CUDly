@@ -626,7 +626,7 @@ var cloudAccountCols = []string{
 	"aws_web_identity_token_file",
 	"aws_is_org_root",
 	"azure_subscription_id", "azure_tenant_id", "azure_client_id", "azure_auth_mode",
-	"gcp_project_id", "gcp_client_email", "gcp_auth_mode",
+	"gcp_project_id", "gcp_client_email", "gcp_auth_mode", "gcp_wif_audience",
 	"created_at", "updated_at", "created_by",
 	"credentials_configured",
 }
@@ -637,7 +637,7 @@ func cloudAccountRow(now time.Time) []interface{} {
 		true, "aws", "123456789012",
 		"access_keys", "", "", "", "", false,
 		"", "", "", "",
-		"", "", "",
+		"", "", "", "",
 		now, now, "admin",
 		true,
 	}
@@ -694,7 +694,7 @@ func TestPGXMock_UpdateCloudAccount_Success(t *testing.T) {
 	ctx := context.Background()
 
 	acct := &CloudAccount{ID: "acct-id", Name: "Updated", Enabled: true, Provider: "aws"}
-	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(20)...).
+	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(21)...).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := store.UpdateCloudAccount(ctx, acct)
@@ -708,7 +708,7 @@ func TestPGXMock_UpdateCloudAccount_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	acct := &CloudAccount{ID: "missing-id", Name: "X", Provider: "aws"}
-	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(20)...).
+	mock.ExpectExec("UPDATE").WithArgs(anyArgsCfg(21)...).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := store.UpdateCloudAccount(ctx, acct)

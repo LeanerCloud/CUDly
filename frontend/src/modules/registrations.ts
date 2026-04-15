@@ -29,6 +29,7 @@ function registrationToAccount(reg: AccountRegistration): CloudAccount {
     gcp_project_id: reg.gcp_project_id,
     gcp_client_email: reg.gcp_client_email,
     gcp_auth_mode: reg.gcp_auth_mode as CloudAccount['gcp_auth_mode'],
+    gcp_wif_audience: reg.gcp_wif_audience,
     credentials_configured: false,
     created_at: '',
     updated_at: '',
