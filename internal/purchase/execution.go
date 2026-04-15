@@ -183,7 +183,10 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 	if account.GCPAuthMode != "application_default" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-ADC GCP account %s", account.ID)
 	}
-	gcpTS, err := credentials.ResolveGCPTokenSource(ctx, &account, m.credStore)
+	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, &account, m.credStore, credentials.GCPResolveOptions{
+		Signer:    m.oidcSigner,
+		IssuerURL: m.oidcIssuerURL,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: resolve GCP for account %s (%s): %w", account.ID, account.Name, err)
 	}

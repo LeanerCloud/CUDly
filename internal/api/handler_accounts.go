@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"golang.org/x/oauth2"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
@@ -426,11 +427,91 @@ func (h *Handler) testAccountCredentials(ctx context.Context, req *events.Lambda
 	if res, ok := h.azureFederatedCredResult(ctx, acct); ok {
 		return res, nil
 	}
+	if res, ok := h.gcpFederatedCredResult(ctx, acct); ok {
+		return res, nil
+	}
 	res, err := h.checkCredentialPresence(ctx, acct)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
+}
+
+// gcpFederatedCredResult exercises the secret-free GCP federated
+// credential path end-to-end. Guards on provider/mode/signer/issuer/
+// audience and delegates the actual token exchange to
+// runGCPFederatedTokenExchange so this top-level branch stays under
+// gocyclo's 10-branch threshold. Returns (result, true) when this
+// path applies; (_, false) means the caller should fall back to the
+// presence check.
+func (h *Handler) gcpFederatedCredResult(ctx context.Context, acct *config.CloudAccount) (AccountTestResult, bool) {
+	if !h.canUseGCPFederated(ctx, acct) {
+		return AccountTestResult{}, false
+	}
+	ts, err := credentials.BuildGCPFederatedCredential(ctx, h.signer, oidc.IssuerURL(), acct.GCPWIFAudience, acct.GCPClientEmail)
+	if err != nil {
+		return AccountTestResult{OK: false, Message: fmt.Sprintf("gcp federated credential build failed: %v", err)}, true
+	}
+	return runGCPFederatedTokenExchange(ctx, ts), true
+}
+
+// canUseGCPFederated returns true when all preconditions for the
+// federated GCP test path are met. Factored out of
+// gcpFederatedCredResult to keep that function's cyclomatic
+// complexity below gocyclo's threshold.
+func (h *Handler) canUseGCPFederated(ctx context.Context, acct *config.CloudAccount) bool {
+	if acct.Provider != "gcp" || acct.GCPAuthMode != "workload_identity_federation" {
+		return false
+	}
+	if h.signer == nil || acct.GCPWIFAudience == "" {
+		return false
+	}
+	if oidc.IssuerURL() == "" {
+		return false
+	}
+	// If a legacy stored WIF JSON is present, defer to the presence
+	// check so legacy accounts keep reporting the same shape.
+	if h.credStore != nil {
+		if has, _ := h.credStore.HasCredential(ctx, acct.ID, credentials.CredTypeGCPWIFConfig); has {
+			return false
+		}
+	}
+	return true
+}
+
+// runGCPFederatedTokenExchange calls Token() on the federated token
+// source with a 15-second deadline (oauth2.TokenSource.Token() is
+// not context-aware, so we plumb the timeout through a goroutine +
+// select). A successful non-empty token proves the KMS → GCP STS →
+// SA-impersonation chain is healthy.
+func runGCPFederatedTokenExchange(ctx context.Context, ts oauth2.TokenSource) AccountTestResult {
+	tokCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	tokenChan := make(chan tokenResult, 1)
+	go func() {
+		tok, err := ts.Token()
+		tokenChan <- tokenResult{tok: tok, err: err}
+	}()
+	select {
+	case r := <-tokenChan:
+		if r.err != nil {
+			return AccountTestResult{OK: false, Message: fmt.Sprintf("gcp token exchange failed: %v", r.err)}
+		}
+		if r.tok == nil || r.tok.AccessToken == "" {
+			return AccountTestResult{OK: false, Message: "gcp token exchange returned empty token"}
+		}
+		return AccountTestResult{OK: true, Message: "federated credential validated (KMS-signed JWT accepted by GCP STS, SA impersonation succeeded)"}
+	case <-tokCtx.Done():
+		return AccountTestResult{OK: false, Message: "gcp token exchange timed out after 15s"}
+	}
+}
+
+// tokenResult bundles the return of oauth2.TokenSource.Token() for
+// plumbing through a select for timeout handling, since oauth2's
+// TokenSource interface does not take a context.
+type tokenResult struct {
+	tok *oauth2.Token
+	err error
 }
 
 // azureFederatedCredResult exercises the secret-free Azure federated

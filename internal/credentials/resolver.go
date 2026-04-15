@@ -22,6 +22,7 @@ import (
 	"golang.org/x/oauth2/google"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
@@ -386,20 +387,79 @@ func buildAzureWIFCredential(account *config.CloudAccount, pemBlob []byte) (azco
 	return azidentity.NewClientAssertionCredential(tenantID, clientID, assertionFunc, nil)
 }
 
-// ResolveGCPTokenSource returns an oauth2.TokenSource for the account.
-// Returns (nil, nil) for application_default mode — callers should use ADC directly.
-// For service_account_key and workload_identity_federation, loads JSON from the
-// credential store; google.CredentialsFromJSON handles both formats.
+// ResolveGCPTokenSource is the legacy entry point — calls
+// ResolveGCPTokenSourceWithOpts with zero-valued options so existing
+// cert-based / stored-JSON accounts keep working.
 func ResolveGCPTokenSource(ctx context.Context, account *config.CloudAccount, store CredentialStore) (oauth2.TokenSource, error) {
+	return ResolveGCPTokenSourceWithOpts(ctx, account, store, GCPResolveOptions{})
+}
+
+// ResolveGCPTokenSourceWithOpts is like ResolveGCPTokenSource but
+// accepts per-deployment options. When opts.Signer and opts.IssuerURL
+// are both set, accounts in workload_identity_federation mode with a
+// gcp_wif_audience field and no stored JSON config are routed through
+// BuildGCPFederatedCredential (the secret-free path). Existing
+// stored-JSON accounts keep working.
+//
+// Routes by GCPAuthMode:
+//   - application_default → returns (nil, nil); caller uses ADC.
+//   - workload_identity_federation → federated (if no stored cred and
+//     signer+issuer+audience present) or legacy stored-JSON.
+//   - service_account_key (or empty) → stored-JSON path.
+func ResolveGCPTokenSourceWithOpts(
+	ctx context.Context,
+	account *config.CloudAccount,
+	store CredentialStore,
+	opts GCPResolveOptions,
+) (oauth2.TokenSource, error) {
 	if account.GCPAuthMode == "application_default" {
 		return nil, nil
 	}
+	if account.GCPAuthMode == "workload_identity_federation" {
+		return resolveGCPWIFCredential(ctx, account, store, opts)
+	}
+	return loadStoredGCPTokenSource(ctx, account, store, CredTypeGCPServiceAccount)
+}
+
+// resolveGCPWIFCredential handles the workload_identity_federation
+// auth mode for GCP. Mirrors the Azure split in azure_federated.go.
+func resolveGCPWIFCredential(
+	ctx context.Context,
+	account *config.CloudAccount,
+	store CredentialStore,
+	opts GCPResolveOptions,
+) (oauth2.TokenSource, error) {
+	// Peek at the stored WIF JSON first — absent means this is a
+	// federated (secret-free) account.
+	var raw []byte
+	if store != nil {
+		raw, _ = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+	}
+
+	issuer := opts.IssuerURL
+	if issuer == "" {
+		issuer = oidc.IssuerURL()
+	}
+
+	if opts.Signer != nil && issuer != "" && len(raw) == 0 && account.GCPWIFAudience != "" {
+		return BuildGCPFederatedCredential(ctx, opts.Signer, issuer, account.GCPWIFAudience, account.GCPClientEmail)
+	}
+
+	// Legacy stored-JSON path.
+	return loadStoredGCPTokenSource(ctx, account, store, CredTypeGCPWIFConfig)
+}
+
+// loadStoredGCPTokenSource reads a stored JSON credential of the
+// given type and returns a TokenSource. Shared by both the
+// service_account_key and legacy workload_identity_federation paths.
+func loadStoredGCPTokenSource(
+	ctx context.Context,
+	account *config.CloudAccount,
+	store CredentialStore,
+	credType string,
+) (oauth2.TokenSource, error) {
 	if store == nil {
 		return nil, fmt.Errorf("credentials: credential store required for gcp account %s", account.ID)
-	}
-	credType := CredTypeGCPServiceAccount
-	if account.GCPAuthMode == "workload_identity_federation" {
-		credType = CredTypeGCPWIFConfig
 	}
 	raw, err := store.LoadRaw(ctx, account.ID, credType)
 	if err != nil {
