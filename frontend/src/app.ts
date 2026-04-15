@@ -7,7 +7,7 @@ import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, refreshRecommendations, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
-import { switchTab } from './navigation';
+import { switchTab, applyTabFromPath, initRouter } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings, closeAzureCredsModal, closeGCPCredsModal, copyToClipboard } from './settings';
 import { setupUserHandlers } from './users';
@@ -47,7 +47,14 @@ export async function init(): Promise<void> {
   try {
     const user = await api.getCurrentUser();
     state.setCurrentUser(user);
-    await loadDashboard();
+    initRouter();
+    const target = applyTabFromPath();
+    window.history.replaceState(
+      { tab: target, id: 0 },
+      '',
+      '/' + target + window.location.search + window.location.hash,
+    );
+    switchTab(target, { push: false });
     setupEventListeners();
     updateUserUI();
   } catch (error) {

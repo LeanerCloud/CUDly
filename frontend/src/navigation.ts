@@ -12,13 +12,41 @@ import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
 import { loadRIExchange, loadAutomationSettings } from './riexchange';
 
+interface TabMeta {
+  title: string;
+}
+
+const TABS: Record<string, TabMeta> = {
+  dashboard: { title: 'CUDly — Dashboard' },
+  recommendations: { title: 'CUDly — Recommendations' },
+  plans: { title: 'CUDly — Purchase Plans' },
+  history: { title: 'CUDly — Purchase History' },
+  'ri-exchange': { title: 'CUDly — RI Exchange' },
+  settings: { title: 'CUDly — Settings' },
+};
+
+let currentTab: string | undefined;
+let historyId = 0;
+
+interface SwitchTabOptions {
+  push?: boolean;
+  skipDirtyGuard?: boolean;
+}
+
 /**
  * Switch between tabs
  */
-export function switchTab(tabName: string): void {
-  // Warn when navigating away from settings with unsaved changes
-  const currentTab = document.querySelector<HTMLButtonElement>('.tab-btn.active')?.dataset['tab'];
-  if (currentTab === 'settings' && tabName !== 'settings' && isUnsavedChanges()) {
+export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
+  if (!(tabName in TABS)) tabName = 'dashboard';
+
+  const isSelfSwitch = tabName === currentTab;
+
+  if (
+    !opts.skipDirtyGuard &&
+    currentTab === 'settings' &&
+    tabName !== 'settings' &&
+    isUnsavedChanges()
+  ) {
     if (!confirm('You have unsaved settings changes. Leave without saving?')) return;
   }
 
@@ -58,4 +86,62 @@ export function switchTab(tabName: string): void {
       void loadRIExchange();
       break;
   }
+
+  if (isSelfSwitch) return;
+
+  document.title = TABS[tabName]!.title;
+  currentTab = tabName;
+
+  if (opts.push !== false) {
+    historyId += 1;
+    window.history.pushState(
+      { tab: tabName, id: historyId },
+      '',
+      '/' + tabName + window.location.search + window.location.hash,
+    );
+  }
+}
+
+/**
+ * Resolve the current URL to a known tab name. Normalizes case, leading/
+ * trailing slashes, and sub-paths (only the first segment is matched).
+ * Unknown or empty paths fall back to 'dashboard'.
+ */
+export function applyTabFromPath(): string {
+  const segment = window.location.pathname
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .split('/')[0]
+    ?.toLowerCase() ?? '';
+  if (segment === '') return 'dashboard';
+  return segment in TABS ? segment : 'dashboard';
+}
+
+/**
+ * Install the popstate listener that handles browser back/forward.
+ * Must be called once during init() before any switchTab call.
+ */
+export function initRouter(): void {
+  window.addEventListener('popstate', (e: PopStateEvent) => {
+    const target = applyTabFromPath();
+    const newId = (e.state as { id?: number } | null)?.id ?? 0;
+    const delta = newId - historyId;
+
+    if (
+      currentTab === 'settings' &&
+      target !== 'settings' &&
+      isUnsavedChanges()
+    ) {
+      if (!confirm('You have unsaved settings changes. Leave without saving?')) {
+        // Restore exact previous position. The induced second popstate
+        // is harmless: target will equal currentTab so the self-switch
+        // path inside switchTab no-ops on history.
+        if (delta !== 0) window.history.go(-delta);
+        return;
+      }
+    }
+
+    historyId = newId;
+    switchTab(target, { push: false, skipDirtyGuard: true });
+  });
 }

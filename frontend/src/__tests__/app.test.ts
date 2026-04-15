@@ -25,7 +25,9 @@ jest.mock('../dashboard', () => ({
 }));
 
 jest.mock('../navigation', () => ({
-  switchTab: jest.fn()
+  switchTab: jest.fn(),
+  applyTabFromPath: jest.fn().mockReturnValue('dashboard'),
+  initRouter: jest.fn(),
 }));
 
 jest.mock('../recommendations', () => ({
@@ -75,16 +77,18 @@ describe('App Module', () => {
       expect(api.getCurrentUser).not.toHaveBeenCalled();
     });
 
-    test('loads user and dashboard when authenticated', async () => {
+    test('loads user and routes to dashboard when authenticated', async () => {
       (api.isAuthenticated as jest.Mock).mockReturnValue(true);
       (api.getCurrentUser as jest.Mock).mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
-      (dashboard.loadDashboard as jest.Mock).mockResolvedValue(undefined);
+      (navigation.applyTabFromPath as jest.Mock).mockReturnValue('dashboard');
 
       await init();
 
       expect(api.getCurrentUser).toHaveBeenCalled();
       expect(state.setCurrentUser).toHaveBeenCalledWith({ id: 'user-1', email: 'test@example.com' });
-      expect(dashboard.loadDashboard).toHaveBeenCalled();
+      expect(navigation.initRouter).toHaveBeenCalled();
+      expect(navigation.applyTabFromPath).toHaveBeenCalled();
+      expect(navigation.switchTab).toHaveBeenCalledWith('dashboard', { push: false });
       expect(auth.updateUserUI).toHaveBeenCalled();
     });
 

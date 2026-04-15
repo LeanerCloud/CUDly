@@ -138,15 +138,14 @@ describe('Navigation Module', () => {
       expect(recsContent?.classList.contains('active')).toBe(true);
     });
 
-    test('handles unknown tab gracefully', () => {
-      // Should not throw error for unknown tab
+    test('falls back to dashboard for unknown tab', () => {
+      // Unknown tab names are normalized to 'dashboard' rather than
+      // leaving the UI in a broken all-deactivated state.
       expect(() => switchTab('unknown-tab')).not.toThrow();
 
-      // No tab should be active (all deactivated since none match)
-      const buttons = document.querySelectorAll('.tab-btn');
-      buttons.forEach(btn => {
-        expect(btn.classList.contains('active')).toBe(false);
-      });
+      const dashboardBtn = document.querySelector('[data-tab="dashboard"]');
+      expect(dashboardBtn?.classList.contains('active')).toBe(true);
+      expect(loadDashboard).toHaveBeenCalled();
     });
 
     test('multiple tab switches work correctly', () => {
