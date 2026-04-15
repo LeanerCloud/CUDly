@@ -480,11 +480,50 @@ func (h *Handler) canUseGCPFederated(ctx context.Context, acct *config.CloudAcco
 }
 
 // runGCPFederatedTokenExchange calls Token() on the federated token
-// source with a 15-second deadline (oauth2.TokenSource.Token() is
-// not context-aware, so we plumb the timeout through a goroutine +
+// source with a per-attempt 15-second deadline (oauth2.TokenSource.Token()
+// is not context-aware, so we plumb the timeout through a goroutine +
 // select). A successful non-empty token proves the KMS → GCP STS →
 // SA-impersonation chain is healthy.
+//
+// Retries on IAM propagation errors: freshly-bound WIF principals and
+// iam.workloadIdentityUser grants on the impersonated service account
+// take up to ~30s to become visible to GCP's token exchange. During
+// that window iamcredentials.generateAccessToken returns
+// IAM_PERMISSION_DENIED / "The caller does not have permission" even
+// though the policy is correct. We retry up to 3 times with a 10s
+// pause, but only when the error actually looks like that race.
+// Other failure modes (KMS unauthorized, JWT rejected, wrong
+// audience) fail fast on the first attempt.
 func runGCPFederatedTokenExchange(ctx context.Context, ts oauth2.TokenSource) AccountTestResult {
+	const maxAttempts = 3
+	const retryDelay = 10 * time.Second
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		res, err, retriable := gcpTokenExchangeAttempt(ctx, ts)
+		if err == nil {
+			return res
+		}
+		lastErr = err
+		if !retriable {
+			return AccountTestResult{OK: false, Message: fmt.Sprintf("gcp token exchange failed: %v", err)}
+		}
+		if attempt == maxAttempts {
+			break
+		}
+		select {
+		case <-time.After(retryDelay):
+		case <-ctx.Done():
+			return AccountTestResult{OK: false, Message: fmt.Sprintf("gcp token exchange aborted while waiting for IAM propagation: %v", ctx.Err())}
+		}
+	}
+	return AccountTestResult{OK: false, Message: fmt.Sprintf("gcp token exchange failed after %d attempts (IAM propagation): %v", maxAttempts, lastErr)}
+}
+
+// gcpTokenExchangeAttempt runs one Token() call with a 15s deadline.
+// Returns (result, nil, _) on success, (_, err, true) on a retriable
+// IAM propagation error, (_, err, false) on any other failure.
+func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (AccountTestResult, error, bool) {
 	tokCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	tokenChan := make(chan tokenResult, 1)
@@ -495,15 +534,31 @@ func runGCPFederatedTokenExchange(ctx context.Context, ts oauth2.TokenSource) Ac
 	select {
 	case r := <-tokenChan:
 		if r.err != nil {
-			return AccountTestResult{OK: false, Message: fmt.Sprintf("gcp token exchange failed: %v", r.err)}
+			return AccountTestResult{}, r.err, isGCPIAMPropagationError(r.err)
 		}
 		if r.tok == nil || r.tok.AccessToken == "" {
-			return AccountTestResult{OK: false, Message: "gcp token exchange returned empty token"}
+			return AccountTestResult{OK: false, Message: "gcp token exchange returned empty token"}, nil, false
 		}
-		return AccountTestResult{OK: true, Message: "federated credential validated (KMS-signed JWT accepted by GCP STS, SA impersonation succeeded)"}
+		return AccountTestResult{OK: true, Message: "federated credential validated (KMS-signed JWT accepted by GCP STS, SA impersonation succeeded)"}, nil, false
 	case <-tokCtx.Done():
-		return AccountTestResult{OK: false, Message: "gcp token exchange timed out after 15s"}
+		return AccountTestResult{}, fmt.Errorf("timed out after 15s"), true
 	}
+}
+
+// isGCPIAMPropagationError reports whether err looks like the
+// IAM-binding-not-yet-visible race that follows a fresh WIF provider
+// or roles/iam.workloadIdentityUser grant. Matched by substring
+// because the underlying error is wrapped through oauth2 →
+// externalaccount → iamcredentials, and the leaf type isn't exported.
+func isGCPIAMPropagationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "IAM_PERMISSION_DENIED") ||
+		strings.Contains(msg, "iam.serviceAccounts.getAccessToken") ||
+		strings.Contains(msg, "The caller does not have permission") ||
+		strings.Contains(msg, "Permission 'iam.serviceAccounts.getAccessToken' denied")
 }
 
 // tokenResult bundles the return of oauth2.TokenSource.Token() for
