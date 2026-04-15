@@ -136,15 +136,13 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
       rejectBtn.style.marginLeft = '4px';
       rejectBtn.addEventListener('click', () => void handleReject(reg));
       actionsTd.appendChild(rejectBtn);
-    } else if (reg.status === 'approved' && reg.cloud_account_id) {
+    } else if (reg.status === 'approved') {
+      // After deleteAccount resets the linked registration back to pending, and
+      // the 000021 migration healed historical drift, an approved row always has
+      // a live cloud_account_id. Render accordingly.
       const span = document.createElement('span');
       span.className = 'text-muted';
       span.textContent = 'Account created';
-      actionsTd.appendChild(span);
-    } else if (reg.status === 'approved') {
-      const span = document.createElement('span');
-      span.className = 'text-muted';
-      span.textContent = 'Approved (account pending link)';
       actionsTd.appendChild(span);
     } else if (reg.rejection_reason) {
       const span = document.createElement('span');
