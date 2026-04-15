@@ -47,7 +47,7 @@ resource "google_kms_crypto_key_iam_member" "cloud_run_signer" {
 
 resource "google_kms_crypto_key_iam_member" "cloud_run_viewer" {
   crypto_key_id = google_kms_crypto_key.signing.id
-  role          = "roles/cloudkms.viewerVersion"
+  role          = "roles/cloudkms.publicKeyViewer"
   member        = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
