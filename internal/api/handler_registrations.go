@@ -269,7 +269,14 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	now := time.Now()
 	account := cloudAccountFromRequest(acctReq)
 	account.ID = uuid.New().String()
-	account.Enabled = reg.RegCredentialPayload != "" // Auto-enable if credentials are included.
+	// Auto-enable when the operator either embedded a credential in
+	// the registration (legacy key-based flow) OR when the account
+	// uses an auth mode that doesn't require any stored credential
+	// at all — ambient (instance profile, managed identity, ADC) or
+	// KMS-backed federated. Without this, every federated-path
+	// approval leaves the account disabled and the operator has to
+	// follow up with a manual PUT enabled=true.
+	account.Enabled = reg.RegCredentialPayload != "" || accountHasCredentialFreePath(account)
 	account.CreatedAt = now
 	account.UpdatedAt = now
 
@@ -293,6 +300,39 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	})
 
 	return account, nil
+}
+
+// accountHasCredentialFreePath returns true when the account's auth
+// mode resolves a credential without any stored secret — either via
+// ambient instance credentials (role assumption, managed identity,
+// Application Default Credentials) or via CUDly's KMS-backed OIDC
+// federated path. These accounts should auto-enable on approval
+// because there's no follow-up "upload the PEM/JSON" step.
+//
+// Cert-based legacy Azure WIF is NOT included here — it needs a
+// stored azure_wif_private_key blob that the operator uploads
+// separately after approval, so those accounts keep the old
+// opt-in-via-manual-PUT behaviour.
+func accountHasCredentialFreePath(acct *config.CloudAccount) bool {
+	switch acct.Provider {
+	case "aws":
+		// role_arn flows via STS AssumeRole with ambient CUDly creds;
+		// workload_identity_federation mints its own token file.
+		return acct.AWSAuthMode == "role_arn" || acct.AWSAuthMode == "workload_identity_federation"
+	case "azure":
+		// managed_identity: ambient. workload_identity_federation:
+		// federated via the KMS-backed path when no PEM is stored —
+		// the /test handler falls back to the cert path when one is
+		// present, so auto-enabling the account either way is fine.
+		return acct.AzureAuthMode == "managed_identity" || acct.AzureAuthMode == "workload_identity_federation"
+	case "gcp":
+		// application_default: ambient (Cloud Run / GKE). WIF:
+		// federated when gcp_wif_audience is set (the CLI template
+		// always sets it for the new flow).
+		return acct.GCPAuthMode == "application_default" ||
+			(acct.GCPAuthMode == "workload_identity_federation" && acct.GCPWIFAudience != "")
+	}
+	return false
 }
 
 // rejectRegistration handles POST /api/registrations/:id/reject.
