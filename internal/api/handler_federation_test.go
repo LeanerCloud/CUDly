@@ -364,7 +364,11 @@ func TestGetFederationIaC_CLI_GCPWIF(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, res.Filename, "gcp-wif-cli.sh")
 	assert.Contains(t, res.Content, "workload-identity-pools create")
-	assert.Contains(t, res.Content, "create-aws")
+	// Secret-free redesign: the provider binds to CUDly's own OIDC
+	// issuer, not a source-cloud AWS-STS provider.
+	assert.Contains(t, res.Content, "providers create-oidc")
+	assert.Contains(t, res.Content, "issuer-uri=\"${CUDLY_ISSUER_URL}\"")
+	assert.NotContains(t, res.Content, "create-aws")
 }
 
 func TestShellEscape(t *testing.T) {

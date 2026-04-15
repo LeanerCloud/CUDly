@@ -137,12 +137,29 @@ func TestCLITemplatesAutoRegister(t *testing.T) {
 				`"gcp_auth_mode": "workload_identity_federation"`,
 				`"gcp_project_id": "${PROJECT_ID}"`,
 				`"gcp_client_email": "${SERVICE_ACCOUNT_EMAIL}"`,
+				`"gcp_wif_audience": "${WIF_AUDIENCE}"`,
 				`"external_id": "${PROJECT_ID}"`,
 				`ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-GCP ${PROJECT_ID}}"`,
+				// Secret-free redesign: issuer is CUDly's own OIDC
+				// deployment, subject is the fixed cudly-controller.
+				`CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-https://cudly.example.com/oidc}"`,
+				`--issuer-uri="${CUDLY_ISSUER_URL}"`,
+				`--attribute-mapping="google.subject=assertion.sub"`,
+				`--attribute-condition="assertion.sub == '${CUDLY_FEDERATED_SUBJECT}'"`,
+				`principal://iam.googleapis.com/${POOL_NAME}/subject/${CUDLY_FEDERATED_SUBJECT}`,
+				`WIF_AUDIENCE="//iam.googleapis.com/${POOL_NAME}/providers/${PROVIDER_ID}"`,
 			},
 			mustNot: []string{
 				"/api/registrations",
 				`"service_account_email":`,
+				// The old AWS-STS-ARN provider is gone.
+				"create-aws",
+				"attribute.aws_role",
+				"SOURCE_AWS_ACCOUNT_ID",
+				// No longer asking the operator to generate a creds
+				// config JSON file.
+				"create-cred-config",
+				"gcp_workload_identity_config",
 			},
 		},
 		{

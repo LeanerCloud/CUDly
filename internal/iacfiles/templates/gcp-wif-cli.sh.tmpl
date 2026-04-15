@@ -1,21 +1,38 @@
 #!/usr/bin/env bash
-# Create CUDly GCP Workload Identity Pool + provider via gcloud.
+# Create CUDly GCP Workload Identity Pool + OIDC provider bound to
+# CUDly's own OIDC issuer, plus grant the target service account
+# workloadIdentityUser to the "cudly-controller" subject.
+#
 # Target GCP project : {{.AccountName}} ({{.ProjectID}})
-# Source cloud       : {{.Source}}
+#
+# This script configures true secret-free federation: CUDly's OIDC
+# issuer (served under {{.CUDlyAPIURL}}/oidc, backed by AWS KMS /
+# Azure Key Vault / GCP Cloud KMS depending on where CUDly runs)
+# signs a short-lived JWT on each GCP API call and Google STS
+# verifies it against the JWKS published by the CUDly deployment.
+# No keys, no credential JSON, nothing to rotate on the CUDly side.
 #
 # Usage:
-#   SOURCE_AWS_ACCOUNT_ID=123456789012 bash {{.AccountSlug}}-gcp-wif-cli.sh    (source=aws)
-#   bash {{.AccountSlug}}-gcp-wif-cli.sh                                      (source=azure)
+#   CUDLY_CONTACT_EMAIL=ops@example.com bash {{.AccountSlug}}-gcp-wif-cli.sh
 #
-# Requirements: gcloud CLI authenticated with a principal that has IAM admin on the project.
+# Requirements: gcloud CLI authenticated with a principal that has
+# IAM admin on the project.
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-{{.ProjectID}}}"
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-{{.ServiceAccountEmail}}}"
 POOL_ID="${POOL_ID:-cudly-{{.AccountSlug}}}"
-PROVIDER_ID="${PROVIDER_ID:-cudly-{{.Source}}}"
+PROVIDER_ID="${PROVIDER_ID:-cudly-oidc}"
+
+# CUDly OIDC issuer URL — base URL + /oidc. Google STS appends
+# /.well-known/openid-configuration when resolving the discovery
+# document, so do NOT include the well-known suffix here.
+CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-{{.CUDlyAPIURL}}/oidc}"
+CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
+
 : "${PROJECT_ID:?set PROJECT_ID to the target GCP project}"
-: "${SERVICE_ACCOUNT_EMAIL:?set SERVICE_ACCOUNT_EMAIL to the CUDly service account in the target project}"
+: "${SERVICE_ACCOUNT_EMAIL:?set SERVICE_ACCOUNT_EMAIL to the CUDly target service account in the project}"
+: "${CUDLY_ISSUER_URL:?set CUDLY_ISSUER_URL to the OIDC issuer URL of your CUDly deployment (base URL + /oidc)}"
 
 gcloud config set project "${PROJECT_ID}"
 
@@ -29,45 +46,39 @@ gcloud iam workload-identity-pools create "${POOL_ID}" \
   --project="${PROJECT_ID}" \
   || echo "  (pool may already exist)"
 
-{{if eq .Source "aws"}}
-: "${SOURCE_AWS_ACCOUNT_ID:?set SOURCE_AWS_ACCOUNT_ID to the AWS account where CUDly runs}"
-echo "Creating AWS provider..."
-gcloud iam workload-identity-pools providers create-aws "${PROVIDER_ID}" \
-  --location=global \
-  --workload-identity-pool="${POOL_ID}" \
-  --account-id="${SOURCE_AWS_ACCOUNT_ID}" \
-  --attribute-mapping="google.subject=assertion.arn,attribute.aws_role=assertion.arn,attribute.account=assertion.account" \
-  --project="${PROJECT_ID}" \
-  || echo "  (provider may already exist)"
-{{else}}
-OIDC_ISSUER_URI="${OIDC_ISSUER_URI:-{{.OIDCIssuerURI}}}"
-: "${OIDC_ISSUER_URI:?set OIDC_ISSUER_URI to the source cloud OIDC issuer URI}"
-echo "Creating OIDC provider..."
+echo "Creating OIDC provider ${PROVIDER_ID} bound to CUDly issuer..."
 gcloud iam workload-identity-pools providers create-oidc "${PROVIDER_ID}" \
   --location=global \
   --workload-identity-pool="${POOL_ID}" \
-  --issuer-uri="${OIDC_ISSUER_URI}" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.aud=assertion.aud" \
+  --issuer-uri="${CUDLY_ISSUER_URL}" \
+  --attribute-mapping="google.subject=assertion.sub" \
+  --attribute-condition="assertion.sub == '${CUDLY_FEDERATED_SUBJECT}'" \
   --project="${PROJECT_ID}" \
   || echo "  (provider may already exist)"
-{{end}}
 
 POOL_NAME=$(gcloud iam workload-identity-pools describe "${POOL_ID}" --location=global --project="${PROJECT_ID}" --format="value(name)")
 
-echo "Granting workloadIdentityUser on ${SERVICE_ACCOUNT_EMAIL}..."
+# POOL_NAME is "projects/<number>/locations/global/workloadIdentityPools/<pool>"
+# The full WIF audience CUDly uses as the STS audience is the
+# provider resource, prefixed with //iam.googleapis.com/
+WIF_AUDIENCE="//iam.googleapis.com/${POOL_NAME}/providers/${PROVIDER_ID}"
+
+echo "Granting workloadIdentityUser on ${SERVICE_ACCOUNT_EMAIL} to ${CUDLY_FEDERATED_SUBJECT}..."
 gcloud iam service-accounts add-iam-policy-binding "${SERVICE_ACCOUNT_EMAIL}" \
   --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/${POOL_NAME}/*" \
+  --member="principal://iam.googleapis.com/${POOL_NAME}/subject/${CUDLY_FEDERATED_SUBJECT}" \
   --project="${PROJECT_ID}" \
   --output=none
 
 echo ""
 echo "=== Done ==="
+echo "project_id            : ${PROJECT_ID}"
 echo "pool_name             : ${POOL_NAME}"
+echo "provider_id           : ${PROVIDER_ID}"
 echo "service_account_email : ${SERVICE_ACCOUNT_EMAIL}"
+echo "wif_audience          : ${WIF_AUDIENCE}"
 echo ""
-echo "Generate the WIF credential JSON with 'gcloud iam workload-identity-pools create-cred-config',"
-echo "then paste it into CUDly as gcp_workload_identity_config."
+echo "In CUDly, set gcp_auth_mode = workload_identity_federation. No JSON config file or keys are required — CUDly mints and signs the subject token itself on each call."
 
 {{- if .CUDlyAPIURL}}
 if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
@@ -82,7 +93,8 @@ if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
   "contact_email": "${CUDLY_CONTACT_EMAIL}",
   "gcp_auth_mode": "workload_identity_federation",
   "gcp_project_id": "${PROJECT_ID}",
-  "gcp_client_email": "${SERVICE_ACCOUNT_EMAIL}"
+  "gcp_client_email": "${SERVICE_ACCOUNT_EMAIL}",
+  "gcp_wif_audience": "${WIF_AUDIENCE}"
 }
 JSON
   HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
