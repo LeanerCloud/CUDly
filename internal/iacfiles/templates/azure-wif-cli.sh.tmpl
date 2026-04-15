@@ -9,22 +9,24 @@
 #
 # This script configures true Azure Workload Identity Federation —
 # no certificate, no private key, no client secret is created or stored.
-# CUDly's OIDC issuer (published under {{.CUDlyAPIURL}}/.well-known/*)
-# signs a short-lived JWT on each Azure API call and Azure AD verifies
-# it against the federated credential added here.
+# CUDly's OIDC issuer (served under {{.CUDlyAPIURL}}/oidc) signs a
+# short-lived JWT on each Azure API call and Azure AD verifies it
+# against the federated credential added here.
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-CUDly-{{.AccountSlug}}}"
 SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-{{.SubscriptionID}}}"
 
 # CUDly OIDC issuer URL. Must match exactly what the CUDly deployment
-# publishes at /.well-known/openid-configuration — trailing slashes and
+# publishes — the base URL + /oidc. Azure AD appends
+# /.well-known/openid-configuration when resolving the discovery doc,
+# so do NOT include the well-known suffix here. Trailing slashes and
 # http/https matter for Azure AD validation (AADSTS700213 if mismatched).
-CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-{{.CUDlyAPIURL}}}"
+CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-{{.CUDlyAPIURL}}/oidc}"
 CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
 CUDLY_FEDERATED_AUDIENCE="${CUDLY_FEDERATED_AUDIENCE:-api://AzureADTokenExchange}"
 
-: "${CUDLY_ISSUER_URL:?set CUDLY_ISSUER_URL to the base URL of your CUDly deployment (the one that serves /.well-known/openid-configuration)}"
+: "${CUDLY_ISSUER_URL:?set CUDLY_ISSUER_URL to the OIDC issuer URL of your CUDly deployment (base URL + /oidc)}"
 
 if [[ -n "${SUBSCRIPTION_ID}" && "${SUBSCRIPTION_ID}" != "<SUBSCRIPTION_ID>" ]]; then
   az account set --subscription "${SUBSCRIPTION_ID}"

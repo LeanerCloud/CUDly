@@ -106,10 +106,11 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 		}, nil
 	}
 
-	// Intercept OIDC discovery endpoints before both the static-file
-	// fallback and the main API router. api.HandleOIDC does its own
-	// auth-less dispatch so the /.well-known/* paths don't leak into
-	// the API router tables or the security middleware.
+	// Intercept OIDC issuer endpoints (discovery + JWKS, served under
+	// /oidc/) before both the static-file fallback and the main API
+	// router. api.HandleOIDC does its own auth-less dispatch so the
+	// issuer paths don't leak into the API router tables or the
+	// security middleware.
 	if resp, handled := app.API.HandleOIDC(ctx, &request); handled {
 		return resp, nil
 	}

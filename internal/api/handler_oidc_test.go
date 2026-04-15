@@ -54,10 +54,12 @@ func TestHandleOIDCDiscovery(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp.Body), &doc); err != nil {
 		t.Fatalf("unmarshal discovery: %v", err)
 	}
-	if doc.Issuer != "https://cudly.example.com" {
+	// The issuer is always base URL + /oidc so Azure AD appending
+	// /.well-known/openid-configuration lands on oidcDiscoveryPath.
+	if doc.Issuer != "https://cudly.example.com"+OIDCBasePath {
 		t.Errorf("issuer=%s", doc.Issuer)
 	}
-	if doc.JWKSURI != "https://cudly.example.com/.well-known/jwks.json" {
+	if doc.JWKSURI != "https://cudly.example.com"+oidcJWKSPath {
 		t.Errorf("jwks_uri=%s", doc.JWKSURI)
 	}
 	if resp.Headers["Content-Type"] != "application/json" {
@@ -104,8 +106,8 @@ func TestHandleOIDCPopulatesIssuerCache(t *testing.T) {
 	// process-wide and other tests may have populated it.
 	oidc.SetIssuerURL("https://overridden.example.com")
 	_, _ = h.HandleOIDC(context.Background(), newOIDCRequest(oidcDiscoveryPath))
-	if got := oidc.IssuerURL(); got != "https://cudly.example.com" {
-		t.Errorf("HandleOIDC should have overwritten the issuer cache, got %s", got)
+	if got, want := oidc.IssuerURL(), "https://cudly.example.com"+OIDCBasePath; got != want {
+		t.Errorf("HandleOIDC should have overwritten the issuer cache, got %s want %s", got, want)
 	}
 }
 
@@ -117,8 +119,8 @@ func TestResolveIssuerURLPrefersConfiguredIssuer(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{}
 	req.RequestContext.DomainName = "lambda.aws"
 	got := h.resolveIssuerURL(req)
-	if got != "https://from-env.example.com" {
-		t.Errorf("got %s, want https://from-env.example.com", got)
+	if want := "https://from-env.example.com" + OIDCBasePath; got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }
 
@@ -126,8 +128,8 @@ func TestResolveIssuerURLFallsBackToDashboard(t *testing.T) {
 	h := &Handler{dashboardURL: "https://dashboard.example.com/"}
 	req := &events.LambdaFunctionURLRequest{}
 	req.RequestContext.DomainName = "lambda.aws"
-	if got := h.resolveIssuerURL(req); got != "https://dashboard.example.com" {
-		t.Errorf("got %s", got)
+	if got, want := h.resolveIssuerURL(req), "https://dashboard.example.com"+OIDCBasePath; got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }
 
@@ -135,7 +137,7 @@ func TestResolveIssuerURLFallsBackToRequestDomain(t *testing.T) {
 	h := &Handler{}
 	req := &events.LambdaFunctionURLRequest{}
 	req.RequestContext.DomainName = "lambda.aws"
-	if got := h.resolveIssuerURL(req); got != "https://lambda.aws" {
-		t.Errorf("got %s", got)
+	if got, want := h.resolveIssuerURL(req), "https://lambda.aws"+OIDCBasePath; got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }

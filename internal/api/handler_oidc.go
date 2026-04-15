@@ -10,21 +10,31 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// OIDC discovery paths served by this handler. Treated as an opaque
-// set by the transport layer (lambda.go / http.go) which checks paths
-// against HandleOIDC before the main router runs — that way the
-// router and its auth middleware never see these requests and the
-// paths don't leak into internal/api routing tables or public-endpoint
-// allowlists.
+// OIDC discovery paths served by this handler. Scoped under /oidc/
+// so the paths read descriptively in code and in CUDly's URL space
+// rather than sitting at the root under the opaque .well-known prefix.
+// The RFC 8414 discovery suffix still applies (Azure AD, GCP STS, etc.
+// fetch ${issuer}/.well-known/openid-configuration), but because we
+// register the issuer URL as <host>/oidc the full external paths
+// become <host>/oidc/.well-known/openid-configuration — the issuer
+// prefix alone appears in routing lists, the well-known suffix is
+// only an implementation detail inside handler_oidc.go.
 const (
-	oidcDiscoveryPath = "/.well-known/openid-configuration"
-	oidcJWKSPath      = "/.well-known/jwks.json"
+	// OIDCBasePath is the URL prefix CUDly publishes its OIDC issuer
+	// under. Federated credentials registered with target clouds
+	// (Azure AD, GCP STS) must use issuer = <base URL> + OIDCBasePath.
+	OIDCBasePath = "/oidc"
+
+	oidcDiscoveryPath = OIDCBasePath + "/.well-known/openid-configuration"
+	oidcJWKSPath      = OIDCBasePath + "/.well-known/jwks.json"
 )
 
-// IsOIDCDiscoveryPath returns true if path is one of the well-known
-// OIDC issuer endpoints. The server transport layer uses this to
-// route requests directly to HandleOIDC before the main API router.
-func IsOIDCDiscoveryPath(path string) bool {
+// IsOIDCIssuerPath returns true if path belongs to CUDly's OIDC issuer
+// surface (the discovery document or the JWKS). The server transport
+// layer uses this to route requests directly to HandleOIDC before the
+// main API router so the issuer endpoints never touch the auth
+// middleware or the static-file fallback.
+func IsOIDCIssuerPath(path string) bool {
 	return path == oidcDiscoveryPath || path == oidcJWKSPath
 }
 
@@ -39,7 +49,7 @@ func IsOIDCDiscoveryPath(path string) bool {
 // context) learns what iss claim to put in its client_assertion JWTs.
 func (h *Handler) HandleOIDC(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, bool) {
 	path := req.RequestContext.HTTP.Path
-	if !IsOIDCDiscoveryPath(path) {
+	if !IsOIDCIssuerPath(path) {
 		return nil, false
 	}
 
@@ -86,27 +96,39 @@ func (h *Handler) oidcResponse(statusCode int, body any) *events.LambdaFunctionU
 	}
 }
 
-// resolveIssuerURL returns the base URL at which this CUDly deployment
-// publishes its OIDC issuer. Preference order:
+// resolveIssuerURL returns the canonical OIDC issuer URL for this
+// deployment. This is the string that (a) appears as the `issuer`
+// field in the Discovery document, (b) is the `iss` claim in JWTs
+// minted by the KMS-backed signer, and (c) is registered on the
+// target-cloud federated credential entry. All three must match
+// exactly or validation fails.
+//
+// The URL is the deployment's base URL plus OIDCBasePath ("/oidc"),
+// so Azure AD fetching ${issuer}/.well-known/openid-configuration
+// resolves to CUDly's oidcDiscoveryPath.
+//
+// Base URL preference order:
 //  1. h.issuerURL (CUDLY_ISSUER_URL env var, if the operator set one)
 //  2. h.dashboardURL (operator-configured dashboard URL)
 //  3. the trusted Function URL context domain on the current request
-//     (this is the common case for AWS Lambda deployments — it's the
-//     only stable issuer value available since the Lambda env vars
-//     cannot reference the Function URL without a Terraform cycle)
+//     (the common case for AWS Lambda deployments — the only stable
+//     issuer value available since Lambda env vars cannot reference
+//     the Function URL without a Terraform cycle)
 //
 // Whatever we resolve here is also persisted via oidc.SetIssuerURL so
 // the purchase manager's Azure federated credential path mints JWTs
 // with a matching iss claim.
 func (h *Handler) resolveIssuerURL(req *events.LambdaFunctionURLRequest) string {
-	if url := h.pickIssuerURL(req); url != "" {
-		oidc.SetIssuerURL(url)
-		return url
+	base := h.pickIssuerBaseURL(req)
+	if base == "" {
+		return ""
 	}
-	return ""
+	issuer := base + OIDCBasePath
+	oidc.SetIssuerURL(issuer)
+	return issuer
 }
 
-func (h *Handler) pickIssuerURL(req *events.LambdaFunctionURLRequest) string {
+func (h *Handler) pickIssuerBaseURL(req *events.LambdaFunctionURLRequest) string {
 	if h.issuerURL != "" {
 		return strings.TrimRight(h.issuerURL, "/")
 	}

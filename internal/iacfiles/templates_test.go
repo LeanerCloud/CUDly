@@ -113,8 +113,10 @@ func TestCLITemplatesAutoRegister(t *testing.T) {
 				`"issuer": "${CUDLY_ISSUER_URL}"`,
 				`"subject": "${CUDLY_FEDERATED_SUBJECT}"`,
 				`"audiences": ["${CUDLY_FEDERATED_AUDIENCE}"]`,
-				// Issuer env var must default to the CUDly deployment URL.
-				`CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-https://cudly.example.com}"`,
+				// Issuer env var must default to the CUDly base URL + /oidc
+				// so Azure AD appending /.well-known/openid-configuration
+				// resolves to the discovery endpoint on the CUDly deployment.
+				`CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-https://cudly.example.com/oidc}"`,
 			},
 			mustNot: []string{
 				"/api/registrations",
