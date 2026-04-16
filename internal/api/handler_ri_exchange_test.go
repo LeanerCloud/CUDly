@@ -347,3 +347,6 @@ func (m *mockAuthForExchange) RevokeAPIKeyAPI(_ context.Context, _, _ string) er
 func (m *mockAuthForExchange) ValidateUserAPIKeyAPI(_ context.Context, _ string) (any, any, error) {
 	return nil, nil, nil
 }
+func (m *mockAuthForExchange) GetAllowedAccountsAPI(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}

@@ -150,6 +150,8 @@ type AuthServiceInterface interface {
 	ListGroupsAPI(ctx context.Context) (any, error)
 	// Permission checking
 	HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error)
+	// Account access - returns the union of allowed_accounts from all user groups (empty = all access)
+	GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error)
 	// API Key management
 	CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error)
 	ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error)

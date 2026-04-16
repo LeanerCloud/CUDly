@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -90,6 +91,57 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	// it nil to disable the /.well-known/* endpoints.
 
 	return h
+}
+
+// requirePermission validates authentication and checks if the user has the
+// specified permission. Admin API keys and admin-role users bypass the check.
+// Returns the session on success so callers can read session.UserID for
+// account filtering.
+func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource string) (*Session, error) {
+	apiKey := extractAPIKey(req)
+	if h.checkAdminAPIKey(apiKey) {
+		return &Session{Role: "admin", UserID: "admin-api-key"}, nil
+	}
+
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil, NewClientError(401, "no authorization token provided")
+	}
+
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil {
+		return nil, NewClientError(401, "invalid session")
+	}
+
+	if session.Role == "admin" {
+		return session, nil
+	}
+
+	has, err := h.auth.HasPermissionAPI(ctx, session.UserID, action, resource)
+	if err != nil {
+		return nil, fmt.Errorf("permission check failed: %w", err)
+	}
+	if !has {
+		return nil, NewClientError(403, fmt.Sprintf("permission denied: requires %s on %s", action, resource))
+	}
+
+	return session, nil
+}
+
+// getAllowedAccounts returns the list of account IDs the user is allowed to
+// access. Empty slice means all access. Admin users always get all access.
+func (h *Handler) getAllowedAccounts(ctx context.Context, session *Session) ([]string, error) {
+	if session.Role == "admin" {
+		return nil, nil // admin = all access
+	}
+	if h.auth == nil {
+		return nil, nil
+	}
+	return h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response

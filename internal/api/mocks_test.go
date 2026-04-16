@@ -483,6 +483,14 @@ func (m *MockAuthService) HasPermissionAPI(ctx context.Context, userID, action, 
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
+	args := m.Called(ctx, userID)
+	if v := args.Get(0); v != nil {
+		return v.([]string), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 // API Key management mock methods
 func (m *MockAuthService) CreateAPIKeyAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
 	args := m.Called(ctx, userID, req)

@@ -725,6 +725,15 @@ func (a *authServiceAdapter) HasPermissionAPI(ctx context.Context, userID, actio
 	return a.service.HasPermissionAPI(ctx, userID, action, resource)
 }
 
+// Account access
+func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
+	authCtx, err := a.service.BuildAuthContext(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return authCtx.AllowedAccounts, nil
+}
+
 // CSRF validation
 func (a *authServiceAdapter) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken string) error {
 	return a.service.ValidateCSRFToken(ctx, sessionToken, csrfToken)
