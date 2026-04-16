@@ -12,6 +12,9 @@ set -euo pipefail
 ROLE_NAME="${ROLE_NAME:-CUDly-{{.AccountSlug}}}"
 OIDC_ISSUER_URL="${OIDC_ISSUER_URL:-{{.OIDCIssuerURL}}}"
 OIDC_AUDIENCE="${OIDC_AUDIENCE:-{{.OIDCAudience}}}"
+# Optional: restrict which OIDC subject can assume the role.
+# Useful for multi-tenant issuers. Matches TF variable oidc_subject_claim.
+OIDC_SUBJECT_CLAIM="${OIDC_SUBJECT_CLAIM:-}"
 PROFILE_ARG=""
 if [[ -n "${AWS_PROFILE:-}" ]]; then PROFILE_ARG="--profile ${AWS_PROFILE}"; fi
 
@@ -34,7 +37,25 @@ PROVIDER_ARN=$(aws iam list-open-id-connect-providers $PROFILE_ARG \
   --query "OpenIDConnectProviderList[?contains(Arn, '${OIDC_HOST}')].Arn | [0]" \
   --output text)
 
-TRUST_POLICY=$(cat <<JSON
+# Build trust policy — add subject claim restriction when OIDC_SUBJECT_CLAIM is set.
+if [[ -n "${OIDC_SUBJECT_CLAIM}" ]]; then
+  TRUST_POLICY=$(cat <<JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {"Federated": "${PROVIDER_ARN}"},
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {"StringEquals": {
+      "${OIDC_HOST}:aud": "${OIDC_AUDIENCE}",
+      "${OIDC_HOST}:sub": "${OIDC_SUBJECT_CLAIM}"
+    }}
+  }]
+}
+JSON
+)
+else
+  TRUST_POLICY=$(cat <<JSON
 {
   "Version": "2012-10-17",
   "Statement": [{
@@ -46,6 +67,7 @@ TRUST_POLICY=$(cat <<JSON
 }
 JSON
 )
+fi
 
 PERMISSIONS_POLICY=$(cat <<'JSON'
 {
