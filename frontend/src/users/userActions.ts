@@ -15,6 +15,7 @@ import { showError, showSuccess } from './utils';
 import { applyFilters } from './filters';
 import { renderUsers, renderUserStats } from './userList';
 import { renderGroups } from '../groups/groupList';
+import { renderPermissionMatrix } from './permissionMatrix';
 
 /**
  * Load and display users and groups
@@ -35,6 +36,11 @@ export async function loadUsers(): Promise<void> {
     renderUsers(filteredUsers);
     renderGroups(groupsResponse.groups);
     renderUserStats();
+
+    const matrixContainer = document.getElementById('permission-matrix');
+    if (matrixContainer) {
+      renderPermissionMatrix(groupsResponse.groups, matrixContainer);
+    }
   } catch (error) {
     console.error('Failed to load users/groups:', error);
     showError('Failed to load users and groups');

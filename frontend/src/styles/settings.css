@@ -427,3 +427,11 @@ select.dirty {
     margin: 0.1rem;
 }
 .group-members { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #f0f0f0; }
+
+/* Permission matrix */
+.permission-matrix { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.permission-matrix th, .permission-matrix td { padding: 0.4rem 0.6rem; border: 1px solid #e0e0e0; text-align: center; }
+.permission-matrix th { background: #f5f5f5; font-weight: 600; }
+.permission-matrix td:first-child { text-align: left; font-family: monospace; }
+.permission-matrix .has-perm { color: #137333; font-weight: 600; }
+.permission-matrix .no-perm { color: #ccc; }

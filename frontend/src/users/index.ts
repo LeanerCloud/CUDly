@@ -26,5 +26,8 @@ export { openCreateUserModal, openEditUserModal, closeUserModal, saveUser } from
 // Re-export user actions
 export { loadUsers, deleteUser, bulkDeleteUsers, bulkChangeRole, bulkAddToGroup } from './userActions';
 
+// Re-export permission matrix
+export { renderPermissionMatrix } from './permissionMatrix';
+
 // Re-export handlers
 export { setupUserHandlers } from './handlers';
