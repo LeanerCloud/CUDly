@@ -13,37 +13,7 @@ terraform {
       source  = "hashicorp/http"
       version = ">= 3.4"
     }
-    tls = {
-      source  = "hashicorp/tls"
-      version = ">= 4.0"
-    }
   }
-}
-
-# Auto-generate RSA key pair and self-signed certificate when certificate_pem
-# is not provided. This makes registration seamless — no manual openssl needed.
-resource "tls_private_key" "cudly" {
-  count     = var.certificate_pem == "" ? 1 : 0
-  algorithm = "RSA"
-  rsa_bits  = 2048
-}
-
-resource "tls_self_signed_cert" "cudly" {
-  count           = var.certificate_pem == "" ? 1 : 0
-  private_key_pem = tls_private_key.cudly[0].private_key_pem
-
-  subject {
-    common_name = "CUDly-WIF"
-  }
-
-  validity_period_hours = 17520 # 2 years
-  allowed_uses          = ["digital_signature"]
-}
-
-locals {
-  # Use auto-generated cert when certificate_pem is empty, otherwise use provided.
-  certificate_pem = var.certificate_pem != "" ? var.certificate_pem : tls_self_signed_cert.cudly[0].cert_pem
-  private_key_pem = var.certificate_pem == "" ? tls_private_key.cudly[0].private_key_pem : ""
 }
 
 provider "azurerm" {
@@ -75,15 +45,20 @@ resource "azuread_service_principal" "cudly" {
   client_id = azuread_application.cudly.client_id
 }
 
-# Upload the public certificate — CUDly signs JWTs with the private key and Azure
-# verifies them against this certificate (workload identity federation via client assertion).
-resource "azuread_application_certificate" "cudly" {
+# Federated identity credential bound to CUDly's OIDC issuer.
+# CUDly signs JWTs via its own KMS-backed OIDC issuer — no certificate
+# or client secret is needed. Azure AD verifies the JWT signature by
+# fetching the JWKS from the issuer's /.well-known/jwks.json endpoint.
+resource "azuread_application_federated_identity_credential" "cudly" {
   application_id = azuread_application.cudly.id
-  type           = "AsymmetricX509Cert"
-  value          = local.certificate_pem
+  display_name   = "cudly"
+  description    = "CUDly OIDC issuer (KMS-backed). No secret stored."
+  audiences      = [var.cudly_federated_audience]
+  issuer         = var.cudly_issuer_url
+  subject        = var.cudly_federated_subject
 }
 
-# Reservations Administrator is the built-in Azure role for purchasing and managing reservations.
+# Reservation Purchaser is the built-in Azure role for purchasing and managing reservations.
 resource "azurerm_role_assignment" "cudly_reservations" {
   scope                = "/subscriptions/${local.subscription_id}"
   role_definition_name = "Reservation Purchaser"

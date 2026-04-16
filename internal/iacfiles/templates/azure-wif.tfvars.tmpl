@@ -9,21 +9,9 @@
 subscription_id = "{{.SubscriptionID}}"
 tenant_id       = "{{.TenantID}}"
 
-# Generate an RSA private key and a self-signed certificate, then paste the
-# PEM-encoded certificate (NOT the key) into the value below.
-#
-# Steps:
-#   openssl genrsa -out cudly-wif.key 2048
-#   openssl req -new -x509 -key cudly-wif.key -out cudly-wif.crt -days 730 \
-#     -subj "/CN=CUDly-WIF"
-#   cat cudly-wif.crt   # ← paste the output as certificate_pem below
-#
-certificate_pem = <<EOF
-<PASTE CERTIFICATE PEM HERE>
-EOF
-
-# After terraform apply, store the contents of cudly-wif.key as
-# azure_wif_private_key in the CUDly account settings.
+# CUDly OIDC issuer URL — Azure AD uses this to verify client assertion JWTs.
+# No certificate or secret is needed.
+cudly_issuer_url = "{{.CUDlyAPIURL}}/oidc"
 
 # --- CUDly auto-registration (optional) ---
 cudly_api_url = "{{.CUDlyAPIURL}}"

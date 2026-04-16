@@ -16,7 +16,7 @@ output "cudly_account_registration" {
     azure_subscription_id  : ${local.subscription_id}
     azure_tenant_id        : ${local.tenant_id}
     azure_client_id        : ${azuread_application.cudly.client_id}
-    azure_wif_private_key  : <store the private key PEM in CUDly — it was NOT managed by Terraform>
+    No secret or key needed — CUDly signs JWTs via its OIDC issuer.
   EOT
 }
 

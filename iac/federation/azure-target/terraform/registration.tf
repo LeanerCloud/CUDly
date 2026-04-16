@@ -2,10 +2,7 @@ locals {
   do_register      = var.cudly_api_url != "" && var.contact_email != ""
   reg_account_name = var.account_name != "" ? var.account_name : "Azure ${local.subscription_id}"
 
-  # Concatenate private key + certificate PEM for CUDly's azure_wif_private_key credential.
-  azure_credential_blob = local.private_key_pem != "" ? "${local.private_key_pem}\n${local.certificate_pem}" : ""
-
-  reg_payload = local.do_register ? jsonencode(merge({
+  reg_payload = local.do_register ? jsonencode({
     provider              = "azure"
     external_id           = local.subscription_id
     account_name          = local.reg_account_name
@@ -15,10 +12,7 @@ locals {
     azure_tenant_id       = local.tenant_id
     azure_client_id       = azuread_application.cudly.client_id
     azure_auth_mode       = "workload_identity_federation"
-    }, local.azure_credential_blob != "" ? {
-    credential_type    = "azure_wif_private_key"
-    credential_payload = local.azure_credential_blob
-  } : {})) : ""
+  }) : ""
 }
 
 data "http" "cudly_registration" {
