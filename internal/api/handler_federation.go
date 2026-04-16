@@ -399,9 +399,9 @@ func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, tem
 	if err != nil {
 		return fmt.Errorf("azure %s: read template: %w", format, err)
 	}
-	deployScript, err := cudlyiac.Modules.ReadFile("federation/azure-target/bicep/deploy-azure.sh")
+	deployScript, err := renderTemplate("templates/azure-wif-deploy.sh.tmpl", data)
 	if err != nil {
-		return fmt.Errorf("azure %s: read deploy script: %w", format, err)
+		return fmt.Errorf("azure %s: render deploy script: %w", format, err)
 	}
 	paramsJSON, err := renderTemplate("templates/azure-wif-bicep-params.json.tmpl", data)
 	if err != nil {
@@ -413,7 +413,7 @@ func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, tem
 	}{
 		{templateName, templateBytes},
 		{"azure-wif-bicep-params.json", []byte(paramsJSON)},
-		{"deploy-azure.sh", deployScript},
+		{"deploy-azure.sh", []byte(deployScript)},
 		{"README.txt", []byte(buildAzureTemplateReadme(data, format))},
 	}
 	for _, e := range entries {
@@ -435,17 +435,13 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 		sb.WriteString("================================\n\n")
 	}
 	sb.WriteString(fmt.Sprintf("Account : %s (%s)\n\n", data.AccountName, data.AccountExternalID))
-	sb.WriteString("This archive assigns the 'Reservation Purchaser' built-in role to the CUDly\n")
-	sb.WriteString("service principal at the subscription scope. Identity setup (App Registration,\n")
-	sb.WriteString("service principal, certificate upload) is NOT performed by this template —\n")
-	sb.WriteString("that step requires Microsoft Graph API calls which are only available in the\n")
-	sb.WriteString("preview Bicep extension. Use the CUDly CLI script for the identity setup.\n\n")
-	sb.WriteString("Two-step deployment:\n\n")
-	sb.WriteString("  1. Download the 'CLI script' format from CUDly and run it:\n")
-	sb.WriteString("       bash " + data.AccountSlug + "-azure-wif-cli.sh\n")
-	sb.WriteString("     Note the service principal object ID that it prints.\n\n")
-	sb.WriteString("  2. Deploy this template:\n")
-	sb.WriteString("       SP_OBJECT_ID=<object-id-from-step-1> bash deploy-azure.sh --location <region>\n\n")
+	sb.WriteString("The deploy script creates an Azure AD App Registration with a federated\n")
+	sb.WriteString("identity credential bound to CUDly's OIDC issuer, then deploys the role\n")
+	sb.WriteString("assignment template. No certificate or secret is created.\n\n")
+	sb.WriteString("One-step deployment:\n\n")
+	sb.WriteString("  bash deploy-azure.sh [--location <region>] [--template " + format + "]\n\n")
+	sb.WriteString("To auto-register with CUDly:\n\n")
+	sb.WriteString("  CUDLY_CONTACT_EMAIL=you@example.com bash deploy-azure.sh\n\n")
 	sb.WriteString("After deployment, set azure_auth_mode=workload_identity_federation in CUDly.\n")
 	return sb.String()
 }

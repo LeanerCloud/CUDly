@@ -627,30 +627,38 @@
                     </fieldset>
                 </section>
 
-                <!-- API Keys Section (Admin Only) -->
-                <section id="apikeys-section" class="admin-only" style="display:none">
-                    <h2>API Keys Management</h2>
-                    <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>
-                    <div class="section-header">
-                        <button type="button" id="create-apikey-btn" class="primary">Create API Key</button>
-                    </div>
-                    <div id="apikeys-list" class="mt-3"></div>
-                </section>
-
                 <!-- User Management Section (Admin Only) -->
                 <section id="users-section" class="admin-only" style="display:none">
                     <h2>User Management</h2>
                     <p class="settings-description">Manage users and their permissions.</p>
-                    <div class="section-header">
-                        <button type="button" id="create-user-btn" class="primary">Create User</button>
-                    </div>
-                    <div id="users-list" class="mt-3"></div>
 
-                    <h3 class="mt-4">Groups & Permissions</h3>
-                    <div class="section-header">
-                        <button type="button" id="create-group-btn" class="primary">Create Group</button>
-                    </div>
-                    <div id="groups-list" class="mt-3"></div>
+                    <fieldset class="settings-category">
+                        <legend>Users</legend>
+                        <div class="section-header">
+                            <button type="button" id="create-user-btn" class="primary">Create User</button>
+                        </div>
+                        <div id="users-list" class="mt-3"></div>
+                    </fieldset>
+
+                    <fieldset class="settings-category">
+                        <legend>Groups &amp; Permissions</legend>
+                        <div class="section-header">
+                            <button type="button" id="create-group-btn" class="primary">Create Group</button>
+                        </div>
+                        <div id="groups-list" class="mt-3"></div>
+                    </fieldset>
+                </section>
+
+                <!-- API Keys Section (Admin Only) -->
+                <section id="apikeys-section" class="admin-only" style="display:none">
+                    <fieldset class="settings-category">
+                        <legend>API Keys</legend>
+                        <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>
+                        <div class="section-header">
+                            <button type="button" id="create-apikey-btn" class="primary">Create API Key</button>
+                        </div>
+                        <div id="apikeys-list" class="mt-3"></div>
+                    </fieldset>
                 </section>
             </div>
         </main>

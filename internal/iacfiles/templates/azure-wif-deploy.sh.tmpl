@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# Deploy CUDly Azure federation: identity + role assignment in one shot.
+#
+# Creates an Azure AD App Registration with a federated identity credential
+# bound to CUDly's OIDC issuer, then deploys the Bicep/ARM role assignment
+# template. Optionally registers the account with CUDly.
+#
+# Usage:
+#   bash deploy-azure.sh [--location <region>] [--template bicep|arm]
+#
+# Set CUDLY_CONTACT_EMAIL to auto-register with CUDly after deployment.
+#
+# Requirements: az cli v2 logged in to the target subscription.
+set -euo pipefail
+
+APP_NAME="${APP_NAME:-CUDly-target}"
+LOCATION="${AZURE_LOCATION:-eastus}"
+TEMPLATE="bicep"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --location) LOCATION="$2"; shift 2 ;;
+    --template) TEMPLATE="$2"; shift 2 ;;
+    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+  esac
+done
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "$TEMPLATE" in
+  bicep) TEMPLATE_FILE="$DIR/azure-wif.bicep" ;;
+  arm)   TEMPLATE_FILE="$DIR/azure-wif.arm.json" ;;
+  *) echo "--template must be bicep or arm" >&2; exit 1 ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Step 1: Resolve subscription + tenant
+# ---------------------------------------------------------------------------
+SUBSCRIPTION_ID=$(az account show --query id --output tsv)
+TENANT_ID=$(az account show --query tenantId --output tsv)
+echo "Subscription: ${SUBSCRIPTION_ID}"
+echo "Tenant:       ${TENANT_ID}"
+
+# ---------------------------------------------------------------------------
+# Step 2: Create App Registration + Service Principal
+# ---------------------------------------------------------------------------
+echo ""
+echo "Creating App Registration ${APP_NAME}..."
+APP_ID=$(az ad app create --display-name "${APP_NAME}" --sign-in-audience AzureADMyOrg --query appId --output tsv)
+echo "App (client) ID: ${APP_ID}"
+
+echo "Creating service principal..."
+SP_OBJECT_ID=$(az ad sp create --id "${APP_ID}" --query id --output tsv 2>/dev/null \
+  || az ad sp show --id "${APP_ID}" --query id --output tsv)
+echo "SP Object ID:    ${SP_OBJECT_ID}"
+
+# ---------------------------------------------------------------------------
+# Step 3: Add federated identity credential bound to CUDly OIDC issuer
+# ---------------------------------------------------------------------------
+CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-{{.CUDlyAPIURL}}/oidc}"
+CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
+CUDLY_FEDERATED_AUDIENCE="${CUDLY_FEDERATED_AUDIENCE:-api://AzureADTokenExchange}"
+
+echo ""
+echo "Adding federated identity credential..."
+FEDCRED_PARAMS=$(cat <<JSON
+{
+  "name": "cudly",
+  "issuer": "${CUDLY_ISSUER_URL}",
+  "subject": "${CUDLY_FEDERATED_SUBJECT}",
+  "audiences": ["${CUDLY_FEDERATED_AUDIENCE}"],
+  "description": "CUDly OIDC issuer (KMS-backed). No secret stored."
+}
+JSON
+)
+az ad app federated-credential create \
+  --id "${APP_ID}" \
+  --parameters "${FEDCRED_PARAMS}" \
+  --output none 2>&1 || echo "  (federated credential may already exist — continuing)"
+
+# ---------------------------------------------------------------------------
+# Step 4: Deploy role assignment via Bicep/ARM
+# ---------------------------------------------------------------------------
+echo ""
+DEPLOYMENT_NAME="cudly-$(date +%Y%m%d-%H%M%S)"
+echo "Deploying ${TEMPLATE} template (role assignment) at ${LOCATION}..."
+az deployment sub create \
+  --name "$DEPLOYMENT_NAME" \
+  --location "$LOCATION" \
+  --template-file "$TEMPLATE_FILE" \
+  --parameters "servicePrincipalObjectId=$SP_OBJECT_ID" \
+  --output table
+
+echo ""
+echo "=== Done ==="
+echo "subscription_id : ${SUBSCRIPTION_ID}"
+echo "tenant_id       : ${TENANT_ID}"
+echo "client_id       : ${APP_ID}"
+echo "sp_object_id    : ${SP_OBJECT_ID}"
+echo ""
+echo "In CUDly, set azure_auth_mode = workload_identity_federation."
+echo "No key or secret is required."
+{{- if .CUDlyAPIURL}}
+
+# ---------------------------------------------------------------------------
+# Step 5: Auto-register with CUDly (optional)
+# ---------------------------------------------------------------------------
+if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
+  echo ""
+  echo "Registering account with CUDly..."
+  ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"
+  read -r -d '' PAYLOAD <<JSON || true
+{
+  "provider": "azure",
+  "external_id": "${SUBSCRIPTION_ID}",
+  "account_name": "${ACCOUNT_NAME}",
+  "contact_email": "${CUDLY_CONTACT_EMAIL}",
+  "azure_auth_mode": "workload_identity_federation",
+  "azure_subscription_id": "${SUBSCRIPTION_ID}",
+  "azure_tenant_id": "${TENANT_ID}",
+  "azure_client_id": "${APP_ID}"
+}
+JSON
+  HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+    -X POST "{{.CUDlyAPIURL}}/api/register" \
+    -H "Content-Type: application/json" \
+    -d "${PAYLOAD}")
+  case "$HTTP_CODE" in
+    200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+    409)     echo "Registration already pending for this account — continuing." ;;
+    *)       echo "WARNING: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out ;;
+  esac
+fi
+{{- end}}
