@@ -20,9 +20,18 @@ resource "google_service_account_iam_member" "cudly_impersonate" {
   member             = "serviceAccount:${var.source_service_account}"
 }
 
-# Grant the target SA billing permissions needed to manage CUDs/commitments.
-resource "google_project_iam_member" "cudly_billing_user" {
+# Grant the target SA permissions needed to manage CUDs/commitments.
+# commitmentAdmin: create/manage committed-use discounts.
+# billing.viewer:  read billing data (costs, invoices). Read-only —
+#                  billing.user is unnecessarily broad for CUDly's use case.
+resource "google_project_iam_member" "cudly_commitment_admin" {
   project = var.project_id
-  role    = "roles/billing.user"
+  role    = "roles/commerceorgpolicy.commitmentAdmin"
+  member  = "serviceAccount:${var.service_account_email}"
+}
+
+resource "google_project_iam_member" "cudly_billing_viewer" {
+  project = var.project_id
+  role    = "roles/billing.viewer"
   member  = "serviceAccount:${var.service_account_email}"
 }
