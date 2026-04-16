@@ -21,6 +21,10 @@ jest.mock('../settings', () => ({
   isUnsavedChanges: jest.fn().mockReturnValue(false),
   loadAccountsTab: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../riexchange', () => ({
+  loadRIExchange: jest.fn().mockResolvedValue(undefined),
+  loadAutomationSettings: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../auth', () => ({
   isAdmin: jest.fn().mockReturnValue(true),
 }));
@@ -30,6 +34,7 @@ import { loadRecommendations } from '../recommendations';
 import { loadPlans } from '../plans';
 import { initHistoryDateRange } from '../history';
 import { loadGlobalSettings } from '../settings';
+import { loadAutomationSettings } from '../riexchange';
 
 describe('Navigation Module', () => {
   beforeEach(() => {
@@ -49,10 +54,12 @@ describe('Navigation Module', () => {
       <div id="settings-tab" class="tab-content">
         <div class="settings-tabs">
           <button class="sub-tab-btn active" data-settings-tab="general">General</button>
+          <button class="sub-tab-btn" data-settings-tab="purchasing">Purchasing</button>
           <button class="sub-tab-btn" data-settings-tab="accounts">Accounts</button>
           <button class="sub-tab-btn" data-settings-tab="users">Users</button>
         </div>
         <section id="settings-section"></section>
+        <section id="purchasing-panel" style="display:none"></section>
         <section id="accounts-section" style="display:none"></section>
         <section id="users-section" style="display:none"></section>
         <section id="apikeys-section" style="display:none"></section>
@@ -190,15 +197,34 @@ describe('Navigation Module', () => {
       switchSettingsSubTab('general');
 
       expect(document.getElementById('settings-section')?.style.display).toBe('');
+      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
       expect(document.getElementById('accounts-section')?.style.display).toBe('none');
       expect(document.getElementById('users-section')?.style.display).toBe('none');
       expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
+    });
+
+    test('shows purchasing panel and hides others', () => {
+      switchSettingsSubTab('purchasing');
+
+      expect(document.getElementById('purchasing-panel')?.style.display).toBe('');
+      expect(document.getElementById('settings-section')?.style.display).toBe('none');
+      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
+      expect(document.getElementById('users-section')?.style.display).toBe('none');
+      expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
+    });
+
+    test('purchasing sub-tab loads settings and automation', () => {
+      switchSettingsSubTab('purchasing');
+
+      expect(loadGlobalSettings).toHaveBeenCalled();
+      expect(loadAutomationSettings).toHaveBeenCalled();
     });
 
     test('shows accounts section and hides others', () => {
       switchSettingsSubTab('accounts');
 
       expect(document.getElementById('settings-section')?.style.display).toBe('none');
+      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
       expect(document.getElementById('accounts-section')?.style.display).toBe('');
       expect(document.getElementById('users-section')?.style.display).toBe('none');
       expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
@@ -208,6 +234,7 @@ describe('Navigation Module', () => {
       switchSettingsSubTab('users');
 
       expect(document.getElementById('settings-section')?.style.display).toBe('none');
+      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
       expect(document.getElementById('accounts-section')?.style.display).toBe('none');
       expect(document.getElementById('users-section')?.style.display).toBe('');
       expect(document.getElementById('apikeys-section')?.style.display).toBe('');
@@ -217,6 +244,7 @@ describe('Navigation Module', () => {
       switchSettingsSubTab('foobar');
 
       expect(document.getElementById('settings-section')?.style.display).toBe('');
+      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
       expect(document.getElementById('accounts-section')?.style.display).toBe('none');
     });
 
@@ -251,6 +279,12 @@ describe('Navigation Module', () => {
       delete (window as unknown as Record<string, unknown>).location;
       (window as unknown as Record<string, unknown>).location = { pathname: '/settings/accounts' } as Location;
       expect(getSettingsSubTabFromPath()).toBe('accounts');
+    });
+
+    test('returns purchasing for /settings/purchasing', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/settings/purchasing' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('purchasing');
     });
 
     test('returns general for unknown sub-tab', () => {

@@ -243,6 +243,12 @@ function setupButtonHandlers(): void {
     btn.addEventListener('click', () => copyToClipboard('gcp-cli-cmd'));
   });
 
+  // Purchasing save button
+  const savePurchasingBtn = document.getElementById('save-purchasing-btn');
+  if (savePurchasingBtn) {
+    savePurchasingBtn.addEventListener('click', (e) => void saveGlobalSettings(e));
+  }
+
   // History button
   const loadHistoryBtn = document.getElementById('load-history-btn');
   if (loadHistoryBtn) {

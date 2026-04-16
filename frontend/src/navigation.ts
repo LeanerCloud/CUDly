@@ -27,15 +27,17 @@ const TABS: Record<string, TabMeta> = {
 };
 
 const SETTINGS_SUBTABS: Record<string, { title: string }> = {
-  general:  { title: 'CUDly — Settings' },
-  accounts: { title: 'CUDly — Accounts' },
-  users:    { title: 'CUDly — Users & API Keys' },
+  general:    { title: 'CUDly — Settings' },
+  purchasing: { title: 'CUDly — Purchasing' },
+  accounts:   { title: 'CUDly — Accounts' },
+  users:      { title: 'CUDly — Users & API Keys' },
 };
 
 const SECTION_MAP: Record<string, string[]> = {
-  general:  ['settings-section'],
-  accounts: ['accounts-section'],
-  users:    ['users-section', 'apikeys-section'],
+  general:    ['settings-section'],
+  purchasing: ['purchasing-panel'],
+  accounts:   ['accounts-section'],
+  users:      ['users-section', 'apikeys-section'],
 };
 
 let currentTab: string | undefined;
@@ -157,6 +159,9 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
 
   switch (subTab) {
     case 'general':
+      void loadGlobalSettings();
+      break;
+    case 'purchasing':
       void loadGlobalSettings();
       void loadAutomationSettings();
       break;

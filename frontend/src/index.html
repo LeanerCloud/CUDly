@@ -309,6 +309,7 @@
             <div id="settings-tab" class="tab-content" role="tabpanel">
                 <div class="settings-tabs" role="tablist" aria-label="Settings navigation">
                     <button class="sub-tab-btn active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
+                    <button class="sub-tab-btn" data-settings-tab="purchasing" role="tab" aria-selected="false">Purchasing</button>
                     <button class="sub-tab-btn admin-only" data-settings-tab="accounts" role="tab" aria-selected="false">Accounts</button>
                     <button class="sub-tab-btn admin-only" data-settings-tab="users" role="tab" aria-selected="false">Users &amp; API Keys</button>
                 </div>
@@ -378,176 +379,187 @@
                             </div>
                         </fieldset>
 
-                        <fieldset class="settings-category">
-                            <legend>Global Purchase Defaults</legend>
-                            <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options only apply to AWS services; Azure and GCP reservations are always paid upfront.</p>
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <label for="setting-default-term">Default Term</label>
-                                </div>
-                                <div class="setting-input">
-                                    <select id="setting-default-term">
-                                        <option value="1">1 Year</option>
-                                        <option value="3" selected>3 Years</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <label for="setting-default-payment">Default Payment Option</label>
-                                </div>
-                                <div class="setting-input">
-                                    <select id="setting-default-payment">
-                                        <option value="no-upfront">No Upfront</option>
-                                        <option value="partial-upfront">Partial Upfront</option>
-                                        <option value="all-upfront" selected>All Upfront</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <label for="setting-default-coverage">Target Coverage (%)</label>
-                                </div>
-                                <div class="setting-input">
-                                    <input type="number" id="setting-default-coverage" value="80" min="0" max="100">
-                                </div>
-                            </div>
-                            <div class="fieldset-save-bar">
-                                <button type="button" class="btn btn-primary" id="save-defaults-btn">Save</button>
-                            </div>
-                        </fieldset>
-
-                        <!-- AWS Settings -->
-                        <fieldset class="settings-category provider-settings" id="aws-settings">
-                            <legend><span class="provider-badge aws">AWS</span> Settings</legend>
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <label>Credentials</label>
-                                </div>
-                                <div class="setting-input">
-                                    <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
-                                </div>
-                            </div>
-                            <h4 class="subsection-title">Service Defaults</h4>
-                            <div class="service-defaults-grid">
-                                <div class="service-default-card">
-                                    <h5>EC2 Reserved Instances</h5>
-                                    <label>Term: <select id="aws-ec2-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                    <label>Payment: <select id="aws-ec2-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>RDS Reserved Instances</h5>
-                                    <label>Term: <select id="aws-rds-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                    <label>Payment: <select id="aws-rds-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>ElastiCache Reserved Nodes</h5>
-                                    <label>Term: <select id="aws-elasticache-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                    <label>Payment: <select id="aws-elasticache-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>OpenSearch Reserved Instances</h5>
-                                    <label>Term: <select id="aws-opensearch-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                    <label>Payment: <select id="aws-opensearch-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>Redshift Reserved Nodes</h5>
-                                    <label>Term: <select id="aws-redshift-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                    <label>Payment: <select id="aws-redshift-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>Compute Savings Plans</h5>
-                                    <label>Term: <select id="aws-savingsplans-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                    <label>Payment: <select id="aws-savingsplans-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                </div>
-                            </div>
-                            <div class="fieldset-save-bar">
-                                <button type="button" class="btn btn-primary" id="save-aws-btn">Save</button>
-                            </div>
-                        </fieldset>
-
-                        <!-- Azure Settings -->
-                        <fieldset class="settings-category provider-settings hidden" id="azure-settings">
-                            <legend><span class="provider-badge azure">Azure</span> Settings</legend>
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <label>Credentials</label>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
-                                </div>
-                                <div class="setting-input">
-                                    <span class="credential-status" id="azure-creds-status">Not Configured</span>
-                                    <button type="button" class="btn btn-small" id="azure-configure-btn">Configure</button>
-                                </div>
-                            </div>
-                            <h4 class="subsection-title">Service Defaults</h4>
-                            <div class="service-defaults-grid">
-                                <div class="service-default-card">
-                                    <h5>Virtual Machine Reservations</h5>
-                                    <label>Term: <select id="azure-vm-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>SQL Database Reservations</h5>
-                                    <label>Term: <select id="azure-sql-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>CosmosDB Reservations</h5>
-                                    <label>Term: <select id="azure-cosmosdb-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>Redis Cache Reservations</h5>
-                                    <label>Term: <select id="azure-redis-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                            </div>
-                            <div class="fieldset-save-bar">
-                                <button type="button" class="btn btn-primary" id="save-azure-btn">Save</button>
-                            </div>
-                        </fieldset>
-
-                        <!-- GCP Settings -->
-                        <fieldset class="settings-category provider-settings hidden" id="gcp-settings">
-                            <legend><span class="provider-badge gcp">GCP</span> Settings</legend>
-                            <div class="setting-row">
-                                <div class="setting-info">
-                                    <label>Credentials</label>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
-                                </div>
-                                <div class="setting-input">
-                                    <span class="credential-status" id="gcp-creds-status">Not Configured</span>
-                                    <button type="button" class="btn btn-small" id="gcp-configure-btn">Configure</button>
-                                </div>
-                            </div>
-                            <h4 class="subsection-title">Service Defaults</h4>
-                            <div class="service-defaults-grid">
-                                <div class="service-default-card">
-                                    <h5>Compute Engine CUDs</h5>
-                                    <label>Term: <select id="gcp-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>Cloud SQL CUDs</h5>
-                                    <label>Term: <select id="gcp-sql-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>Memorystore CUDs</h5>
-                                    <label>Term: <select id="gcp-memorystore-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                                <div class="service-default-card">
-                                    <h5>Cloud Storage CUDs</h5>
-                                    <label>Term: <select id="gcp-storage-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                </div>
-                            </div>
-                            <div class="fieldset-save-bar">
-                                <button type="button" class="btn btn-primary" id="save-gcp-btn">Save</button>
-                            </div>
-                        </fieldset>
-
                         <div class="settings-buttons">
                             <button type="button" id="reset-settings-btn">Reset to Defaults</button>
                             <button type="submit">Save Settings</button>
                         </div>
                     </form>
                     <div id="settings-error" class="error-message hidden"></div>
+                </section>
+
+                <!-- Purchasing Section -->
+                <section id="purchasing-panel" style="display:none">
+                    <h2>Purchasing Settings</h2>
+                    <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
+
+                    <fieldset class="settings-category">
+                        <legend>Global Purchase Defaults</legend>
+                        <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options only apply to AWS services; Azure and GCP reservations are always paid upfront.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-default-term">Default Term</label>
+                            </div>
+                            <div class="setting-input">
+                                <select id="setting-default-term">
+                                    <option value="1">1 Year</option>
+                                    <option value="3" selected>3 Years</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-default-payment">Default Payment Option</label>
+                            </div>
+                            <div class="setting-input">
+                                <select id="setting-default-payment">
+                                    <option value="no-upfront">No Upfront</option>
+                                    <option value="partial-upfront">Partial Upfront</option>
+                                    <option value="all-upfront" selected>All Upfront</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-default-coverage">Target Coverage (%)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100">
+                            </div>
+                        </div>
+                        <div class="fieldset-save-bar">
+                            <button type="button" class="btn btn-primary" id="save-defaults-btn">Save</button>
+                        </div>
+                    </fieldset>
+
+                    <!-- AWS Settings -->
+                    <fieldset class="settings-category provider-settings" id="aws-settings">
+                        <legend><span class="provider-badge aws">AWS</span> Settings</legend>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label>Credentials</label>
+                            </div>
+                            <div class="setting-input">
+                                <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
+                            </div>
+                        </div>
+                        <h4 class="subsection-title">Service Defaults</h4>
+                        <div class="service-defaults-grid">
+                            <div class="service-default-card">
+                                <h5>EC2 Reserved Instances</h5>
+                                <label>Term: <select id="aws-ec2-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-ec2-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>RDS Reserved Instances</h5>
+                                <label>Term: <select id="aws-rds-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-rds-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>ElastiCache Reserved Nodes</h5>
+                                <label>Term: <select id="aws-elasticache-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-elasticache-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>OpenSearch Reserved Instances</h5>
+                                <label>Term: <select id="aws-opensearch-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-opensearch-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Redshift Reserved Nodes</h5>
+                                <label>Term: <select id="aws-redshift-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-redshift-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Compute Savings Plans</h5>
+                                <label>Term: <select id="aws-savingsplans-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savingsplans-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                        </div>
+                        <div class="fieldset-save-bar">
+                            <button type="button" class="btn btn-primary" id="save-aws-btn">Save</button>
+                        </div>
+                    </fieldset>
+
+                    <!-- Azure Settings -->
+                    <fieldset class="settings-category provider-settings hidden" id="azure-settings">
+                        <legend><span class="provider-badge azure">Azure</span> Settings</legend>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label>Credentials</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <span class="credential-status" id="azure-creds-status">Not Configured</span>
+                                <button type="button" class="btn btn-small" id="azure-configure-btn">Configure</button>
+                            </div>
+                        </div>
+                        <h4 class="subsection-title">Service Defaults</h4>
+                        <div class="service-defaults-grid">
+                            <div class="service-default-card">
+                                <h5>Virtual Machine Reservations</h5>
+                                <label>Term: <select id="azure-vm-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>SQL Database Reservations</h5>
+                                <label>Term: <select id="azure-sql-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>CosmosDB Reservations</h5>
+                                <label>Term: <select id="azure-cosmosdb-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Redis Cache Reservations</h5>
+                                <label>Term: <select id="azure-redis-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                        </div>
+                        <div class="fieldset-save-bar">
+                            <button type="button" class="btn btn-primary" id="save-azure-btn">Save</button>
+                        </div>
+                    </fieldset>
+
+                    <!-- GCP Settings -->
+                    <fieldset class="settings-category provider-settings hidden" id="gcp-settings">
+                        <legend><span class="provider-badge gcp">GCP</span> Settings</legend>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label>Credentials</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <span class="credential-status" id="gcp-creds-status">Not Configured</span>
+                                <button type="button" class="btn btn-small" id="gcp-configure-btn">Configure</button>
+                            </div>
+                        </div>
+                        <h4 class="subsection-title">Service Defaults</h4>
+                        <div class="service-defaults-grid">
+                            <div class="service-default-card">
+                                <h5>Compute Engine CUDs</h5>
+                                <label>Term: <select id="gcp-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Cloud SQL CUDs</h5>
+                                <label>Term: <select id="gcp-sql-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Memorystore CUDs</h5>
+                                <label>Term: <select id="gcp-memorystore-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Cloud Storage CUDs</h5>
+                                <label>Term: <select id="gcp-storage-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                        </div>
+                        <div class="fieldset-save-bar">
+                            <button type="button" class="btn btn-primary" id="save-gcp-btn">Save</button>
+                        </div>
+                    </fieldset>
+
                     <!-- RI Exchange Automation Settings (loaded dynamically) -->
                     <div id="ri-exchange-automation-settings"></div>
+
+                    <div class="settings-buttons">
+                        <button type="button" id="save-purchasing-btn" class="btn btn-primary">Save Settings</button>
+                    </div>
                 </section>
 
                 <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->
