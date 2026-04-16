@@ -7,6 +7,8 @@ import { initFederationPanel } from './federation';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
+let cachedSourceCloud: string | undefined;
+
 /** Options for the account modal (used by the registrations approval flow). */
 export interface AccountModalOptions {
   onSave?: (provider: AccountProvider, request: api.CloudAccountRequest) => Promise<void>;
@@ -835,17 +837,9 @@ export async function loadGlobalSettings(): Promise<void> {
     snapshotAllFields();
     updateDirtyMarkers();
 
-    // Load accounts for all providers (non-blocking)
-    void loadAccountsForProvider('aws');
-    void loadAccountsForProvider('azure');
-    void loadAccountsForProvider('gcp');
+    cachedSourceCloud = data.source_cloud ?? 'aws';
 
-    // Populate federation IaC download panel (non-blocking).
-    // Source comes from the backend CUDLY_SOURCE_CLOUD env var (set by Terraform).
-    void initFederationPanel(data.source_cloud ?? 'aws');
-
-    // Load pending account registrations (non-blocking)
-    void import('./modules/registrations').then(m => m.initRegistrations());
+    void loadAccountsTab();
   } catch (error) {
     console.error('Failed to load settings:', error);
     if (loadingEl) loadingEl.classList.add('hidden');
@@ -855,6 +849,29 @@ export async function loadGlobalSettings(): Promise<void> {
       errorEl.classList.remove('hidden');
     }
   }
+}
+
+/**
+ * Load the Accounts sub-tab: account lists, federation IaC panel, and
+ * pending registrations. Self-contained — fetches sourceCloud from
+ * cache or the config API if not yet available.
+ */
+export async function loadAccountsTab(): Promise<void> {
+  let source = cachedSourceCloud;
+  if (!source) {
+    try {
+      const cfg = await api.getConfig();
+      source = cfg.source_cloud ?? 'aws';
+      cachedSourceCloud = source;
+    } catch {
+      source = 'aws';
+    }
+  }
+  void loadAccountsForProvider('aws');
+  void loadAccountsForProvider('azure');
+  void loadAccountsForProvider('gcp');
+  void initFederationPanel(source);
+  void import('./modules/registrations').then(m => m.initRegistrations());
 }
 
 /**
