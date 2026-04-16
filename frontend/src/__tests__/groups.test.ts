@@ -108,37 +108,26 @@ describe('groups/groupList', () => {
       expect(container?.querySelector('.empty')).toBeTruthy();
     });
 
-    it('should render groups table with correct structure', () => {
+    it('should render group cards with correct structure', () => {
       groupList.renderGroups(mockGroups);
 
       const container = document.getElementById('groups-list');
-      expect(container?.querySelector('table.data-table')).toBeTruthy();
-      expect(container?.querySelector('thead')).toBeTruthy();
-      expect(container?.querySelector('tbody')).toBeTruthy();
+      const cards = container?.querySelectorAll('.group-card');
+      expect(cards?.length).toBe(3);
+      expect(container?.querySelector('.group-card-header')).toBeTruthy();
+      expect(container?.querySelector('.group-card-body')).toBeTruthy();
+      expect(container?.querySelector('.group-members')).toBeTruthy();
     });
 
-    it('should render all table headers', () => {
+    it('should render group names in h4 elements', () => {
       groupList.renderGroups(mockGroups);
 
       const container = document.getElementById('groups-list');
-      const headers = container?.querySelectorAll('th');
-      expect(headers?.length).toBe(6);
-      expect(headers?.item(0)?.textContent).toBe('Name');
-      expect(headers?.item(1)?.textContent).toBe('Description');
-      expect(headers?.item(2)?.textContent).toBe('Members');
-      expect(headers?.item(3)?.textContent).toBe('Permissions');
-      expect(headers?.item(4)?.textContent).toBe('Created');
-      expect(headers?.item(5)?.textContent).toBe('Actions');
-    });
-
-    it('should render group names with strong tag', () => {
-      groupList.renderGroups(mockGroups);
-
-      const container = document.getElementById('groups-list');
-      const strongElements = container?.querySelectorAll('td strong');
-      expect(strongElements?.length).toBe(3);
-      expect(strongElements?.item(0)?.textContent).toBe('Administrators');
-      expect(strongElements?.item(1)?.textContent).toBe('Viewers');
+      const headings = container?.querySelectorAll('.group-card h4');
+      expect(headings?.length).toBe(3);
+      expect(headings?.item(0)?.textContent).toBe('Administrators');
+      expect(headings?.item(1)?.textContent).toBe('Viewers');
+      expect(headings?.item(2)?.textContent).toBe('Empty Group');
     });
 
     it('should render group descriptions', () => {
@@ -178,31 +167,43 @@ describe('groups/groupList', () => {
       expect(badge?.textContent).toBe('1 member');
     });
 
-    it('should render permissions count', () => {
+    it('should render permission badges', () => {
       groupList.renderGroups(mockGroups);
 
       const container = document.getElementById('groups-list');
-      expect(container?.innerHTML).toContain('2 permission(s)');
-      expect(container?.innerHTML).toContain('1 permission(s)');
-      expect(container?.innerHTML).toContain('0 permission(s)');
+      const badges = container?.querySelectorAll('.permission-badge');
+      // group-1 has 2 permissions, group-2 has 1, group-3 has 0
+      expect(badges?.length).toBe(3);
+      expect(badges?.item(0)?.textContent).toBe('execute:*');
+      expect(badges?.item(1)?.textContent).toBe('update:*');
+      expect(badges?.item(2)?.textContent).toBe('view:*');
     });
 
-    it('should render formatted created date', () => {
-      groupList.renderGroups(mockGroups);
-
-      const container = document.getElementById('groups-list');
-      // The exact format depends on locale, but should contain the date
-      expect(container?.innerHTML).toMatch(/\d{1,2}\/\d{1,2}\/\d{4}|1\/15\/2024/);
-    });
-
-    it('should show dash for missing created date', () => {
-      const group = mockGroups[2]; // Empty Group has no created_at
+    it('should show "No permissions" for group with no permissions', () => {
+      const group = mockGroups[2]; // Empty Group
       if (!group) throw new Error('Test data missing');
       groupList.renderGroups([group]);
 
       const container = document.getElementById('groups-list');
-      const rows = container?.querySelectorAll('tbody tr');
-      expect(rows?.item(0)?.innerHTML).toContain('>-<');
+      expect(container?.innerHTML).toContain('No permissions');
+    });
+
+    it('should render member pills with email addresses', () => {
+      groupList.renderGroups(mockGroups);
+
+      const container = document.getElementById('groups-list');
+      const pills = container?.querySelectorAll('.member-pill');
+      // group-1: admin@test.com, both@test.com; group-2: viewer@test.com, both@test.com; group-3: none
+      expect(pills?.length).toBe(4);
+    });
+
+    it('should show "No members" for group with no members', () => {
+      const group = mockGroups[2]; // Empty Group
+      if (!group) throw new Error('Test data missing');
+      groupList.renderGroups([group]);
+
+      const container = document.getElementById('groups-list');
+      expect(container?.innerHTML).toContain('No members');
     });
 
     it('should render edit and delete buttons with data-group-id', () => {

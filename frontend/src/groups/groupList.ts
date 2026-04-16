@@ -2,13 +2,27 @@
  * Group list rendering functionality
  */
 
-import type { APIGroup } from '../api';
+import type { APIGroup, Permission } from '../api';
 import { allUsers } from '../users/state';
 import { escapeHtml } from '../users/utils';
 import { openEditGroupModal, deleteGroup } from './groupActions';
 
 /**
- * Render groups list
+ * Format permission constraints as a readable string for tooltips
+ */
+function formatConstraints(constraints: Permission['constraints']): string {
+  if (!constraints) return '';
+  const parts: string[] = [];
+  if (constraints.accounts?.length) parts.push(`accounts: ${constraints.accounts.join(', ')}`);
+  if (constraints.providers?.length) parts.push(`providers: ${constraints.providers.join(', ')}`);
+  if (constraints.services?.length) parts.push(`services: ${constraints.services.join(', ')}`);
+  if (constraints.regions?.length) parts.push(`regions: ${constraints.regions.join(', ')}`);
+  if (constraints.max_amount != null) parts.push(`max_amount: ${constraints.max_amount}`);
+  return parts.join('; ');
+}
+
+/**
+ * Render groups list as cards with permission badges and member pills
  */
 export function renderGroups(groups: APIGroup[]): void {
   const container = document.getElementById('groups-list');
@@ -19,40 +33,49 @@ export function renderGroups(groups: APIGroup[]): void {
     return;
   }
 
-  const table = `
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Description</th>
-          <th>Members</th>
-          <th>Permissions</th>
-          <th>Created</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${groups.map(group => {
-          const memberCount = allUsers.filter(u => u.groups.includes(group.id)).length;
-          return `
-            <tr>
-              <td><strong>${escapeHtml(group.name)}</strong></td>
-              <td>${escapeHtml(group.description || '')}</td>
-              <td><span class="badge">${memberCount} member${memberCount !== 1 ? 's' : ''}</span></td>
-              <td>${group.permissions.length} permission(s)</td>
-              <td>${group.created_at ? new Date(group.created_at).toLocaleDateString() : '-'}</td>
-              <td>
-                <button class="btn-small edit-group-btn" data-group-id="${escapeHtml(group.id)}">Edit</button>
-                <button class="btn-small btn-danger delete-group-btn" data-group-id="${escapeHtml(group.id)}">Delete</button>
-              </td>
-            </tr>
-          `;
-        }).join('')}
-      </tbody>
-    </table>
-  `;
+  const cards = groups.map(group => {
+    const members = allUsers.filter(u => u.groups.includes(group.id));
+    const memberCount = members.length;
 
-  container.innerHTML = table;
+    const permissionBadges = group.permissions.map(perm => {
+      const label = escapeHtml(`${perm.action}:${perm.resource}`);
+      const constraintStr = formatConstraints(perm.constraints);
+      const titleAttr = constraintStr ? ` title="${escapeHtml(constraintStr)}"` : '';
+      return `<span class="permission-badge"${titleAttr}>${label}</span>`;
+    }).join('');
+
+    const memberPills = members.length > 0
+      ? members.map(m => `<span class="member-pill">${escapeHtml(m.email)}</span>`).join('')
+      : '<span style="color:#999;font-size:0.85rem;">No members</span>';
+
+    const description = group.description
+      ? `<p class="group-description">${escapeHtml(group.description)}</p>`
+      : '';
+
+    return `
+      <div class="group-card">
+        <div class="group-card-header">
+          <div>
+            <h4>${escapeHtml(group.name)}</h4>
+            ${description}
+          </div>
+          <div class="group-card-actions">
+            <span class="badge">${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
+            <button class="btn-small edit-group-btn" data-group-id="${escapeHtml(group.id)}">Edit</button>
+            <button class="btn-small btn-danger delete-group-btn" data-group-id="${escapeHtml(group.id)}">Delete</button>
+          </div>
+        </div>
+        <div class="group-card-body">
+          ${permissionBadges || '<span style="color:#999;font-size:0.85rem;">No permissions</span>'}
+        </div>
+        <div class="group-members">
+          ${memberPills}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = cards;
 
   // Add event delegation after rendering
   container.querySelectorAll('.edit-group-btn').forEach(btn => {
