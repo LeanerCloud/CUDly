@@ -634,6 +634,8 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 			{ParameterKey: "SourceAccountID", ParameterValue: data.SourceAccountID},
 			{ParameterKey: "ExternalID", ParameterValue: uuid.New().String()},
 			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
+			{ParameterKey: "CUDlyAPIURL", ParameterValue: data.CUDlyAPIURL},
+			{ParameterKey: "ContactEmail", ParameterValue: ""},
 		}
 	} else {
 		params = []cfParam{

@@ -23,6 +23,26 @@ Parameters:
     Description: Name of the IAM role CUDly will assume.
     Default: CUDly-CrossAccount
 
+  CUDlyAPIURL:
+    Type: String
+    Description: CUDly API base URL for automatic account registration. Leave empty to skip.
+    Default: ""
+
+  ContactEmail:
+    Type: String
+    Description: Contact email for registration. Required when CUDlyAPIURL is set.
+    Default: ""
+
+  AccountName:
+    Type: String
+    Description: Human-readable name for this account in CUDly.
+    Default: ""
+
+Conditions:
+  DoRegister: !And
+    - !Not [!Equals [!Ref CUDlyAPIURL, ""]]
+    - !Not [!Equals [!Ref ContactEmail, ""]]
+
 Resources:
   CUDlyPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -105,6 +125,87 @@ Resources:
       ManagedPolicyArns:
         - !Ref CUDlyPolicy
 
+  # --- Auto-registration (optional, gated on CUDlyAPIURL + ContactEmail) ---
+
+  RegistrationLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: DoRegister
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  RegistrationLambda:
+    Type: AWS::Lambda::Function
+    Condition: DoRegister
+    Properties:
+      FunctionName: !Sub "${RoleName}-register"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt RegistrationLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json, urllib.request, urllib.error
+          import cfnresponse
+
+          def handler(event, context):
+              if event["RequestType"] in ("Update", "Delete"):
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              props = event["ResourceProperties"]
+              body = json.dumps({
+                  "provider": "aws",
+                  "external_id": props["AccountID"],
+                  "account_name": props.get("AccountName") or ("AWS " + props["AccountID"]),
+                  "contact_email": props["ContactEmail"],
+                  "aws_auth_mode": "role_arn",
+                  "aws_role_arn": props["RoleARN"],
+                  "aws_external_id": props["AWSExternalID"],
+              }).encode()
+
+              url = props["CUDlyAPIURL"].rstrip("/") + "/api/register"
+              req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+              try:
+                  resp = urllib.request.urlopen(req, timeout=15)
+                  result = json.loads(resp.read())
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      "ReferenceToken": result.get("reference_token", ""),
+                      "Status": result.get("status", ""),
+                  })
+              except urllib.error.HTTPError as e:
+                  body_text = e.read().decode()
+                  if e.code == 409:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                          "Status": "already_pending",
+                      })
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {},
+                          reason="HTTP {}: {}".format(e.code, body_text[:200]))
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {},
+                      reason=str(e)[:200])
+
+  CUDlyRegistration:
+    Type: Custom::CUDlyRegistration
+    Condition: DoRegister
+    DependsOn: CUDlyRole
+    Properties:
+      ServiceToken: !GetAtt RegistrationLambda.Arn
+      CUDlyAPIURL: !Ref CUDlyAPIURL
+      ContactEmail: !Ref ContactEmail
+      AccountName: !Ref AccountName
+      AccountID: !Ref AWS::AccountId
+      RoleARN: !GetAtt CUDlyRole.Arn
+      AWSExternalID: !Ref ExternalID
+
 Outputs:
   RoleARN:
     Description: ARN of the CUDly IAM role — use as aws_role_arn in CUDly account registration
@@ -117,3 +218,8 @@ Outputs:
       aws_auth_mode : role_arn
       external_id   : ${AWS::AccountId}
       aws_role_arn  : ${CUDlyRole.Arn}
+
+  RegistrationStatus:
+    Condition: DoRegister
+    Description: CUDly registration status
+    Value: !GetAtt CUDlyRegistration.Status

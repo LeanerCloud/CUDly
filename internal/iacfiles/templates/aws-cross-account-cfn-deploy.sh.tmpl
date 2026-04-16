@@ -27,6 +27,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Deploying stack ${STACK_NAME} to ${REGION}..."
 
+CUDLY_API_URL="${CUDLY_API_URL:-{{.CUDlyAPIURL}}}"
+CUDLY_CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-}"
+
+REG_PARAMS=""
+if [[ -n "${CUDLY_CONTACT_EMAIL}" && -n "${CUDLY_API_URL}" ]]; then
+  REG_PARAMS="CUDlyAPIURL=${CUDLY_API_URL} ContactEmail=${CUDLY_CONTACT_EMAIL}"
+fi
+
 # shellcheck disable=SC2086
 aws cloudformation deploy \
   $PROFILE_ARG \
@@ -37,6 +45,7 @@ aws cloudformation deploy \
     "SourceAccountID=${SOURCE_ACCOUNT_ID}" \
     "ExternalID=${EXTERNAL_ID}" \
     "RoleName=CUDly-{{.AccountSlug}}" \
+    ${REG_PARAMS} \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset
 
