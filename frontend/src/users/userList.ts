@@ -88,7 +88,7 @@ export function renderUsers(users: APIUser[]): void {
                 ${user.id === 'current' ? '<span class="badge badge-info">You</span>' : ''}
               </div>
             </td>
-            <td><span class="badge ${user.role === 'admin' ? 'badge-admin' : 'badge-user'}">${user.role}</span></td>
+            <td><span class="badge badge-${user.role === 'readonly' ? 'readonly' : user.role}">${user.role}</span></td>
             <td>
               <div class="groups-cell">
                 ${user.groups.length > 0 ? user.groups.map(g => `<span class="badge badge-group">${escapeHtml(g)}</span>`).join(' ') : '<span class="text-muted">No groups</span>'}

@@ -283,6 +283,37 @@ button.danger:hover {
     color: rgba(255,255,255,0.9);
 }
 
+/* Role badges in user table */
+.badge-admin {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: #e8f0fe;
+    color: #1a73e8;
+}
+
+.badge-user {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: #f0f0f0;
+    color: #666;
+}
+
+.badge-readonly {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: #f5f5f5;
+    color: #999;
+}
+
 /* Purchase detail status badges */
 .status-badge.completed {
     background: #e6f4ea;

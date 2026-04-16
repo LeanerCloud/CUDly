@@ -34,8 +34,8 @@ const mockGroups: api.APIGroup[] = [
     name: 'Administrators',
     description: 'Admin group with full access',
     permissions: [
-      { action: 'purchase:execute', resource: '*' },
-      { action: 'config:update', resource: '*' },
+      { action: 'execute', resource: '*' },
+      { action: 'update', resource: '*' },
     ],
     created_at: '2024-01-15T10:00:00Z',
   },
@@ -44,7 +44,7 @@ const mockGroups: api.APIGroup[] = [
     name: 'Viewers',
     description: 'Read-only access',
     permissions: [
-      { action: 'recommendation:view', resource: '*' },
+      { action: 'view', resource: '*' },
     ],
     created_at: '2024-02-20T14:30:00Z',
   },
@@ -389,8 +389,8 @@ describe('groups/groupModals', () => {
       description: 'Group with permission constraints',
       permissions: [
         {
-          action: 'purchase:execute',
-          resource: 'aws/*',
+          action: 'execute',
+          resource: 'purchases',
           constraints: {
             providers: ['aws'],
             services: ['ec2', 'rds'],
@@ -451,7 +451,7 @@ describe('groups/groupModals', () => {
       await groupModals.openEditGroupModal('group-with-constraints');
 
       const permissionsList = document.getElementById('permissions-list');
-      expect(permissionsList?.innerHTML).toContain('aws/*');
+      expect(permissionsList?.innerHTML).toContain('purchases');
       expect(permissionsList?.innerHTML).toContain('aws');
       expect(permissionsList?.innerHTML).toContain('ec2, rds');
       expect(permissionsList?.innerHTML).toContain('us-east-1, us-west-2');
@@ -527,8 +527,8 @@ describe('groups/groupModals', () => {
             <textarea id="group-description">New description</textarea>
             <div id="permissions-list">
               <div class="permission-item">
-                <select class="perm-action"><option value="purchase:execute" selected>Execute Purchase</option></select>
-                <input class="perm-resource" value="*" />
+                <select class="perm-action"><option value="execute" selected>Execute</option></select>
+                <select class="perm-resource"><option value="*" selected>All</option></select>
                 <input class="perm-providers" value="aws, azure" />
                 <input class="perm-services" value="ec2" />
                 <input class="perm-regions" value="us-east-1" />
@@ -559,7 +559,7 @@ describe('groups/groupModals', () => {
         description: 'New description',
         permissions: [
           {
-            action: 'purchase:execute',
+            action: 'execute',
             resource: '*',
             constraints: {
               providers: ['aws', 'azure'],
@@ -638,8 +638,8 @@ describe('groups/groupModals', () => {
             <textarea id="group-description">Simple description</textarea>
             <div id="permissions-list">
               <div class="permission-item">
-                <select class="perm-action"><option value="recommendation:view" selected>View</option></select>
-                <input class="perm-resource" value="*" />
+                <select class="perm-action"><option value="view" selected>View</option></select>
+                <select class="perm-resource"><option value="*" selected>All</option></select>
                 <input class="perm-providers" value="" />
                 <input class="perm-services" value="" />
                 <input class="perm-regions" value="" />
@@ -656,7 +656,7 @@ describe('groups/groupModals', () => {
       expect(api.createGroup).toHaveBeenCalledWith({
         name: 'Simple Group',
         description: 'Simple description',
-        permissions: [{ action: 'recommendation:view', resource: '*' }],
+        permissions: [{ action: 'view', resource: '*' }],
       });
     });
 
@@ -669,11 +669,11 @@ describe('groups/groupModals', () => {
             <div id="permissions-list">
               <div class="permission-item">
                 <select class="perm-action"><option value="" selected></option></select>
-                <input class="perm-resource" value="*" />
+                <select class="perm-resource"><option value="*" selected>All</option></select>
               </div>
               <div class="permission-item">
-                <select class="perm-action"><option value="purchase:execute" selected>Execute</option></select>
-                <input class="perm-resource" value="*" />
+                <select class="perm-action"><option value="execute" selected>Execute</option></select>
+                <select class="perm-resource"><option value="*" selected>All</option></select>
               </div>
             </div>
           </form>
@@ -684,31 +684,26 @@ describe('groups/groupModals', () => {
       await groupModals.saveGroup(event);
 
       expect(api.createGroup).toHaveBeenCalledWith(expect.objectContaining({
-        permissions: [{ action: 'purchase:execute', resource: '*' }],
+        permissions: [{ action: 'execute', resource: '*' }],
       }));
     });
 
-    it('should skip permissions without resource', async () => {
-      document.body.innerHTML = `
-        <div id="group-modal">
-          <form id="group-form">
-            <input id="group-name" value="Test Group" />
-            <textarea id="group-description"></textarea>
-            <div id="permissions-list">
-              <div class="permission-item">
-                <select class="perm-action"><option value="purchase:execute" selected>Execute</option></select>
-                <input class="perm-resource" value="" />
-              </div>
-            </div>
-          </form>
-        </div>
-      `;
+    it('includes permissions with default resource value', async () => {
+      // With a select dropdown, resource always has a value (defaults to *)
+      // so permissions are never skipped due to missing resource
+      document.body.innerHTML = '<div id="group-modal"><form id="group-form">'
+        + '<input id="group-name" value="Test Group" />'
+        + '<textarea id="group-description"></textarea>'
+        + '<div id="permissions-list"><div class="permission-item">'
+        + '<select class="perm-action"><option value="execute" selected>Execute</option></select>'
+        + '<select class="perm-resource"><option value="*" selected>All</option></select>'
+        + '</div></div></form></div>';
 
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveGroup(event);
 
       expect(api.createGroup).toHaveBeenCalledWith(expect.objectContaining({
-        permissions: [],
+        permissions: [expect.objectContaining({ action: 'execute', resource: '*' })],
       }));
     });
 
@@ -757,8 +752,8 @@ describe('groups/groupModals', () => {
       permissionsList!.innerHTML = '';
 
       const permission: api.Permission = {
-        action: 'purchase:approve',
-        resource: 'aws/ec2/*',
+        action: 'approve',
+        resource: 'purchases',
         constraints: {
           providers: ['aws'],
           services: ['ec2', 'rds'],
@@ -770,14 +765,14 @@ describe('groups/groupModals', () => {
       groupModals.addPermission(permission);
 
       const actionSelect = permissionsList?.querySelector('.perm-action') as HTMLSelectElement;
-      const resourceInput = permissionsList?.querySelector('.perm-resource') as HTMLInputElement;
+      const resourceSelect = permissionsList?.querySelector('.perm-resource') as HTMLSelectElement;
       const providersInput = permissionsList?.querySelector('.perm-providers') as HTMLInputElement;
       const servicesInput = permissionsList?.querySelector('.perm-services') as HTMLInputElement;
       const regionsInput = permissionsList?.querySelector('.perm-regions') as HTMLInputElement;
       const maxAmountInput = permissionsList?.querySelector('.perm-max-amount') as HTMLInputElement;
 
-      expect(actionSelect.value).toBe('purchase:approve');
-      expect(resourceInput.value).toBe('aws/ec2/*');
+      expect(actionSelect.value).toBe('approve');
+      expect(resourceSelect.value).toBe('purchases');
       expect(providersInput.value).toBe('aws');
       expect(servicesInput.value).toBe('ec2, rds');
       expect(regionsInput.value).toBe('us-east-1');
@@ -812,13 +807,13 @@ describe('groups/groupModals', () => {
       const actionSelect = permissionsList?.querySelector('.perm-action') as HTMLSelectElement;
       const options = Array.from(actionSelect.options).map(opt => opt.value);
 
-      expect(options).toContain('purchase:execute');
-      expect(options).toContain('purchase:approve');
-      expect(options).toContain('plan:create');
-      expect(options).toContain('plan:update');
-      expect(options).toContain('plan:delete');
-      expect(options).toContain('recommendation:view');
-      expect(options).toContain('config:update');
+      expect(options).toContain('execute');
+      expect(options).toContain('approve');
+      expect(options).toContain('create');
+      expect(options).toContain('update');
+      expect(options).toContain('delete');
+      expect(options).toContain('view');
+      expect(options).toContain('update');
     });
 
     it('should handle permission without constraints', () => {
@@ -826,7 +821,7 @@ describe('groups/groupModals', () => {
       permissionsList!.innerHTML = '';
 
       const permission: api.Permission = {
-        action: 'recommendation:view',
+        action: 'view',
         resource: '*',
       };
 

@@ -124,17 +124,27 @@ export function addPermission(permission?: Permission): void {
       <label>Action:
         <select class="perm-action" required>
           <option value="">Select Action</option>
-          <option value="purchase:execute" ${permission?.action === 'purchase:execute' ? 'selected' : ''}>Execute Purchase</option>
-          <option value="purchase:approve" ${permission?.action === 'purchase:approve' ? 'selected' : ''}>Approve Purchase</option>
-          <option value="plan:create" ${permission?.action === 'plan:create' ? 'selected' : ''}>Create Plan</option>
-          <option value="plan:update" ${permission?.action === 'plan:update' ? 'selected' : ''}>Update Plan</option>
-          <option value="plan:delete" ${permission?.action === 'plan:delete' ? 'selected' : ''}>Delete Plan</option>
-          <option value="recommendation:view" ${permission?.action === 'recommendation:view' ? 'selected' : ''}>View Recommendations</option>
-          <option value="config:update" ${permission?.action === 'config:update' ? 'selected' : ''}>Update Config</option>
+          <option value="view" ${permission?.action === 'view' ? 'selected' : ''}>View</option>
+          <option value="create" ${permission?.action === 'create' ? 'selected' : ''}>Create</option>
+          <option value="update" ${permission?.action === 'update' ? 'selected' : ''}>Update</option>
+          <option value="delete" ${permission?.action === 'delete' ? 'selected' : ''}>Delete</option>
+          <option value="execute" ${permission?.action === 'execute' ? 'selected' : ''}>Execute</option>
+          <option value="approve" ${permission?.action === 'approve' ? 'selected' : ''}>Approve</option>
+          <option value="admin" ${permission?.action === 'admin' ? 'selected' : ''}>Admin (full)</option>
         </select>
       </label>
       <label>Resource:
-        <input type="text" class="perm-resource" value="${escapeHtml(permission?.resource || '*')}" required placeholder="*">
+        <select class="perm-resource" required>
+          <option value="*" ${(!permission?.resource || permission?.resource === '*') ? 'selected' : ''}>All (*)</option>
+          <option value="recommendations" ${permission?.resource === 'recommendations' ? 'selected' : ''}>Recommendations</option>
+          <option value="plans" ${permission?.resource === 'plans' ? 'selected' : ''}>Plans</option>
+          <option value="purchases" ${permission?.resource === 'purchases' ? 'selected' : ''}>Purchases</option>
+          <option value="accounts" ${permission?.resource === 'accounts' ? 'selected' : ''}>Accounts</option>
+          <option value="config" ${permission?.resource === 'config' ? 'selected' : ''}>Config</option>
+          <option value="users" ${permission?.resource === 'users' ? 'selected' : ''}>Users</option>
+          <option value="groups" ${permission?.resource === 'groups' ? 'selected' : ''}>Groups</option>
+          <option value="api-keys" ${permission?.resource === 'api-keys' ? 'selected' : ''}>API Keys</option>
+        </select>
       </label>
       <button type="button" class="btn-small btn-danger remove-permission-btn">Remove</button>
     </div>
@@ -198,7 +208,7 @@ function collectPermissions(): Permission[] {
 
   items.forEach(item => {
     const action = (item.querySelector('.perm-action') as HTMLSelectElement)?.value;
-    const resource = (item.querySelector('.perm-resource') as HTMLInputElement)?.value;
+    const resource = (item.querySelector('.perm-resource') as HTMLSelectElement)?.value;
 
     if (!action || !resource) return;
 
