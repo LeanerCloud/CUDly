@@ -2,10 +2,15 @@ locals {
   do_register      = var.cudly_api_url != "" && var.contact_email != ""
   reg_account_name = var.account_name != "" ? var.account_name : "GCP ${local.project}"
 
+  # WIF audience string — used in the credential config JSON AND in the
+  # registration payload (gcp_wif_audience) so the backend's secret-free
+  # auto-enable path works without needing the stored credential JSON.
+  wif_audience = "//iam.googleapis.com/${google_iam_workload_identity_pool.cudly.name}/providers/${google_iam_workload_identity_pool_provider.cudly.workload_identity_pool_provider_id}"
+
   # Construct the GCP WIF credential config JSON (replaces manual gcloud command).
   gcp_wif_config = var.provider_type == "aws" ? jsonencode({
     type                              = "external_account"
-    audience                          = "//iam.googleapis.com/${google_iam_workload_identity_pool.cudly.name}/providers/${google_iam_workload_identity_pool_provider.cudly.workload_identity_pool_provider_id}"
+    audience                          = local.wif_audience
     subject_token_type                = "urn:ietf:params:aws:token-type:aws4_request"
     service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${var.service_account_email}:generateAccessToken"
     token_url                         = "https://sts.googleapis.com/v1/token"
@@ -17,7 +22,7 @@ locals {
     }
     }) : jsonencode({
     type                              = "external_account"
-    audience                          = "//iam.googleapis.com/${google_iam_workload_identity_pool.cudly.name}/providers/${google_iam_workload_identity_pool_provider.cudly.workload_identity_pool_provider_id}"
+    audience                          = local.wif_audience
     subject_token_type                = "urn:ietf:params:oauth:token-type:id_token"
     service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${var.service_account_email}:generateAccessToken"
     token_url                         = "https://sts.googleapis.com/v1/token"
@@ -35,6 +40,7 @@ locals {
     gcp_project_id     = local.project
     gcp_client_email   = var.service_account_email
     gcp_auth_mode      = "workload_identity_federation"
+    gcp_wif_audience   = local.wif_audience
     credential_type    = "gcp_workload_identity_config"
     credential_payload = local.gcp_wif_config
   }) : ""
