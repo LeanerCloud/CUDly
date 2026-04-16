@@ -56,7 +56,13 @@ gcloud iam workload-identity-pools providers create-oidc "${PROVIDER_ID}" \
   --project="${PROJECT_ID}" \
   || echo "  (provider may already exist)"
 
-POOL_NAME=$(gcloud iam workload-identity-pools describe "${POOL_ID}" --location=global --project="${PROJECT_ID}" --format="value(name)")
+# WIF pool creation is eventually consistent — retry describe briefly
+for _attempt in 1 2 3 4 5; do
+  POOL_NAME=$(gcloud iam workload-identity-pools describe "${POOL_ID}" --location=global --project="${PROJECT_ID}" --format="value(name)" 2>/dev/null) && break
+  echo "  Waiting for WIF pool to propagate (attempt ${_attempt})..."
+  sleep 5
+done
+: "${POOL_NAME:?WIF pool describe failed after retries}"
 
 # POOL_NAME is "projects/<number>/locations/global/workloadIdentityPools/<pool>"
 # The full WIF audience CUDly uses as the STS audience is the
