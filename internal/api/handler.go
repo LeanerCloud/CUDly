@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 // Handler processes HTTP requests
@@ -42,6 +43,9 @@ type Handler struct {
 	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
 	awsCfg     aws.Config // cached base AWS config (no region override)
 	awsCfgErr  error      // error from loading the base config, if any
+
+	sourceAccountOnce sync.Once // guards one-time STS GetCallerIdentity
+	sourceAccountID   string    // cached AWS account ID where CUDly runs
 }
 
 // NewHandler creates a new API handler
@@ -361,4 +365,27 @@ func (h *Handler) loadAPIKey(ctx context.Context) (string, error) {
 	}
 
 	return *result.SecretString, nil
+}
+
+// resolveSourceAccountID returns the AWS account ID where CUDly runs,
+// resolved via STS GetCallerIdentity and cached for the process lifetime.
+func (h *Handler) resolveSourceAccountID(ctx context.Context) string {
+	h.sourceAccountOnce.Do(func() {
+		h.awsCfgOnce.Do(func() {
+			h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
+		})
+		if h.awsCfgErr != nil {
+			return
+		}
+		client := sts.NewFromConfig(h.awsCfg)
+		identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+		if err != nil {
+			logging.Warnf("Failed to resolve source account ID via STS: %v", err)
+			return
+		}
+		if identity.Account != nil {
+			h.sourceAccountID = *identity.Account
+		}
+	})
+	return h.sourceAccountID
 }

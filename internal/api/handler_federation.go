@@ -12,6 +12,8 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/google/uuid"
+
 	cudlyiac "github.com/LeanerCloud/CUDly/iac"
 	"github.com/LeanerCloud/CUDly/internal/iacfiles"
 	"github.com/aws/aws-lambda-go/events"
@@ -23,6 +25,7 @@ type federationIaCData struct {
 	AccountExternalID string
 	AccountSlug       string
 	Source            string
+	SourceAccountID   string // AWS account ID where CUDly runs (resolved via STS)
 	// AWS WIF / cross-account
 	OIDCIssuerURL  string
 	OIDCIssuerHost string // issuer URL without https:// prefix (used as IAM condition key)
@@ -112,7 +115,7 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 //   - format="bicep"    → zip with Bicep template + params + deploy script (azure target only)
 //   - format="arm"      → zip with ARM JSON template + params + deploy script (azure target only)
 //   - format="bundle"   → zip with Terraform module + pre-filled tfvars (and CFN fallback on aws)
-func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
+func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
 	target, source, format, err := federationIaCParams(req.QueryStringParameters)
 	if err != nil {
 		return nil, err
@@ -127,6 +130,9 @@ func (h *Handler) getFederationIaC(_ context.Context, req *events.LambdaFunction
 		}
 	}
 	data := buildGenericIaCData(target, source, apiURL)
+	if sourceCloud() == "aws" {
+		data.SourceAccountID = h.resolveSourceAccountID(ctx)
+	}
 
 	if formatNeedsZip(format) {
 		return h.buildZipResponse(data, target, source, format, slug)
@@ -164,6 +170,7 @@ func shellEscapeData(data federationIaCData) federationIaCData {
 	d.ServiceAccountEmail = shellEscape(data.ServiceAccountEmail)
 	d.OIDCIssuerURI = shellEscape(data.OIDCIssuerURI)
 	d.CUDlyAPIURL = shellEscape(data.CUDlyAPIURL)
+	d.SourceAccountID = shellEscape(data.SourceAccountID)
 	return d
 }
 
@@ -569,7 +576,7 @@ func buildBundleReadme(data federationIaCData, target, source string) string {
 		sb.WriteString("Deploy (Terraform):\n")
 		sb.WriteString(fmt.Sprintf("  cd terraform && terraform init && terraform apply -var-file=%s-aws-cross-account.tfvars\n\n", data.AccountSlug))
 		sb.WriteString("Deploy (CloudFormation):\n")
-		sb.WriteString("  cd cloudformation && SOURCE_ACCOUNT_ID=<id> EXTERNAL_ID=<uuid> bash deploy-cfn.sh --region <region>\n\n")
+		sb.WriteString("  cd cloudformation && bash deploy-cfn.sh --region <region>\n\n")
 		sb.WriteString("After apply, set aws_auth_mode=role_arn and aws_role_arn in CUDly.\n")
 	case target == "aws":
 		sb.WriteString("Contents:\n  terraform/           - IAM OIDC provider + role Terraform module\n")
@@ -624,8 +631,8 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 	var params []cfParam
 	if source == "aws" {
 		params = []cfParam{
-			{ParameterKey: "SourceAccountID", ParameterValue: "<SOURCE_ACCOUNT_ID>"},
-			{ParameterKey: "ExternalID", ParameterValue: "<GENERATE_A_UUID>"},
+			{ParameterKey: "SourceAccountID", ParameterValue: data.SourceAccountID},
+			{ParameterKey: "ExternalID", ParameterValue: uuid.New().String()},
 			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
 		}
 	} else {

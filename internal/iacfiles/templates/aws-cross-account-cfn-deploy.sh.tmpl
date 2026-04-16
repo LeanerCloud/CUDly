@@ -3,14 +3,13 @@
 # Target: {{.AccountName}} ({{.AccountExternalID}})
 #
 # Usage:
-#   SOURCE_ACCOUNT_ID=123456789012 EXTERNAL_ID=<uuid> \
-#     bash deploy-cfn.sh [--region <region>] [--profile <aws-profile>]
+#   bash deploy-cfn.sh [--region <region>] [--profile <aws-profile>]
 #
 # Requirements: AWS CLI v2, credentials for the target account.
 set -euo pipefail
 
-: "${SOURCE_ACCOUNT_ID:?set SOURCE_ACCOUNT_ID to the AWS account where CUDly runs}"
-: "${EXTERNAL_ID:?set EXTERNAL_ID to a random UUID for confused-deputy protection}"
+SOURCE_ACCOUNT_ID="${SOURCE_ACCOUNT_ID:-{{.SourceAccountID}}}"
+EXTERNAL_ID="${EXTERNAL_ID:-$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')}"
 
 : "${STACK_NAME:=CUDly-{{.AccountSlug}}-CrossAccount}"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"

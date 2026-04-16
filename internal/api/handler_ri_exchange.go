@@ -44,7 +44,7 @@ func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (a
 
 // listConvertibleRIs returns all active convertible Reserved Instances.
 func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -65,7 +65,7 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 
 // getRIUtilization returns per-RI utilization from Cost Explorer.
 func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -143,7 +143,7 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 // getReshapeRecommendations orchestrates fetching convertible RIs + utilization
 // and returns reshape recommendations.
 func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -183,7 +183,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 
 // getExchangeQuote gets a quote for an RI exchange.
 func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -219,7 +219,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 
 // executeExchange executes an RI exchange with a spend-cap guardrail.
 func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "execute", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -307,7 +307,7 @@ type ExchangeExecuteResponse struct {
 
 // getRIExchangeConfig returns the current RI exchange automation settings.
 func (h *Handler) getRIExchangeConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "config"); err != nil {
 		return nil, err
 	}
 
@@ -328,7 +328,7 @@ func (h *Handler) getRIExchangeConfig(ctx context.Context, req *events.LambdaFun
 
 // updateRIExchangeConfig updates the RI exchange automation settings.
 func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
 		return nil, err
 	}
 
@@ -362,7 +362,7 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 
 // getRIExchangeHistory returns RI exchange records from the last 12 months.
 func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
 	}
 

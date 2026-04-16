@@ -14,8 +14,8 @@ import (
 
 // Plans handlers
 func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PlansResponse, error) {
-	// Require admin access for viewing plans
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require view:plans permission
+	if _, err := h.requirePermission(ctx, req, "view", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -52,8 +52,8 @@ func calculateNextExecutionDate(plan *config.PurchasePlan, now time.Time) *time.
 }
 
 func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (any, error) {
-	// Require admin access for creating plans
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	// Require create:plans permission
+	if _, err := h.requirePermission(ctx, httpReq, "create", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -82,8 +82,8 @@ func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequ
 		return nil, err
 	}
 
-	// Require admin access for viewing plan details
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require view:plans permission
+	if _, err := h.requirePermission(ctx, req, "view", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -106,8 +106,8 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
-	// Require admin access for updating plans
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	// Require update:plans permission
+	if _, err := h.requirePermission(ctx, httpReq, "update", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -153,8 +153,8 @@ func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	// Require admin access for deleting plans
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require delete:plans permission
+	if _, err := h.requirePermission(ctx, req, "delete", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -170,7 +170,7 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	if _, err := h.requirePermission(ctx, httpReq, "create", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -308,7 +308,7 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	if _, err := h.requirePermission(ctx, httpReq, "update", "plans"); err != nil {
 		return nil, err
 	}
 

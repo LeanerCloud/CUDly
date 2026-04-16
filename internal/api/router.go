@@ -295,7 +295,7 @@ func (r *Router) saveGCPCredentialsHandler(ctx context.Context, req *events.Lamb
 }
 
 func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getRecommendations(ctx, req.QueryStringParameters)
+	return r.h.getRecommendations(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

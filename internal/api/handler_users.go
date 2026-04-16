@@ -13,7 +13,7 @@ import (
 
 // listUsers handles GET /api/users
 func (h *Handler) listUsers(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "users"); err != nil {
 		return nil, err
 	}
 
@@ -27,7 +27,7 @@ func (h *Handler) listUsers(ctx context.Context, req *events.LambdaFunctionURLRe
 
 // createUser handles POST /api/users
 func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	session, err := h.requireAdmin(ctx, req)
+	session, err := h.requirePermission(ctx, req, "create", "users")
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (h *Handler) getUser(ctx context.Context, req *events.LambdaFunctionURLRequ
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "users"); err != nil {
 		return nil, err
 	}
 
@@ -96,7 +96,7 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "update", "users"); err != nil {
 		return nil, err
 	}
 
@@ -120,7 +120,7 @@ func (h *Handler) deleteUser(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	session, err := h.requireAdmin(ctx, req)
+	session, err := h.requirePermission(ctx, req, "delete", "users")
 	if err != nil {
 		return nil, err
 	}

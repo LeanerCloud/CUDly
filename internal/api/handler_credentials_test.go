@@ -65,10 +65,11 @@ func TestHandler_saveAzureCredentials(t *testing.T) {
 		assert.Contains(t, err.Error(), "authentication service not configured")
 	})
 
-	t.Run("not admin", func(t *testing.T) {
+	t.Run("no permission", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		userSession := &Session{UserID: "user-id", Email: "user@example.com", Role: "user"}
 		mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+		mockAuth.On("HasPermissionAPI", ctx, "user-id", "update", "config").Return(false, nil)
 
 		handler := &Handler{
 			auth:          mockAuth,
@@ -85,7 +86,7 @@ func TestHandler_saveAzureCredentials(t *testing.T) {
 		_, err := handler.saveAzureCredentials(ctx, req)
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "admin access required")
+		assert.Contains(t, err.Error(), "permission denied")
 	})
 
 	t.Run("no Azure credentials ARN configured", func(t *testing.T) {
@@ -192,10 +193,11 @@ func TestHandler_saveGCPCredentials(t *testing.T) {
 		assert.Contains(t, err.Error(), "authentication service not configured")
 	})
 
-	t.Run("not admin", func(t *testing.T) {
+	t.Run("no permission", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		userSession := &Session{UserID: "user-id", Email: "user@example.com", Role: "user"}
 		mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+		mockAuth.On("HasPermissionAPI", ctx, "user-id", "update", "config").Return(false, nil)
 
 		handler := &Handler{
 			auth:        mockAuth,
@@ -212,7 +214,7 @@ func TestHandler_saveGCPCredentials(t *testing.T) {
 		_, err := handler.saveGCPCredentials(ctx, req)
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "admin access required")
+		assert.Contains(t, err.Error(), "permission denied")
 	})
 
 	t.Run("no GCP credentials ARN configured", func(t *testing.T) {

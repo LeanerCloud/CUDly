@@ -46,8 +46,8 @@ func (h *Handler) getConfig(ctx context.Context) (*ConfigResponse, error) {
 }
 
 func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*StatusResponse, error) {
-	// Require admin access for updating configuration
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require update:config permission
+	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
 		return nil, err
 	}
 
@@ -140,8 +140,8 @@ func (h *Handler) getServiceConfig(ctx context.Context, service string) (any, er
 }
 
 func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFunctionURLRequest, service string) (*StatusResponse, error) {
-	// Require admin access for updating service configuration
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require update:config permission
+	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
 		return nil, err
 	}
 

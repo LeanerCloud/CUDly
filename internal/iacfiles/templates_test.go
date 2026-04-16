@@ -24,6 +24,7 @@ type testTemplateData struct {
 	ServiceAccountEmail string
 	OIDCIssuerURI       string
 	CUDlyAPIURL         string
+	SourceAccountID     string
 }
 
 func renderCLITemplate(t *testing.T, path string, data testTemplateData) string {
@@ -47,9 +48,10 @@ func renderCLITemplate(t *testing.T, path string, data testTemplateData) string 
 // (account-specific fields empty, CUDlyAPIURL set so the auto-register block renders).
 func baseData() testTemplateData {
 	return testTemplateData{
-		AccountSlug: "target",
-		Source:      "aws",
-		CUDlyAPIURL: "https://cudly.example.com",
+		AccountSlug:     "target",
+		Source:          "aws",
+		CUDlyAPIURL:     "https://cudly.example.com",
+		SourceAccountID: "123456789012",
 	}
 }
 

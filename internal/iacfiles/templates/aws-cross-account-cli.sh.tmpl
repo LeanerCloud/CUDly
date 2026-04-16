@@ -4,14 +4,14 @@
 # Source cloud       : AWS (cross-account role assumption)
 #
 # Usage:
-#   SOURCE_ACCOUNT_ID=123456789012 EXTERNAL_ID=<uuid> bash {{.AccountSlug}}-aws-cross-account-cli.sh
+#   bash {{.AccountSlug}}-aws-cross-account-cli.sh
 #
 # Requirements: aws-cli v2, credentials for target account {{.AccountExternalID}}.
 set -euo pipefail
 
 ROLE_NAME="${ROLE_NAME:-CUDly-{{.AccountSlug}}}"
-: "${SOURCE_ACCOUNT_ID:?set SOURCE_ACCOUNT_ID to the AWS account ID where CUDly runs}"
-: "${EXTERNAL_ID:?set EXTERNAL_ID to a random UUID for confused-deputy protection}"
+SOURCE_ACCOUNT_ID="${SOURCE_ACCOUNT_ID:-{{.SourceAccountID}}}"
+EXTERNAL_ID="${EXTERNAL_ID:-$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')}"
 PROFILE_ARG=""
 if [[ -n "${AWS_PROFILE:-}" ]]; then PROFILE_ARG="--profile ${AWS_PROFILE}"; fi
 

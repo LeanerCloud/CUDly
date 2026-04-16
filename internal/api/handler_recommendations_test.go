@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,11 @@ func TestHandler_getRecommendations(t *testing.T) {
 
 	handler := &Handler{
 		scheduler: mockScheduler,
+		apiKey:    "test-key",
+	}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"x-api-key": "test-key"},
 	}
 
 	params := map[string]string{
@@ -26,7 +32,7 @@ func TestHandler_getRecommendations(t *testing.T) {
 		"service":  "rds",
 	}
 
-	result, err := handler.getRecommendations(ctx, params)
+	result, err := handler.getRecommendations(ctx, req, params)
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.Summary.TotalCount)

@@ -82,7 +82,8 @@ var validCredentialTypes = map[string]bool{
 
 // listAccounts handles GET /api/accounts.
 func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "accounts")
+	if err != nil {
 		return nil, err
 	}
 
@@ -95,6 +96,25 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 
 	if accounts == nil {
 		accounts = []config.CloudAccount{}
+	}
+
+	// Filter by allowed accounts if the user has restricted access
+	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if len(allowedAccounts) > 0 {
+		allowed := make(map[string]struct{}, len(allowedAccounts))
+		for _, id := range allowedAccounts {
+			allowed[id] = struct{}{}
+		}
+		filtered := accounts[:0]
+		for _, acct := range accounts {
+			if _, ok := allowed[acct.ID]; ok {
+				filtered = append(filtered, acct)
+			}
+		}
+		accounts = filtered
 	}
 
 	return accounts, nil
@@ -128,7 +148,7 @@ func buildAccountFilter(params map[string]string) config.CloudAccountFilter {
 
 // createAccount handles POST /api/accounts.
 func (h *Handler) createAccount(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	if _, err := h.requirePermission(ctx, httpReq, "create", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -244,7 +264,7 @@ func (h *Handler) getAccount(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -266,7 +286,7 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	if _, err := h.requirePermission(ctx, httpReq, "update", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -307,7 +327,7 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "delete", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -333,7 +353,7 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	if _, err := h.requirePermission(ctx, httpReq, "update", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -411,7 +431,7 @@ func (h *Handler) testAccountCredentials(ctx context.Context, req *events.Lambda
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
 		return nil, err
 	}
 	acct, err := h.config.GetCloudAccount(ctx, id)
@@ -667,7 +687,7 @@ func (h *Handler) listAccountServiceOverrides(ctx context.Context, req *events.L
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -691,7 +711,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, NewClientError(400, err.Error())
 	}
 
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	if _, err := h.requirePermission(ctx, httpReq, "update", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -789,7 +809,7 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 		return nil, NewClientError(400, err.Error())
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "delete", "accounts"); err != nil {
 		return nil, err
 	}
 
@@ -806,7 +826,7 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, httpReq); err != nil {
+	if _, err := h.requirePermission(ctx, httpReq, "update", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -836,7 +856,7 @@ func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "plans"); err != nil {
 		return nil, err
 	}
 
@@ -854,7 +874,7 @@ func (h *Handler) listPlanAccounts(ctx context.Context, req *events.LambdaFuncti
 
 // discoverOrgAccounts handles POST /api/accounts/discover-org.
 func (h *Handler) discoverOrgAccounts(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "create", "accounts"); err != nil {
 		return nil, err
 	}
 

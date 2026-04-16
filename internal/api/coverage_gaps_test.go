@@ -592,8 +592,9 @@ func TestHandler_checkCredentialPresence_FallbackToConfigStore(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandler_getRecommendations_InvalidProvider(t *testing.T) {
-	h := &Handler{}
-	_, err := h.getRecommendations(context.Background(), map[string]string{
+	h := &Handler{apiKey: "test-key"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+	_, err := h.getRecommendations(context.Background(), req, map[string]string{
 		"provider": "unknown-cloud",
 	})
 	require.Error(t, err)
@@ -601,8 +602,9 @@ func TestHandler_getRecommendations_InvalidProvider(t *testing.T) {
 }
 
 func TestHandler_getRecommendations_InvalidService(t *testing.T) {
-	h := &Handler{}
-	_, err := h.getRecommendations(context.Background(), map[string]string{
+	h := &Handler{apiKey: "test-key"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+	_, err := h.getRecommendations(context.Background(), req, map[string]string{
 		"provider": "aws",
 		"service":  "UPPERCASE",
 	})
@@ -611,8 +613,9 @@ func TestHandler_getRecommendations_InvalidService(t *testing.T) {
 }
 
 func TestHandler_getRecommendations_InvalidRegion(t *testing.T) {
-	h := &Handler{}
-	_, err := h.getRecommendations(context.Background(), map[string]string{
+	h := &Handler{apiKey: "test-key"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+	_, err := h.getRecommendations(context.Background(), req, map[string]string{
 		"provider": "aws",
 		"service":  "rds",
 		"region":   "INVALID_REGION!",
@@ -621,8 +624,9 @@ func TestHandler_getRecommendations_InvalidRegion(t *testing.T) {
 }
 
 func TestHandler_getRecommendations_InvalidAccountIDs(t *testing.T) {
-	h := &Handler{}
-	_, err := h.getRecommendations(context.Background(), map[string]string{
+	h := &Handler{apiKey: "test-key"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+	_, err := h.getRecommendations(context.Background(), req, map[string]string{
 		"provider":    "aws",
 		"account_ids": "not-a-uuid",
 	})
@@ -635,8 +639,9 @@ func TestHandler_getRecommendations_SchedulerError(t *testing.T) {
 	mockScheduler.On("GetRecommendations", ctx, mock.Anything).
 		Return(nil, errors.New("scheduler down"))
 
-	h := &Handler{scheduler: mockScheduler}
-	_, err := h.getRecommendations(ctx, map[string]string{"provider": "aws"})
+	h := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+	_, err := h.getRecommendations(ctx, req, map[string]string{"provider": "aws"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get recommendations")
 }
@@ -650,8 +655,9 @@ func TestHandler_getRecommendations_WithResults(t *testing.T) {
 	}
 	mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(recs, nil)
 
-	h := &Handler{scheduler: mockScheduler}
-	result, err := h.getRecommendations(ctx, map[string]string{"provider": "aws"})
+	h := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+	result, err := h.getRecommendations(ctx, req, map[string]string{"provider": "aws"})
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, result.Summary.TotalCount)
@@ -670,8 +676,9 @@ func TestHandler_getRecommendations_ZeroSavings(t *testing.T) {
 	}
 	mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(recs, nil)
 
-	h := &Handler{scheduler: mockScheduler}
-	result, err := h.getRecommendations(ctx, map[string]string{})
+	h := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+	result, err := h.getRecommendations(ctx, req, map[string]string{})
 	require.NoError(t, err)
 	// With zero savings, AvgPayback should be 0 (no division by zero)
 	assert.Equal(t, float64(0), result.Summary.AvgPaybackMonths)

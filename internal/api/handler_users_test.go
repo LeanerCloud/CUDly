@@ -45,7 +45,7 @@ func TestHandler_listUsers_Success(t *testing.T) {
 	assert.NotNil(t, resp["users"])
 }
 
-func TestHandler_listUsers_NotAdmin(t *testing.T) {
+func TestHandler_listUsers_NoPermission(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
@@ -56,6 +56,7 @@ func TestHandler_listUsers_NotAdmin(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "11111111-1111-1111-1111-111111111111", "view", "users").Return(false, nil)
 
 	handler := &Handler{auth: mockAuth}
 
@@ -68,7 +69,7 @@ func TestHandler_listUsers_NotAdmin(t *testing.T) {
 	result, err := handler.listUsers(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "admin access required")
+	assert.Contains(t, err.Error(), "permission denied")
 }
 
 func TestHandler_createUser_Success(t *testing.T) {

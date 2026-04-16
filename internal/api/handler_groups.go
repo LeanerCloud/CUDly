@@ -13,7 +13,7 @@ import (
 
 // listGroups handles GET /api/groups
 func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "groups"); err != nil {
 		return nil, err
 	}
 
@@ -27,7 +27,7 @@ func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLR
 
 // createGroup handles POST /api/groups
 func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	session, err := h.requireAdmin(ctx, req)
+	session, err := h.requirePermission(ctx, req, "create", "groups")
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (h *Handler) getGroup(ctx context.Context, req *events.LambdaFunctionURLReq
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "groups"); err != nil {
 		return nil, err
 	}
 
@@ -81,7 +81,7 @@ func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURL
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "update", "groups"); err != nil {
 		return nil, err
 	}
 
@@ -105,7 +105,7 @@ func (h *Handler) deleteGroup(ctx context.Context, req *events.LambdaFunctionURL
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "delete", "groups"); err != nil {
 		return nil, err
 	}
 

@@ -14,7 +14,7 @@ project               = "{{.ProjectID}}"
 service_account_email = "{{.ServiceAccountEmail}}"
 {{- if eq .Source "aws"}}
 provider_type  = "aws"
-aws_account_id = "<SOURCE_AWS_ACCOUNT_ID>"  # AWS account number where CUDly runs
+aws_account_id = "{{.SourceAccountID}}"  # AWS account number where CUDly runs
 {{- else}}
 provider_type   = "oidc"
 oidc_issuer_uri = "{{.OIDCIssuerURI}}"{{if eq .Source "azure"}}  # Azure: https://login.microsoftonline.com/<TENANT_ID>/v2.0{{end}}

@@ -15,8 +15,8 @@ import (
 )
 
 func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PlannedPurchasesResponse, error) {
-	// Require admin access for viewing planned purchases
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require view:purchases permission
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -92,8 +92,8 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	// Require admin access for pausing planned purchases
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require update:purchases permission
+	if _, err := h.requirePermission(ctx, req, "update", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -111,8 +111,8 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	// Require admin access for resuming planned purchases
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require update:purchases permission
+	if _, err := h.requirePermission(ctx, req, "update", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -130,8 +130,8 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	// Require admin access for running planned purchases
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require execute:purchases permission
+	if _, err := h.requirePermission(ctx, req, "execute", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -154,8 +154,8 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	// Require admin access for deleting planned purchases
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	// Require delete:purchases permission
+	if _, err := h.requirePermission(ctx, req, "delete", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -230,7 +230,7 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
 	}
 
@@ -282,7 +282,7 @@ func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfron
 
 // executePurchase handles direct purchase execution from recommendations
 func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requireAdmin(ctx, req); err != nil {
+	if _, err := h.requirePermission(ctx, req, "execute", "purchases"); err != nil {
 		return nil, err
 	}
 
