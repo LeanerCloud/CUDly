@@ -49,32 +49,95 @@ resource "aws_iam_role" "cudly" {
   description        = "Role assumed by CUDly via cross-account IAM role assumption"
 }
 
-resource "aws_iam_role_policy" "cudly" {
-  name = "CUDlyPermissions"
-  role = aws_iam_role.cudly.id
+# Standalone managed policy — matches the aws-target/terraform WIF module's
+# pattern (separate policy + attachment) for consistency across both AWS paths.
+resource "aws_iam_policy" "cudly" {
+  name        = "${var.role_name}-Policy"
+  description = "Permissions required by CUDly to purchase and manage AWS commitments"
+
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Resource = "*"
-      Action = [
-        "ec2:PurchaseReservedInstancesOffering", "ec2:DescribeReservedInstancesOfferings",
-        "ec2:DescribeReservedInstances", "ec2:DescribeInstanceTypeOfferings",
-        "ec2:GetReservedInstancesExchangeQuote", "ec2:AcceptReservedInstancesExchangeQuote",
-        "rds:PurchaseReservedDBInstancesOffering", "rds:DescribeReservedDBInstancesOfferings",
-        "rds:DescribeReservedDBInstances",
-        "elasticache:PurchaseReservedCacheNodesOffering",
-        "elasticache:DescribeReservedCacheNodesOfferings", "elasticache:DescribeReservedCacheNodes",
-        "redshift:PurchaseReservedNodeOffering", "redshift:DescribeReservedNodeOfferings",
-        "redshift:DescribeReservedNodes",
-        "memorydb:PurchaseReservedNodesOffering", "memorydb:DescribeReservedNodesOfferings",
-        "memorydb:DescribeReservedNodes",
-        "savingsplans:CreateSavingsPlan", "savingsplans:DescribeSavingsPlans",
-        "savingsplans:DescribeSavingsPlansOfferings", "savingsplans:DescribeSavingsPlansOfferingRates",
-        "es:PurchaseReservedInstanceOffering", "es:DescribeReservedInstanceOfferings",
-        "es:DescribeReservedInstances",
-        "ec2:DescribeRegions",
-      ]
-    }]
+    Statement = [
+      {
+        Sid    = "EC2Reservations"
+        Effect = "Allow"
+        Action = [
+          "ec2:PurchaseReservedInstancesOffering",
+          "ec2:DescribeReservedInstancesOfferings",
+          "ec2:DescribeReservedInstances",
+          "ec2:DescribeInstanceTypeOfferings",
+          "ec2:GetReservedInstancesExchangeQuote",
+          "ec2:AcceptReservedInstancesExchangeQuote",
+          "ec2:DescribeRegions",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "RDSReservations"
+        Effect = "Allow"
+        Action = [
+          "rds:PurchaseReservedDBInstancesOffering",
+          "rds:DescribeReservedDBInstancesOfferings",
+          "rds:DescribeReservedDBInstances",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "ElastiCacheReservations"
+        Effect = "Allow"
+        Action = [
+          "elasticache:PurchaseReservedCacheNodesOffering",
+          "elasticache:DescribeReservedCacheNodesOfferings",
+          "elasticache:DescribeReservedCacheNodes",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "RedshiftReservations"
+        Effect = "Allow"
+        Action = [
+          "redshift:PurchaseReservedNodeOffering",
+          "redshift:DescribeReservedNodeOfferings",
+          "redshift:DescribeReservedNodes",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "MemoryDBReservations"
+        Effect = "Allow"
+        Action = [
+          "memorydb:PurchaseReservedNodesOffering",
+          "memorydb:DescribeReservedNodesOfferings",
+          "memorydb:DescribeReservedNodes",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "SavingsPlans"
+        Effect = "Allow"
+        Action = [
+          "savingsplans:CreateSavingsPlan",
+          "savingsplans:DescribeSavingsPlans",
+          "savingsplans:DescribeSavingsPlansOfferings",
+          "savingsplans:DescribeSavingsPlansOfferingRates",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "OpenSearchReservations"
+        Effect = "Allow"
+        Action = [
+          "es:PurchaseReservedInstanceOffering",
+          "es:DescribeReservedInstanceOfferings",
+          "es:DescribeReservedInstances",
+        ]
+        Resource = "*"
+      },
+    ]
   })
+}
+
+resource "aws_iam_role_policy_attachment" "cudly" {
+  role       = aws_iam_role.cudly.name
+  policy_arn = aws_iam_policy.cudly.arn
 }
