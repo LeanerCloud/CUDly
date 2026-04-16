@@ -243,19 +243,25 @@ const (
 
 // Predefined actions
 const (
-	ActionView      = "view"
-	ActionPurchase  = "purchase"
-	ActionConfigure = "configure"
-	ActionAdmin     = "admin"
+	ActionView    = "view"
+	ActionCreate  = "create"
+	ActionUpdate  = "update"
+	ActionDelete  = "delete"
+	ActionExecute = "execute"
+	ActionApprove = "approve"
+	ActionAdmin   = "admin"
 )
 
 // Predefined resources
 const (
 	ResourceRecommendations = "recommendations"
 	ResourcePlans           = "plans"
+	ResourcePurchases       = "purchases"
 	ResourceHistory         = "history"
 	ResourceConfig          = "config"
+	ResourceAccounts        = "accounts"
 	ResourceUsers           = "users"
+	ResourceGroups          = "groups"
 	ResourceAPIKeys         = "api-keys"
 	ResourceAll             = "*"
 )
@@ -272,9 +278,10 @@ func DefaultUserPermissions() []Permission {
 	return []Permission{
 		{Action: ActionView, Resource: ResourceRecommendations},
 		{Action: ActionView, Resource: ResourcePlans},
+		{Action: ActionView, Resource: ResourcePurchases},
 		{Action: ActionView, Resource: ResourceHistory},
-		{Action: ActionPurchase, Resource: ResourcePlans},
-		{Action: ActionConfigure, Resource: ResourcePlans},
+		{Action: ActionCreate, Resource: ResourcePlans},
+		{Action: ActionUpdate, Resource: ResourcePlans},
 	}
 }
 

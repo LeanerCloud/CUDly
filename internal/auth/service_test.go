@@ -661,7 +661,7 @@ func TestService_ErrorPaths(t *testing.T) {
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
 		// Should still return user permissions even if group fetch fails
-		assert.Len(t, permissions, 5)
+		assert.Len(t, permissions, 6)
 
 		mockStore.AssertExpectations(t)
 	})

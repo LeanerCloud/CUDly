@@ -24,7 +24,7 @@ func TestService_HasPermission(t *testing.T) {
 
 		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
 
-		has, err := service.HasPermission(ctx, "admin-123", ActionPurchase, "aws/ec2", nil)
+		has, err := service.HasPermission(ctx, "admin-123", ActionExecute, "aws/ec2", nil)
 		require.NoError(t, err)
 		assert.True(t, has)
 
@@ -47,7 +47,7 @@ func TestService_HasPermission(t *testing.T) {
 			Name: "AWS Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						Providers:  []string{"aws"},
@@ -64,7 +64,7 @@ func TestService_HasPermission(t *testing.T) {
 			Providers:  []string{"aws"},
 			AccountIDs: []string{"123456789012"},
 		}
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", constraints)
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", constraints)
 		require.NoError(t, err)
 		assert.True(t, has)
 
@@ -83,7 +83,7 @@ func TestService_HasPermission(t *testing.T) {
 
 		mockStore.On("GetUserByID", ctx, "readonly-123").Return(readonlyUser, nil).Once()
 
-		has, err := service.HasPermission(ctx, "readonly-123", ActionPurchase, "aws/ec2", nil)
+		has, err := service.HasPermission(ctx, "readonly-123", ActionExecute, "aws/ec2", nil)
 		require.NoError(t, err)
 		assert.False(t, has)
 
@@ -255,7 +255,7 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		assert.Len(t, permissions, 5) // 5 default user permissions
+		assert.Len(t, permissions, 6) // 5 default user permissions
 
 		mockStore.AssertExpectations(t)
 	})
@@ -294,7 +294,7 @@ func TestService_GetUserPermissions(t *testing.T) {
 			ID:   "group-1",
 			Name: "AWS Team",
 			Permissions: []Permission{
-				{Action: ActionPurchase, Resource: ResourcePlans},
+				{Action: ActionExecute, Resource: ResourcePlans},
 			},
 		}
 
@@ -302,7 +302,7 @@ func TestService_GetUserPermissions(t *testing.T) {
 			ID:   "group-2",
 			Name: "Config Team",
 			Permissions: []Permission{
-				{Action: ActionConfigure, Resource: ResourceConfig},
+				{Action: ActionUpdate, Resource: ResourceConfig},
 			},
 		}
 
@@ -312,8 +312,8 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 5 user + 1 from group1 + 1 from group2 = 7
-		assert.Len(t, permissions, 7)
+		// 6 user + 1 from group1 + 1 from group2 = 8
+		assert.Len(t, permissions, 8)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -350,7 +350,7 @@ func TestService_GetUserPermissions(t *testing.T) {
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
 		// Should have only user permissions, missing group is skipped
-		assert.Len(t, permissions, 5)
+		assert.Len(t, permissions, 6)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -409,7 +409,7 @@ func TestService_BuildAuthContext(t *testing.T) {
 			Name:            "AWS Account 2",
 			AllowedAccounts: []string{"222222222222", "333333333333"},
 			Permissions: []Permission{
-				{Action: ActionPurchase, Resource: ResourcePlans},
+				{Action: ActionExecute, Resource: ResourcePlans},
 			},
 		}
 
@@ -427,8 +427,8 @@ func TestService_BuildAuthContext(t *testing.T) {
 		assert.Contains(t, authCtx.AllowedAccounts, "111111111111")
 		assert.Contains(t, authCtx.AllowedAccounts, "222222222222")
 		assert.Contains(t, authCtx.AllowedAccounts, "333333333333")
-		// 5 user perms + 1 from group1 + 1 from group2
-		assert.Len(t, authCtx.Permissions, 7)
+		// 6 user perms + 1 from group1 + 1 from group2
+		assert.Len(t, authCtx.Permissions, 8)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -450,7 +450,7 @@ func TestService_BuildAuthContext(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, authCtx)
 		assert.Empty(t, authCtx.AllowedAccounts)
-		assert.Len(t, authCtx.Permissions, 5) // Only role-based permissions
+		assert.Len(t, authCtx.Permissions, 6) // Only role-based permissions
 
 		mockStore.AssertExpectations(t)
 	})
@@ -507,7 +507,7 @@ func TestAuthContext_HasPermission(t *testing.T) {
 		authCtx := &AuthContext{
 			User: &User{Role: RoleAdmin},
 		}
-		assert.True(t, authCtx.HasPermission(ActionPurchase, ResourcePlans))
+		assert.True(t, authCtx.HasPermission(ActionExecute, ResourcePlans))
 		assert.True(t, authCtx.HasPermission(ActionView, ResourceRecommendations))
 		assert.True(t, authCtx.HasPermission(ActionAdmin, ResourceUsers))
 	})
@@ -517,11 +517,11 @@ func TestAuthContext_HasPermission(t *testing.T) {
 			User: &User{Role: RoleUser},
 			Permissions: []Permission{
 				{Action: ActionView, Resource: ResourceRecommendations},
-				{Action: ActionPurchase, Resource: ResourcePlans},
+				{Action: ActionExecute, Resource: ResourcePlans},
 			},
 		}
 		assert.True(t, authCtx.HasPermission(ActionView, ResourceRecommendations))
-		assert.True(t, authCtx.HasPermission(ActionPurchase, ResourcePlans))
+		assert.True(t, authCtx.HasPermission(ActionExecute, ResourcePlans))
 		assert.False(t, authCtx.HasPermission(ActionAdmin, ResourceUsers))
 	})
 
@@ -535,7 +535,7 @@ func TestAuthContext_HasPermission(t *testing.T) {
 		assert.True(t, authCtx.HasPermission(ActionView, ResourceRecommendations))
 		assert.True(t, authCtx.HasPermission(ActionView, ResourcePlans))
 		assert.True(t, authCtx.HasPermission(ActionView, ResourceHistory))
-		assert.False(t, authCtx.HasPermission(ActionPurchase, ResourcePlans))
+		assert.False(t, authCtx.HasPermission(ActionExecute, ResourcePlans))
 	})
 
 	t.Run("admin permission grants all", func(t *testing.T) {
@@ -546,7 +546,7 @@ func TestAuthContext_HasPermission(t *testing.T) {
 			},
 		}
 		assert.True(t, authCtx.HasPermission(ActionView, ResourceRecommendations))
-		assert.True(t, authCtx.HasPermission(ActionPurchase, ResourcePlans))
+		assert.True(t, authCtx.HasPermission(ActionExecute, ResourcePlans))
 		assert.True(t, authCtx.HasPermission(ActionAdmin, ResourceUsers))
 	})
 }
@@ -619,7 +619,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "AWS Account Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						AccountIDs: []string{"123456789012", "987654321098"},
@@ -632,7 +632,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
 		// Should have permission with matching account
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", &PermissionConstraints{
 			AccountIDs: []string{"123456789012"},
 		})
 		require.NoError(t, err)
@@ -657,7 +657,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "AWS Account Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						AccountIDs: []string{"123456789012"},
@@ -670,7 +670,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
 		// Should not have permission with non-matching account
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", &PermissionConstraints{
 			AccountIDs: []string{"different-account"},
 		})
 		require.NoError(t, err)
@@ -695,7 +695,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "AWS Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						Providers: []string{"aws", "azure"},
@@ -707,7 +707,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", &PermissionConstraints{
 			Providers: []string{"aws"},
 		})
 		require.NoError(t, err)
@@ -732,7 +732,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "AWS Only Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						Providers: []string{"aws"},
@@ -744,7 +744,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "gcp/compute", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "gcp/compute", &PermissionConstraints{
 			Providers: []string{"gcp"},
 		})
 		require.NoError(t, err)
@@ -769,7 +769,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "EC2 Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						Services: []string{"ec2", "rds"},
@@ -781,7 +781,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", &PermissionConstraints{
 			Services: []string{"ec2"},
 		})
 		require.NoError(t, err)
@@ -806,7 +806,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "US Regions Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						Regions: []string{"us-east-1", "us-west-2"},
@@ -818,7 +818,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", &PermissionConstraints{
 			Regions: []string{"us-east-1"},
 		})
 		require.NoError(t, err)
@@ -843,7 +843,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "Budget Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						MaxPurchaseAmount: 10000.00,
@@ -856,7 +856,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
 		// Under limit should pass
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", &PermissionConstraints{
 			MaxPurchaseAmount: 5000.00,
 		})
 		require.NoError(t, err)
@@ -881,7 +881,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "Budget Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					Constraints: &PermissionConstraints{
 						MaxPurchaseAmount: 10000.00,
@@ -894,7 +894,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
 		// Over limit should fail
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "aws/ec2", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "aws/ec2", &PermissionConstraints{
 			MaxPurchaseAmount: 15000.00,
 		})
 		require.NoError(t, err)
@@ -919,7 +919,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "Unrestricted Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourceAll,
 					// No constraints
 				},
@@ -929,7 +929,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, "any/resource", &PermissionConstraints{
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, "any/resource", &PermissionConstraints{
 			AccountIDs: []string{"any-account"},
 			Providers:  []string{"any-provider"},
 		})
@@ -952,7 +952,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
 
 		// Readonly user can view but not purchase
-		has, err := service.HasPermission(ctx, "user-123", ActionPurchase, ResourcePlans, nil)
+		has, err := service.HasPermission(ctx, "user-123", ActionExecute, ResourcePlans, nil)
 		require.NoError(t, err)
 		assert.False(t, has)
 
@@ -975,7 +975,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 			Name: "Plans Team",
 			Permissions: []Permission{
 				{
-					Action:   ActionConfigure,
+					Action:   ActionUpdate,
 					Resource: ResourcePlans,
 				},
 			},
@@ -985,7 +985,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		mockStore.On("GetGroup", ctx, "group-1").Return(group, nil).Once()
 
 		// User can configure plans but not users
-		has, err := service.HasPermission(ctx, "user-123", ActionConfigure, ResourceUsers, nil)
+		has, err := service.HasPermission(ctx, "user-123", ActionUpdate, ResourceUsers, nil)
 		require.NoError(t, err)
 		assert.False(t, has)
 

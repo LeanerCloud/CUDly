@@ -84,18 +84,18 @@ func TestConversionHelpers(t *testing.T) {
 
 	t.Run("permissionToAPIPermission without constraints", func(t *testing.T) {
 		perm := Permission{
-			Action:   ActionPurchase,
+			Action:   ActionExecute,
 			Resource: ResourcePlans,
 		}
 		result := permissionToAPIPermission(perm)
-		assert.Equal(t, ActionPurchase, result.Action)
+		assert.Equal(t, ActionExecute, result.Action)
 		assert.Equal(t, ResourcePlans, result.Resource)
 		assert.Nil(t, result.Constraints)
 	})
 
 	t.Run("apiPermissionToPermission with constraints", func(t *testing.T) {
 		apiPerm := APIPermission{
-			Action:   ActionConfigure,
+			Action:   ActionUpdate,
 			Resource: ResourceConfig,
 			Constraints: &APIPermissionConstraint{
 				Accounts:  []string{"account-2"},
@@ -106,7 +106,7 @@ func TestConversionHelpers(t *testing.T) {
 			},
 		}
 		result := apiPermissionToPermission(apiPerm)
-		assert.Equal(t, ActionConfigure, result.Action)
+		assert.Equal(t, ActionUpdate, result.Action)
 		assert.Equal(t, ResourceConfig, result.Resource)
 		assert.NotNil(t, result.Constraints)
 		assert.Equal(t, []string{"account-2"}, result.Constraints.AccountIDs)
@@ -350,7 +350,7 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 			Description: "New description",
 			Permissions: []APIPermission{
 				{
-					Action:   ActionPurchase,
+					Action:   ActionExecute,
 					Resource: ResourcePlans,
 				},
 			},
@@ -518,7 +518,7 @@ func TestService_HasPermissionAPI(t *testing.T) {
 
 		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
 
-		has, err := service.HasPermissionAPI(ctx, "admin-123", ActionPurchase, ResourcePlans)
+		has, err := service.HasPermissionAPI(ctx, "admin-123", ActionExecute, ResourcePlans)
 		require.NoError(t, err)
 		assert.True(t, has)
 
@@ -537,7 +537,7 @@ func TestService_HasPermissionAPI(t *testing.T) {
 
 		mockStore.On("GetUserByID", ctx, "readonly-123").Return(readonlyUser, nil).Once()
 
-		has, err := service.HasPermissionAPI(ctx, "readonly-123", ActionPurchase, ResourcePlans)
+		has, err := service.HasPermissionAPI(ctx, "readonly-123", ActionExecute, ResourcePlans)
 		require.NoError(t, err)
 		assert.False(t, has)
 

@@ -710,7 +710,7 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 		mockStore.On("GetUserGroups", ctx, "user-123").Return([]string{}, nil)
 		mockStore.On("GetUserPermissions", ctx, "user-123").Return([]Permission{
 			{Action: ActionView, Resource: ResourceRecommendations},
-			{Action: ActionPurchase, Resource: ResourcePlans},
+			{Action: ActionExecute, Resource: ResourcePlans},
 		}, nil)
 
 		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
@@ -778,7 +778,7 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 			UserID: "user-123",
 			Permissions: []Permission{
 				{Action: ActionView, Resource: ResourceRecommendations},
-				{Action: ActionPurchase, Resource: ResourcePlans},
+				{Action: ActionCreate, Resource: ResourcePlans},
 				{Action: ActionAdmin, Resource: ResourceUsers}, // User doesn't have this
 			},
 		}
@@ -792,16 +792,15 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 		mockStore.On("GetUserGroups", ctx, "user-123").Return([]string{}, nil)
 		mockStore.On("GetUserPermissions", ctx, "user-123").Return([]Permission{
 			{Action: ActionView, Resource: ResourceRecommendations},
-			{Action: ActionPurchase, Resource: ResourcePlans},
+			{Action: ActionCreate, Resource: ResourcePlans},
 		}, nil)
 
 		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
 
 		require.NoError(t, err)
-		// Should return only the intersection (first two permissions, not the third)
 		assert.Len(t, permissions, 2)
 		assert.Contains(t, permissions, Permission{Action: ActionView, Resource: ResourceRecommendations})
-		assert.Contains(t, permissions, Permission{Action: ActionPurchase, Resource: ResourcePlans})
+		assert.Contains(t, permissions, Permission{Action: ActionCreate, Resource: ResourcePlans})
 	})
 
 	t.Run("return empty when API key permissions not in user permissions", func(t *testing.T) {
@@ -813,7 +812,7 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 			UserID: "user-123",
 			Permissions: []Permission{
 				{Action: ActionAdmin, Resource: ResourceUsers},
-				{Action: ActionConfigure, Resource: ResourceConfig},
+				{Action: ActionUpdate, Resource: ResourceConfig},
 			},
 		}
 
@@ -850,7 +849,7 @@ func TestService_validateAPIKeyPermissions(t *testing.T) {
 
 		permissions := []Permission{
 			{Action: ActionAdmin, Resource: ResourceUsers},
-			{Action: ActionConfigure, Resource: ResourceConfig},
+			{Action: ActionUpdate, Resource: ResourceConfig},
 		}
 
 		err := service.validateAPIKeyPermissions(ctx, user, permissions)
