@@ -7,7 +7,7 @@ import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, refreshRecommendations, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
-import { switchTab, applyTabFromPath, initRouter } from './navigation';
+import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, getSettingsSubTabFromPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings, closeAzureCredsModal, closeGCPCredsModal, copyToClipboard } from './settings';
 import { setupUserHandlers } from './users';
@@ -49,10 +49,14 @@ export async function init(): Promise<void> {
     state.setCurrentUser(user);
     initRouter();
     const target = applyTabFromPath();
+    let url = '/' + target;
+    if (target === 'settings') {
+      url = '/settings/' + getSettingsSubTabFromPath();
+    }
     window.history.replaceState(
       { tab: target, id: 0 },
       '',
-      '/' + target + window.location.search + window.location.hash,
+      url + window.location.search + window.location.hash,
     );
     switchTab(target, { push: false });
     setupEventListeners();
@@ -75,6 +79,14 @@ export function setupEventListeners(): void {
     btn.addEventListener('click', () => {
       const tab = btn.dataset['tab'];
       if (tab) switchTab(tab);
+    });
+  });
+
+  // Settings sub-tab switching
+  document.querySelectorAll<HTMLButtonElement>('.sub-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const subTab = btn.dataset['settingsTab'];
+      if (subTab) switchSettingsSubTab(subTab);
     });
   });
 

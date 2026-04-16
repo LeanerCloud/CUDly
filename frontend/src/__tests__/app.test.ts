@@ -28,6 +28,8 @@ jest.mock('../navigation', () => ({
   switchTab: jest.fn(),
   applyTabFromPath: jest.fn().mockReturnValue('dashboard'),
   initRouter: jest.fn(),
+  switchSettingsSubTab: jest.fn(),
+  getSettingsSubTabFromPath: jest.fn().mockReturnValue('general'),
 }));
 
 jest.mock('../recommendations', () => ({

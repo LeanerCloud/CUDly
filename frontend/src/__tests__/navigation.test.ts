@@ -1,7 +1,7 @@
 /**
  * Navigation module tests
  */
-import { switchTab } from '../navigation';
+import { switchTab, switchSettingsSubTab, getSettingsSubTabFromPath } from '../navigation';
 
 // Mock the dependent modules
 jest.mock('../dashboard', () => ({
@@ -18,7 +18,11 @@ jest.mock('../history', () => ({
 }));
 jest.mock('../settings', () => ({
   loadGlobalSettings: jest.fn().mockResolvedValue(undefined),
-  isUnsavedChanges: jest.fn().mockReturnValue(false)
+  isUnsavedChanges: jest.fn().mockReturnValue(false),
+  loadAccountsTab: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../auth', () => ({
+  isAdmin: jest.fn().mockReturnValue(true),
 }));
 
 import { loadDashboard } from '../dashboard';
@@ -42,7 +46,17 @@ describe('Navigation Module', () => {
       <div id="recommendations-tab" class="tab-content"></div>
       <div id="plans-tab" class="tab-content"></div>
       <div id="history-tab" class="tab-content"></div>
-      <div id="settings-tab" class="tab-content"></div>
+      <div id="settings-tab" class="tab-content">
+        <div class="settings-tabs">
+          <button class="sub-tab-btn active" data-settings-tab="general">General</button>
+          <button class="sub-tab-btn" data-settings-tab="accounts">Accounts</button>
+          <button class="sub-tab-btn" data-settings-tab="users">Users</button>
+        </div>
+        <section id="settings-section"></section>
+        <section id="accounts-section" style="display:none"></section>
+        <section id="users-section" style="display:none"></section>
+        <section id="apikeys-section" style="display:none"></section>
+      </div>
     `;
 
     // Clear all mocks
@@ -168,6 +182,81 @@ describe('Navigation Module', () => {
       // Final state should have dashboard active
       const dashboardBtn = document.querySelector('[data-tab="dashboard"]');
       expect(dashboardBtn?.classList.contains('active')).toBe(true);
+    });
+  });
+
+  describe('switchSettingsSubTab', () => {
+    test('shows general sections and hides others', () => {
+      switchSettingsSubTab('general');
+
+      expect(document.getElementById('settings-section')?.style.display).toBe('');
+      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
+      expect(document.getElementById('users-section')?.style.display).toBe('none');
+      expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
+    });
+
+    test('shows accounts section and hides others', () => {
+      switchSettingsSubTab('accounts');
+
+      expect(document.getElementById('settings-section')?.style.display).toBe('none');
+      expect(document.getElementById('accounts-section')?.style.display).toBe('');
+      expect(document.getElementById('users-section')?.style.display).toBe('none');
+      expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
+    });
+
+    test('shows users and apikeys sections for users sub-tab', () => {
+      switchSettingsSubTab('users');
+
+      expect(document.getElementById('settings-section')?.style.display).toBe('none');
+      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
+      expect(document.getElementById('users-section')?.style.display).toBe('');
+      expect(document.getElementById('apikeys-section')?.style.display).toBe('');
+    });
+
+    test('falls back to general for unknown sub-tab', () => {
+      switchSettingsSubTab('foobar');
+
+      expect(document.getElementById('settings-section')?.style.display).toBe('');
+      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
+    });
+
+    test('toggles active class on sub-tab buttons', () => {
+      switchSettingsSubTab('accounts');
+
+      const generalBtn = document.querySelector('[data-settings-tab="general"]');
+      const accountsBtn = document.querySelector('[data-settings-tab="accounts"]');
+      expect(generalBtn?.classList.contains('active')).toBe(false);
+      expect(accountsBtn?.classList.contains('active')).toBe(true);
+    });
+
+    test('redirects non-admin to general for admin-only sub-tabs', () => {
+      const { isAdmin } = require('../auth');
+      (isAdmin as jest.Mock).mockReturnValue(false);
+
+      switchSettingsSubTab('accounts');
+
+      expect(document.getElementById('settings-section')?.style.display).toBe('');
+      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
+    });
+  });
+
+  describe('getSettingsSubTabFromPath', () => {
+    test('returns general for root settings path', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/settings' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('general');
+    });
+
+    test('returns accounts for /settings/accounts', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/settings/accounts' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('accounts');
+    });
+
+    test('returns general for unknown sub-tab', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/settings/foobar' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('general');
     });
   });
 });

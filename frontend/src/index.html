@@ -307,6 +307,11 @@
 
             <!-- Settings Tab -->
             <div id="settings-tab" class="tab-content" role="tabpanel">
+                <div class="settings-tabs" role="tablist" aria-label="Settings navigation">
+                    <button class="sub-tab-btn active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
+                    <button class="sub-tab-btn admin-only" data-settings-tab="accounts" role="tab" aria-selected="false">Accounts</button>
+                    <button class="sub-tab-btn admin-only" data-settings-tab="users" role="tab" aria-selected="false">Users &amp; API Keys</button>
+                </div>
                 <section id="settings-section">
                     <h2>Global Configuration</h2>
                     <p class="settings-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
@@ -546,7 +551,7 @@
                 </section>
 
                 <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->
-                <section id="accounts-section" class="admin-only card">
+                <section id="accounts-section" class="admin-only card" style="display:none">
                     <h2>Accounts</h2>
                     <p class="settings-description">Onboard new cloud accounts via federation IaC, review pending registrations, and manage per-provider accounts.</p>
 
@@ -611,7 +616,7 @@
                 </section>
 
                 <!-- API Keys Section (Admin Only) -->
-                <section id="apikeys-section" class="admin-only">
+                <section id="apikeys-section" class="admin-only" style="display:none">
                     <h2>API Keys Management</h2>
                     <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>
                     <div class="section-header">
@@ -621,7 +626,7 @@
                 </section>
 
                 <!-- User Management Section (Admin Only) -->
-                <section id="users-section" class="admin-only">
+                <section id="users-section" class="admin-only" style="display:none">
                     <h2>User Management</h2>
                     <p class="settings-description">Manage users and their permissions.</p>
                     <div class="section-header">

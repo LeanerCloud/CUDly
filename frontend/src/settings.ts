@@ -838,8 +838,6 @@ export async function loadGlobalSettings(): Promise<void> {
     updateDirtyMarkers();
 
     cachedSourceCloud = data.source_cloud ?? 'aws';
-
-    void loadAccountsTab();
   } catch (error) {
     console.error('Failed to load settings:', error);
     if (loadingEl) loadingEl.classList.add('hidden');

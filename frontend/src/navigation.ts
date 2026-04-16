@@ -6,11 +6,12 @@ import { loadDashboard } from './dashboard';
 import { loadRecommendations } from './recommendations';
 import { loadPlans } from './plans';
 import { initHistoryDateRange } from './history';
-import { loadGlobalSettings, isUnsavedChanges } from './settings';
+import { loadGlobalSettings, isUnsavedChanges, loadAccountsTab } from './settings';
 import { loadUsers } from './users';
 import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
 import { loadRIExchange, loadAutomationSettings } from './riexchange';
+import { isAdmin } from './auth';
 
 interface TabMeta {
   title: string;
@@ -25,7 +26,20 @@ const TABS: Record<string, TabMeta> = {
   settings: { title: 'CUDly — Settings' },
 };
 
+const SETTINGS_SUBTABS: Record<string, { title: string }> = {
+  general:  { title: 'CUDly — Settings' },
+  accounts: { title: 'CUDly — Accounts' },
+  users:    { title: 'CUDly — Users & API Keys' },
+};
+
+const SECTION_MAP: Record<string, string[]> = {
+  general:  ['settings-section'],
+  accounts: ['accounts-section'],
+  users:    ['users-section', 'apikeys-section'],
+};
+
 let currentTab: string | undefined;
+let currentSettingsSubTab: string | undefined;
 let historyId = 0;
 
 interface SwitchTabOptions {
@@ -75,12 +89,7 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
       void loadSavingsHistory();
       break;
     case 'settings':
-      void loadGlobalSettings();
-      void loadAutomationSettings();
-      break;
-    case 'users':
-      void loadUsers();
-      void loadApiKeys();
+      switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });
       break;
     case 'ri-exchange':
       void loadRIExchange();
@@ -89,15 +98,88 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
 
   if (isSelfSwitch) return;
 
-  document.title = TABS[tabName]!.title;
+  if (tabName !== 'settings') {
+    document.title = TABS[tabName]!.title;
+  }
   currentTab = tabName;
 
   if (opts.push !== false) {
     historyId += 1;
+    const url = tabName === 'settings'
+      ? '/settings/' + (currentSettingsSubTab ?? 'general')
+      : '/' + tabName;
     window.history.pushState(
       { tab: tabName, id: historyId },
       '',
-      '/' + tabName + window.location.search + window.location.hash,
+      url + window.location.search + window.location.hash,
+    );
+  }
+}
+
+/**
+ * Parse the settings sub-tab from segment[1] of the current URL.
+ * Falls back to 'general' for unknown or missing segments.
+ */
+export function getSettingsSubTabFromPath(): string {
+  const segments = window.location.pathname
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .split('/');
+  const sub = (segments[1] ?? '').toLowerCase();
+  return sub in SETTINGS_SUBTABS ? sub : 'general';
+}
+
+/**
+ * Switch between settings sub-tabs (General / Accounts / Users).
+ * Manages section visibility, load lifecycle, and sub-tab URL history.
+ */
+export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}): void {
+  if (!(subTab in SETTINGS_SUBTABS)) subTab = 'general';
+
+  if ((subTab === 'accounts' || subTab === 'users') && !isAdmin()) {
+    subTab = 'general';
+  }
+
+  const isSelfSwitch = subTab === currentSettingsSubTab;
+
+  document.querySelectorAll<HTMLButtonElement>('.sub-tab-btn').forEach(btn => {
+    const isActive = btn.dataset['settingsTab'] === subTab;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  for (const [tab, ids] of Object.entries(SECTION_MAP)) {
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = (tab === subTab) ? '' : 'none';
+    }
+  }
+
+  switch (subTab) {
+    case 'general':
+      void loadGlobalSettings();
+      void loadAutomationSettings();
+      break;
+    case 'accounts':
+      void loadAccountsTab();
+      break;
+    case 'users':
+      void loadUsers();
+      void loadApiKeys();
+      break;
+  }
+
+  document.title = SETTINGS_SUBTABS[subTab]!.title;
+  currentSettingsSubTab = subTab;
+
+  if (isSelfSwitch) return;
+
+  if (opts.push !== false) {
+    historyId += 1;
+    window.history.pushState(
+      { tab: 'settings', subTab, id: historyId },
+      '',
+      '/settings/' + subTab + window.location.search + window.location.hash,
     );
   }
 }
@@ -133,9 +215,6 @@ export function initRouter(): void {
       isUnsavedChanges()
     ) {
       if (!confirm('You have unsaved settings changes. Leave without saving?')) {
-        // Restore exact previous position. The induced second popstate
-        // is harmless: target will equal currentTab so the self-switch
-        // path inside switchTab no-ops on history.
         if (delta !== 0) window.history.go(-delta);
         return;
       }
