@@ -67,6 +67,12 @@ function renderDashboardSummary(data: DashboardSummary): void {
   const summary = document.getElementById('summary');
   if (!summary) return;
 
+  // When no recommendations and no commitments exist, "100% coverage" is
+  // misleading — nothing is being tracked. Show a dash instead.
+  const nothingTracked = !data.total_recommendations && !data.active_commitments;
+  const coverageValue = nothingTracked ? '—' : `${data.current_coverage || 0}%`;
+  const coverageDetail = nothingTracked ? 'No services tracked' : `Target: ${data.target_coverage || 80}%`;
+
   summary.innerHTML = `
     <div class="card">
       <h3>Potential Monthly Savings</h3>
@@ -80,8 +86,8 @@ function renderDashboardSummary(data: DashboardSummary): void {
     </div>
     <div class="card">
       <h3>Current Coverage</h3>
-      <p class="value">${data.current_coverage || 0}%</p>
-      <p class="detail">Target: ${data.target_coverage || 80}%</p>
+      <p class="value">${coverageValue}</p>
+      <p class="detail">${coverageDetail}</p>
     </div>
     <div class="card">
       <h3>YTD Savings</h3>
@@ -102,7 +108,26 @@ function renderSavingsChart(byService: Record<string, ServiceSavings>): void {
   const existingChart = state.getSavingsChart();
   if (existingChart) {
     existingChart.destroy();
+    state.setSavingsChart(null);
   }
+
+  // No data → hide the canvas and render an empty-state message so the
+  // chart doesn't render with a synthetic $0–$1 y-axis.
+  const section = ctx.parentElement;
+  let emptyState = section?.querySelector<HTMLParagraphElement>('.chart-empty');
+  if (labels.length === 0) {
+    ctx.style.display = 'none';
+    if (section && !emptyState) {
+      emptyState = document.createElement('p');
+      emptyState.className = 'chart-empty empty';
+      emptyState.textContent = 'No savings data yet. Add accounts and wait for recommendations.';
+      section.appendChild(emptyState);
+    }
+    return;
+  }
+  // Data is back — restore the canvas and remove any stale empty state.
+  ctx.style.display = '';
+  emptyState?.remove();
 
   const chart = new Chart(ctx, {
     type: 'bar',
