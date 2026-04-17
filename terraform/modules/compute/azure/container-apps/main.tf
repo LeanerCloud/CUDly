@@ -127,6 +127,8 @@ resource "azurerm_container_app" "main" {
             ADMIN_PASSWORD_SECRET = var.admin_password_secret_name
             SECRET_PROVIDER       = "azure"
             AZURE_CLIENT_ID       = azurerm_user_assigned_identity.container_app.client_id
+            AZURE_SUBSCRIPTION_ID = data.azurerm_subscription.current.subscription_id
+            AZURE_TENANT_ID       = data.azurerm_subscription.current.tenant_id
             AZURE_KEY_VAULT_URL   = var.key_vault_uri
             AZURE_REGION          = var.location
             PORT                  = "8080"
