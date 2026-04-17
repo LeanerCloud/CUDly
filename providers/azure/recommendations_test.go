@@ -192,10 +192,6 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 }
 
 func TestExtractServiceType(t *testing.T) {
-	adapter := &RecommendationsClientAdapter{
-		subscriptionID: "test-subscription",
-	}
-
 	tests := []struct {
 		name          string
 		impactedField string
@@ -240,37 +236,29 @@ func TestExtractServiceType(t *testing.T) {
 					ImpactedField: &tt.impactedField,
 				},
 			}
-			result := adapter.extractServiceType(rec)
+			result := extractServiceType(rec)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
 func TestExtractServiceType_NilProperties(t *testing.T) {
-	adapter := &RecommendationsClientAdapter{
-		subscriptionID: "test-subscription",
-	}
-
 	// Test with nil properties
 	rec := &armadvisor.ResourceRecommendationBase{
 		Properties: nil,
 	}
-	result := adapter.extractServiceType(rec)
+	result := extractServiceType(rec)
 	assert.Equal(t, "", result)
 }
 
 func TestExtractServiceType_NilImpactedField(t *testing.T) {
-	adapter := &RecommendationsClientAdapter{
-		subscriptionID: "test-subscription",
-	}
-
 	// Test with nil impacted field
 	rec := &armadvisor.ResourceRecommendationBase{
 		Properties: &armadvisor.RecommendationProperties{
 			ImpactedField: nil,
 		},
 	}
-	result := adapter.extractServiceType(rec)
+	result := extractServiceType(rec)
 	assert.Equal(t, "", result)
 }
 

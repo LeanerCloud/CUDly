@@ -4,12 +4,14 @@ package azure
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/advisor/armadvisor"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
@@ -63,7 +65,9 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 
 	// Get additional recommendations from Azure Advisor
 	advisorRecs, err := r.getAdvisorRecommendations(ctx, params)
-	if err == nil {
+	if err != nil {
+		logging.Errorf("Failed to get Azure Advisor recommendations: %v", err)
+	} else {
 		allRecommendations = append(allRecommendations, advisorRecs...)
 	}
 
@@ -102,6 +106,7 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
+			logging.Warnf("Azure Advisor pagination error (partial results may be returned): %v", err)
 			break
 		}
 
@@ -127,10 +132,7 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		return nil
 	}
 
-	props := advisorRec.Properties
-
-	// Extract service type from the resource ID or recommendation metadata
-	service := r.extractServiceType(advisorRec)
+	service := extractServiceType(advisorRec)
 	if service == "" {
 		return nil
 	}
@@ -144,50 +146,107 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		PaymentOption:  "upfront",
 	}
 
-	// Extract region from resource ID if available
 	if advisorRec.ID != nil {
-		region := extractRegionFromResourceID(*advisorRec.ID)
-		if region != "" {
+		if region := extractRegionFromResourceID(*advisorRec.ID); region != "" {
 			rec.Region = region
 		}
 	}
 
-	// Extract cost savings if available
-	if props.ExtendedProperties != nil {
-		// ExtendedProperties is map[string]*string in the Azure SDK
-		if annualSavingsStr, ok := props.ExtendedProperties["annualSavingsAmount"]; ok && annualSavingsStr != nil {
-			// Would need to parse the string to float64
-			// For now, just note that savings info is available
-		}
-		if savingsCurrency, ok := props.ExtendedProperties["savingsCurrency"]; ok && savingsCurrency != nil {
-			// Store currency information if needed
-		}
-	}
-
+	populateFromExtendedProperties(rec, advisorRec.Properties.ExtendedProperties)
 	return rec
 }
 
-// extractServiceType determines the service type from an Advisor recommendation
-func (r *RecommendationsClientAdapter) extractServiceType(rec *armadvisor.ResourceRecommendationBase) string {
-	if rec.Properties == nil || rec.Properties.ImpactedField == nil {
+// populateFromExtendedProperties fills savings, SKU, term, and count from
+// the Advisor recommendation's ExtendedProperties map.
+func populateFromExtendedProperties(rec *common.Recommendation, ext map[string]*string) {
+	if ext == nil {
+		return
+	}
+	rec.EstimatedSavings = extFloat(ext, "annualSavingsAmount") / 12
+	rec.ResourceType = extString(ext, "sku", rec.ResourceType)
+	rec.Term = extString(ext, "term", rec.Term)
+	rec.Count = extInt(ext, "qty", rec.Count)
+}
+
+func extString(m map[string]*string, key, fallback string) string {
+	if v, ok := m[key]; ok && v != nil && *v != "" {
+		return *v
+	}
+	return fallback
+}
+
+func extFloat(m map[string]*string, key string) float64 {
+	if v, ok := m[key]; ok && v != nil {
+		if f, err := strconv.ParseFloat(*v, 64); err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+func extInt(m map[string]*string, key string, fallback int) int {
+	if v, ok := m[key]; ok && v != nil {
+		if n, err := strconv.Atoi(*v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+// extractServiceType determines the service type from an Advisor recommendation.
+// First checks ImpactedField (resource-scoped), then falls back to
+// ExtendedProperties (subscription-scoped reservations/savings plans).
+func extractServiceType(rec *armadvisor.ResourceRecommendationBase) string {
+	if rec.Properties == nil {
 		return ""
 	}
+	if svc := serviceFromImpactedField(rec.Properties.ImpactedField); svc != "" {
+		return svc
+	}
+	return serviceFromExtendedProperties(rec.Properties.ExtendedProperties)
+}
 
-	impactedField := *rec.Properties.ImpactedField
-
-	// Map Azure resource types to our service types
+// serviceFromImpactedField maps Azure resource namespace to service type.
+func serviceFromImpactedField(field *string) string {
+	if field == nil {
+		return ""
+	}
+	f := *field
 	switch {
-	case contains(impactedField, "Microsoft.Compute"):
+	case contains(f, "Microsoft.Compute"):
 		return string(common.ServiceCompute)
-	case contains(impactedField, "Microsoft.Sql"):
+	case contains(f, "Microsoft.Sql"):
 		return string(common.ServiceRelationalDB)
-	case contains(impactedField, "Microsoft.Cache"):
+	case contains(f, "Microsoft.Cache"):
 		return string(common.ServiceCache)
-	case contains(impactedField, "Microsoft.DBforMySQL"), contains(impactedField, "Microsoft.DBforPostgreSQL"):
+	case contains(f, "Microsoft.DBforMySQL"), contains(f, "Microsoft.DBforPostgreSQL"):
 		return string(common.ServiceRelationalDB)
-	default:
+	}
+	return ""
+}
+
+// serviceFromExtendedProperties resolves service type for subscription-scoped
+// recommendations where ImpactedField is "Microsoft.Subscriptions/subscriptions".
+func serviceFromExtendedProperties(ext map[string]*string) string {
+	if ext == nil {
 		return ""
 	}
+	if rrt, ok := ext["reservedResourceType"]; ok && rrt != nil {
+		switch strings.ToLower(*rrt) {
+		case "virtualmachines":
+			return string(common.ServiceCompute)
+		case "sqldatabases":
+			return string(common.ServiceRelationalDB)
+		case "rediscache":
+			return string(common.ServiceCache)
+		}
+	}
+	if subcat, ok := ext["recommendationSubCategory"]; ok && subcat != nil {
+		if strings.EqualFold(*subcat, "SavingsPlan") {
+			return string(common.ServiceCompute)
+		}
+	}
+	return ""
 }
 
 // extractRegionFromResourceID extracts the region from an Azure resource ID
