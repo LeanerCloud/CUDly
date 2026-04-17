@@ -3,6 +3,7 @@
  */
 
 import * as api from '../api';
+import { getCurrentUser } from '../state';
 import {
   allUsers,
   filteredUsers,
@@ -18,6 +19,26 @@ import { renderGroups } from '../groups/groupList';
 import { renderPermissionMatrix } from './permissionMatrix';
 
 /**
+ * Ensure the currently-logged-in user is visible in the list.
+ * If the API didn't include them (e.g. self-management not wired up yet),
+ * prepend a synthetic entry flagged with id='current' so the userList "You"
+ * badge still renders.
+ */
+function withCurrentUser(users: api.APIUser[]): api.APIUser[] {
+  const current = getCurrentUser();
+  if (!current) return users;
+  if (users.some(u => u.email === current.email)) return users;
+  const synthetic: api.APIUser = {
+    id: 'current',
+    email: current.email,
+    role: current.role,
+    groups: [],
+    mfa_enabled: false,
+  };
+  return [synthetic, ...users];
+}
+
+/**
  * Load and display users and groups
  */
 export async function loadUsers(): Promise<void> {
@@ -28,7 +49,7 @@ export async function loadUsers(): Promise<void> {
     ]);
 
     setAvailableGroups(groupsResponse.groups);
-    setAllUsers(usersResponse.users);
+    setAllUsers(withCurrentUser(usersResponse.users));
 
     // Apply current filters
     applyFilters();

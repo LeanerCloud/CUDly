@@ -16,9 +16,26 @@ const ACTIONS = ['view', 'create', 'update', 'delete', 'execute', 'approve', 'ad
  *
  * All dynamic values are escaped via escapeHtml before insertion.
  */
+function renderEmptyState(container: HTMLElement, message: string): void {
+  container.textContent = '';
+  const p = document.createElement('p');
+  p.className = 'empty-state';
+  p.textContent = message;
+  container.appendChild(p);
+}
+
 export function renderPermissionMatrix(groups: APIGroup[], container: HTMLElement): void {
   if (groups.length === 0) {
-    container.innerHTML = '<p style="color:#999;font-size:0.85rem;">No groups defined.</p>';
+    renderEmptyState(container, 'No groups defined yet. Create one to assign permissions.');
+    return;
+  }
+
+  // Groups exist but none carry permissions — matrix would be all dashes.
+  // Show an explicit empty-state instead so the section doesn't read as
+  // broken or unfinished.
+  const anyPermission = groups.some(g => g.permissions && g.permissions.length > 0);
+  if (!anyPermission) {
+    renderEmptyState(container, 'No custom permissions configured yet. Edit a group to assign actions to resources.');
     return;
   }
 
