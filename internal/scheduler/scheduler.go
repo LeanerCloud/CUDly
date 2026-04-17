@@ -197,6 +197,14 @@ func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.Glo
 }
 
 func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	// Self-account (role_arn with no role ARN) or ambient modes use ambient credentials
+	if acct.AWSRoleARN == "" {
+		prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
+		if err != nil {
+			return nil, fmt.Errorf("create ambient provider: %w", err)
+		}
+		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, globalCfg)
+	}
 	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials: %w", err)

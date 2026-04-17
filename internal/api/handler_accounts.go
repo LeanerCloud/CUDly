@@ -199,7 +199,7 @@ func (h *Handler) createSelfAccount(ctx context.Context, httpReq *events.LambdaF
 func buildSelfAccountRequest(si *sourceIdentity) CloudAccountRequest {
 	enabled := true
 	req := CloudAccountRequest{
-		Name:       fmt.Sprintf("CUDly host (%s)", si.ExternalID()),
+		Name:       "CUDly host",
 		Provider:   si.Provider,
 		ExternalID: si.ExternalID(),
 		Enabled:    &enabled,
