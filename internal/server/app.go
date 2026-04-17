@@ -449,11 +449,15 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 	})
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
-	// Re-initialize scheduler to pick up the updated purchase manager.
+	// Re-initialize scheduler with per-account credential resolution.
 	app.Scheduler = scheduler.NewScheduler(scheduler.SchedulerConfig{
 		ConfigStore:     app.Config,
 		PurchaseManager: app.Purchase,
 		EmailSender:     app.Email,
+		CredentialStore: credStore,
+		OIDCSigner:      app.signer,
+		OIDCIssuerURL:   resolveOIDCIssuerURL(app.appConfig),
+		AssumeRoleSTS:   sts.NewFromConfig(awsCfg),
 	})
 
 	// Update API handler with new config store, scheduler, and rate limiter

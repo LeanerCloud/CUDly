@@ -11,11 +11,15 @@ import (
 	"strings"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	azureprovider "github.com/LeanerCloud/CUDly/providers/azure"
+	gcpprovider "github.com/LeanerCloud/CUDly/providers/gcp"
 )
 
 // SchedulerConfig holds configuration for the scheduler
@@ -26,6 +30,11 @@ type SchedulerConfig struct {
 	DashboardURL    string
 	// Provider factory for creating cloud providers (allows injection for testing)
 	ProviderFactory provider.FactoryInterface
+	// Per-account credential resolution (mirrors purchase manager)
+	CredentialStore credentials.CredentialStore
+	OIDCSigner      oidc.Signer
+	OIDCIssuerURL   string
+	AssumeRoleSTS   credentials.STSClient
 }
 
 // CollectResult holds the result of collecting recommendations
@@ -47,6 +56,10 @@ type Scheduler struct {
 	email           email.SenderInterface
 	dashboardURL    string
 	providerFactory provider.FactoryInterface
+	credStore       credentials.CredentialStore
+	oidcSigner      oidc.Signer
+	oidcIssuerURL   string
+	assumeRoleSTS   credentials.STSClient
 }
 
 // NewScheduler creates a new scheduler
@@ -62,6 +75,10 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		email:           cfg.EmailSender,
 		dashboardURL:    cfg.DashboardURL,
 		providerFactory: factory,
+		credStore:       cfg.CredentialStore,
+		oidcSigner:      cfg.OIDCSigner,
+		oidcIssuerURL:   cfg.OIDCIssuerURL,
+		assumeRoleSTS:   cfg.AssumeRoleSTS,
 	}
 }
 
@@ -148,104 +165,194 @@ func (s *Scheduler) collectProviderRecommendations(ctx context.Context, provider
 	}
 }
 
-// collectAWSRecommendations fetches recommendations from AWS Cost Explorer
+// collectAWSRecommendations fans out across all enabled AWS accounts.
+// If no accounts are registered and CUDly runs on AWS, it falls back to
+// ambient credentials (backward compatibility with single-account setups).
 func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
-	logging.Info("Collecting AWS recommendations...")
+	accounts := s.enabledAccounts(ctx, "aws")
 
-	// Create AWS provider
-	awsProvider, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
+	// Backward-compatible fallback: no registered accounts → ambient credentials
+	if len(accounts) == 0 {
+		return s.collectAWSAmbient(ctx, globalCfg)
+	}
+
+	var all []config.RecommendationRecord
+	for _, acct := range accounts {
+		recs, err := s.collectAWSForAccount(ctx, globalCfg, acct)
+		if err != nil {
+			logging.Errorf("AWS account %s (%s): %v", acct.Name, acct.ExternalID, err)
+			continue
+		}
+		all = append(all, recs...)
+	}
+	return all, nil
+}
+
+func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AWS provider: %w", err)
 	}
+	return s.fetchAndConvert(ctx, prov, "aws", nil, globalCfg)
+}
 
-	// Get recommendations client
-	recClient, err := awsProvider.GetRecommendationsClient(ctx)
+func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AWS recommendations client: %w", err)
+		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-
-	// Build recommendation params from global config.
-	// Note: These params are only used in the fallback path (when GetAllRecommendations
-	// returns empty). The primary GetAllRecommendations call returns all recommendations
-	// and filtering by term/payment is handled later in convertRecommendations
-	// with a hardcoded default of term=3.
-	params := common.RecommendationParams{
-		Term:           fmt.Sprintf("%dyr", globalCfg.DefaultTerm),
-		PaymentOption:  globalCfg.DefaultPayment,
-		LookbackPeriod: "7d",
-	}
-
-	// Get all recommendations
-	recommendations, err := recClient.GetAllRecommendations(ctx)
+	cfg := &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}
+	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AWS recommendations: %w", err)
+		return nil, fmt.Errorf("create provider: %w", err)
+	}
+	return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, globalCfg)
+}
+
+// collectAzureRecommendations fans out across all enabled Azure accounts,
+// resolving per-account federated credentials via the KMS signer.
+func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+	accounts := s.enabledAccounts(ctx, "azure")
+	if len(accounts) == 0 {
+		logging.Info("No enabled Azure accounts — skipping Azure recommendations")
+		return nil, nil
 	}
 
-	// Also try with params for any specific filtering.
-	// Note: This fallback is intentionally silent on error - if both calls
-	// fail, we proceed with an empty list and log a warning.
-	// This ensures the scheduler continues even if recommendations are unavailable.
-	if len(recommendations) == 0 {
-		recommendations, err = recClient.GetRecommendations(ctx, params)
+	var all []config.RecommendationRecord
+	for _, acct := range accounts {
+		recs, err := s.collectAzureForAccount(ctx, acct)
 		if err != nil {
-			logging.Warnf("Failed to get filtered AWS recommendations: %v", err)
+			logging.Errorf("Azure account %s (%s): %v", acct.Name, acct.ExternalID, err)
+			continue
 		}
+		all = append(all, recs...)
 	}
-
-	// Convert to internal format
-	return s.convertRecommendations(recommendations, "aws"), nil
+	return all, nil
 }
 
-// collectAzureRecommendations fetches recommendations from Azure Advisor
-func (s *Scheduler) collectAzureRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
-	logging.Info("Collecting Azure recommendations...")
-
-	// Create Azure provider
-	azureProvider, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", nil)
+func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &acct, s.credStore, credentials.AzureResolveOptions{
+		Signer:    s.oidcSigner,
+		IssuerURL: s.oidcIssuerURL,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Azure provider: %w", err)
+		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-
-	// Get recommendations client
-	recClient, err := azureProvider.GetRecommendationsClient(ctx)
+	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: acct.AzureSubscriptionID})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure recommendations client: %w", err)
+		return nil, fmt.Errorf("create provider: %w", err)
 	}
+	azProv.SetCredential(azCred)
 
-	// Get all recommendations
-	recommendations, err := recClient.GetAllRecommendations(ctx)
+	recClient, err := azProv.GetRecommendationsClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure recommendations: %w", err)
+		return nil, fmt.Errorf("get recommendations client: %w", err)
 	}
-
-	// Convert to internal format
-	return s.convertRecommendations(recommendations, "azure"), nil
+	recs, err := recClient.GetAllRecommendations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get recommendations: %w", err)
+	}
+	return s.tagAccount(s.convertRecommendations(recs, "azure"), acct.ID), nil
 }
 
-// collectGCPRecommendations fetches recommendations from GCP Recommender
-func (s *Scheduler) collectGCPRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
-	logging.Info("Collecting GCP recommendations...")
-
-	// Create GCP provider
-	gcpProvider, err := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCP provider: %w", err)
+// collectGCPRecommendations fans out across all enabled GCP accounts,
+// resolving per-account federated credentials via the KMS signer.
+func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+	accounts := s.enabledAccounts(ctx, "gcp")
+	if len(accounts) == 0 {
+		logging.Info("No enabled GCP accounts — skipping GCP recommendations")
+		return nil, nil
 	}
 
-	// Get recommendations client
-	recClient, err := gcpProvider.GetRecommendationsClient(ctx)
+	var all []config.RecommendationRecord
+	for _, acct := range accounts {
+		recs, err := s.collectGCPForAccount(ctx, acct)
+		if err != nil {
+			logging.Errorf("GCP account %s (%s): %v", acct.Name, acct.ExternalID, err)
+			continue
+		}
+		all = append(all, recs...)
+	}
+	return all, nil
+}
+
+func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, &acct, s.credStore, credentials.GCPResolveOptions{
+		Signer:    s.oidcSigner,
+		IssuerURL: s.oidcIssuerURL,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get GCP recommendations client: %w", err)
+		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
 
-	// Get all recommendations
-	recommendations, err := recClient.GetAllRecommendations(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get GCP recommendations: %w", err)
+	var prov provider.Provider
+	if gcpTS != nil {
+		prov = gcpprovider.NewProviderWithCredentials(ctx, acct.GCPProjectID, gcpTS)
+	} else {
+		// ADC mode (application_default): use ambient credentials
+		created, err := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
+		if err != nil {
+			return nil, fmt.Errorf("create ambient GCP provider: %w", err)
+		}
+		prov = created
 	}
 
-	// Convert to internal format
-	return s.convertRecommendations(recommendations, "gcp"), nil
+	recClient, err := prov.GetRecommendationsClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get recommendations client: %w", err)
+	}
+	recs, err := recClient.GetAllRecommendations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get recommendations: %w", err)
+	}
+	return s.tagAccount(s.convertRecommendations(recs, "gcp"), acct.ID), nil
+}
+
+// enabledAccounts returns all enabled cloud accounts for the given provider.
+func (s *Scheduler) enabledAccounts(ctx context.Context, providerName string) []config.CloudAccount {
+	enabled := true
+	accounts, err := s.config.ListCloudAccounts(ctx, config.CloudAccountFilter{
+		Provider: &providerName,
+		Enabled:  &enabled,
+	})
+	if err != nil {
+		logging.Errorf("Failed to list %s accounts: %v", providerName, err)
+		return nil
+	}
+	return accounts
+}
+
+// fetchAndConvert is a convenience for the AWS ambient path.
+func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider, providerName string, accountID *string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+	recClient, err := prov.GetRecommendationsClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s recommendations client: %w", providerName, err)
+	}
+	recs, err := recClient.GetAllRecommendations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s recommendations: %w", providerName, err)
+	}
+	if len(recs) == 0 && globalCfg != nil {
+		params := common.RecommendationParams{
+			Term:           fmt.Sprintf("%dyr", globalCfg.DefaultTerm),
+			PaymentOption:  globalCfg.DefaultPayment,
+			LookbackPeriod: "7d",
+		}
+		recs, _ = recClient.GetRecommendations(ctx, params)
+	}
+	result := s.convertRecommendations(recs, providerName)
+	if accountID != nil {
+		result = s.tagAccount(result, *accountID)
+	}
+	return result, nil
+}
+
+// tagAccount sets CloudAccountID on each recommendation record.
+func (s *Scheduler) tagAccount(recs []config.RecommendationRecord, accountID string) []config.RecommendationRecord {
+	for i := range recs {
+		recs[i].CloudAccountID = &accountID
+	}
+	return recs
 }
 
 // RecommendationQueryParams holds query parameters for filtering recommendations
