@@ -261,6 +261,11 @@ const (
 	RoleReadOnly = "readonly"
 )
 
+// DefaultAdminGroupID is the fixed UUID of the Administrators group seeded
+// by migration 000024. SetupAdmin auto-assigns new admin users to this
+// group so the group card shows members on a fresh install.
+const DefaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
+
 // Predefined actions
 const (
 	ActionView    = "view"

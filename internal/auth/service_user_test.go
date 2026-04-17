@@ -21,7 +21,12 @@ func TestService_SetupAdmin(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("AdminExists", ctx).Return(false, nil).Once()
-		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
+		// Capture the user passed to CreateUser so we can assert on the
+		// auto-assigned DefaultAdminGroupID.
+		var capturedUser *User
+		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).
+			Run(func(args mock.Arguments) { capturedUser = args.Get(1).(*User) }).
+			Return(nil).Once()
 		mockStore.On("CreateSession", ctx, mock.AnythingOfType("*auth.Session")).Return(nil).Once()
 
 		req := SetupAdminRequest{
@@ -35,6 +40,10 @@ func TestService_SetupAdmin(t *testing.T) {
 		assert.NotEmpty(t, resp.Token)
 		assert.Equal(t, "admin@example.com", resp.User.Email)
 		assert.Equal(t, RoleAdmin, resp.User.Role)
+
+		// Verify the admin user was auto-assigned to the Administrators group.
+		require.NotNil(t, capturedUser)
+		assert.Equal(t, []string{DefaultAdminGroupID}, capturedUser.GroupIDs)
 
 		mockStore.AssertExpectations(t)
 	})

@@ -39,7 +39,9 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	// Create admin user
+	// Create admin user, auto-assigned to the Administrators group seeded
+	// by migration 000024 so the Administrators group card shows members
+	// immediately on a fresh install.
 	now := time.Now()
 	user := &User{
 		ID:           uuid.New().String(),
@@ -47,6 +49,7 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		PasswordHash: passwordHash,
 		Salt:         "", // Not used anymore, but kept for backward compatibility
 		Role:         RoleAdmin,
+		GroupIDs:     []string{DefaultAdminGroupID},
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		Active:       true,
