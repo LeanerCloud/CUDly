@@ -14,7 +14,11 @@ import (
 // CreateGroup creates a new permission group
 func (s *Service) CreateGroup(ctx context.Context, group *Group, createdBy string) error {
 	now := time.Now()
-	group.ID = "group-" + uuid.New().String()
+	// Generate a plain UUID. The previous "group-<uuid>" prefix produced
+	// an invalid UUID string that failed the Postgres UUID column insert
+	// with an "invalid input syntax for type uuid" error, which surfaced
+	// as a 500 on every POST /api/groups call.
+	group.ID = uuid.New().String()
 	group.CreatedAt = now
 	group.UpdatedAt = now
 	group.CreatedBy = createdBy

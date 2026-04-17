@@ -320,6 +320,14 @@ func (s *PostgresStore) CreateGroup(ctx context.Context, group *Group) error {
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 
+	// created_by is a nullable UUID FK; convert empty string to NULL so
+	// Postgres doesn't reject the insert with "invalid input syntax for
+	// type uuid" when the caller doesn't have a user ID.
+	var createdBy any = group.CreatedBy
+	if group.CreatedBy == "" {
+		createdBy = nil
+	}
+
 	_, err = s.db.Exec(ctx, query,
 		group.ID,
 		group.Name,
@@ -328,7 +336,7 @@ func (s *PostgresStore) CreateGroup(ctx context.Context, group *Group) error {
 		group.AllowedAccounts,
 		group.CreatedAt,
 		group.UpdatedAt,
-		group.CreatedBy,
+		createdBy,
 	)
 
 	if err != nil {
