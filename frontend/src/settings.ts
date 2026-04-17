@@ -645,14 +645,6 @@ export function setupSettingsHandlers(): void {
     if (e.target === gcpModal) closeGCPCredsModal();
   });
 
-  // Per-section save buttons — each triggers a full form submit
-  ['save-general-btn', 'save-defaults-btn', 'save-aws-btn', 'save-azure-btn', 'save-gcp-btn'].forEach(id => {
-    document.getElementById(id)?.addEventListener('click', () => {
-      const form = document.getElementById('global-settings-form') as HTMLFormElement | null;
-      form?.requestSubmit();
-    });
-  });
-
   // Set up dirty-field tracking
   setupDirtyTracking();
 
