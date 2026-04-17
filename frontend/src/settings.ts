@@ -121,6 +121,9 @@ export async function loadAccountsForProvider(provider: AccountProvider): Promis
  * Only shown for the provider matching CUDLY_SOURCE_CLOUD.
  */
 async function renderSelfAccountBanner(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): Promise<void> {
+  // Remove any existing banner first (prevents duplicates on re-render)
+  container.querySelector('.self-account-banner')?.remove();
+
   const hasSelf = accounts.some(a => a.is_self);
   if (hasSelf) return;
 
@@ -153,10 +156,11 @@ async function renderSelfAccountBanner(container: HTMLElement, accounts: api.Clo
         await api.createSelfAccount();
         await loadAccountsForProvider(provider);
       } catch (e: unknown) {
-        addBtn.textContent = 'Failed';
         const msg = e instanceof Error ? e.message : String(e);
         if (msg.includes('409')) {
           await loadAccountsForProvider(provider);
+        } else {
+          addBtn.textContent = 'Failed';
         }
       }
     });
@@ -172,17 +176,15 @@ async function renderSelfAccountBanner(container: HTMLElement, accounts: api.Clo
  * Render accounts list into a container element
  */
 function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): void {
+  // Remove old account rows (banner is managed by renderSelfAccountBanner)
+  container.querySelectorAll('.account-row:not(.self-account-banner), .account-overrides-panel').forEach(el => el.remove());
+
   if (!accounts || accounts.length === 0) {
-    // Don't overwrite the banner if present
     if (!container.querySelector('.self-account-banner')) {
       container.textContent = 'No accounts configured.';
     }
     return;
   }
-  // Clear previous account rows but keep the banner
-  const banner = container.querySelector('.self-account-banner');
-  container.textContent = '';
-  if (banner) container.appendChild(banner);
 
   accounts.forEach(account => {
     const row = document.createElement('div');
