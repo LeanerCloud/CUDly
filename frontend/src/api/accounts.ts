@@ -29,6 +29,7 @@ export interface CloudAccount {
   gcp_auth_mode?: 'service_account_key' | 'application_default' | 'workload_identity_federation';
   gcp_wif_audience?: string;
   credentials_configured: boolean;
+  is_self?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -119,6 +120,10 @@ export async function createAccount(req: CloudAccountRequest): Promise<CloudAcco
     method: 'POST',
     body: JSON.stringify(req)
   });
+}
+
+export async function createSelfAccount(): Promise<CloudAccount> {
+  return apiRequest<CloudAccount>('/accounts/self', { method: 'POST' });
 }
 
 export async function getAccount(id: string): Promise<CloudAccount> {

@@ -180,11 +180,21 @@ export interface SavingsBreakdownValue {
 }
 
 // Settings types
+export interface SourceIdentity {
+  provider: string;
+  account_id?: string;
+  subscription_id?: string;
+  tenant_id?: string;
+  client_id?: string;
+  project_id?: string;
+}
+
 export interface ConfigResponse {
   global?: GlobalConfig;
   services?: api.ServiceConfig[];
   credentials?: CredentialsConfig;
   source_cloud?: string;
+  source_identity?: SourceIdentity;
 }
 
 export interface GlobalConfig {

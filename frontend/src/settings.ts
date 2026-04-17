@@ -109,9 +109,62 @@ export async function loadAccountsForProvider(provider: AccountProvider): Promis
   if (!container) return;
   try {
     const accounts = await api.listAccounts({ provider });
+    renderSelfAccountBanner(container, accounts, provider);
     renderAccountsList(container, accounts, provider);
   } catch {
     container.textContent = 'Failed to load accounts.';
+  }
+}
+
+/**
+ * Show a banner to add CUDly's own host account if not already present.
+ * Only shown for the provider matching CUDLY_SOURCE_CLOUD.
+ */
+async function renderSelfAccountBanner(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): Promise<void> {
+  const hasSelf = accounts.some(a => a.is_self);
+  if (hasSelf) return;
+
+  // Check if this provider matches the source cloud
+  try {
+    const cfg = await api.getConfig();
+    if (!cfg.source_identity || cfg.source_identity.provider !== provider) return;
+    const extId = cfg.source_identity.account_id || cfg.source_identity.subscription_id || cfg.source_identity.project_id;
+    if (!extId) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'account-row self-account-banner';
+    banner.style.borderLeft = '3px solid var(--accent, #4a9eff)';
+    banner.style.padding = '8px 12px';
+    banner.style.marginBottom = '8px';
+
+    const info = document.createElement('span');
+    info.className = 'account-info';
+    info.textContent = `CUDly host account (${extId})`;
+    banner.appendChild(info);
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-small';
+    addBtn.textContent = 'Add';
+    addBtn.addEventListener('click', async () => {
+      addBtn.disabled = true;
+      addBtn.textContent = 'Adding...';
+      try {
+        await api.createSelfAccount();
+        await loadAccountsForProvider(provider);
+      } catch (e: unknown) {
+        addBtn.textContent = 'Failed';
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes('409')) {
+          await loadAccountsForProvider(provider);
+        }
+      }
+    });
+    banner.appendChild(addBtn);
+
+    container.prepend(banner);
+  } catch {
+    // Config fetch failed — skip silently
   }
 }
 
@@ -120,17 +173,25 @@ export async function loadAccountsForProvider(provider: AccountProvider): Promis
  */
 function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): void {
   if (!accounts || accounts.length === 0) {
-    container.textContent = 'No accounts configured.';
+    // Don't overwrite the banner if present
+    if (!container.querySelector('.self-account-banner')) {
+      container.textContent = 'No accounts configured.';
+    }
     return;
   }
+  // Clear previous account rows but keep the banner
+  const banner = container.querySelector('.self-account-banner');
   container.textContent = '';
+  if (banner) container.appendChild(banner);
+
   accounts.forEach(account => {
     const row = document.createElement('div');
     row.className = 'account-row';
 
     const info = document.createElement('span');
     info.className = 'account-info';
-    info.textContent = `${account.name} (${account.external_id})${account.enabled ? '' : ' [disabled]'}`;
+    const selfBadge = account.is_self ? ' [Self]' : '';
+    info.textContent = `${account.name} (${account.external_id})${selfBadge}${account.enabled ? '' : ' [disabled]'}`;
     row.appendChild(info);
 
     const editBtn = document.createElement('button');

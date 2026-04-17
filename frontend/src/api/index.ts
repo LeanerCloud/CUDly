@@ -196,6 +196,7 @@ export type {
 export {
   listAccounts,
   createAccount,
+  createSelfAccount,
   getAccount,
   updateAccount,
   deleteAccount,
