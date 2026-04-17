@@ -1015,6 +1015,40 @@
             </div>
         </div>
 
+        <!-- Duplicate Group Modal -->
+        <div id="group-duplicate-modal" class="modal hidden">
+            <div class="modal-content modal-wide">
+                <div class="modal-header-row">
+                    <h2>Duplicate Group</h2>
+                    <button type="button" class="modal-close" id="close-group-duplicate-modal-btn" aria-label="Close">&times;</button>
+                </div>
+                <form id="group-duplicate-form">
+                    <div class="form-group">
+                        <label for="dup-group-name">Name</label>
+                        <input type="text" id="dup-group-name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="dup-group-description">Description</label>
+                        <textarea id="dup-group-description" rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Source Permissions</label>
+                        <div id="dup-source-permissions" class="perm-preview"></div>
+                    </div>
+                    <fieldset class="settings-category">
+                        <legend>Account Scope (Optional)</legend>
+                        <p class="settings-help">Selected accounts restrict this group to only those accounts. Leave empty to inherit the source group's scope. <strong>Account matches are by name</strong> &mdash; renaming an account later will break this group's scope.</p>
+                        <div id="dup-provider-filter" class="target-cloud-pills" role="group" aria-label="Filter accounts by provider"></div>
+                        <div id="dup-accounts-list" class="dup-accounts-list"></div>
+                    </fieldset>
+                    <div class="modal-buttons">
+                        <button type="button" id="cancel-group-duplicate-btn">Cancel</button>
+                        <button type="submit" class="primary">Create Duplicate</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- Cloud Account Modal -->
         <div id="account-modal" class="modal hidden">
             <div class="modal-content modal-wide">

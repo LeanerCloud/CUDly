@@ -13,7 +13,7 @@ import { resetSettings } from './settings';
 import { loadHistory } from './history';
 import { logout } from './auth';
 import { openCreateUserModal, closeUserModal } from './users/userModals';
-import { openCreateGroupModal, closeGroupModal, addPermission } from './groups/groupModals';
+import { openCreateGroupModal, closeGroupModal, addPermission, closeDuplicateGroupModal, saveDuplicateGroup } from './groups/groupModals';
 
 // Re-export for external use
 export { api, utils };
@@ -44,6 +44,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('close-user-modal-btn')?.addEventListener('click', closeUserModal);
   document.getElementById('close-group-modal-btn')?.addEventListener('click', closeGroupModal);
   document.getElementById('add-permission-btn')?.addEventListener('click', () => addPermission());
+  document.getElementById('close-group-duplicate-modal-btn')?.addEventListener('click', closeDuplicateGroupModal);
+  document.getElementById('cancel-group-duplicate-btn')?.addEventListener('click', closeDuplicateGroupModal);
+  document.getElementById('group-duplicate-form')?.addEventListener('submit', (e) => void saveDuplicateGroup(e));
 });
 
 // Initialize on page load

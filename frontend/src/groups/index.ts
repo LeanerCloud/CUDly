@@ -9,7 +9,16 @@ export { currentEditingGroup, setCurrentEditingGroup } from './state';
 export { renderGroups } from './groupList';
 
 // Re-export group modals
-export { openCreateGroupModal, openEditGroupModal, closeGroupModal, saveGroup, addPermission } from './groupModals';
+export {
+  openCreateGroupModal,
+  openEditGroupModal,
+  closeGroupModal,
+  saveGroup,
+  addPermission,
+  openDuplicateGroupModal,
+  closeDuplicateGroupModal,
+  saveDuplicateGroup
+} from './groupModals';
 
 // Re-export group actions
 export { deleteGroup } from './groupActions';

@@ -6,6 +6,7 @@ import type { APIGroup, Permission } from '../api';
 import { allUsers } from '../users/state';
 import { escapeHtml } from '../users/utils';
 import { openEditGroupModal, deleteGroup } from './groupActions';
+import { openDuplicateGroupModal } from './groupModals';
 
 /**
  * Format permission constraints as a readable string for tooltips
@@ -62,6 +63,7 @@ export function renderGroups(groups: APIGroup[]): void {
           <div class="group-card-actions">
             <span class="badge">${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
             <button class="btn-small edit-group-btn" data-group-id="${escapeHtml(group.id)}">Edit</button>
+            <button class="btn-small duplicate-group-btn" data-group-id="${escapeHtml(group.id)}" title="Duplicate">Duplicate</button>
             <button class="btn-small btn-danger delete-group-btn" data-group-id="${escapeHtml(group.id)}">Delete</button>
           </div>
         </div>
@@ -82,6 +84,12 @@ export function renderGroups(groups: APIGroup[]): void {
     btn.addEventListener('click', () => {
       const groupId = (btn as HTMLElement).dataset.groupId;
       if (groupId) void openEditGroupModal(groupId);
+    });
+  });
+  container.querySelectorAll('.duplicate-group-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const groupId = (btn as HTMLElement).dataset.groupId;
+      if (groupId) void openDuplicateGroupModal(groupId);
     });
   });
   container.querySelectorAll('.delete-group-btn').forEach(btn => {
