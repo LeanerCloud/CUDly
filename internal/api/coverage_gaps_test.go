@@ -455,11 +455,11 @@ func TestAmbientCredResult(t *testing.T) {
 			msgContains: "web identity",
 		},
 		{
-			name:        "aws role_arn no ARN",
+			name:        "aws role_arn no ARN (self-account)",
 			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "role_arn"},
-			wantOK:      false,
+			wantOK:      true,
 			wantFound:   true,
-			msgContains: "aws_role_arn",
+			msgContains: "ambient",
 		},
 		{
 			name:        "aws role_arn with ARN",

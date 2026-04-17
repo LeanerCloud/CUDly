@@ -492,7 +492,10 @@ func awsAmbientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
 		return AccountTestResult{OK: true, Message: "web identity federation configured (no stored credential required)"}, true
 	case "role_arn", "bastion":
 		if acct.AWSRoleARN == "" {
-			return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
+			// Self-account: role_arn mode with no role ARN means "use ambient
+			// Lambda execution role credentials" — the account is CUDly's own
+			// host and doesn't need cross-account role assumption.
+			return AccountTestResult{OK: true, Message: "ambient credentials (CUDly host account)"}, true
 		}
 		return AccountTestResult{OK: true, Message: "role assumption configured (no stored credential required)"}, true
 	}
