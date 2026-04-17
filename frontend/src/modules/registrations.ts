@@ -78,6 +78,29 @@ function createCodeCell(text: string): HTMLTableCellElement {
   return td;
 }
 
+// Auto-generated registration names often embed a UUID (8-4-4-4-12 hex).
+// Dim the UUID portion so the readable prefix (e.g. "Azure") stands out.
+const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+function createNameCell(name: string): HTMLTableCellElement {
+  const td = document.createElement('td');
+  const match = name.match(UUID_RE);
+  if (!match || match.index === undefined) {
+    td.textContent = name;
+    return td;
+  }
+  const uuid = match[1] ?? '';
+  const before = name.slice(0, match.index);
+  const after = name.slice(match.index + uuid.length);
+  if (before) td.appendChild(document.createTextNode(before));
+  const uuidSpan = document.createElement('span');
+  uuidSpan.className = 'text-muted';
+  uuidSpan.textContent = uuid;
+  td.appendChild(uuidSpan);
+  if (after) td.appendChild(document.createTextNode(after));
+  return td;
+}
+
 function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistration[]): void {
   container.textContent = '';
 
@@ -106,7 +129,7 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
   for (const reg of regs) {
     const row = document.createElement('tr');
     row.appendChild(createCell(providerLabel(reg.provider)));
-    row.appendChild(createCell(reg.account_name));
+    row.appendChild(createNameCell(reg.account_name));
     row.appendChild(createCodeCell(reg.external_id));
     row.appendChild(createCell(reg.contact_email));
     row.appendChild(createCell(formatDate(reg.created_at)));

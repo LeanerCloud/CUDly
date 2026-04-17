@@ -571,14 +571,10 @@
                     <fieldset class="settings-category">
                         <legend>Federation Setup (Add New Account)</legend>
                         <p class="settings-description">Download pre-populated IaC to onboard a new account via workload identity federation. No long-lived credentials needed.</p>
-                        <div class="setting-row">
-                            <div class="setting-info">
-                                <label>Target cloud:</label>
-                                <span class="info-icon">&#9432;<span class="tooltip-text">The cloud where the new account lives. The downloaded IaC will be pre-configured to trust CUDly's current deployment.</span></span>
-                            </div>
-                            <div class="setting-input">
-                                <div id="federation-target-cloud-pills" class="target-cloud-pills" role="group" aria-label="Target cloud"></div>
-                            </div>
+                        <div class="target-cloud-row">
+                            <label>Target cloud:</label>
+                            <span class="info-icon">&#9432;<span class="tooltip-text">The cloud where the new account lives. The downloaded IaC will be pre-configured to trust CUDly's current deployment.</span></span>
+                            <div id="federation-target-cloud-pills" class="target-cloud-pills" role="group" aria-label="Target cloud"></div>
                         </div>
                         <div id="federation-setup-panel" class="federation-accounts"></div>
                     </fieldset>

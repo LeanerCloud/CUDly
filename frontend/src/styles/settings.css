@@ -266,10 +266,25 @@ select.dirty {
     gap: 0.5rem;
 }
 
+.target-cloud-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.target-cloud-row label {
+    font-weight: 500;
+    color: #333;
+    margin: 0;
+}
+
 .target-cloud-pills {
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
+    margin-left: 0.5rem;
 }
 
 .target-cloud-pills .target-cloud-pill {
@@ -300,7 +315,7 @@ select.dirty {
     align-items: flex-start;
     text-align: left;
     padding: 0.5rem 0.75rem;
-    min-width: 11rem;
+    flex: 1 1 11rem;
     line-height: 1.2;
 }
 
