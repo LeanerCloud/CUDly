@@ -261,44 +261,6 @@
                     <div id="ri-exchange-recommendations-list"></div>
                 </section>
 
-                <section id="ri-exchange-quote-section" class="card">
-                    <h3>Exchange Quote</h3>
-                    <form id="ri-exchange-quote-form" class="settings-form">
-                        <div class="form-row">
-                            <label>RI IDs (comma-separated):
-                                <input type="text" id="ri-exchange-ri-ids" required placeholder="ri-0123456789abcdef0">
-                            </label>
-                        </div>
-                        <div class="form-row">
-                            <label>Target Offering ID:
-                                <input type="text" id="ri-exchange-target-offering" required placeholder="offering-id">
-                            </label>
-                            <label>Target Count:
-                                <input type="number" id="ri-exchange-target-count" value="1" min="1">
-                            </label>
-                        </div>
-                        <button type="submit">Get Quote</button>
-                    </form>
-                    <div id="ri-exchange-quote-result" class="mt-3"></div>
-                </section>
-
-                <section id="ri-exchange-execute-section" class="card hidden">
-                    <h3>Execute Exchange</h3>
-                    <div class="form-row">
-                        <label>Max Payment Cap (USD):
-                            <input type="number" id="ri-exchange-max-payment" step="0.01" min="0" placeholder="0.00">
-                        </label>
-                    </div>
-                    <div class="form-row">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="ri-exchange-confirm">
-                            I confirm I want to execute this RI exchange
-                        </label>
-                    </div>
-                    <button id="ri-exchange-execute-btn">Execute Exchange</button>
-                    <div id="ri-exchange-execute-result" class="mt-3"></div>
-                </section>
-
                 <section class="card">
                     <h3>Exchange History</h3>
                     <p class="settings-description">Recent RI exchange operations (last 12 months).</p>
