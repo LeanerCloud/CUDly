@@ -117,7 +117,23 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 		accounts = filtered
 	}
 
+	// Mark the self-account (the account matching CUDly's own host identity)
+	h.markSelfAccount(ctx, accounts)
+
 	return accounts, nil
+}
+
+// markSelfAccount sets IsSelf=true on the account matching the source identity.
+func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) {
+	si := h.resolveSourceIdentity(ctx)
+	if si == nil || si.ExternalID() == "" {
+		return
+	}
+	for i := range accounts {
+		if accounts[i].Provider == si.Provider && accounts[i].ExternalID == si.ExternalID() {
+			accounts[i].IsSelf = true
+		}
+	}
 }
 
 // buildAccountFilter constructs a CloudAccountFilter from query parameters.
@@ -144,6 +160,64 @@ func buildAccountFilter(params map[string]string) config.CloudAccountFilter {
 	}
 
 	return filter
+}
+
+// createSelfAccount handles POST /api/accounts/self.
+// Auto-creates an account for CUDly's own host cloud using ambient credentials.
+func (h *Handler) createSelfAccount(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (any, error) {
+	if _, err := h.requirePermission(ctx, httpReq, "create", "accounts"); err != nil {
+		return nil, err
+	}
+
+	si := h.resolveSourceIdentity(ctx)
+	if si == nil || si.ExternalID() == "" {
+		return nil, NewClientError(400, "source identity not available — CUDly cannot detect its own cloud account")
+	}
+
+	req := buildSelfAccountRequest(si)
+	if err := validateCloudAccountRequest(req); err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	account := cloudAccountFromRequest(req)
+	account.ID = uuid.New().String()
+	account.CreatedAt = now
+	account.UpdatedAt = now
+	account.Enabled = true
+
+	if err := h.config.CreateCloudAccount(ctx, account); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+			return nil, NewClientError(409, "self-account already exists")
+		}
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+
+	account.IsSelf = true
+	return account, nil
+}
+
+func buildSelfAccountRequest(si *sourceIdentity) CloudAccountRequest {
+	enabled := true
+	req := CloudAccountRequest{
+		Name:       fmt.Sprintf("CUDly host (%s)", si.ExternalID()),
+		Provider:   si.Provider,
+		ExternalID: si.ExternalID(),
+		Enabled:    &enabled,
+	}
+	switch si.Provider {
+	case "aws":
+		req.AWSAuthMode = "role_arn"
+	case "azure":
+		req.AzureAuthMode = "managed_identity"
+		req.AzureSubscriptionID = si.SubscriptionID
+		req.AzureTenantID = si.TenantID
+		req.AzureClientID = si.ClientID
+	case "gcp":
+		req.GCPAuthMode = "application_default"
+		req.GCPProjectID = si.ProjectID
+	}
+	return req
 }
 
 // createAccount handles POST /api/accounts.

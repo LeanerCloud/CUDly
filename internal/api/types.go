@@ -287,10 +287,11 @@ type ProfileUpdateRequest struct {
 
 // ConfigResponse holds the configuration response
 type ConfigResponse struct {
-	Global      *config.GlobalConfig   `json:"global"`
-	Services    []config.ServiceConfig `json:"services"`
-	Credentials *CredentialsStatus     `json:"credentials,omitempty"`
-	SourceCloud string                 `json:"source_cloud,omitempty"`
+	Global         *config.GlobalConfig   `json:"global"`
+	Services       []config.ServiceConfig `json:"services"`
+	Credentials    *CredentialsStatus     `json:"credentials,omitempty"`
+	SourceCloud    string                 `json:"source_cloud,omitempty"`
+	SourceIdentity *sourceIdentity        `json:"source_identity,omitempty"`
 }
 
 // CredentialsStatus holds the status of cloud provider credentials

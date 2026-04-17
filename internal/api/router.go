@@ -139,6 +139,7 @@ func (r *Router) registerRoutes() {
 
 		// Cloud Account endpoints (more-specific suffix routes must precede generic prefix routes)
 		{ExactPath: "/api/accounts/discover-org", Method: "POST", Handler: r.discoverOrgAccountsHandler},
+		{ExactPath: "/api/accounts/self", Method: "POST", Handler: r.createSelfAccountHandler},
 		{ExactPath: "/api/accounts", Method: "GET", Handler: r.listAccountsHandler},
 		{ExactPath: "/api/accounts", Method: "POST", Handler: r.createAccountHandler},
 		{PathPrefix: "/api/accounts/", PathSuffix: "/credentials", Method: "POST", Handler: r.saveAccountCredentialsHandler},
@@ -541,6 +542,10 @@ func (r *Router) listAccountsHandler(ctx context.Context, req *events.LambdaFunc
 
 func (r *Router) createAccountHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
 	return r.h.createAccount(ctx, req)
+}
+
+func (r *Router) createSelfAccountHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.createSelfAccount(ctx, req)
 }
 
 func (r *Router) discoverOrgAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {

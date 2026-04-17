@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -44,8 +45,8 @@ type Handler struct {
 	awsCfg     aws.Config // cached base AWS config (no region override)
 	awsCfgErr  error      // error from loading the base config, if any
 
-	sourceAccountOnce sync.Once // guards one-time STS GetCallerIdentity
-	sourceAccountID   string    // cached AWS account ID where CUDly runs
+	sourceIdentityOnce sync.Once       // guards one-time source identity resolution
+	sourceID           *sourceIdentity // cached source cloud identity
 }
 
 // NewHandler creates a new API handler
@@ -367,25 +368,72 @@ func (h *Handler) loadAPIKey(ctx context.Context) (string, error) {
 	return *result.SecretString, nil
 }
 
-// resolveSourceAccountID returns the AWS account ID where CUDly runs,
-// resolved via STS GetCallerIdentity and cached for the process lifetime.
-func (h *Handler) resolveSourceAccountID(ctx context.Context) string {
-	h.sourceAccountOnce.Do(func() {
-		h.awsCfgOnce.Do(func() {
-			h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
-		})
-		if h.awsCfgErr != nil {
-			return
+// sourceIdentity holds the auto-detected identity of the cloud account
+// where CUDly itself runs. Resolved once at first use, cached for process lifetime.
+type sourceIdentity struct {
+	Provider       string `json:"provider"`
+	AccountID      string `json:"account_id,omitempty"`      // AWS account number
+	SubscriptionID string `json:"subscription_id,omitempty"` // Azure subscription
+	TenantID       string `json:"tenant_id,omitempty"`       // Azure tenant
+	ClientID       string `json:"client_id,omitempty"`       // Azure app client ID
+	ProjectID      string `json:"project_id,omitempty"`      // GCP project
+}
+
+// ExternalID returns the canonical external identifier for the source cloud.
+func (s *sourceIdentity) ExternalID() string {
+	switch s.Provider {
+	case "aws":
+		return s.AccountID
+	case "azure":
+		return s.SubscriptionID
+	case "gcp":
+		return s.ProjectID
+	}
+	return ""
+}
+
+// resolveSourceIdentity returns the auto-detected identity of CUDly's host
+// account. All resolution is best-effort — returns an empty struct on failure.
+func (h *Handler) resolveSourceIdentity(ctx context.Context) *sourceIdentity {
+	h.sourceIdentityOnce.Do(func() {
+		cloud := sourceCloud()
+		id := &sourceIdentity{Provider: cloud}
+		switch cloud {
+		case "aws":
+			id.AccountID = h.resolveAWSAccountID(ctx)
+		case "azure":
+			id.ClientID = os.Getenv("AZURE_CLIENT_ID")
+			id.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
+			id.TenantID = os.Getenv("AZURE_TENANT_ID")
+		case "gcp":
+			id.ProjectID = os.Getenv("GCP_PROJECT_ID")
 		}
-		client := sts.NewFromConfig(h.awsCfg)
-		identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-		if err != nil {
-			logging.Warnf("Failed to resolve source account ID via STS: %v", err)
-			return
-		}
-		if identity.Account != nil {
-			h.sourceAccountID = *identity.Account
-		}
+		h.sourceID = id
 	})
-	return h.sourceAccountID
+	return h.sourceID
+}
+
+// resolveSourceAccountID returns the AWS account ID where CUDly runs.
+// Convenience wrapper for the federation IaC handler.
+func (h *Handler) resolveSourceAccountID(ctx context.Context) string {
+	return h.resolveSourceIdentity(ctx).AccountID
+}
+
+func (h *Handler) resolveAWSAccountID(ctx context.Context) string {
+	h.awsCfgOnce.Do(func() {
+		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
+	})
+	if h.awsCfgErr != nil {
+		return ""
+	}
+	client := sts.NewFromConfig(h.awsCfg)
+	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		logging.Warnf("Failed to resolve source account ID via STS: %v", err)
+		return ""
+	}
+	if identity.Account != nil {
+		return *identity.Account
+	}
+	return ""
 }

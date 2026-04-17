@@ -248,6 +248,7 @@ type CloudAccount struct {
 	// Derived (not stored in DB)
 	CredentialsConfigured bool   `json:"credentials_configured"`
 	BastionAccountName    string `json:"bastion_account_name,omitempty"`
+	IsSelf                bool   `json:"is_self,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
