@@ -544,10 +544,10 @@ describe('Dashboard API', () => {
       );
     });
 
-    test('uses all providers by default', async () => {
+    test('uses all providers by default (empty provider filter)', async () => {
       await getDashboardSummary();
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/dashboard/summary?provider=all',
+        '/api/dashboard/summary?provider=',
         expect.anything()
       );
     });

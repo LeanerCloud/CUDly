@@ -8,7 +8,7 @@ import * as api from './api';
 // App state interface
 export interface AppState {
   currentUser: api.User | null;
-  currentProvider: api.Provider | 'all';
+  currentProvider: api.Provider | '';
   currentAccountIDs: string[]; // selected account UUIDs; empty = all accounts
   currentRecommendations: api.Recommendation[];
   selectedRecommendations: Set<number>;

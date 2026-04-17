@@ -7,7 +7,7 @@ import type { AppState } from './types';
 // Singleton state instance
 export const state: AppState = {
   currentUser: null,
-  currentProvider: 'all',
+  currentProvider: '',
   currentAccountIDs: [],
   currentRecommendations: [],
   selectedRecommendations: new Set(),

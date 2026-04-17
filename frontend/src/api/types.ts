@@ -64,7 +64,7 @@ export interface Recommendation {
 }
 
 export interface RecommendationFilters {
-  provider?: Provider | 'all';
+  provider?: Provider | '';
   service?: string;
   region?: string;
   minSavings?: number;

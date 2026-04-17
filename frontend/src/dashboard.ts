@@ -21,7 +21,7 @@ export function setupDashboardHandlers(): void {
     providerFilter.value = state.getCurrentProvider();
 
     providerFilter.addEventListener('change', () => {
-      state.setCurrentProvider(providerFilter.value as 'all' | 'aws' | 'azure' | 'gcp');
+      state.setCurrentProvider(providerFilter.value as '' | 'aws' | 'azure' | 'gcp');
       void populateAccountFilter('dashboard-account-filter', api.listAccounts, providerFilter.value);
       void loadDashboard();
     });

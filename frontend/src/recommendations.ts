@@ -40,7 +40,7 @@ export function setupRecommendationsHandlers(): void {
     providerFilter.value = state.getCurrentProvider();
 
     providerFilter.addEventListener('change', () => {
-      state.setCurrentProvider(providerFilter.value as 'all' | 'aws' | 'azure' | 'gcp');
+      state.setCurrentProvider(providerFilter.value as '' | 'aws' | 'azure' | 'gcp');
       updateServiceFilterVisibility(providerFilter.value);
       void populateRecommendationsAccountFilter(providerFilter.value);
       void loadRecommendations();
@@ -88,7 +88,7 @@ function updateServiceFilterVisibility(provider: string): void {
   const optgroups = serviceFilter.querySelectorAll('optgroup');
   optgroups.forEach(optgroup => {
     const providerLabel = optgroup.label.toLowerCase();
-    if (provider === '' || provider === 'all') {
+    if (provider === '') {
       // Show all optgroups when "All Providers" is selected
       (optgroup as HTMLOptGroupElement).style.display = '';
     } else if (providerLabel.includes(provider)) {

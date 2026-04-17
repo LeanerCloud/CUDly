@@ -22,7 +22,7 @@ describe('State Module', () => {
   // Reset state before each test
   beforeEach(() => {
     state.currentUser = null;
-    state.currentProvider = 'all';
+    state.currentProvider = '';
     state.currentRecommendations = [];
     state.selectedRecommendations = new Set();
     state.savingsChart = null;
@@ -47,8 +47,8 @@ describe('State Module', () => {
   });
 
   describe('Provider State', () => {
-    test('getCurrentProvider returns "all" initially', () => {
-      expect(getCurrentProvider()).toBe('all');
+    test('getCurrentProvider returns "" initially (all providers)', () => {
+      expect(getCurrentProvider()).toBe('');
     });
 
     test('setCurrentProvider and getCurrentProvider work correctly', () => {
@@ -61,8 +61,8 @@ describe('State Module', () => {
       setCurrentProvider('gcp');
       expect(getCurrentProvider()).toBe('gcp');
 
-      setCurrentProvider('all');
-      expect(getCurrentProvider()).toBe('all');
+      setCurrentProvider('');
+      expect(getCurrentProvider()).toBe('');
     });
   });
 
