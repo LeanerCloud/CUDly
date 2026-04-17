@@ -105,6 +105,15 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const isPaused = purchase.status === 'paused';
   const isPending = purchase.status === 'pending';
   const canRun = isPending || isPaused;
+  const termCell = purchase.term > 0
+    ? `${purchase.term}yr ${purchase.payment.replace('-', ' ')}`
+    : '—';
+  // Show an em-dash for upfront=0 unless the plan truly is all-upfront;
+  // $0 upfront on "partial" or "no-upfront" is informative ($0 is real).
+  // A zero on an all-upfront term almost always means missing data.
+  const upfrontCell = purchase.upfront_cost > 0 || purchase.payment !== 'all-upfront'
+    ? formatCurrency(purchase.upfront_cost)
+    : '—';
 
   return `
     <tr class="planned-purchase-row ${statusClass}">
@@ -117,8 +126,8 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${escapeHtml(purchase.service)}</td>
       <td>${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})</td>
       <td>${purchase.count}</td>
-      <td>${purchase.term}yr ${purchase.payment.replace('-', ' ')}</td>
-      <td>${formatCurrency(purchase.upfront_cost)}</td>
+      <td>${termCell}</td>
+      <td>${upfrontCell}</td>
       <td class="savings">${formatCurrency(purchase.estimated_savings)}/mo</td>
       <td><span class="status-badge ${statusClass}">${purchase.status}</span></td>
       <td class="actions">
@@ -213,16 +222,32 @@ interface BackendPlan {
 // Extract provider/service info from plan's services map
 function extractPlanInfo(plan: BackendPlan): { provider: string; service: string; term: number; coverage: number } {
   const services = plan.services || {};
-  const firstService = Object.values(services)[0];
+  const serviceValues = Object.values(services);
+  const firstService = serviceValues[0];
   if (firstService) {
+    // When a plan spans multiple services, show "Multiple" instead of
+    // arbitrarily picking the first one's label.
+    const service = serviceValues.length > 1
+      ? 'Multiple'
+      : (firstService.service || '—');
     return {
       provider: firstService.provider || 'aws',
-      service: firstService.service || 'unknown',
+      service,
       term: firstService.term || 3,
       coverage: firstService.coverage || 80
     };
   }
-  return { provider: 'aws', service: 'unknown', term: 3, coverage: 80 };
+  return { provider: 'aws', service: '—', term: 3, coverage: 80 };
+}
+
+// Returns true when the plan's next_execution_date is strictly before today.
+function isPlanOverdue(plan: BackendPlan): boolean {
+  if (!plan.next_execution_date) return false;
+  const nextDate = new Date(plan.next_execution_date);
+  if (isNaN(nextDate.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return nextDate < today;
 }
 
 // Format ramp schedule from backend struct
@@ -268,6 +293,13 @@ function renderPlans(plans: LocalPlan[]): void {
     const info = extractPlanInfo(plan);
     const status = getStatusBadge(plan.enabled, plan.auto_purchase);
     const rampSchedule = plan.ramp_schedule || { type: 'immediate', current_step: 0, total_steps: 1 };
+    const overdue = isPlanOverdue(plan);
+    // Hide the stale next_execution_date for disabled plans — keeping it
+    // visible implies the plan will still run on that date, which it won't.
+    const showNextDate = Boolean(plan.next_execution_date) && plan.enabled;
+    const overdueBadge = overdue && plan.enabled
+      ? '<span class="status-badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
+      : '';
 
     return `
       <div class="plan-card">
@@ -275,6 +307,7 @@ function renderPlans(plans: LocalPlan[]): void {
           <h3>${escapeHtml(plan.name)}</h3>
           <div class="plan-status">
             <span class="status-badge ${status.class}">${status.label}</span>
+            ${overdueBadge}
             <label class="toggle-label">
               <input type="checkbox" data-action="toggle-plan" data-id="${plan.id}" ${plan.enabled ? 'checked' : ''}>
               <span class="slider"></span>
@@ -307,10 +340,10 @@ function renderPlans(plans: LocalPlan[]): void {
               <span class="plan-detail-label">Progress</span>
               <span class="plan-detail-value">${rampSchedule.current_step || 0}/${rampSchedule.total_steps || 1} steps</span>
             </div>
-            ${plan.next_execution_date ? `
+            ${showNextDate ? `
             <div class="plan-detail">
               <span class="plan-detail-label">Next Purchase</span>
-              <span class="plan-detail-value">${formatDate(plan.next_execution_date)}</span>
+              <span class="plan-detail-value">${formatDate(plan.next_execution_date || '')}</span>
             </div>
             ` : ''}
           </div>
