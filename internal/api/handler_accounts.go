@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"golang.org/x/oauth2"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
@@ -98,19 +99,17 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 		accounts = []config.CloudAccount{}
 	}
 
-	// Filter by allowed accounts if the user has restricted access
+	// Filter by allowed accounts if the user has restricted access.
+	// An empty list or one containing "*" grants unrestricted access.
+	// Otherwise each entry is matched against the account's ID or Name.
 	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if len(allowedAccounts) > 0 {
-		allowed := make(map[string]struct{}, len(allowedAccounts))
-		for _, id := range allowedAccounts {
-			allowed[id] = struct{}{}
-		}
+	if !auth.IsUnrestrictedAccess(allowedAccounts) {
 		filtered := accounts[:0]
 		for _, acct := range accounts {
-			if _, ok := allowed[acct.ID]; ok {
+			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
 				filtered = append(filtered, acct)
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
@@ -65,20 +66,30 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if len(allowedAccounts) == 0 {
+	if auth.IsUnrestrictedAccess(allowedAccounts) {
 		return recs, nil
 	}
 
-	allowed := make(map[string]struct{}, len(allowedAccounts))
-	for _, id := range allowedAccounts {
-		allowed[id] = struct{}{}
+	// Resolve account names so the allowed list can match on either ID or
+	// display name. Recommendations only carry CloudAccountID, so the name
+	// lookup needs a one-time fetch of the account list.
+	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list accounts for filter: %w", err)
 	}
+	nameByID := make(map[string]string, len(accounts))
+	for _, a := range accounts {
+		nameByID[a.ID] = a.Name
+	}
+
 	filtered := recs[:0]
 	for _, rec := range recs {
-		if rec.CloudAccountID != nil {
-			if _, ok := allowed[*rec.CloudAccountID]; ok {
-				filtered = append(filtered, rec)
-			}
+		if rec.CloudAccountID == nil {
+			continue
+		}
+		id := *rec.CloudAccountID
+		if auth.MatchesAccount(allowedAccounts, id, nameByID[id]) {
+			filtered = append(filtered, rec)
 		}
 	}
 	return filtered, nil

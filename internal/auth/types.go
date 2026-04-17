@@ -120,29 +120,49 @@ func (ctx *AuthContext) HasPermission(action, resource string) bool {
 	return false
 }
 
-// CanAccessAccount checks if the user can access a specific account ID
-func (ctx *AuthContext) CanAccessAccount(accountID string) bool {
-	// Admin users have access to all accounts
+// IsUnrestrictedAccess returns true if the allowed list grants access to all
+// accounts — either because it's empty (backward-compat default) or contains
+// a "*" wildcard entry. Handlers can use this to short-circuit their filter
+// loops without iterating accounts when access is unrestricted.
+func IsUnrestrictedAccess(allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, a := range allowed {
+		if a == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchesAccount returns true if the allowed list matches an account by its
+// internal ID or display name. Exact string match against either field. The
+// name is optional — pass "" when unavailable; the match then falls back to
+// ID-only. Empty allowed list or a "*" entry matches any account.
+func MatchesAccount(allowed []string, accountID, accountName string) bool {
+	if IsUnrestrictedAccess(allowed) {
+		return true
+	}
+	for _, a := range allowed {
+		if a == accountID {
+			return true
+		}
+		if accountName != "" && a == accountName {
+			return true
+		}
+	}
+	return false
+}
+
+// CanAccessAccount checks if the user can access a specific account by its
+// ID or display name. Admins always have full access. Non-admins are checked
+// against AllowedAccounts via MatchesAccount.
+func (ctx *AuthContext) CanAccessAccount(accountID, accountName string) bool {
 	if ctx.User.Role == RoleAdmin {
 		return true
 	}
-
-	// Empty AllowedAccounts means all access
-	if len(ctx.AllowedAccounts) == 0 {
-		return true
-	}
-
-	// Check for wildcard
-	for _, allowed := range ctx.AllowedAccounts {
-		if allowed == "*" {
-			return true
-		}
-		if allowed == accountID {
-			return true
-		}
-	}
-
-	return false
+	return MatchesAccount(ctx.AllowedAccounts, accountID, accountName)
 }
 
 // Session represents an active user session
