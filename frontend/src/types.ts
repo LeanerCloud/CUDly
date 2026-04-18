@@ -192,7 +192,6 @@ export interface SourceIdentity {
 export interface ConfigResponse {
   global?: GlobalConfig;
   services?: api.ServiceConfig[];
-  credentials?: CredentialsConfig;
   source_cloud?: string;
   source_identity?: SourceIdentity;
 }
@@ -206,11 +205,6 @@ export interface GlobalConfig {
   default_payment?: string;
   default_coverage?: number;
   notification_days_before?: number;
-}
-
-export interface CredentialsConfig {
-  azure_configured?: boolean;
-  gcp_configured?: boolean;
 }
 
 // API Keys types

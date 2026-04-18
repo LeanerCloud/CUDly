@@ -437,16 +437,6 @@
                     <!-- Azure Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="azure-settings">
                         <legend><span class="provider-badge azure">Azure</span> Settings</legend>
-                        <div class="setting-row">
-                            <div class="setting-info">
-                                <label>Credentials</label>
-                                <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
-                            </div>
-                            <div class="setting-input">
-                                <span class="credential-status" id="azure-creds-status">Not Configured</span>
-                                <button type="button" class="btn btn-small" id="azure-configure-btn">Configure</button>
-                            </div>
-                        </div>
                         <h4 class="subsection-title">Service Defaults</h4>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
@@ -471,16 +461,6 @@
                     <!-- GCP Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="gcp-settings">
                         <legend><span class="provider-badge gcp">GCP</span> Settings</legend>
-                        <div class="setting-row">
-                            <div class="setting-info">
-                                <label>Credentials</label>
-                                <span class="info-icon">&#9432;<span class="tooltip-text">Stored in AWS Secrets Manager. Configure the secret ARN in CloudFormation.</span></span>
-                            </div>
-                            <div class="setting-input">
-                                <span class="credential-status" id="gcp-creds-status">Not Configured</span>
-                                <button type="button" class="btn btn-small" id="gcp-configure-btn">Configure</button>
-                            </div>
-                        </div>
                         <h4 class="subsection-title">Service Defaults</h4>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
@@ -613,126 +593,6 @@
         </main>
 
         <!-- Login Modal is created dynamically by auth.ts -->
-
-        <!-- Azure Credentials Modal -->
-        <div id="azure-creds-modal" class="modal hidden">
-            <div class="modal-content modal-wide">
-                <h2>Configure Azure Credentials</h2>
-                <p class="modal-description">Enter your Azure Service Principal credentials. These are stored securely in AWS Secrets Manager.</p>
-
-                <div class="prereq-section">
-                    <h4>Step 1: Create a Service Principal</h4>
-                    <p class="prereq-description">Run these commands in Azure CLI to create a Service Principal with the required permissions:</p>
-                    <div class="cli-command">
-                        <code id="azure-login-cmd">az login</code>
-                        <button type="button" class="copy-btn copy-azure-login" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                    <div class="cli-command">
-                        <code id="azure-sp-cmd">az ad sp create-for-rbac --name "CUDly" --role "Reservation Administrator" --scopes /subscriptions/&lt;your-subscription-id&gt;</code>
-                        <button type="button" class="copy-btn copy-azure-sp" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                    <p class="prereq-hint">The command output will contain the Tenant ID, Client ID (appId), and Client Secret (password).</p>
-                </div>
-
-                <h4>Step 2: Enter the credentials below</h4>
-                <form id="azure-creds-form">
-                    <div class="form-group">
-                        <label for="azure-tenant-id">Tenant ID</label>
-                        <input type="text" id="azure-tenant-id" required placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-                    </div>
-                    <div class="form-group">
-                        <label for="azure-client-id">Client ID (Application ID)</label>
-                        <input type="text" id="azure-client-id" required placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-                    </div>
-                    <div class="form-group">
-                        <label for="azure-client-secret">Client Secret</label>
-                        <input type="password" id="azure-client-secret" required placeholder="Enter client secret">
-                    </div>
-                    <div class="form-group">
-                        <label for="azure-subscription-id">Subscription ID</label>
-                        <input type="text" id="azure-subscription-id" required placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-                    </div>
-                    <div id="azure-creds-error" class="error-message hidden"></div>
-                    <div class="modal-buttons">
-                        <button type="button" class="btn-secondary" id="close-azure-modal-btn">Cancel</button>
-                        <button type="submit">Save Credentials</button>
-                    </div>
-                </form>
-                <div class="cli-alternative">
-                    <p>Or configure via CLI:</p>
-                    <div class="cli-command">
-                        <code id="azure-cli-cmd">cudly configure-azure --profile &lt;your-profile&gt;</code>
-                        <button type="button" class="copy-btn copy-azure-cli" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- GCP Credentials Modal -->
-        <div id="gcp-creds-modal" class="modal hidden">
-            <div class="modal-content modal-wide">
-                <h2>Configure GCP Credentials</h2>
-                <p class="modal-description">Paste your GCP Service Account JSON key. These are stored securely in AWS Secrets Manager.</p>
-
-                <div class="prereq-section">
-                    <h4>Step 1: Create a Service Account</h4>
-                    <p class="prereq-description">Run these commands in gcloud CLI to create a Service Account with the required permissions:</p>
-                    <div class="cli-command">
-                        <code id="gcp-login-cmd">gcloud auth login</code>
-                        <button type="button" class="copy-btn copy-gcp-login" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                    <div class="cli-command">
-                        <code id="gcp-sa-create-cmd">gcloud iam service-accounts create cudly --display-name="CUDly Commitment Manager"</code>
-                        <button type="button" class="copy-btn copy-gcp-sa-create" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                    <div class="cli-command">
-                        <code id="gcp-role-cmd">gcloud projects add-iam-policy-binding &lt;PROJECT_ID&gt; --member="serviceAccount:cudly@&lt;PROJECT_ID&gt;.iam.gserviceaccount.com" --role="roles/compute.admin"</code>
-                        <button type="button" class="copy-btn copy-gcp-role" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                    <div class="cli-command">
-                        <code id="gcp-key-cmd">gcloud iam service-accounts keys create ~/cudly-key.json --iam-account=cudly@&lt;PROJECT_ID&gt;.iam.gserviceaccount.com</code>
-                        <button type="button" class="copy-btn copy-gcp-key" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                    <p class="prereq-hint">Then open ~/cudly-key.json and paste its contents below.</p>
-                </div>
-
-                <h4>Step 2: Paste the JSON key below</h4>
-                <form id="gcp-creds-form">
-                    <div class="form-group">
-                        <label for="gcp-service-account-json">Service Account JSON Key</label>
-                        <textarea id="gcp-service-account-json" rows="10" required placeholder='Paste your service account JSON key here...'></textarea>
-                    </div>
-                    <div id="gcp-creds-error" class="error-message hidden"></div>
-                    <div class="modal-buttons">
-                        <button type="button" class="btn-secondary" id="close-gcp-modal-btn">Cancel</button>
-                        <button type="submit">Save Credentials</button>
-                    </div>
-                </form>
-                <div class="cli-alternative">
-                    <p>Or configure via CLI:</p>
-                    <div class="cli-command">
-                        <code id="gcp-cli-cmd">cudly configure-gcp --profile &lt;your-profile&gt;</code>
-                        <button type="button" class="copy-btn copy-gcp-cli" title="Copy to clipboard">
-                            <span class="copy-icon">&#128203;</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- Create/Edit Plan Modal -->
         <div id="plan-modal" class="modal hidden">

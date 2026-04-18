@@ -682,32 +682,6 @@ export function setupSettingsHandlers(): void {
   defaultTerm?.addEventListener('change', () => propagateTermToServices(defaultTerm.value));
   defaultPayment?.addEventListener('change', () => propagatePaymentToServices(defaultPayment.value));
 
-  // Credential configure button handlers
-  const azureConfigBtn = document.getElementById('azure-configure-btn');
-  const gcpConfigBtn = document.getElementById('gcp-configure-btn');
-
-  azureConfigBtn?.addEventListener('click', showAzureCredsModal);
-  gcpConfigBtn?.addEventListener('click', showGCPCredsModal);
-
-  // Azure credentials form handler
-  const azureCredsForm = document.getElementById('azure-creds-form');
-  azureCredsForm?.addEventListener('submit', handleAzureCredsSave);
-
-  // GCP credentials form handler
-  const gcpCredsForm = document.getElementById('gcp-creds-form');
-  gcpCredsForm?.addEventListener('submit', handleGCPCredsSave);
-
-  // Close modals when clicking outside
-  const azureModal = document.getElementById('azure-creds-modal');
-  const gcpModal = document.getElementById('gcp-creds-modal');
-
-  azureModal?.addEventListener('click', (e) => {
-    if (e.target === azureModal) closeAzureCredsModal();
-  });
-  gcpModal?.addEventListener('click', (e) => {
-    if (e.target === gcpModal) closeGCPCredsModal();
-  });
-
   // Set up dirty-field tracking
   setupDirtyTracking();
 
@@ -871,20 +845,6 @@ export async function loadGlobalSettings(): Promise<void> {
       }
     }
 
-    if (data.credentials) {
-      const azureStatus = document.getElementById('azure-creds-status');
-      const gcpStatus = document.getElementById('gcp-creds-status');
-
-      if (azureStatus) {
-        azureStatus.textContent = data.credentials.azure_configured ? 'Configured' : 'Not Configured';
-        azureStatus.classList.toggle('configured', data.credentials.azure_configured === true);
-      }
-      if (gcpStatus) {
-        gcpStatus.textContent = data.credentials.gcp_configured ? 'Configured' : 'Not Configured';
-        gcpStatus.classList.toggle('configured', data.credentials.gcp_configured === true);
-      }
-    }
-
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');
 
@@ -1010,155 +970,6 @@ export function resetSettings(): void {
 
   const notifyDaysInput = document.getElementById('setting-notification-days') as HTMLInputElement | null;
   if (notifyDaysInput) notifyDaysInput.value = '3';
-}
-
-/**
- * Show Azure credentials modal
- */
-export function showAzureCredsModal(): void {
-  const modal = document.getElementById('azure-creds-modal');
-  const errorEl = document.getElementById('azure-creds-error');
-  if (modal) modal.classList.remove('hidden');
-  if (errorEl) errorEl.classList.add('hidden');
-}
-
-/**
- * Close Azure credentials modal
- */
-export function closeAzureCredsModal(): void {
-  const modal = document.getElementById('azure-creds-modal');
-  if (modal) modal.classList.add('hidden');
-  // Clear form
-  const form = document.getElementById('azure-creds-form') as HTMLFormElement | null;
-  form?.reset();
-}
-
-/**
- * Show GCP credentials modal
- */
-export function showGCPCredsModal(): void {
-  const modal = document.getElementById('gcp-creds-modal');
-  const errorEl = document.getElementById('gcp-creds-error');
-  if (modal) modal.classList.remove('hidden');
-  if (errorEl) errorEl.classList.add('hidden');
-}
-
-/**
- * Close GCP credentials modal
- */
-export function closeGCPCredsModal(): void {
-  const modal = document.getElementById('gcp-creds-modal');
-  if (modal) modal.classList.add('hidden');
-  // Clear form
-  const form = document.getElementById('gcp-creds-form') as HTMLFormElement | null;
-  form?.reset();
-}
-
-/**
- * Handle Azure credentials save
- */
-async function handleAzureCredsSave(e: Event): Promise<void> {
-  e.preventDefault();
-  const errorEl = document.getElementById('azure-creds-error');
-
-  const tenantId = (document.getElementById('azure-tenant-id') as HTMLInputElement)?.value.trim();
-  const clientId = (document.getElementById('azure-client-id') as HTMLInputElement)?.value.trim();
-  const clientSecret = (document.getElementById('azure-client-secret') as HTMLInputElement)?.value;
-  const subscriptionId = (document.getElementById('azure-subscription-id') as HTMLInputElement)?.value.trim();
-
-  if (!tenantId || !clientId || !clientSecret || !subscriptionId) {
-    if (errorEl) {
-      errorEl.textContent = 'All fields are required';
-      errorEl.classList.remove('hidden');
-    }
-    return;
-  }
-
-  try {
-    await api.saveAzureCredentials({
-      tenant_id: tenantId,
-      client_id: clientId,
-      client_secret: clientSecret,
-      subscription_id: subscriptionId
-    });
-
-    // Update status
-    const statusEl = document.getElementById('azure-creds-status');
-    if (statusEl) {
-      statusEl.textContent = 'Configured';
-      statusEl.classList.add('configured');
-    }
-
-    closeAzureCredsModal();
-    alert('Azure credentials saved successfully');
-  } catch (error) {
-    console.error('Failed to save Azure credentials:', error);
-    if (errorEl) {
-      const err = error as Error;
-      errorEl.textContent = `Failed to save: ${err.message}`;
-      errorEl.classList.remove('hidden');
-    }
-  }
-}
-
-/**
- * Handle GCP credentials save
- */
-async function handleGCPCredsSave(e: Event): Promise<void> {
-  e.preventDefault();
-  const errorEl = document.getElementById('gcp-creds-error');
-
-  const jsonText = (document.getElementById('gcp-service-account-json') as HTMLTextAreaElement)?.value.trim();
-
-  if (!jsonText) {
-    if (errorEl) {
-      errorEl.textContent = 'Service account JSON is required';
-      errorEl.classList.remove('hidden');
-    }
-    return;
-  }
-
-  // Parse and validate JSON
-  let credentials: api.GCPCredentials;
-  try {
-    credentials = JSON.parse(jsonText) as api.GCPCredentials;
-  } catch {
-    if (errorEl) {
-      errorEl.textContent = 'Invalid JSON format';
-      errorEl.classList.remove('hidden');
-    }
-    return;
-  }
-
-  // Validate required fields
-  if (!credentials.type || !credentials.project_id || !credentials.private_key || !credentials.client_email) {
-    if (errorEl) {
-      errorEl.textContent = 'Missing required fields: type, project_id, private_key, client_email';
-      errorEl.classList.remove('hidden');
-    }
-    return;
-  }
-
-  try {
-    await api.saveGCPCredentials(credentials);
-
-    // Update status
-    const statusEl = document.getElementById('gcp-creds-status');
-    if (statusEl) {
-      statusEl.textContent = 'Configured';
-      statusEl.classList.add('configured');
-    }
-
-    closeGCPCredsModal();
-    alert('GCP credentials saved successfully');
-  } catch (error) {
-    console.error('Failed to save GCP credentials:', error);
-    if (errorEl) {
-      const err = error as Error;
-      errorEl.textContent = `Failed to save: ${err.message}`;
-      errorEl.classList.remove('hidden');
-    }
-  }
 }
 
 /**

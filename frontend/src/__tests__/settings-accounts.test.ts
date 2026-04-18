@@ -10,8 +10,6 @@ import {
 jest.mock('../api', () => ({
   getConfig: jest.fn(),
   updateConfig: jest.fn(),
-  saveAzureCredentials: jest.fn(),
-  saveGCPCredentials: jest.fn(),
   listAccounts: jest.fn(),
   createAccount: jest.fn(),
   updateAccount: jest.fn(),

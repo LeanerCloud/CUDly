@@ -283,27 +283,6 @@ export interface UpdateGroupRequest {
   allowed_accounts?: string[];
 }
 
-// Credential Types
-export interface AzureCredentials {
-  tenant_id: string;
-  client_id: string;
-  client_secret: string;
-  subscription_id: string;
-}
-
-export interface GCPCredentials {
-  type: string;
-  project_id: string;
-  private_key_id: string;
-  private_key: string;
-  client_email: string;
-  client_id: string;
-  auth_uri?: string;
-  token_uri?: string;
-  auth_provider_x509_cert_url?: string;
-  client_x509_cert_url?: string;
-}
-
 // API Keys Management Types
 export interface APIKeyInfo {
   id: string;

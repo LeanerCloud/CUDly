@@ -32,8 +32,6 @@ export type {
   Permission,
   CreateGroupRequest,
   UpdateGroupRequest,
-  AzureCredentials,
-  GCPCredentials,
   APIKeyInfo,
   CreateAPIKeyRequest,
   CreateAPIKeyResponse,
@@ -153,9 +151,7 @@ export {
 export {
   getConfig,
   updateConfig,
-  updateServiceConfig,
-  saveAzureCredentials,
-  saveGCPCredentials
+  updateServiceConfig
 } from './settings';
 
 // Re-export RI exchange functions

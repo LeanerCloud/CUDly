@@ -9,7 +9,7 @@ import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, refreshRecommendations, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
 import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, getSettingsSubTabFromPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
-import { saveGlobalSettings, setupSettingsHandlers, resetSettings, closeAzureCredsModal, closeGCPCredsModal, copyToClipboard } from './settings';
+import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
 import { initApiKeys } from './apikeys';
 import { loadHistory } from './history';
@@ -202,46 +202,6 @@ function setupButtonHandlers(): void {
   if (resetSettingsBtn) {
     resetSettingsBtn.addEventListener('click', () => resetSettings());
   }
-
-  // Azure credentials modal
-  const closeAzureBtn = document.getElementById('close-azure-modal-btn');
-  if (closeAzureBtn) {
-    closeAzureBtn.addEventListener('click', () => closeAzureCredsModal());
-  }
-
-  // GCP credentials modal
-  const closeGCPBtn = document.getElementById('close-gcp-modal-btn');
-  if (closeGCPBtn) {
-    closeGCPBtn.addEventListener('click', () => closeGCPCredsModal());
-  }
-
-  // Copy to clipboard buttons for Azure
-  document.querySelectorAll('.copy-azure-login').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('azure-login-cmd'));
-  });
-  document.querySelectorAll('.copy-azure-sp').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('azure-sp-cmd'));
-  });
-  document.querySelectorAll('.copy-azure-cli').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('azure-cli-cmd'));
-  });
-
-  // Copy to clipboard buttons for GCP
-  document.querySelectorAll('.copy-gcp-login').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('gcp-login-cmd'));
-  });
-  document.querySelectorAll('.copy-gcp-sa-create').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('gcp-sa-create-cmd'));
-  });
-  document.querySelectorAll('.copy-gcp-role').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('gcp-role-cmd'));
-  });
-  document.querySelectorAll('.copy-gcp-key').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('gcp-key-cmd'));
-  });
-  document.querySelectorAll('.copy-gcp-cli').forEach(btn => {
-    btn.addEventListener('click', () => copyToClipboard('gcp-cli-cmd'));
-  });
 
   // Purchasing reset button
   const resetPurchasingBtn = document.getElementById('reset-purchasing-btn');

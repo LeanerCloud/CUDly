@@ -530,31 +530,6 @@ describe('HTML Structure', () => {
     });
   });
 
-  describe('Credential Configuration Modals', () => {
-    test('has Azure credentials modal', () => {
-      const modal = document.getElementById('azure-creds-modal');
-      expect(modal).toBeTruthy();
-    });
-
-    test('has Azure credential form fields', () => {
-      expect(document.getElementById('azure-tenant-id')).toBeTruthy();
-      expect(document.getElementById('azure-client-id')).toBeTruthy();
-      expect(document.getElementById('azure-client-secret')).toBeTruthy();
-      expect(document.getElementById('azure-subscription-id')).toBeTruthy();
-    });
-
-    test('has GCP credentials modal', () => {
-      const modal = document.getElementById('gcp-creds-modal');
-      expect(modal).toBeTruthy();
-    });
-
-    test('has GCP service account JSON textarea', () => {
-      const textarea = document.getElementById('gcp-service-account-json');
-      expect(textarea).toBeTruthy();
-      expect(textarea?.tagName.toLowerCase()).toBe('textarea');
-    });
-  });
-
   describe('Planned Purchases Section', () => {
     test('has planned purchases header', () => {
       const header = document.getElementById('planned-purchases-header');
