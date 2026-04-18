@@ -347,20 +347,6 @@ Resources:
         PasswordLength: 32
         ExcludePunctuation: true
 
-  AzureCredentialsSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub "${AWS::StackName}-AzureCredentials"
-      Description: Azure Service Principal credentials for commitment management
-      SecretString: '{"tenant_id":"","client_id":"","client_secret":"","subscription_id":""}'
-
-  GCPCredentialsSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub "${AWS::StackName}-GCPCredentials"
-      Description: GCP Service Account credentials for commitment management
-      SecretString: '{"type":"service_account","project_id":"","private_key_id":"","private_key":"","client_email":""}'
-
   # =============================================================================
   # Note: ECR Repository is created by the deploy CLI before stack creation
   # to allow pushing the Lambda image first
@@ -526,8 +512,6 @@ Resources:
               - secretsmanager:GetSecretValue
             Resource:
               - !Ref APIKeySecret
-              - !Ref AzureCredentialsSecret
-              - !Ref GCPCredentialsSecret
 
           # SNS for email notifications
           - Sid: SNSPublish
@@ -569,8 +553,6 @@ Resources:
           GROUPS_TABLE: !Ref GroupsTable
           SESSIONS_TABLE: !Ref SessionsTable
           API_KEY_SECRET_ARN: !Ref APIKeySecret
-          AZURE_CREDENTIALS_SECRET_ARN: !Ref AzureCredentialsSecret
-          GCP_CREDENTIALS_SECRET_ARN: !Ref GCPCredentialsSecret
           NOTIFICATION_TOPIC_ARN: !Ref NotificationTopic
           # Defaults
           DEFAULT_TERM: !Ref DefaultTerm
