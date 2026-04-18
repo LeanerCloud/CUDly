@@ -34,13 +34,9 @@ func (h *Handler) getConfig(ctx context.Context) (*ConfigResponse, error) {
 		return nil, err
 	}
 
-	// Check credentials status
-	credStatus := h.getCredentialsStatus(ctx)
-
 	return &ConfigResponse{
 		Global:         globalCfg,
 		Services:       services,
-		Credentials:    credStatus,
 		SourceCloud:    sourceCloud(),
 		SourceIdentity: h.resolveSourceIdentity(ctx),
 	}, nil

@@ -70,10 +70,6 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/config/service/", Method: "GET", Handler: r.getServiceConfigHandler},
 		{PathPrefix: "/api/config/service/", Method: "PUT", Handler: r.updateServiceConfigHandler},
 
-		// Credentials endpoints
-		{ExactPath: "/api/credentials/azure", Method: "POST", Handler: r.saveAzureCredentialsHandler},
-		{ExactPath: "/api/credentials/gcp", Method: "POST", Handler: r.saveGCPCredentialsHandler},
-
 		// Recommendations endpoints
 		{ExactPath: "/api/recommendations", Method: "GET", Handler: r.getRecommendationsHandler},
 		{ExactPath: "/api/recommendations/refresh", Method: "POST", Handler: r.refreshRecommendationsHandler},
@@ -285,14 +281,6 @@ func (r *Router) getServiceConfigHandler(ctx context.Context, req *events.Lambda
 
 func (r *Router) updateServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updateServiceConfig(ctx, req, params["id"])
-}
-
-func (r *Router) saveAzureCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.saveAzureCredentials(ctx, req)
-}
-
-func (r *Router) saveGCPCredentialsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.saveGCPCredentials(ctx, req)
 }
 
 func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

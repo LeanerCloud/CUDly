@@ -22,20 +22,18 @@ type STSClient interface {
 
 // ManagerConfig holds configuration for the purchase manager
 type ManagerConfig struct {
-	ConfigStore               config.StoreInterface
-	EmailSender               email.SenderInterface
-	STSClient                 STSClient
-	AssumeRoleSTS             credentials.STSClient // used for cross-account role assumption
-	CredentialStore           credentials.CredentialStore
-	ProviderFactory           provider.FactoryInterface
-	NotificationDaysBefore    int
-	DefaultTerm               int
-	DefaultPaymentOption      string
-	DefaultCoverage           float64
-	DefaultRampSchedule       string
-	AzureCredentialsSecretARN string
-	GCPCredentialsSecretARN   string
-	DashboardURL              string
+	ConfigStore            config.StoreInterface
+	EmailSender            email.SenderInterface
+	STSClient              STSClient
+	AssumeRoleSTS          credentials.STSClient // used for cross-account role assumption
+	CredentialStore        credentials.CredentialStore
+	ProviderFactory        provider.FactoryInterface
+	NotificationDaysBefore int
+	DefaultTerm            int
+	DefaultPaymentOption   string
+	DefaultCoverage        float64
+	DefaultRampSchedule    string
+	DashboardURL           string
 	// OIDCSigner and OIDCIssuerURL enable the secret-free Azure
 	// federated credential path. When both are set, Azure accounts in
 	// workload_identity_federation mode with no stored PEM are routed

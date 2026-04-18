@@ -45,20 +45,18 @@ type RateLimiterInterface interface {
 
 // HandlerConfig holds configuration for the API handler
 type HandlerConfig struct {
-	ConfigStore               config.StoreInterface
-	CredentialStore           credentials.CredentialStore
-	PurchaseManager           PurchaseManagerInterface
-	Scheduler                 SchedulerInterface
-	AuthService               AuthServiceInterface
-	APIKeySecretARN           string
-	AzureCredentialsSecretARN string
-	GCPCredentialsSecretARN   string
-	EnableDashboard           bool
-	DashboardBucket           string
-	CORSAllowedOrigin         string // CORS allowed origin (default "*")
-	RateLimiter               RateLimiterInterface
-	EmailNotifier             email.SenderInterface // Optional: used to send purchase approval emails
-	DashboardURL              string                // Base URL for approval/cancel links in emails
+	ConfigStore       config.StoreInterface
+	CredentialStore   credentials.CredentialStore
+	PurchaseManager   PurchaseManagerInterface
+	Scheduler         SchedulerInterface
+	AuthService       AuthServiceInterface
+	APIKeySecretARN   string
+	EnableDashboard   bool
+	DashboardBucket   string
+	CORSAllowedOrigin string // CORS allowed origin (default "*")
+	RateLimiter       RateLimiterInterface
+	EmailNotifier     email.SenderInterface // Optional: used to send purchase approval emails
+	DashboardURL      string                // Base URL for approval/cancel links in emails
 	// Analytics configuration (optional)
 	AnalyticsClient    AnalyticsClientInterface
 	AnalyticsCollector AnalyticsCollectorInterface
@@ -289,37 +287,8 @@ type ProfileUpdateRequest struct {
 type ConfigResponse struct {
 	Global         *config.GlobalConfig   `json:"global"`
 	Services       []config.ServiceConfig `json:"services"`
-	Credentials    *CredentialsStatus     `json:"credentials,omitempty"`
 	SourceCloud    string                 `json:"source_cloud,omitempty"`
 	SourceIdentity *sourceIdentity        `json:"source_identity,omitempty"`
-}
-
-// CredentialsStatus holds the status of cloud provider credentials
-type CredentialsStatus struct {
-	AzureConfigured bool `json:"azure_configured"`
-	GCPConfigured   bool `json:"gcp_configured"`
-}
-
-// AzureCredentialsRequest holds Azure Service Principal credentials
-type AzureCredentialsRequest struct {
-	TenantID       string `json:"tenant_id"`
-	ClientID       string `json:"client_id"`
-	ClientSecret   string `json:"client_secret"`
-	SubscriptionID string `json:"subscription_id"`
-}
-
-// GCPCredentialsRequest holds GCP Service Account credentials (JSON key file contents)
-type GCPCredentialsRequest struct {
-	Type                    string `json:"type"`
-	ProjectID               string `json:"project_id"`
-	PrivateKeyID            string `json:"private_key_id"`
-	PrivateKey              string `json:"private_key"`
-	ClientEmail             string `json:"client_email"`
-	ClientID                string `json:"client_id,omitempty"`
-	AuthURI                 string `json:"auth_uri,omitempty"`
-	TokenURI                string `json:"token_uri,omitempty"`
-	AuthProviderX509CertURL string `json:"auth_provider_x509_cert_url,omitempty"`
-	ClientX509CertURL       string `json:"client_x509_cert_url,omitempty"`
 }
 
 // StatusResponse holds a simple status response

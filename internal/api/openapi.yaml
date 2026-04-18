@@ -167,57 +167,6 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
-  # ---- Credentials --------------------------------------------------------
-  /api/credentials/azure:
-    post:
-      operationId: saveAzureCredentials
-      tags: [Credentials]
-      summary: Save Azure Service Principal credentials
-      parameters:
-        - $ref: '#/components/parameters/CSRFToken'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AzureCredentialsRequest'
-      responses:
-        '200':
-          description: Credentials saved
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /api/credentials/gcp:
-    post:
-      operationId: saveGCPCredentials
-      tags: [Credentials]
-      summary: Save GCP Service Account credentials
-      parameters:
-        - $ref: '#/components/parameters/CSRFToken'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/GCPCredentialsRequest'
-      responses:
-        '200':
-          description: Credentials saved
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
   # ---- Recommendations ----------------------------------------------------
   /api/recommendations:
     get:
@@ -1755,8 +1704,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ServiceConfig'
-        credentials:
-          $ref: '#/components/schemas/CredentialsStatus'
 
     GlobalConfig:
       type: object
@@ -1828,57 +1775,6 @@ components:
           type: array
           items:
             type: string
-
-    CredentialsStatus:
-      type: object
-      properties:
-        azure_configured:
-          type: boolean
-        gcp_configured:
-          type: boolean
-
-    AzureCredentialsRequest:
-      type: object
-      required: [tenant_id, client_id, client_secret, subscription_id]
-      properties:
-        tenant_id:
-          type: string
-        client_id:
-          type: string
-        client_secret:
-          type: string
-        subscription_id:
-          type: string
-
-    GCPCredentialsRequest:
-      type: object
-      required: [type, project_id, private_key_id, private_key, client_email]
-      properties:
-        type:
-          type: string
-          enum: [service_account]
-          description: Must be "service_account"
-        project_id:
-          type: string
-        private_key_id:
-          type: string
-        private_key:
-          type: string
-        client_email:
-          type: string
-        client_id:
-          type: string
-        auth_uri:
-          type: string
-        token_uri:
-          type: string
-        auth_provider_x509_cert_url:
-          type: string
-        client_x509_cert_url:
-          type: string
-
-    # -- Credentials --------------------------------------------------------
-    # (request types defined above; no separate response beyond StatusResponse)
 
     # -- Dashboard ----------------------------------------------------------
     DashboardSummary:

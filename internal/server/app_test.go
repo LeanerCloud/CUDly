@@ -312,7 +312,6 @@ func TestLoadApplicationConfig(t *testing.T) {
 		envVars := []string{
 			"VERSION", "NOTIFICATION_DAYS_BEFORE", "DEFAULT_TERM",
 			"DEFAULT_PAYMENT_OPTION", "DEFAULT_COVERAGE", "DEFAULT_RAMP_SCHEDULE",
-			"AZURE_CREDENTIALS_SECRET_ARN", "GCP_CREDENTIALS_SECRET_ARN",
 			"API_KEY_SECRET_ARN", "ENABLE_DASHBOARD", "DASHBOARD_BUCKET",
 			"DASHBOARD_URL", "CORS_ALLOWED_ORIGIN", "AWS_LAMBDA_RUNTIME_API",
 		}
@@ -339,8 +338,6 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.SetEnv(t, "DEFAULT_PAYMENT_OPTION", "AllUpfront")
 		testutil.SetEnv(t, "DEFAULT_COVERAGE", "95.5")
 		testutil.SetEnv(t, "DEFAULT_RAMP_SCHEDULE", "linear")
-		testutil.SetEnv(t, "AZURE_CREDENTIALS_SECRET_ARN", "arn:azure:secret")
-		testutil.SetEnv(t, "GCP_CREDENTIALS_SECRET_ARN", "arn:gcp:secret")
 		testutil.SetEnv(t, "API_KEY_SECRET_ARN", "arn:api:key")
 		testutil.SetEnv(t, "ENABLE_DASHBOARD", "true")
 		testutil.SetEnv(t, "DASHBOARD_BUCKET", "my-bucket")
@@ -356,8 +353,6 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.AssertEqual(t, "AllUpfront", cfg.DefaultPaymentOption)
 		testutil.AssertEqual(t, 95.5, cfg.DefaultCoverage)
 		testutil.AssertEqual(t, "linear", cfg.DefaultRampSchedule)
-		testutil.AssertEqual(t, "arn:azure:secret", cfg.AzureCredentialsSecretARN)
-		testutil.AssertEqual(t, "arn:gcp:secret", cfg.GCPCredentialsSecretARN)
 		testutil.AssertEqual(t, "arn:api:key", cfg.APIKeySecretARN)
 		testutil.AssertEqual(t, true, cfg.EnableDashboard)
 		testutil.AssertEqual(t, "my-bucket", cfg.DashboardBucket)
@@ -444,19 +439,17 @@ func TestNewApplicationFromDeps(t *testing.T) {
 
 	t.Run("config values are wired correctly", func(t *testing.T) {
 		cfg := ApplicationConfig{
-			Version:                   "v2.0",
-			NotificationDaysBefore:    7,
-			DefaultTerm:               1,
-			DefaultPaymentOption:      "AllUpfront",
-			DefaultCoverage:           95.5,
-			APIKeySecretARN:           "arn:aws:key",
-			AzureCredentialsSecretARN: "arn:azure",
-			GCPCredentialsSecretARN:   "arn:gcp",
-			EnableDashboard:           true,
-			DashboardBucket:           "bucket",
-			DashboardURL:              "https://dash.test",
-			CORSAllowedOrigin:         "https://test.com",
-			IsLambda:                  false,
+			Version:                "v2.0",
+			NotificationDaysBefore: 7,
+			DefaultTerm:            1,
+			DefaultPaymentOption:   "AllUpfront",
+			DefaultCoverage:        95.5,
+			APIKeySecretARN:        "arn:aws:key",
+			EnableDashboard:        true,
+			DashboardBucket:        "bucket",
+			DashboardURL:           "https://dash.test",
+			CORSAllowedOrigin:      "https://test.com",
+			IsLambda:               false,
 		}
 
 		deps := ExternalDeps{

@@ -62,18 +62,16 @@ type Application struct {
 
 // ApplicationConfig holds all env-based configuration for the application
 type ApplicationConfig struct {
-	Version                   string
-	NotificationDaysBefore    int
-	DefaultTerm               int
-	DefaultPaymentOption      string
-	DefaultCoverage           float64
-	DefaultRampSchedule       string
-	AzureCredentialsSecretARN string
-	GCPCredentialsSecretARN   string
-	APIKeySecretARN           string
-	EnableDashboard           bool
-	DashboardBucket           string
-	DashboardURL              string
+	Version                string
+	NotificationDaysBefore int
+	DefaultTerm            int
+	DefaultPaymentOption   string
+	DefaultCoverage        float64
+	DefaultRampSchedule    string
+	APIKeySecretARN        string
+	EnableDashboard        bool
+	DashboardBucket        string
+	DashboardURL           string
 	// IssuerURL is the canonical OIDC issuer URL published under
 	// /.well-known/* and used as the iss claim in JWTs minted by the
 	// KMS-backed signer. Falls back to DashboardURL. Set via the
@@ -120,22 +118,20 @@ func LoadApplicationConfig() ApplicationConfig {
 	}
 
 	return ApplicationConfig{
-		Version:                   version,
-		NotificationDaysBefore:    getEnvInt("NOTIFICATION_DAYS_BEFORE", 3),
-		DefaultTerm:               getEnvInt("DEFAULT_TERM", 3),
-		DefaultPaymentOption:      os.Getenv("DEFAULT_PAYMENT_OPTION"),
-		DefaultCoverage:           getEnvFloat("DEFAULT_COVERAGE", 80),
-		DefaultRampSchedule:       os.Getenv("DEFAULT_RAMP_SCHEDULE"),
-		AzureCredentialsSecretARN: os.Getenv("AZURE_CREDENTIALS_SECRET_ARN"),
-		GCPCredentialsSecretARN:   os.Getenv("GCP_CREDENTIALS_SECRET_ARN"),
-		APIKeySecretARN:           os.Getenv("API_KEY_SECRET_ARN"),
-		EnableDashboard:           os.Getenv("ENABLE_DASHBOARD") == "true",
-		DashboardBucket:           os.Getenv("DASHBOARD_BUCKET"),
-		DashboardURL:              os.Getenv("DASHBOARD_URL"),
-		IssuerURL:                 os.Getenv("CUDLY_ISSUER_URL"),
-		CORSAllowedOrigin:         os.Getenv("CORS_ALLOWED_ORIGIN"),
-		ScheduledTaskSecret:       os.Getenv("SCHEDULED_TASK_SECRET"),
-		IsLambda:                  isLambdaRuntime(),
+		Version:                version,
+		NotificationDaysBefore: getEnvInt("NOTIFICATION_DAYS_BEFORE", 3),
+		DefaultTerm:            getEnvInt("DEFAULT_TERM", 3),
+		DefaultPaymentOption:   os.Getenv("DEFAULT_PAYMENT_OPTION"),
+		DefaultCoverage:        getEnvFloat("DEFAULT_COVERAGE", 80),
+		DefaultRampSchedule:    os.Getenv("DEFAULT_RAMP_SCHEDULE"),
+		APIKeySecretARN:        os.Getenv("API_KEY_SECRET_ARN"),
+		EnableDashboard:        os.Getenv("ENABLE_DASHBOARD") == "true",
+		DashboardBucket:        os.Getenv("DASHBOARD_BUCKET"),
+		DashboardURL:           os.Getenv("DASHBOARD_URL"),
+		IssuerURL:              os.Getenv("CUDLY_ISSUER_URL"),
+		CORSAllowedOrigin:      os.Getenv("CORS_ALLOWED_ORIGIN"),
+		ScheduledTaskSecret:    os.Getenv("SCHEDULED_TASK_SECRET"),
+		IsLambda:               isLambdaRuntime(),
 	}
 }
 
@@ -176,18 +172,16 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 
 	// Initialize purchase manager
 	purchaseManager := purchase.NewManager(purchase.ManagerConfig{
-		ConfigStore:               deps.ConfigStore,
-		EmailSender:               deps.EmailSender,
-		STSClient:                 deps.STSClient,
-		NotificationDaysBefore:    cfg.NotificationDaysBefore,
-		DefaultTerm:               cfg.DefaultTerm,
-		DefaultPaymentOption:      cfg.DefaultPaymentOption,
-		DefaultCoverage:           cfg.DefaultCoverage,
-		DefaultRampSchedule:       cfg.DefaultRampSchedule,
-		AzureCredentialsSecretARN: cfg.AzureCredentialsSecretARN,
-		GCPCredentialsSecretARN:   cfg.GCPCredentialsSecretARN,
-		OIDCSigner:                signer,
-		OIDCIssuerURL:             resolveOIDCIssuerURL(cfg),
+		ConfigStore:            deps.ConfigStore,
+		EmailSender:            deps.EmailSender,
+		STSClient:              deps.STSClient,
+		NotificationDaysBefore: cfg.NotificationDaysBefore,
+		DefaultTerm:            cfg.DefaultTerm,
+		DefaultPaymentOption:   cfg.DefaultPaymentOption,
+		DefaultCoverage:        cfg.DefaultCoverage,
+		DefaultRampSchedule:    cfg.DefaultRampSchedule,
+		OIDCSigner:             signer,
+		OIDCIssuerURL:          resolveOIDCIssuerURL(cfg),
 	})
 
 	// Initialize scheduler
@@ -220,21 +214,19 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 
 	// Initialize API handler
 	apiHandler := api.NewHandler(api.HandlerConfig{
-		ConfigStore:               deps.ConfigStore,
-		PurchaseManager:           purchaseManager,
-		Scheduler:                 sched,
-		AuthService:               newAuthServiceAdapter(authService),
-		APIKeySecretARN:           cfg.APIKeySecretARN,
-		AzureCredentialsSecretARN: cfg.AzureCredentialsSecretARN,
-		GCPCredentialsSecretARN:   cfg.GCPCredentialsSecretARN,
-		EnableDashboard:           cfg.EnableDashboard,
-		DashboardBucket:           cfg.DashboardBucket,
-		CORSAllowedOrigin:         cfg.CORSAllowedOrigin,
-		RateLimiter:               rateLimiter,
-		EmailNotifier:             deps.EmailSender,
-		DashboardURL:              cfg.DashboardURL,
-		OIDCSigner:                signer,
-		OIDCIssuerURL:             resolveOIDCIssuerURL(cfg),
+		ConfigStore:       deps.ConfigStore,
+		PurchaseManager:   purchaseManager,
+		Scheduler:         sched,
+		AuthService:       newAuthServiceAdapter(authService),
+		APIKeySecretARN:   cfg.APIKeySecretARN,
+		EnableDashboard:   cfg.EnableDashboard,
+		DashboardBucket:   cfg.DashboardBucket,
+		CORSAllowedOrigin: cfg.CORSAllowedOrigin,
+		RateLimiter:       rateLimiter,
+		EmailNotifier:     deps.EmailSender,
+		DashboardURL:      cfg.DashboardURL,
+		OIDCSigner:        signer,
+		OIDCIssuerURL:     resolveOIDCIssuerURL(cfg),
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -431,21 +423,19 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		return fmt.Errorf("failed to load AWS config for cross-account STS: %w", err)
 	}
 	app.Purchase = purchase.NewManager(purchase.ManagerConfig{
-		ConfigStore:               app.Config,
-		EmailSender:               app.Email,
-		STSClient:                 sts.NewFromConfig(awsCfg),
-		AssumeRoleSTS:             sts.NewFromConfig(awsCfg),
-		CredentialStore:           credStore,
-		NotificationDaysBefore:    app.appConfig.NotificationDaysBefore,
-		DefaultTerm:               app.appConfig.DefaultTerm,
-		DefaultPaymentOption:      app.appConfig.DefaultPaymentOption,
-		DefaultCoverage:           app.appConfig.DefaultCoverage,
-		DefaultRampSchedule:       app.appConfig.DefaultRampSchedule,
-		AzureCredentialsSecretARN: app.appConfig.AzureCredentialsSecretARN,
-		GCPCredentialsSecretARN:   app.appConfig.GCPCredentialsSecretARN,
-		DashboardURL:              app.appConfig.DashboardURL,
-		OIDCSigner:                app.signer,
-		OIDCIssuerURL:             resolveOIDCIssuerURL(app.appConfig),
+		ConfigStore:            app.Config,
+		EmailSender:            app.Email,
+		STSClient:              sts.NewFromConfig(awsCfg),
+		AssumeRoleSTS:          sts.NewFromConfig(awsCfg),
+		CredentialStore:        credStore,
+		NotificationDaysBefore: app.appConfig.NotificationDaysBefore,
+		DefaultTerm:            app.appConfig.DefaultTerm,
+		DefaultPaymentOption:   app.appConfig.DefaultPaymentOption,
+		DefaultCoverage:        app.appConfig.DefaultCoverage,
+		DefaultRampSchedule:    app.appConfig.DefaultRampSchedule,
+		DashboardURL:           app.appConfig.DashboardURL,
+		OIDCSigner:             app.signer,
+		OIDCIssuerURL:          resolveOIDCIssuerURL(app.appConfig),
 	})
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
@@ -462,22 +452,20 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 
 	// Update API handler with new config store, scheduler, and rate limiter
 	app.API = api.NewHandler(api.HandlerConfig{
-		ConfigStore:               app.Config,
-		CredentialStore:           credStore,
-		PurchaseManager:           app.Purchase,
-		Scheduler:                 app.Scheduler,
-		AuthService:               newAuthServiceAdapter(app.Auth),
-		APIKeySecretARN:           app.appConfig.APIKeySecretARN,
-		AzureCredentialsSecretARN: app.appConfig.AzureCredentialsSecretARN,
-		GCPCredentialsSecretARN:   app.appConfig.GCPCredentialsSecretARN,
-		EnableDashboard:           app.appConfig.EnableDashboard,
-		DashboardBucket:           app.appConfig.DashboardBucket,
-		CORSAllowedOrigin:         app.appConfig.CORSAllowedOrigin,
-		RateLimiter:               app.RateLimiter,
-		EmailNotifier:             app.Email,
-		DashboardURL:              app.appConfig.DashboardURL,
-		OIDCSigner:                app.signer,
-		OIDCIssuerURL:             resolveOIDCIssuerURL(app.appConfig),
+		ConfigStore:       app.Config,
+		CredentialStore:   credStore,
+		PurchaseManager:   app.Purchase,
+		Scheduler:         app.Scheduler,
+		AuthService:       newAuthServiceAdapter(app.Auth),
+		APIKeySecretARN:   app.appConfig.APIKeySecretARN,
+		EnableDashboard:   app.appConfig.EnableDashboard,
+		DashboardBucket:   app.appConfig.DashboardBucket,
+		CORSAllowedOrigin: app.appConfig.CORSAllowedOrigin,
+		RateLimiter:       app.RateLimiter,
+		EmailNotifier:     app.Email,
+		DashboardURL:      app.appConfig.DashboardURL,
+		OIDCSigner:        app.signer,
+		OIDCIssuerURL:     resolveOIDCIssuerURL(app.appConfig),
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")

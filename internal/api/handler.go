@@ -29,8 +29,6 @@ type Handler struct {
 	scheduler          SchedulerInterface
 	auth               AuthServiceInterface
 	secretsARN         string
-	azureCredsARN      string // Azure credentials secret ARN
-	gcpCredsARN        string // GCP credentials secret ARN
 	apiKey             string // Cached API key
 	corsAllowedOrigin  string // CORS allowed origin
 	rateLimiter        RateLimiterInterface
@@ -68,8 +66,6 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		scheduler:          cfg.Scheduler,
 		auth:               cfg.AuthService,
 		secretsARN:         cfg.APIKeySecretARN,
-		azureCredsARN:      cfg.AzureCredentialsSecretARN,
-		gcpCredsARN:        cfg.GCPCredentialsSecretARN,
 		corsAllowedOrigin:  corsOrigin,
 		rateLimiter:        cfg.RateLimiter,
 		emailNotifier:      cfg.EmailNotifier,
