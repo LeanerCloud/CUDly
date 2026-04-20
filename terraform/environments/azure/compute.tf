@@ -41,9 +41,12 @@ module "compute_container_apps" {
       FROM_EMAIL                            = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                         = local.dashboard_url
       CORS_ALLOWED_ORIGIN                   = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      SCHEDULED_TASK_SECRET                 = module.secrets.scheduled_task_secret_value
-      CUDLY_MAX_ACCOUNT_PARALLELISM         = tostring(var.max_account_parallelism)
-      CUDLY_SOURCE_CLOUD                    = "azure"
+      # Pass the Key Vault secret NAME (not the value) so the scheduled
+      # task secret never lives in the container env. The app resolves the
+      # real value at startup via the SecretResolver — see internal/server/app.go.
+      SCHEDULED_TASK_SECRET_NAME    = module.secrets.scheduled_task_secret_name
+      CUDLY_MAX_ACCOUNT_PARALLELISM = tostring(var.max_account_parallelism)
+      CUDLY_SOURCE_CLOUD            = "azure"
     },
     var.additional_env_vars
   )
@@ -53,6 +56,15 @@ module "compute_container_apps" {
   registry_password = azurerm_container_registry.main.admin_password
 
   # Scheduled tasks (Logic Apps)
+  #
+  # scheduled_task_secret still passes the plaintext value here because the
+  # Logic App workflow definition embeds it in its outgoing "Authorization:
+  # Bearer ..." header (see scheduled-tasks.tf). Azure Logic Apps DO support
+  # Key Vault references via @parameters() + a Key Vault connection, but
+  # that's a larger refactor. This value is stored in Terraform state and
+  # in the Logic App resource, but is no longer exposed in the Container
+  # App's env vars — `az containerapp show` now reveals only the secret
+  # name, not the value.
   enable_scheduled_tasks  = var.enable_scheduled_tasks
   scheduled_task_secret   = module.secrets.scheduled_task_secret_value
   recommendation_schedule = var.recommendation_schedule
@@ -117,9 +129,12 @@ module "compute_aks" {
       FROM_EMAIL                            = var.enable_email_service ? module.email[0].sender_address : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                         = local.dashboard_url
       CORS_ALLOWED_ORIGIN                   = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      SCHEDULED_TASK_SECRET                 = module.secrets.scheduled_task_secret_value
-      CUDLY_MAX_ACCOUNT_PARALLELISM         = tostring(var.max_account_parallelism)
-      CUDLY_SOURCE_CLOUD                    = "azure"
+      # Pass the Key Vault secret NAME (not the value) so the scheduled
+      # task secret never lives in the container env. The app resolves the
+      # real value at startup via the SecretResolver — see internal/server/app.go.
+      SCHEDULED_TASK_SECRET_NAME    = module.secrets.scheduled_task_secret_name
+      CUDLY_MAX_ACCOUNT_PARALLELISM = tostring(var.max_account_parallelism)
+      CUDLY_SOURCE_CLOUD            = "azure"
     },
     var.additional_env_vars
   )

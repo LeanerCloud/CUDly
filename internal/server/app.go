@@ -78,10 +78,17 @@ type ApplicationConfig struct {
 	// CUDLY_ISSUER_URL env var; in the AWS Lambda deploy the Terraform
 	// module wires this to the Function URL so the deployment is
 	// self-contained without needing a frontend domain.
-	IssuerURL           string
-	CORSAllowedOrigin   string
-	ScheduledTaskSecret string
-	IsLambda            bool
+	IssuerURL         string
+	CORSAllowedOrigin string
+	// ScheduledTaskSecret is the shared secret checked on the /scheduled
+	// endpoint. In production (Azure Container Apps, Lambda-with-KV) it is
+	// resolved lazily from SCHEDULED_TASK_SECRET_NAME via the SecretResolver
+	// in NewApplicationFromDeps, so the value never lives in a container
+	// env var. In dev the plaintext SCHEDULED_TASK_SECRET env var is still
+	// accepted as a fallback.
+	ScheduledTaskSecret     string
+	ScheduledTaskSecretName string
+	IsLambda                bool
 }
 
 // ExternalDeps holds pre-built external dependencies that require infrastructure
@@ -130,9 +137,31 @@ func LoadApplicationConfig() ApplicationConfig {
 		DashboardURL:           os.Getenv("DASHBOARD_URL"),
 		IssuerURL:              os.Getenv("CUDLY_ISSUER_URL"),
 		CORSAllowedOrigin:      os.Getenv("CORS_ALLOWED_ORIGIN"),
-		ScheduledTaskSecret:    os.Getenv("SCHEDULED_TASK_SECRET"),
-		IsLambda:               isLambdaRuntime(),
+		// SCHEDULED_TASK_SECRET (plaintext) is the legacy dev-only path.
+		// SCHEDULED_TASK_SECRET_NAME (secret-store name) is preferred in prod;
+		// NewApplicationFromDeps resolves it via the SecretResolver at init.
+		ScheduledTaskSecret:     os.Getenv("SCHEDULED_TASK_SECRET"),
+		ScheduledTaskSecretName: os.Getenv("SCHEDULED_TASK_SECRET_NAME"),
+		IsLambda:                isLambdaRuntime(),
 	}
+}
+
+// resolveScheduledTaskSecret resolves SCHEDULED_TASK_SECRET_NAME to its real
+// value via the configured SecretResolver (Azure Key Vault / AWS Secrets
+// Manager) when possible. Falls back to cfg.ScheduledTaskSecret (plaintext
+// SCHEDULED_TASK_SECRET env var) if the resolver is absent or the lookup
+// fails. Pulled out of NewApplicationFromDeps to keep it under the
+// cyclomatic limit.
+func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) string {
+	if cfg.ScheduledTaskSecretName == "" || cfg.ScheduledTaskSecret != "" || resolver == nil {
+		return cfg.ScheduledTaskSecret
+	}
+	resolved, err := resolver.GetSecret(ctx, cfg.ScheduledTaskSecretName)
+	if err != nil {
+		log.Printf("scheduled task secret resolution failed for %q: %v (falling back to SCHEDULED_TASK_SECRET)", cfg.ScheduledTaskSecretName, err)
+		return cfg.ScheduledTaskSecret
+	}
+	return resolved
 }
 
 // NewApplicationFromDeps creates an Application from pre-built configuration and dependencies.
@@ -141,6 +170,8 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	if deps.DBConfig == nil {
 		return nil, fmt.Errorf("database configuration required: DBConfig must be provided")
 	}
+
+	cfg.ScheduledTaskSecret = resolveScheduledTaskSecret(ctx, cfg, deps.SecretResolver)
 
 	// Construct the OIDC issuer signer once per deployment. Nil means
 	// the deployment has not opted into the federated flow yet — all

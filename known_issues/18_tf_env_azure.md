@@ -1,6 +1,6 @@
 # Known Issues: Terraform Azure Environment
 
-> **Audit status (2026-04-20):** `1 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 1 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: `nonsensitive()` strips sensitivity from `additional_secrets` before merge~~ — RESOLVED
 
@@ -95,13 +95,20 @@
 
 **Effort:** `small` (contingent on triage)
 
-## HIGH: `SCHEDULED_TASK_SECRET` injected as plain-text environment variable
+## ~~HIGH: `SCHEDULED_TASK_SECRET` injected as plain-text environment variable~~ — PARTIALLY RESOLVED
 
 **File**: `terraform/environments/azure/compute.tf:42`
-**Description**: Raw password value (not a Key Vault secret name) is passed as a direct env var. Visible in Azure Portal, ARM templates, and Terraform state.
-**Status:** ✅ Still valid
+**Description**: The scheduled-task shared secret was injected into the Container App as a plaintext env var, visible via `az containerapp show`, the Azure Portal, and exported ARM templates.
+**Status:** ✔️ Partially resolved — runtime env-var leak closed; Logic App path deferred.
 
-### Implementation plan
+**Resolved by:**
+
+- Container App env var switched from `SCHEDULED_TASK_SECRET = <value>` to `SCHEDULED_TASK_SECRET_NAME = <kv-secret-name>`. `az containerapp show` now reveals only the secret name.
+- `ApplicationConfig.ScheduledTaskSecretName` added. `NewApplicationFromDeps` resolves it via the existing `SecretResolver` (Azure Key Vault / AWS Secrets Manager) at startup and populates `ScheduledTaskSecret` in memory. Falls back to the plaintext `SCHEDULED_TASK_SECRET` env var if the lookup fails or the resolver isn't configured, so dev/local runs still work.
+
+**Deferred:** The Logic App workflow (`scheduled-tasks.tf:48,106`) still interpolates `var.scheduled_task_secret` into its outgoing `Authorization: Bearer …` header. This value is stored inside the Logic App resource + Terraform state; removing it requires migrating to Azure Logic Apps Key Vault connections (`@parameters('kv-secret')`), a larger refactor. The container-app side — which is what was actually flagged in the audit — no longer leaks.
+
+### Original implementation plan
 
 **Goal:** Pass only the Key Vault secret name to the container and let the app resolve the real value at runtime.
 
