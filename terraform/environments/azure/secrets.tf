@@ -36,9 +36,12 @@ module "secrets" {
   admin_password             = var.admin_password
   create_jwt_secret          = true
   create_session_secret      = true
-  additional_secrets = nonsensitive(merge(var.additional_secrets, {
+  # IMPORTANT: do NOT wrap this merge in nonsensitive(). The values flowing
+  # through `additional_secrets` are real secrets that must stay redacted in
+  # `terraform plan/apply` output and CI logs.
+  additional_secrets = merge(var.additional_secrets, {
     "credential-encryption-key" = local.credential_encryption_key
-  }))
+  })
   log_analytics_workspace_id = null # Diagnostics configured separately after workspace creation
 
   tags = local.common_tags

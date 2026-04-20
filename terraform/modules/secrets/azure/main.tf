@@ -261,10 +261,13 @@ resource "azurerm_key_vault_secret" "scheduled_task_secret" {
 # ==============================================
 
 resource "azurerm_key_vault_secret" "additional" {
-  for_each = var.additional_secrets
+  # for_each requires a non-sensitive set, but the values in additional_secrets
+  # are sensitive. Iterate over the (non-sensitive) key set and look up each
+  # value inside the resource body so the value stays redacted in plan output.
+  for_each = toset(nonsensitive(keys(var.additional_secrets)))
 
   name         = each.key
-  value        = each.value
+  value        = var.additional_secrets[each.key]
   key_vault_id = azurerm_key_vault.main.id
 
   content_type = "secret"

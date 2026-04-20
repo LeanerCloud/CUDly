@@ -131,6 +131,7 @@ variable "additional_secrets" {
   description = "Map of additional secret values to create (keys are not sensitive, values are)"
   type        = map(string)
   default     = {}
+  sensitive   = true
 }
 
 variable "container_app_identity_principal_id" {
