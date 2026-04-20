@@ -370,8 +370,10 @@ func TestListAccountServiceOverrides_Success(t *testing.T) {
 			Service:   "ec2",
 		},
 	}
+	acct := sampleAccount()
 	customStore := &mockConfigStoreAccounts{
 		MockConfigStore:     setupAdminMock(ctx),
+		getResult:           &acct,
 		listOverridesResult: overrides,
 	}
 
@@ -550,6 +552,121 @@ func TestBuildAccountFilter(t *testing.T) {
 		assert.Nil(t, f.Enabled)
 		assert.Empty(t, f.Search)
 	})
+}
+
+// --- IDOR scoping tests ---
+// These lock down that a non-admin user whose allowed_accounts list does NOT
+// include the target account gets 404, not 200/403, from per-account handlers.
+// 404 hides existence; 403 would leak "this ID exists, you just can't see it".
+
+func scopedUserSession() *Session {
+	return &Session{
+		UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+		Email:  "viewer@example.com",
+		Role:   "user",
+	}
+}
+
+func setupScopedAuth(ctx context.Context, mockAuth *MockAuthService, userID, verb, resource string, allowed []string) {
+	session := scopedUserSession()
+	session.UserID = userID
+	mockAuth.On("ValidateSession", ctx, "scoped-token").Return(session, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, verb, resource).Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return(allowed, nil)
+}
+
+func scopedRequest(body string) *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer scoped-token"},
+		Body:    body,
+	}
+}
+
+// outOfScopeID is distinct from the default sample account ID used elsewhere
+// and is not in the scoped user's allowed_accounts list.
+const outOfScopeID = "22222222-2222-2222-2222-222222222222"
+
+func TestGetAccount_OutOfScope_Returns404(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+
+	acct := sampleAccount()
+	acct.ID = outOfScopeID
+	acct.Name = "Staging"
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		getResult:       &acct,
+	}
+
+	handler := &Handler{auth: mockAuth, config: customStore}
+	result, err := handler.getAccount(ctx, scopedRequest(""), outOfScopeID)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
+}
+
+func TestGetAccount_InScope_ByName(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	// allowed_accounts = ["Production"] matches acct.Name
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+
+	acct := sampleAccount()
+	acct.Name = "Production"
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		getResult:       &acct,
+	}
+
+	handler := &Handler{auth: mockAuth, config: customStore}
+	result, err := handler.getAccount(ctx, scopedRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.NoError(t, err)
+	got := result.(*config.CloudAccount)
+	assert.Equal(t, "Production", got.Name)
+}
+
+func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "delete", "accounts", []string{"Production"})
+
+	acct := sampleAccount()
+	acct.ID = outOfScopeID
+	acct.Name = "Staging"
+	deleteCalled := false
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return &acct, nil }
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+
+	handler := &Handler{auth: mockAuth, config: store}
+	result, err := handler.deleteAccount(ctx, scopedRequest(""), outOfScopeID)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
+	assert.False(t, deleteCalled, "DeleteCloudAccount must NOT run for out-of-scope accounts")
+}
+
+func TestSaveAccountCredentials_OutOfScope_Returns404(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "update", "accounts", []string{"Production"})
+
+	acct := sampleAccount()
+	acct.ID = outOfScopeID
+	acct.Name = "Staging"
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return &acct, nil }
+
+	handler := &Handler{auth: mockAuth, config: store, credStore: &MockCredentialStore{}}
+	body := `{"credential_type":"aws_access_keys","payload":{"access_key_id":"AKIA...","secret_access_key":"secret"}}`
+	result, err := handler.saveAccountCredentials(ctx, scopedRequest(body), outOfScopeID)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 }
 
 // mockConfigStoreAccounts embeds MockConfigStore and allows overriding specific account methods.

@@ -341,17 +341,14 @@ func (h *Handler) getAccount(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "accounts")
+	if err != nil {
 		return nil, err
 	}
 
-	account, err := h.config.GetCloudAccount(ctx, id)
+	account, err := h.requireAccountAccess(ctx, session, id)
 	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-
-	if account == nil {
-		return nil, errNotFound
+		return nil, err
 	}
 
 	return account, nil
@@ -363,7 +360,8 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, httpReq, "update", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, httpReq, "update", "accounts")
+	if err != nil {
 		return nil, err
 	}
 
@@ -376,13 +374,9 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, err
 	}
 
-	existing, err := h.config.GetCloudAccount(ctx, id)
+	existing, err := h.requireAccountAccess(ctx, session, id)
 	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-
-	if existing == nil {
-		return nil, errNotFound
+		return nil, err
 	}
 
 	account := cloudAccountFromRequest(req)
@@ -404,17 +398,15 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, req, "delete", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, req, "delete", "accounts")
+	if err != nil {
 		return nil, err
 	}
 
-	// Verify account exists before deleting (return 404 instead of silent success).
-	existing, err := h.config.GetCloudAccount(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-	if existing == nil {
-		return nil, errNotFound
+	// Verify the user can access this account AND that it exists. Returns 404
+	// for both "doesn't exist" and "out of scope" to avoid existence leakage.
+	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+		return nil, err
 	}
 
 	if err := h.config.DeleteCloudAccount(ctx, id); err != nil {
@@ -428,42 +420,42 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 // run before we touch the database: UUID format, permission, body parse,
 // credential_type allowlist, and per-type payload schema. Pulled out of
 // saveAccountCredentials to keep that function under the cyclomatic limit.
-func (h *Handler) parseAndValidateCredentialsRequest(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (*CredentialsRequest, error) {
+// Returns the parsed request and the session so the caller can scope the
+// subsequent account lookup against allowed_accounts.
+func (h *Handler) parseAndValidateCredentialsRequest(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (*CredentialsRequest, *Session, error) {
 	if err := validateUUID(id); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, err := h.requirePermission(ctx, httpReq, "update", "accounts"); err != nil {
-		return nil, err
+	session, err := h.requirePermission(ctx, httpReq, "update", "accounts")
+	if err != nil {
+		return nil, nil, err
 	}
 	var req CredentialsRequest
 	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
-		return nil, NewClientError(400, "invalid request body")
+		return nil, nil, NewClientError(400, "invalid request body")
 	}
 	if !validCredentialTypes[req.CredentialType] {
-		return nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, azure_wif_private_key, gcp_service_account, gcp_workload_identity_config")
+		return nil, nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, azure_wif_private_key, gcp_service_account, gcp_workload_identity_config")
 	}
 	if err := validateCredentialPayload(req.CredentialType, req.Payload); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &req, nil
+	return &req, session, nil
 }
 
 // saveAccountCredentials handles POST /api/accounts/:id/credentials.
 func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (any, error) {
-	req, err := h.parseAndValidateCredentialsRequest(ctx, httpReq, id)
+	req, session, err := h.parseAndValidateCredentialsRequest(ctx, httpReq, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Confirm the account exists so we return 404 rather than a FK violation.
-	// This must precede the credStore-nil check so that a missing account always
-	// returns 404, not a 500 about credential store configuration.
-	acct, err := h.config.GetCloudAccount(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-	if acct == nil {
-		return nil, errNotFound
+	// Scope the account to the user's allowed_accounts AND verify existence.
+	// Must precede the credStore-nil check so missing/out-of-scope accounts
+	// return 404 rather than a 500 about credential store configuration.
+	// Returns errNotFound for both cases to avoid existence disclosure.
+	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
+		return nil, err
 	}
 
 	if h.credStore == nil {
@@ -525,15 +517,13 @@ func (h *Handler) testAccountCredentials(ctx context.Context, req *events.Lambda
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
-	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "accounts")
+	if err != nil {
 		return nil, err
 	}
-	acct, err := h.config.GetCloudAccount(ctx, id)
+	acct, err := h.requireAccountAccess(ctx, session, id)
 	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-	if acct == nil {
-		return nil, errNotFound
+		return nil, err
 	}
 	if res, ok := ambientCredResult(acct); ok {
 		return res, nil
@@ -781,7 +771,12 @@ func (h *Handler) listAccountServiceOverrides(ctx context.Context, req *events.L
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "accounts")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
 		return nil, err
 	}
 
@@ -805,7 +800,12 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, NewClientError(400, err.Error())
 	}
 
-	if _, err := h.requirePermission(ctx, httpReq, "update", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, httpReq, "update", "accounts")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := h.requireAccountAccess(ctx, session, accountID); err != nil {
 		return nil, err
 	}
 
@@ -903,7 +903,12 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 		return nil, NewClientError(400, err.Error())
 	}
 
-	if _, err := h.requirePermission(ctx, req, "delete", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, req, "delete", "accounts")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := h.requireAccountAccess(ctx, session, accountID); err != nil {
 		return nil, err
 	}
 
