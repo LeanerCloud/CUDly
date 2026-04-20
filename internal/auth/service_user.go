@@ -56,6 +56,13 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 	}
 
 	if err := s.store.CreateUser(ctx, user); err != nil {
+		// Two callers reaching CreateUser concurrently after both passed the
+		// AdminExists() check is caught by the users_one_admin partial unique
+		// index (migration 000025). Map that duplicate-key error to the same
+		// "admin already exists" semantic the existence check returned above.
+		if isDuplicateKeyError(err) {
+			return nil, fmt.Errorf("admin user already exists")
+		}
 		return nil, fmt.Errorf("failed to create admin: %w", err)
 	}
 

@@ -152,40 +152,61 @@ func (h *Handler) validateCSRF(ctx context.Context, req *events.LambdaFunctionUR
 		return fmt.Errorf("authentication service not configured")
 	}
 
-	// Check if request is using API key (no CSRF needed for API keys)
-	apiKey := req.Headers["x-api-key"]
-	if apiKey == "" {
-		apiKey = req.Headers["X-API-Key"]
+	// API-key-authenticated requests bypass CSRF (no cookie-based session).
+	if h.apiKeyBypassCSRF(ctx, req) {
+		return nil
 	}
 
-	// If using API key, skip CSRF validation
-	if apiKey != "" {
-		// Validate it's a valid API key (admin or user)
-		if h.apiKey != "" && subtle.ConstantTimeCompare([]byte(apiKey), []byte(h.apiKey)) == 1 {
-			return nil // Admin API key
-		}
-		if h.auth != nil {
-			_, _, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
-			if err == nil {
-				return nil // Valid user API key
-			}
-		}
-		// Invalid API key - fall through to require CSRF
-	}
-
-	// Get session token
 	sessionToken := h.extractBearerToken(req)
 	if sessionToken == "" {
 		return fmt.Errorf("no session token for CSRF validation")
 	}
 
-	// Get CSRF token from header
-	csrfToken := req.Headers["x-csrf-token"]
-	if csrfToken == "" {
-		csrfToken = req.Headers["X-CSRF-Token"]
-	}
-
+	csrfToken := extractCSRFToken(req)
+	logMissingCSRFToken(req, csrfToken)
 	return h.auth.ValidateCSRFToken(ctx, sessionToken, csrfToken)
+}
+
+// apiKeyBypassCSRF returns true when the request presents a valid admin or
+// user API key. API-key auth is stateless and not cookie-based, so CSRF
+// protection doesn't apply. An invalid API key returns false — the caller
+// then falls through to session-based CSRF validation.
+func (h *Handler) apiKeyBypassCSRF(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
+	apiKey := req.Headers["x-api-key"]
+	if apiKey == "" {
+		apiKey = req.Headers["X-API-Key"]
+	}
+	if apiKey == "" {
+		return false
+	}
+	if h.apiKey != "" && subtle.ConstantTimeCompare([]byte(apiKey), []byte(h.apiKey)) == 1 {
+		return true
+	}
+	if _, _, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey); err == nil {
+		return true
+	}
+	return false
+}
+
+// extractCSRFToken pulls the CSRF token from the case-insensitive header.
+func extractCSRFToken(req *events.LambdaFunctionURLRequest) string {
+	if t := req.Headers["x-csrf-token"]; t != "" {
+		return t
+	}
+	return req.Headers["X-CSRF-Token"]
+}
+
+// logMissingCSRFToken emits a defensive warn-level log when a session-
+// authenticated request reaches CSRF validation with no token header.
+// Almost always indicates a frontend regression (sessionStorage cleared, or
+// a new fetch site forgot to include the token). ValidateCSRFToken still
+// rejects the request — this just makes the cause obvious in logs.
+func logMissingCSRFToken(req *events.LambdaFunctionURLRequest, csrfToken string) {
+	if csrfToken != "" {
+		return
+	}
+	logging.Warnf("CSRF validation: empty header on session-authenticated %s %s from %s — frontend regression?",
+		req.RequestContext.HTTP.Method, req.RequestContext.HTTP.Path, req.RequestContext.HTTP.SourceIP)
 }
 
 // requireAdmin checks if the current user has admin role.
