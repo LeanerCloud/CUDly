@@ -807,7 +807,8 @@ func TestPGXMock_ListCloudAccounts_WithSearchFilter(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(cloudAccountCols).AddRow(cloudAccountRow(now)...)
-	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
+	// Search binds once and references the same $1 twice in the ILIKE clause.
+	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
 	accts, err := store.ListCloudAccounts(ctx, CloudAccountFilter{Search: "test"})
 	require.NoError(t, err)
@@ -824,10 +825,11 @@ func TestPGXMock_ListCloudAccounts_WithAllFilters(t *testing.T) {
 	bastionID := "bastion-1"
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(cloudAccountCols).AddRow(cloudAccountRow(now)...)
+	// 4 bound args: provider, enabled, search (bound once, referenced twice
+	// in the ILIKE clause), and bastion_id.
 	mock.ExpectQuery("SELECT").WithArgs(
 		pgxmock.AnyArg(), pgxmock.AnyArg(),
 		pgxmock.AnyArg(), pgxmock.AnyArg(),
-		pgxmock.AnyArg(),
 	).WillReturnRows(rows)
 
 	accts, err := store.ListCloudAccounts(ctx, CloudAccountFilter{

@@ -272,7 +272,14 @@ func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceCo
 	return nil
 }
 
-// ListServiceConfigs lists all service configurations
+// ListServiceConfigs lists all service configurations.
+//
+// LIMIT 1000 caps the result set at three orders of magnitude above the
+// realistic upper bound (each cloud has a bounded set of services, so the
+// total is roughly (providers × service-types × per-service-variants),
+// which stays under ~150 even with generous provider growth). The cap is
+// defence-in-depth against a compromised admin inserting millions of rows
+// and matches the sibling GetPendingExecutions limit.
 func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig, error) {
 	query := `
 		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
@@ -280,6 +287,7 @@ func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig
 		       include_types, exclude_types
 		FROM service_configs
 		ORDER BY provider, service
+		LIMIT 1000
 	`
 
 	rows, err := s.db.Query(ctx, query)
@@ -1481,10 +1489,12 @@ func (s *PostgresStore) ListCloudAccounts(ctx context.Context, filter CloudAccou
 	if filter.Search != "" {
 		// Escape ILIKE wildcards so user-supplied % and _ are treated as literals.
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(filter.Search)
-		query += fmt.Sprintf(" AND (ca.name ILIKE $%d ESCAPE '\\' OR ca.external_id ILIKE $%d ESCAPE '\\')", i, i+1)
-		like := "%" + escaped + "%"
-		args = append(args, like, like)
-		i += 2
+		// Bind once and reference the same $N twice — Postgres allows parameter
+		// reuse, and the single-bind form keeps future filter additions from
+		// having to reason about "+2" offsets.
+		query += fmt.Sprintf(" AND (ca.name ILIKE $%d ESCAPE '\\' OR ca.external_id ILIKE $%d ESCAPE '\\')", i, i)
+		args = append(args, "%"+escaped+"%")
+		i++
 	}
 	if filter.BastionID != nil {
 		query += fmt.Sprintf(" AND ca.aws_bastion_id = $%d", i)
