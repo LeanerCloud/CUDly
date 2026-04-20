@@ -1,6 +1,6 @@
 # Known Issues: Frontend Settings
 
-> **Audit status (2026-04-20):** `1 still valid · 5 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 6 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~HIGH: Unchecked null dereferences via forced element casts~~ — RESOLVED
 
@@ -190,12 +190,14 @@
 
 **Effort:** `small`
 
-## LOW: Event listeners never removed
+## ~~LOW: Event listeners never removed~~ — RESOLVED
 
 **File**: `frontend/src/settings.ts:576-665, 83-93`
-**Description**: `addEventListener` calls with no teardown. In an SPA that navigates away and back to Settings, listeners accumulate — every re-entry registers another handler on the same element.
-**Impact**: Duplicate API calls (one per accumulated listener) and growing memory usage over long sessions.
-**Status:** ✅ Still valid
+**Description**: `addEventListener` calls had no teardown, so if Settings were ever remounted listeners would accumulate (duplicate API calls + growing memory).
+**Impact**: Defensive fix — Settings is mounted once at page boot in the current app, so no accumulation occurs in practice, but the refactor makes future lazy-mount changes safe.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `setupSettingsHandlers(signal?: AbortSignal)` and `setupDirtyTracking(signal?: AbortSignal)` now accept an optional `AbortSignal` that is threaded through the third argument of every `addEventListener` call. Callers that ever need to unmount Settings can `controller.abort()` to unregister every listener in one shot; the current single-mount caller in `app.ts` can continue passing no argument and the helpers stay backward-compatible.
 
 ### Implementation plan
 

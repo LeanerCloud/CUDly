@@ -132,14 +132,14 @@ export function isUnsavedChanges(): boolean {
   return TRACKED_FIELDS.some(id => getFieldValue(id) !== savedSnapshot[id]);
 }
 
-function setupDirtyTracking(): void {
+function setupDirtyTracking(signal?: AbortSignal): void {
   TRACKED_FIELDS.forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.addEventListener('change', () => updateDirtyMarkers());
+    el.addEventListener('change', () => updateDirtyMarkers(), { signal });
     // Also listen to input for text fields so highlighting is immediate
     if (el instanceof HTMLInputElement && el.type !== 'checkbox') {
-      el.addEventListener('input', () => updateDirtyMarkers());
+      el.addEventListener('input', () => updateDirtyMarkers(), { signal });
     }
   });
 }
@@ -709,61 +709,61 @@ async function handleDiscoverOrgAccounts(): Promise<void> {
 /**
  * Set up settings event handlers
  */
-export function setupSettingsHandlers(): void {
+export function setupSettingsHandlers(signal?: AbortSignal): void {
   // Provider checkbox handlers - toggle visibility of provider settings sections
   const awsCheck = document.getElementById('provider-aws') as HTMLInputElement | null;
   const azureCheck = document.getElementById('provider-azure') as HTMLInputElement | null;
   const gcpCheck = document.getElementById('provider-gcp') as HTMLInputElement | null;
 
-  awsCheck?.addEventListener('change', () => updateProviderSettingsVisibility());
-  azureCheck?.addEventListener('change', () => updateProviderSettingsVisibility());
-  gcpCheck?.addEventListener('change', () => updateProviderSettingsVisibility());
+  awsCheck?.addEventListener('change', () => updateProviderSettingsVisibility(), { signal });
+  azureCheck?.addEventListener('change', () => updateProviderSettingsVisibility(), { signal });
+  gcpCheck?.addEventListener('change', () => updateProviderSettingsVisibility(), { signal });
 
   // Auto-collect checkbox - toggle schedule visibility
   const autoCollect = document.getElementById('setting-auto-collect') as HTMLInputElement | null;
-  autoCollect?.addEventListener('change', () => updateCollectionScheduleVisibility());
+  autoCollect?.addEventListener('change', () => updateCollectionScheduleVisibility(), { signal });
 
   // Global defaults - propagate to all services when changed
   const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement | null;
   const defaultPayment = document.getElementById('setting-default-payment') as HTMLSelectElement | null;
 
-  defaultTerm?.addEventListener('change', () => propagateTermToServices(defaultTerm.value));
-  defaultPayment?.addEventListener('change', () => propagatePaymentToServices(defaultPayment.value));
+  defaultTerm?.addEventListener('change', () => propagateTermToServices(defaultTerm.value), { signal });
+  defaultPayment?.addEventListener('change', () => propagatePaymentToServices(defaultPayment.value), { signal });
 
   // Set up dirty-field tracking
-  setupDirtyTracking();
+  setupDirtyTracking(signal);
 
   // Account management buttons
-  document.getElementById('add-aws-account-btn')?.addEventListener('click', () => openAccountModal('aws'));
-  document.getElementById('add-azure-account-btn')?.addEventListener('click', () => openAccountModal('azure'));
-  document.getElementById('add-gcp-account-btn')?.addEventListener('click', () => openAccountModal('gcp'));
+  document.getElementById('add-aws-account-btn')?.addEventListener('click', () => openAccountModal('aws'), { signal });
+  document.getElementById('add-azure-account-btn')?.addEventListener('click', () => openAccountModal('azure'), { signal });
+  document.getElementById('add-gcp-account-btn')?.addEventListener('click', () => openAccountModal('gcp'), { signal });
 
   // Org discovery button
-  document.getElementById('discover-org-accounts-btn')?.addEventListener('click', () => void handleDiscoverOrgAccounts());
+  document.getElementById('discover-org-accounts-btn')?.addEventListener('click', () => void handleDiscoverOrgAccounts(), { signal });
 
   // Account form submit handler
-  document.getElementById('account-form')?.addEventListener('submit', (e) => void handleAccountFormSubmit(e));
+  document.getElementById('account-form')?.addEventListener('submit', (e) => void handleAccountFormSubmit(e), { signal });
 
   // Account modal close
-  document.getElementById('close-account-modal-btn')?.addEventListener('click', closeAccountModal);
+  document.getElementById('close-account-modal-btn')?.addEventListener('click', closeAccountModal, { signal });
 
   // AWS auth mode change handler
   const awsAuthMode = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
-  awsAuthMode?.addEventListener('change', () => updateAwsAuthModeFields(awsAuthMode.value));
+  awsAuthMode?.addEventListener('change', () => updateAwsAuthModeFields(awsAuthMode.value), { signal });
 
   // Azure auth mode change handler
   const azureAuthMode = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
-  azureAuthMode?.addEventListener('change', () => updateAzureAuthModeFields(azureAuthMode.value));
+  azureAuthMode?.addEventListener('change', () => updateAzureAuthModeFields(azureAuthMode.value), { signal });
 
   // GCP auth mode change handler
   const gcpAuthMode = document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null;
-  gcpAuthMode?.addEventListener('change', () => updateGCPAuthModeFields(gcpAuthMode.value));
+  gcpAuthMode?.addEventListener('change', () => updateGCPAuthModeFields(gcpAuthMode.value), { signal });
 
   // Close account modal when clicking outside
   const accountModal = document.getElementById('account-modal');
   accountModal?.addEventListener('click', (e) => {
     if (e.target === accountModal) closeAccountModal();
-  });
+  }, { signal });
 }
 
 /**
