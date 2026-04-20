@@ -129,45 +129,90 @@ func (h *Handler) resolveTargetCoverage(ctx context.Context) float64 {
 }
 
 func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*UpcomingPurchaseResponse, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
 	}
 
-	// Get scheduled purchases from plans
 	plans, err := h.config.ListPurchasePlans(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get purchase plans: %w", err)
 	}
 
-	var upcoming []UpcomingPurchase
-	for _, plan := range plans {
-		if !plan.Enabled || plan.NextExecutionDate == nil {
-			continue
-		}
-
-		// Get first service from the Services map as representative
-		var provider, service string
-		for _, svcCfg := range plan.Services {
-			provider = svcCfg.Provider
-			service = svcCfg.Service
-			break
-		}
-
-		upcoming = append(upcoming, UpcomingPurchase{
-			ExecutionID:      plan.ID,
-			PlanName:         plan.Name,
-			ScheduledDate:    plan.NextExecutionDate.Format("2006-01-02"),
-			Provider:         provider,
-			Service:          service,
-			StepNumber:       plan.RampSchedule.CurrentStep + 1,
-			TotalSteps:       plan.RampSchedule.TotalSteps,
-			EstimatedSavings: 0, // Would need to calculate from recommendations
-		})
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 
-	return &UpcomingPurchaseResponse{
-		Purchases: upcoming,
-	}, nil
+	var upcoming []UpcomingPurchase
+	for _, plan := range plans {
+		include, err := h.includeUpcomingPlan(ctx, plan, allowed)
+		if err != nil {
+			return nil, err
+		}
+		if !include {
+			continue
+		}
+		upcoming = append(upcoming, upcomingFromPlan(plan))
+	}
+
+	return &UpcomingPurchaseResponse{Purchases: upcoming}, nil
+}
+
+// includeUpcomingPlan returns true when the plan should appear in the
+// upcoming-purchases list for the session's allowed_accounts. Skips disabled
+// plans and plans with no next execution date. Admin/unrestricted sessions
+// pass through without the per-plan account lookup.
+//
+// Plans with no account assignments are hidden from scoped users — we can't
+// attribute them to a specific account, so the safe default is "don't leak".
+func (h *Handler) includeUpcomingPlan(ctx context.Context, plan config.PurchasePlan, allowed []string) (bool, error) {
+	if !plan.Enabled || plan.NextExecutionDate == nil {
+		return false, nil
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return true, nil
+	}
+	return h.planIntersectsAllowed(ctx, plan.ID, allowed)
+}
+
+// upcomingFromPlan projects a PurchasePlan onto the UpcomingPurchase response
+// type. Uses the first service as representative — the response shape doesn't
+// support multi-service plans.
+func upcomingFromPlan(plan config.PurchasePlan) UpcomingPurchase {
+	var provider, service string
+	for _, svcCfg := range plan.Services {
+		provider = svcCfg.Provider
+		service = svcCfg.Service
+		break
+	}
+	return UpcomingPurchase{
+		ExecutionID:      plan.ID,
+		PlanName:         plan.Name,
+		ScheduledDate:    plan.NextExecutionDate.Format("2006-01-02"),
+		Provider:         provider,
+		Service:          service,
+		StepNumber:       plan.RampSchedule.CurrentStep + 1,
+		TotalSteps:       plan.RampSchedule.TotalSteps,
+		EstimatedSavings: 0, // Would need to calculate from recommendations
+	}
+}
+
+// planIntersectsAllowed returns true when any of the plan's associated cloud
+// accounts is in the allowed list (matched by ID or display name). Returns
+// false when the plan has no account rows — scoped users don't get to see
+// unattributed plans.
+func (h *Handler) planIntersectsAllowed(ctx context.Context, planID string, allowed []string) (bool, error) {
+	accounts, err := h.config.GetPlanAccounts(ctx, planID)
+	if err != nil {
+		return false, fmt.Errorf("failed to get plan accounts: %w", err)
+	}
+	for _, acct := range accounts {
+		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // getPublicInfo returns public information about the CUDly instance (no auth required)

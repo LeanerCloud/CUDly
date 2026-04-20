@@ -125,6 +125,117 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 	assert.Equal(t, 5, result.Purchases[0].TotalSteps)
 }
 
+// mockStoreWithPlanAccounts embeds MockConfigStore and overrides GetPlanAccounts
+// with a per-plan lookup. MockConfigStore.GetPlanAccounts always returns nil,nil
+// (see mocks_test.go), which defeats the scoped-user filter the tests exercise.
+type mockStoreWithPlanAccounts struct {
+	*MockConfigStore
+	planAccounts map[string][]config.CloudAccount
+}
+
+func (m *mockStoreWithPlanAccounts) GetPlanAccounts(_ context.Context, planID string) ([]config.CloudAccount, error) {
+	return m.planAccounts[planID], nil
+}
+
+// TestHandler_getUpcomingPurchases_ScopedUser asserts that a non-admin user
+// with allowed_accounts=["Production"] only sees plans whose associated
+// accounts include "Production". Plan B is attributed to "Staging" and must
+// be filtered out.
+func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	nextExecDate := time.Now().AddDate(0, 0, 7)
+	planA := config.PurchasePlan{
+		ID:                "11111111-1111-1111-1111-111111111111",
+		Name:              "Plan A",
+		Enabled:           true,
+		NextExecutionDate: &nextExecDate,
+		Services: map[string]config.ServiceConfig{
+			"aws/rds": {Provider: "aws", Service: "rds"},
+		},
+		RampSchedule: config.RampSchedule{CurrentStep: 0, TotalSteps: 5},
+	}
+	planB := config.PurchasePlan{
+		ID:                "22222222-2222-2222-2222-222222222222",
+		Name:              "Plan B",
+		Enabled:           true,
+		NextExecutionDate: &nextExecDate,
+		Services: map[string]config.ServiceConfig{
+			"aws/ec2": {Provider: "aws", Service: "ec2"},
+		},
+		RampSchedule: config.RampSchedule{CurrentStep: 0, TotalSteps: 5},
+	}
+
+	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{planA, planB}, nil)
+	store := &mockStoreWithPlanAccounts{
+		MockConfigStore: mockStore,
+		planAccounts: map[string][]config.CloudAccount{
+			planA.ID: {{ID: "acc-prod", Name: "Production"}},
+			planB.ID: {{ID: "acc-stage", Name: "Staging"}},
+		},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
+		UserID: "viewer-1",
+		Role:   "user",
+	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+
+	handler := &Handler{auth: mockAuth, config: store}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer viewer-token"},
+	}
+
+	result, err := handler.getUpcomingPurchases(ctx, req)
+	require.NoError(t, err)
+
+	// Only Plan A (Production) passes the allowed_accounts filter.
+	assert.Len(t, result.Purchases, 1)
+	assert.Equal(t, "Plan A", result.Purchases[0].PlanName)
+}
+
+// TestHandler_getUpcomingPurchases_ScopedUser_SkipsUnattributed locks down
+// that a plan with no associated accounts is hidden from scoped users — the
+// safe default when we can't attribute the plan to a specific account.
+func TestHandler_getUpcomingPurchases_ScopedUser_SkipsUnattributed(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	nextExecDate := time.Now().AddDate(0, 0, 7)
+	plan := config.PurchasePlan{
+		ID:                "11111111-1111-1111-1111-111111111111",
+		Name:              "Unattributed Plan",
+		Enabled:           true,
+		NextExecutionDate: &nextExecDate,
+		RampSchedule:      config.RampSchedule{CurrentStep: 0, TotalSteps: 5},
+	}
+	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{plan}, nil)
+	store := &mockStoreWithPlanAccounts{
+		MockConfigStore: mockStore,
+		planAccounts:    map[string][]config.CloudAccount{plan.ID: {}},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
+		UserID: "viewer-1",
+		Role:   "user",
+	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+
+	handler := &Handler{auth: mockAuth, config: store}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer viewer-token"},
+	}
+
+	result, err := handler.getUpcomingPurchases(ctx, req)
+	require.NoError(t, err)
+	assert.Len(t, result.Purchases, 0)
+}
+
 func TestHandler_getPublicInfo(t *testing.T) {
 	ctx := context.Background()
 
