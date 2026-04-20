@@ -797,12 +797,29 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 	return executions, rows.Err()
 }
 
-// CleanupOldExecutions deletes purchase executions older than retentionDays
+// CleanupOldExecutions deletes purchase executions older than retentionDays.
+//
+// "Old" covers two cases:
+//
+//  1. Terminal-state executions: status IN ('completed', 'cancelled') and
+//     scheduled_date past the retention window.
+//  2. Pending/notified executions whose `expires_at` has passed: there is
+//     no transition code that flips these to an `expired` status (the
+//     valid_status CHECK doesn't include 'expired'), so the previous
+//     `status IN (..., 'expired')` filter was dead — these rows would
+//     accumulate indefinitely. Cleanup picks them up directly via
+//     `expires_at`.
+//
+// The OR keeps NULL-`expires_at` rows safe (the expires_at branch only
+// fires when expires_at IS NOT NULL).
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	query := `
 		DELETE FROM purchase_executions
 		WHERE scheduled_date < NOW() - INTERVAL '1 day' * $1
-		AND status IN ('completed', 'cancelled', 'expired')
+		  AND (
+		        status IN ('completed', 'cancelled')
+		     OR (expires_at IS NOT NULL AND expires_at < NOW())
+		      )
 	`
 
 	result, err := s.db.Exec(ctx, query, retentionDays)
