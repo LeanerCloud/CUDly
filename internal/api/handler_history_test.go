@@ -5,9 +5,26 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// adminHistoryReq builds an admin-authed request and wires the auth mock so
+// requirePermission short-circuits. Returns the mocked auth so tests can add
+// extra expectations.
+func adminHistoryReq(ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}, nil)
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	return mockAuth, req
+}
 
 func TestHandler_getHistory(t *testing.T) {
 	ctx := context.Background()
@@ -19,13 +36,14 @@ func TestHandler_getHistory(t *testing.T) {
 
 	mockStore.On("GetPurchaseHistory", ctx, "123456789012", 100).Return(history, nil)
 
-	handler := &Handler{config: mockStore}
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	params := map[string]string{
 		"account_id": "123456789012",
 	}
 
-	result, err := handler.getHistory(ctx, params)
+	result, err := handler.getHistory(ctx, req, params)
 	require.NoError(t, err)
 
 	historyResp := result.(HistoryResponse)
@@ -47,11 +65,12 @@ func TestHandler_getHistory_AllAccounts(t *testing.T) {
 
 	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(history, nil)
 
-	handler := &Handler{config: mockStore}
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	params := map[string]string{}
 
-	result, err := handler.getHistory(ctx, params)
+	result, err := handler.getHistory(ctx, req, params)
 	require.NoError(t, err)
 
 	historyResp := result.(HistoryResponse)
@@ -67,12 +86,36 @@ func TestHandler_getHistory_CustomLimit(t *testing.T) {
 
 	mockStore.On("GetAllPurchaseHistory", ctx, 50).Return([]config.PurchaseHistoryRecord{}, nil)
 
-	handler := &Handler{config: mockStore}
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	params := map[string]string{
 		"limit": "50",
 	}
 
-	_, err := handler.getHistory(ctx, params)
+	_, err := handler.getHistory(ctx, req, params)
 	require.NoError(t, err)
+}
+
+// TestHandler_getHistory_PermissionDenied asserts that a non-admin user without
+// view:purchases gets 403 and never reaches the store.
+func TestHandler_getHistory_PermissionDenied(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
+		UserID: "viewer-1",
+		Role:   "user",
+	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(false, nil)
+
+	handler := &Handler{auth: mockAuth, config: mockStore}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer viewer-token"},
+	}
+	_, err := handler.getHistory(ctx, req, map[string]string{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "permission denied")
+	mockStore.AssertNotCalled(t, "GetPurchaseHistory")
+	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory")
 }

@@ -578,39 +578,39 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 	})
 
 	t.Run("getHistoryAnalyticsHandler", func(t *testing.T) {
+		mockAuth, req := adminAnalyticsReq(ctx)
 		mockClient := new(MockAnalyticsClient)
 		mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
 
-		h := &Handler{analyticsClient: mockClient}
+		h := &Handler{auth: mockAuth, analyticsClient: mockClient}
 		router := NewRouter(h)
 
-		req := &events.LambdaFunctionURLRequest{}
 		result, err := router.getHistoryAnalyticsHandler(ctx, req, map[string]string{})
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 	})
 
 	t.Run("getHistoryBreakdownHandler", func(t *testing.T) {
+		mockAuth, req := adminAnalyticsReq(ctx)
 		mockClient := new(MockAnalyticsClient)
 		mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(map[string]BreakdownValue{}, nil)
 
-		h := &Handler{analyticsClient: mockClient}
+		h := &Handler{auth: mockAuth, analyticsClient: mockClient}
 		router := NewRouter(h)
 
-		req := &events.LambdaFunctionURLRequest{}
 		result, err := router.getHistoryBreakdownHandler(ctx, req, map[string]string{})
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 	})
 
 	t.Run("triggerAnalyticsCollectionHandler", func(t *testing.T) {
+		mockAuth, req := adminAnalyticsReq(ctx)
 		mockCollector := new(MockAnalyticsCollector)
 		mockCollector.On("Collect", ctx).Return(nil)
 
-		h := &Handler{analyticsCollector: mockCollector}
+		h := &Handler{auth: mockAuth, analyticsCollector: mockCollector}
 		router := NewRouter(h)
 
-		req := &events.LambdaFunctionURLRequest{}
 		result, err := router.triggerAnalyticsCollectionHandler(ctx, req, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, result)

@@ -24,6 +24,21 @@ func createMockLambdaRequest(sourceIP string) *events.LambdaFunctionURLRequest {
 	}
 }
 
+// adminDashboardReq returns (mocked auth with admin session, admin-authed request).
+// Dashboard handlers are now permission-gated; this short-circuits the gate so
+// existing tests keep exercising the aggregation logic.
+func adminDashboardReq(ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}, nil)
+	return mockAuth, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+}
+
 func TestHandler_getDashboardSummary(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
@@ -43,13 +58,15 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
+	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{
+		auth:      mockAuth,
 		scheduler: mockScheduler,
 		config:    mockStore,
 	}
 
 	params := map[string]string{"provider": "aws"}
-	result, err := handler.getDashboardSummary(ctx, params)
+	result, err := handler.getDashboardSummary(ctx, req, params)
 	require.NoError(t, err)
 
 	assert.Equal(t, 350.0, result.PotentialMonthlySavings)
@@ -92,9 +109,10 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 
 	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
 
-	handler := &Handler{config: mockStore}
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
 
-	result, err := handler.getUpcomingPurchases(ctx)
+	result, err := handler.getUpcomingPurchases(ctx, req)
 	require.NoError(t, err)
 
 	// Only enabled plans should be returned
@@ -350,9 +368,10 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 		mockScheduler := new(MockScheduler)
 		mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(nil, errors.New("scheduler error"))
 
-		handler := &Handler{scheduler: mockScheduler}
+		mockAuth, req := adminDashboardReq(ctx)
+		handler := &Handler{auth: mockAuth, scheduler: mockScheduler}
 
-		_, err := handler.getDashboardSummary(ctx, map[string]string{})
+		_, err := handler.getDashboardSummary(ctx, req, map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get recommendations")
 	})
@@ -365,12 +384,14 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 		mockStore.On("GetGlobalConfig", ctx).Return(nil, nil)
 		mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
+		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{
+			auth:      mockAuth,
 			scheduler: mockScheduler,
 			config:    mockStore,
 		}
 
-		result, err := handler.getDashboardSummary(ctx, map[string]string{})
+		result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
 		require.NoError(t, err)
 		assert.Equal(t, 80.0, result.TargetCoverage) // Default
 	})
@@ -387,12 +408,14 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 		mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 		mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
+		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{
+			auth:      mockAuth,
 			scheduler: mockScheduler,
 			config:    mockStore,
 		}
 
-		result, err := handler.getDashboardSummary(ctx, map[string]string{})
+		result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
 		require.NoError(t, err)
 		assert.Equal(t, 80.0, result.TargetCoverage) // Default when 0
 	})
@@ -405,9 +428,10 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("ListPurchasePlans", ctx).Return(nil, errors.New("db error"))
 
-		handler := &Handler{config: mockStore}
+		mockAuth, req := adminDashboardReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
 
-		_, err := handler.getUpcomingPurchases(ctx)
+		_, err := handler.getUpcomingPurchases(ctx, req)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get purchase plans")
 	})
@@ -426,9 +450,10 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 
 		mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
 
-		handler := &Handler{config: mockStore}
+		mockAuth, req := adminDashboardReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
 
-		result, err := handler.getUpcomingPurchases(ctx)
+		result, err := handler.getUpcomingPurchases(ctx, req)
 		require.NoError(t, err)
 		assert.Len(t, result.Purchases, 0) // Should not include plan without date
 	})

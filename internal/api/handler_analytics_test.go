@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,21 @@ func (m *MockAnalyticsCollector) Collect(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// adminAnalyticsReq returns (mocked auth with admin session, request with admin token).
+// All analytics handlers are permission-gated — this short-circuits the gate so the
+// existing tests can exercise the analytics-specific behaviour without rewriting auth.
+func adminAnalyticsReq(ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}, nil)
+	return mockAuth, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+}
+
 func TestHandler_getHistoryAnalytics_Success(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(MockAnalyticsClient)
@@ -58,14 +74,15 @@ func TestHandler_getHistoryAnalytics_Success(t *testing.T) {
 
 	mockClient.On("QueryHistory", ctx, "account-123", mock.Anything, mock.Anything, "hourly").Return(dataPoints, summary, nil)
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{
 		"account_id": "account-123",
 		"interval":   "hourly",
 	}
 
-	result, err := handler.getHistoryAnalytics(ctx, params)
+	result, err := handler.getHistoryAnalytics(ctx, req, params)
 	require.NoError(t, err)
 
 	response, ok := result.(*AnalyticsResponse)
@@ -77,11 +94,10 @@ func TestHandler_getHistoryAnalytics_Success(t *testing.T) {
 
 func TestHandler_getHistoryAnalytics_NoClient(t *testing.T) {
 	ctx := context.Background()
-	handler := &Handler{}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth}
 
-	params := map[string]string{}
-
-	_, err := handler.getHistoryAnalytics(ctx, params)
+	_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "analytics not configured")
 }
@@ -93,11 +109,12 @@ func TestHandler_getHistoryAnalytics_DefaultInterval(t *testing.T) {
 	dataPoints := []HistoryDataPoint{}
 	mockClient.On("QueryHistory", ctx, "", mock.Anything, mock.Anything, "hourly").Return(dataPoints, (*HistorySummary)(nil), nil)
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{} // No interval specified
 
-	_, err := handler.getHistoryAnalytics(ctx, params)
+	_, err := handler.getHistoryAnalytics(ctx, req, params)
 	require.NoError(t, err)
 
 	mockClient.AssertCalled(t, "QueryHistory", ctx, "", mock.Anything, mock.Anything, "hourly")
@@ -107,13 +124,14 @@ func TestHandler_getHistoryAnalytics_InvalidDateRange(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(MockAnalyticsClient)
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{
 		"start": "invalid-date",
 	}
 
-	_, err := handler.getHistoryAnalytics(ctx, params)
+	_, err := handler.getHistoryAnalytics(ctx, req, params)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid start date")
 }
@@ -124,13 +142,38 @@ func TestHandler_getHistoryAnalytics_QueryError(t *testing.T) {
 
 	mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, errors.New("query failed"))
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{}
 
-	_, err := handler.getHistoryAnalytics(ctx, params)
+	_, err := handler.getHistoryAnalytics(ctx, req, params)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to query analytics")
+}
+
+// TestHandler_getHistoryAnalytics_ScopedUser_RequiresAccountID asserts that a
+// non-admin user with restricted allowed_accounts cannot issue an unscoped
+// analytics query.
+func TestHandler_getHistoryAnalytics_ScopedUser_RequiresAccountID(t *testing.T) {
+	ctx := context.Background()
+	mockClient := new(MockAnalyticsClient)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
+		UserID: "viewer-1",
+		Role:   "user",
+	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer viewer-token"},
+	}
+	_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "account_id is required")
+	mockClient.AssertNotCalled(t, "QueryHistory")
 }
 
 func TestHandler_getHistoryBreakdown_Success(t *testing.T) {
@@ -145,14 +188,15 @@ func TestHandler_getHistoryBreakdown_Success(t *testing.T) {
 
 	mockClient.On("QueryBreakdown", ctx, "account-123", mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{
 		"account_id": "account-123",
 		"dimension":  "service",
 	}
 
-	result, err := handler.getHistoryBreakdown(ctx, params)
+	result, err := handler.getHistoryBreakdown(ctx, req, params)
 	require.NoError(t, err)
 
 	response, ok := result.(*BreakdownResponse)
@@ -164,11 +208,10 @@ func TestHandler_getHistoryBreakdown_Success(t *testing.T) {
 
 func TestHandler_getHistoryBreakdown_NoClient(t *testing.T) {
 	ctx := context.Background()
-	handler := &Handler{}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth}
 
-	params := map[string]string{}
-
-	_, err := handler.getHistoryBreakdown(ctx, params)
+	_, err := handler.getHistoryBreakdown(ctx, req, map[string]string{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "analytics not configured")
 }
@@ -180,11 +223,12 @@ func TestHandler_getHistoryBreakdown_DefaultDimension(t *testing.T) {
 	breakdownData := map[string]BreakdownValue{}
 	mockClient.On("QueryBreakdown", ctx, "", mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{} // No dimension specified
 
-	_, err := handler.getHistoryBreakdown(ctx, params)
+	_, err := handler.getHistoryBreakdown(ctx, req, params)
 	require.NoError(t, err)
 
 	mockClient.AssertCalled(t, "QueryBreakdown", ctx, "", mock.Anything, mock.Anything, "service")
@@ -194,13 +238,14 @@ func TestHandler_getHistoryBreakdown_InvalidDateRange(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(MockAnalyticsClient)
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{
 		"end": "bad-date",
 	}
 
-	_, err := handler.getHistoryBreakdown(ctx, params)
+	_, err := handler.getHistoryBreakdown(ctx, req, params)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid end date")
 }
@@ -211,11 +256,12 @@ func TestHandler_getHistoryBreakdown_QueryError(t *testing.T) {
 
 	mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("breakdown failed"))
 
-	handler := &Handler{analyticsClient: mockClient}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
 
 	params := map[string]string{}
 
-	_, err := handler.getHistoryBreakdown(ctx, params)
+	_, err := handler.getHistoryBreakdown(ctx, req, params)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to query breakdown")
 }
@@ -226,9 +272,10 @@ func TestHandler_triggerAnalyticsCollection_Success(t *testing.T) {
 
 	mockCollector.On("Collect", ctx).Return(nil)
 
-	handler := &Handler{analyticsCollector: mockCollector}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsCollector: mockCollector}
 
-	result, err := handler.triggerAnalyticsCollection(ctx, nil)
+	result, err := handler.triggerAnalyticsCollection(ctx, req, nil)
 	require.NoError(t, err)
 
 	response, ok := result.(map[string]string)
@@ -239,9 +286,10 @@ func TestHandler_triggerAnalyticsCollection_Success(t *testing.T) {
 
 func TestHandler_triggerAnalyticsCollection_NoCollector(t *testing.T) {
 	ctx := context.Background()
-	handler := &Handler{}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth}
 
-	_, err := handler.triggerAnalyticsCollection(ctx, nil)
+	_, err := handler.triggerAnalyticsCollection(ctx, req, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "analytics collector not configured")
 }
@@ -252,11 +300,33 @@ func TestHandler_triggerAnalyticsCollection_Error(t *testing.T) {
 
 	mockCollector.On("Collect", ctx).Return(errors.New("collection error"))
 
-	handler := &Handler{analyticsCollector: mockCollector}
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsCollector: mockCollector}
 
-	_, err := handler.triggerAnalyticsCollection(ctx, nil)
+	_, err := handler.triggerAnalyticsCollection(ctx, req, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "collection failed")
+}
+
+// TestHandler_triggerAnalyticsCollection_NonAdmin asserts that a non-admin user
+// is rejected by requireAdmin, regardless of their broader permission set.
+func TestHandler_triggerAnalyticsCollection_NonAdmin(t *testing.T) {
+	ctx := context.Background()
+	mockCollector := new(MockAnalyticsCollector)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "user-token").Return(&Session{
+		UserID: "user-1",
+		Role:   "user",
+	}, nil)
+
+	handler := &Handler{auth: mockAuth, analyticsCollector: mockCollector}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
+	}
+	_, err := handler.triggerAnalyticsCollection(ctx, req, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "admin access required")
+	mockCollector.AssertNotCalled(t, "Collect")
 }
 
 func TestParseDateRange(t *testing.T) {

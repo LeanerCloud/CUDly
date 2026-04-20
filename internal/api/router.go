@@ -260,11 +260,11 @@ func (r *Router) extractParams(route Route, path string) map[string]string {
 // Handler wrappers that adapt the old handlers to the new RouteHandler signature
 
 func (r *Router) dashboardSummaryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getDashboardSummary(ctx, req.QueryStringParameters)
+	return r.h.getDashboardSummary(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) upcomingPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getUpcomingPurchases(ctx)
+	return r.h.getUpcomingPurchases(ctx, req)
 }
 
 func (r *Router) getConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
@@ -358,19 +358,19 @@ func (r *Router) deletePlannedPurchaseHandler(ctx context.Context, req *events.L
 }
 
 func (r *Router) getHistoryHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getHistory(ctx, req.QueryStringParameters)
+	return r.h.getHistory(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) getHistoryAnalyticsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getHistoryAnalytics(ctx, req.QueryStringParameters)
+	return r.h.getHistoryAnalytics(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) getHistoryBreakdownHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getHistoryBreakdown(ctx, req.QueryStringParameters)
+	return r.h.getHistoryBreakdown(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) triggerAnalyticsCollectionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.triggerAnalyticsCollection(ctx, req.QueryStringParameters)
+	return r.h.triggerAnalyticsCollection(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) loginHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

@@ -7,65 +7,41 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
 
-func (h *Handler) getDashboardSummary(ctx context.Context, params map[string]string) (*DashboardSummaryResponse, error) {
-	provider := params["provider"]
-
-	// Parse account_ids (comma-separated); fall back to singular account_id for backward compat.
-	accountIDs, err := parseAccountIDs(params["account_ids"])
+func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*DashboardSummaryResponse, error) {
+	// Dashboard aggregates recommendations + purchase history. Gate on
+	// view:recommendations — the closest existing resource. No dedicated
+	// "dashboard" resource in the permission model.
+	session, err := h.requirePermission(ctx, req, "view", "recommendations")
 	if err != nil {
-		return nil, NewClientError(400, err.Error())
+		return nil, err
 	}
 
-	// Resolve a single account_id for calculateCommitmentMetrics:
-	// - one ID supplied → use it directly
-	// - multiple IDs → pass empty to return all (multi-account filtering is a future step)
-	// - none supplied → fall back to legacy singular param
-	effectiveAccountID := params["account_id"]
-	switch len(accountIDs) {
-	case 1:
-		effectiveAccountID = accountIDs[0]
-	case 0:
-		// keep legacy value
-	default:
-		logging.Infof("dashboard: multi-account filter requested (%d accounts); returning unfiltered metrics until per-account breakdown is implemented", len(accountIDs))
-		effectiveAccountID = ""
+	effectiveAccountID, err := resolveDashboardAccountID(params)
+	if err != nil {
+		return nil, err
 	}
 
-	// Get recommendations to calculate potential savings
-	queryParams := scheduler.RecommendationQueryParams{
-		Provider: provider,
-	}
-	recommendations, err := h.scheduler.GetRecommendations(ctx, queryParams)
+	recommendations, err := h.scheduler.GetRecommendations(ctx, scheduler.RecommendationQueryParams{
+		Provider: params["provider"],
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}
 
-	// Calculate totals
-	var totalSavings float64
-	byService := make(map[string]ServiceSavings)
-
-	for _, rec := range recommendations {
-		totalSavings += rec.Savings
-
-		serviceKey := rec.Service
-		svc := byService[serviceKey]
-		svc.PotentialSavings += rec.Savings
-		byService[serviceKey] = svc
+	recommendations, err = h.filterDashboardRecommendations(ctx, session, recommendations)
+	if err != nil {
+		return nil, err
 	}
 
-	// Get global config for target coverage
-	globalCfg, _ := h.config.GetGlobalConfig(ctx)
-	targetCoverage := 80.0
-	if globalCfg != nil && globalCfg.DefaultCoverage > 0 {
-		targetCoverage = globalCfg.DefaultCoverage
-	}
-
-	// Calculate metrics from purchase history
+	totalSavings, byService := summarizeRecommendations(recommendations)
+	targetCoverage := h.resolveTargetCoverage(ctx)
 	activeCommitments, committedMonthly, ytdSavings := h.calculateCommitmentMetrics(ctx, effectiveAccountID)
 
 	return &DashboardSummaryResponse{
@@ -80,7 +56,83 @@ func (h *Handler) getDashboardSummary(ctx context.Context, params map[string]str
 	}, nil
 }
 
-func (h *Handler) getUpcomingPurchases(ctx context.Context) (*UpcomingPurchaseResponse, error) {
+// resolveDashboardAccountID chooses the single account_id passed into the
+// (legacy, single-account) commitment metrics calculation:
+//   - one ID in `account_ids` → use it
+//   - multiple IDs → empty (no filter; logged as observability)
+//   - none → fall back to the legacy singular `account_id` param
+func resolveDashboardAccountID(params map[string]string) (string, error) {
+	accountIDs, err := parseAccountIDs(params["account_ids"])
+	if err != nil {
+		return "", NewClientError(400, err.Error())
+	}
+
+	switch len(accountIDs) {
+	case 1:
+		return accountIDs[0], nil
+	case 0:
+		return params["account_id"], nil
+	default:
+		logging.Infof("dashboard: multi-account filter requested (%d accounts); returning unfiltered metrics until per-account breakdown is implemented", len(accountIDs))
+		return "", nil
+	}
+}
+
+// filterDashboardRecommendations applies the session's allowed_accounts filter
+// to the recommendations list before aggregation so scoped users don't see
+// cross-account totals. Admin/unrestricted sessions pass through unchanged.
+func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *Session, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return recs, nil
+	}
+
+	nameByID := h.resolveAccountNamesByID(ctx)
+	filtered := recs[:0]
+	for _, rec := range recs {
+		if rec.CloudAccountID == nil {
+			continue
+		}
+		id := *rec.CloudAccountID
+		if auth.MatchesAccount(allowed, id, nameByID[id]) {
+			filtered = append(filtered, rec)
+		}
+	}
+	return filtered, nil
+}
+
+// summarizeRecommendations reduces a list of recommendations to the totals
+// exposed on the dashboard summary.
+func summarizeRecommendations(recs []config.RecommendationRecord) (float64, map[string]ServiceSavings) {
+	var total float64
+	byService := make(map[string]ServiceSavings)
+	for _, rec := range recs {
+		total += rec.Savings
+		svc := byService[rec.Service]
+		svc.PotentialSavings += rec.Savings
+		byService[rec.Service] = svc
+	}
+	return total, byService
+}
+
+// resolveTargetCoverage returns the configured default coverage or 80% when
+// no global config is set or the configured value is zero.
+func (h *Handler) resolveTargetCoverage(ctx context.Context) float64 {
+	globalCfg, _ := h.config.GetGlobalConfig(ctx)
+	if globalCfg != nil && globalCfg.DefaultCoverage > 0 {
+		return globalCfg.DefaultCoverage
+	}
+	return 80.0
+}
+
+func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*UpcomingPurchaseResponse, error) {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+		return nil, err
+	}
+
 	// Get scheduled purchases from plans
 	plans, err := h.config.ListPurchasePlans(ctx)
 	if err != nil {

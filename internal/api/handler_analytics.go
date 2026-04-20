@@ -5,6 +5,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/LeanerCloud/CUDly/internal/auth"
+	"github.com/aws/aws-lambda-go/events"
 )
 
 // AnalyticsResponse represents the response for the analytics endpoint.
@@ -25,7 +28,14 @@ type BreakdownResponse struct {
 }
 
 // getHistoryAnalytics handles GET /history/analytics
-func (h *Handler) getHistoryAnalytics(ctx context.Context, params map[string]string) (any, error) {
+func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	// Analytics aggregate across purchase history — gate on view:purchases and
+	// scope by allowed_accounts.
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
+		return nil, err
+	}
+
 	// Check if analytics client is configured
 	if h.analyticsClient == nil {
 		return nil, fmt.Errorf("analytics not configured - S3/Athena backend required")
@@ -36,6 +46,13 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, params map[string]str
 	interval := params["interval"]
 	if interval == "" {
 		interval = "hourly"
+	}
+
+	// For scoped users we require account_id and validate it's in their scope.
+	// We don't (yet) support analytics across a subset — the Athena query takes
+	// a single account_id. An unrestricted/admin session can pass "" for all.
+	if err := h.validateAnalyticsAccountScope(ctx, session, accountID); err != nil {
+		return nil, err
 	}
 
 	// Parse date range
@@ -60,20 +77,26 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, params map[string]str
 }
 
 // getHistoryBreakdown handles GET /history/breakdown
-func (h *Handler) getHistoryBreakdown(ctx context.Context, params map[string]string) (any, error) {
-	// Check if analytics client is configured
+func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
+		return nil, err
+	}
+
 	if h.analyticsClient == nil {
 		return nil, fmt.Errorf("analytics not configured - S3/Athena backend required")
 	}
 
-	// Parse parameters
 	accountID := params["account_id"]
 	dimension := params["dimension"]
 	if dimension == "" {
 		dimension = "service"
 	}
 
-	// Parse date range
+	if err := h.validateAnalyticsAccountScope(ctx, session, accountID); err != nil {
+		return nil, err
+	}
+
 	start, end, err := parseDateRange(params["start"], params["end"])
 	if err != nil {
 		return nil, err
@@ -93,9 +116,34 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, params map[string]str
 	}, nil
 }
 
+// validateAnalyticsAccountScope rejects scoped users who request analytics
+// without account_id or for an account outside their allowed_accounts list.
+// Admin/unrestricted sessions pass through (account_id may be empty).
+func (h *Handler) validateAnalyticsAccountScope(ctx context.Context, session *Session, accountID string) error {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return nil
+	}
+	if accountID == "" {
+		return NewClientError(400, "account_id is required for scoped users")
+	}
+	nameByID := h.resolveAccountNamesByID(ctx)
+	if !auth.MatchesAccount(allowed, accountID, nameByID[accountID]) {
+		return errNotFound
+	}
+	return nil
+}
+
 // triggerAnalyticsCollection handles POST /analytics/collect (admin only)
 // This can be used to manually trigger the hourly collection.
-func (h *Handler) triggerAnalyticsCollection(ctx context.Context, _ map[string]string) (any, error) {
+func (h *Handler) triggerAnalyticsCollection(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	// Admin-only operation.
+	if _, err := h.requireAdmin(ctx, req); err != nil {
+		return nil, err
+	}
 	if h.analyticsCollector == nil {
 		return nil, fmt.Errorf("analytics collector not configured")
 	}
