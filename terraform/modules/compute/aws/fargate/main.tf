@@ -152,6 +152,8 @@ resource "aws_iam_role_policy" "task_secrets" {
           "${var.database_password_secret_arn}-*",
           var.admin_password_secret_arn,
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}-*" : "",
+          var.credential_encryption_key_secret_arn,
+          var.credential_encryption_key_secret_arn != "" ? "${var.credential_encryption_key_secret_arn}*" : "",
         ])
       },
       {
@@ -168,8 +170,12 @@ resource "aws_iam_role_policy" "task_secrets" {
   })
 }
 
-# SES email sending access
+# SES email sending access — scoped to the verified From domain plus
+# stack-specific configuration sets when email_from_domain is set; otherwise
+# no SES policy is attached at all. Matches the Lambda module's shape.
 resource "aws_iam_role_policy" "ses_access" {
+  count = var.email_from_domain != "" ? 1 : 0
+
   name = "ses-access"
   role = aws_iam_role.task.id
 
@@ -183,9 +189,55 @@ resource "aws_iam_role_policy" "ses_access" {
           "ses:SendRawEmail",
           "ses:GetAccount",
           "ses:GetEmailIdentity",
-          "ses:CreateEmailIdentity"
         ]
-        Resource = "*" # Allow sending from any verified identity and creating identities
+        Resource = [
+          "arn:aws:ses:*:*:identity/${var.email_from_domain}",
+          "arn:aws:ses:*:*:configuration-set/${var.stack_name}*",
+        ]
+      }
+    ]
+  })
+}
+
+# Cross-account role assumption for multi-account plan execution. Scoped by
+# var.cross_account_role_name_prefix (default "CUDly"). ExternalId is still
+# enforced at the app layer in the credentials resolver; this IAM constraint
+# is defence-in-depth so a single app-layer bug can't pivot into arbitrary
+# roles. Mirrors the Lambda module.
+resource "aws_iam_role_policy" "cross_account_sts" {
+  count = var.enable_cross_account_sts ? 1 : 0
+
+  name = "cross-account-sts"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = "arn:aws:iam::*:role/${var.cross_account_role_name_prefix}*"
+      }
+    ]
+  })
+}
+
+# AWS Organizations ListAccounts for org-root account discovery. Organizations
+# API does not support resource-level restrictions; keep this opt-in via
+# enable_org_discovery. Mirrors the Lambda module.
+resource "aws_iam_role_policy" "org_discovery" {
+  count = var.enable_org_discovery ? 1 : 0
+
+  name = "org-discovery"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["organizations:ListAccounts", "organizations:DescribeOrganization"]
+        Resource = "*"
       }
     ]
   })

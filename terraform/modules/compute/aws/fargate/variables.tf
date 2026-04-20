@@ -231,3 +231,40 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# ==============================================
+# Multi-account credentials + discovery
+# ==============================================
+# These options mirror the Lambda module's 5-field shape so the Fargate
+# path is at feature parity. See terraform/modules/compute/aws/lambda/variables.tf
+# for the same set.
+
+variable "credential_encryption_key_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the credential encryption key. Empty string disables the GetSecretValue grant on this resource."
+  type        = string
+  default     = ""
+}
+
+variable "enable_cross_account_sts" {
+  description = "Grant the task role sts:AssumeRole on IAM roles whose name starts with cross_account_role_name_prefix. Required for multi-account plan execution."
+  type        = bool
+  default     = true
+}
+
+variable "cross_account_role_name_prefix" {
+  description = "Prefix that scopes the cross_account_sts grant. The shipped federation templates (iac/federation/aws-*) create roles starting with this prefix."
+  type        = string
+  default     = "CUDly"
+}
+
+variable "enable_org_discovery" {
+  description = "Grant the task role organizations:ListAccounts / DescribeOrganization so CUDly can enumerate accounts in an AWS Organizations management / delegated account."
+  type        = bool
+  default     = false
+}
+
+variable "email_from_domain" {
+  description = "Verified SES From domain. When set, the task role gets SES send permissions scoped to this domain plus stack-specific configuration sets. Leave empty to disable SES entirely."
+  type        = string
+  default     = ""
+}

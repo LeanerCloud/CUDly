@@ -173,6 +173,16 @@ module "compute_fargate" {
     var.additional_env_vars
   )
 
+  # Multi-account IAM capabilities — kept at parity with the Lambda branch.
+  # cross_account_role_name_prefix scopes the task role's sts:AssumeRole grant
+  # to role names starting with the prefix; ExternalId validation still
+  # happens at the app layer (credentials/resolver.go).
+  enable_cross_account_sts             = true
+  cross_account_role_name_prefix       = "CUDly"
+  enable_org_discovery                 = true
+  credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn
+  email_from_domain                    = var.subdomain_zone_name
+
   tags = local.common_tags
 
   # CRITICAL: Wait for resources before creating/updating Fargate

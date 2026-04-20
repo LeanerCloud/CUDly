@@ -1,15 +1,16 @@
 # Known Issues: Terraform AWS Environment
 
-> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
 
-## CRITICAL: Fargate compute platform has no multi-account support
+## ~~CRITICAL: Fargate compute platform has no multi-account support~~ — RESOLVED
 
 **File**: `terraform/environments/aws/compute.tf:154-163`
-**Description**: Lambda path injects `CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN` and `CUDLY_MAX_ACCOUNT_PARALLELISM`. Fargate omits both entirely. The Fargate module has no `credential_encryption_key_secret_arn` variable, no `enable_cross_account_sts` flag, no `enable_org_discovery` flag, and no IAM policy for credential access.
-**Impact**: Fargate deployments silently have no multi-account credential encryption, no org discovery, and no cross-account STS — CUDly core features are non-functional.
-**Status:** ✅ Still valid
+**Description**: The Lambda path injected `CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN`, `CUDLY_MAX_ACCOUNT_PARALLELISM`, and multi-account IAM permissions (`enable_cross_account_sts`, `enable_org_discovery`). Fargate only had the env-var pair; the module had no corresponding variables or IAM policy statements, so cross-account STS and org discovery were completely absent.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Added five variables to `terraform/modules/compute/aws/fargate/variables.tf` mirroring the Lambda module: `credential_encryption_key_secret_arn`, `enable_cross_account_sts`, `cross_account_role_name_prefix`, `enable_org_discovery`, `email_from_domain`. Added three IAM role-policy statements in `main.tf`: extended `task_secrets` with the credential-encryption-key ARN, added opt-in `cross_account_sts` and `org_discovery` policies (count-gated on the flags). `ses_access` now honours `email_from_domain` just like Lambda — deployments without email notifications no longer get a broad SES `*` grant. The env-layer `compute.tf` wires all five values at parity with the Lambda branch (`enable_cross_account_sts = true`, `enable_org_discovery = true`, `credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn`, `email_from_domain = var.subdomain_zone_name`).
+
+### Original implementation plan
 
 **Goal:** Bring the Fargate compute path to feature parity with Lambda so multi-account credential encryption, org discovery, and cross-account STS work by default.
 
