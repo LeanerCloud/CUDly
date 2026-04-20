@@ -1,0 +1,20 @@
+# Opt-in remote state for the CUDly GCP target federation module.
+#
+# By default, the module uses local state so a one-shot operator run works
+# without any GCS bootstrap. Teams that need shared state should copy this
+# file to `backend.tf` and initialise with:
+#
+#   terraform init -backend-config=backend-config.example.hcl
+#
+# (or a copy of that file with your bucket filled in). Bootstrap the bucket
+# once per organisation:
+#
+#   gsutil mb -p <project-id> -l <region> gs://my-cudly-tf-state
+#   gsutil versioning set on gs://my-cudly-tf-state
+#   gsutil uniformbucketlevelaccess set on gs://my-cudly-tf-state
+#
+# No arguments are hard-coded inside the block — everything flows through
+# `-backend-config` so the module stays portable across orgs.
+terraform {
+  backend "gcs" {}
+}

@@ -1,6 +1,6 @@
 # Known Issues: IaC GCP Target Federation
 
-> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: Overly Broad Workload Identity Pool Trust (Wildcard Member)~~ — RESOLVED
 
@@ -95,13 +95,15 @@
 
 **Effort:** `small`
 
-## LOW: No Remote Backend Configured
+## ~~LOW: No Remote Backend Configured~~ — RESOLVED
 
 **File**: `iac/federation/gcp-target/terraform/main.tf:1-9`
-**Description**: Local state only. This module manages IAM resources that multiple operators need to share state for.
-**Status:** ✅ Still valid
+**Description**: Local state only, so multiple operators acting on the same target project could not converge.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Shipped `backend.tf.example` and `backend-config.example.hcl` in the module. Teams that need shared state copy `backend.tf.example` to `backend.tf` and run `terraform init -backend-config=backend-config.example.hcl` after filling in the bucket. No arguments are hard-coded inside the `backend "gcs"` block so the module stays portable across orgs. Left as opt-in rather than forcing a backend block in the default file because CUDly's federation bundles are typically run one-off by a single operator per target, and mandating a GCS bucket would create a hard prerequisite that most users don't need.
+
+### Original implementation plan
 
 **Goal:** Move the module's state to a shared remote backend so multiple operators can safely converge on the same resources.
 
