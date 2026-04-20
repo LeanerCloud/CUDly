@@ -424,23 +424,35 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 	return nil, nil
 }
 
-// saveAccountCredentials handles POST /api/accounts/:id/credentials.
-func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (any, error) {
+// parseAndValidateCredentialsRequest performs all input validation that must
+// run before we touch the database: UUID format, permission, body parse,
+// credential_type allowlist, and per-type payload schema. Pulled out of
+// saveAccountCredentials to keep that function under the cyclomatic limit.
+func (h *Handler) parseAndValidateCredentialsRequest(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (*CredentialsRequest, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
-
 	if _, err := h.requirePermission(ctx, httpReq, "update", "accounts"); err != nil {
 		return nil, err
 	}
-
 	var req CredentialsRequest
 	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-
 	if !validCredentialTypes[req.CredentialType] {
 		return nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, azure_wif_private_key, gcp_service_account, gcp_workload_identity_config")
+	}
+	if err := validateCredentialPayload(req.CredentialType, req.Payload); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
+// saveAccountCredentials handles POST /api/accounts/:id/credentials.
+func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (any, error) {
+	req, err := h.parseAndValidateCredentialsRequest(ctx, httpReq, id)
+	if err != nil {
+		return nil, err
 	}
 
 	// Confirm the account exists so we return 404 rather than a FK violation.

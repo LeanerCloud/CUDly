@@ -1,6 +1,6 @@
 # Known Issues: API Account Handlers
 
-> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~HIGH: deleteAccount does not verify account existence before deletion~~ — RESOLVED
 
@@ -69,14 +69,16 @@
 
 **Resolved by:** `031b958cf` — changed the guard to `if len(parts) != 4` so trailing segments now produce a 400.
 
-## MEDIUM: No size or key validation on CredentialsRequest.Payload before storage
+## ~~MEDIUM: No size or key validation on CredentialsRequest.Payload before storage~~ — RESOLVED
 
 **File**: `internal/api/handler_accounts.go:424-464`
-**Description**: `CredentialsRequest.Payload` is `map[string]interface{}`. The only guard is the 1 MB HTTP body limit. The payload is immediately re-marshalled and passed to `h.credStore.SaveCredential` without any key allowlist, value type enforcement, or nesting-depth check.
-**Impact**: An admin can store arbitrarily structured JSON blobs. No enforcement that keys match what the declared `credential_type` actually expects — silent misconfiguration slips through to runtime.
-**Status:** ✅ Still valid
+**Description**: `CredentialsRequest.Payload` was `map[string]interface{}` with only the 1 MB body limit as a guard. The payload was re-marshalled and stored without any per-credential-type schema check, so an admin could store arbitrarily structured JSON blobs that would fail silently at runtime.
+**Impact**: Silent misconfiguration slipped through to the resolver.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** `validateCredentialPayload` added to `internal/api/validation.go` enforces per-`credential_type` schemas: `aws_access_keys`/`azure_client_secret`/`azure_wif_private_key` use a flat required+optional allowlist; `gcp_service_account` requires `type="service_account"` plus the four standard SA fields; `gcp_workload_identity_config` requires `type="external_account"` plus the standard external-account fields with `credential_source` as a nested object. Unknown keys, missing required keys, non-string values, and nesting beyond depth 2 all return 400. Wired into `saveAccountCredentials` after the `validCredentialTypes` lookup. Covered by `TestValidateCredentialPayload` (18 sub-tests).
+
+### Original implementation plan
 
 **Goal:** Every accepted credentials payload must match the shape required by its `credential_type`.
 

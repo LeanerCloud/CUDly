@@ -195,6 +195,109 @@ func TestValidateContentType(t *testing.T) {
 	}
 }
 
+func TestValidateCredentialPayload(t *testing.T) {
+	tests := []struct {
+		name           string
+		credentialType string
+		payload        map[string]interface{}
+		wantErrSubstr  string
+	}{
+		// aws_access_keys
+		{"aws happy", "aws_access_keys",
+			map[string]interface{}{"access_key_id": "AKIA", "secret_access_key": "sk"},
+			""},
+		{"aws missing required", "aws_access_keys",
+			map[string]interface{}{"access_key_id": "AKIA"},
+			"missing required key \"secret_access_key\""},
+		{"aws extra key", "aws_access_keys",
+			map[string]interface{}{"access_key_id": "AKIA", "secret_access_key": "sk", "session_token": "tok"},
+			"unknown key \"session_token\""},
+		{"aws empty value", "aws_access_keys",
+			map[string]interface{}{"access_key_id": "", "secret_access_key": "sk"},
+			"must be a non-empty string"},
+		{"aws non-string value", "aws_access_keys",
+			map[string]interface{}{"access_key_id": true, "secret_access_key": "sk"},
+			"must be a non-empty string"},
+
+		// azure_client_secret
+		{"azure secret happy", "azure_client_secret",
+			map[string]interface{}{"client_secret": "abc123"}, ""},
+		{"azure secret unknown key", "azure_client_secret",
+			map[string]interface{}{"some_other": "abc"}, "unknown key \"some_other\""},
+
+		// azure_wif_private_key
+		{"azure wif happy", "azure_wif_private_key",
+			map[string]interface{}{"private_key_pem": "-----BEGIN..."}, ""},
+		{"azure wif unknown key", "azure_wif_private_key",
+			map[string]interface{}{"private_key_pem": "x", "thumbprint": "abc"},
+			"unknown key \"thumbprint\""},
+
+		// gcp_service_account
+		{"gcp svc happy", "gcp_service_account",
+			map[string]interface{}{
+				"type": "service_account", "project_id": "p", "private_key": "k", "client_email": "e@p.iam",
+				"private_key_id": "id", "client_id": "cid",
+			}, ""},
+		{"gcp svc wrong type", "gcp_service_account",
+			map[string]interface{}{
+				"type": "external_account", "project_id": "p", "private_key": "k", "client_email": "e@p.iam",
+			}, "type=\"service_account\""},
+		{"gcp svc missing project_id", "gcp_service_account",
+			map[string]interface{}{"type": "service_account", "private_key": "k", "client_email": "e@p.iam"},
+			"missing required key \"project_id\""},
+
+		// gcp_workload_identity_config
+		{"gcp wif happy", "gcp_workload_identity_config",
+			map[string]interface{}{
+				"type": "external_account", "audience": "//iam...", "subject_token_type": "urn:...",
+				"token_url":         "https://sts.googleapis.com/v1/token",
+				"credential_source": map[string]interface{}{"environment_id": "aws1"},
+			}, ""},
+		{"gcp wif missing audience", "gcp_workload_identity_config",
+			map[string]interface{}{
+				"type": "external_account", "subject_token_type": "urn:...",
+				"token_url":         "https://sts.googleapis.com/v1/token",
+				"credential_source": map[string]interface{}{"environment_id": "aws1"},
+			}, "missing required key \"audience\""},
+		{"gcp wif credential_source not object", "gcp_workload_identity_config",
+			map[string]interface{}{
+				"type": "external_account", "audience": "x", "subject_token_type": "y",
+				"token_url": "https://sts.googleapis.com/v1/token", "credential_source": "string",
+			}, "credential_source\" must be an object"},
+		{"gcp wif wrong type", "gcp_workload_identity_config",
+			map[string]interface{}{
+				"type": "service_account", "audience": "x", "subject_token_type": "y",
+				"token_url":         "https://sts.googleapis.com/v1/token",
+				"credential_source": map[string]interface{}{"k": "v"},
+			}, "type=\"external_account\""},
+
+		// generic
+		{"empty payload", "aws_access_keys", map[string]interface{}{}, "must not be empty"},
+		{"nesting too deep", "gcp_workload_identity_config",
+			map[string]interface{}{
+				"type": "external_account", "audience": "x", "subject_token_type": "y",
+				"token_url": "https://sts.googleapis.com/v1/token",
+				"credential_source": map[string]interface{}{
+					"deeper": map[string]interface{}{"x": "y"},
+				},
+			}, "nests too deeply"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCredentialPayload(tt.credentialType, tt.payload)
+			if tt.wantErrSubstr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.Error(t, err)
+			if err != nil {
+				assert.Contains(t, err.Error(), tt.wantErrSubstr)
+			}
+		})
+	}
+}
+
 func TestValidateRequestBodySize(t *testing.T) {
 	tests := []struct {
 		name      string

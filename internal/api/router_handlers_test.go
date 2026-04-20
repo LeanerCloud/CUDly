@@ -299,9 +299,11 @@ func TestRouter_saveAccountCredentialsHandler_NoCredStore(t *testing.T) {
 	h := &Handler{auth: mockAuth, config: store, credStore: nil}
 	r := newTestRouter(h)
 
+	// Non-empty payload so we exercise the credStore==nil path rather than
+	// the payload-shape validation that runs earlier.
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
-		Body:    `{"credential_type": "aws_access_keys", "payload": {}}`,
+		Body:    `{"credential_type": "aws_access_keys", "payload": {"access_key_id":"AKIA","secret_access_key":"sk"}}`,
 	}
 	_, err := r.saveAccountCredentialsHandler(ctx, req, map[string]string{"id": "11111111-1111-1111-1111-111111111111"})
 	assert.Error(t, err)
