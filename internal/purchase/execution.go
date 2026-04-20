@@ -198,18 +198,6 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
 }
 
-// planProvider derives the cloud provider from the plan's Services map.
-// Service keys use the "provider:service" format (e.g. "aws:ec2").
-// Returns the first provider found, or empty string if no services are configured.
-func planProvider(plan *config.PurchasePlan) string {
-	for key := range plan.Services {
-		if i := strings.Index(key, ":"); i > 0 {
-			return key[:i]
-		}
-	}
-	return ""
-}
-
 // getMaxAccountParallelism reads the CUDLY_MAX_ACCOUNT_PARALLELISM env var.
 // Returns DefaultMaxConcurrency if unset or invalid.
 func getMaxAccountParallelism() int {
