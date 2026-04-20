@@ -23,47 +23,55 @@ type RecommendationsClientAdapter struct {
 	subscriptionID string
 }
 
-// GetRecommendations retrieves all Azure reservation recommendations across all services and regions
+// GetRecommendations retrieves all Azure reservation recommendations across services.
+//
+// The Azure Consumption Reservation Recommendations API is subscription-scoped:
+// the response covers every region in one call. Iterating regions and calling each
+// service per region (the previous behaviour) produced ~60× duplicate results,
+// hammered the rate limit, and meant downstream consumers had to deduplicate.
+// We now call each service client exactly once. Region is intentionally left
+// blank on the client — converters must populate Region from the response data
+// (see known_issues/10_azure_provider.md CRITICAL "Recommendation converters
+// ignore the API response entirely" for the matching converter work).
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
 	allRecommendations := make([]common.Recommendation, 0)
 
-	// Get list of regions to check
-	regions, err := r.getRegions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get regions: %w", err)
-	}
-
-	// Collect recommendations from each service type across all regions
-	for _, region := range regions {
-		// Compute (VM) recommendations
-		if shouldIncludeService(params, common.ServiceCompute) {
-			computeClient := compute.NewClient(r.cred, r.subscriptionID, region)
-			computeRecs, err := computeClient.GetRecommendations(ctx, params)
-			if err == nil {
-				allRecommendations = append(allRecommendations, computeRecs...)
-			}
-		}
-
-		// Database (SQL) recommendations
-		if shouldIncludeService(params, common.ServiceRelationalDB) {
-			dbClient := database.NewClient(r.cred, r.subscriptionID, region)
-			dbRecs, err := dbClient.GetRecommendations(ctx, params)
-			if err == nil {
-				allRecommendations = append(allRecommendations, dbRecs...)
-			}
-		}
-
-		// Cache (Redis) recommendations
-		if shouldIncludeService(params, common.ServiceCache) {
-			cacheClient := cache.NewClient(r.cred, r.subscriptionID, region)
-			cacheRecs, err := cacheClient.GetRecommendations(ctx, params)
-			if err == nil {
-				allRecommendations = append(allRecommendations, cacheRecs...)
-			}
+	// Compute (VM) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceCompute) {
+		computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
+		computeRecs, err := computeClient.GetRecommendations(ctx, params)
+		if err != nil {
+			logging.Warnf("Azure compute recommendations: %v", err)
+		} else {
+			allRecommendations = append(allRecommendations, computeRecs...)
 		}
 	}
 
-	// Get additional recommendations from Azure Advisor
+	// Database (SQL) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceRelationalDB) {
+		dbClient := database.NewClient(r.cred, r.subscriptionID, "")
+		dbRecs, err := dbClient.GetRecommendations(ctx, params)
+		if err != nil {
+			logging.Warnf("Azure database recommendations: %v", err)
+		} else {
+			allRecommendations = append(allRecommendations, dbRecs...)
+		}
+	}
+
+	// Cache (Redis) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceCache) {
+		cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
+		cacheRecs, err := cacheClient.GetRecommendations(ctx, params)
+		if err != nil {
+			logging.Warnf("Azure cache recommendations: %v", err)
+		} else {
+			allRecommendations = append(allRecommendations, cacheRecs...)
+		}
+	}
+
+	// Azure Advisor adds cross-cutting cost recommendations independent of the
+	// per-service Reservation API. Failures here are non-fatal — the per-service
+	// results above are still useful on their own.
 	advisorRecs, err := r.getAdvisorRecommendations(ctx, params)
 	if err != nil {
 		logging.Errorf("Failed to get Azure Advisor recommendations: %v", err)
@@ -296,26 +304,6 @@ func extractRegionFromResourceID(resourceID string) string {
 		return rest
 	}
 	return ""
-}
-
-// getRegions retrieves available Azure regions for the subscription
-func (r *RecommendationsClientAdapter) getRegions(ctx context.Context) ([]string, error) {
-	// Create a temporary provider to get regions
-	provider := &AzureProvider{
-		cred: r.cred,
-	}
-
-	regions, err := provider.GetRegions(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	regionNames := make([]string, 0, len(regions))
-	for _, region := range regions {
-		regionNames = append(regionNames, region.ID)
-	}
-
-	return regionNames, nil
 }
 
 // shouldIncludeService checks if a service should be included based on params

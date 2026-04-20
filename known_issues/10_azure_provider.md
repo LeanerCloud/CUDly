@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-20):** `3 still valid · 5 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `2 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## CRITICAL: Recommendation converters ignore the API response entirely
 
@@ -14,6 +14,7 @@
 **Goal:** Make the converters actually read the Azure response.
 
 **Files to modify:**
+
 - `providers/azure/services/compute/client.go:654-668`
 - `providers/azure/services/database/client.go:575-`
 - `providers/azure/services/cache/client.go:570-`
@@ -21,6 +22,7 @@
 - corresponding `*_test.go` files
 
 **Steps:**
+
 1. In each converter, type-assert `azureRec` to `*armconsumption.SharedReservationRecommendationProperties` (and handle `SingleReservationRecommendationProperties` for single-scope results if that path is exercised).
 2. Extract `InstanceFlexibilityGroup`/`SKUProperties.Name` for `ResourceType`, `RecommendedQuantity` for `Count`, `NetSavings`/`CostWithNoReservedInstances` for cost fields, `Term` for `Term`, and the `Location` for `Region`.
 3. Handle nil pointers defensively — Azure SDK returns pointer-heavy structs. Skip the rec or default on nil.
@@ -28,15 +30,18 @@
 5. Add a nil-azureRec test per converter to lock down the defensive behaviour.
 
 **Edge cases the fix must handle:**
+
 - Azure returns both Single- and Shared-scope results; both classifications must be handled.
 - Nil `Properties` — return nil so the caller can skip the rec.
 - `Term` string format ("P1Y"/"P3Y") — convert to the internal `"1yr"/"3yr"` format used elsewhere.
 
 **Test plan:**
+
 - New fixture-based test per converter asserting `ResourceType`, `Count`, `CommitmentCost`.
 - Existing nil-argument tests continue to pass and now assert nil-return.
 
 **Verification:**
+
 - `go test ./providers/azure/...`
 
 **Related issues:** `10_azure_provider#LOW-extractRegionFromResourceID` — Advisor path is a separate but related stub.
@@ -64,6 +69,7 @@
 **Goal:** Follow `NextPageLink` until empty, across all four service clients.
 
 **Files to modify:**
+
 - `providers/azure/services/compute/client.go:602-632`
 - `providers/azure/services/database/client.go` (equivalent `fetchAzurePricing`)
 - `providers/azure/services/cache/client.go`
@@ -71,21 +77,25 @@
 - corresponding tests
 
 **Steps:**
+
 1. Extract a shared pagination helper (e.g. into `providers/azure/internal/pricing/retail_prices.go`) rather than duplicating the loop four times — see **Related issues**.
 2. In the helper: loop while `priceData.NextPageLink != ""`, issue the next GET, append `Items`, guard against infinite loops with a page cap (say 50).
 3. Set a sensible per-request timeout (not the whole pagination) to avoid a single slow page stalling all callers.
 4. Update each `fetchAzurePricing` to call the shared helper.
 
 **Edge cases the fix must handle:**
+
 - Pagination pointing back to the same URL (shouldn't happen but could loop) — break on repeat.
 - Server returning a non-200 mid-pagination — return the partial error, don't silently accept partial data.
 - Very large SKU catalogues — cap pages at 50 and log a warning if hit.
 
 **Test plan:**
+
 - `TestFetchAzurePricing_FollowsNextPageLink` — seed an HTTP test server returning two pages and asserting both are loaded.
 - `TestFetchAzurePricing_ErrorMidPagination` — asserts the error is returned.
 
 **Verification:**
+
 - `go test ./providers/azure/...`
 
 **Related issues:** This overlaps with the duplicated logic across the four service clients — combining the fix with an extract-to-helper refactor is sensible.
@@ -105,6 +115,7 @@
 **Goal:** Return errors from `collect*Reservations` so the caller sees the failure.
 
 **Files to modify:**
+
 - `providers/azure/services/compute/client.go:190-208`
 - `providers/azure/services/database/client.go` (`collectSQLReservations`)
 - `providers/azure/services/cache/client.go` (`collectRedisReservations`)
@@ -113,35 +124,45 @@
 - tests for each helper
 
 **Steps:**
+
 1. Change each helper's signature to return `([]common.Commitment, error)`.
 2. On page error, return the error (wrapped with service name) and the commitments collected so far — or return nil and let the caller decide. Recommended: return error + nil commitments so callers can't accidentally use partial data.
 3. Update callers: at the call site, decide whether to treat the error as fatal (most cases) or to log+continue (explicit opt-in for "best effort" reads, if any such caller exists).
 
 **Edge cases the fix must handle:**
+
 - Authentication errors vs transient 5xx — don't distinguish; just fail. Callers can retry.
 - Empty subscription (no reservations) — `pager.More()` returns false; still nil error.
 
 **Test plan:**
+
 - `TestCollectVMReservations_PaginationError` — asserts error is returned, no commitments.
 - Parallel tests for the other three services.
 
 **Verification:**
+
 - `go test ./providers/azure/...`
 
 **Effort:** `medium`
 
-## HIGH: Recommendations fetched once per region (60+) for a subscription-scoped API
+## ~~HIGH: Recommendations fetched once per region (60+) for a subscription-scoped API~~ — RESOLVED
 
 **File**: `providers/azure/recommendations.go:26-75`
-**Description**: `GetRecommendations` iterates every Azure region and calls each service's `GetRecommendations` once per region. The underlying `armconsumption` API is subscription-scoped — the full result set is returned regardless of region, so ~60 regions × 3 services = 180 API calls that all produce identical results.
-**Impact**: 60x API call multiplication; duplicate recommendations in the output; rate-limit risk.
-**Status:** ✅ Still valid
+**Description**: `GetRecommendations` iterated every Azure region and called each service's `GetRecommendations` once per region. The underlying `armconsumption` API is subscription-scoped — the full result set is returned regardless of region, so ~60 regions × 3 services = 180 API calls that all produced identical results.
+**Status:** ✔️ Resolved
+
+**Resolved by:** Removed the outer region loop in `GetRecommendations`. Each service client (compute, database, cache) is now called exactly once with an empty region (`""`) — the API returns subscription-wide results in a single call. Errors per service are logged and skipped rather than aborting the whole call (preserves the previous best-effort semantics).
+
+The `getRegions` helper became unused and was removed; the `AzureProvider.GetRegions` path it depended on is still available for callers that genuinely need region listings (UI dropdowns, etc.).
+
+The per-recommendation `Region` field is now whatever the per-service converter sets — currently `c.region`, which is `""` after this change. Properly populating `Region` from the response payload is the converter work tracked in the `CRITICAL: Recommendation converters ignore the API response entirely` item below; this change is the prerequisite that makes that work meaningful (otherwise the converter would have to overwrite a wrong region 60 times).
 
 ### Implementation plan
 
 **Goal:** Call each service once with subscription scope, then filter by region.
 
 **Files to modify:**
+
 - `providers/azure/recommendations.go:26-75`
 - `providers/azure/services/compute/client.go` (confirm the API is subscription-scoped)
 - `providers/azure/services/database/client.go`
@@ -149,19 +170,23 @@
 - `providers/azure/recommendations_test.go`
 
 **Steps:**
+
 1. Remove the outer `for _, region := range regions` loop in `GetRecommendations`.
 2. Call each service's `GetRecommendations` once, without a region scope (pass empty string if the signature requires it; otherwise update the signature).
 3. Update each service's `GetRecommendations` to populate the region from the response payload, not the client's stored `c.region`.
 4. If filtering by region is still needed for the UI, do it post-fetch via a simple slice filter.
 
 **Edge cases the fix must handle:**
+
 - Subscriptions with no recommendations — return empty slice.
 - Responses where the per-item region is missing — fall back to the Advisor region extraction (see LOW issue below) or leave blank.
 
 **Test plan:**
+
 - `TestGetRecommendations_SingleCallPerService` — mock the API to return two recommendations with different regions; assert exactly one call per service and both recs appear.
 
 **Verification:**
+
 - `go test ./providers/azure/...`
 
 **Effort:** `medium`
@@ -196,23 +221,28 @@
 **Goal:** Parse the region from the Azure ARM resource ID when present.
 
 **Files to modify:**
+
 - `providers/azure/recommendations.go:252-258`
 - `providers/azure/recommendations_test.go`
 
 **Steps:**
+
 1. Most Advisor recommendations carry `Properties.Location` or `Properties.ExtendedProperties["region"]` directly — check those first; they're authoritative.
 2. As a fallback, try to parse the ARM resource ID: `/subscriptions/{sub}/resourceGroups/{rg}/providers/{namespace}/{type}/{name}` does not include region, but many ARM IDs for reservation-scope resources embed the location elsewhere in the properties. If the ID doesn't contain region info (the common case), return "".
 3. Prefer fixing at the Advisor conversion path: in `convertAdvisorRecommendation` (line 130), read the Advisor properties first before calling this helper.
 
 **Edge cases the fix must handle:**
+
 - IDs without any region info → return "" (unchanged).
 - Non-ARM-shaped strings → return "" safely without panic.
 
 **Test plan:**
+
 - `TestExtractRegionFromResourceID_WithLocationField` — asserts region extracted when present in sibling field.
 - `TestExtractRegionFromResourceID_MissingRegion` — asserts "" return.
 
 **Verification:**
+
 - `go test ./providers/azure/...`
 
 **Effort:** `small`
