@@ -969,6 +969,18 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 	}
 	record.UpdatedAt = now
 
+	// PaymentDue is the Go-side mirror of a DECIMAL(20,6) NOT NULL DEFAULT 0
+	// column with `CHECK (payment_due >= 0)`. We keep the Go field as a
+	// string (rather than float64 — money should not round) but pgx can't
+	// cast `""` to DECIMAL. Default the empty string to "0" at the boundary
+	// so a freshly-zero-valued struct inserts cleanly. Anything non-empty
+	// is passed through verbatim and the DECIMAL parser rejects malformed
+	// values with a clear error.
+	paymentDue := record.PaymentDue
+	if paymentDue == "" {
+		paymentDue = "0"
+	}
+
 	query := `
 		INSERT INTO ri_exchange_history (
 			id, account_id, exchange_id, region, source_ri_ids,
@@ -990,7 +1002,7 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 		record.TargetOfferingID,
 		record.TargetInstanceType,
 		record.TargetCount,
-		record.PaymentDue,
+		paymentDue,
 		record.Status,
 		nullStringFromString(record.ApprovalToken),
 		nullStringFromString(record.Error),

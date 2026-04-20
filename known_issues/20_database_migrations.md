@@ -1,6 +1,6 @@
 # Known Issues: Database Migrations
 
-> **Audit status (2026-04-20):** `1 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~HIGH: savings_snapshots has no PRIMARY KEY~~ — RESOLVED
 
@@ -93,12 +93,22 @@ The OR keeps NULL-`expires_at` rows safe (the expires_at branch only fires when 
 
 **Effort:** `small`
 
-## HIGH: RIExchangeRecord.PaymentDue type mismatch (string in Go, DECIMAL in DB)
+## ~~HIGH: RIExchangeRecord.PaymentDue type mismatch (string in Go, DECIMAL in DB)~~ — RESOLVED (boundary fix; type-change deferred deliberately)
 
-**File**: `internal/config/types.go:191` / `internal/database/postgres/migrations/000009_ri_exchange_history.up.sql:12`
-**Description**: The DB column `payment_due` is `DECIMAL(20,6)` with `NOT NULL DEFAULT 0 CHECK (payment_due >= 0)`. The Go struct field is `PaymentDue string`. Reads cast via `payment_due::text`. Writes pass the raw string — inserting a zero-value Go struct (`PaymentDue: ""`) fails the DECIMAL cast at runtime.
-**Impact**: Any code path constructing a new `RIExchangeRecord` without explicitly setting `PaymentDue` crashes on insert.
-**Status:** ✅ Still valid
+**File**: `internal/config/types.go:191` / `internal/config/store_postgres.go:993`
+**Description**: DB column was `DECIMAL(20,6) NOT NULL DEFAULT 0 CHECK (payment_due >= 0)` and Go field was `PaymentDue string`. Reads cast via `payment_due::text`; writes passed the raw string — a zero-value Go struct (`PaymentDue: ""`) failed the DECIMAL cast at runtime.
+**Status:** ✔️ Resolved (defaulting at the insert boundary; the audit's "convert to float64" path was intentionally not taken)
+
+**Resolved by:** `SaveRIExchangeRecord` now defaults `PaymentDue == ""` to `"0"` at the boundary before passing it to pgx. A freshly-zero-valued struct inserts cleanly; non-empty values pass through verbatim and the DECIMAL parser rejects malformed input with a clear error. Inline comment above the defaulting block explains the rationale.
+
+**Why the audit's float64 path was rejected:** The audit suggested changing `PaymentDue string` to `PaymentDue float64`. After tracing the call graph (`internal/api/handler_ri_exchange.go::checkDailyCap`, `internal/server/handler_ri_exchange.go`, `internal/email/...`, plus tests in 7+ files), money is consistently held as `string` and arithmetic is done with `*big.Rat` via `exchange.ParseDecimalRat`. Switching the persistent representation to `float64` would either:
+
+- Round at the boundary (loses precision the rest of the pipeline went out of its way to preserve), or
+- Force a parallel path through `big.Rat` for the persistence layer only (worse than the original problem).
+
+Defaulting `""` to `"0"` at the SQL boundary fixes the actual crash with one line of additional code, no DB migration, and zero ripple through the precision-preserving layers above. The remaining `payment_due::text` casts on the read path are not a bug — they explicitly preserve the round-tripping shape between the DECIMAL column and the Go string field.
+
+If a future caller does need numeric `PaymentDue`, the recommended path is `exchange.ParseDecimalRat(record.PaymentDue)` rather than re-typing the field.
 
 ### Implementation plan
 
