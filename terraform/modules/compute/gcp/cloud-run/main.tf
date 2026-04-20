@@ -324,33 +324,28 @@ resource "google_project_iam_member" "compute_viewer" {
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Commitment write access: two paths, selected by var.use_custom_compute_commitment_role.
+# Commitment write access: custom project role cudlyCommitmentWriter
+# granting only compute.commitments.{create,update}. Replaces the original
+# roles/compute.admin grant (pre-eaa84c259), which conferred full VM/network/
+# disk/firewall control — a Cloud Run compromise could then rewrite the
+# entire project. Read-side permissions come from the roles/compute.viewer
+# grant above.
 #
-#   false (default, backward-compat): bind to roles/compute.admin. Works with
-#   any deployer SA that has resourcemanager.projects.setIamPolicy. This is
-#   the historical behaviour — over-scoped but deployable out of the box.
+# Requires the deployer SA to hold iam.roles.{get,create,update,delete} —
+# provisioned in terraform/environments/gcp/ci-cd-permissions via
+# roles/iam.roleAdmin. Consumers without that permission path cannot apply
+# this module; it's a deliberate choice over the earlier opt-in fallback to
+# roles/compute.admin.
 #
-#   true (opt-in, minimum blast radius): create a custom project role
-#   cudlyCommitmentWriter granting only compute.commitments.{create,update,
-#   delete} and bind the Cloud Run SA to that. Requires the deployer SA to
-#   hold iam.roles.{get,create,update,delete} — typically via
-#   roles/iam.roleAdmin or roles/owner. Flip when your deploy pipeline has
-#   those permissions.
-#
-# Read-side permissions (compute.commitments.list, compute.machineTypes.list)
-# come from the roles/compute.viewer grant above, so both paths expose the
-# same read capability.
+# GCP commitments are non-cancellable by design (no compute.commitments.delete
+# permission exists in the API surface), so the role grants only create and
+# update. Including "delete" fails role creation with
+# "Permission compute.commitments.delete is not valid".
 resource "google_project_iam_custom_role" "cudly_commitment_writer" {
-  count = var.use_custom_compute_commitment_role ? 1 : 0
-
   project     = var.project_id
   role_id     = "cudlyCommitmentWriter"
   title       = "CUDly Commitment Writer"
   description = "Minimum permissions for CUDly to purchase and update committed use discounts."
-  # Note: compute.commitments.delete is NOT a valid IAM permission — GCP
-  # commitments are non-cancellable by design, so the API surface exposes
-  # only create/get/list/update. Including "delete" here fails role
-  # creation with "Permission compute.commitments.delete is not valid".
   permissions = [
     "compute.commitments.create",
     "compute.commitments.update",
@@ -359,21 +354,8 @@ resource "google_project_iam_custom_role" "cudly_commitment_writer" {
 }
 
 resource "google_project_iam_member" "compute_commitment_writer" {
-  count = var.use_custom_compute_commitment_role ? 1 : 0
-
   project = var.project_id
-  role    = google_project_iam_custom_role.cudly_commitment_writer[0].id
-  member  = "serviceAccount:${google_service_account.cloud_run.email}"
-}
-
-# Fallback path: roles/compute.admin when the custom role is not opted in.
-# Matches the original pre-eaa84c259 behaviour so existing deployments keep
-# working without requiring new deployer permissions.
-resource "google_project_iam_member" "compute_commitment_admin" {
-  count = var.use_custom_compute_commitment_role ? 0 : 1
-
-  project = var.project_id
-  role    = "roles/compute.admin"
+  role    = google_project_iam_custom_role.cudly_commitment_writer.id
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 

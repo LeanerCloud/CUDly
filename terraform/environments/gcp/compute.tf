@@ -26,13 +26,6 @@ module "compute_cloud_run" {
   # Access
   allow_unauthenticated = var.cloud_run_allow_unauthenticated
 
-  # Bind the Cloud Run SA to a narrow custom role (compute.commitments.{create,
-  # update,delete}) instead of the over-scoped roles/compute.admin. Requires
-  # the deploy SA to hold roles/iam.roleAdmin, which is provisioned in
-  # terraform/environments/gcp/ci-cd-permissions/ — that module has already
-  # been applied.
-  use_custom_compute_commitment_role = true
-
   # Database connection
   database_host               = module.database.private_ip_address
   database_name               = module.database.database_name
