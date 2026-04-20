@@ -1,6 +1,6 @@
 # Known Issues: IaC AWS Target Federation
 
-> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: Terraform trust policy silently drops `:aud` condition when `oidc_subject_claim` is set~~ — RESOLVED
 
@@ -29,14 +29,20 @@
 
 **Resolved by:** `a96fc719f` — adds `AllowedPattern: "^[0-9a-fA-F]{40}$"` on the `OIDCThumbprint` parameter.
 
-## HIGH: CF and Terraform derive the condition key host differently
+## ~~HIGH: CF and Terraform derive the condition key host differently~~ — RESOLVED
 
 **File**: `template.yaml:16-23` vs `main.tf:123`
-**Description**: CF requires separate `OIDCIssuerHost` parameter; Terraform uses `trimprefix`. A trailing slash in the issuer URL produces mismatched condition keys. No validation that `OIDCIssuerHost` matches `OIDCIssuerURL`.
-**Impact**: Role assumption silently fails with `AccessDenied`.
-**Status:** ✅ Still valid
+**Description**: CF accepted any string for `OIDCIssuerHost`; Terraform built it via `trimprefix` only (without `trimsuffix`). A trailing slash in the issuer URL produced mismatched condition keys, and CF never validated the relationship between `OIDCIssuerHost` and `OIDCIssuerURL`.
+**Impact**: Role assumption silently failed with `AccessDenied` when the issuer URL or host had a trailing slash.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:**
+
+- Terraform now derives `local.oidc_issuer_url_normalized` (`trimsuffix(..., "/")`) and `local.oidc_condition_host` (`trimsuffix(trimprefix(..., "https://"), "/")`) once and uses them for both the OIDC provider URL and the trust-policy condition keys, so trailing slashes are handled consistently.
+- The `oidc_issuer_url` variable now has a strict regex validation rejecting trailing slashes and non-https URLs.
+- `OIDCIssuerURL` and `OIDCIssuerHost` parameters in CloudFormation now have explicit `AllowedPattern` + `ConstraintDescription` forbidding trailing slashes; the description calls out that the operator must keep the two values in sync.
+
+### Original implementation plan
 
 **Goal:** Derive the OIDC condition-key host identically in CF and Terraform so trailing slashes or mismatched `OIDCIssuerHost` values cannot produce an unusable trust policy.
 

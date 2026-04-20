@@ -14,10 +14,16 @@ terraform {
 
 locals {
   audience = var.oidc_audience != "" ? var.oidc_audience : "sts.amazonaws.com"
+  # Normalize the issuer URL once: strip the https:// scheme and any trailing
+  # slash. AWS IAM uses the host portion (no scheme, no trailing slash) as the
+  # prefix for the condition keys; the OpenIDConnectProvider Url argument also
+  # rejects trailing slashes, so normalize before binding either value.
+  oidc_issuer_url_normalized = trimsuffix(var.oidc_issuer_url, "/")
+  oidc_condition_host        = trimsuffix(trimprefix(var.oidc_issuer_url, "https://"), "/")
 }
 
 resource "aws_iam_openid_connect_provider" "cudly" {
-  url             = var.oidc_issuer_url
+  url             = local.oidc_issuer_url_normalized
   client_id_list  = [local.audience]
   thumbprint_list = var.thumbprint_list
 }
@@ -125,10 +131,10 @@ resource "aws_iam_role" "cudly" {
           Condition = {
             StringEquals = merge(
               {
-                "${trimsuffix(trimprefix(var.oidc_issuer_url, "https://"), "/")}:aud" = local.audience
+                "${local.oidc_condition_host}:aud" = local.audience
               },
               var.oidc_subject_claim != "" ? {
-                "${trimsuffix(trimprefix(var.oidc_issuer_url, "https://"), "/")}:sub" = var.oidc_subject_claim
+                "${local.oidc_condition_host}:sub" = var.oidc_subject_claim
               } : {}
             )
           }

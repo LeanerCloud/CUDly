@@ -1,14 +1,16 @@
 variable "oidc_issuer_url" {
   description = <<-EOT
-    OIDC issuer URL of the source identity provider.
+    OIDC issuer URL of the source identity provider. Must be https:// and must
+    not contain a trailing slash — AWS IAM condition keys are case-sensitive
+    and the trust-policy host string must match the issuer URL exactly.
     Azure AD: https://login.microsoftonline.com/<tenant_id>/v2.0
     GCP:      https://accounts.google.com
   EOT
   type        = string
 
   validation {
-    condition     = startswith(var.oidc_issuer_url, "https://")
-    error_message = "oidc_issuer_url must start with https://"
+    condition     = can(regex("^https://[^/]+(/[^/].*[^/]|/[^/]+)?$", var.oidc_issuer_url)) && !endswith(var.oidc_issuer_url, "/")
+    error_message = "oidc_issuer_url must start with https:// and must not end with a trailing slash."
   }
 }
 

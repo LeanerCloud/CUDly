@@ -9,18 +9,24 @@ Parameters:
     Type: String
     Description: >
       Full OIDC issuer URL (with https://) — used for the IAM OIDC provider Url property.
+      Must NOT contain a trailing slash; the value here must match OIDCIssuerHost
+      (minus the https:// prefix) exactly because AWS IAM condition keys are
+      case-sensitive and string-equal.
       Azure AD: https://login.microsoftonline.com/<tenant_id>/v2.0
       GCP:      https://accounts.google.com
-    AllowedPattern: "https://.*"
+    AllowedPattern: "^https://[^/]+(/[^/]+)*$"
+    ConstraintDescription: "OIDCIssuerURL must be https:// and must not contain a trailing slash."
 
   OIDCIssuerHost:
     Type: String
     Description: >
-      OIDC issuer host and path WITHOUT the https:// prefix — used as the IAM condition key.
-      AWS IAM condition keys strip the scheme, so this must match exactly.
+      OIDC issuer host and path WITHOUT the https:// prefix — used as the IAM
+      condition key. Must equal OIDCIssuerURL with the https:// stripped and no
+      trailing slash; the operator is responsible for keeping the two in sync.
       Azure AD: login.microsoftonline.com/<tenant_id>/v2.0
       GCP:      accounts.google.com
-    AllowedPattern: "^[^/].*"
+    AllowedPattern: "^[^/]+(/[^/]+)*$"
+    ConstraintDescription: "OIDCIssuerHost must not start or end with a slash."
 
   OIDCAudience:
     Type: String
