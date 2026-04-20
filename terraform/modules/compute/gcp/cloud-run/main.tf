@@ -189,11 +189,51 @@ resource "google_project_iam_member" "cloud_sql_client" {
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Secret Manager access for reading email credentials and other secrets
-resource "google_project_iam_member" "secret_accessor" {
-  project = var.project_id
-  role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+# Secret Manager access — least-privilege per-secret bindings.
+#
+# Previously this granted the Cloud Run SA project-wide
+# `roles/secretmanager.secretAccessor`, which let it read every secret in
+# the project (including unrelated workloads' secrets). Now we bind only
+# the specific secrets the workload actually needs:
+#
+#   - database_password_secret_id  (always required)
+#   - admin_password_secret_name   (writer binding handled separately below)
+#   - additional_secret_accessor_ids (sendgrid, credential encryption key,
+#     anything else the env wires through)
+#
+# The admin-password reader binding rides on the same `additional_*` map
+# entry from the env, so the admin-password-writer binding below is the
+# only admin-specific resource left here.
+resource "google_secret_manager_secret_iam_member" "db_password_reader" {
+  project   = var.project_id
+  secret_id = var.database_password_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "additional_readers" {
+  for_each = var.additional_secret_accessor_ids
+
+  project   = var.project_id
+  secret_id = each.value
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Grant read access to admin password secret (for password verification on
+# login). Read sits on the same binding gate as write — both come from the
+# `admin_password_secret_name` input — because the app needs both to be
+# usable. Using `enable_admin_password_writer` as the gate keeps a single
+# precondition for "admin secret is wired up enough to produce known-after-
+# apply names without tripping Terraform's sensitive-value-in-count limit"
+# (see variable docs).
+resource "google_secret_manager_secret_iam_member" "admin_password_reader" {
+  count = var.enable_admin_password_writer ? 1 : 0
+
+  project   = var.project_id
+  secret_id = var.admin_password_secret_name
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
 # Grant write access to admin password secret only (for password sync)

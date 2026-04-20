@@ -170,11 +170,16 @@ resource "kubernetes_secret" "database" {
     namespace = kubernetes_namespace.app[0].metadata[0].name
   }
 
+  # NOTE: `password_secret_name` carries the *Key Vault secret name*, not
+  # the cleartext password. Workloads must resolve it via the Key Vault API
+  # (or the Azure Key Vault CSI driver) before connecting. The earlier key
+  # name `password` was misleading because it implied the cleartext value
+  # lived inline.
   data = {
-    host     = var.database_host
-    name     = var.database_name
-    username = var.database_username
-    password = var.database_password_secret_name
+    host                 = var.database_host
+    name                 = var.database_name
+    username             = var.database_username
+    password_secret_name = var.database_password_secret_name
   }
 
   type = "Opaque"

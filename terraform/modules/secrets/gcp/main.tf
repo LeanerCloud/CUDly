@@ -247,6 +247,47 @@ resource "google_secret_manager_secret_version" "additional" {
 }
 
 # ==============================================
+# Credential Encryption Key (dedicated, sensitive)
+# ==============================================
+#
+# Created from a `sensitive = true` input variable so the value never
+# appears in plan output or `terraform show`. Compare with
+# `additional_secrets` above, which cannot be sensitive without losing
+# `for_each` over the keys — keep the encryption key out of that bucket.
+
+resource "google_secret_manager_secret" "credential_encryption_key" {
+  # Wrap with nonsensitive(): the value itself stays sensitive, but the
+  # "is it empty" check is a structural toggle that must produce a count
+  # Terraform can plan with. Without the unwrap, Terraform conservatively
+  # treats every count-gated resource and downstream output as sensitive.
+  count = nonsensitive(var.credential_encryption_key) == "" ? 0 : 1
+
+  secret_id = "${var.service_name}-credential-encryption-key"
+  project   = var.project_id
+
+  replication {
+    auto {}
+  }
+
+  labels = merge(var.labels, {
+    environment = var.environment
+    managed_by  = "terraform"
+    purpose     = "credential-encryption"
+  })
+}
+
+resource "google_secret_manager_secret_version" "credential_encryption_key" {
+  # Wrap with nonsensitive(): the value itself stays sensitive, but the
+  # "is it empty" check is a structural toggle that must produce a count
+  # Terraform can plan with. Without the unwrap, Terraform conservatively
+  # treats every count-gated resource and downstream output as sensitive.
+  count = nonsensitive(var.credential_encryption_key) == "" ? 0 : 1
+
+  secret      = google_secret_manager_secret.credential_encryption_key[0].id
+  secret_data = var.credential_encryption_key
+}
+
+# ==============================================
 # IAM Permissions for Cloud Run Service Account
 # ==============================================
 

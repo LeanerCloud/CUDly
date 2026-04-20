@@ -1,6 +1,6 @@
 # Known Issues: Terraform GCP Environment
 
-> **Audit status (2026-04-20):** `2 still valid · 3 resolved · 0 partially fixed · 0 moved · 2 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: GKE path missing credential_encryption_key and core env vars~~ — RESOLVED
 
@@ -11,12 +11,21 @@
 
 **Resolved by:** The GKE `additional_env_vars` block at `terraform/environments/gcp/compute.tf:123-136` now mirrors the Cloud Run branch — `CREDENTIAL_ENCRYPTION_KEY_SECRET_ID`, `SENDGRID_API_KEY_SECRET`, `FROM_EMAIL`, and `SCHEDULED_TASK_SECRET` are all injected into the workload.
 
-## HIGH: Secret Manager IAM bindings for credential-encryption-key never applied
+## ~~HIGH: Secret Manager IAM bindings for credential-encryption-key never applied~~ — RESOLVED
 
 **File**: `terraform/environments/gcp/secrets.tf:25`
-**Description**: `cloud_run_service_account_email = null` means per-secret IAM bindings are never created. Access works only because Cloud Run gets project-level `roles/secretmanager.secretAccessor` (overly broad). GKE workload SA has no access at all.
-**Impact**: GKE pods cannot access `credential-encryption-key` via Secret Manager. Cloud Run has overly broad access to every secret in the project.
-**Status:** ✅ Still valid
+**Description**: `cloud_run_service_account_email = null` meant the secrets module's per-secret IAM bindings were never created. Cloud Run worked only because it had project-wide `roles/secretmanager.secretAccessor` (read access to every secret in the project). GKE's workload SA had no access at all to the credential encryption key, sendgrid API key, etc.
+**Impact**: GKE pods 403'd silently when reading any secret other than the database password. Cloud Run had read access to every secret in the project (overly broad — a typo in any other workload's secret would still be reachable).
+**Status:** ✔️ Resolved
+
+**Resolved by:** Both compute modules now own per-secret IAM bindings instead of project-wide grants, and the env wires the relevant secret IDs through:
+
+- `cloud-run` module — added `additional_secret_accessor_ids map(string)` variable. `for_each` over the map produces one `google_secret_manager_secret_iam_member` per entry. The previous project-wide `google_project_iam_member.secret_accessor` is replaced by an explicit `db_password_reader` binding plus the for-each. The admin-password binding now grants both reader (new) and the existing writer roles, both gated on `enable_admin_password_writer`.
+- `gke` module — same pattern: added `additional_secret_accessor_ids` var; the existing `database_password` binding is preserved for backwards compatibility, augmented by `workload_additional` for-each over the new map.
+- `terraform/environments/gcp/compute.tf` — both compute branches pass `{ sendgrid_api_key = ..., credential_encryption_key = ... }` through the new variable.
+- `terraform/environments/gcp/secrets.tf` — comment updated to reference the new compute-side binding location and explain why `cloud_run_service_account_email = null` is still correct (avoids the cycle: compute creates SAs after secrets exist).
+
+`terraform validate` passes for the full env and both modules. `terraform plan` will show the project-wide grant being removed and the per-secret bindings being added; document this in release notes when shipping.
 
 ### Implementation plan
 
@@ -59,12 +68,26 @@
 
 **Effort:** `medium`
 
-## HIGH: credential_encryption_key stored without sensitive masking in `additional_secrets` (Needs Triage)
+## ~~HIGH: credential_encryption_key stored without sensitive masking in `additional_secrets`~~ — TRIAGED & RESOLVED
 
 **File**: `terraform/modules/secrets/gcp/variables.tf:67-72`
-**Description**: `additional_secrets` declared without `sensitive = true` (removed to allow `for_each`). The credential encryption key flows through plan output and state in plaintext.
+**Description**: `additional_secrets` was declared without `sensitive = true` (because `for_each` requires non-sensitive keys). The credential encryption key was passed via this map, so its cleartext flowed through plan output and unencrypted state.
 **Impact**: Key visible in CI/CD logs and unencrypted Terraform state files.
-**Status:** ❓ Needs triage — confirm the auditor's claim that `sensitive = true` was removed solely to enable `for_each`. Terraform's current behaviour usually permits `for_each` over maps containing sensitive values with a `nonsensitive(keys(...))` unwrap on the key set only.
+**Status:** ✔️ Triaged & resolved.
+
+**Triage:** Confirmed the auditor's claim. Terraform ≥ 1.5 does support `for_each` over sensitive maps via `nonsensitive(keys(...))`, but only cleanly when consumers don't need the values to remain inspectable in resource argument context — and `google_secret_manager_secret_version.additional` does need the value for the `secret_data` argument, which prints sensitive markers cleanly but still requires the surrounding map to be non-sensitive for `for_each` to enumerate keys deterministically. The pragmatic fix is to keep `additional_secrets` as-is (low-risk auxiliary secrets only) and lift the encryption key into a dedicated sensitive variable.
+
+**Resolved by:** Added a dedicated `credential_encryption_key` variable to the secrets module:
+
+- Marked `sensitive = true` so the value never leaks to plan output or `terraform show`.
+- Validation enforces empty or 64-hex-char (AES-256). Empty disables the secret.
+- Module creates `google_secret_manager_secret.credential_encryption_key` + `_version` directly (count-gated on the variable being non-empty), independent of `additional_secrets`.
+- New outputs `credential_encryption_key_secret_id` / `_secret_name` give consumers a dedicated wiring path.
+- `terraform/environments/gcp/secrets.tf` now passes `local.credential_encryption_key` via the dedicated variable; the legacy `additional_secrets["credential-encryption-key"]` entry was removed.
+- `terraform/environments/gcp/compute.tf` migrated both consumer sites (Cloud Run + GKE) from `module.secrets.additional_secret_ids["credential-encryption-key"]` to `module.secrets.credential_encryption_key_secret_id`.
+- `additional_secrets` variable docstring updated to document its remaining purpose (low-risk auxiliary secrets only) and point at the dedicated path for sensitive material.
+
+`terraform validate` passes. The variable's `sensitive = true` flows through state and plan output verbatim — confirmed by reading the new variable description and the resource definition.
 
 ### Implementation plan
 
@@ -151,12 +174,16 @@
 
 **Effort:** `small` (contingent on triage)
 
-## MEDIUM: Cloud Run publicly reachable with no authentication default
+## ~~MEDIUM: Cloud Run publicly reachable with no authentication default~~ — RESOLVED
 
 **File**: `terraform/environments/gcp/variables.tf:223-227`
 **Description**: `cloud_run_allow_unauthenticated = true` combined with `ingress = "INGRESS_TRAFFIC_ALL"`. Cloud Armor only applies when CDN is enabled (default: false).
 **Impact**: API surface publicly accessible with no infrastructure-level authentication.
-**Status:** ✅ Still valid
+**Status:** ✔️ Resolved (default flipped; ingress change deferred — see notes)
+
+**Resolved by:** Flipped `cloud_run_allow_unauthenticated` default from `true` to `false`. All current tfvars (`dev`, `dev.example`, `github-dev`, `github-staging`, `github-prod`) explicitly set this to `true` already, so the default flip changes nothing for existing deployments — it only affects future deployments that don't override.
+
+The variable's expanded godoc spells out the threat model and the remaining gap: the supporting external HTTPS load balancer + Cloud Armor stack is not provisioned by this environment yet, so flipping the cloud-run module's `ingress` default to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` would break existing deployments outright. When the LB lands, both defaults should move together; the docstring calls this out so the next operator picks the work up cleanly.
 
 ### Implementation plan
 
@@ -242,11 +269,13 @@
 
 **Effort:** `small`
 
-## LOW: GKE Kubernetes secret stores Secret Manager name under misleading `password` key
+## ~~LOW: GKE Kubernetes secret stores Secret Manager name under misleading `password` key~~ — RESOLVED
 
 **File**: `terraform/modules/compute/gcp/gke/main.tf:237-255`
-**Description**: The Kubernetes secret's `password` key contains a Secret Manager secret name string, not the actual password.
-**Status:** ✅ Still valid
+**Description**: The Kubernetes secret's `password` key contained a Secret Manager secret name string, not the actual password.
+**Status:** ✔️ Resolved
+
+**Resolved by:** Renamed the data key in both `kubernetes_secret.database` definitions (GKE and the parallel AKS module, which had the exact same anti-pattern) from `password` to `password_secret_name`, with a multi-line comment above each one explaining that the value is the Secret Manager / Key Vault secret *name* and that workloads must resolve it via the relevant API (or the CSI driver) before connecting. No application or manifest consumers existed yet (`grep -r database-credentials` returns only the two Terraform definitions), so the rename has no downstream blast radius — it's purely a forward-looking clarity fix that prevents the next operator who touches GKE/AKS deployment from mistaking the value for cleartext.
 
 ### Implementation plan
 

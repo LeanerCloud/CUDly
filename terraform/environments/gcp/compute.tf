@@ -37,6 +37,14 @@ module "compute_cloud_run" {
   admin_password_secret_name   = coalesce(module.secrets.admin_password_secret_name, "")
   enable_admin_password_writer = true # secret name comes from secrets module output, not a literal
 
+  # Per-secret IAM bindings (replaces the previous project-wide
+  # `roles/secretmanager.secretAccessor` grant). Each entry produces one
+  # least-privilege binding scoped to that secret only.
+  additional_secret_accessor_ids = {
+    sendgrid_api_key          = module.secrets.sendgrid_api_key_id
+    credential_encryption_key = module.secrets.credential_encryption_key_secret_id
+  }
+
   # VPC Access (for Cloud SQL)
   vpc_connector_id = module.networking.vpc_connector_id
 
@@ -60,7 +68,7 @@ module "compute_cloud_run" {
     {
       STATIC_DIR                          = "/app/static"
       SENDGRID_API_KEY_SECRET             = module.secrets.sendgrid_api_key_id
-      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.additional_secret_ids["credential-encryption-key"]
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.credential_encryption_key_secret_id
       FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
@@ -120,11 +128,21 @@ module "compute_gke" {
   admin_email                = var.admin_email
   admin_password_secret_name = coalesce(module.secrets.admin_password_secret_name, "")
   auto_migrate               = var.auto_migrate
+
+  # Per-secret IAM bindings for the GKE workload SA. Without these the pod
+  # could only read `database_password_secret_name`, so any code path
+  # touching the credential encryption key or the SendGrid key would 403
+  # silently. Map keys are arbitrary stable labels.
+  additional_secret_accessor_ids = {
+    sendgrid_api_key          = module.secrets.sendgrid_api_key_id
+    credential_encryption_key = module.secrets.credential_encryption_key_secret_id
+  }
+
   additional_env_vars = merge(
     {
       STATIC_DIR                          = "/app/static"
       SENDGRID_API_KEY_SECRET             = module.secrets.sendgrid_api_key_id
-      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.additional_secret_ids["credential-encryption-key"]
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.credential_encryption_key_secret_id
       FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"

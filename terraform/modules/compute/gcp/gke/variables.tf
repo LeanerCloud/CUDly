@@ -109,6 +109,24 @@ variable "secret_manager_project_id" {
   default     = ""
 }
 
+variable "additional_secret_accessor_ids" {
+  description = <<-EOT
+    Map of Secret Manager secret IDs (full resource names) the GKE workload
+    Identity service account must be able to read. Each entry produces a
+    per-secret `roles/secretmanager.secretAccessor` binding. Map keys are
+    arbitrary labels used only for Terraform resource addressing — pick
+    something stable so a value change doesn't force a binding recreate.
+
+    Previously the GKE workload SA only had access to
+    `database_password_secret_name`, which meant any code path reading
+    other secrets (credential encryption key, sendgrid API key, etc.)
+    silently failed at runtime. Wire the relevant secret IDs through
+    here so the bindings exist before the first pod starts.
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 variable "enable_workload_identity" {
   description = "Enable Workload Identity for GKE"
   type        = bool

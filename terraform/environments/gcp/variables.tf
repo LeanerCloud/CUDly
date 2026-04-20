@@ -227,9 +227,26 @@ variable "cloud_run_request_timeout" {
 }
 
 variable "cloud_run_allow_unauthenticated" {
-  description = "Allow unauthenticated access"
+  description = <<-EOT
+    Whether to expose the Cloud Run service publicly without IAM-level
+    authentication. The default is `false` (least-privilege): only callers
+    with the `roles/run.invoker` IAM binding can hit the URL. Application-
+    layer auth (sessions, RBAC, OIDC federation) still runs on top.
+
+    Set to `true` to allow direct browser access on the *.run.app URL —
+    useful for dev/preview environments where the only consumer is the
+    bundled frontend hitting the Cloud Run URL directly without an HTTPS
+    load balancer in front.
+
+    NOTE: For production, prefer `false` plus an external HTTPS load
+    balancer with Cloud Armor (see `cloud_run_ingress` semantics in the
+    cloud-run module). The current default does not flip the module's
+    `ingress` default to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` because
+    the supporting LB is not provisioned by this environment yet — when
+    that lands, this default and the ingress default should move together.
+  EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 # ==============================================

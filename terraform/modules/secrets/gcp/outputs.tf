@@ -46,12 +46,20 @@ output "session_secret_name" {
 
 output "sendgrid_api_key_id" {
   description = "Secret Manager secret ID for SendGrid API key (if created)"
-  value       = (var.sendgrid_api_key != null || var.create_sendgrid_secret) ? google_secret_manager_secret.sendgrid_api_key[0].secret_id : null
+  # Gate on the resource's `length(...)` rather than the original
+  # `var.sendgrid_api_key != null || var.create_sendgrid_secret`
+  # conditional. The variable is `sensitive = true`, so referencing it in
+  # an output expression makes Terraform conservatively flag the entire
+  # output as sensitive — even though the value (a secret ID like
+  # "<service>-sendgrid-api-key") is not. Driving the conditional from
+  # the resource list keeps the output public and the variable's
+  # sensitivity intact.
+  value = length(google_secret_manager_secret.sendgrid_api_key) > 0 ? google_secret_manager_secret.sendgrid_api_key[0].secret_id : null
 }
 
 output "sendgrid_api_key_name" {
   description = "Full secret name for SendGrid API key (if created)"
-  value       = (var.sendgrid_api_key != null || var.create_sendgrid_secret) ? google_secret_manager_secret.sendgrid_api_key[0].name : null
+  value       = length(google_secret_manager_secret.sendgrid_api_key) > 0 ? google_secret_manager_secret.sendgrid_api_key[0].name : null
 }
 
 output "scheduled_task_secret_value" {
@@ -68,6 +76,21 @@ output "scheduled_task_secret_id" {
 output "additional_secret_ids" {
   description = "Map of additional secret IDs"
   value       = { for k, v in google_secret_manager_secret.additional : k => v.secret_id }
+}
+
+# Dedicated credential-encryption-key outputs. Returns null when no key
+# was supplied so callers can `coalesce(...)` against the legacy
+# `additional_secret_ids["credential-encryption-key"]` path during
+# migration. Once all callers move to the dedicated path, the legacy
+# entry can be dropped from `additional_secrets`.
+output "credential_encryption_key_secret_id" {
+  description = "Secret Manager secret ID for the credential encryption key (null if not provisioned)"
+  value       = length(google_secret_manager_secret.credential_encryption_key) > 0 ? google_secret_manager_secret.credential_encryption_key[0].secret_id : null
+}
+
+output "credential_encryption_key_secret_name" {
+  description = "Full Secret Manager secret name for the credential encryption key (null if not provisioned)"
+  value       = length(google_secret_manager_secret.credential_encryption_key) > 0 ? google_secret_manager_secret.credential_encryption_key[0].name : null
 }
 
 output "additional_secret_names" {

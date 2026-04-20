@@ -31,12 +31,16 @@ module "secrets" {
   create_jwt_secret     = true
   create_session_secret = true
 
-  additional_secrets = {
-    "credential-encryption-key" = local.credential_encryption_key
-  }
+  # Pass the credential-encryption key through the dedicated `sensitive`
+  # variable so it never leaks into plan output or unencrypted state. The
+  # `additional_secrets` path was previously used here but couldn't be
+  # marked sensitive (it needs `for_each` over its keys), so the value was
+  # rendered in plan diffs.
+  credential_encryption_key = local.credential_encryption_key
 
   # IAM permissions for compute service account are handled in compute modules
-  # Setting to null to avoid circular dependency
+  # via per-secret bindings (see `additional_secret_accessor_ids` in
+  # compute.tf). Setting to null avoids the circular module dependency.
   cloud_run_service_account_email = null
 
   labels = local.common_labels

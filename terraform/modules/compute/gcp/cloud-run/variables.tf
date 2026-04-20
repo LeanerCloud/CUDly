@@ -168,6 +168,26 @@ variable "scheduled_task_secret" {
   sensitive   = true
 }
 
+variable "additional_secret_accessor_ids" {
+  description = <<-EOT
+    Map of Secret Manager secret IDs (full resource names) the Cloud Run
+    service account must be able to read. Each entry produces a per-secret
+    `roles/secretmanager.secretAccessor` binding. Map keys are arbitrary
+    labels used only for Terraform resource addressing — pick something
+    stable so a value change doesn't force a binding recreate.
+
+    Replaces the previous project-wide
+    `roles/secretmanager.secretAccessor` grant, which gave Cloud Run read
+    access to every secret in the project (overly broad — a typo in any
+    other workload's secret name would still be reachable). Pass exactly
+    the secrets the workload needs (typically: sendgrid, credential
+    encryption key, scheduled-task secret if stored as a Secret Manager
+    secret).
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 variable "log_retention_days" {
   description = "Log retention in days (null for default retention)"
   type        = number

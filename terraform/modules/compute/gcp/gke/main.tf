@@ -178,10 +178,24 @@ resource "google_service_account" "workload" {
   project      = var.project_id
 }
 
-# Grant access to Secret Manager
+# Grant per-secret access to Secret Manager. The database password is
+# always required; additional secrets (credential encryption key, sendgrid,
+# etc.) are wired through `additional_secret_accessor_ids` from the env so
+# the workload can read everything it needs at startup. Previously only
+# `database_password_secret_name` was bound, so any code path that read
+# other secrets silently 403'd inside the pod.
 resource "google_secret_manager_secret_iam_member" "workload" {
   project   = local.secret_project_id
   secret_id = var.database_password_secret_name
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "workload_additional" {
+  for_each = var.additional_secret_accessor_ids
+
+  project   = local.secret_project_id
+  secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workload.email}"
 }
@@ -242,11 +256,16 @@ resource "kubernetes_secret" "database" {
     namespace = kubernetes_namespace.app[0].metadata[0].name
   }
 
+  # NOTE: `password_secret_name` carries the *Secret Manager secret name*,
+  # not the cleartext password. Workloads must resolve it via the Secret
+  # Manager API (or the Secrets Store CSI driver) before connecting. The
+  # earlier key name `password` was misleading because it implied the
+  # cleartext value lived inline.
   data = {
-    host     = var.database_host
-    name     = var.database_name
-    username = var.database_username
-    password = var.database_password_secret_name
+    host                 = var.database_host
+    name                 = var.database_name
+    username             = var.database_username
+    password_secret_name = var.database_password_secret_name
   }
 
   type = "Opaque"
