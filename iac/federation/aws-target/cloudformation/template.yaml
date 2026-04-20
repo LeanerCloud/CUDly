@@ -28,7 +28,10 @@ Parameters:
       Expected audience (aud) in the incoming OIDC token.
       Azure: api://<client_id>  or  <client_id>
       GCP:   https://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>
+      Leave empty to skip audience matching, or supply a non-whitespace string.
     Default: ""
+    AllowedPattern: "^$|^\\S$|^\\S.*\\S$"
+    ConstraintDescription: "OIDCAudience must be either empty or a non-whitespace string (no leading/trailing whitespace)."
 
   OIDCThumbprint:
     Type: String
