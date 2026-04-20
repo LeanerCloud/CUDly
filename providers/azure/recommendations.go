@@ -126,6 +126,25 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 	return recommendations, nil
 }
 
+// resolveAdvisorRegion picks the region for an Advisor recommendation.
+// ExtendedProperties["region"|"location"] is authoritative when present;
+// the resource-ID parser is a fallback for the rare case where the ID
+// embeds /locations/{region}/. Pulled out of convertAdvisorRecommendation
+// to keep that function under the cyclomatic limit.
+func resolveAdvisorRegion(advisorRec *armadvisor.ResourceRecommendationBase) string {
+	if ext := advisorRec.Properties.ExtendedProperties; ext != nil {
+		for _, key := range []string{"region", "location"} {
+			if v, ok := ext[key]; ok && v != nil && *v != "" {
+				return *v
+			}
+		}
+	}
+	if advisorRec.ID != nil {
+		return extractRegionFromResourceID(*advisorRec.ID)
+	}
+	return ""
+}
+
 // convertAdvisorRecommendation converts an Azure Advisor recommendation to common format
 func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *armadvisor.ResourceRecommendationBase) *common.Recommendation {
 	if advisorRec.Properties == nil {
@@ -146,22 +165,7 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		PaymentOption:  "upfront",
 	}
 
-	// Prefer an explicit region from the Advisor response. ExtendedProperties
-	// is the authoritative source when present; fall back to the resource-ID
-	// parser for the rare case where the ID embeds /locations/{region}/.
-	if ext := advisorRec.Properties.ExtendedProperties; ext != nil {
-		for _, key := range []string{"region", "location"} {
-			if v, ok := ext[key]; ok && v != nil && *v != "" {
-				rec.Region = *v
-				break
-			}
-		}
-	}
-	if rec.Region == "" && advisorRec.ID != nil {
-		if region := extractRegionFromResourceID(*advisorRec.ID); region != "" {
-			rec.Region = region
-		}
-	}
+	rec.Region = resolveAdvisorRegion(advisorRec)
 
 	populateFromExtendedProperties(rec, advisorRec.Properties.ExtendedProperties)
 	return rec
@@ -263,7 +267,9 @@ func serviceFromExtendedProperties(ext map[string]*string) string {
 // extractRegionFromResourceID extracts the region from an Azure resource ID.
 //
 // Standard ARM resource IDs follow the shape
-//   /subscriptions/{sub}/resourceGroups/{rg}/providers/{ns}/{type}/{name}
+//
+//	/subscriptions/{sub}/resourceGroups/{rg}/providers/{ns}/{type}/{name}
+//
 // and do NOT embed the region — so this helper is a best-effort fallback
 // only. Callers that have a better source (Advisor recommendation's
 // Properties.ExtendedProperties["region"] / "location", or a sibling

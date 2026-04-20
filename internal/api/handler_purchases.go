@@ -20,88 +20,92 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	// Get all pending executions (actual scheduled purchases)
 	executions, err := h.config.GetPendingExecutions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pending executions: %w", err)
 	}
 
-	// Get all purchase plans for metadata
 	plans, err := h.config.ListPurchasePlans(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get purchase plans: %w", err)
+	}
+
+	planMap := make(map[string]*config.PurchasePlan, len(plans))
+	for i := range plans {
+		planMap[plans[i].ID] = &plans[i]
 	}
 
 	// Cache per-plan access decisions — all executions for the same plan share
 	// the same account scope. Avoids GetPlanAccounts round-trips per execution.
 	allowedPlan := make(map[string]bool)
 
-	// Build plan map for lookup
-	planMap := make(map[string]*config.PurchasePlan)
-	for i := range plans {
-		planMap[plans[i].ID] = &plans[i]
-	}
-
 	var purchases []PlannedPurchase
-
-	// Convert executions to planned purchases
 	for _, exec := range executions {
 		plan := planMap[exec.PlanID]
 		if plan == nil {
 			continue
 		}
-
-		// Drop executions whose plan is outside the session's allowed_accounts.
-		ok, cached := allowedPlan[exec.PlanID]
-		if !cached {
-			planErr := h.requirePlanAccess(ctx, session, exec.PlanID)
-			ok = planErr == nil
-			if planErr != nil && !IsNotFoundError(planErr) {
-				return nil, planErr
-			}
-			allowedPlan[exec.PlanID] = ok
+		ok, err := h.isPlanAllowedCached(ctx, session, exec.PlanID, allowedPlan)
+		if err != nil {
+			return nil, err
 		}
 		if !ok {
 			continue
 		}
-
-		// Get first service config for provider/service info
-		var provider, service string
-		var term int
-		var payment string
-		for _, svcCfg := range plan.Services {
-			provider = svcCfg.Provider
-			service = svcCfg.Service
-			term = svcCfg.Term
-			payment = svcCfg.Payment
-			break
-		}
-
-		scheduledDate := exec.ScheduledDate.Format("2006-01-02")
-
-		purchases = append(purchases, PlannedPurchase{
-			ID:               exec.ExecutionID,
-			PlanID:           exec.PlanID,
-			PlanName:         plan.Name,
-			ScheduledDate:    scheduledDate,
-			Provider:         provider,
-			Service:          service,
-			ResourceType:     "Various",
-			Region:           "Multiple",
-			Count:            len(exec.Recommendations),
-			Term:             term,
-			Payment:          payment,
-			EstimatedSavings: exec.EstimatedSavings,
-			UpfrontCost:      exec.TotalUpfrontCost,
-			Status:           exec.Status,
-			StepNumber:       exec.StepNumber,
-			TotalSteps:       plan.RampSchedule.TotalSteps,
-		})
+		purchases = append(purchases, buildPlannedPurchase(plan, &exec))
 	}
 
 	return &PlannedPurchasesResponse{
 		Purchases: purchases,
 	}, nil
+}
+
+// isPlanAllowedCached resolves and memoises whether the session may see the given plan.
+// NotFound errors are treated as "not allowed" (not an error) so missing plans don't
+// surface as 500s, mirroring the previous inline behaviour.
+func (h *Handler) isPlanAllowedCached(ctx context.Context, session *Session, planID string, cache map[string]bool) (bool, error) {
+	if ok, cached := cache[planID]; cached {
+		return ok, nil
+	}
+	planErr := h.requirePlanAccess(ctx, session, planID)
+	if planErr != nil && !IsNotFoundError(planErr) {
+		return false, planErr
+	}
+	ok := planErr == nil
+	cache[planID] = ok
+	return ok, nil
+}
+
+// buildPlannedPurchase converts a (plan, execution) pair into the API-facing PlannedPurchase.
+// Provider/service/term/payment are taken from the first service entry, matching prior behaviour.
+func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecution) PlannedPurchase {
+	var provider, service, payment string
+	var term int
+	for _, svcCfg := range plan.Services {
+		provider = svcCfg.Provider
+		service = svcCfg.Service
+		term = svcCfg.Term
+		payment = svcCfg.Payment
+		break
+	}
+	return PlannedPurchase{
+		ID:               exec.ExecutionID,
+		PlanID:           exec.PlanID,
+		PlanName:         plan.Name,
+		ScheduledDate:    exec.ScheduledDate.Format("2006-01-02"),
+		Provider:         provider,
+		Service:          service,
+		ResourceType:     "Various",
+		Region:           "Multiple",
+		Count:            len(exec.Recommendations),
+		Term:             term,
+		Payment:          payment,
+		EstimatedSavings: exec.EstimatedSavings,
+		UpfrontCost:      exec.TotalUpfrontCost,
+		Status:           exec.Status,
+		StepNumber:       exec.StepNumber,
+		TotalSteps:       plan.RampSchedule.TotalSteps,
+	}
 }
 
 func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
