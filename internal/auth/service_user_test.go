@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -625,6 +626,39 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, resp)
 		assert.Contains(t, err.Error(), "failed to create admin")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	// TestSetupAdmin TOCTOU fix (migration 000025_admin_role_unique + service
+	// change in 957295317): when AdminExists() reports false but the database
+	// rejects CreateUser with a 23505 duplicate-key error (another concurrent
+	// SetupAdmin won the race), the service must translate that into the same
+	// "admin user already exists" message the existence check would have
+	// returned — NOT the generic "failed to create admin" wrapper.
+	t.Run("admin creation races to duplicate-key", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		mockStore.On("AdminExists", ctx).Return(false, nil).Once()
+		// Simulate the partial unique index on (role) WHERE role = 'admin'
+		// rejecting the insert with a 23505 unique violation.
+		pgErr := &pgconn.PgError{Code: "23505", ConstraintName: "users_one_admin"}
+		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(pgErr).Once()
+
+		req := SetupAdminRequest{
+			Email:    "admin@example.com",
+			Password: "SecurePass@123",
+		}
+
+		resp, err := service.SetupAdmin(ctx, req)
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		assert.Contains(t, err.Error(), "admin user already exists")
+		// Do NOT leak the "failed to create admin" wrapper — the error surface
+		// should be indistinguishable from the pre-race existence check.
+		assert.NotContains(t, err.Error(), "failed to create admin")
 
 		mockStore.AssertExpectations(t)
 	})
