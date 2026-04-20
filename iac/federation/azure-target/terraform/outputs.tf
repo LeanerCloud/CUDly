@@ -9,7 +9,7 @@ output "tenant_id" {
 }
 
 output "cudly_account_registration" {
-  description = "Values to use when registering this account in CUDly"
+  description = "Values to use when registering this account in CUDly. Marked sensitive so subscription/tenant IDs do not leak into CI/CD logs; retrieve via `terraform output -raw cudly_account_registration` when needed."
   value       = <<-EOT
     provider               : azure
     azure_auth_mode        : workload_identity_federation
@@ -18,6 +18,7 @@ output "cudly_account_registration" {
     azure_client_id        : ${azuread_application.cudly.client_id}
     No secret or key needed — CUDly signs JWTs via its OIDC issuer.
   EOT
+  sensitive   = true
 }
 
 output "registration_response" {
