@@ -49,24 +49,28 @@ func (r *Registry) Register(name string, factory ProviderFactory) error {
 	return nil
 }
 
-// GetProvider creates a provider instance by name with default config
-func (r *Registry) GetProvider(name string) Provider {
+// GetProvider creates a provider instance by name with default config.
+//
+// Returns:
+//   - "provider %s not registered" when no factory has been registered for that name
+//   - "provider %s factory failed: %w" when the factory itself returned an error
+//
+// Callers can distinguish the two cases via the returned error message; previously
+// both cases returned nil and callers had no way to surface the factory failure.
+func (r *Registry) GetProvider(name string) (Provider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	factory, exists := r.providers[name]
 	if !exists {
-		return nil
+		return nil, fmt.Errorf("provider %s not registered", name)
 	}
 
-	// Create provider with default config
 	provider, err := factory(&ProviderConfig{Name: name})
 	if err != nil {
-		log.Printf("provider %q factory error: %v", name, err)
-		return nil
+		return nil, fmt.Errorf("provider %s factory failed: %w", name, err)
 	}
-
-	return provider
+	return provider, nil
 }
 
 // GetProviderWithConfig creates a provider instance with custom config

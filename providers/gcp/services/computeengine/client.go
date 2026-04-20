@@ -208,8 +208,11 @@ func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params com
 			break
 		}
 		if err != nil {
-			// If recommender API fails, continue with empty recommendations
-			break
+			// Iterator errors (quota, auth, transient 5xx) must propagate so
+			// callers don't silently act on a partial recommendation list —
+			// a missed recommendation can lead to under-committing or
+			// double-purchasing. Callers should retry.
+			return nil, fmt.Errorf("computeengine: iterate recommendations: %w", err)
 		}
 
 		converted := c.convertGCPRecommendation(ctx, rec)

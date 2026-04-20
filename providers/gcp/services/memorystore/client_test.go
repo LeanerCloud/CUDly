@@ -601,10 +601,10 @@ func TestMemorystoreClient_GetRecommendations_WithMockClient(t *testing.T) {
 			wantErr:         false,
 		},
 		{
-			name:    "handles iterator error gracefully",
+			name:    "propagates iterator errors (no silent swallow)",
 			err:     errors.New("iterator error"),
 			wantLen: 0,
-			wantErr: false, // Errors are swallowed during iteration
+			wantErr: true, // Partial-list risk — errors must surface.
 		},
 	}
 

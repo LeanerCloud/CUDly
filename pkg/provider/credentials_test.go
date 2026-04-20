@@ -221,7 +221,9 @@ func TestDetectProvider_NotFound(t *testing.T) {
 
 	_, err := DetectProvider(ctx, "nonexistent-provider")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	// Registry now distinguishes "not registered" from factory errors;
+	// DetectProvider surfaces the registry's wrapped error directly.
+	assert.Contains(t, err.Error(), "not registered")
 }
 
 func TestDetectProvider_NotConfigured(t *testing.T) {

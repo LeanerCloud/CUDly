@@ -166,7 +166,10 @@ func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params commo
 			break
 		}
 		if err != nil {
-			break
+			// Iterator errors must propagate so callers don't silently act
+			// on a partial recommendation list — see the computeengine
+			// client for the full rationale.
+			return nil, fmt.Errorf("memorystore: iterate recommendations: %w", err)
 		}
 
 		converted := c.convertGCPRecommendation(ctx, rec)

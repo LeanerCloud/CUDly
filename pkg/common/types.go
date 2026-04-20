@@ -51,11 +51,14 @@ const (
 	ServiceOther ServiceType = "other" // Catch-all for unclassified services
 
 	// Legacy AWS service types (for backward compatibility)
-	ServiceEC2           ServiceType = "ec2"
-	ServiceRDS           ServiceType = "rds"
-	ServiceElastiCache   ServiceType = "elasticache"
-	ServiceOpenSearch    ServiceType = "opensearch"
-	ServiceElasticsearch ServiceType = "opensearch" // Alias for ServiceOpenSearch (AWS rebranded)
+	ServiceEC2         ServiceType = "ec2"
+	ServiceRDS         ServiceType = "rds"
+	ServiceElastiCache ServiceType = "elasticache"
+	ServiceOpenSearch  ServiceType = "opensearch"
+	// ServiceElasticsearch is a typed alias of ServiceOpenSearch — a future
+	// const declared with the same string value but different intent will
+	// now produce a compile error rather than silently equal.
+	ServiceElasticsearch             = ServiceOpenSearch
 	ServiceRedshift      ServiceType = "redshift"
 	ServiceMemoryDB      ServiceType = "memorydb"
 )

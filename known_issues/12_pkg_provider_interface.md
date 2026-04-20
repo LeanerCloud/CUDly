@@ -1,0 +1,143 @@
+# Known Issues: Provider Interface
+
+> **Audit status (2026-04-20):** `1 still valid · 5 resolved · 1 partially fixed · 0 moved · 0 needs triage`
+
+## ~~HIGH: Azure `GetSupportedServices` advertises `ServiceNoSQL` but `GetServiceClient` has no handler~~
+
+**File**: `providers/azure/provider.go:314-322` and `providers/azure/provider.go:324-352`
+**Description**: `GetSupportedServices()` returned `common.ServiceNoSQL`, but the `GetServiceClient` switch had no `case common.ServiceNoSQL:` branch.
+**Impact**: Callers iterating `GetSupportedServices()` and calling `GetServiceClient` for each service got a runtime error for `ServiceNoSQL`.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `2fd9d0324` — `GetServiceClient` (provider.go:340-351) now has `case common.ServiceNoSQL: return NewCosmosDBClient(p.cred, subscriptionID, region), nil`.
+
+## ~~HIGH: GCP has `cloudstorage` and `memorystore` clients but they are unreachable via the interface~~
+
+**File**: `providers/gcp/provider.go:378-402`
+**Description**: `GetSupportedServices()` returned only `[ServiceCompute, ServiceRelationalDB]`. Fully-implemented clients at `services/cloudstorage/` and `services/memorystore/` were unreachable.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `2fd9d0324` — `GetSupportedServices` (provider.go:379-386) now includes `ServiceCache` and `ServiceStorage`, and `GetServiceClient` (provider.go:389-402) wires `memorystore.NewClient` and `cloudstorage.NewClient` into the switch.
+
+## HIGH: `ProviderConfig.Profile` overloaded with undocumented provider-specific semantics
+
+**File**: `pkg/provider/interface.go:74-90`
+**Description**: `Profile` carries three different meanings: AWS profile name, Azure subscription ID, GCP project ID. Godoc comments (lines 77-80) now document the per-provider semantics, but there are no per-provider fields; callers must still know which provider is in use and interpret `Profile` accordingly.
+**Impact**: Easy to silently get the wrong subscription/project when a caller assumes `Profile` is always an AWS profile.
+**Status:** ⚠️ Partially fixed — per-provider docs added; typed fields still missing.
+
+### Implementation plan
+
+**Goal:** `ProviderConfig` has typed per-provider identity fields (`AWSProfile`, `AzureSubscriptionID`, `GCPProjectID`) so callers cannot confuse them, while preserving backwards compatibility with existing `Profile` users.
+
+**Files to modify:**
+
+- `pkg/provider/interface.go:74-90` — add typed fields; keep `Profile` as deprecated alias.
+- `providers/aws/provider.go`, `providers/azure/provider.go`, `providers/gcp/provider.go` — read the typed field first, fall back to `Profile`.
+- Callers that construct `ProviderConfig` — migrate to the typed field over time.
+
+**Steps:**
+
+1. Add `AWSProfile string`, `AzureSubscriptionID string`, `GCPProjectID string` to `ProviderConfig` alongside `Profile`.
+2. In each provider's `NewProvider`, read the typed field; if empty, fall back to `Profile` so existing callers keep working.
+3. Update godoc to mark `Profile` as deprecated.
+4. File a follow-up ticket to migrate all callers and remove `Profile` in a major version bump.
+
+**Edge cases the fix must handle:**
+
+- Callers that set both `Profile` and the typed field — typed field wins.
+- Provider registry factories that operate generically — no change needed; only the provider-specific `NewProvider` functions consult the new fields.
+
+**Test plan:**
+
+- Per provider: add unit test asserting the typed field takes precedence over `Profile`.
+
+**Verification:**
+
+- `go test ./pkg/... ./providers/...`
+
+**Related issues:** `11_gcp_provider.md#MEDIUM: NewProvider with config.Profile Ignores Custom Client Options` — the same refactor should also add `GCPTokenSource` and analogous Azure token credential.
+
+**Effort:** `medium`
+
+## ~~MEDIUM: `Registry.GetProvider` silently discards factory errors~~ — RESOLVED
+
+**File**: `pkg/provider/registry.go:52-70`
+**Description**: `GetProvider` previously returned `Provider` (single value) and `nil` on miss — callers couldn't distinguish "not registered" from "factory failed". Logging had been added earlier but the signature still hid the distinction.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `GetProvider` now returns `(Provider, error)`. "not registered" produces `"provider %s not registered"`; factory failures produce `"provider %s factory failed: %w"` wrapping the underlying error. The single non-test caller (`DetectProvider` in `pkg/provider/credentials.go`) was updated to surface the wrapped error directly. Two existing registry tests (`TestRegistry_GetProvider`, `TestRegistry_GetProvider_FactoryError`) now assert the error messages in addition to the nil result. The `TestDetectProvider_NotFound` assertion was updated from "not found" to "not registered".
+
+### Original implementation plan
+
+**Goal:** `GetProvider` returns an error so callers can distinguish and surface the root cause.
+
+**Files to modify:**
+
+- `pkg/provider/registry.go:52-70` — change signature to `GetProvider(name string) (Provider, error)`.
+- Every caller of `GetProvider` across the repo — handle the error.
+
+**Steps:**
+
+1. Change the signature: return `nil, fmt.Errorf("provider %s not registered", name)` on miss, `nil, fmt.Errorf("provider %s factory failed: %w", name, err)` on factory error.
+2. Grep for `registry.GetProvider(` and update each caller.
+3. Keep the `log.Printf` or remove it once callers handle the error themselves (prefer the latter — avoid double logging).
+
+**Edge cases the fix must handle:**
+
+- `GetAllProviders` iterating the registry — propagate factory errors up rather than skip silently; surface them in `DetectAvailableProviders`' structured output.
+
+**Test plan:**
+
+- `TestGetProvider_ReturnsFactoryError` — register a factory that returns an error; assert `GetProvider` surfaces the wrapped error.
+- `TestGetProvider_ReturnsNotRegisteredError` — assert error message for unknown provider.
+
+**Verification:**
+
+- `go test ./pkg/...`
+
+**Effort:** `medium` (wide caller update)
+
+## ~~MEDIUM: GCP `GetAccounts` omits `Provider` field on returned Account structs~~
+
+**File**: `providers/gcp/provider.go:278-302`
+**Description**: `Provider: common.ProviderGCP` was never set on accounts; downstream code routing on `account.Provider` fell through to ambient credentials.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `2fd9d0324` — `GetAccounts` (provider.go:280-299) now sets `Provider: common.ProviderGCP` on every `common.Account` (both the normal loop and the fallback default account).
+
+## ~~LOW: Duplicate `ServiceType` constant values not enforced~~ — RESOLVED
+
+**File**: `pkg/common/types.go:57-58`
+**Description**: `ServiceOpenSearch` and `ServiceElasticsearch` were independent `const ServiceType = "opensearch"` declarations. Intentional aliasing, but a future const declared with the same value but different intent would get no compile error.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `ServiceElasticsearch = ServiceOpenSearch` — typed alias instead of duplicate string literal. The Go const block correctly preserves the `ServiceType` type. A future declaration of a third const with `"opensearch"` as the value would now require explicit intent rather than silent aliasing.
+
+### Original implementation plan
+
+**Goal:** `ServiceElasticsearch` is defined as a named alias of `ServiceOpenSearch`, so future duplicates with a different intent trigger a compile error.
+
+**Files to modify:**
+
+- `pkg/common/types.go:57-58` — change `ServiceElasticsearch ServiceType = "opensearch"` to `ServiceElasticsearch = ServiceOpenSearch`.
+
+**Steps:**
+
+1. Replace the raw string literal with a typed reference to `ServiceOpenSearch`.
+2. Run `go vet` and the full test suite to ensure no downstream code depends on `ServiceElasticsearch` being a distinct `const` declaration rather than an alias.
+
+**Edge cases the fix must handle:**
+
+- Go's `const` block allows `ServiceElasticsearch = ServiceOpenSearch` without re-typing; confirm the resulting type remains `ServiceType`.
+
+**Test plan:**
+
+- Existing tests pass.
+- Optional: `TestServiceElasticsearchIsAliasOfOpenSearch` — `require.Equal(common.ServiceOpenSearch, common.ServiceElasticsearch)`.
+
+**Verification:**
+
+- `go test ./pkg/...`
+
+**Effort:** `small`

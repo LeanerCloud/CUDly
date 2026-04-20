@@ -83,14 +83,18 @@ func TestRegistry_GetProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get existing provider
-	provider := r.GetProvider("test")
+	provider, err := r.GetProvider("test")
+	require.NoError(t, err)
 	require.NotNil(t, provider)
 	assert.Equal(t, "test", provider.Name())
 	assert.Equal(t, "Test Provider", provider.DisplayName())
 
-	// Get non-existing provider
-	provider = r.GetProvider("nonexistent")
+	// Get non-existing provider — must return a "not registered" error so
+	// callers can distinguish from a factory failure.
+	provider, err = r.GetProvider("nonexistent")
 	assert.Nil(t, provider)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not registered")
 }
 
 func TestRegistry_GetProvider_FactoryError(t *testing.T) {
@@ -103,9 +107,12 @@ func TestRegistry_GetProvider_FactoryError(t *testing.T) {
 	err := r.Register("failing", factory)
 	require.NoError(t, err)
 
-	// GetProvider should return nil when factory fails
-	provider := r.GetProvider("failing")
+	// Factory error must surface to the caller, distinct from "not registered".
+	provider, err := r.GetProvider("failing")
 	assert.Nil(t, provider)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "factory failed")
+	assert.Contains(t, err.Error(), "factory error")
 }
 
 func TestRegistry_GetProviderWithConfig(t *testing.T) {

@@ -163,9 +163,15 @@ variable "database_query_insights" {
 }
 
 variable "database_deletion_protection" {
-  description = "Enable deletion protection"
+  description = <<-EOT
+    Enable Cloud SQL deletion protection. Default is true so production
+    cannot be wiped by an accidental destroy. Disabling requires two
+    applies (one to flip the flag, one to destroy) by design of the
+    Cloud SQL provider — dev tfvars override to false to keep ephemeral
+    teardown ergonomic.
+  EOT
   type        = bool
-  default     = false # False in dev for easy teardown
+  default     = true
 }
 
 variable "database_enable_iam_auth" {
@@ -369,9 +375,27 @@ variable "subdomain_zone_name" {
 }
 
 variable "frontend_domain_names" {
-  description = "Custom domain names for the frontend Load Balancer (e.g., [\"app.cudly.example.com\"])"
+  description = <<-EOT
+    Custom domain names for the frontend Load Balancer (e.g., ["app.cudly.example.com"]).
+    The first entry is also used to build the CORS_ALLOWED_ORIGIN env var exposed to
+    the backend. Must not contain a bare "*" — wildcard CORS is never acceptable for
+    an authenticated API surface. When this list is empty, CORS falls back to
+    http://localhost:3000 (safe for local dev).
+  EOT
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = !contains(var.frontend_domain_names, "*")
+    error_message = "frontend_domain_names must not contain \"*\" — bare wildcard CORS is never safe. Supply explicit origins per environment."
+  }
+
+  validation {
+    condition = alltrue([
+      for d in var.frontend_domain_names : !strcontains(d, " ")
+    ])
+    error_message = "Entries in frontend_domain_names must not contain whitespace."
+  }
 }
 
 variable "enable_cloud_armor" {

@@ -54,9 +54,9 @@ func DetectAvailableProviders(ctx context.Context) ([]Provider, error) {
 
 // DetectProvider detects a specific provider by name
 func DetectProvider(ctx context.Context, name string) (Provider, error) {
-	provider := GetRegistry().GetProvider(name)
-	if provider == nil {
-		return nil, fmt.Errorf("provider %s not found", name)
+	provider, err := GetRegistry().GetProvider(name)
+	if err != nil {
+		return nil, err
 	}
 
 	if !provider.IsConfigured() {

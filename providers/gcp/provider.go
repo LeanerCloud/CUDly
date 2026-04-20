@@ -3,6 +3,7 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -165,13 +166,19 @@ func (p *GCPProvider) DisplayName() string {
 	return "Google Cloud Platform"
 }
 
-// IsConfigured checks if GCP credentials are configured
+// IsConfigured checks if GCP credentials are configured.
+//
+// When a client has been injected via SetProjectsClient (test path), the
+// injector owns its lifecycle and we must NOT Close() it here — otherwise
+// subsequent calls in the same test hit a closed connection. In production
+// the client is constructed internally and we retain Close responsibility.
 func (p *GCPProvider) IsConfigured() bool {
 	ctx := context.Background()
 
 	// Use injected client if available (for testing)
 	var projectsClient ProjectsClient
-	if p.projectsClient != nil {
+	injected := p.projectsClient != nil
+	if injected {
 		projectsClient = p.projectsClient
 	} else {
 		// Try to create a simple client to test credentials
@@ -181,7 +188,9 @@ func (p *GCPProvider) IsConfigured() bool {
 		}
 		projectsClient = &realProjectsClient{client: client}
 	}
-	defer projectsClient.Close()
+	if !injected {
+		defer projectsClient.Close()
+	}
 
 	// Try to get the project to verify credentials work
 	_, err := projectsClient.GetProject(ctx, &resourcemanagerpb.GetProjectRequest{
@@ -191,11 +200,13 @@ func (p *GCPProvider) IsConfigured() bool {
 	return err == nil
 }
 
-// ValidateCredentials validates that GCP credentials are valid
+// ValidateCredentials validates that GCP credentials are valid.
+// Same injected-client ownership rule as IsConfigured — see that godoc.
 func (p *GCPProvider) ValidateCredentials(ctx context.Context) error {
 	// Use injected client if available (for testing)
 	var projectsClient ProjectsClient
-	if p.projectsClient != nil {
+	injected := p.projectsClient != nil
+	if injected {
 		projectsClient = p.projectsClient
 	} else {
 		client, err := resourcemanager.NewProjectsClient(ctx, p.clientOpts...)
@@ -204,7 +215,9 @@ func (p *GCPProvider) ValidateCredentials(ctx context.Context) error {
 		}
 		projectsClient = &realProjectsClient{client: client}
 	}
-	defer projectsClient.Close()
+	if !injected {
+		defer projectsClient.Close()
+	}
 
 	// Verify we can access the project
 	project, err := projectsClient.GetProject(ctx, &resourcemanagerpb.GetProjectRequest{
@@ -410,7 +423,16 @@ func (p *GCPProvider) GetRecommendationsClient(ctx context.Context) (provider.Re
 	}, nil
 }
 
-// getDefaultProject attempts to get the default GCP project from environment or ADC
+// errStopProjectPagination is a sentinel used by Pages() to short-circuit
+// iteration as soon as getDefaultProject finds its first ACTIVE project,
+// avoiding unnecessary page fetches in large organisations.
+var errStopProjectPagination = errors.New("stop pagination: found active project")
+
+// getDefaultProject attempts to get the default GCP project from environment
+// or ADC. In organisations with more than one page of projects (~500 per
+// page), this walks pages via Pages() until the first ACTIVE project is
+// found — a single req.Do() would only see page 1 and falsely report
+// "no active GCP projects found" if the active one sat on a later page.
 func getDefaultProject(ctx context.Context) (string, error) {
 	// Try to use the Cloud Resource Manager API to get the default project
 	service, err := cloudresourcemanager.NewService(ctx)
@@ -418,20 +440,23 @@ func getDefaultProject(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to create resource manager service: %w", err)
 	}
 
-	// List projects and use the first active one as default
-	req := service.Projects.List()
-	resp, err := req.Do()
-	if err != nil {
+	var foundID string
+	err = service.Projects.List().Pages(ctx, func(resp *cloudresourcemanager.ListProjectsResponse) error {
+		for _, project := range resp.Projects {
+			if project.LifecycleState == "ACTIVE" {
+				foundID = project.ProjectId
+				return errStopProjectPagination
+			}
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStopProjectPagination) {
 		return "", fmt.Errorf("failed to list projects: %w", err)
 	}
-
-	for _, project := range resp.Projects {
-		if project.LifecycleState == "ACTIVE" {
-			return project.ProjectId, nil
-		}
+	if foundID == "" {
+		return "", fmt.Errorf("no active GCP projects found")
 	}
-
-	return "", fmt.Errorf("no active GCP projects found")
+	return foundID, nil
 }
 
 func init() {
