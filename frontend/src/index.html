@@ -23,12 +23,12 @@
             </div>
         </header>
         <div class="tabs" role="tablist" aria-label="Main navigation">
-            <button class="tab-btn active" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="dashboard-tab">Dashboard</button>
-            <button class="tab-btn" data-tab="recommendations" role="tab" aria-selected="false" aria-controls="recommendations-tab">Recommendations</button>
-            <button class="tab-btn" data-tab="plans" role="tab" aria-selected="false" aria-controls="plans-tab">Purchase Plans</button>
-            <button class="tab-btn" data-tab="history" role="tab" aria-selected="false" aria-controls="history-tab">Purchase History</button>
-            <button class="tab-btn" data-tab="ri-exchange" role="tab" aria-selected="false" aria-controls="ri-exchange-tab">RI Exchange</button>
-            <button class="tab-btn" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings-tab">Settings</button>
+            <button class="tab-btn active" id="dashboard-tab-btn" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="dashboard-tab">Dashboard</button>
+            <button class="tab-btn" id="recommendations-tab-btn" data-tab="recommendations" role="tab" aria-selected="false" aria-controls="recommendations-tab">Recommendations</button>
+            <button class="tab-btn" id="plans-tab-btn" data-tab="plans" role="tab" aria-selected="false" aria-controls="plans-tab">Purchase Plans</button>
+            <button class="tab-btn" id="history-tab-btn" data-tab="history" role="tab" aria-selected="false" aria-controls="history-tab">Purchase History</button>
+            <button class="tab-btn" id="ri-exchange-tab-btn" data-tab="ri-exchange" role="tab" aria-selected="false" aria-controls="ri-exchange-tab">RI Exchange</button>
+            <button class="tab-btn" id="settings-tab-btn" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings-tab">Settings</button>
         </div>
         <main>
             <!-- Dashboard Tab -->
@@ -66,7 +66,7 @@
             </div>
 
             <!-- Recommendations Tab -->
-            <div id="recommendations-tab" class="tab-content" role="tabpanel">
+            <div id="recommendations-tab" class="tab-content" role="tabpanel" aria-labelledby="recommendations-tab-btn">
                 <section id="recommendations-controls">
                     <div class="controls-bar">
                         <div class="filter-group">
@@ -132,7 +132,7 @@
             </div>
 
             <!-- Purchase Plans Tab -->
-            <div id="plans-tab" class="tab-content" role="tabpanel">
+            <div id="plans-tab" class="tab-content" role="tabpanel" aria-labelledby="plans-tab-btn">
                 <section id="plans-header" class="card">
                     <h2>Purchase Plans</h2>
                     <div class="controls-bar">
@@ -166,7 +166,7 @@
             </div>
 
             <!-- History Tab -->
-            <div id="history-tab" class="tab-content" role="tabpanel">
+            <div id="history-tab" class="tab-content" role="tabpanel" aria-labelledby="history-tab-btn">
                 <!-- Savings History Chart Section -->
                 <section id="savings-history-section" class="card">
                     <div class="section-header">
@@ -241,7 +241,7 @@
             </div>
 
             <!-- RI Exchange Tab -->
-            <div id="ri-exchange-tab" class="tab-content" role="tabpanel">
+            <div id="ri-exchange-tab" class="tab-content" role="tabpanel" aria-labelledby="ri-exchange-tab-btn">
                 <section class="card">
                     <div class="section-header">
                         <h2>Convertible RI Exchange</h2>
@@ -269,7 +269,7 @@
             </div>
 
             <!-- Settings Tab -->
-            <div id="settings-tab" class="tab-content" role="tabpanel">
+            <div id="settings-tab" class="tab-content" role="tabpanel" aria-labelledby="settings-tab-btn">
                 <div class="settings-tabs" role="tablist" aria-label="Settings navigation">
                     <button class="sub-tab-btn active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
                     <button class="sub-tab-btn" data-settings-tab="purchasing" role="tab" aria-selected="false">Purchasing</button>
@@ -285,10 +285,14 @@
                             <legend>General Settings</legend>
                             <div class="setting-row">
                                 <div class="setting-info">
-                                    <label for="setting-enabled-providers">Enabled Providers</label>
+                                    <!-- The orphan `<label for="setting-enabled-providers">` was removed:
+                                         there is no element with that id, and the actual controls are the
+                                         three checkboxes below. Use a span with an id that the grouping
+                                         div references via aria-labelledby instead. -->
+                                    <span id="enabled-providers-label" class="label-like">Enabled Providers</span>
                                     <span class="info-icon">&#9432;<span class="tooltip-text">Select which cloud providers to monitor for commitment recommendations.</span></span>
                                 </div>
-                                <div class="setting-input">
+                                <div class="setting-input" role="group" aria-labelledby="enabled-providers-label">
                                     <label><input type="checkbox" id="provider-aws" value="aws" checked> AWS</label>
                                     <label><input type="checkbox" id="provider-azure" value="azure"> Azure</label>
                                     <label><input type="checkbox" id="provider-gcp" value="gcp"> GCP</label>
@@ -595,7 +599,7 @@
         <!-- Login Modal is created dynamically by auth.ts -->
 
         <!-- Create/Edit Plan Modal -->
-        <div id="plan-modal" class="modal hidden">
+        <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="plan-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="plan-modal-title">Create Purchase Plan</h2>
                 <form id="plan-form">
@@ -751,16 +755,16 @@
         </div>
 
         <!-- RI Exchange Modal -->
-        <div id="ri-exchange-modal" class="modal hidden">
+        <div id="ri-exchange-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="RI Exchange">
             <div class="modal-content modal-wide">
                 <!-- Content is built dynamically by openExchangeModal() in riexchange.ts -->
             </div>
         </div>
 
         <!-- Purchase Detail Modal -->
-        <div id="purchase-modal" class="modal hidden">
+        <div id="purchase-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="purchase-modal-title">
             <div class="modal-content modal-wide">
-                <h2>Configure Purchase</h2>
+                <h2 id="purchase-modal-title">Configure Purchase</h2>
                 <div id="purchase-details"></div>
                 <div class="modal-buttons">
                     <button type="button" id="close-purchase-modal-btn">Cancel</button>
@@ -770,9 +774,9 @@
         </div>
 
         <!-- Recommendation Selection Modal -->
-        <div id="select-recommendations-modal" class="modal hidden">
+        <div id="select-recommendations-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="select-recommendations-modal-title">
             <div class="modal-content modal-wide">
-                <h2>Select Recommendations for Plan</h2>
+                <h2 id="select-recommendations-modal-title">Select Recommendations for Plan</h2>
                 <div id="selectable-recommendations"></div>
                 <div class="modal-buttons">
                     <button type="button" id="close-select-recommendations-btn">Cancel</button>
@@ -783,9 +787,9 @@
 
 
         <!-- Create API Key Modal -->
-        <div id="create-apikey-modal" class="modal hidden">
+        <div id="create-apikey-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="create-apikey-modal-title">
             <div class="modal-content">
-                <h2>Create API Key</h2>
+                <h2 id="create-apikey-modal-title">Create API Key</h2>
                 <form id="create-apikey-form">
                     <div class="form-group">
                         <label for="apikey-name">API Key Name</label>
@@ -813,7 +817,7 @@
         </div>
 
         <!-- User Management Modals -->
-        <div id="user-modal" class="modal hidden">
+        <div id="user-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
             <div class="modal-content">
                 <h2 id="user-modal-title">Create User</h2>
                 <form id="user-form">
@@ -849,7 +853,7 @@
         </div>
 
         <!-- Group Management Modal -->
-        <div id="group-modal" class="modal hidden">
+        <div id="group-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="group-modal-title">Create Group</h2>
                 <form id="group-form">
@@ -876,10 +880,10 @@
         </div>
 
         <!-- Duplicate Group Modal -->
-        <div id="group-duplicate-modal" class="modal hidden">
+        <div id="group-duplicate-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-duplicate-modal-title">
             <div class="modal-content modal-wide">
                 <div class="modal-header-row">
-                    <h2>Duplicate Group</h2>
+                    <h2 id="group-duplicate-modal-title">Duplicate Group</h2>
                     <button type="button" class="modal-close" id="close-group-duplicate-modal-btn" aria-label="Close">&times;</button>
                 </div>
                 <form id="group-duplicate-form">
@@ -910,7 +914,7 @@
         </div>
 
         <!-- Cloud Account Modal -->
-        <div id="account-modal" class="modal hidden">
+        <div id="account-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="account-modal-title">Add Account</h2>
                 <form id="account-form">

@@ -87,7 +87,8 @@
     gap: 0.5rem;
 }
 
-.setting-info label {
+.setting-info label,
+.setting-info .label-like {
     font-weight: 500;
     color: #333;
     margin: 0;
