@@ -372,6 +372,32 @@ variable "enable_cdn" {
   default     = false
 }
 
+variable "enable_secret_rotation" {
+  description = <<-EOT
+    When true, the secrets module provisions automatic rotation for the
+    database password via an AWS-managed Lambda. Requires a reachable
+    Aurora/RDS cluster ID (set rds_cluster_id_for_rotation). Default is
+    false to keep dev/staging ergonomic — production tfvars should set
+    this true.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "rds_cluster_id_for_rotation" {
+  description = <<-EOT
+    RDS/Aurora cluster ID that the rotation Lambda should target when
+    enable_secret_rotation = true. Leave null when rotation is disabled.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.rds_cluster_id_for_rotation != "" # null is allowed; empty string is a footgun
+    error_message = "rds_cluster_id_for_rotation must be null or a non-empty string."
+  }
+}
+
 variable "frontend_domain_names" {
   description = <<-EOT
     Custom domain names for the frontend CloudFront distribution. The first

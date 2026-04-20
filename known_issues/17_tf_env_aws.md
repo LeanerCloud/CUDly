@@ -1,6 +1,6 @@
 # Known Issues: Terraform AWS Environment
 
-> **Audit status (2026-04-20):** `2 still valid · 5 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## CRITICAL: Fargate compute platform has no multi-account support
 
@@ -50,14 +50,16 @@
 
 **Effort:** `medium`
 
-## CRITICAL: Secret rotation hardcoded off with no override path
+## ~~CRITICAL: Secret rotation hardcoded off with no override path~~ — RESOLVED
 
 **File**: `terraform/environments/aws/secrets.tf:28`
-**Description**: `enable_secret_rotation = false` is hardcoded. No variable exists to change it.
-**Impact**: Production deployments permanently run without secret rotation.
-**Status:** ✅ Still valid
+**Description**: `enable_secret_rotation = false` was hard-coded in the module call with no variable to flip it, so production deployments could never turn rotation on without forking the env.
+**Impact**: Production ran permanently without rotation.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Added two env-layer variables: `enable_secret_rotation` (default `false` for backward compatibility) and `rds_cluster_id_for_rotation` (default `null`). Both flow through to the existing module inputs. The module already supports these cleanly via `count = var.enable_secret_rotation ? 1 : 0` on every rotation resource, so no module-level changes were needed. Production tfvars flip both to enable rotation against the prod RDS cluster; dev/staging stay at the default and are unaffected.
+
+### Original implementation plan
 
 **Goal:** Allow per-environment control of Secrets Manager rotation so production can enable it without forking the module.
 

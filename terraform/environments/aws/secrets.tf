@@ -24,8 +24,12 @@ module "secrets" {
   create_credential_encryption_key = true
   credential_encryption_key        = var.credential_encryption_key
 
-  # Secret rotation disabled in dev (enable in prod)
-  enable_secret_rotation = false
+  # Secret rotation defaults to false to keep dev ergonomic, but can now be
+  # flipped per environment via var.enable_secret_rotation. Production tfvars
+  # should set this true and supply rds_cluster_id for the database-password
+  # rotation Lambda to target. See variables.tf for the rotation prerequisites.
+  enable_secret_rotation = var.enable_secret_rotation
+  rds_cluster_id         = var.rds_cluster_id_for_rotation
 
   tags = local.common_tags
 }
