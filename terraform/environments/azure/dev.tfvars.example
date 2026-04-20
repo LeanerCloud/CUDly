@@ -71,6 +71,10 @@ purge_protection_enabled   = false
 # Dev environments are ephemeral; allow destroy through the resource group.
 prevent_resource_group_deletion = false
 
+# Dev allows unrestricted vault access; production should keep the default
+# "Deny" and enumerate CI / operator IPs in allowed_ip_addresses.
+key_vault_default_network_acl_action = "Allow"
+
 # ==============================================
 # Scheduled Tasks (Logic Apps)
 # ==============================================

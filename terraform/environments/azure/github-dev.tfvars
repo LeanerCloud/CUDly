@@ -56,6 +56,11 @@ purge_protection_enabled   = false
 # Allow ephemeral CI dev environment to be torn down via terraform destroy.
 prevent_resource_group_deletion = false
 
+# CI dev runs from GitHub Actions runners with non-fixed egress IPs; "Allow"
+# keeps the vault reachable for job-level tests. Override per-account in
+# production tfvars with a tight ip_allowlist instead.
+key_vault_default_network_acl_action = "Allow"
+
 # ==============================================
 # Scheduled Tasks
 # ==============================================

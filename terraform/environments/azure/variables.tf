@@ -146,9 +146,25 @@ variable "prevent_resource_group_deletion" {
 
 
 variable "allowed_ip_addresses" {
-  description = "List of allowed IP addresses for Key Vault"
+  description = "List of allowed IP addresses / CIDRs for Key Vault network ACL. Include CI runner egress IPs and operator office IPs here when default_network_acl_action = \"Deny\"."
   type        = list(string)
   default     = []
+}
+
+variable "key_vault_default_network_acl_action" {
+  description = <<-EOT
+    Key Vault default network ACL action. Default is "Deny" so the vault
+    data plane is reachable only from `allowed_ip_addresses` and the
+    declared virtual network subnets. Override to "Allow" only for local
+    dev environments that need unrestricted access.
+  EOT
+  type        = string
+  default     = "Deny"
+
+  validation {
+    condition     = contains(["Deny", "Allow"], var.key_vault_default_network_acl_action)
+    error_message = "key_vault_default_network_acl_action must be \"Deny\" or \"Allow\"."
+  }
 }
 
 variable "database_password" {

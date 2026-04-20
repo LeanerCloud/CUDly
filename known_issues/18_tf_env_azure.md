@@ -1,6 +1,6 @@
 # Known Issues: Terraform Azure Environment
 
-> **Audit status (2026-04-20):** `2 still valid · 5 resolved · 0 partially fixed · 0 moved · 1 needs triage`
+> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 0 partially fixed · 0 moved · 1 needs triage`
 
 ## ~~CRITICAL: `nonsensitive()` strips sensitivity from `additional_secrets` before merge~~ — RESOLVED
 
@@ -145,14 +145,15 @@
 
 **Resolved by:** The AKS `additional_env_vars` block at `terraform/environments/azure/compute.tf:111-125` now mirrors the Container Apps branch — credential encryption key name, SMTP secrets, and scheduled task secret are all injected.
 
-## HIGH: Key Vault network ACL hardcoded to `"Allow"`
+## ~~HIGH: Key Vault network ACL hardcoded to `"Allow"`~~ — RESOLVED
 
 **File**: `terraform/environments/azure/secrets.tf:17`
-**Description**: `default_network_acl_action = "Allow"` overrides the module's secure default of `"Deny"`. The Key Vault holds the credential encryption key and database passwords.
-**Impact**: Any host on the internet can attempt to reach the Key Vault data plane.
-**Status:** ✅ Still valid
+**Description**: The env-layer hard-coded `default_network_acl_action = "Allow"`, so the Key Vault data plane (holding credential encryption keys and database passwords) was reachable from any internet host.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Replaced the hard-coded `"Allow"` with `var.key_vault_default_network_acl_action`, new variable defaulting to `"Deny"` with enum validation. `allowed_ip_addresses` description now calls out that it should hold CI/operator IPs when the default `"Deny"` is in effect. CI/dev tfvars (`dev.tfvars.example`, `github-dev.tfvars`, `github-staging.tfvars`) explicitly override to `"Allow"` because their runners have non-fixed egress IPs; production tfvars should keep the default and supply an ip_allowlist.
+
+### Original implementation plan
 
 **Goal:** Restore the module's `Deny`-by-default ACL so the Key Vault is not reachable from arbitrary internet hosts.
 

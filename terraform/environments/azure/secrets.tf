@@ -29,7 +29,11 @@ module "secrets" {
   sku_name                   = var.key_vault_sku
   soft_delete_retention_days = var.soft_delete_retention_days
   purge_protection_enabled   = var.purge_protection_enabled
-  default_network_acl_action = "Allow" # Allow access from all networks for dev
+  # Default-deny network ACL: only ip_addresses in var.allowed_ip_addresses and
+  # the Container App subnet reach the Key Vault data plane. Dev environments
+  # that need cross-network access from an operator laptop should add the IP
+  # explicitly; they should not widen this to "Allow".
+  default_network_acl_action = var.key_vault_default_network_acl_action
   allowed_ip_addresses       = var.allowed_ip_addresses
   allowed_subnet_ids         = var.create_private_subnet ? [module.networking.private_subnet_id] : []
   database_password          = var.database_password

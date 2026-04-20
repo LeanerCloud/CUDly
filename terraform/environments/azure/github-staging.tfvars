@@ -53,6 +53,10 @@ key_vault_sku              = "standard"
 soft_delete_retention_days = 14
 purge_protection_enabled   = false
 
+# CI staging runs on GitHub Actions with non-fixed runner IPs. Production
+# tfvars should keep the default "Deny" and supply allowed_ip_addresses.
+key_vault_default_network_acl_action = "Allow"
+
 # ==============================================
 # Scheduled Tasks
 # ==============================================
