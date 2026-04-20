@@ -402,6 +402,13 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
 
   (document.getElementById('account-aws-access-key-id') as HTMLInputElement).value = '';
   (document.getElementById('account-aws-secret-access-key') as HTMLInputElement).value = '';
+  // aws_role_arn is the backend column used by all three auth modes that need
+  // a role: role_arn (direct), bastion (target role assumed via bastion creds),
+  // and workload_identity_federation (role assumed via OIDC). Only one of
+  // these fields is visible at a time (see updateAwsAuthModeFields), and the
+  // save path writes whichever one is visible back to req.aws_role_arn. We
+  // pre-fill all three with the same stored value so switching modes mid-edit
+  // doesn't blank the input that just became visible.
   (document.getElementById('account-aws-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
   (document.getElementById('account-aws-external-id') as HTMLInputElement).value = account?.aws_external_id ?? '';
   (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
