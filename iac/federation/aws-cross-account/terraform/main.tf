@@ -57,83 +57,96 @@ resource "aws_iam_policy" "cudly" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EC2Reservations"
-        Effect = "Allow"
-        Action = [
-          "ec2:PurchaseReservedInstancesOffering",
-          "ec2:DescribeReservedInstancesOfferings",
-          "ec2:DescribeReservedInstances",
-          "ec2:DescribeInstanceTypeOfferings",
-          "ec2:GetReservedInstancesExchangeQuote",
-          "ec2:AcceptReservedInstancesExchangeQuote",
-          "ec2:DescribeRegions",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "RDSReservations"
-        Effect = "Allow"
-        Action = [
-          "rds:PurchaseReservedDBInstancesOffering",
-          "rds:DescribeReservedDBInstancesOfferings",
-          "rds:DescribeReservedDBInstances",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "ElastiCacheReservations"
-        Effect = "Allow"
-        Action = [
-          "elasticache:PurchaseReservedCacheNodesOffering",
-          "elasticache:DescribeReservedCacheNodesOfferings",
-          "elasticache:DescribeReservedCacheNodes",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "RedshiftReservations"
-        Effect = "Allow"
-        Action = [
-          "redshift:PurchaseReservedNodeOffering",
-          "redshift:DescribeReservedNodeOfferings",
-          "redshift:DescribeReservedNodes",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "MemoryDBReservations"
-        Effect = "Allow"
-        Action = [
-          "memorydb:PurchaseReservedNodesOffering",
-          "memorydb:DescribeReservedNodesOfferings",
-          "memorydb:DescribeReservedNodes",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "SavingsPlans"
-        Effect = "Allow"
-        Action = [
-          "savingsplans:CreateSavingsPlan",
-          "savingsplans:DescribeSavingsPlans",
-          "savingsplans:DescribeSavingsPlansOfferings",
-          "savingsplans:DescribeSavingsPlansOfferingRates",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "OpenSearchReservations"
-        Effect = "Allow"
-        Action = [
-          "es:PurchaseReservedInstanceOffering",
-          "es:DescribeReservedInstanceOfferings",
-          "es:DescribeReservedInstances",
-        ]
-        Resource = "*"
-      },
-    ]
+    Statement = concat(
+      [
+        {
+          Sid    = "EC2Reservations"
+          Effect = "Allow"
+          Action = [
+            "ec2:PurchaseReservedInstancesOffering",
+            "ec2:DescribeReservedInstancesOfferings",
+            "ec2:DescribeReservedInstances",
+            "ec2:DescribeInstanceTypeOfferings",
+            "ec2:GetReservedInstancesExchangeQuote",
+            "ec2:AcceptReservedInstancesExchangeQuote",
+            "ec2:DescribeRegions",
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "RDSReservations"
+          Effect = "Allow"
+          Action = [
+            "rds:PurchaseReservedDBInstancesOffering",
+            "rds:DescribeReservedDBInstancesOfferings",
+            "rds:DescribeReservedDBInstances",
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "ElastiCacheReservations"
+          Effect = "Allow"
+          Action = [
+            "elasticache:PurchaseReservedCacheNodesOffering",
+            "elasticache:DescribeReservedCacheNodesOfferings",
+            "elasticache:DescribeReservedCacheNodes",
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "RedshiftReservations"
+          Effect = "Allow"
+          Action = [
+            "redshift:PurchaseReservedNodeOffering",
+            "redshift:DescribeReservedNodeOfferings",
+            "redshift:DescribeReservedNodes",
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "MemoryDBReservations"
+          Effect = "Allow"
+          Action = [
+            "memorydb:PurchaseReservedNodesOffering",
+            "memorydb:DescribeReservedNodesOfferings",
+            "memorydb:DescribeReservedNodes",
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "SavingsPlans"
+          Effect = "Allow"
+          Action = [
+            "savingsplans:CreateSavingsPlan",
+            "savingsplans:DescribeSavingsPlans",
+            "savingsplans:DescribeSavingsPlansOfferings",
+            "savingsplans:DescribeSavingsPlansOfferingRates",
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "OpenSearchReservations"
+          Effect = "Allow"
+          Action = [
+            "es:PurchaseReservedInstanceOffering",
+            "es:DescribeReservedInstanceOfferings",
+            "es:DescribeReservedInstances",
+          ]
+          Resource = "*"
+        },
+      ],
+      var.enable_org_discovery ? [
+        {
+          Sid    = "OrganizationsDiscovery"
+          Effect = "Allow"
+          Action = [
+            "organizations:ListAccounts",
+            "organizations:DescribeOrganization",
+          ]
+          Resource = "*"
+        }
+      ] : []
+    )
   })
 }
 

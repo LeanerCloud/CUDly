@@ -49,3 +49,14 @@ variable "contact_email" {
   type        = string
   default     = ""
 }
+
+variable "enable_org_discovery" {
+  description = <<-EOT
+    Grant organizations:ListAccounts and organizations:DescribeOrganization so
+    CUDly can enumerate all accounts in the AWS Organization through this role.
+    Set this only when this role is deployed in an Organizations management or
+    delegated-administrator account. Leave false in member-account deployments.
+  EOT
+  type        = bool
+  default     = false
+}

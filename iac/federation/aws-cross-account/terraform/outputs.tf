@@ -9,6 +9,11 @@ output "external_id" {
   sensitive   = true
 }
 
+output "policy_arn" {
+  description = "ARN of the standalone managed policy attached to the CUDly role."
+  value       = aws_iam_policy.cudly.arn
+}
+
 output "cudly_account_registration" {
   description = "Values to use when registering this account in CUDly"
   value       = <<-EOT
