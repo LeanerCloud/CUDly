@@ -3,6 +3,12 @@ variable "project_id" {
   type        = string
 }
 
+variable "use_custom_compute_commitment_role" {
+  description = "When true, create a custom project role cudlyCommitmentWriter granting only compute.commitments.{create,update,delete} and bind the Cloud Run SA to it. When false (the default), bind to the predefined roles/compute.admin instead. The custom role is the smaller-blast-radius option but requires the deployer SA to hold iam.roles.get/create/update/delete (roles/iam.roleAdmin or roles/owner). Leave false when your CI/CD deployer only has Cloud Run + IAM-member permissions."
+  type        = bool
+  default     = false
+}
+
 variable "service_name" {
   description = "Service name"
   type        = string

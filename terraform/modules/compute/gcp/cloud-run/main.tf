@@ -324,13 +324,25 @@ resource "google_project_iam_member" "compute_viewer" {
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Commitment Writer: custom role granting only compute.commitments.{create,
-# update,delete} so CUDly can purchase, update, and delete committed use
-# discounts. Replaces the previous roles/compute.admin grant, which conferred
-# broad VM/network/disk/firewall control — the blast radius of a Cloud Run
-# compromise was the entire project. Read-side permissions come from the
-# roles/compute.viewer grant above.
+# Commitment write access: two paths, selected by var.use_custom_compute_commitment_role.
+#
+#   false (default, backward-compat): bind to roles/compute.admin. Works with
+#   any deployer SA that has resourcemanager.projects.setIamPolicy. This is
+#   the historical behaviour — over-scoped but deployable out of the box.
+#
+#   true (opt-in, minimum blast radius): create a custom project role
+#   cudlyCommitmentWriter granting only compute.commitments.{create,update,
+#   delete} and bind the Cloud Run SA to that. Requires the deployer SA to
+#   hold iam.roles.{get,create,update,delete} — typically via
+#   roles/iam.roleAdmin or roles/owner. Flip when your deploy pipeline has
+#   those permissions.
+#
+# Read-side permissions (compute.commitments.list, compute.machineTypes.list)
+# come from the roles/compute.viewer grant above, so both paths expose the
+# same read capability.
 resource "google_project_iam_custom_role" "cudly_commitment_writer" {
+  count = var.use_custom_compute_commitment_role ? 1 : 0
+
   project     = var.project_id
   role_id     = "cudlyCommitmentWriter"
   title       = "CUDly Commitment Writer"
@@ -344,8 +356,21 @@ resource "google_project_iam_custom_role" "cudly_commitment_writer" {
 }
 
 resource "google_project_iam_member" "compute_commitment_writer" {
+  count = var.use_custom_compute_commitment_role ? 1 : 0
+
   project = var.project_id
-  role    = google_project_iam_custom_role.cudly_commitment_writer.id
+  role    = google_project_iam_custom_role.cudly_commitment_writer[0].id
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Fallback path: roles/compute.admin when the custom role is not opted in.
+# Matches the original pre-eaa84c259 behaviour so existing deployments keep
+# working without requiring new deployer permissions.
+resource "google_project_iam_member" "compute_commitment_admin" {
+  count = var.use_custom_compute_commitment_role ? 0 : 1
+
+  project = var.project_id
+  role    = "roles/compute.admin"
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
