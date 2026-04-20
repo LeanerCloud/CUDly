@@ -1,6 +1,6 @@
 # Known Issues: IaC AWS Target Federation
 
-> **Audit status (2026-04-20):** `2 still valid · 5 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: Terraform trust policy silently drops `:aud` condition when `oidc_subject_claim` is set~~ — RESOLVED
 
@@ -119,13 +119,15 @@
 
 **Effort:** `small`
 
-## MEDIUM: Terraform `thumbprint_list` defaults to zeros with no validation
+## ~~MEDIUM: Terraform `thumbprint_list` defaults to zeros with no validation~~ — RESOLVED
 
 **File**: `iac/federation/aws-target/terraform/variables.tf:38-46`
-**Description**: Default is all-zeros placeholder. No validation block enforces 40-char hex strings. Custom issuers with the default will silently fail.
-**Status:** ✅ Still valid
+**Description**: Default was an all-zeros placeholder with no validation; bogus or wrong-length thumbprints would silently produce a non-functional OIDC provider that fails at auth time.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Added two `validation` blocks to `thumbprint_list`: one rejects empty lists, the other requires every entry to match `^[0-9a-fA-F]{40}$`. The all-zeros default is preserved (AWS auto-validates well-known providers like Azure AD/Google and accepts the placeholder for them); the validation prevents the typo'd / wrong-length cases that otherwise surface only at runtime. Custom issuers that need a real thumbprint are documented in the variable description.
+
+### Original implementation plan
 
 **Goal:** Prevent the all-zeros default from silently producing a non-functional OIDC provider by validating each thumbprint at `terraform plan` time.
 

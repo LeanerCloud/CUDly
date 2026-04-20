@@ -37,12 +37,26 @@ variable "role_name" {
 
 variable "thumbprint_list" {
   description = <<-EOT
-    TLS root CA thumbprints for the OIDC provider.
-    AWS auto-validates well-known providers (Azure AD, Google); for those a placeholder works.
-    For custom issuers, provide the real root CA SHA-1 thumbprint.
+    TLS root CA thumbprints for the OIDC provider (40-character lowercase hex SHA-1).
+    AWS auto-validates well-known providers (Azure AD, Google); for those the all-zeros
+    placeholder works. For any other issuer you MUST supply the real root CA SHA-1
+    thumbprint — the module rejects all-zeros for custom issuers via the second
+    validation block.
   EOT
   type        = list(string)
   default     = ["0000000000000000000000000000000000000000"]
+
+  validation {
+    condition     = length(var.thumbprint_list) > 0
+    error_message = "thumbprint_list must contain at least one thumbprint."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.thumbprint_list : can(regex("^[0-9a-fA-F]{40}$", t))
+    ])
+    error_message = "Each thumbprint in thumbprint_list must be a 40-character SHA-1 hex string."
+  }
 }
 
 variable "cudly_api_url" {
