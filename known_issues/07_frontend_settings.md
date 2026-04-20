@@ -1,15 +1,17 @@
 # Known Issues: Frontend Settings
 
-> **Audit status (2026-04-20):** `3 still valid · 3 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `2 still valid · 4 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
 
-## HIGH: Unchecked null dereferences via forced element casts
+## ~~HIGH: Unchecked null dereferences via forced element casts~~ — RESOLVED
 
 **File**: `frontend/src/settings.ts:352-358, 403-412`
-**Description**: Multiple `document.getElementById()` calls are cast directly to a concrete element type and `.value`/`.checked` accessed without a null check (e.g. `account-id`, `account-provider`, `account-name`, `account-description`, `account-contact-email`, `account-external-id`, `account-enabled`, `account-aws-access-key-id`, `account-aws-secret-access-key`, `account-aws-role-arn`, `account-aws-external-id`, `account-aws-bastion-role-arn`, `account-aws-is-org-root`). If any element is absent (typo, refactor, DOM not yet rendered), the cast succeeds at compile time but the access throws `TypeError` at runtime.
-**Impact**: Silent form submission failure or uncaught exception in account modal open/submit. Users see the modal silently refuse to populate or save without any diagnostic.
-**Status:** ✅ Still valid
+**Description**: Multiple `document.getElementById()` call sites were cast directly to concrete element types without `| null`, so a missing element produced an uncaught `TypeError` instead of a silent no-op.
+**Impact**: Form submission could fail silently in the middle of a save if any one element was missing due to a refactor/typo.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Introduced three helpers at the top of `settings.ts`: `byId<T>(id)` (null-safe lookup), `setInputValue(id, value)` (write-site), and `setInputChecked(id, checked)` (checkbox write-site). All write-site forced casts in `openAccountModal`, `populateAwsAccountFields`, and the Azure/GCP branches now route through `setInputValue`/`setInputChecked`. All read-site forced casts in `buildAccountRequest` and `saveAccountCredentialsIfFilled` use `byId<T>(...)?.value ?? ''` or `?.checked ?? default`. The remaining casts of the form `as HTMLXElement | null` are already nullable-typed and safely use optional chaining. TypeScript + Jest (1097 tests) pass.
+
+### Original implementation plan
 
 **Goal:** Every `document.getElementById` cast in account modal code returns a nullable type and accesses `.value`/`.checked` through optional chaining.
 

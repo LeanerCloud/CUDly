@@ -56,6 +56,43 @@ let savedSnapshot: Record<string, string> = {};
 // non-UI fields (ramp_schedule, include_engines, etc.) that SaveServiceConfig replaces entirely.
 let loadedServiceConfigs: api.ServiceConfig[] = [];
 
+/**
+ * byId is the null-safe replacement for `document.getElementById(...) as T`.
+ * Returning `T | null` forces callers to guard with optional chaining (`?.value`,
+ * `?.checked`) rather than dereferencing blindly, so a missing element in the
+ * DOM produces a silent no-op instead of a TypeError.
+ *
+ * Pattern to migrate from:
+ *   (document.getElementById('foo') as HTMLInputElement).value = v;
+ * to:
+ *   const el = byId<HTMLInputElement>('foo'); if (el) el.value = v;
+ * or:
+ *   byId<HTMLInputElement>('foo')?.value ?? '';  // read site
+ */
+function byId<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
+}
+
+/**
+ * setInputValue writes a value to an <input>/<textarea> looked up by id, no-op
+ * if the element is missing. Consolidates the repetitive
+ * `byId<HTMLInputElement>('x'); if (el) el.value = v;` pattern used across
+ * modal-populate helpers.
+ */
+function setInputValue(id: string, value: string): void {
+  const el = byId<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(id);
+  if (el) el.value = value;
+}
+
+/**
+ * setInputChecked writes `checked` to a checkbox input, no-op if the element
+ * is missing. Same motivation as setInputValue.
+ */
+function setInputChecked(id: string, checked: boolean): void {
+  const el = byId<HTMLInputElement>(id);
+  if (el) el.checked = checked;
+}
+
 function getFieldValue(id: string): string {
   const el = document.getElementById(id);
   if (!el) return '';
@@ -349,13 +386,13 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
   const title = document.getElementById('account-modal-title');
   if (title) title.textContent = account ? 'Edit Account' : 'Add Account';
 
-  (document.getElementById('account-id') as HTMLInputElement).value = account?.id ?? '';
-  (document.getElementById('account-provider') as HTMLInputElement).value = provider;
-  (document.getElementById('account-name') as HTMLInputElement).value = account?.name ?? '';
-  (document.getElementById('account-description') as HTMLTextAreaElement).value = account?.description ?? '';
-  (document.getElementById('account-contact-email') as HTMLInputElement).value = account?.contact_email ?? '';
-  (document.getElementById('account-external-id') as HTMLInputElement).value = account?.external_id ?? '';
-  (document.getElementById('account-enabled') as HTMLInputElement).checked = account?.enabled ?? true;
+  setInputValue('account-id', account?.id ?? '');
+  setInputValue('account-provider', provider);
+  setInputValue('account-name', account?.name ?? '');
+  setInputValue('account-description', account?.description ?? '');
+  setInputValue('account-contact-email', account?.contact_email ?? '');
+  setInputValue('account-external-id', account?.external_id ?? '');
+  setInputChecked('account-enabled', account?.enabled ?? true);
 
   // Show/hide provider-specific fields
   const awsFields = document.getElementById('account-aws-fields');
@@ -371,10 +408,10 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
     const azureAuthMode = account?.azure_auth_mode ?? 'workload_identity_federation';
     const azureAuthSelect = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
     if (azureAuthSelect) azureAuthSelect.value = azureAuthMode;
-    (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value = account?.azure_tenant_id ?? '';
-    (document.getElementById('account-azure-client-id') as HTMLInputElement).value = account?.azure_client_id ?? '';
-    (document.getElementById('account-azure-client-secret') as HTMLInputElement).value = '';
-    (document.getElementById('account-azure-wif-private-key') as HTMLTextAreaElement | null ?? { value: '' }).value = '';
+    setInputValue('account-azure-tenant-id', account?.azure_tenant_id ?? '');
+    setInputValue('account-azure-client-id', account?.azure_client_id ?? '');
+    setInputValue('account-azure-client-secret', '');
+    setInputValue('account-azure-wif-private-key', '');
     updateAzureAuthModeFields(azureAuthMode);
   } else if (provider === 'gcp') {
     const gcpMode = account?.gcp_auth_mode ?? 'workload_identity_federation';
@@ -400,8 +437,8 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   const authModeSelect = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
   if (authModeSelect) authModeSelect.value = authMode;
 
-  (document.getElementById('account-aws-access-key-id') as HTMLInputElement).value = '';
-  (document.getElementById('account-aws-secret-access-key') as HTMLInputElement).value = '';
+  setInputValue('account-aws-access-key-id', '');
+  setInputValue('account-aws-secret-access-key', '');
   // aws_role_arn is the backend column used by all three auth modes that need
   // a role: role_arn (direct), bastion (target role assumed via bastion creds),
   // and workload_identity_federation (role assumed via OIDC). Only one of
@@ -409,14 +446,12 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   // save path writes whichever one is visible back to req.aws_role_arn. We
   // pre-fill all three with the same stored value so switching modes mid-edit
   // doesn't blank the input that just became visible.
-  (document.getElementById('account-aws-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
-  (document.getElementById('account-aws-external-id') as HTMLInputElement).value = account?.aws_external_id ?? '';
-  (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value = account?.aws_role_arn ?? '';
-  const wifRoleEl = document.getElementById('account-aws-wif-role-arn') as HTMLInputElement | null;
-  if (wifRoleEl) wifRoleEl.value = account?.aws_role_arn ?? '';
-  const wifTokenEl = document.getElementById('account-aws-wif-token-file') as HTMLInputElement | null;
-  if (wifTokenEl) wifTokenEl.value = account?.aws_web_identity_token_file ?? '';
-  (document.getElementById('account-aws-is-org-root') as HTMLInputElement).checked = account?.aws_is_org_root ?? false;
+  setInputValue('account-aws-role-arn', account?.aws_role_arn ?? '');
+  setInputValue('account-aws-external-id', account?.aws_external_id ?? '');
+  setInputValue('account-aws-bastion-role-arn', account?.aws_role_arn ?? '');
+  setInputValue('account-aws-wif-role-arn', account?.aws_role_arn ?? '');
+  setInputValue('account-aws-wif-token-file', account?.aws_web_identity_token_file ?? '');
+  setInputChecked('account-aws-is-org-root', account?.aws_is_org_root ?? false);
 
   updateAwsAuthModeFields(authMode, account?.aws_bastion_id);
 }
@@ -495,37 +530,37 @@ function closeAccountModal(): void {
  */
 function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest {
   const req: api.CloudAccountRequest = {
-    name: (document.getElementById('account-name') as HTMLInputElement).value.trim(),
-    description: (document.getElementById('account-description') as HTMLTextAreaElement).value.trim() || undefined,
-    contact_email: (document.getElementById('account-contact-email') as HTMLInputElement).value.trim() || undefined,
+    name: (byId<HTMLInputElement>('account-name')?.value ?? '').trim(),
+    description: (byId<HTMLTextAreaElement>('account-description')?.value ?? '').trim() || undefined,
+    contact_email: (byId<HTMLInputElement>('account-contact-email')?.value ?? '').trim() || undefined,
     provider,
-    external_id: (document.getElementById('account-external-id') as HTMLInputElement).value.trim(),
-    enabled: (document.getElementById('account-enabled') as HTMLInputElement).checked
+    external_id: (byId<HTMLInputElement>('account-external-id')?.value ?? '').trim(),
+    enabled: byId<HTMLInputElement>('account-enabled')?.checked ?? true,
   };
 
   if (provider === 'aws') {
-    const authMode = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement).value;
+    const authMode = byId<HTMLSelectElement>('account-aws-auth-mode')?.value ?? '';
     req.aws_auth_mode = authMode;
-    req.aws_is_org_root = (document.getElementById('account-aws-is-org-root') as HTMLInputElement).checked;
+    req.aws_is_org_root = byId<HTMLInputElement>('account-aws-is-org-root')?.checked ?? false;
     if (authMode === 'role_arn') {
-      req.aws_role_arn = (document.getElementById('account-aws-role-arn') as HTMLInputElement).value.trim();
-      req.aws_external_id = (document.getElementById('account-aws-external-id') as HTMLInputElement).value.trim() || undefined;
+      req.aws_role_arn = (byId<HTMLInputElement>('account-aws-role-arn')?.value ?? '').trim();
+      req.aws_external_id = (byId<HTMLInputElement>('account-aws-external-id')?.value ?? '').trim() || undefined;
     } else if (authMode === 'bastion') {
-      req.aws_bastion_id = (document.getElementById('account-aws-bastion-id') as HTMLSelectElement).value;
-      req.aws_role_arn = (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value.trim();
+      req.aws_bastion_id = byId<HTMLSelectElement>('account-aws-bastion-id')?.value ?? '';
+      req.aws_role_arn = (byId<HTMLInputElement>('account-aws-bastion-role-arn')?.value ?? '').trim();
     } else if (authMode === 'workload_identity_federation') {
-      req.aws_role_arn = (document.getElementById('account-aws-wif-role-arn') as HTMLInputElement | null)?.value.trim();
-      req.aws_web_identity_token_file = (document.getElementById('account-aws-wif-token-file') as HTMLInputElement | null)?.value.trim() || undefined;
+      req.aws_role_arn = byId<HTMLInputElement>('account-aws-wif-role-arn')?.value.trim();
+      req.aws_web_identity_token_file = byId<HTMLInputElement>('account-aws-wif-token-file')?.value.trim() || undefined;
     }
   } else if (provider === 'azure') {
     req.azure_subscription_id = req.external_id; // external_id IS the subscription ID for Azure
-    req.azure_auth_mode = (document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null)?.value || 'client_secret';
-    req.azure_tenant_id = (document.getElementById('account-azure-tenant-id') as HTMLInputElement).value.trim();
-    req.azure_client_id = (document.getElementById('account-azure-client-id') as HTMLInputElement).value.trim();
+    req.azure_auth_mode = byId<HTMLSelectElement>('account-azure-auth-mode')?.value || 'client_secret';
+    req.azure_tenant_id = (byId<HTMLInputElement>('account-azure-tenant-id')?.value ?? '').trim();
+    req.azure_client_id = (byId<HTMLInputElement>('account-azure-client-id')?.value ?? '').trim();
   } else if (provider === 'gcp') {
     req.gcp_project_id = req.external_id; // external_id IS the project ID for GCP
-    req.gcp_auth_mode = (document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null)?.value || 'service_account_key';
-    req.gcp_client_email = (document.getElementById('account-gcp-client-email') as HTMLInputElement | null)?.value.trim() ?? '';
+    req.gcp_auth_mode = byId<HTMLSelectElement>('account-gcp-auth-mode')?.value || 'service_account_key';
+    req.gcp_client_email = byId<HTMLInputElement>('account-gcp-client-email')?.value.trim() ?? '';
   }
 
   return req;
@@ -536,10 +571,10 @@ function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest
  */
 async function saveAccountCredentialsIfFilled(accountId: string, provider: AccountProvider): Promise<void> {
   if (provider === 'aws') {
-    const authMode = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement).value;
+    const authMode = byId<HTMLSelectElement>('account-aws-auth-mode')?.value ?? '';
     if (authMode === 'access_keys') {
-      const keyId = (document.getElementById('account-aws-access-key-id') as HTMLInputElement).value.trim();
-      const secretKey = (document.getElementById('account-aws-secret-access-key') as HTMLInputElement).value;
+      const keyId = (byId<HTMLInputElement>('account-aws-access-key-id')?.value ?? '').trim();
+      const secretKey = byId<HTMLInputElement>('account-aws-secret-access-key')?.value ?? '';
       if (keyId && secretKey) {
         await api.saveAccountCredentials(accountId, {
           credential_type: 'aws_access_keys',
@@ -548,11 +583,11 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
       }
     }
   } else if (provider === 'azure') {
-    const azureMode = (document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null)?.value ?? 'client_secret';
+    const azureMode = byId<HTMLSelectElement>('account-azure-auth-mode')?.value ?? 'client_secret';
     if (azureMode === 'managed_identity') {
       // No credential to store
     } else if (azureMode === 'workload_identity_federation') {
-      const pem = (document.getElementById('account-azure-wif-private-key') as HTMLTextAreaElement | null)?.value.trim();
+      const pem = byId<HTMLTextAreaElement>('account-azure-wif-private-key')?.value.trim();
       if (pem) {
         await api.saveAccountCredentials(accountId, {
           credential_type: 'azure_wif_private_key',
@@ -560,7 +595,7 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
         });
       }
     } else {
-      const secret = (document.getElementById('account-azure-client-secret') as HTMLInputElement).value;
+      const secret = byId<HTMLInputElement>('account-azure-client-secret')?.value ?? '';
       if (secret) {
         await api.saveAccountCredentials(accountId, {
           credential_type: 'azure_client_secret',
@@ -569,11 +604,11 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
       }
     }
   } else if (provider === 'gcp') {
-    const gcpMode = (document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null)?.value ?? 'service_account_key';
+    const gcpMode = byId<HTMLSelectElement>('account-gcp-auth-mode')?.value ?? 'service_account_key';
     if (gcpMode === 'application_default') {
       // No credential to store
     } else if (gcpMode === 'workload_identity_federation') {
-      const config = (document.getElementById('account-gcp-wif-config') as HTMLTextAreaElement | null)?.value.trim();
+      const config = byId<HTMLTextAreaElement>('account-gcp-wif-config')?.value.trim();
       if (config) {
         let parsed: Record<string, unknown>;
         try {
@@ -584,7 +619,7 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
         await api.saveAccountCredentials(accountId, { credential_type: 'gcp_workload_identity_config', payload: parsed });
       }
     } else {
-      const jsonText = (document.getElementById('account-gcp-service-account-json') as HTMLTextAreaElement | null)?.value.trim() ?? '';
+      const jsonText = byId<HTMLTextAreaElement>('account-gcp-service-account-json')?.value.trim() ?? '';
       if (jsonText) {
         let parsed: Record<string, unknown>;
         try {
@@ -619,7 +654,7 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
     return;
   }
 
-  const accountId = (document.getElementById('account-id') as HTMLInputElement).value;
+  const accountId = byId<HTMLInputElement>('account-id')?.value ?? '';
 
   try {
     let savedId = accountId;
