@@ -346,11 +346,14 @@ resource "google_project_iam_custom_role" "cudly_commitment_writer" {
   project     = var.project_id
   role_id     = "cudlyCommitmentWriter"
   title       = "CUDly Commitment Writer"
-  description = "Minimum permissions for CUDly to purchase, update, and delete committed use discounts."
+  description = "Minimum permissions for CUDly to purchase and update committed use discounts."
+  # Note: compute.commitments.delete is NOT a valid IAM permission — GCP
+  # commitments are non-cancellable by design, so the API surface exposes
+  # only create/get/list/update. Including "delete" here fails role
+  # creation with "Permission compute.commitments.delete is not valid".
   permissions = [
     "compute.commitments.create",
     "compute.commitments.update",
-    "compute.commitments.delete",
   ]
   stage = "GA"
 }
