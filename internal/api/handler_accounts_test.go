@@ -229,6 +229,30 @@ func TestDeleteAccount_Success(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+// TestDeleteAccount_NotFound asserts that deleteAccount returns 404 and never
+// invokes DeleteCloudAccount when the account does not exist. Locks down the
+// existence check added in 031b958cf so a refactor cannot regress the 404 path.
+func TestDeleteAccount_NotFound(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return nil, nil }
+	deleteCalled := false
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	result, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found error, got %v", err)
+	assert.False(t, deleteCalled, "DeleteCloudAccount should not be called when account does not exist")
+}
+
 // --- saveAccountCredentials ---
 
 func TestSaveAccountCredentials_Success(t *testing.T) {
@@ -276,6 +300,25 @@ func TestSaveAccountCredentials_InvalidJSON(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
+}
+
+// TestSaveAccountCredentials_NotFound_WithNilCredStore asserts that when both
+// the account is missing and the credStore is nil, the handler returns 404
+// (account not found) rather than 500 (credential store not configured).
+func TestSaveAccountCredentials_NotFound_WithNilCredStore(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return nil, nil }
+	handler := &Handler{auth: mockAuth, config: store, credStore: nil}
+
+	body := `{"credential_type":"aws_access_keys","payload":{"access_key_id":"AKIA...","secret_access_key":"secret"}}`
+	result, err := handler.saveAccountCredentials(ctx, adminRequest(body), "11111111-1111-1111-1111-111111111111")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found error, got %v", err)
 }
 
 // --- listAccountServiceOverrides ---

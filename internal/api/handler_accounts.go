@@ -439,17 +439,19 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 		return nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, azure_wif_private_key, gcp_service_account, gcp_workload_identity_config")
 	}
 
-	if h.credStore == nil {
-		return nil, fmt.Errorf("accounts: credential store not configured")
-	}
-
 	// Confirm the account exists so we return 404 rather than a FK violation.
+	// This must precede the credStore-nil check so that a missing account always
+	// returns 404, not a 500 about credential store configuration.
 	acct, err := h.config.GetCloudAccount(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 	if acct == nil {
 		return nil, errNotFound
+	}
+
+	if h.credStore == nil {
+		return nil, fmt.Errorf("accounts: credential store not configured")
 	}
 
 	payloadBytes, err := json.Marshal(req.Payload)
