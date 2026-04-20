@@ -48,7 +48,10 @@ provider "azurerm" {
       recover_soft_deleted_key_vaults = true
     }
     resource_group {
-      prevent_deletion_if_contains_resources = false
+      # Default to true so `terraform destroy` / `az group delete` cannot
+      # wipe a populated resource group without explicit operator override.
+      # Dev environments opt out via tfvars (see variables.tf).
+      prevent_deletion_if_contains_resources = var.prevent_resource_group_deletion
     }
   }
 

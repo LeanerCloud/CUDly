@@ -68,6 +68,9 @@ key_vault_sku              = "standard"
 soft_delete_retention_days = 7
 purge_protection_enabled   = false
 
+# Dev environments are ephemeral; allow destroy through the resource group.
+prevent_resource_group_deletion = false
+
 # ==============================================
 # Scheduled Tasks (Logic Apps)
 # ==============================================

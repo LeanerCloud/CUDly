@@ -1,6 +1,6 @@
 # Known Issues: Terraform Azure Environment
 
-> **Audit status (2026-04-20):** `5 still valid · 2 resolved · 0 partially fixed · 0 moved · 1 needs triage`
+> **Audit status (2026-04-20):** `2 still valid · 5 resolved · 0 partially fixed · 0 moved · 1 needs triage`
 
 ## ~~CRITICAL: `nonsensitive()` strips sensitivity from `additional_secrets` before merge~~ — RESOLVED
 
@@ -190,14 +190,16 @@
 
 **Effort:** `medium`
 
-## MEDIUM: `purge_protection_enabled` defaults to `false`
+## ~~MEDIUM: `purge_protection_enabled` defaults to `false`~~ — RESOLVED
 
 **File**: `terraform/environments/azure/variables.tf:126`
-**Description**: Combined with 7-day soft-delete retention (minimum). An operator can permanently delete the Key Vault.
-**Impact**: Permanent loss of credential encryption key renders all stored cloud credentials unrecoverable.
-**Status:** ✅ Still valid
+**Description**: Default was `false`, so a Key Vault could be permanently deleted along with the credential encryption key.
+**Impact**: Permanent loss of credential encryption key would have rendered all stored cloud credentials unrecoverable.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Flipped the default to `true`. The variable description now warns that purge protection is irreversible once enabled. Existing dev/CI tfvars (`dev.tfvars`, `github-dev.tfvars`, `github-staging.tfvars`) explicitly set `false` so ephemeral environments are unaffected.
+
+### Original implementation plan
 
 **Goal:** Default production Key Vaults to purge-protected + long soft-delete retention so accidental deletion cannot erase the credential key.
 
@@ -235,13 +237,15 @@
 
 **Effort:** `small`
 
-## MEDIUM: `prevent_deletion_if_contains_resources = false` on resource group
+## ~~MEDIUM: `prevent_deletion_if_contains_resources = false` on resource group~~ — RESOLVED
 
 **File**: `terraform/environments/azure/main.tf:51-53`
-**Description**: `terraform destroy` or accidental `az group delete` will not be blocked even when the group contains live resources.
-**Status:** ✅ Still valid
+**Description**: The provider feature was hard-coded `false`, so `terraform destroy` or accidental `az group delete` would proceed even when the group still contained live resources.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Replaced the hard-coded `false` with `var.prevent_resource_group_deletion` and added a new boolean variable defaulting to `true`. Dev tfvars (`dev.tfvars`, `dev.tfvars.example`, `github-dev.tfvars`) explicitly opt out so ephemeral environments retain destroy ergonomics.
+
+### Original implementation plan
 
 **Goal:** Prevent accidental resource-group deletion for non-ephemeral environments.
 
@@ -277,13 +281,15 @@
 
 **Effort:** `small`
 
-## LOW: `min_replicas` defaults to `0`
+## ~~LOW: `min_replicas` defaults to `0`~~ — RESOLVED
 
 **File**: `terraform/environments/azure/variables.tf:274`
-**Description**: Container scales to zero when idle. Every new request after idle incurs a cold start.
-**Status:** ✅ Still valid
+**Description**: Default was `0`, so the container scaled to zero when idle and every new request after idle incurred a cold start.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Flipped the default to `1` so staging/production have at least one warm replica. Added validation that `min_replicas <= max_replicas`. Dev tfvars already set `min_replicas = 0` explicitly so scale-to-zero is preserved for cost-sensitive dev/ephemeral CI environments.
+
+### Original implementation plan
 
 **Goal:** Default staging/production to warm replicas so users do not see cold-start latency on first request.
 

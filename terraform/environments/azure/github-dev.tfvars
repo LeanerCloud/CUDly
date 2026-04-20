@@ -53,6 +53,9 @@ key_vault_sku              = "standard"
 soft_delete_retention_days = 7
 purge_protection_enabled   = false
 
+# Allow ephemeral CI dev environment to be torn down via terraform destroy.
+prevent_resource_group_deletion = false
+
 # ==============================================
 # Scheduled Tasks
 # ==============================================

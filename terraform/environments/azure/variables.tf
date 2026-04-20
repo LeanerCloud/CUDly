@@ -121,9 +121,27 @@ variable "soft_delete_retention_days" {
 }
 
 variable "purge_protection_enabled" {
-  description = "Enable Key Vault purge protection"
+  description = <<-EOT
+    Enable Key Vault purge protection. Default is true so accidental
+    deletion cannot erase the credential encryption key (which would render
+    every stored cloud credential unrecoverable). Irreversible once enabled:
+    a purge-protected vault cannot have purge protection disabled without a
+    full replace. Override to false only in ephemeral dev environments.
+  EOT
   type        = bool
-  default     = false
+  default     = true
+}
+
+variable "prevent_resource_group_deletion" {
+  description = <<-EOT
+    When true, `terraform destroy` and `az group delete` refuse to delete
+    the resource group while it still contains resources. Default is true
+    so production cannot be wiped by an accidental destroy. Override to
+    false in ephemeral dev environments that genuinely need destroy/recreate
+    cycles.
+  EOT
+  type        = bool
+  default     = true
 }
 
 
@@ -271,15 +289,34 @@ variable "container_memory" {
 }
 
 variable "min_replicas" {
-  description = "Minimum number of container replicas"
+  description = <<-EOT
+    Minimum number of container replicas. Default is 1 so users don't see cold-start
+    latency on the first request after idle. Override to 0 in dev tfvars when
+    scale-to-zero is desired (trades cold starts for cost savings).
+  EOT
   type        = number
-  default     = 0
+  default     = 1
+
+  validation {
+    condition     = var.min_replicas >= 0
+    error_message = "min_replicas must be non-negative."
+  }
+
+  validation {
+    condition     = var.min_replicas <= var.max_replicas
+    error_message = "min_replicas must be <= max_replicas."
+  }
 }
 
 variable "max_replicas" {
   description = "Maximum number of container replicas"
   type        = number
   default     = 10
+
+  validation {
+    condition     = var.max_replicas >= 1
+    error_message = "max_replicas must be at least 1."
+  }
 }
 
 variable "external_ingress_enabled" {
