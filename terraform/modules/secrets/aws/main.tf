@@ -182,8 +182,14 @@ resource "aws_secretsmanager_secret_version" "credential_encryption_key" {
   secret_id     = aws_secretsmanager_secret.credential_encryption_key[0].id
   secret_string = local.credential_encryption_key
 
+  # ignore_changes on secret_string is intentional: operators rotate the key
+  # out-of-band (via `aws secretsmanager put-secret-value`) and we don't want
+  # Terraform to revert to the var-supplied value on the next apply. The
+  # variable-level validation ensures Terraform cannot seed an invalid key
+  # in the first place, so the risk of "empty/short key locked in forever"
+  # is closed at the input gate rather than at the lifecycle gate.
   lifecycle {
-    ignore_changes = [secret_string] # Allow out-of-band rotation without Terraform drift
+    ignore_changes = [secret_string]
   }
 }
 

@@ -116,8 +116,20 @@ variable "create_credential_encryption_key" {
 }
 
 variable "credential_encryption_key" {
-  description = "AES-256-GCM key for account credential encryption (64-char hex = 32 bytes). Generate with: openssl rand -hex 32"
+  description = <<-EOT
+    AES-256-GCM key for account credential encryption. Either the empty
+    string (which triggers auto-generation of a fresh 32-byte key when
+    create_credential_encryption_key = true) or a 64-character hex string
+    (= 32 raw bytes). Generate explicitly via: openssl rand -hex 32.
+    The validation below rejects any other value so a typo or short key
+    cannot silently lock in a non-decryptable secret.
+  EOT
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = var.credential_encryption_key == "" || can(regex("^[0-9a-fA-F]{64}$", var.credential_encryption_key))
+    error_message = "credential_encryption_key must be either an empty string (auto-generate) or a 64-character hex string."
+  }
 }

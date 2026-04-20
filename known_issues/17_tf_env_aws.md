@@ -1,6 +1,6 @@
 # Known Issues: Terraform AWS Environment
 
-> **Audit status (2026-04-20):** `4 still valid · 3 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `3 still valid · 4 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## CRITICAL: Fargate compute platform has no multi-account support
 
@@ -97,14 +97,16 @@
 
 **Effort:** `small`
 
-## HIGH: Empty credential_encryption_key stored silently
+## ~~HIGH: Empty credential_encryption_key stored silently~~ — RESOLVED
 
 **File**: `terraform/modules/secrets/aws/variables.tf:123` and `main.tf:168-176`
-**Description**: The module's `credential_encryption_key` defaults to `""`. Combined with `ignore_changes = [secret_string]`, an empty key is permanently locked in.
-**Impact**: Credentials encrypted with an empty key are trivially breakable. `ignore_changes` prevents Terraform from correcting it.
-**Status:** ✅ Still valid
+**Description**: The module's `credential_encryption_key` had no validation; combined with `ignore_changes = [secret_string]`, a typo'd or short key would be locked in to Secrets Manager and never re-converged by Terraform.
+**Impact**: Credentials encrypted with a placeholder/empty key would have been trivially breakable.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Added a validation block to the variable that accepts only the empty string (which triggers the existing auto-generation path) or a 64-character hex string. Anything else fails at plan time. Kept the `ignore_changes` lifecycle (operators rotate the key out-of-band via `aws secretsmanager put-secret-value` and Terraform must not revert), but added a comment explaining the rationale and noting that the variable-level validation closes the original "empty/short key locked in forever" risk at the input gate.
+
+### Original implementation plan
 
 **Goal:** Reject empty/short credential-encryption keys at plan time so Secrets Manager never stores a placeholder that cannot be decrypted.
 
