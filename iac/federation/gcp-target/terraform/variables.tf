@@ -66,6 +66,50 @@ variable "oidc_subject" {
   default     = ""
 }
 
+# ------------------------------------------------------------------------
+# OIDC credential source (used by gcloud_command output for provider_type=oidc)
+# ------------------------------------------------------------------------
+
+variable "oidc_credential_source_type" {
+  description = <<-EOT
+    Credential source type for the generated `gcloud iam workload-identity-pools
+    create-cred-config` command when provider_type = "oidc". Must be "file" or
+    "url". Ignored when provider_type = "aws".
+  EOT
+  type        = string
+  default     = "file"
+
+  validation {
+    condition     = contains(["file", "url"], var.oidc_credential_source_type)
+    error_message = "oidc_credential_source_type must be \"file\" or \"url\"."
+  }
+}
+
+variable "oidc_credential_source" {
+  description = <<-EOT
+    Credential source path (file mode) or URL (url mode) that `gcloud` should
+    read the OIDC token from. Only used when provider_type = "oidc". Example:
+    `/var/run/secrets/cudly/token` or `https://cudly.example.com/oidc/token`.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "oidc_credential_source_format" {
+  description = <<-EOT
+    Format of the credential source response when provider_type = "oidc".
+    Must be "text" (raw token) or "json" (JSON-wrapped). Ignored when
+    provider_type = "aws".
+  EOT
+  type        = string
+  default     = "text"
+
+  validation {
+    condition     = contains(["text", "json"], var.oidc_credential_source_format)
+    error_message = "oidc_credential_source_format must be \"text\" or \"json\"."
+  }
+}
+
 variable "service_account_email" {
   description = "Email of the GCP service account CUDly will impersonate."
   type        = string
