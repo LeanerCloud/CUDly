@@ -70,9 +70,14 @@ variable "az_count" {
 }
 
 variable "enable_flow_logs" {
-  description = "Enable VPC Flow Logs"
+  description = <<-EOT
+    Enable VPC Flow Logs. Default is true so every environment captures a
+    network audit trail by default. Override to false in cost-sensitive dev
+    environments — VPC Flow Logs ingest into CloudWatch and incur per-GB
+    charges (see flow_logs_retention_days).
+  EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "flow_logs_retention_days" {
@@ -159,9 +164,13 @@ variable "database_deletion_protection" {
 }
 
 variable "database_skip_final_snapshot" {
-  description = "Skip final snapshot on deletion"
+  description = <<-EOT
+    Skip final snapshot when the RDS instance is destroyed. Default is false
+    so production destroys preserve a recoverable snapshot. Override to true
+    in dev tfvars when teardown ergonomics matter more than recoverability.
+  EOT
   type        = bool
-  default     = true # True in dev for easy teardown
+  default     = false
 }
 
 variable "database_auto_migrate" {
@@ -216,9 +225,22 @@ variable "lambda_enable_function_url" {
 }
 
 variable "lambda_function_url_auth_type" {
-  description = "Function URL auth type (NONE or AWS_IAM)"
+  description = <<-EOT
+    Lambda Function URL auth type — must be "NONE" or "AWS_IAM". Default is
+    "NONE" because CUDly is a browser-served SPA that talks directly to the
+    Function URL; the browser cannot SigV4-sign requests. Auth is enforced at
+    the application layer (login session, JWT, API keys, CSRF) — see
+    internal/api/handler_login.go and middleware in router.go. Override to
+    AWS_IAM only when fronting the URL with a signed-request gateway
+    (CloudFront with Lambda@Edge, API Gateway, etc.).
+  EOT
   type        = string
   default     = "NONE"
+
+  validation {
+    condition     = contains(["AWS_IAM", "NONE"], var.lambda_function_url_auth_type)
+    error_message = "lambda_function_url_auth_type must be either \"AWS_IAM\" or \"NONE\"."
+  }
 }
 
 variable "lambda_allowed_origins" {
