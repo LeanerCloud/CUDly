@@ -27,7 +27,10 @@ terraform.rc
 
 # Terraform directories
 .terraform/
-.terraform.lock.hcl
+# Track .terraform.lock.hcl so every engineer + CI run resolves the same
+# provider versions. The broad `.terraform/` ignore above still skips
+# per-developer provider cache dirs.
+!.terraform.lock.hcl
 
 # Plan files
 *.tfplan
