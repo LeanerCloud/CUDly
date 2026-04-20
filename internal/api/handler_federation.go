@@ -110,12 +110,22 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 // Generates generic IaC templates for self-registration. Target account owners
 // fill in their own values via -var flags when running terraform apply.
 //
+// The rendered template embeds the CUDly host's AWS account ID (resolved via
+// STS GetCallerIdentity) so target-account deployments can trust the right
+// source. That identity must not leak to unauthenticated callers — the
+// endpoint requires view:accounts, matching the audience that legitimately
+// consumes these templates (admins onboarding cross-account federations).
+//
 //   - format="cli"      → self-contained shell script (single file)
 //   - format="cfn"      → zip with CFN template + params + deploy script (aws target only)
 //   - format="bicep"    → zip with Bicep template + params + deploy script (azure target only)
 //   - format="arm"      → zip with ARM JSON template + params + deploy script (azure target only)
 //   - format="bundle"   → zip with Terraform module + pre-filled tfvars (and CFN fallback on aws)
 func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
+	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
+		return nil, err
+	}
+
 	target, source, format, err := federationIaCParams(req.QueryStringParameters)
 	if err != nil {
 		return nil, err

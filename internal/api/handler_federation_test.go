@@ -11,15 +11,30 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func federationHandler() *Handler {
-	return NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore)})
+	// getFederationIaC is permission-gated on view:accounts — wire an admin
+	// auth service into the handler so test requests with the admin token
+	// short-circuit requirePermission. ValidateSession is configured with
+	// mock.Anything so the helper works in both context.Background() and
+	// other contexts the tests may use.
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}, nil)
+	return NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
 }
 
 func federationReq(params map[string]string) *events.LambdaFunctionURLRequest {
-	return &events.LambdaFunctionURLRequest{QueryStringParameters: params}
+	return &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"Authorization": "Bearer admin-token"},
+		QueryStringParameters: params,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +73,25 @@ func TestGetFederationIaC_MissingParams(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
 	assert.Equal(t, 400, ce.code)
+}
+
+// TestGetFederationIaC_RequiresAuth asserts an unauthenticated request is
+// rejected before template rendering — the response would otherwise embed
+// the CUDly host AWS account ID resolved via STS.
+func TestGetFederationIaC_RequiresAuth(t *testing.T) {
+	h := federationHandler()
+	ctx := context.Background()
+
+	req := &events.LambdaFunctionURLRequest{
+		QueryStringParameters: map[string]string{
+			"target": "aws", "source": "aws", "format": "cli",
+		},
+	}
+	_, err := h.getFederationIaC(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 401, ce.code)
 }
 
 func TestGetFederationIaC_RejectsEmptyFormat(t *testing.T) {

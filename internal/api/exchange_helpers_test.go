@@ -59,13 +59,11 @@ func TestCheckDailyCap_ZeroSpend(t *testing.T) {
 
 func TestHandler_getFederationIaC_MissingTarget(t *testing.T) {
 	ctx := context.Background()
-	h := &Handler{}
-	req := &events.LambdaFunctionURLRequest{
-		QueryStringParameters: map[string]string{
-			"source":     "aws",
-			"account_id": "11111111-1111-1111-1111-111111111111",
-		},
-	}
+	h := federationHandler()
+	req := federationReq(map[string]string{
+		"source":     "aws",
+		"account_id": "11111111-1111-1111-1111-111111111111",
+	})
 	_, err := h.getFederationIaC(ctx, req)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "target")
@@ -73,14 +71,12 @@ func TestHandler_getFederationIaC_MissingTarget(t *testing.T) {
 
 func TestHandler_getFederationIaC_SuccessWithoutAccountID(t *testing.T) {
 	ctx := context.Background()
-	h := &Handler{config: new(MockConfigStore)}
-	req := &events.LambdaFunctionURLRequest{
-		QueryStringParameters: map[string]string{
-			"target": "aws",
-			"source": "gcp",
-			"format": "cli",
-		},
-	}
+	h := federationHandler()
+	req := federationReq(map[string]string{
+		"target": "aws",
+		"source": "gcp",
+		"format": "cli",
+	})
 	res, err := h.getFederationIaC(ctx, req)
 	require.NoError(t, err)
 	assert.Contains(t, res.Filename, "aws-wif-cli.sh")

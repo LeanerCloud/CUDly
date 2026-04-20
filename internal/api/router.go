@@ -175,8 +175,10 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/registrations/", Method: "DELETE", Handler: r.deleteRegistrationHandler},
 		{PathPrefix: "/api/registrations/", Method: "GET", Handler: r.getRegistrationHandler},
 
-		// Federation IaC download endpoint (public — generic templates, no secrets)
-		{ExactPath: "/api/federation/iac", Method: "GET", Handler: r.getFederationIaCHandler, Auth: AuthPublic},
+		// Federation IaC download endpoint (requires auth — templates embed the
+		// host AWS account ID via STS, which we don't want to leak to unauth'd
+		// reconnaissance. Only admins have access; view:accounts is the gate.)
+		{ExactPath: "/api/federation/iac", Method: "GET", Handler: r.getFederationIaCHandler, Auth: AuthUser},
 
 		// Note: /.well-known/openid-configuration and /.well-known/jwks.json
 		// are served by the transport layer (lambda.go / http.go) which
