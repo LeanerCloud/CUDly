@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	orgtypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -230,7 +231,7 @@ func TestAWSProvider_GetServiceClient_UnsupportedService(t *testing.T) {
 	}
 
 	// Test unsupported service type
-	_, err := p.GetServiceClient(nil, common.ServiceType("unsupported"), "us-east-1")
+	_, err := p.GetServiceClient(context.Background(), common.ServiceType("unsupported"), "us-east-1")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported service")
 }
@@ -261,7 +262,7 @@ func TestAWSProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(string(tc.service), func(t *testing.T) {
-			client, err := p.GetServiceClient(nil, tc.service, "us-east-1")
+			client, err := p.GetServiceClient(context.Background(), tc.service, "us-east-1")
 			require.NoError(t, err)
 			require.NotNil(t, client)
 			assert.Equal(t, tc.expectedType, client.GetServiceType())
@@ -406,7 +407,7 @@ func TestAWSProvider_GetAccounts_WithMock(t *testing.T) {
 		assert.Equal(t, "333333333333", accounts[2].ID)
 	})
 
-	t.Run("returns current account when org list fails", func(t *testing.T) {
+	t.Run("returns current account when caller not in an Organization", func(t *testing.T) {
 		p := &AWSProvider{
 			cfg: aws.Config{Region: "us-east-1"},
 		}
@@ -418,8 +419,10 @@ func TestAWSProvider_GetAccounts_WithMock(t *testing.T) {
 			},
 		})
 		p.SetOrganizationsPaginator(&mockOrganizationsPaginator{
-			pages:     []*organizations.ListAccountsOutput{{}},
-			nextErr:   errors.New("access denied"),
+			pages: []*organizations.ListAccountsOutput{{}},
+			// Structured API error — AWSOrganizationsNotInUseException is one
+			// of the two codes the resolver treats as a silent fallback.
+			nextErr:   &smithy.GenericAPIError{Code: "AWSOrganizationsNotInUseException", Message: "not in org"},
 			errOnPage: 0,
 		})
 
@@ -427,6 +430,75 @@ func TestAWSProvider_GetAccounts_WithMock(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, accounts, 1)
 		assert.Equal(t, "123456789012", accounts[0].ID)
+	})
+
+	t.Run("returns current account when Organizations access is denied", func(t *testing.T) {
+		p := &AWSProvider{
+			cfg: aws.Config{Region: "us-east-1"},
+		}
+		p.SetSTSClient(&mockSTSClient{
+			getCallerIdentityFunc: func(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+				return &sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil
+			},
+		})
+		p.SetOrganizationsPaginator(&mockOrganizationsPaginator{
+			pages:     []*organizations.ListAccountsOutput{{}},
+			nextErr:   &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "no perms"},
+			errOnPage: 0,
+		})
+
+		accounts, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, accounts, 1)
+		assert.Equal(t, "123456789012", accounts[0].ID)
+	})
+
+	t.Run("propagates non-classified errors so callers don't see a silent truncation", func(t *testing.T) {
+		p := &AWSProvider{
+			cfg: aws.Config{Region: "us-east-1"},
+		}
+		p.SetSTSClient(&mockSTSClient{
+			getCallerIdentityFunc: func(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+				return &sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil
+			},
+		})
+		// Throttle mid-pagination: first page has one account, second page
+		// throttles. Returning a partial list would be unsafe for the
+		// purchase flow — the caller must see the error and stop.
+		p.SetOrganizationsPaginator(&mockOrganizationsPaginator{
+			pages: []*organizations.ListAccountsOutput{
+				{Accounts: []orgtypes.Account{{Id: aws.String("444444444444"), Name: aws.String("member")}}},
+				{},
+			},
+			nextErr:   &smithy.GenericAPIError{Code: "ThrottlingException", Message: "slow down"},
+			errOnPage: 1,
+		})
+
+		_, err := p.GetAccounts(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "organizations: list accounts")
+	})
+
+	t.Run("propagates opaque non-API errors too", func(t *testing.T) {
+		p := &AWSProvider{
+			cfg: aws.Config{Region: "us-east-1"},
+		}
+		p.SetSTSClient(&mockSTSClient{
+			getCallerIdentityFunc: func(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+				return &sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil
+			},
+		})
+		// Plain errors.New value — not a smithy API error — must not be
+		// treated as the silent not-in-org case.
+		p.SetOrganizationsPaginator(&mockOrganizationsPaginator{
+			pages:     []*organizations.ListAccountsOutput{{}},
+			nextErr:   errors.New("network blew up"),
+			errOnPage: 0,
+		})
+
+		_, err := p.GetAccounts(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "network blew up")
 	})
 
 	t.Run("returns error when STS fails", func(t *testing.T) {
@@ -790,4 +862,52 @@ func TestProviderRegistration(t *testing.T) {
 		assert.Equal(t, "test-profile", awsProvider.profile)
 		assert.Equal(t, "us-west-2", awsProvider.region)
 	})
+}
+
+// TestGetCredentials_SourceMapping locks down the (SDK source string →
+// CredentialSource) mapping in GetCredentials. The aws-sdk-go-v2 source
+// strings used here are SDK internals; if a future SDK upgrade renames
+// them, the awsSourceSharedConfigCredentials / awsSourceAssumeRoleProvider
+// constants in provider.go become stale and this test starts failing —
+// that is the intended guard rail. Re-audit the SDK's `aws.Credentials.Source`
+// values when bumping the SDK if this test breaks.
+func TestGetCredentials_SourceMapping(t *testing.T) {
+	tests := []struct {
+		name       string
+		sdkSource  string
+		wantSource provider.CredentialSource
+	}{
+		{"shared config maps to file", awsSourceSharedConfigCredentials, provider.CredentialSourceFile},
+		{"assume role maps to IAM role", awsSourceAssumeRoleProvider, provider.CredentialSourceIAMRole},
+		{"unknown source defaults to environment", "SomeNewSourceTheSDKIntroduced", provider.CredentialSourceEnvironment},
+		{"empty source defaults to environment", "", provider.CredentialSourceEnvironment},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := aws.Config{
+				Region: "us-east-1",
+				Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+					return aws.Credentials{
+						AccessKeyID:     "AKIA",
+						SecretAccessKey: "secret",
+						Source:          tt.sdkSource,
+					}, nil
+				}),
+			}
+			p := &AWSProvider{cfg: cfg}
+			// Bypass IsConfigured's loadConfig path — set cfgErr=nil so
+			// IsConfigured returns true without touching the AWS SDK config.
+			p.cfgOnce.Do(func() {})
+
+			creds, err := p.GetCredentials()
+			require.NoError(t, err)
+			// Credentials interface only exposes IsValid + GetType; the AWS
+			// provider returns *BaseCredentials, so type-assert to inspect
+			// the concrete CredentialSource enum directly.
+			base, ok := creds.(*provider.BaseCredentials)
+			require.True(t, ok, "AWSProvider.GetCredentials should return *provider.BaseCredentials")
+			assert.Equal(t, tt.wantSource, base.Source)
+		})
+	}
 }

@@ -18,6 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/redshift v1.58.3
 	github.com/aws/aws-sdk-go-v2/service/savingsplans v1.31.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.26.6
+	github.com/aws/smithy-go v1.24.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -31,8 +32,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.18.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.21.5 // indirect
-	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

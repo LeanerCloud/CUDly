@@ -3,6 +3,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -11,9 +12,23 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
+)
+
+// AWS SDK v2 credential source identifiers.
+//
+// These are NOT part of the aws-sdk-go-v2 public API — they're the string
+// values the SDK stamps into aws.Credentials.Source for each credential
+// chain. We map them back to our provider.CredentialSource enum in
+// GetCredentials. If the SDK ever renames them on upgrade,
+// TestGetCredentials_SourceMapping will flag the mismatch at test time.
+const (
+	awsSourceSharedConfigCredentials = "SharedConfigCredentials"
+	awsSourceAssumeRoleProvider      = "AssumeRoleProvider"
 )
 
 // STSClient interface for STS operations (enables mocking)
@@ -171,10 +186,15 @@ func (p *AWSProvider) GetCredentials() (provider.Credentials, error) {
 
 	credType := provider.CredentialSourceEnvironment
 	if creds.Source != "" {
+		// These string constants are AWS SDK v2 internal implementation
+		// details, not a stable public contract. If the SDK renames them
+		// on upgrade, TestGetCredentials_SourceMapping in provider_test.go
+		// starts failing — that is the guard rail. Keep this list in sync
+		// with the SDK when bumping aws-sdk-go-v2.
 		switch creds.Source {
-		case "SharedConfigCredentials":
+		case awsSourceSharedConfigCredentials:
 			credType = provider.CredentialSourceFile
-		case "AssumeRoleProvider":
+		case awsSourceAssumeRoleProvider:
 			credType = provider.CredentialSourceIAMRole
 		}
 	}
@@ -207,10 +227,30 @@ func (p *AWSProvider) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-// appendOrgAccounts adds organization member accounts to the slice, skipping the
-// current account (already added as the default) and suspended accounts with nil fields.
-// Returns the accounts unchanged if not in an organization or lacking permissions.
-func (p *AWSProvider) appendOrgAccounts(ctx context.Context, accounts []common.Account, currentAccountID string) []common.Account {
+// orgListAccountsSilentErrorCodes are the AWS Organizations ListAccounts
+// error codes that represent "expected" fallback conditions: the caller is
+// not part of an organization, or lacks the Organizations permission. For
+// those codes we return the accumulated accounts (just the caller's own
+// account from the earlier STS GetCallerIdentity call) with no error.
+//
+// Any OTHER error (throttling, network, auth) is a real failure — returning
+// a silently-truncated list is unsafe for the purchase flow that consumes
+// GetAccounts, so we log and propagate so the caller can decide.
+var orgListAccountsSilentErrorCodes = map[string]struct{}{
+	"AWSOrganizationsNotInUseException": {},
+	"AccessDeniedException":             {},
+}
+
+// appendOrgAccounts adds organization member accounts to the slice, skipping
+// the current account (already added as the default) and suspended accounts
+// with nil fields.
+//
+// Error classification: returns the accumulated accounts with nil error only
+// for the expected fallback cases (not in an org, permission denied). Any
+// other mid-pagination error (throttling, network, SDK bug) is returned to
+// the caller so an incomplete list can't silently slip into the purchase
+// flow as if it were complete. See orgListAccountsSilentErrorCodes above.
+func (p *AWSProvider) appendOrgAccounts(ctx context.Context, accounts []common.Account, currentAccountID string) ([]common.Account, error) {
 	var paginator OrganizationsPaginator
 	if p.orgPaginator != nil {
 		paginator = p.orgPaginator
@@ -224,7 +264,14 @@ func (p *AWSProvider) appendOrgAccounts(ctx context.Context, accounts []common.A
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			return accounts // not in an org or no permissions
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				if _, silent := orgListAccountsSilentErrorCodes[apiErr.ErrorCode()]; silent {
+					return accounts, nil
+				}
+			}
+			logging.Warnf("AWS Organizations ListAccounts pagination failed mid-run: %v", err)
+			return accounts, fmt.Errorf("organizations: list accounts: %w", err)
 		}
 		for _, acc := range output.Accounts {
 			if acc.Id == nil || acc.Name == nil || *acc.Id == currentAccountID {
@@ -239,7 +286,7 @@ func (p *AWSProvider) appendOrgAccounts(ctx context.Context, accounts []common.A
 			})
 		}
 	}
-	return accounts
+	return accounts, nil
 }
 
 // GetAccounts returns all accessible AWS accounts
@@ -271,7 +318,7 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 		IsDefault:   true,
 	}}
 
-	return p.appendOrgAccounts(ctx, accounts, *identity.Account), nil
+	return p.appendOrgAccounts(ctx, accounts, *identity.Account)
 }
 
 // GetRegions returns all available AWS regions using EC2 DescribeRegions API
