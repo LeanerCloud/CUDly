@@ -1,6 +1,6 @@
 # Known Issues: Terraform AWS Environment
 
-> **Audit status (2026-04-20):** `3 still valid · 4 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `2 still valid · 5 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## CRITICAL: Fargate compute platform has no multi-account support
 
@@ -191,14 +191,16 @@
 
 **Effort:** `small`
 
-## HIGH: Wildcard CORS fallback in production
+## ~~HIGH: Wildcard CORS fallback in production~~ — RESOLVED
 
 **File**: `terraform/environments/aws/compute.tf:63, 158`
-**Description**: Both compute platforms set `CORS_ALLOWED_ORIGIN = "*"` when no `frontend_domain_names` are configured.
-**Impact**: Any origin can make credentialed cross-origin requests to the API.
-**Status:** ✅ Still valid
+**Description**: Earlier revisions set `CORS_ALLOWED_ORIGIN = "*"` when `frontend_domain_names` was empty. That wildcard fallback has already been replaced with `"http://localhost:3000"` (safe for local dev, not useful for prod). The remaining risk is an operator supplying `"*"` as a domain name entry, which the current code would accept silently.
+**Impact**: Historical CORS wildcard (`"*"`) allowed any origin to make credentialed cross-origin requests.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Confirmed the `"*"` fallback is gone from `compute.tf` (both Lambda and Fargate branches fall back to `"http://localhost:3000"`). Added two validation blocks on `var.frontend_domain_names` so the list itself cannot contain a bare `"*"` or any whitespace-containing entry. Updated the variable description to document the CORS derivation, the `localhost:3000` fallback, and why wildcards are not safe on an authenticated API.
+
+### Original implementation plan
 
 **Goal:** Eliminate the silent `"*"` fallback so CORS is always pinned to explicit origins, or deliberately disabled for local dev only.
 

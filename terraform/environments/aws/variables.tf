@@ -373,9 +373,27 @@ variable "enable_cdn" {
 }
 
 variable "frontend_domain_names" {
-  description = "Custom domain names for the frontend CloudFront distribution"
+  description = <<-EOT
+    Custom domain names for the frontend CloudFront distribution. The first
+    entry is also used to build the CORS_ALLOWED_ORIGIN env var exposed to
+    the backend. Must not contain a bare "*" — wildcard CORS is never
+    acceptable for an authenticated API surface. When this list is empty,
+    CORS falls back to http://localhost:3000 (safe for local dev).
+  EOT
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = !contains(var.frontend_domain_names, "*")
+    error_message = "frontend_domain_names must not contain \"*\" — bare wildcard CORS is never safe. Supply explicit origins per environment."
+  }
+
+  validation {
+    condition = alltrue([
+      for d in var.frontend_domain_names : !strcontains(d, " ")
+    ])
+    error_message = "Entries in frontend_domain_names must not contain whitespace."
+  }
 }
 
 variable "frontend_acm_certificate_arn" {
