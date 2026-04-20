@@ -74,17 +74,37 @@ type Credentials interface {
 // ProviderConfig represents configuration for a provider
 type ProviderConfig struct {
 	Name string
-	// Profile carries provider-specific semantics:
-	//   - AWS: named profile from ~/.aws/credentials
-	//   - Azure: subscription ID
-	//   - GCP: project ID
-	Profile                string
-	Region                 string
-	CredentialPath         string
-	Endpoint               string                  // For custom endpoints
+
+	// Deprecated: Profile is overloaded with provider-specific semantics
+	// (AWS: named profile, Azure: subscription ID, GCP: project ID). Prefer
+	// the typed AWSProfile/AzureSubscriptionID/GCPProjectID fields below;
+	// when both are set, the typed field wins.
+	Profile string
+
+	// Typed per-provider identity fields. When set, these take precedence
+	// over Profile. Each provider only reads its own field and ignores the
+	// others, so a single ProviderConfig can be reused across providers.
+	AWSProfile          string // AWS named profile from ~/.aws/credentials or ~/.aws/config
+	AzureSubscriptionID string // Azure subscription ID (UUID)
+	GCPProjectID        string // GCP project ID (e.g. "my-project")
+
+	Region         string
+	CredentialPath string
+	Endpoint       string // For custom endpoints
+
+	// Optional pre-resolved credentials. Each field is typed as `any` to
+	// keep this module free of Azure/GCP SDK dependencies; providers
+	// type-assert to their expected concrete type and ignore mismatches:
+	//   - AzureTokenCredential: github.com/Azure/azure-sdk-for-go/sdk/azcore.TokenCredential
+	//   - GCPTokenSource:        golang.org/x/oauth2.TokenSource
+	// When unset (nil), providers fall back to ambient credentials
+	// (DefaultAzureCredential / Application Default Credentials).
 	AWSCredentialsProvider aws.CredentialsProvider // optional: override ambient AWS credentials
+	AzureTokenCredential   any
+	GCPTokenSource         any
+
 	// ProviderOverride, if non-nil, is returned directly by CreateProvider without
 	// going through the registry. Use this to inject a pre-built, pre-authenticated
-	// provider (e.g. with a resolved azcore.TokenCredential or oauth2.TokenSource).
+	// provider when the typed credential slots above aren't expressive enough.
 	ProviderOverride Provider
 }

@@ -146,6 +146,23 @@ func TestNewAzureProvider(t *testing.T) {
 			expectedRegion: "eastus",
 			expectedSubID:  "my-subscription",
 		},
+		{
+			name: "Typed AzureSubscriptionID takes precedence over deprecated Profile",
+			config: &provider.ProviderConfig{
+				AzureSubscriptionID: "typed-sub-id",
+				Profile:             "deprecated-sub-id",
+			},
+			expectedRegion: "",
+			expectedSubID:  "typed-sub-id",
+		},
+		{
+			name: "Typed AzureSubscriptionID alone (no Profile fallback needed)",
+			config: &provider.ProviderConfig{
+				AzureSubscriptionID: "only-typed",
+			},
+			expectedRegion: "",
+			expectedSubID:  "only-typed",
+		},
 	}
 
 	for _, tt := range tests {
@@ -158,6 +175,39 @@ func TestNewAzureProvider(t *testing.T) {
 			assert.Equal(t, tt.expectedSubID, p.subscriptionID)
 		})
 	}
+}
+
+// TestNewAzureProvider_TokenCredentialInjection verifies that a pre-resolved
+// azcore.TokenCredential supplied via config.AzureTokenCredential is installed
+// on the provider so subsequent client builds skip the DefaultAzureCredential
+// lazy initialisation path.
+func TestNewAzureProvider_TokenCredentialInjection(t *testing.T) {
+	t.Run("Nil credential leaves cred unset", func(t *testing.T) {
+		p, err := NewAzureProvider(&provider.ProviderConfig{
+			AzureSubscriptionID: "sub-1",
+		})
+		require.NoError(t, err)
+		assert.Nil(t, p.cred)
+	})
+
+	t.Run("Non-nil credential is stored on the provider", func(t *testing.T) {
+		fake := &mockTokenCredential{}
+		p, err := NewAzureProvider(&provider.ProviderConfig{
+			AzureSubscriptionID:  "sub-1",
+			AzureTokenCredential: fake,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, azcore.TokenCredential(fake), p.cred)
+	})
+
+	t.Run("Wrong-typed credential is silently ignored (defensive type assertion)", func(t *testing.T) {
+		p, err := NewAzureProvider(&provider.ProviderConfig{
+			AzureSubscriptionID:  "sub-1",
+			AzureTokenCredential: "not-a-credential",
+		})
+		require.NoError(t, err)
+		assert.Nil(t, p.cred)
+	})
 }
 
 func TestAzureProvider_Name(t *testing.T) {

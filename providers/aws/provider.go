@@ -15,8 +15,8 @@ import (
 	"github.com/aws/smithy-go"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
-	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
 // AWS SDK v2 credential source identifiers.
@@ -91,17 +91,30 @@ type AWSProvider struct {
 	credentialsProvider aws.CredentialsProvider // optional override for per-account execution
 }
 
-// NewAWSProvider creates a new AWS provider instance
+// NewAWSProvider creates a new AWS provider instance.
+//
+// Profile resolution order:
+//  1. config.AWSProfile (typed field, preferred)
+//  2. config.Profile (deprecated overload — kept for backwards compatibility)
 func NewAWSProvider(config *provider.ProviderConfig) (*AWSProvider, error) {
 	p := &AWSProvider{}
 
 	if config != nil {
-		p.profile = config.Profile
+		p.profile = resolveAWSProfile(config)
 		p.region = config.Region
 		p.credentialsProvider = config.AWSCredentialsProvider
 	}
 
 	return p, nil
+}
+
+// resolveAWSProfile picks the AWS profile name from the typed field,
+// falling back to the deprecated Profile field.
+func resolveAWSProfile(config *provider.ProviderConfig) string {
+	if config.AWSProfile != "" {
+		return config.AWSProfile
+	}
+	return config.Profile
 }
 
 // SetConfigLoader sets the config loader (for testing)

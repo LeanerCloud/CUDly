@@ -116,6 +116,23 @@ func TestNewAWSProvider(t *testing.T) {
 			expectedProfile: "production",
 			expectedRegion:  "eu-west-1",
 		},
+		{
+			name: "Typed AWSProfile takes precedence over deprecated Profile",
+			config: &provider.ProviderConfig{
+				AWSProfile: "typed-profile",
+				Profile:    "deprecated-profile",
+			},
+			expectedProfile: "typed-profile",
+			expectedRegion:  "",
+		},
+		{
+			name: "Typed AWSProfile alone (no Profile fallback needed)",
+			config: &provider.ProviderConfig{
+				AWSProfile: "only-typed",
+			},
+			expectedProfile: "only-typed",
+			expectedRegion:  "",
+		},
 	}
 
 	for _, tt := range tests {

@@ -1,6 +1,6 @@
 # Known Issues: GCP Provider
 
-> **Audit status (2026-04-20):** `2 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: Missing Pagination in `getDefaultProject`~~ — RESOLVED
 
@@ -147,12 +147,14 @@
 
 **Resolved by:** `2fd9d0324` — `GroupCommitments` (computeengine/client.go:354-358) now generates the timestamp once outside the loop and appends a monotonically-increasing counter: `fmt.Sprintf("cud-%s-%d-%d", k.region, ts, counter)`.
 
-## MEDIUM: `NewProvider` with `config.Profile` Ignores Custom Client Options
+## ~~MEDIUM: `NewProvider` with `config.Profile` Ignores Custom Client Options~~ — RESOLVED
 
 **File**: `providers/gcp/provider.go:102-125`
-**Description**: When `config.Profile` is set, `clientOpts` is initialised empty (line 123). Credentials always resolve via ADC regardless of caller intent. `NewProviderWithCredentials` exists but is unreachable from the registry path.
-**Impact**: Callers that want to inject a service-account token source must bypass the registry entirely, which defeats the whole point of the registry abstraction.
-**Status:** ✅ Still valid
+**Description**: When `config.Profile` was set, `clientOpts` was initialised empty. Credentials always resolved via ADC regardless of caller intent. `NewProviderWithCredentials` existed but was unreachable from the registry path.
+**Impact**: Callers that wanted to inject a service-account token source had to bypass the registry entirely, defeating the registry abstraction.
+**Status:** ✔️ Resolved (cross-cuts `12_pkg_provider_interface.md`'s typed-fields refactor)
+
+**Resolved by:** `ProviderConfig` gained an opaque `GCPTokenSource any` slot. `NewProvider` now type-asserts to `oauth2.TokenSource`; on success it appends `option.WithTokenSource(ts)` to `clientOpts` and forwards those opts into `getDefaultProject` so the project-ID lookup uses caller-provided credentials. When the slot is nil or wrong-typed it falls back silently to ADC, preserving prior behaviour. The slot is `any` rather than `oauth2.TokenSource` so `pkg/provider` keeps zero GCP SDK dependencies. See `12_pkg_provider_interface.md` for the broader refactor and tests.
 
 ### Implementation plan
 
@@ -187,11 +189,13 @@
 
 **Effort:** `medium`
 
-## LOW: Missing Test Coverage for `getDefaultProject` Pagination
+## ~~LOW: Missing Test Coverage for `getDefaultProject` Pagination~~ — RESOLVED
 
 **File**: `providers/gcp/provider_test.go`
-**Description**: No test for `getDefaultProject`. The pagination bug above exists without any test to detect it.
-**Status:** ✅ Still valid
+**Description**: No test for `getDefaultProject`. The pagination bug above existed without any test to detect it.
+**Status:** ✔️ Resolved
+
+**Resolved by:** Extracted the per-page callback used by `Pages()` into a named helper `findActiveProjectInPage(*string, *ListProjectsResponse) error`, then added `TestFindActiveProjectInPage` covering: page with one ACTIVE (sets out + returns sentinel), page with no ACTIVE projects (returns nil, leaves out untouched so Pages() walks to the next page), empty page, "first ACTIVE wins" within a page, and a multi-page simulation where page 1 has no ACTIVE and page 2 does — pinning the contract that the original bug violated (looking only at page 1). The full `getDefaultProject` integration is exercised implicitly by `NewProvider` callers; standing up a real `cloudresourcemanager` service was not necessary because the only logic the previous bug missed was the cross-page short-circuit, and that callback is now directly tested.
 
 ### Implementation plan
 

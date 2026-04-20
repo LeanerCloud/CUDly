@@ -1,6 +1,6 @@
 # Known Issues: Provider Interface
 
-> **Audit status (2026-04-20):** `1 still valid · 5 resolved · 1 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~HIGH: Azure `GetSupportedServices` advertises `ServiceNoSQL` but `GetServiceClient` has no handler~~
 
@@ -19,12 +19,25 @@
 
 **Resolved by:** `2fd9d0324` — `GetSupportedServices` (provider.go:379-386) now includes `ServiceCache` and `ServiceStorage`, and `GetServiceClient` (provider.go:389-402) wires `memorystore.NewClient` and `cloudstorage.NewClient` into the switch.
 
-## HIGH: `ProviderConfig.Profile` overloaded with undocumented provider-specific semantics
+## ~~HIGH: `ProviderConfig.Profile` overloaded with undocumented provider-specific semantics~~ — RESOLVED
 
 **File**: `pkg/provider/interface.go:74-90`
-**Description**: `Profile` carries three different meanings: AWS profile name, Azure subscription ID, GCP project ID. Godoc comments (lines 77-80) now document the per-provider semantics, but there are no per-provider fields; callers must still know which provider is in use and interpret `Profile` accordingly.
-**Impact**: Easy to silently get the wrong subscription/project when a caller assumes `Profile` is always an AWS profile.
-**Status:** ⚠️ Partially fixed — per-provider docs added; typed fields still missing.
+**Description**: `Profile` carried three different meanings: AWS profile name, Azure subscription ID, GCP project ID. Godoc explained the overload but there were no per-provider fields; callers had to know which provider was in use and interpret `Profile` accordingly.
+**Impact**: Easy to silently get the wrong subscription/project when a caller assumed `Profile` was always an AWS profile.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `ProviderConfig` now exposes typed identity fields — `AWSProfile`, `AzureSubscriptionID`, `GCPProjectID` — and typed pre-resolved credential slots — `AzureTokenCredential` and `GCPTokenSource` (both `any` so `pkg/provider` keeps no Azure/GCP SDK deps; providers type-assert to the expected concrete type and silently ignore mismatches). `Profile` is marked `// Deprecated:` with godoc explaining the precedence: typed field wins; `Profile` is the documented fallback.
+
+Each provider's `NewProvider` reads the typed field through a small `resolveXProfile` / `resolveAzureSubscriptionID` / `resolveGCPProjectID` helper, falling back to `Profile` only when the typed field is empty. GCP additionally honours `GCPTokenSource` by appending `option.WithTokenSource(ts)` to `clientOpts` and forwarding the same opts into `getDefaultProject` so the lookup uses caller-provided credentials. Azure honours `AzureTokenCredential` by storing it directly on the provider (skipping the lazy `DefaultAzureCredential` initialisation in `GetCredentials`).
+
+Tests added:
+
+- `providers/aws/provider_test.go::TestNewAWSProvider` — table cases for typed-precedence and typed-alone.
+- `providers/azure/provider_test.go::TestNewAzureProvider` — table cases for typed-precedence and typed-alone.
+- `providers/azure/provider_test.go::TestNewAzureProvider_TokenCredentialInjection` — nil credential, valid `azcore.TokenCredential`, and wrong-typed credential (silently ignored).
+- `providers/gcp/provider_test.go::TestNewProvider_ProjectIDResolution` — typed-precedence, typed-alone, deprecated-fallback, nil-config, empty-config.
+
+Existing callers that still use `Profile` continue to work unchanged.
 
 ### Implementation plan
 

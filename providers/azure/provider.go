@@ -95,17 +95,37 @@ type AzureProvider struct {
 	credProvider        CredentialProvider
 }
 
-// NewAzureProvider creates a new Azure provider instance
+// NewAzureProvider creates a new Azure provider instance.
+//
+// Subscription resolution order:
+//  1. config.AzureSubscriptionID (typed field, preferred)
+//  2. config.Profile (deprecated overload — kept for backwards compatibility)
+//
+// Credential resolution: if config.AzureTokenCredential is a non-nil
+// azcore.TokenCredential, it is installed directly so all downstream clients
+// use those credentials. Otherwise, GetCredentials lazily falls back to
+// DefaultAzureCredential.
 func NewAzureProvider(config *provider.ProviderConfig) (*AzureProvider, error) {
 	p := &AzureProvider{}
 
 	if config != nil {
 		p.region = config.Region
-		// In Azure, Profile maps to subscription ID
-		p.subscriptionID = config.Profile
+		p.subscriptionID = resolveAzureSubscriptionID(config)
+		if cred, ok := config.AzureTokenCredential.(azcore.TokenCredential); ok && cred != nil {
+			p.cred = cred
+		}
 	}
 
 	return p, nil
+}
+
+// resolveAzureSubscriptionID picks the subscription ID from the typed field,
+// falling back to the deprecated Profile field.
+func resolveAzureSubscriptionID(config *provider.ProviderConfig) string {
+	if config.AzureSubscriptionID != "" {
+		return config.AzureSubscriptionID
+	}
+	return config.Profile
 }
 
 // SetSubscriptionsClient sets the subscriptions client (for testing)

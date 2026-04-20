@@ -99,20 +99,33 @@ type GCPProvider struct {
 	resourceManagerService ResourceManagerService
 }
 
-// NewProvider creates a new GCP provider
+// NewProvider creates a new GCP provider.
+//
+// Project resolution order:
+//  1. config.GCPProjectID (typed field, preferred)
+//  2. config.Profile (deprecated overload — kept for backwards compatibility)
+//  3. Application Default Credentials' default project
+//
+// Credential resolution: if config.GCPTokenSource is a non-nil
+// oauth2.TokenSource, it is installed via option.WithTokenSource so all
+// downstream clients use those credentials. Otherwise, clients fall back
+// to Application Default Credentials.
 func NewProvider(config *provider.ProviderConfig) (*GCPProvider, error) {
 	ctx := context.Background()
 
-	var projectID string
-	var err error
+	projectID := resolveGCPProjectID(config)
+	clientOpts := []option.ClientOption{}
+	if config != nil {
+		if ts, ok := config.GCPTokenSource.(oauth2.TokenSource); ok && ts != nil {
+			clientOpts = append(clientOpts, option.WithTokenSource(ts))
+		}
+	}
 
-	// Use project from config if provided, otherwise detect default
-	if config != nil && config.Profile != "" {
-		// In GCP, we use Profile field to pass project ID
-		projectID = config.Profile
-	} else {
-		// Try to get default project from Application Default Credentials
-		projectID, err = getDefaultProject(ctx)
+	if projectID == "" {
+		// Token source (when supplied) is forwarded to getDefaultProject so
+		// the lookup uses the caller-provided credentials, not ambient ADC.
+		var err error
+		projectID, err = getDefaultProject(ctx, clientOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get default GCP project: %w", err)
 		}
@@ -121,8 +134,21 @@ func NewProvider(config *provider.ProviderConfig) (*GCPProvider, error) {
 	return &GCPProvider{
 		ctx:        ctx,
 		projectID:  projectID,
-		clientOpts: []option.ClientOption{},
+		clientOpts: clientOpts,
 	}, nil
+}
+
+// resolveGCPProjectID picks the project ID from the typed field, falling
+// back to the deprecated Profile field. Returns "" if neither is set, which
+// signals the caller to consult ADC.
+func resolveGCPProjectID(config *provider.ProviderConfig) string {
+	if config == nil {
+		return ""
+	}
+	if config.GCPProjectID != "" {
+		return config.GCPProjectID
+	}
+	return config.Profile
 }
 
 // NewProviderWithProject creates a new GCP provider with a specific project
@@ -433,22 +459,20 @@ var errStopProjectPagination = errors.New("stop pagination: found active project
 // page), this walks pages via Pages() until the first ACTIVE project is
 // found — a single req.Do() would only see page 1 and falsely report
 // "no active GCP projects found" if the active one sat on a later page.
-func getDefaultProject(ctx context.Context) (string, error) {
+//
+// opts is forwarded to cloudresourcemanager.NewService so callers can inject
+// option.WithTokenSource (or similar) to use non-ambient credentials. With
+// no opts the lookup uses Application Default Credentials.
+func getDefaultProject(ctx context.Context, opts ...option.ClientOption) (string, error) {
 	// Try to use the Cloud Resource Manager API to get the default project
-	service, err := cloudresourcemanager.NewService(ctx)
+	service, err := cloudresourcemanager.NewService(ctx, opts...)
 	if err != nil {
 		return "", fmt.Errorf("failed to create resource manager service: %w", err)
 	}
 
 	var foundID string
 	err = service.Projects.List().Pages(ctx, func(resp *cloudresourcemanager.ListProjectsResponse) error {
-		for _, project := range resp.Projects {
-			if project.LifecycleState == "ACTIVE" {
-				foundID = project.ProjectId
-				return errStopProjectPagination
-			}
-		}
-		return nil
+		return findActiveProjectInPage(&foundID, resp)
 	})
 	if err != nil && !errors.Is(err, errStopProjectPagination) {
 		return "", fmt.Errorf("failed to list projects: %w", err)
@@ -457,6 +481,23 @@ func getDefaultProject(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no active GCP projects found")
 	}
 	return foundID, nil
+}
+
+// findActiveProjectInPage is the per-page callback for getDefaultProject's
+// `Pages()` walk. It sets *out to the first ACTIVE project's ID it sees and
+// returns errStopProjectPagination to short-circuit iteration; for pages
+// containing no ACTIVE projects it leaves *out untouched and returns nil so
+// the walk continues to the next page. Extracted so unit tests can cover the
+// pagination/short-circuit semantics without standing up a real
+// cloudresourcemanager service.
+func findActiveProjectInPage(out *string, page *cloudresourcemanager.ListProjectsResponse) error {
+	for _, project := range page.Projects {
+		if project.LifecycleState == "ACTIVE" {
+			*out = project.ProjectId
+			return errStopProjectPagination
+		}
+	}
+	return nil
 }
 
 func init() {

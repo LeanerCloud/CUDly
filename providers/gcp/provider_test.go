@@ -84,6 +84,134 @@ func (m *MockResourceManagerService) ListProjects(ctx context.Context) ([]*cloud
 	return m.projects, nil
 }
 
+// TestFindActiveProjectInPage covers the page callback used by
+// `getDefaultProject`'s `Pages()` walk. The Pages() machinery itself is
+// well-tested in the cloudresourcemanager SDK; what matters here is that
+// the callback (a) finds the first ACTIVE project on a page, (b) returns
+// the sentinel to short-circuit further pages, and (c) leaves *out
+// untouched on pages with no ACTIVE projects so the walk continues.
+//
+// This pins the pagination contract documented in the function godoc
+// (related issue: 11_gcp_provider.md LOW "Missing Test Coverage for
+// getDefaultProject Pagination").
+func TestFindActiveProjectInPage(t *testing.T) {
+	t.Run("page with one ACTIVE project — sets out and short-circuits", func(t *testing.T) {
+		var out string
+		err := findActiveProjectInPage(&out, &cloudresourcemanager.ListProjectsResponse{
+			Projects: []*cloudresourcemanager.Project{
+				{ProjectId: "proj-active", LifecycleState: "ACTIVE"},
+			},
+		})
+		require.ErrorIs(t, err, errStopProjectPagination)
+		assert.Equal(t, "proj-active", out)
+	})
+
+	t.Run("page with no ACTIVE projects — returns nil, leaves out untouched", func(t *testing.T) {
+		var out string
+		err := findActiveProjectInPage(&out, &cloudresourcemanager.ListProjectsResponse{
+			Projects: []*cloudresourcemanager.Project{
+				{ProjectId: "proj-pending", LifecycleState: "DELETE_REQUESTED"},
+				{ProjectId: "proj-deleted", LifecycleState: "DELETE_IN_PROGRESS"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, out)
+	})
+
+	t.Run("empty page — returns nil, leaves out untouched", func(t *testing.T) {
+		var out string
+		err := findActiveProjectInPage(&out, &cloudresourcemanager.ListProjectsResponse{})
+		require.NoError(t, err)
+		assert.Empty(t, out)
+	})
+
+	t.Run("first ACTIVE wins, later projects on same page are not inspected", func(t *testing.T) {
+		var out string
+		err := findActiveProjectInPage(&out, &cloudresourcemanager.ListProjectsResponse{
+			Projects: []*cloudresourcemanager.Project{
+				{ProjectId: "proj-1", LifecycleState: "ACTIVE"},
+				{ProjectId: "proj-2", LifecycleState: "ACTIVE"},
+			},
+		})
+		require.ErrorIs(t, err, errStopProjectPagination)
+		assert.Equal(t, "proj-1", out)
+	})
+
+	t.Run("multi-page simulation — page 1 has none, page 2 has ACTIVE", func(t *testing.T) {
+		// Simulates Pages() invoking the callback per page. The callback
+		// holds onto the same *out across calls; finding ACTIVE on page 2
+		// must populate it correctly.
+		var out string
+
+		err := findActiveProjectInPage(&out, &cloudresourcemanager.ListProjectsResponse{
+			Projects: []*cloudresourcemanager.Project{
+				{ProjectId: "p1-pending", LifecycleState: "DELETE_REQUESTED"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, out, "page 1 has no ACTIVE projects, out must stay empty")
+
+		err = findActiveProjectInPage(&out, &cloudresourcemanager.ListProjectsResponse{
+			Projects: []*cloudresourcemanager.Project{
+				{ProjectId: "p2-active", LifecycleState: "ACTIVE"},
+			},
+		})
+		require.ErrorIs(t, err, errStopProjectPagination)
+		assert.Equal(t, "p2-active", out, "page 2 has the ACTIVE project, out must be set")
+	})
+}
+
+// TestNewProvider_ProjectIDResolution verifies the precedence chain when
+// resolving the project ID: typed GCPProjectID > deprecated Profile. The
+// "fall through to ADC" branch is exercised separately because it requires
+// ambient credentials.
+func TestNewProvider_ProjectIDResolution(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *provider.ProviderConfig
+		expected string
+	}{
+		{
+			name: "Typed GCPProjectID takes precedence over deprecated Profile",
+			config: &provider.ProviderConfig{
+				GCPProjectID: "typed-project",
+				Profile:      "deprecated-project",
+			},
+			expected: "typed-project",
+		},
+		{
+			name: "Typed GCPProjectID alone (no Profile fallback needed)",
+			config: &provider.ProviderConfig{
+				GCPProjectID: "only-typed",
+			},
+			expected: "only-typed",
+		},
+		{
+			name: "Deprecated Profile is honoured when typed field is empty",
+			config: &provider.ProviderConfig{
+				Profile: "legacy-project",
+			},
+			expected: "legacy-project",
+		},
+		{
+			name:     "Nil config resolves to empty (caller falls through to ADC)",
+			config:   nil,
+			expected: "",
+		},
+		{
+			name:     "Empty config resolves to empty (caller falls through to ADC)",
+			config:   &provider.ProviderConfig{},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, resolveGCPProjectID(tt.config))
+		})
+	}
+}
+
 func TestNewProviderWithProject(t *testing.T) {
 	ctx := context.Background()
 	provider := NewProviderWithProject(ctx, "test-project")
