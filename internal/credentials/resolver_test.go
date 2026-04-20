@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	stypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/stretchr/testify/assert"
@@ -185,6 +186,133 @@ func TestResolveAWSCredentialProvider_UnsupportedMode(t *testing.T) {
 	_, err := ResolveAWSCredentialProvider(context.Background(), account, newMockStore(), nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported aws_auth_mode")
+}
+
+// TestResolveBastionProvider_LoadsBastionCreds asserts the self-resolving path:
+// when AccountLookup + STSClientFactory are wired, the resolver builds an STS
+// client backed by the bastion account's own credentials before assuming the
+// target role. We verify by capturing which credentials provider was passed to
+// the factory.
+func TestResolveBastionProvider_LoadsBastionCreds(t *testing.T) {
+	bastion := &config.CloudAccount{
+		ID:          "bastion-acct",
+		Enabled:     true,
+		AWSAuthMode: "access_keys",
+	}
+	target := &config.CloudAccount{
+		ID:           "target-acct",
+		AWSAuthMode:  "bastion",
+		AWSBastionID: "bastion-acct",
+		AWSRoleARN:   "arn:aws:iam::999999999999:role/Target",
+	}
+	// Stash bastion access keys in the store so resolveAccessKeyProvider succeeds.
+	store := newMockStore()
+	store.data["bastion-acct/aws_access_keys"] = []byte(`{"access_key_id":"AKIA","secret_access_key":"sk"}`)
+
+	var capturedProvider aws.CredentialsProvider
+	opts := AWSResolveOptions{
+		AccountLookup: func(_ context.Context, id string) (*config.CloudAccount, error) {
+			if id == "bastion-acct" {
+				return bastion, nil
+			}
+			return nil, nil
+		},
+		STSClientFactory: func(p aws.CredentialsProvider) STSClient {
+			capturedProvider = p
+			return &mockSTSClient{}
+		},
+	}
+
+	provider, err := ResolveAWSCredentialProviderWithOpts(context.Background(), target, store, &mockSTSClient{}, opts)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+	assert.NotNil(t, capturedProvider, "STSClientFactory should have been called with bastion creds")
+}
+
+// TestResolveBastionProvider_RejectsBastionChain ensures bastion-of-bastion is
+// refused even if AccountLookup returns one.
+func TestResolveBastionProvider_RejectsBastionChain(t *testing.T) {
+	chainedBastion := &config.CloudAccount{
+		ID:           "bastion-acct",
+		Enabled:      true,
+		AWSAuthMode:  "bastion",
+		AWSBastionID: "another-bastion",
+	}
+	target := &config.CloudAccount{
+		ID:           "target-acct",
+		AWSAuthMode:  "bastion",
+		AWSBastionID: "bastion-acct",
+		AWSRoleARN:   "arn:aws:iam::999999999999:role/Target",
+	}
+	opts := AWSResolveOptions{
+		AccountLookup: func(_ context.Context, _ string) (*config.CloudAccount, error) {
+			return chainedBastion, nil
+		},
+		STSClientFactory: func(_ aws.CredentialsProvider) STSClient { return &mockSTSClient{} },
+	}
+
+	_, err := ResolveAWSCredentialProviderWithOpts(context.Background(), target, newMockStore(), &mockSTSClient{}, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bastion chaining not allowed")
+}
+
+// TestResolveBastionProvider_BastionNotFound surfaces a clear error when the
+// referenced bastion account does not exist.
+func TestResolveBastionProvider_BastionNotFound(t *testing.T) {
+	target := &config.CloudAccount{
+		ID:           "target-acct",
+		AWSAuthMode:  "bastion",
+		AWSBastionID: "missing-bastion",
+		AWSRoleARN:   "arn:aws:iam::999999999999:role/Target",
+	}
+	opts := AWSResolveOptions{
+		AccountLookup: func(_ context.Context, _ string) (*config.CloudAccount, error) {
+			return nil, nil
+		},
+		STSClientFactory: func(_ aws.CredentialsProvider) STSClient { return &mockSTSClient{} },
+	}
+
+	_, err := ResolveAWSCredentialProviderWithOpts(context.Background(), target, newMockStore(), &mockSTSClient{}, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bastion account missing-bastion not found")
+}
+
+// TestResolveBastionProvider_BastionDisabled refuses to use a disabled bastion.
+func TestResolveBastionProvider_BastionDisabled(t *testing.T) {
+	disabled := &config.CloudAccount{
+		ID:          "bastion-acct",
+		Enabled:     false,
+		AWSAuthMode: "access_keys",
+	}
+	target := &config.CloudAccount{
+		ID:           "target-acct",
+		AWSAuthMode:  "bastion",
+		AWSBastionID: "bastion-acct",
+		AWSRoleARN:   "arn:aws:iam::999999999999:role/Target",
+	}
+	opts := AWSResolveOptions{
+		AccountLookup:    func(_ context.Context, _ string) (*config.CloudAccount, error) { return disabled, nil },
+		STSClientFactory: func(_ aws.CredentialsProvider) STSClient { return &mockSTSClient{} },
+	}
+
+	_, err := ResolveAWSCredentialProviderWithOpts(context.Background(), target, newMockStore(), &mockSTSClient{}, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bastion account bastion-acct is disabled")
+}
+
+// TestResolveBastionProvider_LegacyFallback verifies the back-compat path:
+// when AccountLookup/STSClientFactory are nil, the resolver falls through to
+// the old behaviour of trusting the caller-supplied STS client.
+func TestResolveBastionProvider_LegacyFallback(t *testing.T) {
+	target := &config.CloudAccount{
+		ID:           "target-acct",
+		AWSAuthMode:  "bastion",
+		AWSBastionID: "bastion-acct",
+		AWSRoleARN:   "arn:aws:iam::999999999999:role/Target",
+	}
+	provider, err := ResolveAWSCredentialProvider(context.Background(), target, newMockStore(), &mockSTSClient{})
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
 }
 
 func TestResolveAzureCredentials_Success(t *testing.T) {

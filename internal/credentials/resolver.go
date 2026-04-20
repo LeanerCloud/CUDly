@@ -70,17 +70,53 @@ type STSClient interface {
 	AssumeRoleWithWebIdentity(ctx context.Context, params *sts.AssumeRoleWithWebIdentityInput, optFns ...func(*sts.Options)) (*sts.AssumeRoleWithWebIdentityOutput, error)
 }
 
-// ResolveAWSCredentialProvider returns an aws.CredentialsProvider for the account.
-//
-// Logic per auth mode:
-//   - access_keys: load stored key pair → static credentials provider
-//   - role_arn:    use ambient (instance role / env) → STS AssumeRole
-//   - bastion:     load bastion account creds → STS AssumeRole into target
+// AccountLookupFunc resolves a CloudAccount by ID. Used by the bastion path so
+// the resolver can self-load the bastion account's credentials rather than
+// trust a caller-supplied STS client.
+type AccountLookupFunc func(ctx context.Context, id string) (*config.CloudAccount, error)
+
+// STSClientFactory builds an STSClient from a credentials provider. Used by
+// the bastion path to construct an STS client backed by the bastion account's
+// own credentials before assuming the target role.
+type STSClientFactory func(provider aws.CredentialsProvider) STSClient
+
+// AWSResolveOptions holds optional dependencies for the AWS credential
+// resolver. The bastion path needs both AccountLookup and STSClientFactory to
+// self-resolve correctly; without them, bastion mode falls back to the
+// pre-self-loading behaviour (trusts the caller-supplied STS client) for
+// backward compatibility.
+type AWSResolveOptions struct {
+	AccountLookup    AccountLookupFunc
+	STSClientFactory STSClientFactory
+}
+
+// ResolveAWSCredentialProvider is a back-compat wrapper that calls
+// ResolveAWSCredentialProviderWithOpts with empty options. New callers should
+// use the WithOpts variant so bastion mode can self-resolve.
 func ResolveAWSCredentialProvider(
 	ctx context.Context,
 	account *config.CloudAccount,
 	store CredentialStore,
 	stsClient STSClient,
+) (aws.CredentialsProvider, error) {
+	return ResolveAWSCredentialProviderWithOpts(ctx, account, store, stsClient, AWSResolveOptions{})
+}
+
+// ResolveAWSCredentialProviderWithOpts returns an aws.CredentialsProvider for
+// the account.
+//
+// Logic per auth mode:
+//   - access_keys: load stored key pair → static credentials provider
+//   - role_arn:    use ambient (instance role / env) → STS AssumeRole
+//   - bastion:     load bastion account creds → STS AssumeRole into target
+//     (requires opts.AccountLookup + opts.STSClientFactory)
+//   - workload_identity_federation: token file → STS AssumeRoleWithWebIdentity
+func ResolveAWSCredentialProviderWithOpts(
+	ctx context.Context,
+	account *config.CloudAccount,
+	store CredentialStore,
+	stsClient STSClient,
+	opts AWSResolveOptions,
 ) (aws.CredentialsProvider, error) {
 	switch account.AWSAuthMode {
 	case "access_keys":
@@ -88,7 +124,7 @@ func ResolveAWSCredentialProvider(
 	case "role_arn":
 		return resolveRoleARNProvider(ctx, account, stsClient, nil)
 	case "bastion":
-		return resolveBastionProvider(ctx, account, store, stsClient)
+		return resolveBastionProvider(ctx, account, store, stsClient, opts)
 	case "workload_identity_federation":
 		return resolveWebIdentityProvider(account, stsClient)
 	default:
@@ -142,20 +178,55 @@ func resolveRoleARNProvider(
 	return provider, nil
 }
 
+// resolveBastionProvider implements the bastion auth mode: target account is
+// reached via STS AssumeRole using credentials from a separate bastion account.
+//
+// Self-resolving path (preferred): when opts.AccountLookup and
+// opts.STSClientFactory are both set, the resolver loads the bastion account,
+// recursively resolves its credentials, builds a bastion-scoped STS client, and
+// uses that to assume the target role. Bastion-of-bastion chaining is rejected
+// at depth 1 to prevent loops.
+//
+// Legacy path: when either option is nil, the resolver falls back to the old
+// behaviour and trusts that the caller-supplied stsClient already carries
+// bastion credentials. This preserves backward compatibility with callers that
+// have not yet been updated to wire the lookup/factory.
 func resolveBastionProvider(
 	ctx context.Context,
 	account *config.CloudAccount,
 	store CredentialStore,
 	stsClient STSClient,
+	opts AWSResolveOptions,
 ) (aws.CredentialsProvider, error) {
 	if account.AWSBastionID == "" {
 		return nil, fmt.Errorf("credentials: aws_bastion_id is required for bastion auth mode (account %s)", account.ID)
 	}
-	// The bastion account must be resolved by the caller as a full CloudAccount.
-	// Here we only have the account struct — the bastion account's credentials were
-	// loaded separately and passed in via stsClient which already uses bastion creds.
-	// This resolver simply assumes the target role using the provided stsClient.
-	return resolveRoleARNProvider(ctx, account, stsClient, nil)
+	if opts.AccountLookup == nil || opts.STSClientFactory == nil {
+		// Legacy fallback: trust caller's stsClient. Tracked in known_issues/03.
+		return resolveRoleARNProvider(ctx, account, stsClient, nil)
+	}
+	bastion, err := opts.AccountLookup(ctx, account.AWSBastionID)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: load bastion account %s: %w", account.AWSBastionID, err)
+	}
+	if bastion == nil {
+		return nil, fmt.Errorf("credentials: bastion account %s not found", account.AWSBastionID)
+	}
+	if !bastion.Enabled {
+		return nil, fmt.Errorf("credentials: bastion account %s is disabled", account.AWSBastionID)
+	}
+	if bastion.AWSAuthMode == "bastion" {
+		return nil, fmt.Errorf("credentials: bastion chaining not allowed (account %s references bastion %s which is itself a bastion)", account.ID, bastion.ID)
+	}
+	// Recursively resolve the bastion's own credentials. Pass empty opts to
+	// guarantee the recursive call cannot trigger bastion mode (already
+	// guarded above by the AWSAuthMode check, but defence in depth).
+	bastionCreds, err := ResolveAWSCredentialProviderWithOpts(ctx, bastion, store, stsClient, AWSResolveOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("credentials: resolve bastion %s creds: %w", bastion.ID, err)
+	}
+	bastionSTS := opts.STSClientFactory(bastionCreds)
+	return resolveRoleARNProvider(ctx, account, bastionSTS, nil)
 }
 
 // resolveWebIdentityProvider returns a credential provider that exchanges an OIDC token
