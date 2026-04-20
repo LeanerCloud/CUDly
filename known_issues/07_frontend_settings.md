@@ -1,6 +1,6 @@
 # Known Issues: Frontend Settings
 
-> **Audit status (2026-04-20):** `2 still valid · 4 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `1 still valid · 5 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~HIGH: Unchecked null dereferences via forced element casts~~ — RESOLVED
 
@@ -91,14 +91,15 @@
 
 **Effort:** `small`
 
-## HIGH: Race condition — multiple concurrent save submissions with no in-flight guard
+## ~~HIGH: Race condition — multiple concurrent save submissions with no in-flight guard~~ — RESOLVED
 
 **File**: `frontend/src/settings.ts:893-941`
-**Description**: `saveGlobalSettings` has no in-progress flag, no button disable, no debounce. Rapid clicks of the Save button launch concurrent `updateConfig` + `updateServiceConfig` batches. Last-write-wins ordering is non-deterministic because per-service saves run through `Promise.all`.
-**Impact**: Duplicate API calls; under concurrent submission the final persisted state may be a mix of both forms. Particularly harmful when the user makes changes, clicks Save, then quickly edits again and clicks Save again.
-**Status:** ✅ Still valid
+**Description**: `saveGlobalSettings` had no in-progress flag, no button disable, and no debounce, so rapid Save clicks produced concurrent `updateConfig` + `updateServiceConfig` batches with non-deterministic last-write-wins ordering.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Added a module-level `saveInFlight` flag. `saveGlobalSettings` returns early when it's already true, flips it inside `try`, and restores it in `finally`. The Save button (now `id="save-settings-btn"` in `index.html`) is `disabled` for the duration so rapid clicks produce no new submissions and the UI reflects the in-progress state.
+
+### Original implementation plan
 
 **Goal:** Only one save operation is in flight at a time; the Save button is disabled while saving and re-enabled in `finally`.
 
@@ -148,14 +149,15 @@
 
 **Resolved by:** `0cb45a370` — propagation is now derived from the single `SERVICE_FIELDS` source of truth (settings.ts:23-38), so all declared services are always covered.
 
-## MEDIUM: `saveGlobalSettings` silently resets per-service coverage to global default
+## ~~MEDIUM: `saveGlobalSettings` silently resets per-service coverage to global default~~ — RESOLVED
 
 **File**: `frontend/src/settings.ts:927`
-**Description**: `coverage: settings.default_coverage` is written unconditionally for every service on save. There is no per-service coverage UI field, and `loadedServiceConfigs` is not consulted for the existing per-service coverage override. Every Save overwrites any backend per-service coverage customisation.
-**Impact**: Silent data-loss for any operator who set per-service coverage through the API or a future UI. Global changes blast over per-service overrides invisibly.
-**Status:** ✅ Still valid
+**Description**: Every Save wrote `coverage: settings.default_coverage` unconditionally, so any per-service coverage customisation set via the API or a future UI was blasted over silently on every Save.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** The per-service save now preserves every field the UI doesn't own: each service config is built by spreading the cached `base` (`loadedServiceConfigs`) first, then overlaying only the UI-managed fields (`term`, `payment`, `enabled`). `coverage` falls back to `base?.coverage` and only uses `settings.default_coverage` when no backend record exists. This closes the data-loss path for `coverage` and also protects `ramp_schedule`, `include_engines`, and any other fields the UI doesn't own.
+
+### Original implementation plan
 
 **Goal:** Per-service coverage is preserved through Save; only services that the user actually touched in the UI are updated.
 

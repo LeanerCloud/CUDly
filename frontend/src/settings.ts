@@ -56,6 +56,12 @@ let savedSnapshot: Record<string, string> = {};
 // non-UI fields (ramp_schedule, include_engines, etc.) that SaveServiceConfig replaces entirely.
 let loadedServiceConfigs: api.ServiceConfig[] = [];
 
+// saveInFlight guards saveGlobalSettings against concurrent invocations
+// (rapid Save clicks, Enter-in-form, etc.). Toggled in a try/finally and
+// mirrored on the Save button's disabled attribute so the UI reflects the
+// in-progress state.
+let saveInFlight = false;
+
 /**
  * byId is the null-safe replacement for `document.getElementById(...) as T`.
  * Returning `T | null` forces callers to guard with optional chaining (`?.value`,
@@ -935,38 +941,52 @@ export async function loadAccountsTab(): Promise<void> {
 export async function saveGlobalSettings(e: Event): Promise<void> {
   e.preventDefault();
 
+  // In-flight guard: silently drop concurrent submissions so rapid Save
+  // clicks or an Enter-triggered resubmit don't produce duplicate PUTs
+  // with non-deterministic last-write-wins ordering.
+  if (saveInFlight) return;
+
+  const saveBtn = byId<HTMLButtonElement>('save-settings-btn');
+  saveInFlight = true;
+  if (saveBtn) saveBtn.disabled = true;
+
   const enabledProviders: api.Provider[] = [];
-  if ((document.getElementById('provider-aws') as HTMLInputElement | null)?.checked) enabledProviders.push('aws');
-  if ((document.getElementById('provider-azure') as HTMLInputElement | null)?.checked) enabledProviders.push('azure');
-  if ((document.getElementById('provider-gcp') as HTMLInputElement | null)?.checked) enabledProviders.push('gcp');
+  if (byId<HTMLInputElement>('provider-aws')?.checked) enabledProviders.push('aws');
+  if (byId<HTMLInputElement>('provider-azure')?.checked) enabledProviders.push('azure');
+  if (byId<HTMLInputElement>('provider-gcp')?.checked) enabledProviders.push('gcp');
 
   const settings: api.Config = {
     enabled_providers: enabledProviders,
-    notification_email: (document.getElementById('setting-notification-email') as HTMLInputElement | null)?.value || '',
-    auto_collect: (document.getElementById('setting-auto-collect') as HTMLInputElement | null)?.checked ?? true,
-    collection_schedule: (document.getElementById('setting-collection-schedule') as HTMLSelectElement | null)?.value || 'daily',
-    default_term: parseInt((document.getElementById('setting-default-term') as HTMLSelectElement | null)?.value || '3', 10),
-    default_payment: ((document.getElementById('setting-default-payment') as HTMLSelectElement | null)?.value || 'all-upfront') as api.PaymentOption,
-    default_coverage: parseInt((document.getElementById('setting-default-coverage') as HTMLInputElement | null)?.value || '80', 10),
-    notification_days_before: parseInt((document.getElementById('setting-notification-days') as HTMLInputElement | null)?.value || '3', 10)
+    notification_email: byId<HTMLInputElement>('setting-notification-email')?.value || '',
+    auto_collect: byId<HTMLInputElement>('setting-auto-collect')?.checked ?? true,
+    collection_schedule: byId<HTMLSelectElement>('setting-collection-schedule')?.value || 'daily',
+    default_term: parseInt(byId<HTMLSelectElement>('setting-default-term')?.value || '3', 10),
+    default_payment: (byId<HTMLSelectElement>('setting-default-payment')?.value || 'all-upfront') as api.PaymentOption,
+    default_coverage: parseInt(byId<HTMLInputElement>('setting-default-coverage')?.value || '80', 10),
+    notification_days_before: parseInt(byId<HTMLInputElement>('setting-notification-days')?.value || '3', 10),
   };
 
   try {
     await api.updateConfig(settings);
 
     const serviceSaves = SERVICE_FIELDS.map(({ provider, service, termId, paymentId }) => {
-      const term = parseInt((document.getElementById(termId) as HTMLSelectElement)?.value || '3', 10);
+      const term = parseInt(byId<HTMLSelectElement>(termId)?.value || '3', 10);
       const payment = paymentId
-        ? ((document.getElementById(paymentId) as HTMLSelectElement)?.value || 'all-upfront')
+        ? (byId<HTMLSelectElement>(paymentId)?.value || 'all-upfront')
         : settings.default_payment;
       const base = loadedServiceConfigs.find(s => s.provider === provider && s.service === service);
+      // Carry forward every field the UI doesn't own. coverage, ramp_schedule,
+      // include_engines, etc. can be set out-of-band (API, future UI, migration)
+      // and a full UPSERT that only honoured the four term/payment/enabled/coverage
+      // fields would silently wipe them every time the user clicked Save.
       const cfg: api.ServiceConfig = {
+        ...(base ?? {}),
         provider,
         service,
         enabled: base?.enabled ?? true,
         term,
         payment,
-        coverage: settings.default_coverage,
+        coverage: base?.coverage ?? settings.default_coverage,
       };
       return api.updateServiceConfig(provider, service, cfg);
     });
@@ -979,6 +999,9 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     console.error('Failed to save settings:', error);
     const err = error as Error;
     alert(`Failed to save settings: ${err.message}`);
+  } finally {
+    saveInFlight = false;
+    if (saveBtn) saveBtn.disabled = false;
   }
 }
 
