@@ -140,6 +140,21 @@ variable "container_app_identity_principal_id" {
   default     = null
 }
 
+variable "writeable_secrets_role" {
+  description = <<-EOT
+    When true, the Container App runtime identity gets "Key Vault Secrets
+    Officer" (read + set + delete). Required if the app uses the
+    admin-password sync path (internal/server/app.go writes the admin
+    password to Key Vault when CUDLY_ADMIN_PASSWORD_SECRET is set).
+    When false, the identity gets "Key Vault Secrets User" (read only),
+    which shrinks the blast radius of a runtime compromise. Production
+    tenants that rotate admin credentials out-of-band should set this to
+    false.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "log_analytics_workspace_id" {
   description = "Log Analytics workspace ID for diagnostics"
   type        = string

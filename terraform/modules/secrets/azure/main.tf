@@ -290,12 +290,26 @@ resource "azurerm_role_assignment" "current_user_secrets_officer" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
-# Grant Container App managed identity Secrets User role
+# Role assignment for the Container App runtime identity.
+#
+# Default role is "Key Vault Secrets Officer" because CUDly's runtime needs
+# write access for the admin-password sync path (internal/server/app.go:494,
+# called when the admin user changes their password and
+# CUDLY_ADMIN_PASSWORD_SECRET is set). That path is the only runtime write
+# against Key Vault; Azure RBAC does not offer a "read + set but no delete"
+# built-in role, so the upgrade from "Secrets User" is the cheapest path.
+#
+# Deployments that disable the admin-password sync (no CUDLY_ADMIN_PASSWORD_SECRET)
+# can pass writeable_secrets_role = false to downgrade the runtime identity
+# to read-only "Key Vault Secrets User", reducing the blast radius of a
+# runtime compromise to "read every stored secret" rather than
+# "read/overwrite/delete every secret". This is the recommended posture for
+# production tenants that rotate admin credentials out-of-band.
 resource "azurerm_role_assignment" "container_app_secrets_user" {
   count = var.container_app_identity_principal_id != null ? 1 : 0
 
   scope                = azurerm_key_vault.main.id
-  role_definition_name = "Key Vault Secrets Officer"
+  role_definition_name = var.writeable_secrets_role ? "Key Vault Secrets Officer" : "Key Vault Secrets User"
   principal_id         = var.container_app_identity_principal_id
 }
 

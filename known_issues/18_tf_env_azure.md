@@ -1,6 +1,6 @@
 # Known Issues: Terraform Azure Environment
 
-> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 0 partially fixed · 0 moved · 1 needs triage`
+> **Audit status (2026-04-20):** `1 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: `nonsensitive()` strips sensitivity from `additional_secrets` before merge~~ — RESOLVED
 
@@ -48,14 +48,17 @@
 
 **Effort:** `small`
 
-## HIGH: Container App RBAC grants `Secrets Officer` instead of `Secrets User` (Needs Triage)
+## ~~HIGH: Container App RBAC grants `Secrets Officer` instead of `Secrets User`~~ — TRIAGED & RESOLVED
 
 **File**: `terraform/modules/secrets/azure/main.tf:291-297`
-**Description**: The optional RBAC assignment uses `"Key Vault Secrets Officer"` (create/update/delete) instead of `"Key Vault Secrets User"` (read-only).
-**Impact**: Compromised runtime identity can overwrite or delete all Key Vault secrets including the credential encryption key.
-**Status:** ❓ Needs triage — confirm whether the runtime identity actually needs write permissions (e.g., self-rotation) before downgrading.
+**Description**: The optional RBAC assignment used `"Key Vault Secrets Officer"` (read + set + delete) where many reviewers expected `"Key Vault Secrets User"` (read-only).
+**Status:** ✔️ Triaged & resolved via opt-in downgrade.
 
-### Implementation plan
+**Triage result:** The runtime legitimately writes to Key Vault via the admin-password sync path (`internal/server/app.go:494`, only active when `CUDLY_ADMIN_PASSWORD_SECRET` is set). Azure RBAC does not offer a "read + set but no delete" built-in role, so write-capable deployments must have `Secrets Officer` end-to-end.
+
+**Resolved by:** Added a `writeable_secrets_role` module variable (default `true` for backward compatibility) that switches the Container App identity's role between `"Key Vault Secrets Officer"` (writes allowed) and `"Key Vault Secrets User"` (read-only). Deployments that rotate admin credentials out-of-band and do not set `CUDLY_ADMIN_PASSWORD_SECRET` should pass `writeable_secrets_role = false` at the module call site to shrink the blast radius of a runtime compromise to "read every stored secret" instead of "read/overwrite/delete every secret". The resource comment now documents the tradeoff so future operators don't have to re-run this triage.
+
+### Original implementation plan
 
 **Goal:** Grant the Container App the least privilege that still satisfies CUDly's runtime flows, ideally `Key Vault Secrets User`.
 
