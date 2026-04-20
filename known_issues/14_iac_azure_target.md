@@ -1,15 +1,16 @@
 # Known Issues: IaC Azure Target Federation
 
-> **Audit status (2026-04-20):** `1 still valid · 3 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 still valid · 4 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
-## MEDIUM: `.terraform.lock.hcl` silently excluded from git by root `.gitignore`
+## ~~MEDIUM: `.terraform.lock.hcl` silently excluded from git by root `.gitignore`~~ — RESOLVED
 
 **File**: `.gitignore:109-110`
-**Description**: Root `.gitignore` uses bare patterns `.terraform/` and `.terraform.lock.hcl` that match recursively. The lock file will never be committed, so `terraform init` resolves versions from scratch within loose `>= X.Y` constraints.
-**Impact**: Different engineers and CI runs can initialize with different provider versions. Breaks reproducibility.
-**Status:** ✅ Still valid
+**Description**: Bare `.terraform.lock.hcl` ignore pattern silently excluded every module's lock file, so `terraform init` resolved providers from scratch within loose `>= X.Y` constraints. Different engineers and CI runs could initialize with different provider versions.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** Replaced the bare `.terraform.lock.hcl` ignore with a negation (`!.terraform.lock.hcl`). The broad `.terraform/` ignore above still skips per-developer provider cache directories so no binary blobs get committed. Added all 41 generated lock files across the tree (every module under `iac/federation/` and `terraform/` including ci-cd-permissions subdirs) so the next `terraform init` converges on the exact provider versions the current codebase was tested against.
+
+### Original implementation plan
 
 **Goal:** Commit module-scoped `.terraform.lock.hcl` files so every engineer and CI run resolves the same provider versions.
 

@@ -26,6 +26,13 @@ locals {
     # cloud-run/signing-key.tf. Without this, Terraform Apply 403s
     # on cloudkms.keyRings.create.
     "roles/cloudkms.admin",
+    # iam.roleAdmin is required to create/read/update/delete the
+    # custom project role cudlyCommitmentWriter (see
+    # terraform/modules/compute/gcp/cloud-run/main.tf). Without it,
+    # Apply 403s on iam.roles.get when
+    # use_custom_compute_commitment_role = true. Kept even when the
+    # flag is false so operators can flip it without re-bootstrapping.
+    "roles/iam.roleAdmin",
   ])
 }
 
