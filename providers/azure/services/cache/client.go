@@ -503,7 +503,13 @@ func (c *CacheClient) getRedisPricing(ctx context.Context, sku, region string, t
 	}, nil
 }
 
-// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+// retailPricesMaxPages caps fetchAzurePricing's NextPageLink loop. The
+// Azure Retail Prices API paginates at 100 items per page, so 50 pages
+// covers 5000 items — more than any realistic SKU/region/term query.
+const retailPricesMaxPages = 50
+
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API,
+// following NextPageLink until exhausted or the safety cap fires.
 func (c *CacheClient) fetchAzurePricing(ctx context.Context, serviceName, sku, region string) (*AzureRetailPrice, error) {
 	filter := fmt.Sprintf("serviceName eq '%s' and armRegionName eq '%s' and contains(armSkuName, '%s')",
 		serviceName, region, sku)
@@ -512,30 +518,42 @@ func (c *CacheClient) fetchAzurePricing(ctx context.Context, serviceName, sku, r
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	fullURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
+	combined := &AzureRetailPrice{}
+	nextURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
+	seen := map[string]struct{}{}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	for pageIdx := 0; pageIdx < retailPricesMaxPages && nextURL != ""; pageIdx++ {
+		if _, ok := seen[nextURL]; ok {
+			return nil, fmt.Errorf("pricing API returned a self-referential NextPageLink (page %d)", pageIdx)
+		}
+		seen[nextURL] = struct{}{}
+
+		req, err := http.NewRequestWithContext(ctx, "GET", nextURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request (page %d): %w", pageIdx, err)
+		}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to call pricing API (page %d): %w", pageIdx, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("pricing API returned status %d (page %d): %s", resp.StatusCode, pageIdx, string(body))
+		}
+
+		var page AzureRetailPrice
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode pricing response (page %d): %w", pageIdx, err)
+		}
+		resp.Body.Close()
+
+		combined.Items = append(combined.Items, page.Items...)
+		nextURL = page.NextPageLink
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call pricing API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("pricing API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var priceData AzureRetailPrice
-	if err := json.NewDecoder(resp.Body).Decode(&priceData); err != nil {
-		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
-	}
-
-	return &priceData, nil
+	return combined, nil
 }
 
 // extractRedisPricing extracts on-demand and reservation pricing from price items

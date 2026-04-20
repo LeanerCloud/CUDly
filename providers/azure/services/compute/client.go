@@ -122,7 +122,8 @@ type AzureRetailPriceItem struct {
 }
 
 type AzureRetailPrice struct {
-	Items []AzureRetailPriceItem `json:"Items"`
+	Items        []AzureRetailPriceItem `json:"Items"`
+	NextPageLink string                 `json:"NextPageLink"`
 }
 
 // GetRecommendations gets VM RI recommendations from Azure Consumption API
@@ -604,36 +605,62 @@ func (c *ComputeClient) getVMPricing(ctx context.Context, vmSize, region string,
 	}, nil
 }
 
-// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+// retailPricesMaxPages caps fetchAzurePricing's NextPageLink loop. The
+// Azure Retail Prices API paginates at 100 items per page, so 50 pages
+// covers 5000 items — more than any realistic SKU/region/term query. The
+// cap exists purely as a defence against a server bug returning a
+// NextPageLink that never empties.
+const retailPricesMaxPages = 50
+
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API,
+// following NextPageLink until exhausted (or the safety cap is hit).
+//
+// The earlier version issued a single GET and decoded just the first
+// page, so any SKU/term/region combination that landed on page 2+
+// produced a "no on-demand pricing found" error or a wrong price
+// estimate.
 func (c *ComputeClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	fullURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
+	combined := &AzureRetailPrice{Items: make([]AzureRetailPriceItem, 0)}
+	nextURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
+	seen := map[string]struct{}{}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	for pageIdx := 0; pageIdx < retailPricesMaxPages && nextURL != ""; pageIdx++ {
+		if _, ok := seen[nextURL]; ok {
+			// Server returned the same NextPageLink twice — break instead of looping.
+			return nil, fmt.Errorf("pricing API returned a self-referential NextPageLink (page %d)", pageIdx)
+		}
+		seen[nextURL] = struct{}{}
+
+		req, err := http.NewRequestWithContext(ctx, "GET", nextURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request (page %d): %w", pageIdx, err)
+		}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to call pricing API (page %d): %w", pageIdx, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("pricing API returned status %d (page %d): %s", resp.StatusCode, pageIdx, string(body))
+		}
+
+		var page AzureRetailPrice
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode pricing response (page %d): %w", pageIdx, err)
+		}
+		resp.Body.Close()
+
+		combined.Items = append(combined.Items, page.Items...)
+		nextURL = page.NextPageLink
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call pricing API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("pricing API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var priceData AzureRetailPrice
-	if err := json.NewDecoder(resp.Body).Decode(&priceData); err != nil {
-		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
-	}
-
-	return &priceData, nil
+	return combined, nil
 }
 
 // extractVMPricing extracts on-demand and reservation pricing from price items

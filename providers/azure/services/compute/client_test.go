@@ -578,3 +578,48 @@ func TestComputeClient_ConvertAzureVMRecommendation(t *testing.T) {
 	assert.Equal(t, "1yr", rec.Term)
 	assert.Equal(t, "upfront", rec.PaymentOption)
 }
+
+// TestFetchAzurePricing_FollowsNextPageLink pins the pagination behaviour
+// added to fix the "stops after page 1" bug: when the first response
+// includes NextPageLink, the loop must follow it and merge items from the
+// next page into the combined result. Without this, any SKU/region/term
+// query whose data spilled past page 100 silently returned zero matches.
+func TestFetchAzurePricing_FollowsNextPageLink(t *testing.T) {
+	mockHTTP := &mocks.MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+
+	page1 := `{"Items":[{"armSkuName":"Standard_D2s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":100.0,"unitPrice":100.0,"currencyCode":"USD"}],"NextPageLink":"https://prices.azure.com/api/retail/prices?page=2"}`
+	page2 := `{"Items":[{"armSkuName":"Standard_D4s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":200.0,"unitPrice":200.0,"currencyCode":"USD"}],"NextPageLink":""}`
+
+	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
+		return req.URL.Query().Get("page") == ""
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, page1), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
+		return req.URL.Query().Get("page") == "2"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, page2), nil).Once()
+
+	result, err := client.fetchAzurePricing(context.Background(), "anything")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 2, "items from both pages must be merged")
+	assert.Equal(t, "Standard_D2s_v3", result.Items[0].ArmSKUName)
+	assert.Equal(t, "Standard_D4s_v3", result.Items[1].ArmSKUName)
+	mockHTTP.AssertExpectations(t)
+}
+
+// TestFetchAzurePricing_RejectsSelfReferentialNextPageLink covers the
+// safety check: if the server returns the same NextPageLink twice, the
+// loop must break with an error instead of looping forever.
+func TestFetchAzurePricing_RejectsSelfReferentialNextPageLink(t *testing.T) {
+	mockHTTP := &mocks.MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+
+	// Returns a NextPageLink that points at the same initial URL — exact
+	// match including query string. The seen-set should detect the loop.
+	loopBody := `{"Items":[],"NextPageLink":"https://prices.azure.com/api/retail/prices?%24filter=anything&api-version=2023-01-01-preview"}`
+	mockHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, loopBody), nil)
+
+	_, err := client.fetchAzurePricing(context.Background(), "anything")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "self-referential")
+}

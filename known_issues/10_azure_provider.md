@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-20):** `2 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `1 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## CRITICAL: Recommendation converters ignore the API response entirely
 
@@ -57,12 +57,26 @@
 
 **Resolved by:** `635a2a2a4` — both clients now use `reservationOrderID := uuid.New().String()`, matching the compute client pattern.
 
-## HIGH: Azure Retail Prices API pagination never followed
+## ~~HIGH: Azure Retail Prices API pagination never followed~~ — RESOLVED
 
 **File**: `providers/azure/services/compute/client.go:602-632` (and the parallel `fetchAzurePricing` in `database/client.go`, `cache/client.go`, `cosmosdb/client.go`)
-**Description**: `fetchAzurePricing` issues one GET to `https://prices.azure.com/api/retail/prices?...`, decodes the response into `AzureRetailPrice`, and returns it. `NextPageLink` exists on the struct but is never inspected or followed. The Azure Retail Prices API paginates at 100 items per page.
-**Impact**: For common SKUs with many pricing rows, the specific entry needed for a size/term/region combo can sit on page 2+, causing `"no on-demand pricing found"` errors or wrong price estimates.
-**Status:** ✅ Still valid
+**Description**: `fetchAzurePricing` issued a single GET to the Retail Prices API and decoded one page. `NextPageLink` (present on the struct in three of the four services already; added to compute as part of this fix) was never followed. The API paginates at 100 items per page, so any SKU/term/region combo that landed on page 2+ produced "no on-demand pricing found" or a wrong estimate.
+**Status:** ✔️ Resolved
+
+**Resolved by:** Each of the four `fetchAzurePricing` methods (compute, database, cache, cosmosdb) now walks `NextPageLink` until it's empty. Each implements the same loop in place rather than extracting a shared helper — the four `AzureRetailPrice` types have different per-service `Items` shapes and unifying them would have been a larger refactor than the bug warranted. The loop has three guards:
+
+- Safety cap (`retailPricesMaxPages = 50`, ≈5000 items) defends against a server bug returning a `NextPageLink` that never empties.
+- A `seen` map of URLs detects self-referential `NextPageLink` and aborts with a clear error instead of looping forever.
+- HTTP errors and non-200 responses include the page index so logs pinpoint where pagination failed (rather than masking the failure as "first page failed").
+
+The compute `AzureRetailPrice` type was extended with the `NextPageLink string \`json:"NextPageLink"\`` field that the other three services already had.
+
+Tests added (`providers/azure/services/compute/client_test.go`):
+
+- `TestFetchAzurePricing_FollowsNextPageLink` — mock HTTP returns two pages; assert items from both are merged in order, and exactly two HTTP calls happen.
+- `TestFetchAzurePricing_RejectsSelfReferentialNextPageLink` — mock returns the initial URL as its own `NextPageLink`; assert the error message names the failure mode rather than looping forever.
+
+The other three services share the same code shape; covering compute is sufficient to pin the contract. `go test -short ./providers/azure/...` passes for the whole tree.
 
 ### Implementation plan
 
