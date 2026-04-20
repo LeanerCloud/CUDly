@@ -164,7 +164,7 @@ func (c *CosmosDBClient) GetExistingCommitments(ctx context.Context) ([]common.C
 		return []common.Commitment{}, nil
 	}
 
-	return c.collectCosmosReservations(ctx, pager), nil
+	return c.collectCosmosReservations(ctx, pager)
 }
 
 // createReservationsPager creates a pager for listing reservations
@@ -183,14 +183,16 @@ func (c *CosmosDBClient) createReservationsPager() (ReservationsDetailsPager, er
 	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
-// collectCosmosReservations collects Cosmos DB reservations from the pager
-func (c *CosmosDBClient) collectCosmosReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+// collectCosmosReservations collects Cosmos DB reservations from the pager.
+// Returns an error on first pagination failure so callers can't silently act
+// on a partial list — see the compute client for the full rationale.
+func (c *CosmosDBClient) collectCosmosReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("cosmosdb: list reservations: %w", err)
 		}
 
 		for _, detail := range page.Value {
@@ -200,7 +202,7 @@ func (c *CosmosDBClient) collectCosmosReservations(ctx context.Context, pager Re
 		}
 	}
 
-	return commitments
+	return commitments, nil
 }
 
 // convertCosmosReservation converts a reservation detail to a commitment if it's a Cosmos DB reservation

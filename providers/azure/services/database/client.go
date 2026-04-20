@@ -163,7 +163,7 @@ func (c *DatabaseClient) GetExistingCommitments(ctx context.Context) ([]common.C
 		return []common.Commitment{}, nil
 	}
 
-	return c.collectSQLReservations(ctx, pager), nil
+	return c.collectSQLReservations(ctx, pager)
 }
 
 // createReservationsPager creates a pager for listing reservations
@@ -182,14 +182,16 @@ func (c *DatabaseClient) createReservationsPager() (ReservationsDetailsPager, er
 	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
-// collectSQLReservations collects SQL Database reservations from the pager
-func (c *DatabaseClient) collectSQLReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+// collectSQLReservations collects SQL Database reservations from the pager.
+// Returns an error on first pagination failure so callers can't silently act
+// on a partial list — see the compute client for the full rationale.
+func (c *DatabaseClient) collectSQLReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("database: list reservations: %w", err)
 		}
 
 		for _, detail := range page.Value {
@@ -199,7 +201,7 @@ func (c *DatabaseClient) collectSQLReservations(ctx context.Context, pager Reser
 		}
 	}
 
-	return commitments
+	return commitments, nil
 }
 
 // convertSQLReservation converts a reservation detail to a commitment if it's a SQL reservation

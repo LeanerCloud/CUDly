@@ -388,7 +388,13 @@ func TestCacheClient_GetExistingCommitments_Empty(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Will return empty without credentials
+	// Mock pager returns no pages — the empty-subscription case, distinct
+	// from the pager-error case below. Previously this test used a nil
+	// pager and relied on silent error-swallowing; that behaviour was
+	// unsafe and has been replaced with error propagation, so the test
+	// now uses an explicit empty mock.
+	client.SetReservationsPager(&MockReservationsDetailsPager{})
+
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, commitments)
@@ -562,7 +568,8 @@ func TestCacheClient_GetExistingCommitments_PagerError(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Test that pager errors are handled gracefully
+	// Pagination errors must propagate — see the database client for the
+	// full rationale (partial lists are unsafe for the purchase flow).
 	mockPager := &MockReservationsDetailsPager{
 		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{},
@@ -573,8 +580,9 @@ func TestCacheClient_GetExistingCommitments_PagerError(t *testing.T) {
 	client.SetReservationsPager(mockPager)
 
 	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cache: list reservations")
+	assert.Nil(t, commitments)
 }
 
 func TestCacheClient_GetValidResourceTypes_WithMockPager(t *testing.T) {

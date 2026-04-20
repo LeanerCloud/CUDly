@@ -160,7 +160,7 @@ func (c *SearchClient) GetExistingCommitments(ctx context.Context) ([]common.Com
 		return []common.Commitment{}, nil
 	}
 
-	return c.collectSearchReservations(ctx, pager), nil
+	return c.collectSearchReservations(ctx, pager)
 }
 
 // createReservationsPager creates a pager for listing reservations
@@ -179,14 +179,16 @@ func (c *SearchClient) createReservationsPager() (ReservationsDetailsPager, erro
 	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
-// collectSearchReservations collects Search reservations from the pager
-func (c *SearchClient) collectSearchReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+// collectSearchReservations collects Search reservations from the pager.
+// Returns an error on first pagination failure so callers can't silently act
+// on a partial list — see the compute client for the full rationale.
+func (c *SearchClient) collectSearchReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("search: list reservations: %w", err)
 		}
 
 		for _, detail := range page.Value {
@@ -196,7 +198,7 @@ func (c *SearchClient) collectSearchReservations(ctx context.Context, pager Rese
 		}
 	}
 
-	return commitments
+	return commitments, nil
 }
 
 // convertSearchReservation converts a reservation detail to a commitment if it's a Search reservation

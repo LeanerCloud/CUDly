@@ -327,7 +327,9 @@ func TestCosmosDBClient_GetExistingCommitments_Empty(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Will return empty without credentials
+	// Mock pager returns no pages — the empty-subscription case.
+	client.SetReservationsPager(&MockReservationsDetailsPager{})
+
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, commitments)
@@ -487,16 +489,17 @@ func TestCosmosDBClient_GetExistingCommitments_PagerError(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Create mock pager that returns an error
 	mockPager := &MockReservationsDetailsPager{
 		err: errors.New("API error"),
 	}
 	client.SetReservationsPager(mockPager)
 
-	// Should return empty (not error) due to graceful handling
+	// Pagination errors must propagate — partial lists are unsafe for the
+	// purchase flow (duplicate-purchase risk). See the compute client.
 	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cosmosdb: list reservations")
+	assert.Nil(t, commitments)
 }
 
 func TestCosmosDBClient_GetExistingCommitments_NilProperties(t *testing.T) {

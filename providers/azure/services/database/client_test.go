@@ -368,7 +368,10 @@ func TestDatabaseClient_GetExistingCommitments_Empty(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Will return empty without credentials
+	// Mock pager returns no pages — the empty-subscription case. See the
+	// cache client for the full rationale.
+	client.SetReservationsPager(&MockReservationsDetailsPager{})
+
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, commitments)
@@ -529,7 +532,9 @@ func TestDatabaseClient_GetExistingCommitments_PagerError(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Test that pager errors are handled gracefully
+	// Pagination errors must propagate — returning a partial commitment list
+	// silently is unsafe for the purchase flow (it could trigger duplicate
+	// purchases for reservations we didn't see).
 	mockPager := &MockReservationsDetailsPager{
 		pages: []armconsumption.ReservationsDetailsClientListResponse{{}},
 		err:   errors.New("API error"),
@@ -538,8 +543,9 @@ func TestDatabaseClient_GetExistingCommitments_PagerError(t *testing.T) {
 	client.SetReservationsPager(mockPager)
 
 	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database: list reservations")
+	assert.Nil(t, commitments)
 }
 
 func TestDatabaseClient_GetValidResourceTypes_WithMock(t *testing.T) {

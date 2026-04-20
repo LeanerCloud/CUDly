@@ -146,7 +146,18 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		PaymentOption:  "upfront",
 	}
 
-	if advisorRec.ID != nil {
+	// Prefer an explicit region from the Advisor response. ExtendedProperties
+	// is the authoritative source when present; fall back to the resource-ID
+	// parser for the rare case where the ID embeds /locations/{region}/.
+	if ext := advisorRec.Properties.ExtendedProperties; ext != nil {
+		for _, key := range []string{"region", "location"} {
+			if v, ok := ext[key]; ok && v != nil && *v != "" {
+				rec.Region = *v
+				break
+			}
+		}
+	}
+	if rec.Region == "" && advisorRec.ID != nil {
 		if region := extractRegionFromResourceID(*advisorRec.ID); region != "" {
 			rec.Region = region
 		}
@@ -249,11 +260,35 @@ func serviceFromExtendedProperties(ext map[string]*string) string {
 	return ""
 }
 
-// extractRegionFromResourceID extracts the region from an Azure resource ID
+// extractRegionFromResourceID extracts the region from an Azure resource ID.
+//
+// Standard ARM resource IDs follow the shape
+//   /subscriptions/{sub}/resourceGroups/{rg}/providers/{ns}/{type}/{name}
+// and do NOT embed the region — so this helper is a best-effort fallback
+// only. Callers that have a better source (Advisor recommendation's
+// Properties.ExtendedProperties["region"] / "location", or a sibling
+// Location field) must use that first. This helper exists for the rare
+// Advisor recommendation whose ID happens to carry a /locations/{region}/
+// segment (some reservation-scope resource IDs do).
+//
+// Returns "" when the ID has no recognisable region segment.
 func extractRegionFromResourceID(resourceID string) string {
-	// Azure resource IDs don't always contain region information
-	// This would need to query the resource or use resource metadata
-	// For now, return empty string as region will be set by service clients
+	// Case-insensitive scan for /locations/{region}/ — Azure is inconsistent
+	// between `locations`, `Locations`, `location`.
+	lower := strings.ToLower(resourceID)
+	for _, marker := range []string{"/locations/", "/location/"} {
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := resourceID[idx+len(marker):]
+		// The next / ends the region segment.
+		if end := strings.IndexByte(rest, '/'); end >= 0 {
+			return rest[:end]
+		}
+		// No trailing / — the region is the last segment.
+		return rest
+	}
 	return ""
 }
 

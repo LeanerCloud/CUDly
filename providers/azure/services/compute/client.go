@@ -168,7 +168,7 @@ func (c *ComputeClient) GetExistingCommitments(ctx context.Context) ([]common.Co
 		return []common.Commitment{}, nil
 	}
 
-	return c.collectVMReservations(ctx, pager), nil
+	return c.collectVMReservations(ctx, pager)
 }
 
 // createReservationsPager creates a pager for listing reservations
@@ -187,14 +187,19 @@ func (c *ComputeClient) createReservationsPager() (ReservationsDetailsPager, err
 	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
-// collectVMReservations collects VM reservations from the pager
-func (c *ComputeClient) collectVMReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+// collectVMReservations collects VM reservations from the pager.
+//
+// Returns an error on the first pagination failure rather than silently
+// truncating the result set. A partial commitment list is unsafe for the
+// purchase flow — it could trigger duplicate purchases for reservations
+// that exist but weren't loaded. Callers must treat the error as fatal.
+func (c *ComputeClient) collectVMReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("compute: list reservations: %w", err)
 		}
 
 		for _, detail := range page.Value {
@@ -204,7 +209,7 @@ func (c *ComputeClient) collectVMReservations(ctx context.Context, pager Reserva
 		}
 	}
 
-	return commitments
+	return commitments, nil
 }
 
 // convertVMReservation converts a reservation detail to a commitment if it's a VM reservation

@@ -139,13 +139,38 @@ func TestExtractRegionFromResourceID(t *testing.T) {
 		expected   string
 	}{
 		{
-			name:       "Simple resource ID returns empty",
+			name:       "Standard ARM ID without region segment returns empty",
 			resourceID: "/subscriptions/123/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1",
 			expected:   "",
 		},
 		{
 			name:       "Empty resource ID",
 			resourceID: "",
+			expected:   "",
+		},
+		{
+			name:       "Locations segment mid-id extracts region",
+			resourceID: "/subscriptions/123/providers/Microsoft.Capacity/locations/eastus/reservationOrders/rid1",
+			expected:   "eastus",
+		},
+		{
+			name:       "Uppercase Locations segment case-insensitive match",
+			resourceID: "/subscriptions/123/providers/Microsoft.Capacity/Locations/westus2/reservationOrders/rid1",
+			expected:   "westus2",
+		},
+		{
+			name:       "Singular location segment also recognised",
+			resourceID: "/subscriptions/123/providers/Microsoft.Resources/location/northeurope/foo/bar",
+			expected:   "northeurope",
+		},
+		{
+			name:       "Region is the last segment (no trailing slash)",
+			resourceID: "/subscriptions/123/locations/centralus",
+			expected:   "centralus",
+		},
+		{
+			name:       "Non-ARM-shaped string returns empty safely",
+			resourceID: "not-an-id",
 			expected:   "",
 		},
 	}

@@ -161,7 +161,7 @@ func (c *CacheClient) GetExistingCommitments(ctx context.Context) ([]common.Comm
 		return []common.Commitment{}, nil
 	}
 
-	return c.collectRedisReservations(ctx, pager), nil
+	return c.collectRedisReservations(ctx, pager)
 }
 
 // createReservationsPager creates a pager for listing reservations
@@ -180,14 +180,16 @@ func (c *CacheClient) createReservationsPager() (ReservationsDetailsPager, error
 	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
-// collectRedisReservations collects Redis reservations from the pager
-func (c *CacheClient) collectRedisReservations(ctx context.Context, pager ReservationsDetailsPager) []common.Commitment {
+// collectRedisReservations collects Redis reservations from the pager.
+// Returns an error on first pagination failure so callers can't silently act
+// on a partial list — see the compute client for the full rationale.
+func (c *CacheClient) collectRedisReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("cache: list reservations: %w", err)
 		}
 
 		for _, detail := range page.Value {
@@ -197,7 +199,7 @@ func (c *CacheClient) collectRedisReservations(ctx context.Context, pager Reserv
 		}
 	}
 
-	return commitments
+	return commitments, nil
 }
 
 // convertRedisReservation converts a reservation detail to a commitment if it's a Redis reservation
