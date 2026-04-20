@@ -12,25 +12,21 @@ import (
 )
 
 // API Key handlers
+//
+// All handlers gate on `requirePermission` for the `api-keys` resource so the
+// permission system controls who can mint/list/revoke keys, not just who's
+// authenticated. Keys remain owner-scoped — the handler still uses
+// session.UserID from requirePermission's return value to scope the operation
+// to the calling user. There is no separate "revoke" action in the permission
+// model, so revoke reuses "delete".
 
 // listAPIKeys handles GET /api/api-keys
 func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if h.auth == nil {
-		return nil, fmt.Errorf("authentication service not configured")
-	}
-
-	// Get current user from token
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
+	session, err := h.requirePermission(ctx, req, "view", "api-keys")
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
+		return nil, err
 	}
 
-	// List API keys for the current user - call service directly
 	keys, err := h.auth.ListUserAPIKeysAPI(ctx, session.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list API keys: %w", err)
@@ -41,19 +37,9 @@ func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURL
 
 // createAPIKey handles POST /api/api-keys
 func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if h.auth == nil {
-		return nil, fmt.Errorf("authentication service not configured")
-	}
-
-	// Get current user from token
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
+	session, err := h.requirePermission(ctx, req, "create", "api-keys")
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
+		return nil, err
 	}
 
 	// Rate limiting: 30 admin operations per user per minute
@@ -66,13 +52,11 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		}
 	}
 
-	// Parse request body
 	var createReq CreateAPIKeyRequest
 	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Create API key - call service directly
 	result, err := h.auth.CreateAPIKeyAPI(ctx, session.UserID, createReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API key: %w", err)
@@ -83,35 +67,16 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 
 // deleteAPIKey handles DELETE /api/api-keys/{id}
 func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if h.auth == nil {
-		return nil, fmt.Errorf("authentication service not configured")
-	}
-
-	// Get current user from token
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
+	session, err := h.requirePermission(ctx, req, "delete", "api-keys")
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
-	}
-
-	// Extract key ID from path
-	path := req.RequestContext.HTTP.Path
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 {
-		return nil, NewClientError(400, "invalid path: missing key ID")
-	}
-	keyID := parts[len(parts)-1]
-
-	// Validate UUID format
-	if err := validateUUID(keyID); err != nil {
 		return nil, err
 	}
 
-	// Delete API key - call service directly
+	keyID, err := apiKeyIDFromPath(req.RequestContext.HTTP.Path, false)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := h.auth.DeleteAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
 		return nil, fmt.Errorf("failed to delete API key: %w", err)
 	}
@@ -121,40 +86,44 @@ func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 
 // revokeAPIKey handles POST /api/api-keys/{id}/revoke
 func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if h.auth == nil {
-		return nil, fmt.Errorf("authentication service not configured")
-	}
-
-	// Get current user from token
-	token := h.extractBearerToken(req)
-	if token == "" {
-		return nil, NewClientError(401, "no authorization token provided")
-	}
-
-	session, err := h.auth.ValidateSession(ctx, token)
+	// No "revoke" verb in the permission model — reuse "delete".
+	session, err := h.requirePermission(ctx, req, "delete", "api-keys")
 	if err != nil {
-		return nil, NewClientError(401, "invalid session")
-	}
-
-	// Extract key ID from path (format: /api/api-keys/{id}/revoke)
-	path := req.RequestContext.HTTP.Path
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 4 {
-		return nil, NewClientError(400, "invalid path: missing key ID")
-	}
-	keyID := parts[len(parts)-2] // Second to last part (before "revoke")
-
-	// Validate UUID format
-	if err := validateUUID(keyID); err != nil {
 		return nil, err
 	}
 
-	// Revoke API key - call service directly
+	keyID, err := apiKeyIDFromPath(req.RequestContext.HTTP.Path, true)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := h.auth.RevokeAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
 		return nil, fmt.Errorf("failed to revoke API key: %w", err)
 	}
 
 	return map[string]string{"status": "revoked"}, nil
+}
+
+// apiKeyIDFromPath extracts the key ID from /api/api-keys/{id} or
+// /api/api-keys/{id}/revoke depending on `hasTrailingAction`.
+func apiKeyIDFromPath(path string, hasTrailingAction bool) (string, error) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	minLen := 3
+	if hasTrailingAction {
+		minLen = 4
+	}
+	if len(parts) < minLen {
+		return "", NewClientError(400, "invalid path: missing key ID")
+	}
+	idx := len(parts) - 1
+	if hasTrailingAction {
+		idx = len(parts) - 2
+	}
+	keyID := parts[idx]
+	if err := validateUUID(keyID); err != nil {
+		return "", err
+	}
+	return keyID, nil
 }
 
 // Helper function to format time pointer as string

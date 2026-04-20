@@ -317,7 +317,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("listAPIKeysHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
 		mockAuth.On("ListUserAPIKeysAPI", ctx, "user-1").Return([]interface{}{}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -334,7 +334,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("createAPIKeyHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
 		mockAuth.On("CreateAPIKeyAPI", ctx, "user-1", mock.Anything).Return(map[string]string{"key_id": "key-1"}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -352,7 +352,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("deleteAPIKeyHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
 		mockAuth.On("DeleteAPIKeyAPI", ctx, "user-1", "11111111-1111-1111-1111-111111111111").Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -374,7 +374,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("revokeAPIKeyHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
 		mockAuth.On("RevokeAPIKeyAPI", ctx, "user-1", "11111111-1111-1111-1111-111111111111").Return(nil)
 
 		h := &Handler{auth: mockAuth}
