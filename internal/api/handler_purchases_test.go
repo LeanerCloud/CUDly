@@ -820,3 +820,47 @@ func TestHandler_executePurchase_SaveError(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "failed to save execution")
 }
+
+// TestHandler_pausePlannedPurchase_OutOfScope locks down that a non-admin
+// user whose allowed_accounts do not intersect with the execution's plan
+// gets 404 and never reaches TransitionExecutionStatus. Covers the
+// requireExecutionAccess hop added in the plans/purchases scoping commit.
+func TestHandler_pausePlannedPurchase_OutOfScope(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	executionID := "77777777-7777-7777-7777-777777777777"
+	planID := "88888888-8888-8888-8888-888888888888"
+
+	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
+		UserID: "viewer-1", Role: "user",
+	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "update", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+	mockStore.On("GetExecutionByID", ctx, executionID).Return(&config.PurchaseExecution{
+		ExecutionID: executionID, PlanID: planID,
+	}, nil)
+
+	store := &mockStoreWithPlanAccounts{
+		MockConfigStore: mockStore,
+		planAccounts: map[string][]config.CloudAccount{
+			planID: {{ID: "acc-stage", Name: "Staging"}},
+		},
+	}
+
+	handler := &Handler{auth: mockAuth, config: store}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer viewer-token"},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Path: "/api/purchases/planned/" + executionID + "/pause",
+			},
+		},
+	}
+	_, err := handler.pausePlannedPurchase(ctx, req, executionID)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus")
+}
+

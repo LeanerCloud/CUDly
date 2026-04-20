@@ -15,8 +15,8 @@ import (
 )
 
 func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PlannedPurchasesResponse, error) {
-	// Require view:purchases permission
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
 	}
 
@@ -32,6 +32,10 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 		return nil, fmt.Errorf("failed to get purchase plans: %w", err)
 	}
 
+	// Cache per-plan access decisions — all executions for the same plan share
+	// the same account scope. Avoids GetPlanAccounts round-trips per execution.
+	allowedPlan := make(map[string]bool)
+
 	// Build plan map for lookup
 	planMap := make(map[string]*config.PurchasePlan)
 	for i := range plans {
@@ -44,6 +48,20 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 	for _, exec := range executions {
 		plan := planMap[exec.PlanID]
 		if plan == nil {
+			continue
+		}
+
+		// Drop executions whose plan is outside the session's allowed_accounts.
+		ok, cached := allowedPlan[exec.PlanID]
+		if !cached {
+			planErr := h.requirePlanAccess(ctx, session, exec.PlanID)
+			ok = planErr == nil
+			if planErr != nil && !IsNotFoundError(planErr) {
+				return nil, planErr
+			}
+			allowedPlan[exec.PlanID] = ok
+		}
+		if !ok {
 			continue
 		}
 
@@ -87,13 +105,15 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 }
 
 func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
-	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
 	}
 
-	// Require update:purchases permission
-	if _, err := h.requirePermission(ctx, req, "update", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "update", "purchases")
+	if err != nil {
+		return nil, err
+	}
+	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -106,13 +126,15 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 }
 
 func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
-	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
 	}
 
-	// Require update:purchases permission
-	if _, err := h.requirePermission(ctx, req, "update", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "update", "purchases")
+	if err != nil {
+		return nil, err
+	}
+	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -125,13 +147,15 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 }
 
 func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (any, error) {
-	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
 	}
 
-	// Require execute:purchases permission
-	if _, err := h.requirePermission(ctx, req, "execute", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "execute", "purchases")
+	if err != nil {
+		return nil, err
+	}
+	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -149,13 +173,15 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 }
 
 func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
-	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
 	}
 
-	// Require delete:purchases permission
-	if _, err := h.requirePermission(ctx, req, "delete", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "delete", "purchases")
+	if err != nil {
+		return nil, err
+	}
+	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -230,7 +256,8 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
 	}
 
@@ -240,6 +267,11 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 	}
 	if execution == nil {
 		return nil, fmt.Errorf("execution not found: %s", executionID)
+	}
+
+	// Scope: reject if the execution's plan isn't accessible to the session.
+	if err := h.requirePlanAccess(ctx, session, execution.PlanID); err != nil {
+		return nil, err
 	}
 
 	var planName string
@@ -282,7 +314,8 @@ func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfron
 
 // executePurchase handles direct purchase execution from recommendations
 func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "execute", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "execute", "purchases")
+	if err != nil {
 		return nil, err
 	}
 
@@ -297,6 +330,14 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	}
 	if len(execReq.Recommendations) > maxRecommendations {
 		return nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
+	}
+
+	// Scope: reject the whole request if any recommendation targets an
+	// account outside the session's allowed_accounts. Safer than silently
+	// dropping the out-of-scope ones, because the user explicitly chose
+	// those recommendations — a partial execution would misrepresent intent.
+	if err := h.validatePurchaseRecommendationScope(ctx, session, execReq.Recommendations); err != nil {
+		return nil, err
 	}
 
 	totalUpfront, totalSavings, err := validateAndTotalRecommendations(execReq.Recommendations)

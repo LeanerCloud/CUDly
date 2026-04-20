@@ -82,8 +82,12 @@ func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequ
 		return nil, err
 	}
 
-	// Require view:plans permission
-	if _, err := h.requirePermission(ctx, req, "view", "plans"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "plans")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
 		return nil, err
 	}
 
@@ -106,8 +110,12 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
-	// Require update:plans permission
-	if _, err := h.requirePermission(ctx, httpReq, "update", "plans"); err != nil {
+	session, err := h.requirePermission(ctx, httpReq, "update", "plans")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
 		return nil, err
 	}
 
@@ -153,8 +161,12 @@ func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	// Require delete:plans permission
-	if _, err := h.requirePermission(ctx, req, "delete", "plans"); err != nil {
+	session, err := h.requirePermission(ctx, req, "delete", "plans")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
 		return nil, err
 	}
 
@@ -170,7 +182,12 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, httpReq, "create", "plans"); err != nil {
+	session, err := h.requirePermission(ctx, httpReq, "create", "plans")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
 		return nil, err
 	}
 
@@ -308,7 +325,12 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, httpReq, "update", "plans"); err != nil {
+	session, err := h.requirePermission(ctx, httpReq, "update", "plans")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.requirePlanAccess(ctx, session, planID); err != nil {
 		return nil, err
 	}
 

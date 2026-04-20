@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -362,7 +363,8 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 
 // getRIExchangeHistory returns RI exchange records from the last 12 months.
 func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
 	}
 
@@ -370,6 +372,24 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	records, err := h.config.GetRIExchangeHistory(ctx, since, 500)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load exchange history: %w", err)
+	}
+
+	// Filter records by the session's allowed_accounts against the record's
+	// AccountID. Scoped users don't see history for accounts outside their
+	// scope. Admin / unrestricted sessions pass through unchanged.
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if !auth.IsUnrestrictedAccess(allowed) {
+		nameByID := h.resolveAccountNamesByID(ctx)
+		filtered := records[:0]
+		for _, r := range records {
+			if auth.MatchesAccount(allowed, r.AccountID, nameByID[r.AccountID]) {
+				filtered = append(filtered, r)
+			}
+		}
+		records = filtered
 	}
 
 	// Strip approval tokens — single-use secrets must not be included in

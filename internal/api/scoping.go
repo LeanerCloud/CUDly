@@ -59,6 +59,90 @@ func (h *Handler) canAccessAccountID(ctx context.Context, session *Session, acco
 	return auth.MatchesAccount(allowed, accountID, accountName), nil
 }
 
+// requirePlanAccess fetches the plan's associated accounts and rejects with
+// errNotFound when the session's allowed_accounts list doesn't intersect
+// with any of them. Admin / unrestricted sessions pass through unchanged.
+// Plans with no account assignments are hidden from scoped users — the safe
+// default when we can't attribute the plan to a specific account.
+//
+// requirePermission must fire first; the session it returns is what the
+// caller passes here. This is the plan-level analogue of requireAccountAccess
+// and is used by the plans/purchases/ri-exchange per-record scoping.
+func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planID string) error {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return nil
+	}
+	accounts, err := h.config.GetPlanAccounts(ctx, planID)
+	if err != nil {
+		return fmt.Errorf("failed to get plan accounts: %w", err)
+	}
+	for _, acct := range accounts {
+		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
+			return nil
+		}
+	}
+	return errNotFound
+}
+
+// validatePurchaseRecommendationScope returns a 400 client error when any
+// recommendation in the batch targets an account the session can't access.
+// Admin / unrestricted sessions pass through. Recommendations with a nil
+// CloudAccountID are rejected when the session is scoped — we can't
+// attribute them, and silently letting them through would bypass the filter.
+func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, session *Session, recs []config.RecommendationRecord) error {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return nil
+	}
+	nameByID := h.resolveAccountNamesByID(ctx)
+	for i, rec := range recs {
+		if rec.CloudAccountID == nil {
+			return NewClientError(400, fmt.Sprintf("recommendation %d has no cloud_account_id; scoped users cannot execute unattributed recommendations", i))
+		}
+		id := *rec.CloudAccountID
+		if !auth.MatchesAccount(allowed, id, nameByID[id]) {
+			return NewClientError(403, fmt.Sprintf("recommendation %d targets account %s which is outside your allowed_accounts", i, id))
+		}
+	}
+	return nil
+}
+
+// requireExecutionAccess rejects with errNotFound when the execution's plan's
+// associated accounts don't intersect with the session's allowed_accounts.
+// Convenience wrapper around requirePlanAccess for the pause/resume/run/
+// delete/details handlers that key on executionID. Returns errNotFound when
+// the execution itself doesn't exist, so unauthenticated probing can't
+// distinguish "no such execution" from "you can't see it".
+//
+// Short-circuits for admin / unrestricted sessions BEFORE the
+// GetExecutionByID fetch to keep those happy-paths free of the extra store
+// round-trip (and to keep existing unit-test fixtures for admin operations
+// working without adding execution mocks).
+func (h *Handler) requireExecutionAccess(ctx context.Context, session *Session, executionID string) error {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return nil
+	}
+	execution, err := h.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("failed to get execution: %w", err)
+	}
+	if execution == nil {
+		return errNotFound
+	}
+	return h.requirePlanAccess(ctx, session, execution.PlanID)
+}
+
 // resolveAccountNamesByID fetches the complete account list once and returns
 // a map from account ID → display name. Used by handlers that filter records
 // (recommendations, purchases, history) by account ID but need name-based
