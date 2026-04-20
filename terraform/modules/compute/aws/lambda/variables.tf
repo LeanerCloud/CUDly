@@ -160,10 +160,22 @@ variable "enable_cross_account_sts" {
   default     = false
 }
 
+variable "cross_account_role_name_prefix" {
+  description = "Prefix constraint for cross-account role names the Lambda may assume. The IAM policy Resource is scoped to arn:aws:iam::*:role/{prefix}*. The supplied federation CloudFormation/Terraform templates create roles matching the default prefix; change only if your target-account roles use a different naming convention. Must end with '*' when you want trailing freedom; setting this to an empty string intentionally widens to all roles (not recommended)."
+  type        = string
+  default     = "CUDly"
+}
+
 variable "enable_org_discovery" {
   description = "Allow Lambda to call AWS Organizations ListAccounts for member account discovery"
   type        = bool
   default     = false
+}
+
+variable "email_from_domain" {
+  description = "Verified SES domain used as the From: address. When set, the SES IAM policy is scoped to identity/{domain} + configuration-set/{stack_name}*, blocking sends from any other identity in the AWS account. Leave empty only when SES is not configured (notifications disabled)."
+  type        = string
+  default     = ""
 }
 
 variable "tags" {

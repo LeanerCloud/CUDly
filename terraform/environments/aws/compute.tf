@@ -69,10 +69,18 @@ module "compute_lambda" {
     var.additional_env_vars
   )
 
-  # Multi-account IAM capabilities
+  # Multi-account IAM capabilities. cross_account_role_name_prefix scopes the
+  # Lambda role's sts:AssumeRole IAM grant to role names starting with the
+  # prefix — defence-in-depth on top of the app-layer ExternalId check.
   enable_cross_account_sts             = true
+  cross_account_role_name_prefix       = "CUDly"
   enable_org_discovery                 = true
   credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn
+
+  # SES From domain — scopes the Lambda's SES policy to identity/{domain}
+  # plus configuration-set/{stack}*. Leave empty to disable SES entirely
+  # (deployments without email notifications don't get any SES permissions).
+  email_from_domain = var.subdomain_zone_name
 
   tags = local.common_tags
 

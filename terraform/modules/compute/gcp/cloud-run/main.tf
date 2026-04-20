@@ -324,11 +324,28 @@ resource "google_project_iam_member" "compute_viewer" {
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Compute Admin: grants compute.commitments.create so CUDly can purchase
-# committed use discounts (CUDs) on behalf of users.
-resource "google_project_iam_member" "compute_commitment_admin" {
+# Commitment Writer: custom role granting only compute.commitments.{create,
+# update,delete} so CUDly can purchase, update, and delete committed use
+# discounts. Replaces the previous roles/compute.admin grant, which conferred
+# broad VM/network/disk/firewall control — the blast radius of a Cloud Run
+# compromise was the entire project. Read-side permissions come from the
+# roles/compute.viewer grant above.
+resource "google_project_iam_custom_role" "cudly_commitment_writer" {
+  project     = var.project_id
+  role_id     = "cudlyCommitmentWriter"
+  title       = "CUDly Commitment Writer"
+  description = "Minimum permissions for CUDly to purchase, update, and delete committed use discounts."
+  permissions = [
+    "compute.commitments.create",
+    "compute.commitments.update",
+    "compute.commitments.delete",
+  ]
+  stage = "GA"
+}
+
+resource "google_project_iam_member" "compute_commitment_writer" {
   project = var.project_id
-  role    = "roles/compute.admin"
+  role    = google_project_iam_custom_role.cudly_commitment_writer.id
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 

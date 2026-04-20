@@ -219,8 +219,17 @@ resource "aws_iam_role_policy" "secrets_access" {
   })
 }
 
-# SES email sending access
+# SES email sending access — scoped to the verified From domain plus
+# stack-specific configuration sets. ses:CreateEmailIdentity is intentionally
+# NOT in the action list; identity verification is a one-time operator task,
+# and keeping it out of the runtime role blocks a compromised Lambda from
+# registering arbitrary identities for phishing/spam.
+#
+# Only attached when var.email_from_domain is set — deployments without email
+# notifications don't get any SES permissions at all.
 resource "aws_iam_role_policy" "ses_access" {
+  count = var.email_from_domain != "" ? 1 : 0
+
   name_prefix = "${var.stack_name}-ses-"
   role        = aws_iam_role.lambda.id
 
@@ -234,9 +243,11 @@ resource "aws_iam_role_policy" "ses_access" {
           "ses:SendRawEmail",
           "ses:GetAccount",
           "ses:GetEmailIdentity",
-          "ses:CreateEmailIdentity"
         ]
-        Resource = "*" # Allow sending from any verified identity and creating identities
+        Resource = [
+          "arn:aws:ses:*:*:identity/${var.email_from_domain}",
+          "arn:aws:ses:*:*:configuration-set/${var.stack_name}*",
+        ]
       }
     ]
   })
@@ -298,7 +309,14 @@ resource "aws_iam_role_policy" "ri_exchange" {
   })
 }
 
-# Cross-account role assumption for multi-account plan execution
+# Cross-account role assumption for multi-account plan execution.
+#
+# Scoped by var.cross_account_role_name_prefix (default "CUDly") so the
+# Lambda can only assume roles whose names start with that prefix. The
+# shipped federation templates (iac/federation/aws-*) create roles matching
+# this prefix. ExternalId validation still happens at the application layer
+# (resolver.go) — this IAM constraint is defence-in-depth so a single app-
+# layer bug can't pivot into arbitrary roles.
 resource "aws_iam_role_policy" "cross_account_sts" {
   count = var.enable_cross_account_sts ? 1 : 0
 
@@ -311,11 +329,7 @@ resource "aws_iam_role_policy" "cross_account_sts" {
       {
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
-        Resource = "arn:aws:iam::*:role/*"
-        # Recommendation: scope to a naming convention in production to reduce blast radius:
-        # Resource = "arn:aws:iam::*:role/CUDly*"
-        # Note: ExternalId validation is enforced at the application layer (resolver.go),
-        # not here, because Lambda assumes roles on behalf of many target accounts.
+        Resource = "arn:aws:iam::*:role/${var.cross_account_role_name_prefix}*"
       }
     ]
   })
