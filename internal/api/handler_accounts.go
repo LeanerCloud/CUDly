@@ -278,6 +278,10 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 		return NewClientError(400, "external_id is required")
 	}
 
+	if err := validateEmailFormat(req.ContactEmail); err != nil {
+		return err
+	}
+
 	return validateAuthMode(req)
 }
 

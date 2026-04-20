@@ -1,6 +1,6 @@
 # Known Issues: API Account Handlers
 
-> **Audit status (2026-04-20):** `2 still valid · 5 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `1 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~HIGH: deleteAccount does not verify account existence before deletion~~ — RESOLVED
 
@@ -146,14 +146,16 @@
 
 **Effort:** `small`
 
-## LOW: Contact email stored without format validation
+## ~~LOW: Contact email stored without format validation~~ — RESOLVED
 
 **File**: `internal/api/handler_accounts.go:268-301`
-**Description**: `ContactEmail` is accepted and stored verbatim inside `cloudAccountFromRequest`. `validateCloudAccountRequest` has no regex or format check.
-**Impact**: Invalid addresses silently persist and break downstream notifications (bounce, SMTP reject) long after account creation.
-**Status:** ✅ Still valid
+**Description**: `ContactEmail` was accepted and stored verbatim inside `cloudAccountFromRequest`. `validateCloudAccountRequest` had no regex or format check.
+**Impact**: Invalid addresses silently persisted and broke downstream notifications (bounce, SMTP reject).
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** `validateEmailFormat` added to `internal/api/validation.go` (uses `net/mail.ParseAddress`); `validateCloudAccountRequest` calls it after the external_id check. Empty emails remain allowed (field is optional). Covered by `TestCreateAccount_InvalidContactEmail` and `TestCreateAccount_EmptyContactEmail`.
+
+### Original implementation plan
 
 **Goal:** Reject malformed contact emails at the API boundary.
 

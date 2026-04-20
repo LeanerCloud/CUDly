@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/base64"
 	"fmt"
+	"net/mail"
 	"regexp"
 	"strings"
 	"unicode"
@@ -42,6 +43,19 @@ var regionNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 func validateProvider(provider string) error {
 	if !validProviders[provider] {
 		return NewClientError(400, "invalid provider: must be aws, azure, gcp, or all")
+	}
+	return nil
+}
+
+// validateEmailFormat returns a 400 error when email is non-empty but does not
+// parse as an RFC 5322 address. Empty strings are accepted (contact email is
+// optional on cloud accounts).
+func validateEmailFormat(email string) error {
+	if email == "" {
+		return nil
+	}
+	if _, err := mail.ParseAddress(email); err != nil {
+		return NewClientError(400, "contact_email is not a valid email address")
 	}
 	return nil
 }

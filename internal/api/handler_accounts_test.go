@@ -165,6 +165,40 @@ func TestCreateAccount_MissingExternalID(t *testing.T) {
 	assert.Contains(t, ce.message, "external_id")
 }
 
+func TestCreateAccount_InvalidContactEmail(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"name":"Acme","provider":"aws","external_id":"123456789012","contact_email":"not-an-email"}`
+	result, err := handler.createAccount(ctx, adminRequest(body))
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.message, "contact_email")
+}
+
+func TestCreateAccount_EmptyContactEmail(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	handler := &Handler{auth: mockAuth, config: store}
+
+	// Empty contact_email is allowed (field is optional).
+	body := `{"name":"Acme","provider":"aws","external_id":"123456789012"}`
+	result, err := handler.createAccount(ctx, adminRequest(body))
+	require.NoError(t, err)
+	got := result.(*config.CloudAccount)
+	assert.Empty(t, got.ContactEmail)
+}
+
 // --- getAccount ---
 
 func TestGetAccount_Success(t *testing.T) {
