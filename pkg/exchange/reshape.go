@@ -23,16 +23,70 @@ type UtilizationInfo struct {
 }
 
 // ReshapeRecommendation describes a suggested exchange for an underutilized RI.
+//
+// AlternativeTargetInstanceTypes lists cross-family options within the
+// same use-case group (general-purpose / compute / memory / burstable)
+// at the same target size. This is an advisory list for the UI to
+// surface alongside the primary target; the auto-exchange pipeline
+// still acts on TargetInstanceType only so existing automated
+// behaviour is unchanged. Emitted when the primary target's family
+// belongs to a known peer group; empty otherwise.
 type ReshapeRecommendation struct {
-	SourceRIID          string  `json:"source_ri_id"`
-	SourceInstanceType  string  `json:"source_instance_type"`
-	SourceCount         int32   `json:"source_count"`
-	TargetInstanceType  string  `json:"target_instance_type"`
-	TargetCount         int32   `json:"target_count"`
-	UtilizationPercent  float64 `json:"utilization_percent"`
-	NormalizedUsed      float64 `json:"normalized_used"`
-	NormalizedPurchased float64 `json:"normalized_purchased"`
-	Reason              string  `json:"reason"`
+	SourceRIID                     string   `json:"source_ri_id"`
+	SourceInstanceType             string   `json:"source_instance_type"`
+	SourceCount                    int32    `json:"source_count"`
+	TargetInstanceType             string   `json:"target_instance_type"`
+	TargetCount                    int32    `json:"target_count"`
+	AlternativeTargetInstanceTypes []string `json:"alternative_target_instance_types,omitempty"`
+	UtilizationPercent             float64  `json:"utilization_percent"`
+	NormalizedUsed                 float64  `json:"normalized_used"`
+	NormalizedPurchased            float64  `json:"normalized_purchased"`
+	Reason                         string   `json:"reason"`
+}
+
+// peerFamilyGroups maps each family in the allowlist to the full set
+// of peer families within its use-case group. AWS Convertible RIs can
+// cross families when the target's $-value units (from
+// DescribeReservedInstancesOfferings) match — and the most common
+// viable cross-family moves are between same-generation same-use-case
+// siblings (e.g. m5 ↔ m6i, c5 ↔ c7g). Suggesting these to the user
+// broadens their options without pushing them into shapes that will
+// fail the AWS exchange-units check at quote time.
+//
+// Scope discipline: only the mainstream general/compute/memory
+// families and the burstable t-family are listed. Specialty (p*/g*/
+// x*/hpc*) and legacy-generation (m4/c4/r3) families are deliberately
+// omitted — those exchanges have awkward $-units and frequently fail
+// at AWS level, so suggesting them would hurt user trust more than it
+// helps. Tracked as a follow-up in known-issues.md.
+var peerFamilyGroups = map[string][]string{
+	// general-purpose
+	"m5":  {"m5", "m6i", "m7g"},
+	"m6i": {"m5", "m6i", "m7g"},
+	"m7g": {"m5", "m6i", "m7g"},
+	// compute-optimised
+	"c5":  {"c5", "c6i", "c7g"},
+	"c6i": {"c5", "c6i", "c7g"},
+	"c7g": {"c5", "c6i", "c7g"},
+	// memory-optimised
+	"r5":  {"r5", "r6i", "r7g"},
+	"r6i": {"r5", "r6i", "r7g"},
+	"r7g": {"r5", "r6i", "r7g"},
+	// burstable (maps to itself — generation variants are
+	// typically distinct enough that AWS won't let you exchange
+	// across them; listed to keep the helper returning a sensible
+	// result rather than nil for t-family RIs).
+	"t3":  {"t3", "t3a", "t4g"},
+	"t3a": {"t3", "t3a", "t4g"},
+	"t4g": {"t3", "t3a", "t4g"},
+}
+
+// candidateFamilies returns the peer families (including sourceFamily
+// itself) within the same use-case group, or nil when the family is
+// not in the allowlist. Callers surface the returned families to users
+// as cross-family alternatives.
+func candidateFamilies(sourceFamily string) []string {
+	return peerFamilyGroups[strings.ToLower(sourceFamily)]
 }
 
 // normalizationFactors maps EC2 instance sizes to their AWS normalization factors.
@@ -164,14 +218,15 @@ func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *Reshap
 	}
 
 	return &ReshapeRecommendation{
-		SourceRIID:          ri.ID,
-		SourceInstanceType:  ri.InstanceType,
-		SourceCount:         ri.InstanceCount,
-		TargetInstanceType:  targetInstanceType,
-		TargetCount:         targetCount,
-		UtilizationPercent:  util,
-		NormalizedUsed:      normalizedUsed,
-		NormalizedPurchased: normalizedPurchased,
+		SourceRIID:                     ri.ID,
+		SourceInstanceType:             ri.InstanceType,
+		SourceCount:                    ri.InstanceCount,
+		TargetInstanceType:             targetInstanceType,
+		TargetCount:                    targetCount,
+		AlternativeTargetInstanceTypes: alternativesForTarget(family, targetSize),
+		UtilizationPercent:             util,
+		NormalizedUsed:                 normalizedUsed,
+		NormalizedPurchased:            normalizedPurchased,
 		Reason: fmt.Sprintf(
 			"RI at %.0f%% utilization (%.1f/%.1f normalized units). Suggest exchanging %dx %s for %dx %s.",
 			util, normalizedUsed, normalizedPurchased,
@@ -179,6 +234,26 @@ func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *Reshap
 			targetCount, targetInstanceType,
 		),
 	}
+}
+
+// alternativesForTarget returns cross-family equivalents at the same
+// target size for the families in sourceFamily's peer group. The
+// source family itself is excluded (that's the primary
+// TargetInstanceType already). Returns nil when sourceFamily isn't in
+// the allowlist or has no peers.
+func alternativesForTarget(sourceFamily, targetSize string) []string {
+	peers := candidateFamilies(sourceFamily)
+	if len(peers) <= 1 {
+		return nil
+	}
+	out := make([]string, 0, len(peers)-1)
+	for _, p := range peers {
+		if strings.EqualFold(p, sourceFamily) {
+			continue
+		}
+		out = append(out, p+"."+targetSize)
+	}
+	return out
 }
 
 // findBestFit finds the instance size and count that best fits normalizedUsed units.
