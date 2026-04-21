@@ -1,37 +1,125 @@
 # Known Issues
 
-No critical issues at this time. The following are known limitations:
+The seven limitations previously listed here have been resolved or
+scoped-down with explicit follow-ups. This file tracks what's still
+outstanding so future work has a clear starting point.
 
-## Azure
+## Resolved
 
-- ~~**ARM template role definition scoping + `Reservation Reader` tenant gap**~~: Previously, `arm/CUDly-CrossSubscription/template.json` built role-definition IDs scoped to the subscription (`/subscriptions/{subId}/providers/Microsoft.Authorization/roleDefinitions/...`). Azure built-in roles are GLOBAL resources — scoping the definition ID to the subscription caused ARM to look for the role inside the subscription, where it isn't registered; `Reservation Reader` (`582fc458-8989-419f-a480-75249a578f9d`) consistently failed with `RoleDefinitionDoesNotExist`, and `Reservation Reader` itself is not provisioned in every Azure tenant. **Resolved:** the template now uses the unscoped global path (`/providers/Microsoft.Authorization/roleDefinitions/{id}`) for all three surviving role definitions, and the `Reservation Reader` assignment was dropped in favour of a FOURTH `Reservation Purchaser` assignment at `/providers/Microsoft.Capacity` scope (a superset that is available in every tenant). Operators who previously applied the buggy template may need to clean up the orphaned subscription-scoped `Reservation Reader` assignment manually via `az role assignment delete --assignee <sp-object-id> --role "Reservation Reader" --scope /subscriptions/<subId>` — the next `az deployment sub create` won't delete it because ARM's resource model no longer references the obsolete assignment name.
+### Azure
 
-- **Azure SMTP credential generation requires manual Azure Portal step**: Azure Communication Services SMTP credentials cannot be auto-generated via Terraform. See the documentation in `terraform/modules/secrets/azure/main.tf` for manual setup instructions.
+- **ARM template role-definition scoping + `Reservation Reader` tenant
+  gap**: Resolved. `arm/CUDly-CrossSubscription/template.json` now uses
+  unscoped global role-definition paths
+  (`/providers/Microsoft.Authorization/roleDefinitions/{id}`) and drops
+  the fragile `Reservation Reader` assignment in favour of a
+  `Reservation Purchaser` assignment at `/providers/Microsoft.Capacity`
+  scope (a superset available in every tenant). Operators who previously
+  applied the buggy template may need to clean up the orphaned
+  subscription-scoped `Reservation Reader` assignment manually with
+  `az role assignment delete --assignee <sp-object-id> --role "Reservation Reader" --scope /subscriptions/<subId>`.
 
-## Azure AKS Module
+- **Azure ACS SMTP credential generation requires manual portal step**:
+  Microsoft's API gap remains (no REST endpoint generates ACS SMTP
+  credentials; the Portal is the only supported path). The ergonomic
+  gap is closed: `scripts/azure-smtp-setup.sh` prints a pre-filled
+  checklist with the direct Azure Portal URL plus the exact `az keyvault
+  secret set` commands for this deployment. The `smtp_setup_instructions`
+  Terraform output surfaces the command to run at the end of
+  `terraform apply`. See `specs/azure-smtp-setup.md` for the runbook and
+  troubleshooting.
 
-- **Helm LoadBalancer IP may not be available on first apply**: The NGINX ingress LoadBalancer IP is provisioned asynchronously by Azure. The `load_balancer_ip` output uses `try()` to return `""` when pending. A subsequent `terraform apply` resolves the IP.
+### Azure AKS Module
 
-## RI Exchange
+- **Helm LoadBalancer IP may not be available on first apply**:
+  Resolved. `terraform/modules/compute/azure/aks/main.tf` now emits a
+  `time_sleep.wait_for_lb_ip` (5-minute create_duration) between the
+  `helm_release.nginx_ingress` and the `kubernetes_service` data source
+  read, covering Azure's typical 2–5 minute LB provisioning window.
+  First-apply no longer requires a follow-up run in the common case;
+  the `try()` fallback on the output still handles the rare
+  beyond-budget provisioning tail.
 
-- **Same-family-only recommendations**: `AnalyzeReshaping` only suggests targets within the same instance family (e.g. m5.xlarge -> m5.large). Cross-family recommendations (e.g. m5 -> m6i) would require offering ID lookup and pricing comparison via the EC2 `DescribeReservedInstancesOfferings` API. AWS normalization-based exchange rules constrain exchanges to the same family for size-flexibility adjustments, so cross-family support is a distinct feature expansion.
+### RI Exchange
 
-- **Multi-target exchange**: The AWS exchange APIs accept multiple `TargetConfigurationRequest` entries, allowing a single exchange to produce several target RIs. The current implementation supports only one target per exchange. Supporting multi-target would require rethinking the request types, validation logic, and spend-cap guardrails.
+- **Same-family-only recommendations**: Resolved with scoped cross-family
+  advisory suggestions. `pkg/exchange.ReshapeRecommendation` now carries
+  an advisory `AlternativeTargetInstanceTypes []string` field populated
+  from a peer-family allowlist (general-purpose `m5/m6i/m7g`,
+  compute-optimised `c5/c6i/c7g`, memory-optimised `r5/r6i/r7g`,
+  burstable `t3/t3a/t4g`). The UI can surface these as alternatives
+  alongside the primary target; the auto-exchange pipeline still acts
+  on the primary target only so existing automated behaviour is
+  unchanged. Specialty (p\*/g\*/x\*/hpc\*) and legacy-generation
+  (m4/c4/r3) families are deliberately out of the allowlist — see the
+  follow-up below.
 
-- **Utilization caching**: `getRIUtilization` and `getReshapeRecommendations` call Cost Explorer on every request. Cost Explorer charges per API call and is rate-limited. Adding a cache would reduce costs and improve response times, but the cache design (key strategy incorporating region + lookback_days, TTL policy, invalidation on RI changes) warrants separate planning.
+- **Multi-target exchange**: Resolved. `pkg/exchange.ExchangeQuoteRequest`
+  and `ExchangeExecuteRequest` accept a `Targets []TargetConfig` slice;
+  legacy `TargetOfferingID` / `TargetCount` fields are retained as a
+  single-target alias so existing callers keep working. The HTTP API
+  gains an optional `targets[]` array on the quote + execute bodies;
+  when present it wins over the legacy singleton fields. Spend-cap
+  semantics: AWS returns a single aggregated `PaymentDue` across all
+  targets, so `max_payment_due_usd` naturally functions as a TOTAL cap
+  for multi-target requests. Frontend UI for exposing multi-target is a
+  separate follow-up.
 
-## Test Performance
+- **Utilization caching**: Resolved with a Postgres-backed TTL cache.
+  Migration `000031_ri_utilization_cache` adds
+  `ri_utilization_cache (region, lookback_days, payload, fetched_at)`.
+  `internal/api/handler_ri_exchange.go` routes both
+  `getRIUtilization` and `getReshapeRecommendations` through the cache
+  wrapper (`internal/api/ri_utilization_cache.go`) so one Cost Explorer
+  call per TTL window serves every warm and cold Lambda container. TTL
+  configurable via `CUDLY_RI_UTILIZATION_CACHE_TTL` (default `15m`,
+  matches CE's hourly upstream refresh cadence). Errors are never
+  cached — a transient CE 5xx cannot lock the dashboard out for the
+  full TTL. See the Config section of `specs/recommendations-cache.md`.
 
-### Test parallelization
+### Test Performance
 
-Unit tests do not use t.Parallel(). Adding it could provide 2-4x speedup but requires:
+- **t.Parallel() adoption (partial)**: Resolved for three audit-safe
+  packages — `pkg/exchange/{auto,exchange,reshape}_test.go`,
+  `providers/aws/services/ec2/client_test.go`, and
+  `internal/api/validation_test.go`. Remaining packages haven't been
+  audited per-file and keep their sequential execution — see the
+  follow-up below.
 
-- Auditing test files for shared state (global vars, package-level mocks)
-- Ensuring test helpers (createTestUser, createTestService) are goroutine-safe
-- Starting with low-risk packages (pkg/exchange, providers/aws/services/ec2) before auth
+## Outstanding follow-ups
 
-Candidate packages (low shared state risk, audit still required):
+- **Cross-family RI recommendations for specialty + legacy families**:
+  `pkg/exchange/reshape.go`'s `peerFamilyGroups` allowlist covers
+  general/compute/memory/burstable mainstream families only. Specialty
+  families (`p*`, `g*`, `x*`, `hpc*`) and legacy generations (`m4`,
+  `c4`, `r3`) return no cross-family alternatives because AWS's
+  `$`-units check routinely rejects exchanges for these shapes — adding
+  them would hurt user trust. A proper fix requires live offering
+  enumeration via `DescribeReservedInstancesOfferings` + pricing
+  comparison, which is a multi-day feature scoped separately.
 
-- pkg/exchange
-- providers/aws/services/ec2
-- internal/api (validation tests only)
+- **t.Parallel() adoption for remaining packages**: Adoption is complete
+  only for `pkg/exchange/`, `providers/aws/services/ec2/`, and
+  `internal/api/validation_test.go`. Other packages need a per-test-file
+  audit for shared state before parallelizing:
+
+  - `internal/api/` (other test files besides `validation_test.go`) use
+    handler fixtures and shared mocks; not race-safe without review.
+  - `internal/config/*_test.go` integration tests share a Postgres
+    container and cannot naively parallelize.
+  - `internal/server/app_test.go` uses package-level vars
+    (`runMigrations`, `migrationsTimeout`) that are not race-safe.
+  - Any test file using `os.Setenv`/`t.Setenv` for process-wide state
+    needs verification that the variable scope is per-test.
+
+  Expected incremental speedup is meaningful but each package needs its
+  own small audit commit; scheduled as ad-hoc cleanup rather than a
+  single sweeping change.
+
+- **Frontend UI for multi-target RI exchange**: The backend accepts
+  `targets[]`, but the dashboard still posts the single-target shape
+  (`target_offering_id` + `target_count`). Exposing multi-target in the
+  UI is the natural next step once users have a mental model for
+  redistributing one source RI into multiple shapes atomically. Out of
+  scope for the current round because it's a UX question more than a
+  backend question.
