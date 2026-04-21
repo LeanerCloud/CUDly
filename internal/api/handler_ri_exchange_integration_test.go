@@ -136,18 +136,16 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	require.Equal(t, "m5.large", rec.TargetInstanceType)
 
 	// AnalyzeReshapingWithOfferings drops the source family (m5) from
-	// the alternatives, so we expect m6i.large + m7g.large only. The
-	// order preserves the peer-family allowlist ordering from
-	// `peerFamilyGroups["m5"] = {"m5","m6i","m7g"}` (m6i before m7g);
-	// the pricing enrichment doesn't re-sort by cost. Callers that
-	// want cost-order can sort AlternativeTargets client-side.
+	// the alternatives, so we expect m6i.large + m7g.large only.
+	// Alternatives are sorted ascending by EffectiveMonthlyCost —
+	// cheapest first — so m7g ($30) comes before m6i ($35).
 	require.Len(t, rec.AlternativeTargets, 2)
-	require.Equal(t, "m6i.large", rec.AlternativeTargets[0].InstanceType)
-	require.Equal(t, "off-m6i", rec.AlternativeTargets[0].OfferingID)
-	require.InDelta(t, 35.0, rec.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
-	require.Equal(t, "m7g.large", rec.AlternativeTargets[1].InstanceType)
-	require.Equal(t, "off-m7g", rec.AlternativeTargets[1].OfferingID)
-	require.InDelta(t, 30.0, rec.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
+	require.Equal(t, "m7g.large", rec.AlternativeTargets[0].InstanceType)
+	require.Equal(t, "off-m7g", rec.AlternativeTargets[0].OfferingID)
+	require.InDelta(t, 30.0, rec.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
+	require.Equal(t, "m6i.large", rec.AlternativeTargets[1].InstanceType)
+	require.Equal(t, "off-m6i", rec.AlternativeTargets[1].OfferingID)
+	require.InDelta(t, 35.0, rec.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
 
 	// Verify the RI utilization cache row landed in Postgres.
 	entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)

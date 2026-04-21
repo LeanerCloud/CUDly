@@ -151,14 +151,14 @@ func TestAnalyzeReshapingWithOfferings_EnrichesAlternatives(t *testing.T) {
 	if len(got.AlternativeTargets) != 2 {
 		t.Fatalf("expected 2 alternatives; got %+v", got.AlternativeTargets)
 	}
-	// Sort for deterministic comparison.
-	sort.Slice(got.AlternativeTargets, func(i, j int) bool {
-		return got.AlternativeTargets[i].InstanceType < got.AlternativeTargets[j].InstanceType
-	})
-	assert.Equal(t, "m6i.large", got.AlternativeTargets[0].InstanceType)
-	assert.Equal(t, "off-m6i", got.AlternativeTargets[0].OfferingID)
-	assert.InDelta(t, 35.0, got.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
-	assert.Equal(t, "m7g.large", got.AlternativeTargets[1].InstanceType)
+	// AnalyzeReshapingWithOfferings sorts alternatives ascending by
+	// EffectiveMonthlyCost so the cheapest option is first. Lookup
+	// returned m6i.large=$35 and m7g.large=$30 → m7g first.
+	assert.Equal(t, "m7g.large", got.AlternativeTargets[0].InstanceType)
+	assert.Equal(t, "off-m7g", got.AlternativeTargets[0].OfferingID)
+	assert.InDelta(t, 30.0, got.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
+	assert.Equal(t, "m6i.large", got.AlternativeTargets[1].InstanceType)
+	assert.InDelta(t, 35.0, got.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
 }
 
 func TestAnalyzeReshapingWithOfferings_MissingOfferingDroppedNotWholeRec(t *testing.T) {

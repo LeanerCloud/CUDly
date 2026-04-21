@@ -356,7 +356,12 @@ func distinctCandidateTypes(recs []ReshapeRecommendation) []string {
 // fillAlternativesFromOfferings replaces each rec's AlternativeTargets
 // with the matching OfferingOption from the lookup result. Missing
 // instance types are silently dropped (per the doc on
-// AnalyzeReshapingWithOfferings).
+// AnalyzeReshapingWithOfferings). The output is sorted ascending by
+// EffectiveMonthlyCost so the UI shows cheapest alternatives first —
+// this matches user intent (the primary advisory signal of this list
+// is "is there a cheaper option than the primary target?") even though
+// it differs from the peer-family allowlist order that the base
+// AnalyzeReshaping emits.
 func fillAlternativesFromOfferings(recs []ReshapeRecommendation, offerings []OfferingOption) {
 	offByType := make(map[string]OfferingOption, len(offerings))
 	for _, o := range offerings {
@@ -371,6 +376,9 @@ func fillAlternativesFromOfferings(recs []ReshapeRecommendation, offerings []Off
 				filled = append(filled, found)
 			}
 		}
+		sort.Slice(filled, func(a, b int) bool {
+			return filled[a].EffectiveMonthlyCost < filled[b].EffectiveMonthlyCost
+		})
 		recs[i].AlternativeTargets = filled
 	}
 }
