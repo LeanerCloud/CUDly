@@ -454,6 +454,17 @@ func (p *GCPProvider) GetRecommendationsClient(ctx context.Context) (provider.Re
 // avoiding unnecessary page fetches in large organisations.
 var errStopProjectPagination = errors.New("stop pagination: found active project")
 
+// listProjectsForDefault walks all resource-manager project pages, calling
+// cb for each. Package-level var so tests can swap in a fake that simulates
+// "no ACTIVE projects across every page" without standing up a real service.
+var listProjectsForDefault = func(ctx context.Context, opts []option.ClientOption, cb func(*cloudresourcemanager.ListProjectsResponse) error) error {
+	service, err := cloudresourcemanager.NewService(ctx, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to create resource manager service: %w", err)
+	}
+	return service.Projects.List().Pages(ctx, cb)
+}
+
 // getDefaultProject attempts to get the default GCP project from environment
 // or ADC. In organisations with more than one page of projects (~500 per
 // page), this walks pages via Pages() until the first ACTIVE project is
@@ -464,14 +475,8 @@ var errStopProjectPagination = errors.New("stop pagination: found active project
 // option.WithTokenSource (or similar) to use non-ambient credentials. With
 // no opts the lookup uses Application Default Credentials.
 func getDefaultProject(ctx context.Context, opts ...option.ClientOption) (string, error) {
-	// Try to use the Cloud Resource Manager API to get the default project
-	service, err := cloudresourcemanager.NewService(ctx, opts...)
-	if err != nil {
-		return "", fmt.Errorf("failed to create resource manager service: %w", err)
-	}
-
 	var foundID string
-	err = service.Projects.List().Pages(ctx, func(resp *cloudresourcemanager.ListProjectsResponse) error {
+	err := listProjectsForDefault(ctx, opts, func(resp *cloudresourcemanager.ListProjectsResponse) error {
 		return findActiveProjectInPage(&foundID, resp)
 	})
 	if err != nil && !errors.Is(err, errStopProjectPagination) {

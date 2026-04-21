@@ -636,6 +636,29 @@ func TestComputeEngineClient_GetRecommendations_WithMock(t *testing.T) {
 	assert.True(t, mockClient.closed)
 }
 
+// TestComputeEngineClient_GetRecommendations_IteratorError pins the
+// "iterator error propagates, no silent swallow" contract that commit
+// f75aa6cf4 introduced. Memorystore's test (TestMemorystoreClient_
+// GetRecommendations_WithMockClient) already covers this shape; adding
+// the same coverage for computeengine closes the test-parity gap flagged
+// in known_issues/11_gcp_provider.md.
+func TestComputeEngineClient_GetRecommendations_IteratorError(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockIterator := &MockRecommenderIterator{
+		err: errors.New("injected iterator failure"),
+	}
+	mockClient := &MockRecommenderClient{iterator: mockIterator}
+	client.SetRecommenderClient(mockClient)
+
+	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "computeengine: iterate recommendations")
+	assert.Nil(t, recs, "partial data must not leak on iterator failure")
+	assert.True(t, mockClient.closed, "client must still be closed on the error path")
+}
+
 func TestComputeEngineClient_GetRecommendations_Empty(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")

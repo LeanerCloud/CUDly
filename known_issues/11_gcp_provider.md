@@ -1,6 +1,6 @@
 # Known Issues: GCP Provider
 
-> **Audit status (2026-04-20):** `0 from original audit · 8 resolved · 0 partially fixed · 0 moved · 2 new items surfaced during 2026-04-21 audit review`
+> **Audit status (2026-04-21):** `0 from original audit · 10 resolved · 0 partially fixed · 0 moved · 0 outstanding follow-ups`
 
 ## ~~CRITICAL: Missing Pagination in `getDefaultProject`~~ — RESOLVED
 
@@ -212,14 +212,16 @@
 
 **Effort:** `small` (coupled with fix above)
 
-## MEDIUM: Iterator-error propagation not unit-tested in computeengine/cloudsql (found during 2026-04-21 audit review)
+## ~~MEDIUM: Iterator-error propagation not unit-tested in computeengine/cloudsql~~ — RESOLVED
 
 **File**: `providers/gcp/services/computeengine/client.go`, `cloudsql/client.go` (and their `_test.go` siblings)
-**Description**: Commit `f75aa6cf4` changed all three GCP service recommendation iterators (computeengine, cloudsql, memorystore) to return `(nil, fmt.Errorf("<svc>: iterate recommendations: %w", err))` on iterator failures instead of silently breaking out of the loop. The memorystore test file was updated to assert the new behaviour; computeengine and cloudsql were not. If a future refactor re-introduces the "break silently" pattern in either of those services, the test suite won't catch it.
+**Description**: Commit `f75aa6cf4` changed all three GCP service recommendation iterators (computeengine, cloudsql, memorystore) to return `(nil, fmt.Errorf("<svc>: iterate recommendations: %w", err))` on iterator failures instead of silently breaking out of the loop. The memorystore test file was updated to assert the new behaviour; computeengine and cloudsql were not. If a future refactor re-introduced the "break silently" pattern in either of those services, the test suite wouldn't catch it.
 **Impact**: Silent-data-loss regression risk. The shape is identical in all three services so covering one fully and leaving two uncovered is asymmetric.
-**Status:** ❓ Needs triage
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** `TestComputeEngineClient_GetRecommendations_IteratorError` and `TestCloudSQLClient_GetRecommendations_IteratorError` added, each using the existing `MockRecommenderIterator` with an injected error and asserting (a) the returned error contains the service prefix (`"computeengine: iterate recommendations"` / `"cloudsql: iterate recommendations"`), (b) the returned slice is nil, (c) the client is still closed on the error path. Test parity with `TestMemorystoreClient_GetRecommendations_WithMockClient` "propagates iterator errors (no silent swallow)" is now in place.
+
+### Original implementation plan
 
 **Goal:** Parity with memorystore's iterator-error test coverage.
 
@@ -240,14 +242,16 @@
 
 **Effort:** `small`.
 
-## MEDIUM: getDefaultProject "no ACTIVE projects" error path lacks test coverage (found during 2026-04-21 audit review)
+## ~~MEDIUM: getDefaultProject "no ACTIVE projects" error path lacks test coverage~~ — RESOLVED
 
 **File**: `providers/gcp/provider.go::getDefaultProject` + `provider_test.go`
-**Description**: After commits `f75aa6cf4` and `f0a9da7e8`, `getDefaultProject` walks pages via `Pages()` and returns `"no active GCP projects found"` when no `LifecycleState == "ACTIVE"` project is seen across all pages. `TestFindActiveProjectInPage` covers the per-page callback, and `TestNewProvider_ProjectIDResolution` covers the typed-field-vs-Profile precedence chain, but no test exercises the full `getDefaultProject` path where the service returns a page of non-ACTIVE projects only and the function should produce the no-active error.
+**Description**: After commits `f75aa6cf4` and `f0a9da7e8`, `getDefaultProject` walks pages via `Pages()` and returns `"no active GCP projects found"` when no `LifecycleState == "ACTIVE"` project is seen across all pages. `TestFindActiveProjectInPage` covered the per-page callback, and `TestNewProvider_ProjectIDResolution` covered the typed-field-vs-Profile precedence chain, but no test exercised the full `getDefaultProject` path where the service returns a page of non-ACTIVE projects only and the function should produce the no-active error.
 **Impact**: Regression risk — if a future refactor weakens the LifecycleState check (e.g. accepts "DELETE_REQUESTED" as alive), the error path stops firing and callers get a misleading ACTIVE project that's actually tombstoned.
-**Status:** ❓ Needs triage
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** `provider.go` extracted the `cloudresourcemanager.NewService` + `Projects.List().Pages` call into a package-level `var listProjectsForDefault` so tests can swap in a fake that returns pages with no ACTIVE projects. Two new tests in `provider_test.go`: `TestGetDefaultProject_NoActiveProjects` (feeds pages of `DELETE_REQUESTED` / `DELETE_IN_PROGRESS` projects and asserts the `"no active GCP projects found"` error) and `TestGetDefaultProject_ListerError` (feeds a transient lister error and asserts it's wrapped as `"failed to list projects: cloudresourcemanager: transient failure"` rather than swallowed).
+
+### Original implementation plan
 
 **Goal:** Pin the "no ACTIVE projects surface the exact error" contract.
 

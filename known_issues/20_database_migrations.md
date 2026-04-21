@@ -1,6 +1,6 @@
 # Known Issues: Database Migrations
 
-> **Audit status (2026-04-20):** `0 from original audit · 8 resolved · 0 partially fixed · 0 moved · 2 new items surfaced during 2026-04-21 audit review (CleanupOldExecutions SQL precedence fix applied in a follow-up commit; test-coverage and locking-risk remain)`
+> **Audit status (2026-04-21):** `0 from original audit · 9 resolved · 0 partially fixed · 0 moved · 1 follow-up outstanding (MEDIUM: migration 000027 dedup DELETE lock window)`
 
 ## ~~HIGH: savings_snapshots has no PRIMARY KEY~~ — RESOLVED
 
@@ -322,14 +322,16 @@ The Go field stays `string` for now (with the existing `COALESCE(...,'')` reads)
 
 **Effort:** `small`
 
-## LOW: SaveRIExchangeRecord empty-PaymentDue defaulting has no test (found during 2026-04-21 audit review)
+## ~~LOW: SaveRIExchangeRecord empty-PaymentDue defaulting has no test~~ — RESOLVED
 
 **File**: `internal/config/store_postgres.go::SaveRIExchangeRecord` + its test sites
-**Description**: Commit `57e461cab` added a boundary-level default that maps empty `record.PaymentDue` to `"0"` before binding to the `DECIMAL(20,6) NOT NULL DEFAULT 0 CHECK (payment_due >= 0)` column. The fix is correct and minimal (pre-condition: pgx can't cast `""` to DECIMAL). However the test suite has no case that constructs a zero-value `RIExchangeRecord` and asserts the insert succeeds — the existing `handler_ri_exchange_test.go` fixtures all set `PaymentDue: "5.00"` explicitly. A future refactor that drops the defaulting would not be caught by `go test`.
+**Description**: Commit `57e461cab` added a boundary-level default that maps empty `record.PaymentDue` to `"0"` before binding to the `DECIMAL(20,6) NOT NULL DEFAULT 0 CHECK (payment_due >= 0)` column. The fix is correct and minimal (pre-condition: pgx can't cast `""` to DECIMAL). However the test suite had no case that constructed a zero-value `RIExchangeRecord` and asserted the insert succeeded — the existing `handler_ri_exchange_test.go` fixtures all set `PaymentDue: "5.00"` explicitly. A future refactor that dropped the defaulting would not be caught by `go test`.
 **Impact**: Silent regression risk on the exact crash mode the commit was meant to prevent.
-**Status:** ❓ Needs triage
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** `store_postgres_db_test.go::TestPostgresStoreDB_SaveRIExchangeRecord_DefaultsEmptyPaymentDue` (integration-tagged, runs against the testcontainers Postgres harness used by the other `*_db_test.go` suites). The test constructs an `RIExchangeRecord` with `PaymentDue: ""`, saves it, reads it back via `GetRIExchangeRecord`, and asserts the read-back string parses via `strconv.ParseFloat` to numeric zero. Byte-exact compare avoided deliberately because the DB-driver returns "0" or "0.000000" depending on formatting.
+
+### Original implementation plan
 
 **Goal:** Pin the "empty → 0" contract.
 

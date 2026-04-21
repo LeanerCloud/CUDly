@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -1154,4 +1155,48 @@ func TestSQLNullTimeHandling(t *testing.T) {
 		}
 		assert.Empty(t, result)
 	})
+}
+
+// TestPostgresStoreDB_SaveRIExchangeRecord_DefaultsEmptyPaymentDue pins the
+// boundary fix in SaveRIExchangeRecord: an empty PaymentDue string is mapped
+// to "0" before being passed to pgx, because the DECIMAL(20,6) column can't
+// cast "" but CAN cast "0". The round-trip assertion uses strconv.ParseFloat
+// rather than a byte-exact string compare because the DB may return "0" or
+// "0.000000" depending on driver formatting.
+func TestPostgresStoreDB_SaveRIExchangeRecord_DefaultsEmptyPaymentDue(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	if conn == nil {
+		return
+	}
+
+	cleanupTestData(t, conn)
+
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+
+	record := &RIExchangeRecord{
+		AccountID:          "payment-due-test-account",
+		ExchangeID:         "payment-due-test-exchange",
+		Region:             "us-east-1",
+		SourceRIIDs:        []string{"ri-1"},
+		SourceInstanceType: "r5.large",
+		SourceCount:        1,
+		TargetOfferingID:   "off-1",
+		TargetInstanceType: "r5.xlarge",
+		TargetCount:        1,
+		PaymentDue:         "", // the case under test
+		Status:             "pending",
+		Mode:               "manual",
+	}
+
+	require.NoError(t, store.SaveRIExchangeRecord(ctx, record))
+	require.NotEmpty(t, record.ID, "SaveRIExchangeRecord should populate ID")
+
+	retrieved, err := store.GetRIExchangeRecord(ctx, record.ID)
+	require.NoError(t, err)
+	require.NotNil(t, retrieved)
+
+	parsed, err := strconv.ParseFloat(retrieved.PaymentDue, 64)
+	require.NoError(t, err, "PaymentDue must parse as a float; got %q", retrieved.PaymentDue)
+	assert.Equal(t, 0.0, parsed, "empty PaymentDue must round-trip as numeric zero")
 }

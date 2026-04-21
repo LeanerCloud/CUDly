@@ -692,6 +692,23 @@ func TestCloudSQLClient_GetRecommendations_WithMock(t *testing.T) {
 	assert.True(t, mockClient.closed)
 }
 
+func TestCloudSQLClient_GetRecommendations_IteratorError(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockIterator := &MockRecommenderIterator{
+		err: errors.New("injected iterator failure"),
+	}
+	mockClient := &MockRecommenderClient{iterator: mockIterator}
+	client.SetRecommenderClient(mockClient)
+
+	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cloudsql: iterate recommendations")
+	assert.Nil(t, recs, "partial data must not leak on iterator failure")
+	assert.True(t, mockClient.closed, "client must still be closed on the error path")
+}
+
 func TestCloudSQLClient_GetRecommendations_Empty(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")

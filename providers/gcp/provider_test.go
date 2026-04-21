@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/cloudresourcemanager/v1"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
@@ -159,6 +160,48 @@ func TestFindActiveProjectInPage(t *testing.T) {
 		require.ErrorIs(t, err, errStopProjectPagination)
 		assert.Equal(t, "p2-active", out, "page 2 has the ACTIVE project, out must be set")
 	})
+}
+
+// TestGetDefaultProject_NoActiveProjects exercises the "lister returned
+// pages but none contained an ACTIVE project" error path. The per-page
+// callback has unit coverage (TestFindActiveProjectInPage), but the
+// end-to-end "no active GCP projects found" error was previously only
+// covered by the ADC-dependent path, which doesn't run in CI.
+func TestGetDefaultProject_NoActiveProjects(t *testing.T) {
+	originalLister := listProjectsForDefault
+	t.Cleanup(func() { listProjectsForDefault = originalLister })
+
+	listProjectsForDefault = func(ctx context.Context, opts []option.ClientOption, cb func(*cloudresourcemanager.ListProjectsResponse) error) error {
+		return cb(&cloudresourcemanager.ListProjectsResponse{
+			Projects: []*cloudresourcemanager.Project{
+				{ProjectId: "p1", LifecycleState: "DELETE_REQUESTED"},
+				{ProjectId: "p2", LifecycleState: "DELETE_IN_PROGRESS"},
+			},
+		})
+	}
+
+	id, err := getDefaultProject(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, "", id)
+	assert.Contains(t, err.Error(), "no active GCP projects found")
+}
+
+// TestGetDefaultProject_ListerError verifies that errors from the underlying
+// lister (other than the internal errStopProjectPagination sentinel) are
+// wrapped and returned, not swallowed.
+func TestGetDefaultProject_ListerError(t *testing.T) {
+	originalLister := listProjectsForDefault
+	t.Cleanup(func() { listProjectsForDefault = originalLister })
+
+	listProjectsForDefault = func(ctx context.Context, opts []option.ClientOption, cb func(*cloudresourcemanager.ListProjectsResponse) error) error {
+		return errors.New("cloudresourcemanager: transient failure")
+	}
+
+	id, err := getDefaultProject(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, "", id)
+	assert.Contains(t, err.Error(), "failed to list projects")
+	assert.Contains(t, err.Error(), "cloudresourcemanager: transient failure")
 }
 
 // TestNewProvider_ProjectIDResolution verifies the precedence chain when
