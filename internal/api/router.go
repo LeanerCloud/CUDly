@@ -72,6 +72,7 @@ func (r *Router) registerRoutes() {
 
 		// Recommendations endpoints
 		{ExactPath: "/api/recommendations", Method: "GET", Handler: r.getRecommendationsHandler},
+		{ExactPath: "/api/recommendations/freshness", Method: "GET", Handler: r.getRecommendationsFreshnessHandler},
 		{ExactPath: "/api/recommendations/refresh", Method: "POST", Handler: r.refreshRecommendationsHandler},
 
 		// Purchase plans endpoints
@@ -291,6 +292,10 @@ func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.Lamb
 
 func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.scheduler.CollectRecommendations(ctx)
+}
+
+func (r *Router) getRecommendationsFreshnessHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getRecommendationsFreshness(ctx, req)
 }
 
 func (r *Router) listPlansHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

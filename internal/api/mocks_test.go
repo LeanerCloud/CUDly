@@ -266,20 +266,51 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	return nil, nil
 }
+func (m *MockConfigStore) hasRecExpectation(method string) bool {
+	for i := range m.ExpectedCalls {
+		if m.ExpectedCalls[i].Method == method {
+			return true
+		}
+	}
+	return false
+}
 func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
-	return nil
+	if !m.hasRecExpectation("ReplaceRecommendations") {
+		return nil
+	}
+	return m.Called(ctx, collectedAt, recs).Error(0)
 }
 func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulProviders []string) error {
-	return nil
+	if !m.hasRecExpectation("UpsertRecommendations") {
+		return nil
+	}
+	return m.Called(ctx, collectedAt, recs, successfulProviders).Error(0)
 }
 func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
-	return nil, nil
+	if !m.hasRecExpectation("ListStoredRecommendations") {
+		return nil, nil
+	}
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.RecommendationRecord), args.Error(1)
 }
 func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
-	return &config.RecommendationsFreshness{}, nil
+	if !m.hasRecExpectation("GetRecommendationsFreshness") {
+		return &config.RecommendationsFreshness{}, nil
+	}
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.RecommendationsFreshness), args.Error(1)
 }
 func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
-	return nil
+	if !m.hasRecExpectation("SetRecommendationsCollectionError") {
+		return nil
+	}
+	return m.Called(ctx, errMsg).Error(0)
 }
 func (m *MockConfigStore) CreateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
 	args := m.Called(ctx, reg)

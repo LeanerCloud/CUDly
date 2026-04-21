@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
@@ -37,4 +39,40 @@ func TestHandler_getRecommendations(t *testing.T) {
 
 	assert.Equal(t, 0, result.Summary.TotalCount)
 	assert.Equal(t, float64(0), result.Summary.TotalMonthlySavings)
+}
+
+func TestHandler_getRecommendationsFreshness(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns freshness payload", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		now := time.Now().UTC()
+		mockStore.On("GetRecommendationsFreshness", ctx).
+			Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
+
+		handler := &Handler{config: mockStore, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		got, err := handler.getRecommendationsFreshness(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.NotNil(t, got.LastCollectedAt)
+		assert.WithinDuration(t, now, *got.LastCollectedAt, time.Second)
+	})
+
+	t.Run("surfaces store error", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, errors.New("db down"))
+
+		handler := &Handler{config: mockStore, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		got, err := handler.getRecommendationsFreshness(ctx, req)
+		require.Error(t, err)
+		assert.Nil(t, got)
+	})
 }

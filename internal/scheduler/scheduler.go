@@ -429,85 +429,44 @@ type RecommendationQueryParams struct {
 	AccountIDs []string // filter by cloud account UUIDs; empty = all accounts
 }
 
-// GetRecommendations fetches recommendations from all configured providers with optional filtering
+// GetRecommendations reads cached recommendations from the store, applying
+// the given filters as SQL WHERE clauses. Previously this did live cloud
+// API calls on every request (2–10s per provider); now it's a pure DB
+// read, typically under 100ms.
+//
+// The upcoming commit 7 wraps this with stale-while-revalidate; for now
+// the wrapper is a thin passthrough to config.ListStoredRecommendations.
+// On Lambda-safe cold start (empty cache), CollectRecommendations is run
+// synchronously first so the user sees data rather than an empty table.
 func (s *Scheduler) GetRecommendations(ctx context.Context, params RecommendationQueryParams) ([]config.RecommendationRecord, error) {
-	logging.Info("Getting recommendations from cloud providers...")
+	logging.Info("Reading recommendations from cache...")
 
-	globalCfg, err := s.config.GetGlobalConfig(ctx)
+	// Cold-start fallback: if the cache has never been populated, collect
+	// synchronously so the first caller sees real data. Subsequent requests
+	// read from the DB. Safe on all runtimes since the call is sync.
+	freshness, err := s.config.GetRecommendationsFreshness(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read recommendations freshness: %w", err)
+	}
+	if freshness.LastCollectedAt == nil {
+		logging.Info("Recommendations cache is empty; performing synchronous cold-start collect")
+		if _, err := s.CollectRecommendations(ctx); err != nil {
+			return nil, fmt.Errorf("cold-start collect failed: %w", err)
+		}
 	}
 
-	return s.collectAndFilterRecommendations(ctx, globalCfg, params)
+	return s.config.ListStoredRecommendations(ctx, recommendationFilterFromQueryParams(params))
 }
 
-// collectAndFilterRecommendations collects recommendations from all providers and applies filters
-func (s *Scheduler) collectAndFilterRecommendations(ctx context.Context, globalCfg *config.GlobalConfig, params RecommendationQueryParams) ([]config.RecommendationRecord, error) {
-	var allRecommendations []config.RecommendationRecord
-
-	for _, providerName := range globalCfg.EnabledProviders {
-		if !shouldIncludeProvider(providerName, params.Provider) {
-			continue
-		}
-
-		recs, err := s.collectProviderRecommendations(ctx, providerName, globalCfg)
-		if err != nil {
-			logging.Errorf("Failed to collect %s recommendations: %v", providerName, err)
-			continue
-		}
-
-		filtered := filterRecommendations(recs, params)
-		allRecommendations = append(allRecommendations, filtered...)
+// recommendationFilterFromQueryParams translates the API-facing
+// RecommendationQueryParams into the DB-facing config.RecommendationFilter.
+func recommendationFilterFromQueryParams(params RecommendationQueryParams) config.RecommendationFilter {
+	return config.RecommendationFilter{
+		Provider:   params.Provider,
+		Service:    params.Service,
+		Region:     params.Region,
+		AccountIDs: params.AccountIDs,
 	}
-
-	return allRecommendations, nil
-}
-
-// shouldIncludeProvider checks if a provider should be included based on filter
-func shouldIncludeProvider(providerName, filter string) bool {
-	return filter == "" || filter == providerName
-}
-
-// filterRecommendations filters recommendations by service, region, and account
-func filterRecommendations(recs []config.RecommendationRecord, params RecommendationQueryParams) []config.RecommendationRecord {
-	if params.Service == "" && params.Region == "" && len(params.AccountIDs) == 0 {
-		return recs
-	}
-
-	filtered := make([]config.RecommendationRecord, 0, len(recs))
-	for _, rec := range recs {
-		if shouldIncludeRecommendation(rec, params) {
-			filtered = append(filtered, rec)
-		}
-	}
-
-	return filtered
-}
-
-// shouldIncludeRecommendation checks if a recommendation matches the filters
-func shouldIncludeRecommendation(rec config.RecommendationRecord, params RecommendationQueryParams) bool {
-	if params.Service != "" && rec.Service != params.Service {
-		return false
-	}
-	if params.Region != "" && rec.Region != params.Region {
-		return false
-	}
-	if len(params.AccountIDs) > 0 {
-		if rec.CloudAccountID == nil {
-			return false
-		}
-		matched := false
-		for _, id := range params.AccountIDs {
-			if *rec.CloudAccountID == id {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	return true
 }
 
 // convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice

@@ -129,3 +129,23 @@ func buildRecommendationsResponse(recommendations []config.RecommendationRecord)
 		Regions: regions,
 	}
 }
+
+// getRecommendationsFreshness returns the cache-freshness state (last
+// successful collection timestamp + most recent collection error) so the
+// frontend can render a "Data from <N> min ago" indicator and surface a
+// warning banner when the last collect was partial or failed.
+//
+// Gated by view:recommendations permission inside the handler. The route
+// itself inherits AuthAdmin (the router default) so the permission check
+// is currently defense-in-depth, matching the pattern used by other
+// scoped handlers in this package.
+func (h *Handler) getRecommendationsFreshness(ctx context.Context, req *events.LambdaFunctionURLRequest) (*config.RecommendationsFreshness, error) {
+	if _, err := h.requirePermission(ctx, req, "view", "recommendations"); err != nil {
+		return nil, err
+	}
+	freshness, err := h.config.GetRecommendationsFreshness(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recommendations freshness: %w", err)
+	}
+	return freshness, nil
+}

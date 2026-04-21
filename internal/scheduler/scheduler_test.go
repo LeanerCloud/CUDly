@@ -293,20 +293,57 @@ func (m *MockConfigStore) DeleteAccountRegistration(_ context.Context, _ string)
 	return nil
 }
 
-func (m *MockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
-	return nil
+// hasExpectation reports whether the test registered an expectation for the
+// given method. Lets the recommendations-cache stubs below default to
+// returning zero-values for pre-existing tests that predate the cache and
+// don't care about these methods, while still letting new tests assert via
+// .On(...).Return(...).
+func (m *MockConfigStore) hasExpectation(method string) bool {
+	for i := range m.ExpectedCalls {
+		if m.ExpectedCalls[i].Method == method {
+			return true
+		}
+	}
+	return false
 }
-func (m *MockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []string) error {
-	return nil
+
+func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
+	if !m.hasExpectation("ReplaceRecommendations") {
+		return nil
+	}
+	return m.Called(ctx, collectedAt, recs).Error(0)
 }
-func (m *MockConfigStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
-	return nil, nil
+func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulProviders []string) error {
+	if !m.hasExpectation("UpsertRecommendations") {
+		return nil
+	}
+	return m.Called(ctx, collectedAt, recs, successfulProviders).Error(0)
 }
-func (m *MockConfigStore) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
-	return &config.RecommendationsFreshness{}, nil
+func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	if !m.hasExpectation("ListStoredRecommendations") {
+		return nil, nil
+	}
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.RecommendationRecord), args.Error(1)
 }
-func (m *MockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
-	return nil
+func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
+	if !m.hasExpectation("GetRecommendationsFreshness") {
+		return &config.RecommendationsFreshness{}, nil
+	}
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.RecommendationsFreshness), args.Error(1)
+}
+func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
+	if !m.hasExpectation("SetRecommendationsCollectionError") {
+		return nil
+	}
+	return m.Called(ctx, errMsg).Error(0)
 }
 
 // MockEmailSender is a mock implementation of email.Sender
@@ -843,158 +880,73 @@ func (m *MockRecommendationsClient) GetRecommendationsForService(ctx context.Con
 }
 
 // Test GetRecommendations method
+// GetRecommendations now reads from the recommendations cache rather than
+// doing live cloud API calls. The tests below cover the cache-read path
+// (warm cache) + filter pass-through. Cold-start behavior is covered by
+// TestScheduler_GetRecommendations_ColdStart.
 func TestScheduler_GetRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockFactory := new(MockProviderFactory)
-	mockProvider := new(MockProvider)
-	mockRecClient := new(MockRecommendationsClient)
 
-	globalCfg := &config.GlobalConfig{
-		EnabledProviders: []string{"aws"},
-		DefaultTerm:      3,
-		DefaultPayment:   "all-upfront",
+	now := time.Now().UTC()
+	cached := []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", Savings: 500},
+		{Provider: "aws", Service: "rds", Region: "us-west-2", Savings: 200},
 	}
 
-	recommendations := []common.Recommendation{
-		{
-			Provider:         common.ProviderAWS,
-			Service:          common.ServiceEC2,
-			Region:           "us-east-1",
-			ResourceType:     "m5.large",
-			Count:            5,
-			Term:             "3yr",
-			PaymentOption:    "all-upfront",
-			EstimatedSavings: 500.0,
-		},
-		{
-			Provider:         common.ProviderAWS,
-			Service:          common.ServiceRDS,
-			Region:           "us-west-2",
-			ResourceType:     "db.m5.large",
-			Count:            2,
-			Term:             "1yr",
-			PaymentOption:    "partial-upfront",
-			EstimatedSavings: 200.0,
-			Details: common.DatabaseDetails{
-				Engine: "mysql",
-			},
-		},
-	}
+	mockStore.On("GetRecommendationsFreshness", ctx).
+		Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
+	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
+		Return(cached, nil)
 
-	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
-	mockRecClient.On("GetAllRecommendations", ctx).Return(recommendations, nil)
+	scheduler := &Scheduler{config: mockStore}
 
-	scheduler := &Scheduler{
-		config:          mockStore,
-		providerFactory: mockFactory,
-	}
-
-	params := RecommendationQueryParams{}
-	recs, err := scheduler.GetRecommendations(ctx, params)
+	recs, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 }
 
-// Test GetRecommendations with filtering
-func TestScheduler_GetRecommendations_WithFilters(t *testing.T) {
+// Filter pass-through: the handler-level RecommendationQueryParams fields
+// map into the DB-facing RecommendationFilter. The SQL pushdown semantics
+// themselves are covered by store_postgres_recommendations_test.go.
+func TestScheduler_GetRecommendations_PassesFilterToStore(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockFactory := new(MockProviderFactory)
-	mockProvider := new(MockProvider)
-	mockRecClient := new(MockRecommendationsClient)
 
-	globalCfg := &config.GlobalConfig{
-		EnabledProviders: []string{"aws"},
-		DefaultTerm:      3,
-		DefaultPayment:   "all-upfront",
+	now := time.Now().UTC()
+	mockStore.On("GetRecommendationsFreshness", ctx).
+		Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
+
+	expected := config.RecommendationFilter{
+		Provider:   "aws",
+		Service:    "ec2",
+		Region:     "us-east-1",
+		AccountIDs: []string{"acct-1"},
 	}
+	mockStore.On("ListStoredRecommendations", ctx, expected).
+		Return([]config.RecommendationRecord{}, nil)
 
-	recommendations := []common.Recommendation{
-		{
-			Provider:         common.ProviderAWS,
-			Service:          common.ServiceEC2,
-			Region:           "us-east-1",
-			ResourceType:     "m5.large",
-			Count:            5,
-			Term:             "3yr",
-			EstimatedSavings: 500.0,
-		},
-		{
-			Provider:         common.ProviderAWS,
-			Service:          common.ServiceRDS,
-			Region:           "us-west-2",
-			ResourceType:     "db.m5.large",
-			Count:            2,
-			Term:             "1yr",
-			EstimatedSavings: 200.0,
-		},
-	}
+	scheduler := &Scheduler{config: mockStore}
 
-	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
-	mockRecClient.On("GetAllRecommendations", ctx).Return(recommendations, nil)
-
-	scheduler := &Scheduler{
-		config:          mockStore,
-		providerFactory: mockFactory,
-	}
-
-	// Filter by service
-	params := RecommendationQueryParams{
-		Service: "ec2",
-	}
-	recs, err := scheduler.GetRecommendations(ctx, params)
+	_, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{
+		Provider:   "aws",
+		Service:    "ec2",
+		Region:     "us-east-1",
+		AccountIDs: []string{"acct-1"},
+	})
 	require.NoError(t, err)
-	assert.Len(t, recs, 1)
-	assert.Equal(t, "ec2", recs[0].Service)
+	mockStore.AssertExpectations(t)
 }
 
-// Test GetRecommendations with provider filter
-func TestScheduler_GetRecommendations_ProviderFilter(t *testing.T) {
-	ctx := context.Background()
-	mockStore := new(MockConfigStore)
-	mockFactory := new(MockProviderFactory)
-
-	globalCfg := &config.GlobalConfig{
-		EnabledProviders: []string{"aws", "azure"},
-		DefaultTerm:      3,
-		DefaultPayment:   "all-upfront",
-	}
-
-	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	// No calls to provider factory expected because we filter by provider "gcp" which is not enabled
-
-	scheduler := &Scheduler{
-		config:          mockStore,
-		providerFactory: mockFactory,
-	}
-
-	// Filter by provider that's not enabled
-	params := RecommendationQueryParams{
-		Provider: "gcp",
-	}
-	recs, err := scheduler.GetRecommendations(ctx, params)
-	require.NoError(t, err)
-	assert.Len(t, recs, 0)
-}
-
-// Test GetRecommendations config error
-func TestScheduler_GetRecommendations_ConfigError(t *testing.T) {
+// Error surface: a store error on the freshness read bubbles up.
+func TestScheduler_GetRecommendations_FreshnessError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
-	mockStore.On("GetGlobalConfig", ctx).Return(nil, assert.AnError)
+	mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, assert.AnError)
 
-	scheduler := &Scheduler{
-		config: mockStore,
-	}
-
-	params := RecommendationQueryParams{}
-	recs, err := scheduler.GetRecommendations(ctx, params)
+	scheduler := &Scheduler{config: mockStore}
+	recs, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{})
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
