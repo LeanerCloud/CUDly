@@ -20,6 +20,13 @@ terraform {
       version = "~> 2.11"
       # Provider will be configured at root level after cluster creation
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+      # Used by the time_sleep resource that waits for the NGINX LB IP to
+      # be provisioned by Azure (async, 2–5 min) before the
+      # kubernetes_service data source reads it.
+    }
   }
 }
 

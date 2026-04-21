@@ -662,9 +662,39 @@ resource "helm_release" "nginx_ingress" {
 # ==============================================
 # Get Ingress Load Balancer IP
 # ==============================================
-# NOTE: The LoadBalancer IP may not be available on the first terraform apply
-# because Azure provisions the external IP asynchronously. Outputs use try()
-# to return "" when pending. A subsequent apply will resolve the IP.
+# Azure provisions the external LoadBalancer IP asynchronously (2–5 min)
+# after Helm installs the NGINX ingress. Historically the kubernetes_service
+# data source would run before the IP was ready, so outputs emitted ""
+# and a second `terraform apply` was required to pick up the real IP.
+#
+# time_sleep below waits 5 minutes after the Helm release — covering
+# Azure's typical provisioning window — before the data source reads the
+# service status. This lets a single `terraform apply` produce a populated
+# load_balancer_ip output in the common case. The try() fallback on the
+# output is retained as a safety net for the rare tenant where
+# provisioning takes longer than the budget.
+#
+# Trade-off: happy-path apply is ~5 minutes slower than an event-driven
+# wait would be, but total AKS apply time is dominated by cluster +
+# Helm install (~10–15 min) so the overhead is proportionally small.
+# We don't poll via kubectl because this module doesn't bootstrap a
+# local kubeconfig (the k8s provider uses exec-auth directly, which
+# doesn't help a local-exec subprocess).
+
+resource "time_sleep" "wait_for_lb_ip" {
+  count = var.deploy_kubernetes_resources ? 1 : 0
+
+  depends_on = [helm_release.nginx_ingress]
+
+  create_duration = "5m"
+
+  # Re-wait when the cluster or helm release changes, so a redeploy
+  # doesn't read a stale IP from a previous LB provisioning cycle.
+  triggers = {
+    cluster_id   = azurerm_kubernetes_cluster.main.id
+    release_name = helm_release.nginx_ingress[0].name
+  }
+}
 
 data "kubernetes_service" "nginx_ingress" {
   count = var.deploy_kubernetes_resources ? 1 : 0
@@ -674,5 +704,8 @@ data "kubernetes_service" "nginx_ingress" {
     namespace = "ingress-nginx"
   }
 
-  depends_on = [helm_release.nginx_ingress]
+  depends_on = [
+    helm_release.nginx_ingress,
+    time_sleep.wait_for_lb_ip,
+  ]
 }
