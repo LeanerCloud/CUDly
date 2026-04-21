@@ -100,7 +100,7 @@ No issues found. Empty states are appropriate. Date range filter and Load Histor
 
 ## RI Exchange
 
-### LOW: Exchange Quote form uses example-looking placeholders
+### ~~LOW: Exchange Quote form uses example-looking placeholders~~ — RESOLVED
 
 "ri-0123456789abcdef0" and "offering-id" previously appeared as actual input values rather than greyed-out placeholders.
 

@@ -3,8 +3,10 @@ package migrations
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
+	"strconv"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres" // postgres driver
@@ -32,6 +34,15 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 		return fmt.Errorf("failed to create migrator: %w", err)
 	}
 	defer m.Close()
+
+	// One-shot operator recovery: if CUDLY_FORCE_MIGRATION_VERSION is set,
+	// call Force(N) before Up(). Clears the dirty flag and pins state to
+	// the given version. Used to recover from a partially-applied
+	// migration without direct DB access. Remove the env var after the
+	// next successful deploy.
+	if err := maybeForceMigrationVersion(m); err != nil {
+		return err
+	}
 
 	// Run migrations
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
@@ -126,6 +137,43 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email 
 	} else {
 		fmt.Printf("Admin user already has a password set: %s (skipping)\n", email)
 	}
+	return nil
+}
+
+// maybeForceMigrationVersion inspects CUDLY_FORCE_MIGRATION_VERSION and,
+// when set to a non-negative integer, calls m.Force(N) which clears the
+// dirty flag and pins the migration version. Used as a one-shot recovery
+// path after a partially-applied migration leaves schema_migrations in a
+// dirty state.
+//
+// Operator flow:
+//  1. Check the current DB state (e.g. by inspecting actual schema via
+//     logs or a one-off job).
+//  2. If the dirty migration's SQL effects landed (e.g. the PK exists),
+//     set CUDLY_FORCE_MIGRATION_VERSION=N where N is the dirty version —
+//     this marks it clean and subsequent Up() picks up from N+1.
+//  3. If the dirty migration's effects did NOT land, set
+//     CUDLY_FORCE_MIGRATION_VERSION=N-1 — subsequent Up() re-runs N.
+//  4. Redeploy / restart so the env var is visible.
+//  5. After the first successful run, remove the env var.
+//
+// A non-numeric value is rejected with a loud error rather than silently
+// ignored — forcing a wrong version is destructive, so typos should
+// surface immediately.
+func maybeForceMigrationVersion(m *migrate.Migrate) error {
+	v := os.Getenv("CUDLY_FORCE_MIGRATION_VERSION")
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return fmt.Errorf("CUDLY_FORCE_MIGRATION_VERSION must be a non-negative integer, got %q", v)
+	}
+	log.Printf("CUDLY_FORCE_MIGRATION_VERSION=%d set: forcing migration state (clears dirty flag)", n)
+	if err := m.Force(n); err != nil {
+		return fmt.Errorf("failed to force migration version to %d: %w", n, err)
+	}
+	log.Printf("Forced migration state to version %d", n)
 	return nil
 }
 
