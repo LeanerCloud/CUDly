@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
@@ -37,10 +38,17 @@ type SchedulerConfig struct {
 	AssumeRoleSTS   credentials.STSClient
 }
 
-// CollectResult holds the result of collecting recommendations
+// CollectResult holds the result of collecting recommendations.
+//
+// SuccessfulProviders + FailedProviders track per-provider outcomes so the
+// persistence layer (UpsertRecommendations) can scope the delete-stale
+// clause to providers that actually ran, and the frontend banner can
+// surface the specific failures.
 type CollectResult struct {
-	Recommendations int     `json:"recommendations"`
-	TotalSavings    float64 `json:"total_savings"`
+	Recommendations     int               `json:"recommendations"`
+	TotalSavings        float64           `json:"total_savings"`
+	SuccessfulProviders []string          `json:"successful_providers,omitempty"`
+	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
 }
 
 // ManagerInterface defines the purchase manager methods used by scheduler
@@ -82,7 +90,9 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 	}
 }
 
-// CollectRecommendations fetches recommendations from all configured cloud providers
+// CollectRecommendations fetches recommendations from all configured cloud providers.
+// Persists results to the recommendations cache so read handlers can serve
+// from SQL instead of re-fetching live.
 func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult, error) {
 	logging.Info("Collecting recommendations from cloud providers...")
 
@@ -92,9 +102,13 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 		return nil, err
 	}
 
-	// Collect recommendations from each enabled provider
+	// Collect recommendations from each enabled provider, tracking per-provider
+	// outcomes so persistence can scope stale-row eviction to providers that
+	// actually ran.
 	var allRecommendations []config.RecommendationRecord
 	var totalSavings float64
+	var successfulProviders []string
+	failedProviders := map[string]string{}
 
 	for _, providerName := range globalCfg.EnabledProviders {
 		logging.Infof("Collecting recommendations from %s...", providerName)
@@ -102,8 +116,10 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 		recs, err := s.collectProviderRecommendations(ctx, providerName, globalCfg)
 		if err != nil {
 			logging.Errorf("Failed to collect %s recommendations: %v", providerName, err)
+			failedProviders[providerName] = err.Error()
 			continue
 		}
+		successfulProviders = append(successfulProviders, providerName)
 
 		for _, rec := range recs {
 			totalSavings += rec.Savings
@@ -113,6 +129,8 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 
 	logging.Infof("Collected %d recommendations with $%.2f/month potential savings",
 		len(allRecommendations), totalSavings)
+
+	s.persistCollection(ctx, allRecommendations, successfulProviders, failedProviders)
 
 	// Send notification if we have recommendations
 	if len(allRecommendations) > 0 && totalSavings > 0 {
@@ -145,9 +163,49 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	}
 
 	return &CollectResult{
-		Recommendations: len(allRecommendations),
-		TotalSavings:    totalSavings,
+		Recommendations:     len(allRecommendations),
+		TotalSavings:        totalSavings,
+		SuccessfulProviders: successfulProviders,
+		FailedProviders:     failedProviders,
 	}, nil
+}
+
+// persistCollection writes the collection results to the recommendations
+// cache. On full success it calls ReplaceRecommendations (atomic wipe +
+// reinsert). On partial failure it skips the write to preserve the older
+// cached rows from the providers that didn't run, then surfaces the error
+// through SetRecommendationsCollectionError so the frontend banner renders.
+//
+// Commit 6 replaces this with UpsertRecommendations + per-provider
+// stale-row eviction so partial collects can safely merge fresh data
+// without clobbering the older rows. Keeping the simpler Replace path
+// here keeps commit 3's diff focused on persistence plumbing.
+func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulProviders []string, failedProviders map[string]string) {
+	if len(failedProviders) > 0 {
+		logging.Warnf("Skipping Replace due to %d partial-collect failures; existing cached rows preserved", len(failedProviders))
+		if err := s.config.SetRecommendationsCollectionError(ctx, joinProviderErrors(failedProviders)); err != nil {
+			logging.Errorf("Failed to record collection error: %v", err)
+		}
+		return
+	}
+
+	if err := s.config.ReplaceRecommendations(ctx, time.Now().UTC(), recs); err != nil {
+		logging.Errorf("Failed to persist recommendations: %v", err)
+		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
+			logging.Errorf("Failed to record write error: %v", setErr)
+		}
+	}
+}
+
+// joinProviderErrors formats a "provider: err; provider: err" string for
+// the state table's last_collection_error column.
+func joinProviderErrors(failed map[string]string) string {
+	parts := make([]string, 0, len(failed))
+	for p, msg := range failed {
+		parts = append(parts, fmt.Sprintf("%s: %s", p, msg))
+	}
+	sort.Strings(parts) // deterministic ordering for test stability
+	return strings.Join(parts, "; ")
 }
 
 // collectProviderRecommendations collects recommendations from a specific provider
