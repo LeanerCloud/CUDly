@@ -65,6 +65,21 @@ outstanding so future work has a clear starting point.
   (m4/c4/r3) families are deliberately out of the allowlist — see
   the follow-up below.
 
+  The reshape-recommendations dashboard page renders the
+  alternatives as a new "Alternatives" column with per-instance
+  `$X.XX/mo` cost chips (commit 97fc2597d); when the user clicks
+  "Exchange" from a reshape row, the modal receives the rec's
+  `alternative_targets` and shows a matching cost chip next to each
+  target-offering input plus a live-updating running total
+  (`sum(chip.cost × row.count)`). End-to-end coverage is exercised
+  by the handler integration test at
+  `internal/api/handler_ri_exchange_integration_test.go` (build-tag
+  `integration`, commit da762067c) which wires a real Postgres
+  through the reshape handler with mocked AWS clients via newly-
+  added factory injection points on the Handler struct
+  (`reshapeEC2Factory` / `reshapeRecsFactory`, both nil-safe so
+  prod behaviour is unchanged).
+
 - **Multi-target exchange**: Fully resolved — backend
   (commit 5eb274690) and frontend (commit 2ff1ebe89).
   `pkg/exchange.ExchangeQuoteRequest` and `ExchangeExecuteRequest`
@@ -78,7 +93,10 @@ outstanding so future work has a clear starting point.
   multi-target requests. Dashboard modal gained add/remove target
   rows: the modal posts the singleton shape when exactly one row is
   present (preserving existing wire format) and posts `targets[]`
-  when ≥2 rows are present.
+  when ≥2 rows are present. With commit 97fc2597d the modal also
+  shows per-row cost chips (when the caller supplies
+  `alternativeTargets`) and a running total that updates live as
+  the user edits offering-type / count inputs.
 
 - **Utilization caching**: Resolved with a Postgres-backed TTL cache
   plus stale-while-revalidate on non-Lambda runtimes. Migration
