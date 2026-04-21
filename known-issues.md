@@ -42,40 +42,67 @@ outstanding so future work has a clear starting point.
 
 ### RI Exchange
 
-- **Same-family-only recommendations**: Resolved with scoped cross-family
-  advisory suggestions. `pkg/exchange.ReshapeRecommendation` now carries
-  an advisory `AlternativeTargetInstanceTypes []string` field populated
-  from a peer-family allowlist (general-purpose `m5/m6i/m7g`,
-  compute-optimised `c5/c6i/c7g`, memory-optimised `r5/r6i/r7g`,
-  burstable `t3/t3a/t4g`). The UI can surface these as alternatives
-  alongside the primary target; the auto-exchange pipeline still acts
-  on the primary target only so existing automated behaviour is
-  unchanged. Specialty (p\*/g\*/x\*/hpc\*) and legacy-generation
-  (m4/c4/r3) families are deliberately out of the allowlist — see the
-  follow-up below.
+- **Same-family-only recommendations**: Fully resolved for the
+  allowlisted family groups — advisory *names* in the first pass
+  (commit edc8d7838), real offering IDs + `EffectiveMonthlyCost`
+  ranking in the follow-up (commit 0347b3111).
+  `pkg/exchange.ReshapeRecommendation` now carries an
+  `AlternativeTargets []OfferingOption` field (renamed from the
+  earlier `AlternativeTargetInstanceTypes []string` — note for anyone
+  auditing JSON payloads: the response key changed from
+  `alternative_target_instance_types` to `alternative_targets`).
+  `providers/aws/services/ec2/client.go`'s new
+  `FindConvertibleOfferings` batches all candidate instance types
+  into ONE `DescribeReservedInstancesOfferings` call per reshape
+  page load (≤4 API calls for a diverse fleet; 1 for a homogeneous
+  one) and ranks by monthly cost. `pkg/exchange.AnalyzeReshapingWithOfferings`
+  composes the base analyzer with offering enrichment; the
+  auto-exchange pipeline still uses the plain `AnalyzeReshaping`
+  (no pricing needed) so automated behaviour is unchanged. Allowlist
+  covers general-purpose `m5/m6i/m7g`, compute-optimised
+  `c5/c6i/c7g`, memory-optimised `r5/r6i/r7g`, burstable
+  `t3/t3a/t4g`. Specialty (p\*/g\*/x\*/hpc\*) and legacy-generation
+  (m4/c4/r3) families are deliberately out of the allowlist — see
+  the follow-up below.
 
-- **Multi-target exchange**: Resolved. `pkg/exchange.ExchangeQuoteRequest`
-  and `ExchangeExecuteRequest` accept a `Targets []TargetConfig` slice;
-  legacy `TargetOfferingID` / `TargetCount` fields are retained as a
-  single-target alias so existing callers keep working. The HTTP API
-  gains an optional `targets[]` array on the quote + execute bodies;
-  when present it wins over the legacy singleton fields. Spend-cap
-  semantics: AWS returns a single aggregated `PaymentDue` across all
-  targets, so `max_payment_due_usd` naturally functions as a TOTAL cap
-  for multi-target requests. Frontend UI for exposing multi-target is a
-  separate follow-up.
+- **Multi-target exchange**: Fully resolved — backend
+  (commit 5eb274690) and frontend (commit 2ff1ebe89).
+  `pkg/exchange.ExchangeQuoteRequest` and `ExchangeExecuteRequest`
+  accept a `Targets []TargetConfig` slice; legacy `TargetOfferingID`
+  / `TargetCount` fields are retained as a single-target alias so
+  existing callers keep working. The HTTP API gains an optional
+  `targets[]` array on the quote + execute bodies; when present it
+  wins over the legacy singleton fields. Spend-cap semantics: AWS
+  returns a single aggregated `PaymentDue` across all targets, so
+  `max_payment_due_usd` naturally functions as a TOTAL cap for
+  multi-target requests. Dashboard modal gained add/remove target
+  rows: the modal posts the singleton shape when exactly one row is
+  present (preserving existing wire format) and posts `targets[]`
+  when ≥2 rows are present.
 
-- **Utilization caching**: Resolved with a Postgres-backed TTL cache.
-  Migration `000031_ri_utilization_cache` adds
+- **Utilization caching**: Resolved with a Postgres-backed TTL cache
+  plus stale-while-revalidate on non-Lambda runtimes. Migration
+  `000031_ri_utilization_cache` adds
   `ri_utilization_cache (region, lookback_days, payload, fetched_at)`.
-  `internal/api/handler_ri_exchange.go` routes both
-  `getRIUtilization` and `getReshapeRecommendations` through the cache
-  wrapper (`internal/api/ri_utilization_cache.go`) so one Cost Explorer
-  call per TTL window serves every warm and cold Lambda container. TTL
-  configurable via `CUDLY_RI_UTILIZATION_CACHE_TTL` (default `15m`,
-  matches CE's hourly upstream refresh cadence). Errors are never
-  cached — a transient CE 5xx cannot lock the dashboard out for the
-  full TTL. See the Config section of `specs/recommendations-cache.md`.
+  `internal/api/handler_ri_exchange.go` routes both `getRIUtilization`
+  and `getReshapeRecommendations` through the cache wrapper
+  (`internal/api/ri_utilization_cache.go`) so one Cost Explorer call
+  per TTL window serves every warm and cold Lambda container.
+  Two TTL knobs: `CUDLY_RI_UTILIZATION_CACHE_TTL` (default `15m`,
+  soft-freshness window) and `CUDLY_RI_UTILIZATION_CACHE_STALE_TTL`
+  (default `30m`, hard expiry). On non-Lambda, reads in
+  `[soft, hard)` serve the stale row and kick a singleflight-guarded
+  background refresh (`golang.org/x/sync/singleflight`); reads past
+  `hard` force a synchronous refetch. Lambda runtimes always
+  synchronously refetch on any staleness — background goroutines
+  aren't safe there (containers freeze between invocations). Errors
+  are never cached — a transient CE 5xx cannot lock the dashboard
+  out for the full TTL. Observability: `logging.Infof` on SWR kick
+  and hard-expiry paths; `logging.Debugf` on the Lambda-skip
+  branch. See the Config section of
+  `specs/recommendations-cache.md`. End-to-end Postgres integration
+  test at `internal/api/ri_utilization_cache_integration_test.go`
+  (build-tag `integration`).
 
 ### Test Performance
 
@@ -116,10 +143,44 @@ outstanding so future work has a clear starting point.
   own small audit commit; scheduled as ad-hoc cleanup rather than a
   single sweeping change.
 
-- **Frontend UI for multi-target RI exchange**: The backend accepts
-  `targets[]`, but the dashboard still posts the single-target shape
-  (`target_offering_id` + `target_count`). Exposing multi-target in the
-  UI is the natural next step once users have a mental model for
-  redistributing one source RI into multiple shapes atomically. Out of
-  scope for the current round because it's a UX question more than a
-  backend question.
+- **Migration 000027 non-idempotent on fresh DBs**: Integration
+  tests that spin up a fresh Postgres via `testcontainers-go` can't
+  run the full migration set — migration 000027 (`savings_snapshots_pk`)
+  tries to `ADD PRIMARY KEY` that migration 000018 already added,
+  failing with "multiple primary keys for table". Production DBs
+  aren't affected because they were already in the "duplicate rows
+  needing dedup" state that 000027 was written to fix. Fix: make
+  the ADD CONSTRAINT idempotent (e.g. DROP CONSTRAINT IF EXISTS
+  first, or wrap in a conditional PL/pgSQL block) without changing
+  the behaviour on already-migrated databases. Tracked separately
+  because it requires careful review against real prod migration
+  history. Commit `2d8f1e2ba` works around it by bypassing
+  migrations entirely for the cache integration test (creates only
+  the `ri_utilization_cache` table directly).
+
+- **GCP account `serene-bazaar-666` deploy SA missing `compute.regions.list`**:
+  Visible in production Lambda logs (`2026-04-21T16:28:22Z` and onward):
+
+      [ERROR] GCP account GCP serene-bazaar-666 (serene-bazaar-666):
+      get recommendations: failed to get regions: failed to list regions:
+      googleapi: Error 403: Required 'compute.regions.list' permission
+      for 'projects/serene-bazaar-666'
+
+  The deploy service account that CUDly impersonates for that project
+  doesn't have `roles/compute.viewer` (or a custom role that includes
+  `compute.regions.list`). Two paths to fix:
+
+  - **Operator action (preferred):** grant the GCP service account
+    `roles/compute.viewer` on the project (or a narrower custom role
+    containing `compute.regions.list` + `compute.zones.list` if least-
+    privilege matters).
+  - **Code-side mitigation:** the GCP region-fetch already short-circuits
+    on errors but every fetch attempt logs as `[ERROR]`. The collector
+    could downgrade to `[WARN]` for permission errors specifically (so
+    the operator notices once but the noise stops) — tracked as a
+    follow-up in `known_issues/22_scheduler.md` under the silent-
+    failure entry.
+
+  The collector's account-failure-swallow bug masks this entirely: the
+  GCP provider is reported as successful even when this account fails,
+  so the operator only sees the issue if they tail logs.
