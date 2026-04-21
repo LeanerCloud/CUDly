@@ -178,6 +178,73 @@ describe('openExchangeModal', () => {
     expect(modal.classList.contains('hidden')).toBe(true);
   });
 
+  it('shows a cost chip when the typed instance type matches an alternative', () => {
+    openExchangeModal('ri-abc', 2, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: 'off-m5', effective_monthly_cost: 42.5 },
+      { instance_type: 'm6i.large', offering_id: 'off-m6i', effective_monthly_cost: 35.0 },
+    ]);
+    const chip = modal.querySelector<HTMLSpanElement>('.cost-chip');
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toBe('$42.50/mo each');
+  });
+
+  it('shows an em-dash in the cost chip when the typed instance type has no alternative match', () => {
+    openExchangeModal('ri-abc', 2, 'unknown.shape', [
+      { instance_type: 'm5.large', offering_id: 'off-m5', effective_monthly_cost: 42.5 },
+    ]);
+    const chip = modal.querySelector<HTMLSpanElement>('.cost-chip');
+    expect(chip?.textContent).toBe('—');
+  });
+
+  it('computes the running total across two rows using per-row count', () => {
+    openExchangeModal('ri-multi', 1, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: 'off-m5', effective_monthly_cost: 40.0 },
+      { instance_type: 'm6i.large', offering_id: 'off-m6i', effective_monthly_cost: 30.0 },
+    ]);
+    const firstCountInput = modal.querySelector<HTMLInputElement>('.modal-exchange-count');
+    if (firstCountInput) {
+      firstCountInput.value = '2';
+      firstCountInput.dispatchEvent(new Event('input'));
+    }
+    modal.querySelector<HTMLButtonElement>('#modal-exchange-add-target')?.click();
+    const rows = modal.querySelectorAll<HTMLDivElement>('.exchange-target-row');
+    const secondOffering = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-target');
+    const secondCount = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-count');
+    if (secondOffering) {
+      secondOffering.value = 'm6i.large';
+      secondOffering.dispatchEvent(new Event('input'));
+    }
+    if (secondCount) {
+      secondCount.value = '3';
+      secondCount.dispatchEvent(new Event('input'));
+    }
+    const total = modal.querySelector<HTMLDivElement>('#modal-exchange-running-total');
+    expect(total?.textContent).toContain('$170.00/mo');
+    expect(total?.textContent).not.toContain('incomplete');
+  });
+
+  it('marks the running total as incomplete when some rows have no pricing match', () => {
+    openExchangeModal('ri-incomplete', 1, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: 'off-m5', effective_monthly_cost: 40.0 },
+    ]);
+    modal.querySelector<HTMLButtonElement>('#modal-exchange-add-target')?.click();
+    const rows = modal.querySelectorAll<HTMLDivElement>('.exchange-target-row');
+    const secondOffering = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-target');
+    if (secondOffering) {
+      secondOffering.value = 'unknown.shape';
+      secondOffering.dispatchEvent(new Event('input'));
+    }
+    const total = modal.querySelector<HTMLDivElement>('#modal-exchange-running-total');
+    expect(total?.textContent).toContain('$40.00/mo');
+    expect(total?.textContent).toContain('incomplete');
+  });
+
+  it('hides the running total when called without alternativeTargets', () => {
+    openExchangeModal('ri-no-alts', 2, 'm5.large');
+    const total = modal.querySelector<HTMLDivElement>('#modal-exchange-running-total');
+    expect(total?.classList.contains('hidden')).toBe(true);
+  });
+
   it('does not throw when modal element is missing', () => {
     document.body.innerHTML = '';
     expect(() => openExchangeModal('ri-abc123', 2)).not.toThrow();

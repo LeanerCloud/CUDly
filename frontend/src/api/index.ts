@@ -45,9 +45,11 @@ export type {
   ConvertibleRI,
   RIUtilization,
   ReshapeRecommendation,
+  OfferingOption,
   ExchangeQuoteRequest,
   ExchangeQuoteSummary,
   ExchangeExecuteRequest,
+  ExchangeTarget,
   ExchangeResult,
   RIExchangeConfig,
   RIExchangeHistoryRecord

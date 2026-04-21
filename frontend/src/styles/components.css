@@ -222,6 +222,29 @@ button.danger:hover {
     color: #666;
 }
 
+/* Cost chips: used in the reshape-alternatives cell and the exchange
+ * modal's per-target-row cost slot. Shares geometry with
+ * .status-badge so the visual style stays consistent. Neutral grey
+ * background since costs are advisory information, not status. */
+.cost-chip {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    margin-right: 0.25rem;
+    border-radius: 12px;
+    background: #f0f2f5;
+    color: #333;
+    font-size: 0.78rem;
+    font-family: var(--mono-font, ui-monospace, monospace);
+}
+
+/* Running total under the modal's target rows. Muted emphasis — this
+ * is advisory, final cost is the server-side quote. */
+.exchange-running-total {
+    color: #555;
+    font-style: italic;
+    font-size: 0.9rem;
+}
+
 /* Info icon tooltip */
 .info-icon {
     display: inline-block;
