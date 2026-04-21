@@ -187,3 +187,18 @@ func (m *mockConfigStoreForHealth) TransitionRegistrationStatus(_ context.Contex
 func (m *mockConfigStoreForHealth) DeleteAccountRegistration(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockConfigStoreForHealth) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
+	return &config.RecommendationsFreshness{}, nil
+}
+func (m *mockConfigStoreForHealth) SetRecommendationsCollectionError(_ context.Context, _ string) error {
+	return nil
+}

@@ -266,6 +266,21 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	return nil, nil
 }
+func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
+	return nil
+}
+func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulProviders []string) error {
+	return nil
+}
+func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
+	return &config.RecommendationsFreshness{}, nil
+}
+func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
+	return nil
+}
 func (m *MockConfigStore) CreateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
 	args := m.Called(ctx, reg)
 	return args.Error(0)

@@ -71,6 +71,18 @@ type StoreInterface interface {
 	SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error
 	GetPlanAccounts(ctx context.Context, planID string) ([]CloudAccount, error)
 
+	// Recommendations cache (ADR: store recommendations in Postgres so the
+	// dashboard serves provider-switch clicks from SQL instead of live cloud
+	// API calls). ReplaceRecommendations is the "force full resync" path;
+	// UpsertRecommendations is the steady-state write path and takes a list
+	// of successful providers so partial-collect failures don't wipe
+	// healthy rows from providers whose collection didn't run.
+	ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error
+	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulProviders []string) error
+	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
+	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
+	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
+
 	// Account registrations (self-service enrollment via federation IaC)
 	CreateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
 	GetAccountRegistration(ctx context.Context, id string) (*AccountRegistration, error)

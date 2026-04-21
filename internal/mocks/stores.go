@@ -517,6 +517,39 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	return args.Get(0).(int64), args.Error(1)
 }
 
+// Recommendations cache
+
+func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
+	args := m.Called(ctx, collectedAt, recs)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulProviders []string) error {
+	args := m.Called(ctx, collectedAt, recs, successfulProviders)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.RecommendationRecord), args.Error(1)
+}
+
+func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.RecommendationsFreshness), args.Error(1)
+}
+
+func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
+	args := m.Called(ctx, errMsg)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) CreateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
 	args := m.Called(ctx, reg)
 	return args.Error(0)

@@ -155,6 +155,27 @@ type RecommendationRecord struct {
 	CloudAccountID *string `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 }
 
+// RecommendationFilter parameterises ListStoredRecommendations. Zero-value
+// fields mean "no filter"; non-empty AccountIDs restricts to the given IDs.
+// Mirrors the shape of scheduler.RecommendationQueryParams so the API handler
+// mapping is one-to-one.
+type RecommendationFilter struct {
+	Provider   string   // "aws" / "azure" / "gcp" / "" (all)
+	Service    string   // "" = all services
+	Region     string   // "" = all regions
+	AccountIDs []string // nil/empty = all accounts
+	MinSavings float64  // 0 = no floor on monthly savings
+}
+
+// RecommendationsFreshness describes the cache staleness state surfaced to
+// the frontend. LastCollectedAt is nil on a cold start.
+// LastCollectionError is non-nil when the most recent collect attempt
+// partially or fully failed.
+type RecommendationsFreshness struct {
+	LastCollectedAt     *time.Time `json:"last_collected_at"`
+	LastCollectionError *string    `json:"last_collection_error"`
+}
+
 // PurchaseHistoryRecord stores completed purchase information
 type PurchaseHistoryRecord struct {
 	AccountID        string    `json:"account_id" dynamodbav:"account_id"`

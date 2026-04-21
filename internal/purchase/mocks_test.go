@@ -429,6 +429,22 @@ func (m *MockConfigStore) DeleteAccountRegistration(_ context.Context, _ string)
 	return nil
 }
 
+func (m *MockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
+	return nil
+}
+func (m *MockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []string) error {
+	return nil
+}
+func (m *MockConfigStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
+	return &config.RecommendationsFreshness{}, nil
+}
+func (m *MockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
+	return nil
+}
+
 // Verify MockConfigStore implements config.StoreInterface
 var _ config.StoreInterface = (*MockConfigStore)(nil)
 

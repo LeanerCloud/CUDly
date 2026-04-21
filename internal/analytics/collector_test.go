@@ -288,6 +288,21 @@ func (m *mockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *con
 func (m *mockConfigStore) DeleteAccountRegistration(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
+	return nil
+}
+func (m *mockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []string) error {
+	return nil
+}
+func (m *mockConfigStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
+	return &config.RecommendationsFreshness{}, nil
+}
+func (m *mockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
+	return nil
+}
 
 // TestNewCollector tests the NewCollector function
 func TestNewCollector(t *testing.T) {
