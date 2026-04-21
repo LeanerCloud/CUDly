@@ -14,7 +14,7 @@ jest.mock('../api', () => ({
   updateRIExchangeConfig: jest.fn(),
 }));
 
-import { fillQuoteFromRI, openExchangeModal } from '../riexchange';
+import { fillQuoteFromRI, loadReshapeRecommendations, openExchangeModal } from '../riexchange';
 import * as api from '../api';
 
 function createModal(): HTMLDivElement {
@@ -273,7 +273,82 @@ describe('fillQuoteFromRI', () => {
   });
 
   it('does not throw when modal is missing', () => {
-    document.body.innerHTML = '';
+    const body = document.body;
+    while (body.firstChild) body.removeChild(body.firstChild);
     expect(() => fillQuoteFromRI('ri-abc123', 1)).not.toThrow();
+  });
+});
+
+// Reshape-table rendering tests. Kept in a separate describe block so
+// the shared modal-element fixture doesn't leak in.
+describe('reshape recommendations table', () => {
+  let tableContainer: HTMLDivElement;
+
+  beforeEach(() => {
+    tableContainer = document.createElement('div');
+    tableContainer.id = 'ri-exchange-recommendations-list';
+    document.body.appendChild(tableContainer);
+  });
+
+  afterEach(() => {
+    const body = document.body;
+    while (body.firstChild) body.removeChild(body.firstChild);
+    jest.resetAllMocks();
+  });
+
+  // Baseline rec with the reshape fields the renderer expects. Tests
+  // extend this with alternative_targets when needed.
+  const baseRec = {
+    source_ri_id: 'ri-abc',
+    source_instance_type: 'm5.xlarge',
+    source_count: 1,
+    target_instance_type: 'm5.large',
+    target_count: 2,
+    utilization_percent: 50,
+    normalized_used: 4,
+    normalized_purchased: 8,
+    reason: 'underutilized',
+  };
+
+  it('renders the Alternatives column with cost chips when the rec carries alternative_targets', async () => {
+    const mockGet = api.getReshapeRecommendations as jest.Mock;
+    mockGet.mockResolvedValueOnce([
+      {
+        ...baseRec,
+        alternative_targets: [
+          { instance_type: 'm7g.large', offering_id: 'off-m7g', effective_monthly_cost: 30.0 },
+          { instance_type: 'm6i.large', offering_id: 'off-m6i', effective_monthly_cost: 35.0 },
+        ],
+      },
+    ]);
+
+    await loadReshapeRecommendations();
+
+    const chips = tableContainer.querySelectorAll<HTMLSpanElement>('.cost-chip');
+    expect(chips.length).toBe(2);
+    // Chips include the instance type + formatted cost; the backend
+    // emits them in ascending-cost order (commit 7378ceaa5 sorts
+    // fillAlternativesFromOfferings output by EffectiveMonthlyCost)
+    // so the UI shows cheapest first.
+    expect(chips[0]?.textContent).toContain('m7g.large');
+    expect(chips[0]?.textContent).toContain('$30.00/mo');
+    expect(chips[1]?.textContent).toContain('m6i.large');
+    expect(chips[1]?.textContent).toContain('$35.00/mo');
+  });
+
+  it('renders an em-dash in the Alternatives column when the rec has no alternative_targets', async () => {
+    const mockGet = api.getReshapeRecommendations as jest.Mock;
+    mockGet.mockResolvedValueOnce([{ ...baseRec }]); // no alternative_targets
+
+    await loadReshapeRecommendations();
+
+    // The Alternatives <td> is the 4th column (Source RI, Current,
+    // Suggested, Alternatives, Utilization, Normalized Units, Reason,
+    // Actions). Select the single data row and pull the 4th cell.
+    const row = tableContainer.querySelector<HTMLTableRowElement>('tbody tr');
+    expect(row).not.toBeNull();
+    const cells = row?.querySelectorAll<HTMLTableCellElement>('td');
+    expect(cells?.[3]?.textContent).toBe('—');
+    expect(tableContainer.querySelectorAll('.cost-chip').length).toBe(0);
   });
 });

@@ -146,7 +146,7 @@ function renderRIsTable(container: HTMLElement): void {
 // Reshape recommendations
 // ──────────────────────────────────────────────
 
-async function loadReshapeRecommendations(): Promise<void> {
+export async function loadReshapeRecommendations(): Promise<void> {
   const container = document.getElementById('ri-exchange-recommendations-list');
   if (!container) return;
 
