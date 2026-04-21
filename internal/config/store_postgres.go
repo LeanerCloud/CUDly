@@ -799,26 +799,40 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 
 // CleanupOldExecutions deletes purchase executions older than retentionDays.
 //
-// "Old" covers two cases:
+// Two independent cleanup branches, each with its own retention window so
+// that a row far in one dimension doesn't block cleanup in the other:
 //
-//  1. Terminal-state executions: status IN ('completed', 'cancelled') and
-//     scheduled_date past the retention window.
-//  2. Pending/notified executions whose `expires_at` has passed: there is
-//     no transition code that flips these to an `expired` status (the
-//     valid_status CHECK doesn't include 'expired'), so the previous
-//     `status IN (..., 'expired')` filter was dead — these rows would
-//     accumulate indefinitely. Cleanup picks them up directly via
-//     `expires_at`.
+//  1. Terminal-state cleanup: `status IN ('completed', 'cancelled') AND
+//     scheduled_date < NOW() - retention`. Keeps recent completions
+//     visible in the UI for at least `retention` days before purging.
 //
-// The OR keeps NULL-`expires_at` rows safe (the expires_at branch only
-// fires when expires_at IS NOT NULL).
+//  2. Expired-execution cleanup: `expires_at IS NOT NULL AND expires_at <
+//     NOW() - retention`. A row whose approval token has been expired
+//     for longer than `retention` is dead — the user can no longer act
+//     on it, and no transition code ever writes an 'expired' status
+//     (the valid_status CHECK doesn't include it), so without this
+//     branch the row would accumulate indefinitely.
+//
+// The two branches are OR'd — a row that qualifies under EITHER is
+// deleted, regardless of the other column. An earlier revision of this
+// function incorrectly AND'd the `scheduled_date` gate with both
+// branches, which meant pending rows with a far-future `scheduled_date`
+// but a long-past `expires_at` never got cleaned up (a user scheduling a
+// 2-year-out purchase with a 30-day approval window would leave a dead
+// row accumulating for 1.9 years after the approval expired).
+//
+// NULL `expires_at` is excluded from branch 2 so rows that never had an
+// expiration deadline are safe from expiry-based cleanup.
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	query := `
 		DELETE FROM purchase_executions
-		WHERE scheduled_date < NOW() - INTERVAL '1 day' * $1
-		  AND (
+		WHERE (
 		        status IN ('completed', 'cancelled')
-		     OR (expires_at IS NOT NULL AND expires_at < NOW())
+		    AND scheduled_date < NOW() - INTERVAL '1 day' * $1
+		      )
+		   OR (
+		        expires_at IS NOT NULL
+		    AND expires_at    < NOW() - INTERVAL '1 day' * $1
 		      )
 	`
 

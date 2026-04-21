@@ -1,6 +1,6 @@
 # Known Issues: Provider Interface
 
-> **Audit status (2026-04-20):** `0 still valid · 6 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 from original audit · 6 resolved · 0 partially fixed · 0 moved · 1 new item surfaced during 2026-04-21 audit review`
 
 ## ~~HIGH: Azure `GetSupportedServices` advertises `ServiceNoSQL` but `GetServiceClient` has no handler~~
 
@@ -154,3 +154,25 @@ Existing callers that still use `Profile` continue to work unchanged.
 - `go test ./pkg/...`
 
 **Effort:** `small`
+
+## LOW: Typed credential slots silently discard wrong-type values (found during 2026-04-21 audit review)
+
+**File**: `pkg/provider/interface.go` (`GCPTokenSource any`, `AzureTokenCredential any`) + the three provider `NewProvider` functions that consume them
+**Description**: The typed credential slots `AzureTokenCredential any` and `GCPTokenSource any` (added in commit `f0a9da7e8`) are `any` rather than concrete SDK types to keep `pkg/provider` free of Azure/GCP SDK deps. Each provider's `NewProvider` type-asserts to the expected concrete type (`azcore.TokenCredential` / `oauth2.TokenSource`); if the assertion fails, the slot is silently ignored and the provider falls back to ambient credentials (`DefaultAzureCredential` / ADC). The godoc mentions the behaviour, but a production caller that mis-wires the slot (e.g. passes a *string or a typo'd interface) will see "permission denied" errors at request time with no hint that their credential injection was silently dropped.
+**Impact**: Debuggability gap. A caller who thinks they supplied custom credentials but actually passed the wrong type sees the confusing "ADC unavailable" error in environments where ADC genuinely is unavailable (Lambda / Cloud Run with no ambient GCP creds).
+**Status:** ❓ Needs triage
+
+### Implementation plan
+
+**Goal:** Wrong-typed credential slot values are logged at `Warnf` level so mis-wirings surface in logs even though they don't break the pipeline.
+
+**Files to modify:**
+
+- `providers/gcp/provider.go::NewProvider` — inside the type-assert branch, if `config.GCPTokenSource != nil` AND the assert fails, `logging.Warnf("gcp provider: config.GCPTokenSource is %T, expected oauth2.TokenSource — ignoring", config.GCPTokenSource)`.
+- `providers/azure/provider.go::NewAzureProvider` — analogous for `AzureTokenCredential` → `azcore.TokenCredential`.
+
+**Steps:** two analogous 3-line edits; no tests required beyond eyeballing the log output in manual verification.
+
+**Verification:** build-only.
+
+**Effort:** `small`.

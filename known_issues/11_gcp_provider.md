@@ -1,6 +1,6 @@
 # Known Issues: GCP Provider
 
-> **Audit status (2026-04-20):** `0 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 from original audit · 8 resolved · 0 partially fixed · 0 moved · 2 new items surfaced during 2026-04-21 audit review`
 
 ## ~~CRITICAL: Missing Pagination in `getDefaultProject`~~ — RESOLVED
 
@@ -211,3 +211,57 @@
 2. Implement both tests described under the CRITICAL issue above.
 
 **Effort:** `small` (coupled with fix above)
+
+## MEDIUM: Iterator-error propagation not unit-tested in computeengine/cloudsql (found during 2026-04-21 audit review)
+
+**File**: `providers/gcp/services/computeengine/client.go`, `cloudsql/client.go` (and their `_test.go` siblings)
+**Description**: Commit `f75aa6cf4` changed all three GCP service recommendation iterators (computeengine, cloudsql, memorystore) to return `(nil, fmt.Errorf("<svc>: iterate recommendations: %w", err))` on iterator failures instead of silently breaking out of the loop. The memorystore test file was updated to assert the new behaviour; computeengine and cloudsql were not. If a future refactor re-introduces the "break silently" pattern in either of those services, the test suite won't catch it.
+**Impact**: Silent-data-loss regression risk. The shape is identical in all three services so covering one fully and leaving two uncovered is asymmetric.
+**Status:** ❓ Needs triage
+
+### Implementation plan
+
+**Goal:** Parity with memorystore's iterator-error test coverage.
+
+**Files to modify:**
+
+- `providers/gcp/services/computeengine/client_test.go` — add `TestComputeEngineClient_GetRecommendations_IteratorError`.
+- `providers/gcp/services/cloudsql/client_test.go` — same shape.
+
+**Steps:**
+
+1. Use the existing mock iterator pattern (see memorystore's `client_test.go` for the reference impl — it injects a `*MockRecommendationIterator` that returns an error on `Next()`).
+2. Assert the returned error contains the service prefix (`"computeengine: iterate recommendations"` / `"cloudsql: ..."`).
+3. Assert the returned slice is nil (no partial data leaks).
+
+**Test plan:** as above.
+
+**Verification:** `cd providers/gcp && go test -short ./services/computeengine/... ./services/cloudsql/...`
+
+**Effort:** `small`.
+
+## MEDIUM: getDefaultProject "no ACTIVE projects" error path lacks test coverage (found during 2026-04-21 audit review)
+
+**File**: `providers/gcp/provider.go::getDefaultProject` + `provider_test.go`
+**Description**: After commits `f75aa6cf4` and `f0a9da7e8`, `getDefaultProject` walks pages via `Pages()` and returns `"no active GCP projects found"` when no `LifecycleState == "ACTIVE"` project is seen across all pages. `TestFindActiveProjectInPage` covers the per-page callback, and `TestNewProvider_ProjectIDResolution` covers the typed-field-vs-Profile precedence chain, but no test exercises the full `getDefaultProject` path where the service returns a page of non-ACTIVE projects only and the function should produce the no-active error.
+**Impact**: Regression risk — if a future refactor weakens the LifecycleState check (e.g. accepts "DELETE_REQUESTED" as alive), the error path stops firing and callers get a misleading ACTIVE project that's actually tombstoned.
+**Status:** ❓ Needs triage
+
+### Implementation plan
+
+**Goal:** Pin the "no ACTIVE projects surface the exact error" contract.
+
+**Files to modify:**
+
+- `providers/gcp/provider_test.go` — add `TestGetDefaultProject_NoActiveProjects`.
+
+**Steps:**
+
+1. Build on the existing `ResourceManagerService` interface mock (`MockResourceManagerService` already exists in `provider_test.go`) or introduce a `cloudresourcemanager.Service` fake that returns a single page containing only non-ACTIVE projects (`DELETE_REQUESTED` / `DELETE_IN_PROGRESS`).
+2. Call `getDefaultProject(ctx)` (no opts needed) and assert the returned error matches `"no active GCP projects found"`.
+
+**Test plan:** as above.
+
+**Verification:** `cd providers/gcp && go test -short ./.`
+
+**Effort:** `small`.

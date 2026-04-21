@@ -1,6 +1,6 @@
 # Known Issues: Database Migrations
 
-> **Audit status (2026-04-20):** `0 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `0 from original audit · 8 resolved · 0 partially fixed · 0 moved · 2 new items surfaced during 2026-04-21 audit review (CleanupOldExecutions SQL precedence fix applied in a follow-up commit; test-coverage and locking-risk remain)`
 
 ## ~~HIGH: savings_snapshots has no PRIMARY KEY~~ — RESOLVED
 
@@ -52,14 +52,15 @@
 **Description**: The `valid_status` CHECK on `purchase_executions` allowed `pending, notified, approved, cancelled, completed, failed` (plus `running`). `CleanupOldExecutions` deleted `status IN ('completed', 'cancelled', 'expired')`. Since no transition code ever wrote `expired`, that branch was dead — executions past `expires_at` accumulated indefinitely.
 **Status:** ✔️ Resolved
 
-**Resolved by:** Followed plan option (b) — drove cleanup off `expires_at` instead of inventing an `expired` status. The DELETE WHERE now reads:
+**Resolved by:** Followed plan option (b) — drove cleanup off `expires_at` instead of inventing an `expired` status. Two independent branches, each with its own retention gate, OR'd:
 
 ```sql
-status IN ('completed', 'cancelled')
-OR (expires_at IS NOT NULL AND expires_at < NOW())
+(status IN ('completed', 'cancelled') AND scheduled_date < NOW() - INTERVAL '1 day' * $1)
+OR
+(expires_at IS NOT NULL AND expires_at < NOW() - INTERVAL '1 day' * $1)
 ```
 
-The OR keeps NULL-`expires_at` rows safe (the expires_at branch only fires when the column is non-NULL). Function godoc spells out the two cleanup cases. No DB migration needed — this is a pure query change. No new status added (avoiding the cascading CHECK + transition-job work that option (a) would have required).
+The OR between the two branches is deliberate — an earlier fix mistakenly AND'd the `scheduled_date` retention gate with both branches, which left pending rows with a far-future `scheduled_date` but a long-past `expires_at` accumulating indefinitely (a user scheduling a 2-year-out purchase with a 30-day approval window would have left a dead row for 1.9 years after the approval expired). The correct shape is two independent retention windows, one keyed on `scheduled_date` for the terminal-state branch (so recent completions stay visible in the UI) and one keyed on `expires_at` for the expiry-cleanup branch (so a stalled pending row is cleaned up `retentionDays` after its approval token expires, regardless of how far out its `scheduled_date` was). NULL `expires_at` is excluded from branch 2 so rows that never had an expiration deadline are safe. No DB migration needed — this is a pure query change. Function godoc spells out the two branches explicitly.
 
 ### Implementation plan
 
@@ -320,3 +321,55 @@ The Go field stays `string` for now (with the existing `COALESCE(...,'')` reads)
 - N/A (documentation-only change if we take option a).
 
 **Effort:** `small`
+
+## LOW: SaveRIExchangeRecord empty-PaymentDue defaulting has no test (found during 2026-04-21 audit review)
+
+**File**: `internal/config/store_postgres.go::SaveRIExchangeRecord` + its test sites
+**Description**: Commit `57e461cab` added a boundary-level default that maps empty `record.PaymentDue` to `"0"` before binding to the `DECIMAL(20,6) NOT NULL DEFAULT 0 CHECK (payment_due >= 0)` column. The fix is correct and minimal (pre-condition: pgx can't cast `""` to DECIMAL). However the test suite has no case that constructs a zero-value `RIExchangeRecord` and asserts the insert succeeds — the existing `handler_ri_exchange_test.go` fixtures all set `PaymentDue: "5.00"` explicitly. A future refactor that drops the defaulting would not be caught by `go test`.
+**Impact**: Silent regression risk on the exact crash mode the commit was meant to prevent.
+**Status:** ❓ Needs triage
+
+### Implementation plan
+
+**Goal:** Pin the "empty → 0" contract.
+
+**Files to modify:**
+
+- `internal/config/store_postgres_nil_db_test.go` (or a new file) — add a test against a real/ephemeral Postgres (reuse whatever harness the sibling `*_postgres_test.go` files use) that:
+    1. Constructs `RIExchangeRecord{...}` with `PaymentDue: ""`.
+    2. Calls `store.SaveRIExchangeRecord(ctx, rec)`.
+    3. Asserts no error.
+    4. Reads the row back and asserts `PaymentDue == "0"` (or the DECIMAL equivalent — `"0" == strings.TrimRight("0.000000", "0")` or exact-string compare depending on how the store formats reads).
+
+**Steps:** one test; no production-code change.
+
+**Test plan:** as above.
+
+**Effort:** `small`.
+
+## MEDIUM: 000027 dedup DELETE may lock savings_snapshots for a long time on large tables (found during 2026-04-21 audit review)
+
+**File**: `internal/database/postgres/migrations/000027_savings_snapshots_pk.up.sql`
+**Description**: The migration dedupes `savings_snapshots` via a `WITH duplicates AS (... ROW_NUMBER() ...) DELETE ...` before adding the primary key. Production audit at migration-write time showed zero duplicates, so the DELETE is expected to be a no-op — but the migration will still take a table-scan acquiring a row-exclusive lock. On the largest partition this can be minutes on production-scale data, during which writes queue behind the lock.
+**Impact**: The migration's apply window blocks writes to `savings_snapshots` for the duration of the scan, even when no rows get deleted. Acceptable if the operator knows to apply during a low-write period; risky if they apply blind during peak collection hours.
+**Status:** ❓ Needs triage (new risk surfaced during audit of commit `c3e428851`)
+
+### Implementation plan
+
+**Goal:** Document the apply window; optionally offer a non-locking variant.
+
+**Files to modify:**
+
+- `internal/database/postgres/migrations/000027_savings_snapshots_pk.up.sql` — add a comment block flagging the scan cost + suggested apply window (off-peak).
+- Optionally: split the dedup into its own migration that the operator can run manually with `CREATE INDEX CONCURRENTLY`-style tooling, keeping the ALTER TABLE in 000027 to run fast once dedup is confirmed clean.
+
+**Steps:**
+
+1. Add a `-- NOTE:` comment block to the .up.sql file.
+2. If the operator wants the split approach, file a follow-up; otherwise the docs-only change is enough.
+
+**Test plan:** documentation-only change (option 1); if splitting the migration, re-run the migration suite.
+
+**Verification:** `go test ./internal/database/postgres/...`
+
+**Effort:** `small` (docs-only) or `medium` (split-migration).

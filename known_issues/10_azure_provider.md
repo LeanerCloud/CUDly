@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-20):** `2 still valid (new follow-ups from CRITICAL rewrite) · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-20):** `2 follow-ups from CRITICAL rewrite · 8 resolved · 0 partially fixed · 0 moved · 2 new items surfaced during 2026-04-21 audit review`
 
 ## ~~CRITICAL: Recommendation converters ignore the API response entirely~~ — RESOLVED
 
@@ -339,3 +339,63 @@ The per-recommendation `Region` field is now whatever the per-service converter 
 **Related issues:** Deferred from `10_azure_provider.md::HIGH: Azure Retail Prices API pagination never followed` — closed by `04b375f68` with per-service in-place pagination.
 
 **Effort:** `medium` (4 files + 1 new package + tests).
+
+## MEDIUM: fetchAzurePricing has no per-page timeout (found during 2026-04-21 audit review)
+
+**File**: `providers/azure/services/{compute,database,cache,cosmosdb}/client.go::fetchAzurePricing`
+**Description**: Commit `04b375f68`'s implementation plan promised "a sensible per-request timeout (not the whole pagination) to avoid a single slow page stalling all callers." The shipped code only respects the caller's `ctx` deadline via `http.NewRequestWithContext(ctx, ...)` — there's no per-page timeout. A 30-second caller context applied to a 50-page walk means one slow page can consume the entire budget and starve the rest.
+**Impact**: Pagination runs that should succeed within the caller's overall budget fail partway through when a single page is slow; the resulting error is attributed to the overall caller context rather than the specific slow page, making diagnosis harder.
+**Status:** ❓ Needs triage (surfaced during the audit review of commit `04b375f68`)
+
+### Implementation plan
+
+**Goal:** Each GET in the pagination loop has an independent timeout (e.g. 10s), separate from the caller's overall context deadline.
+
+**Files to modify:**
+
+- `providers/azure/services/compute/client.go::fetchAzurePricing` (and the three parallel methods in database, cache, cosmosdb).
+
+**Steps:**
+
+1. Define `const pricingPageTimeout = 10 * time.Second` near the top of each service client (or, if doing the shared-helper refactor in the LOW entry above, in the shared package).
+2. Inside the pagination loop, wrap each page with `pageCtx, cancel := context.WithTimeout(ctx, pricingPageTimeout); defer cancel()` (or equivalent idiom — `defer` inside a loop leaks across iterations, so call `cancel()` explicitly at end-of-iteration and before every `return` / `break`).
+3. Pass `pageCtx` into `http.NewRequestWithContext(pageCtx, ...)`.
+4. Adjust the per-page error message to mention the timeout (`"pricing API call timed out after %s on page %d: %w"`).
+
+**Test plan:**
+
+- `TestFetchAzurePricing_PerPageTimeout` — mock HTTP that sleeps ≥11s on page 2; assert the error surfaces with a recognisable timeout message and does NOT cascade to cancel the caller's outer context.
+
+**Verification:**
+
+- `cd providers/azure && go test -short ./services/compute/...` (other services share the shape — one service's test covers the contract).
+
+**Effort:** `small` (4 identical edits + 1 test).
+
+## LOW: Extract Account field invariant not enforced on RecommendationsClientAdapter (found during 2026-04-21 audit review)
+
+**File**: `providers/azure/recommendations.go::RecommendationsClientAdapter`
+**Description**: After commit `2d98002f8`, each per-service converter populates `Recommendation.Account = c.subscriptionID`. The client's `subscriptionID` is validated non-empty in `AzureProvider.GetRecommendationsClient` (`providers/azure/provider.go` fallback to `accounts[0].ID`), but `RecommendationsClientAdapter` itself has no invariant-check — a direct test or future refactor that constructs the adapter with an empty `subscriptionID` would silently produce recommendations with `Account == ""`, which downstream account-scoping would drop.
+**Impact**: Defensive-coding gap. Not a runtime bug today (the only production construction path does validate), but a regression risk if the construction path changes.
+**Status:** ❓ Needs triage
+
+### Implementation plan
+
+**Goal:** Make the invariant impossible to violate by refactor.
+
+**Files to modify:**
+
+- `providers/azure/recommendations.go::RecommendationsClientAdapter` struct + a constructor function that enforces non-empty subscriptionID.
+- `providers/azure/provider.go::GetRecommendationsClient` — use the constructor.
+
+**Steps:**
+
+1. Add a `newRecommendationsClientAdapter(cred, subscriptionID)` function that returns `(*RecommendationsClientAdapter, error)` and rejects empty `subscriptionID` with a clear error.
+2. Route all construction through the new helper (grep for `&RecommendationsClientAdapter{`).
+3. Keep the struct public (external test files may reference it) but document the invariant in godoc.
+
+**Test plan:**
+
+- `TestNewRecommendationsClientAdapter_RejectsEmptySubscriptionID`.
+
+**Effort:** `small`.
