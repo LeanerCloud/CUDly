@@ -385,12 +385,19 @@ export interface RIUtilization {
   unused_hours: number;
 }
 
+export interface OfferingOption {
+  instance_type: string;
+  offering_id: string;
+  effective_monthly_cost: number;
+}
+
 export interface ReshapeRecommendation {
   source_ri_id: string;
   source_instance_type: string;
   source_count: number;
   target_instance_type: string;
   target_count: number;
+  alternative_targets?: OfferingOption[];
   utilization_percent: number;
   normalized_used: number;
   normalized_purchased: number;

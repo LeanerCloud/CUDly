@@ -1,8 +1,10 @@
 package exchange
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -22,26 +24,49 @@ type UtilizationInfo struct {
 	UtilizationPercent float64 // 0.0–100.0
 }
 
+// OfferingOption is a single Convertible RI offering exposed to the
+// reshape layer: the AWS offering ID, the instance type it provisions,
+// and the effective monthly cost (amortised fixed price + recurring
+// hourly charges × 730 hours). Used both as the return shape of
+// OfferingLookup (what an AWS-provider closure returns) and as the
+// element type of ReshapeRecommendation.AlternativeTargets (what
+// reshape emits to the HTTP handler). Kept in pkg/exchange so
+// pkg/exchange stays AWS-free and providers/aws/services/ec2 imports
+// the type rather than defining its own.
+type OfferingOption struct {
+	InstanceType         string  `json:"instance_type"`
+	OfferingID           string  `json:"offering_id"`
+	EffectiveMonthlyCost float64 `json:"effective_monthly_cost"`
+}
+
+// OfferingLookup is the signature of the closure that resolves
+// candidate instance types into concrete offerings with pricing. Used
+// by AnalyzeReshapingWithOfferings. Implementations batch the request
+// into a single DescribeReservedInstancesOfferings call per peer-family
+// group so the N instance-types → N API calls fan-out is avoided.
+type OfferingLookup func(ctx context.Context, instanceTypes []string) ([]OfferingOption, error)
+
 // ReshapeRecommendation describes a suggested exchange for an underutilized RI.
 //
-// AlternativeTargetInstanceTypes lists cross-family options within the
-// same use-case group (general-purpose / compute / memory / burstable)
-// at the same target size. This is an advisory list for the UI to
-// surface alongside the primary target; the auto-exchange pipeline
-// still acts on TargetInstanceType only so existing automated
+// AlternativeTargets lists cross-family options within the same
+// use-case group (general-purpose / compute / memory / burstable) at
+// the same target size, enriched with real offering IDs and monthly
+// cost when a pricing lookup is available. This is advisory data for
+// the UI to surface alongside the primary target; the auto-exchange
+// pipeline still acts on TargetInstanceType only so existing automated
 // behaviour is unchanged. Emitted when the primary target's family
 // belongs to a known peer group; empty otherwise.
 type ReshapeRecommendation struct {
-	SourceRIID                     string   `json:"source_ri_id"`
-	SourceInstanceType             string   `json:"source_instance_type"`
-	SourceCount                    int32    `json:"source_count"`
-	TargetInstanceType             string   `json:"target_instance_type"`
-	TargetCount                    int32    `json:"target_count"`
-	AlternativeTargetInstanceTypes []string `json:"alternative_target_instance_types,omitempty"`
-	UtilizationPercent             float64  `json:"utilization_percent"`
-	NormalizedUsed                 float64  `json:"normalized_used"`
-	NormalizedPurchased            float64  `json:"normalized_purchased"`
-	Reason                         string   `json:"reason"`
+	SourceRIID          string           `json:"source_ri_id"`
+	SourceInstanceType  string           `json:"source_instance_type"`
+	SourceCount         int32            `json:"source_count"`
+	TargetInstanceType  string           `json:"target_instance_type"`
+	TargetCount         int32            `json:"target_count"`
+	AlternativeTargets  []OfferingOption `json:"alternative_targets,omitempty"`
+	UtilizationPercent  float64          `json:"utilization_percent"`
+	NormalizedUsed      float64          `json:"normalized_used"`
+	NormalizedPurchased float64          `json:"normalized_purchased"`
+	Reason              string           `json:"reason"`
 }
 
 // peerFamilyGroups maps each family in the allowlist to the full set
@@ -218,15 +243,15 @@ func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *Reshap
 	}
 
 	return &ReshapeRecommendation{
-		SourceRIID:                     ri.ID,
-		SourceInstanceType:             ri.InstanceType,
-		SourceCount:                    ri.InstanceCount,
-		TargetInstanceType:             targetInstanceType,
-		TargetCount:                    targetCount,
-		AlternativeTargetInstanceTypes: alternativesForTarget(family, targetSize),
-		UtilizationPercent:             util,
-		NormalizedUsed:                 normalizedUsed,
-		NormalizedPurchased:            normalizedPurchased,
+		SourceRIID:          ri.ID,
+		SourceInstanceType:  ri.InstanceType,
+		SourceCount:         ri.InstanceCount,
+		TargetInstanceType:  targetInstanceType,
+		TargetCount:         targetCount,
+		AlternativeTargets:  alternativesForTarget(family, targetSize),
+		UtilizationPercent:  util,
+		NormalizedUsed:      normalizedUsed,
+		NormalizedPurchased: normalizedPurchased,
 		Reason: fmt.Sprintf(
 			"RI at %.0f%% utilization (%.1f/%.1f normalized units). Suggest exchanging %dx %s for %dx %s.",
 			util, normalizedUsed, normalizedPurchased,
@@ -241,19 +266,113 @@ func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *Reshap
 // source family itself is excluded (that's the primary
 // TargetInstanceType already). Returns nil when sourceFamily isn't in
 // the allowlist or has no peers.
-func alternativesForTarget(sourceFamily, targetSize string) []string {
+//
+// Pricing fields (OfferingID, EffectiveMonthlyCost) are left empty
+// here. AnalyzeReshapingWithOfferings backfills them via an injected
+// lookup; callers without a lookup (auto.go, no-pricing tests) see
+// name-only entries.
+func alternativesForTarget(sourceFamily, targetSize string) []OfferingOption {
 	peers := candidateFamilies(sourceFamily)
 	if len(peers) <= 1 {
 		return nil
 	}
-	out := make([]string, 0, len(peers)-1)
+	out := make([]OfferingOption, 0, len(peers)-1)
 	for _, p := range peers {
 		if strings.EqualFold(p, sourceFamily) {
 			continue
 		}
-		out = append(out, p+"."+targetSize)
+		out = append(out, OfferingOption{InstanceType: p + "." + targetSize})
 	}
 	return out
+}
+
+// AnalyzeReshapingWithOfferings is AnalyzeReshaping + offering
+// enrichment: it calls the base analyzer, batches the distinct target
+// instance types (primary + alternatives) into ONE lookup call, and
+// fills each rec's AlternativeTargets with real OfferingID +
+// EffectiveMonthlyCost.
+//
+// Missing-offering behaviour: if the lookup returns no entry for a
+// candidate instance type, that alternative is silently dropped from
+// the rec's slice — the rec still ships with its primary target and
+// the alternatives that DID resolve. If the lookup itself errors, the
+// base recs are returned with empty AlternativeTargets across the
+// board; the dashboard's primary reshape suggestions stay intact.
+//
+// auto.go keeps calling the existing AnalyzeReshaping (no pricing
+// needed); only the HTTP handlers that surface recommendations to
+// users call the enriched version.
+func AnalyzeReshapingWithOfferings(
+	ctx context.Context,
+	ris []RIInfo,
+	utilization []UtilizationInfo,
+	threshold float64,
+	lookup OfferingLookup,
+) []ReshapeRecommendation {
+	recs := AnalyzeReshaping(ris, utilization, threshold)
+	if lookup == nil || len(recs) == 0 {
+		return recs
+	}
+
+	types := distinctCandidateTypes(recs)
+	if len(types) == 0 {
+		return recs
+	}
+
+	offerings, err := lookup(ctx, types)
+	if err != nil {
+		// Fall back to name-only alternatives — losing pricing is
+		// strictly less bad than losing the whole reshape page.
+		return recs
+	}
+
+	fillAlternativesFromOfferings(recs, offerings)
+	return recs
+}
+
+// distinctCandidateTypes collects de-duplicated instance types from all
+// recs' primary + alternative targets, sorted for deterministic
+// lookups in tests.
+func distinctCandidateTypes(recs []ReshapeRecommendation) []string {
+	want := make(map[string]struct{})
+	for _, r := range recs {
+		if r.TargetInstanceType != "" {
+			want[r.TargetInstanceType] = struct{}{}
+		}
+		for _, alt := range r.AlternativeTargets {
+			if alt.InstanceType != "" {
+				want[alt.InstanceType] = struct{}{}
+			}
+		}
+	}
+	types := make([]string, 0, len(want))
+	for t := range want {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+	return types
+}
+
+// fillAlternativesFromOfferings replaces each rec's AlternativeTargets
+// with the matching OfferingOption from the lookup result. Missing
+// instance types are silently dropped (per the doc on
+// AnalyzeReshapingWithOfferings).
+func fillAlternativesFromOfferings(recs []ReshapeRecommendation, offerings []OfferingOption) {
+	offByType := make(map[string]OfferingOption, len(offerings))
+	for _, o := range offerings {
+		if _, exists := offByType[o.InstanceType]; !exists {
+			offByType[o.InstanceType] = o
+		}
+	}
+	for i := range recs {
+		filled := make([]OfferingOption, 0, len(recs[i].AlternativeTargets))
+		for _, alt := range recs[i].AlternativeTargets {
+			if found, ok := offByType[alt.InstanceType]; ok {
+				filled = append(filled, found)
+			}
+		}
+		recs[i].AlternativeTargets = filled
+	}
 }
 
 // findBestFit finds the instance size and count that best fits normalizedUsed units.

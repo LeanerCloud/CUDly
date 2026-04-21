@@ -177,7 +177,15 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	riInfos, utilInfos := convertToExchangeTypes(instances, utilData)
-	recs := exchange.AnalyzeReshaping(riInfos, utilInfos, threshold)
+	// Offering lookup closure uses the already-configured ec2Client,
+	// so no extra AWS config plumbing is needed. Errors from the
+	// lookup are swallowed inside AnalyzeReshapingWithOfferings —
+	// losing pricing chips is strictly less bad than losing the whole
+	// reshape page.
+	lookup := func(ctx context.Context, instanceTypes []string) ([]exchange.OfferingOption, error) {
+		return ec2Client.FindConvertibleOfferings(ctx, instanceTypes)
+	}
+	recs := exchange.AnalyzeReshapingWithOfferings(ctx, riInfos, utilInfos, threshold, lookup)
 
 	return &ReshapeRecommendationsResponse{Recommendations: recs}, nil
 }
