@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -39,6 +41,13 @@ type SchedulerConfig struct {
 	OIDCSigner      oidc.Signer
 	OIDCIssuerURL   string
 	AssumeRoleSTS   credentials.STSClient
+
+	// IsLambda gates the stale-while-revalidate background goroutine.
+	// On Lambda, goroutines freeze between invocations — firing one from
+	// a request handler would corrupt state — so we fall back to the
+	// scheduled cron + manual refresh. Cloud Run / Container Apps run
+	// long-lived processes where the goroutine is safe.
+	IsLambda bool
 }
 
 // CollectResult holds the result of collecting recommendations.
@@ -71,7 +80,25 @@ type Scheduler struct {
 	oidcSigner      oidc.Signer
 	oidcIssuerURL   string
 	assumeRoleSTS   credentials.STSClient
+
+	// isLambda gates the stale-while-revalidate background goroutine. See
+	// SchedulerConfig.IsLambda for the rationale.
+	isLambda bool
+
+	// cacheTTL is the age past which opportunistic background refresh kicks
+	// in on non-Lambda runtimes. Parsed from CUDLY_RECOMMENDATION_CACHE_TTL
+	// at NewScheduler time; defaults to 6h.
+	cacheTTL time.Duration
+
+	// collecting is a single-flight guard so N concurrent stale reads only
+	// trigger ONE background refresh.
+	collecting atomic.Bool
 }
+
+// defaultCacheTTL is the fallback when CUDLY_RECOMMENDATION_CACHE_TTL is
+// unset or invalid. 6h is shorter than the default 1-day cron so
+// opportunistic refresh closes the gap when users are active.
+const defaultCacheTTL = 6 * time.Hour
 
 // NewScheduler creates a new scheduler
 func NewScheduler(cfg SchedulerConfig) *Scheduler {
@@ -90,7 +117,25 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		oidcSigner:      cfg.OIDCSigner,
 		oidcIssuerURL:   cfg.OIDCIssuerURL,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		isLambda:        cfg.IsLambda,
+		cacheTTL:        cacheTTLFromEnv(),
 	}
+}
+
+// cacheTTLFromEnv parses CUDLY_RECOMMENDATION_CACHE_TTL using
+// time.ParseDuration. Falls back to defaultCacheTTL on parse error (with
+// a warning) so a mis-set env doesn't take the feature offline.
+func cacheTTLFromEnv() time.Duration {
+	v := os.Getenv("CUDLY_RECOMMENDATION_CACHE_TTL")
+	if v == "" {
+		return defaultCacheTTL
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		logging.Warnf("CUDLY_RECOMMENDATION_CACHE_TTL invalid (%q); using default %s", v, defaultCacheTTL)
+		return defaultCacheTTL
+	}
+	return d
 }
 
 // CollectRecommendations fetches recommendations from all configured cloud providers.
@@ -450,20 +495,24 @@ type RecommendationQueryParams struct {
 // API calls on every request (2–10s per provider); now it's a pure DB
 // read, typically under 100ms.
 //
-// The upcoming commit 7 wraps this with stale-while-revalidate; for now
-// the wrapper is a thin passthrough to config.ListStoredRecommendations.
-// On Lambda-safe cold start (empty cache), CollectRecommendations is run
-// synchronously first so the user sees data rather than an empty table.
+// Order of operations:
+//  1. Read freshness.
+//  2. Cold-start (LastCollectedAt==nil): synchronous CollectRecommendations
+//     so the first caller sees real data rather than an empty table. Safe
+//     on all runtimes since the call is sync.
+//  3. Read from the cache.
+//  4. Stale-while-revalidate: if the cache is older than cacheTTL AND we
+//     aren't on Lambda, kick off a background CollectRecommendations so
+//     the NEXT read sees fresh data. Lambda skips this (goroutines freeze
+//     between invocations); the scheduled cron is Lambda's refresh path.
 func (s *Scheduler) GetRecommendations(ctx context.Context, params RecommendationQueryParams) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
-	// Cold-start fallback: if the cache has never been populated, collect
-	// synchronously so the first caller sees real data. Subsequent requests
-	// read from the DB. Safe on all runtimes since the call is sync.
 	freshness, err := s.config.GetRecommendationsFreshness(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read recommendations freshness: %w", err)
 	}
+
 	if freshness.LastCollectedAt == nil {
 		logging.Info("Recommendations cache is empty; performing synchronous cold-start collect")
 		if _, err := s.CollectRecommendations(ctx); err != nil {
@@ -471,7 +520,54 @@ func (s *Scheduler) GetRecommendations(ctx context.Context, params Recommendatio
 		}
 	}
 
-	return s.config.ListStoredRecommendations(ctx, recommendationFilterFromQueryParams(params))
+	recs, err := s.config.ListStoredRecommendations(ctx, recommendationFilterFromQueryParams(params))
+	if err != nil {
+		return nil, err
+	}
+
+	s.maybeKickBackgroundRefresh(freshness)
+	return recs, nil
+}
+
+// maybeKickBackgroundRefresh spawns a detached CollectRecommendations
+// goroutine when the cache is stale AND the runtime can safely run
+// background goroutines (i.e. not Lambda). The atomic.Bool guard
+// single-flights concurrent callers so only one refresh fires per TTL
+// window. Recovers from panics so one bad collect can't crash the
+// long-lived process.
+func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.RecommendationsFreshness) {
+	if s.isLambda {
+		return
+	}
+	if freshness.LastCollectedAt == nil {
+		// Just handled synchronously; nothing to backfill.
+		return
+	}
+	if time.Since(*freshness.LastCollectedAt) < s.cacheTTL {
+		return
+	}
+	if !s.collecting.CompareAndSwap(false, true) {
+		// Another refresh is already in flight.
+		return
+	}
+
+	logging.Infof("Recommendations cache is stale (age > %s); triggering background refresh", s.cacheTTL)
+	bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	go func() {
+		defer cancel()
+		defer s.collecting.Store(false)
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Errorf("background recommendations refresh panic: %v", r)
+			}
+		}()
+		if _, err := s.CollectRecommendations(bgCtx); err != nil {
+			// CollectRecommendations already surfaces errors via
+			// recommendations_state.last_collection_error, so just log
+			// locally here for operator visibility.
+			logging.Errorf("background refresh: %v", err)
+		}
+	}()
 }
 
 // recommendationFilterFromQueryParams translates the API-facing

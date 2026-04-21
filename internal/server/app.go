@@ -220,6 +220,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		ConfigStore:     deps.ConfigStore,
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
+		IsLambda:        isLambdaRuntime(),
 	})
 
 	// Auth store will be initialized lazily after DB connection
@@ -479,6 +480,7 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		OIDCSigner:      app.signer,
 		OIDCIssuerURL:   resolveOIDCIssuerURL(app.appConfig),
 		AssumeRoleSTS:   sts.NewFromConfig(awsCfg),
+		IsLambda:        app.appConfig.IsLambda,
 	})
 
 	// Update API handler with new config store, scheduler, and rate limiter

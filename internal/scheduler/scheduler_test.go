@@ -951,6 +951,57 @@ func TestScheduler_GetRecommendations_FreshnessError(t *testing.T) {
 	assert.Nil(t, recs)
 }
 
+// Lambda runtime must NOT spawn a background refresh even when the
+// cache is stale — goroutines freeze between invocations.
+func TestScheduler_GetRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	// Cache is stale (older than the 1ns TTL set below).
+	old := time.Now().Add(-time.Hour)
+	mockStore.On("GetRecommendationsFreshness", ctx).
+		Return(&config.RecommendationsFreshness{LastCollectedAt: &old}, nil)
+	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
+		Return([]config.RecommendationRecord{}, nil)
+
+	scheduler := &Scheduler{
+		config:   mockStore,
+		isLambda: true,
+		cacheTTL: time.Nanosecond,
+	}
+
+	_, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{})
+	require.NoError(t, err)
+
+	// Give any (wrongly-spawned) goroutine time to hit the store; none
+	// should fire, so no GetGlobalConfig call should be observed.
+	time.Sleep(20 * time.Millisecond)
+
+	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	assert.False(t, scheduler.collecting.Load(), "collecting flag must stay unset on Lambda")
+}
+
+// Non-Lambda stale reads kick a single background refresh regardless of
+// how many concurrent callers hit the stale cache.
+func TestScheduler_GetRecommendations_StaleSingleFlight(t *testing.T) {
+	ctx := context.Background()
+
+	scheduler := &Scheduler{
+		isLambda: false,
+		cacheTTL: time.Nanosecond, // force stale
+	}
+
+	old := time.Now().Add(-time.Hour)
+	freshness := &config.RecommendationsFreshness{LastCollectedAt: &old}
+
+	// Seed the flag as though a refresh is already in flight. The
+	// guard short-circuits and no new goroutine fires.
+	scheduler.collecting.Store(true)
+	scheduler.maybeKickBackgroundRefresh(freshness)
+	assert.True(t, scheduler.collecting.Load(), "in-flight flag must not be cleared by the guard path")
+	_ = ctx
+}
+
 // Test convertRecommendations
 func TestScheduler_ConvertRecommendations(t *testing.T) {
 	scheduler := &Scheduler{}
