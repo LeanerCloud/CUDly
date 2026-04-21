@@ -876,4 +876,41 @@ func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields(t *t
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "1yr", out.Term)
 	assert.Equal(t, "upfront", out.PaymentOption)
+
+	// Details carries Engine="cosmos". For this fixture the SKU doesn't
+	// start with digits, so ThroughputUnits is 0 — which correctly
+	// signals "unknown from payload" rather than being parsed wrong.
+	require.NotNil(t, out.Details)
+	details, ok := out.Details.(common.NoSQLDetails)
+	require.True(t, ok, "Details must be a common.NoSQLDetails value")
+	assert.Equal(t, "cosmos", details.Engine)
+	assert.Empty(t, details.APIType, "APIType requires an armcosmos lookup and is deferred")
+}
+
+// TestDetailsFromCosmosSKU covers the permissive SKU parser directly.
+// Real SKUs look like "100RU", "1000RUperSecond", or service-emitted
+// strings without a numeric prefix. The parser extracts leading digits
+// as ThroughputUnits and leaves the field at zero on any other shape.
+func TestDetailsFromCosmosSKU(t *testing.T) {
+	cases := []struct {
+		name       string
+		sku        string
+		wantUnits  int
+		wantEngine string
+	}{
+		{"bare digits + RU suffix", "100RU", 100, "cosmos"},
+		{"digits + RUperSecond suffix", "1000RUperSecond", 1000, "cosmos"},
+		{"digits only", "5000", 5000, "cosmos"},
+		{"prefix without leading digits", "CosmosDB_RU_1000", 0, "cosmos"},
+		{"empty", "", 0, "cosmos"},
+		{"non-digit prefix", "UnknownSKU", 0, "cosmos"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := detailsFromCosmosSKU(tc.sku)
+			assert.Equal(t, tc.wantEngine, d.Engine)
+			assert.Equal(t, tc.wantUnits, d.ThroughputUnits)
+			assert.Empty(t, d.APIType)
+		})
+	}
 }

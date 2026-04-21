@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -567,10 +568,12 @@ func calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPri
 // See providers/azure/internal/recommendations.Extract for the shared
 // SDK-to-struct ladder. Returns nil when the SDK payload is unusable.
 //
-// Details deliberately left nil: pkg/common has no NoSQLDetails /
-// CosmosDetails type. Adding one is a cross-module change that should
-// land with its own commit — tracked as a follow-up in
-// known_issues/10_azure_provider.md.
+// Details populated with Engine="cosmos" and ThroughputUnits parsed from
+// the SKU string (f.ResourceType) when it encodes a throughput tier.
+// APIType (sql / mongodb / cassandra / gremlin / table) requires an
+// armcosmos.DatabaseAccountsClient lookup and is deferred to the same
+// batched-enrichment follow-up that covers compute/database/cache SDK
+// fields — tracked in known_issues/10_azure_provider.md.
 func (c *CosmosDBClient) convertAzureCosmosRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
@@ -590,5 +593,37 @@ func (c *CosmosDBClient) convertAzureCosmosRecommendation(_ context.Context, azu
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
+		Details:          detailsFromCosmosSKU(f.ResourceType),
 	}
+}
+
+// detailsFromCosmosSKU parses an Azure Cosmos DB reservation SKU string
+// into a common.NoSQLDetails value. Real Cosmos RI SKU strings look like
+// "100RU" or "100RUperSecond" — a bare integer followed by "RU" (with or
+// without "perSecond" suffix). The parser extracts the leading integer
+// and treats it as ThroughputUnits; anything that doesn't match leaves
+// ThroughputUnits at zero and only Engine is populated.
+//
+// The parser is deliberately permissive: unknown formats populate just
+// Engine and ResourceType. Converters MUST NOT return an error on
+// unexpected SKU strings because the API can add new SKUs without
+// breaking downstream consumers.
+func detailsFromCosmosSKU(sku string) common.NoSQLDetails {
+	d := common.NoSQLDetails{
+		Engine: "cosmos",
+	}
+	// Extract leading integer characters. Anything after stops parsing.
+	var ruDigits string
+	for _, r := range sku {
+		if r < '0' || r > '9' {
+			break
+		}
+		ruDigits += string(r)
+	}
+	if ruDigits != "" {
+		if n, err := strconv.Atoi(ruDigits); err == nil {
+			d.ThroughputUnits = n
+		}
+	}
+	return d
 }

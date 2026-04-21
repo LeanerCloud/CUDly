@@ -281,6 +281,31 @@ func (d DataWarehouseDetails) GetDetailDescription() string {
 	return d.NodeType
 }
 
+// NoSQLDetails represents NoSQL-specific details (Cosmos DB, DynamoDB,
+// Firestore). Engine is the provider-level family ("cosmos", "dynamodb",
+// "firestore"); APIType is the cosmos-specific sub-API (sql, mongodb,
+// cassandra, gremlin, table) and stays empty for non-cosmos engines.
+// ThroughputUnits is the reserved-throughput unit (RU/s for cosmos).
+// Zero-value fields indicate the source payload didn't supply the data
+// (e.g. SKU string lacks a throughput tier or API-type hint) — do NOT
+// treat zero as "definitely zero", only as "unknown".
+type NoSQLDetails struct {
+	Engine          string `json:"engine"`
+	APIType         string `json:"api_type,omitempty"`
+	ThroughputUnits int    `json:"throughput_units,omitempty"`
+}
+
+func (d NoSQLDetails) GetServiceType() ServiceType {
+	return ServiceNoSQL
+}
+
+func (d NoSQLDetails) GetDetailDescription() string {
+	if d.APIType == "" {
+		return d.Engine
+	}
+	return d.Engine + "/" + d.APIType
+}
+
 // SavingsPlanDetails represents AWS Savings Plans specific details
 type SavingsPlanDetails struct {
 	PlanType         string  `json:"plan_type"` // Compute, EC2Instance, SageMaker

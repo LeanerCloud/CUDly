@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 11 resolved · 1 partially fixed (Details: compute/database/cache done, cosmos deferred) · 0 moved · 2 new follow-ups surfaced (batched SKU enrichment; CosmosDetails type)`
+> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 12 resolved · 0 partially fixed · 0 moved · 1 new follow-up surfaced (batched SKU enrichment — deferred N+1 avoidance)`
 
 ## ~~CRITICAL: Recommendation converters ignore the API response entirely~~ — RESOLVED
 
@@ -281,14 +281,14 @@ The per-recommendation `Region` field is now whatever the per-service converter 
 
 **Effort:** `small`
 
-## ~~MEDIUM: Azure converters leave `common.Recommendation.Details` nil~~ — PARTIALLY RESOLVED (3 of 4 services; cosmos deferred)
+## ~~MEDIUM: Azure converters leave `common.Recommendation.Details` nil~~ — RESOLVED (all 4 services)
 
 **File**: `providers/azure/services/{compute,database,cache,cosmosdb}/client.go::convertAzure*Recommendation`
 **Description**: After the CRITICAL converter rewrite, the four Azure converters populated every `common.Recommendation` field except `Details` (the per-service polymorphic struct: `ComputeDetails`, `DatabaseDetails`, `CacheDetails`, etc.). UI/CSV/email consumers that wanted service-specific extras (VM family, DB engine/edition, Redis tier, Cosmos throughput) saw `Details == nil` for every Azure rec.
 **Impact**: UI consistency between Azure and AWS recommendations was incomplete; some downstream features (e.g. richer email summaries, service-family-aware scoring) silently degraded for Azure.
-**Status:** ⚠️ Partially resolved
+**Status:** ✔️ Resolved
 
-**Resolved for compute / database / cache:**
+**Resolved for all four services:**
 
 - `convertAzureVMRecommendation` now sets `Details: common.ComputeDetails{InstanceType: f.ResourceType}`. Platform/Tenancy/Scope are deferred — they require an `armcompute.ResourceSKUsClient.ListByLocation` lookup per SKU, which would produce an N+1 API-call storm on every `GetRecommendations`. Batched enrichment is filed as a new follow-up below.
 - `convertAzureSQLRecommendation` now sets `Details: common.DatabaseDetails{Engine: "sqlserver", InstanceClass: f.ResourceType}` via a permissive `detailsFromSQLSKU(sku)` helper. EngineVersion/AZConfig/Deployment require an `armsql` SKU catalogue lookup and are deferred under the same batched-enrichment follow-up.
@@ -296,27 +296,17 @@ The per-recommendation `Region` field is now whatever the per-service converter 
 
 Each converter's godoc now explicitly documents which fields are payload-derivable vs. SDK-lookup territory so a future reader can tell the difference without guessing. Tests in each service's `client_test.go::Test*_ConvertAzure*Recommendation_PopulatesAllFields` now assert Details is non-nil, the concrete type matches, the payload-derived fields are populated, and the deferred fields are intentionally empty.
 
-**Deferred for cosmosdb:** `pkg/common` has no `NoSQLDetails` / `CosmosDetails` type. Adding one is a cross-module change (pkg/common is a separate Go module with a `replace` directive) that should land with its own commit so the type surface can be reviewed in isolation. `convertAzureCosmosRecommendation` continues to leave `Details` nil — tracked as a new follow-up below.
+**Cosmos Details now populated too:** `pkg/common/types.go` gained a new `NoSQLDetails{Engine, APIType, ThroughputUnits}` type (GetServiceType returns `ServiceNoSQL`; GetDetailDescription formats as `"cosmos"` or `"cosmos/<apitype>"` when APIType is set). `convertAzureCosmosRecommendation` sets `Details: detailsFromCosmosSKU(f.ResourceType)` — a permissive parser that extracts the leading integer of the SKU string as `ThroughputUnits` and sets `Engine: "cosmos"`. APIType (sql / mongodb / cassandra / gremlin / table) requires an `armcosmos.DatabaseAccountsClient` lookup and is deferred under the same batched-enrichment follow-up as compute/database/cache fields. Six table-driven cases in `TestDetailsFromCosmosSKU` cover real-looking SKU formats (bare digits, `"1000RUperSecond"`, `"CosmosDB_RU_1000"`, empty).
 
 ### New follow-ups surfaced during this resolution
 
 #### MEDIUM: Azure converters leave SKU-lookup Details fields empty (deferred N+1 avoidance)
 
-**File:** `providers/azure/services/{compute,database,cache}/client.go::convertAzure*Recommendation`
+**File:** `providers/azure/services/{compute,database,cache,cosmosdb}/client.go::convertAzure*Recommendation`
 
-**Description:** The compute / database / cache converters populate the subset of `Details` derivable from the reservation recommendation payload only. Fields that require an SDK catalogue lookup — compute Platform/Tenancy/Scope + memory/vCPU, database EngineVersion/AZConfig, cache Shards — are deliberately left empty because populating them inline would produce an N+1 API call per recommendation.
+**Description:** All four converters populate the subset of `Details` derivable from the reservation recommendation payload only. Fields that require an SDK catalogue lookup — compute Platform/Tenancy/Scope + memory/vCPU, database EngineVersion/AZConfig, cache Shards, cosmos APIType — are deliberately left empty because populating them inline would produce an N+1 API call per recommendation.
 
-**Proposed fix:** single-shot batched SKU lookup per region per service (`armcompute.ResourceSKUsClient.ListByLocation(region)`, `armsql.SKUsClient.ListByServer`, `armredis.SKUsClient.ListByLocation`), called ONCE at the start of `GetRecommendations` for each region appearing in the response, cached in a `map[skuName]SKUCatalogueEntry`, then consulted as the converter builds each rec's Details. No N+1 storm, full Details population.
-
-**Status:** ❓ Needs triage
-
-#### LOW: CosmosDB converter can't populate Details — no pkg/common type exists
-
-**File:** `providers/azure/services/cosmosdb/client.go::convertAzureCosmosRecommendation` + `pkg/common/types.go`
-
-**Description:** Unlike compute/database/cache, `pkg/common` has no `NoSQLDetails` or `CosmosDetails` type. Adding one is a cross-module change touching `pkg/` (a separate Go module). The commit that introduces the type should probably also carry AWS DynamoDB Details + GCP Firestore Details population so the NoSQLDetails shape is validated by three callers at once, rather than being over-fit to Cosmos's quirks.
-
-**Proposed fix:** define `common.NoSQLDetails{Engine string; ThroughputUnits int; ConsistencyMode string; MultiRegion bool}` (or similar — shape to be negotiated during the cross-provider design), then populate it from the Cosmos SKU string in `convertAzureCosmosRecommendation`.
+**Proposed fix:** single-shot batched SKU lookup per region per service (`armcompute.ResourceSKUsClient.ListByLocation(region)`, `armsql.SKUsClient.ListByServer`, `armredis.SKUsClient.ListByLocation`, `armcosmos.DatabaseAccountsClient.ListByResourceGroup`), called ONCE at the start of `GetRecommendations` for each region appearing in the response, cached in a `map[skuName]SKUCatalogueEntry`, then consulted as the converter builds each rec's Details. No N+1 storm, full Details population.
 
 **Status:** ❓ Needs triage
 
