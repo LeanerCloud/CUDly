@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -879,12 +881,12 @@ func (m *MockRecommendationsClient) GetRecommendationsForService(ctx context.Con
 	return args.Get(0).([]common.Recommendation), args.Error(1)
 }
 
-// Test GetRecommendations method
-// GetRecommendations now reads from the recommendations cache rather than
+// Test ListRecommendations method
+// ListRecommendations reads from the recommendations cache rather than
 // doing live cloud API calls. The tests below cover the cache-read path
 // (warm cache) + filter pass-through. Cold-start behavior is covered by
-// TestScheduler_GetRecommendations_ColdStart.
-func TestScheduler_GetRecommendations(t *testing.T) {
+// TestScheduler_ListRecommendations_ColdStart.
+func TestScheduler_ListRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
@@ -901,7 +903,7 @@ func TestScheduler_GetRecommendations(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{})
+	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 }
@@ -909,7 +911,7 @@ func TestScheduler_GetRecommendations(t *testing.T) {
 // Filter pass-through: the handler-level RecommendationQueryParams fields
 // map into the DB-facing RecommendationFilter. The SQL pushdown semantics
 // themselves are covered by store_postgres_recommendations_test.go.
-func TestScheduler_GetRecommendations_PassesFilterToStore(t *testing.T) {
+func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
@@ -928,7 +930,7 @@ func TestScheduler_GetRecommendations_PassesFilterToStore(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	_, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{
+	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{
 		Provider:   "aws",
 		Service:    "ec2",
 		Region:     "us-east-1",
@@ -939,21 +941,21 @@ func TestScheduler_GetRecommendations_PassesFilterToStore(t *testing.T) {
 }
 
 // Error surface: a store error on the freshness read bubbles up.
-func TestScheduler_GetRecommendations_FreshnessError(t *testing.T) {
+func TestScheduler_ListRecommendations_FreshnessError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
 	mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, assert.AnError)
 
 	scheduler := &Scheduler{config: mockStore}
-	recs, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{})
+	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
 
 // Lambda runtime must NOT spawn a background refresh even when the
 // cache is stale — goroutines freeze between invocations.
-func TestScheduler_GetRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T) {
+func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
@@ -970,7 +972,7 @@ func TestScheduler_GetRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T)
 		cacheTTL: time.Nanosecond,
 	}
 
-	_, err := scheduler.GetRecommendations(ctx, RecommendationQueryParams{})
+	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 
 	// Give any (wrongly-spawned) goroutine time to hit the store; none
@@ -983,7 +985,7 @@ func TestScheduler_GetRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T)
 
 // Non-Lambda stale reads kick a single background refresh regardless of
 // how many concurrent callers hit the stale cache.
-func TestScheduler_GetRecommendations_StaleSingleFlight(t *testing.T) {
+func TestScheduler_ListRecommendations_StaleSingleFlight(t *testing.T) {
 	ctx := context.Background()
 
 	scheduler := &Scheduler{
@@ -1000,6 +1002,121 @@ func TestScheduler_GetRecommendations_StaleSingleFlight(t *testing.T) {
 	scheduler.maybeKickBackgroundRefresh(freshness)
 	assert.True(t, scheduler.collecting.Load(), "in-flight flag must not be cleared by the guard path")
 	_ = ctx
+}
+
+// Cold-start (LastCollectedAt==nil) triggers a synchronous
+// CollectRecommendations before the read so the user sees real data
+// rather than an empty table.
+func TestScheduler_ListRecommendations_ColdStartSync(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	// Freshness reports cold cache.
+	mockStore.On("GetRecommendationsFreshness", ctx).
+		Return(&config.RecommendationsFreshness{LastCollectedAt: nil}, nil)
+
+	// Cold-start drills into CollectRecommendations, which needs the
+	// global config. Return no enabled providers so the collect is a
+	// no-op but still runs the persistence path.
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{EnabledProviders: []string{}}, nil)
+	mockStore.On("UpsertRecommendations", ctx, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
+		Return([]config.RecommendationRecord{}, nil)
+
+	scheduler := &Scheduler{config: mockStore}
+
+	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+
+	// Assert the cold-start path ran: GetGlobalConfig is only called by
+	// CollectRecommendations, so seeing it prove the sync collect fired
+	// before the store read.
+	mockStore.AssertCalled(t, "GetGlobalConfig", ctx)
+	mockStore.AssertCalled(t, "UpsertRecommendations", ctx, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// fanOutPerAccount bounds parallel in-flight calls to
+// CUDLY_MAX_ACCOUNT_PARALLELISM. Test with a fake fn that increments an
+// atomic counter on entry and decrements on exit, assert peak stays at
+// or below the limit.
+func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
+	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", "3")
+
+	// 20 accounts to make the bound observable.
+	accounts := make([]config.CloudAccount, 20)
+	for i := range accounts {
+		accounts[i] = config.CloudAccount{ID: fmt.Sprintf("acct-%d", i), Name: fmt.Sprintf("acct-%d", i)}
+	}
+
+	var inflight atomic.Int32
+	var peak atomic.Int32
+	updatePeak := func(cur int32) {
+		for {
+			p := peak.Load()
+			if cur <= p || peak.CompareAndSwap(p, cur) {
+				return
+			}
+		}
+	}
+
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		cur := inflight.Add(1)
+		updatePeak(cur)
+		// Small sleep so concurrent workers genuinely overlap.
+		time.Sleep(5 * time.Millisecond)
+		inflight.Add(-1)
+		return []config.RecommendationRecord{{ID: acct.ID}}, nil
+	}
+
+	out := fanOutPerAccount(context.Background(), "Test", accounts, fn)
+	assert.Len(t, out, len(accounts), "all accounts contribute one record")
+	assert.LessOrEqual(t, peak.Load(), int32(3), "peak in-flight must not exceed CUDLY_MAX_ACCOUNT_PARALLELISM")
+}
+
+// persistCollection writes via Upsert and surfaces the per-provider
+// error banner when the collection was partial.
+func TestScheduler_persistCollection_PartialFailure(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	recs := []config.RecommendationRecord{
+		{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1"},
+	}
+	successful := []string{"aws"}
+	failed := map[string]string{"azure": "auth failed", "gcp": "quota"}
+
+	mockStore.On("UpsertRecommendations", ctx, mock.Anything, recs, successful).Return(nil)
+	mockStore.On("SetRecommendationsCollectionError", ctx, mock.Anything).
+		Return(nil).
+		Run(func(args mock.Arguments) {
+			msg := args.String(1)
+			// joinProviderErrors sorts alphabetically → azure before gcp.
+			assert.Contains(t, msg, "azure: auth failed")
+			assert.Contains(t, msg, "gcp: quota")
+		})
+
+	s := &Scheduler{config: mockStore}
+	s.persistCollection(ctx, recs, successful, failed)
+
+	mockStore.AssertExpectations(t)
+}
+
+// On full success (no failed providers), Upsert is called but
+// SetRecommendationsCollectionError is NOT — the banner stays dismissed.
+func TestScheduler_persistCollection_FullSuccess(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	recs := []config.RecommendationRecord{{ID: "r1", Provider: "aws"}}
+	successful := []string{"aws", "azure", "gcp"}
+
+	mockStore.On("UpsertRecommendations", ctx, mock.Anything, recs, successful).Return(nil)
+
+	s := &Scheduler{config: mockStore}
+	s.persistCollection(ctx, recs, successful, nil)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "SetRecommendationsCollectionError", mock.Anything, mock.Anything)
 }
 
 // Test convertRecommendations

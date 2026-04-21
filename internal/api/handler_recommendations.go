@@ -7,7 +7,6 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
-	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -35,16 +34,16 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(400, err.Error())
 	}
 
-	// Build query params from request parameters
-	queryParams := scheduler.RecommendationQueryParams{
+	// Translate query string → DB-level filter. ListRecommendations
+	// pushes these into the WHERE clause so the cache does the pruning.
+	filter := config.RecommendationFilter{
 		Provider:   params["provider"],
 		Service:    params["service"],
 		Region:     params["region"],
 		AccountIDs: accountIDs,
 	}
 
-	// Fetch recommendations from scheduler (which fetches from cloud providers)
-	recommendations, err := h.scheduler.GetRecommendations(ctx, queryParams)
+	recommendations, err := h.scheduler.ListRecommendations(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}

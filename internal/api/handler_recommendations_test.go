@@ -18,7 +18,7 @@ func TestHandler_getRecommendations(t *testing.T) {
 	mockScheduler := new(MockScheduler)
 
 	// Mock the scheduler to return empty recommendations
-	mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 
 	handler := &Handler{
 		scheduler: mockScheduler,

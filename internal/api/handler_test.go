@@ -349,7 +349,7 @@ func TestHandler_HandleRequest_GetRecommendations(t *testing.T) {
 	mockScheduler := new(MockScheduler)
 
 	// Mock the scheduler to return empty recommendations
-	mockScheduler.On("GetRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 
 	handler := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
 
@@ -700,7 +700,7 @@ func TestHandler_HandleRequest_GetDashboardSummary(t *testing.T) {
 		DefaultCoverage: 80.0,
 	}
 
-	mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 

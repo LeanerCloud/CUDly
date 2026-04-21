@@ -11,7 +11,7 @@ import (
 // MockScheduler is a mock implementation of server.SchedulerInterface
 type MockScheduler struct {
 	CollectRecommendationsFunc func(ctx context.Context) (*scheduler.CollectResult, error)
-	GetRecommendationsFunc     func(ctx context.Context, params scheduler.RecommendationQueryParams) ([]config.RecommendationRecord, error)
+	ListRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
 }
 
 func (m *MockScheduler) CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error) {
@@ -21,9 +21,9 @@ func (m *MockScheduler) CollectRecommendations(ctx context.Context) (*scheduler.
 	return &scheduler.CollectResult{}, nil
 }
 
-func (m *MockScheduler) GetRecommendations(ctx context.Context, params scheduler.RecommendationQueryParams) ([]config.RecommendationRecord, error) {
-	if m.GetRecommendationsFunc != nil {
-		return m.GetRecommendationsFunc(ctx, params)
+func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	if m.ListRecommendationsFunc != nil {
+		return m.ListRecommendationsFunc(ctx, filter)
 	}
 	return []config.RecommendationRecord{}, nil
 }

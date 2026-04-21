@@ -54,7 +54,7 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 		DefaultCoverage: 75.0,
 	}
 
-	mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
@@ -477,7 +477,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 	t.Run("scheduler error", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(nil, errors.New("scheduler error"))
+		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(nil, errors.New("scheduler error"))
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{auth: mockAuth, scheduler: mockScheduler}
@@ -491,7 +491,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 		mockScheduler := new(MockScheduler)
 		mockStore := new(MockConfigStore)
 
-		mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(nil, nil)
 		mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
@@ -515,7 +515,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 			DefaultCoverage: 0,
 		}
 
-		mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 		mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 

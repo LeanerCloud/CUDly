@@ -403,8 +403,8 @@ func (m *MockScheduler) CollectRecommendations(ctx context.Context) (*scheduler.
 	return args.Get(0).(*scheduler.CollectResult), args.Error(1)
 }
 
-func (m *MockScheduler) GetRecommendations(ctx context.Context, params scheduler.RecommendationQueryParams) ([]config.RecommendationRecord, error) {
-	args := m.Called(ctx, params)
+func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

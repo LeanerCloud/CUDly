@@ -9,7 +9,6 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
-	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -28,7 +27,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	recommendations, err := h.scheduler.GetRecommendations(ctx, scheduler.RecommendationQueryParams{
+	recommendations, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{
 		Provider: params["provider"],
 	})
 	if err != nil {

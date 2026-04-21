@@ -155,10 +155,9 @@ type RecommendationRecord struct {
 	CloudAccountID *string `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 }
 
-// RecommendationFilter parameterises ListStoredRecommendations. Zero-value
-// fields mean "no filter"; non-empty AccountIDs restricts to the given IDs.
-// Mirrors the shape of scheduler.RecommendationQueryParams so the API handler
-// mapping is one-to-one.
+// RecommendationFilter parameterises ListStoredRecommendations and the
+// handler-facing scheduler.ListRecommendations wrapper. Zero-value fields
+// mean "no filter"; non-empty AccountIDs restricts to the given IDs.
 type RecommendationFilter struct {
 	Provider   string   // "aws" / "azure" / "gcp" / "" (all)
 	Service    string   // "" = all services

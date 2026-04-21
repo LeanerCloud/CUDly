@@ -118,7 +118,7 @@ type PurchaseManagerInterface interface {
 // SchedulerInterface defines scheduler methods used by handler
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
-	GetRecommendations(ctx context.Context, params scheduler.RecommendationQueryParams) ([]config.RecommendationRecord, error)
+	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
 }
 
 // AuthServiceInterface defines auth service methods used by handler

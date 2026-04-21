@@ -636,7 +636,7 @@ func TestHandler_getRecommendations_InvalidAccountIDs(t *testing.T) {
 func TestHandler_getRecommendations_SchedulerError(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
-	mockScheduler.On("GetRecommendations", ctx, mock.Anything).
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).
 		Return(nil, errors.New("scheduler down"))
 
 	h := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
@@ -653,7 +653,7 @@ func TestHandler_getRecommendations_WithResults(t *testing.T) {
 		{Service: "rds", Region: "us-east-1", Savings: 100.0, UpfrontCost: 200.0},
 		{Service: "rds", Region: "eu-west-1", Savings: 50.0, UpfrontCost: 100.0},
 	}
-	mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(recs, nil)
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recs, nil)
 
 	h := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
@@ -674,7 +674,7 @@ func TestHandler_getRecommendations_ZeroSavings(t *testing.T) {
 	recs := []config.RecommendationRecord{
 		{Service: "rds", Region: "us-east-1", Savings: 0, UpfrontCost: 0},
 	}
-	mockScheduler.On("GetRecommendations", ctx, mock.Anything).Return(recs, nil)
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recs, nil)
 
 	h := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}

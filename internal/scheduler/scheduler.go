@@ -482,16 +482,8 @@ func (s *Scheduler) tagAccount(recs []config.RecommendationRecord, accountID str
 	return recs
 }
 
-// RecommendationQueryParams holds query parameters for filtering recommendations
-type RecommendationQueryParams struct {
-	Provider   string
-	Service    string
-	Region     string
-	AccountIDs []string // filter by cloud account UUIDs; empty = all accounts
-}
-
-// GetRecommendations reads cached recommendations from the store, applying
-// the given filters as SQL WHERE clauses. Previously this did live cloud
+// ListRecommendations reads cached recommendations from the store, applying
+// the given filter as SQL WHERE clauses. Previously this did live cloud
 // API calls on every request (2–10s per provider); now it's a pure DB
 // read, typically under 100ms.
 //
@@ -505,7 +497,7 @@ type RecommendationQueryParams struct {
 //     aren't on Lambda, kick off a background CollectRecommendations so
 //     the NEXT read sees fresh data. Lambda skips this (goroutines freeze
 //     between invocations); the scheduled cron is Lambda's refresh path.
-func (s *Scheduler) GetRecommendations(ctx context.Context, params RecommendationQueryParams) ([]config.RecommendationRecord, error) {
+func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
 	freshness, err := s.config.GetRecommendationsFreshness(ctx)
@@ -520,7 +512,7 @@ func (s *Scheduler) GetRecommendations(ctx context.Context, params Recommendatio
 		}
 	}
 
-	recs, err := s.config.ListStoredRecommendations(ctx, recommendationFilterFromQueryParams(params))
+	recs, err := s.config.ListStoredRecommendations(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -568,17 +560,6 @@ func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.Recommendations
 			logging.Errorf("background refresh: %v", err)
 		}
 	}()
-}
-
-// recommendationFilterFromQueryParams translates the API-facing
-// RecommendationQueryParams into the DB-facing config.RecommendationFilter.
-func recommendationFilterFromQueryParams(params RecommendationQueryParams) config.RecommendationFilter {
-	return config.RecommendationFilter{
-		Provider:   params.Provider,
-		Service:    params.Service,
-		Region:     params.Region,
-		AccountIDs: params.AccountIDs,
-	}
 }
 
 // convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice

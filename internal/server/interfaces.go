@@ -11,7 +11,7 @@ import (
 // SchedulerInterface defines the methods required for the scheduler component
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
-	GetRecommendations(ctx context.Context, params scheduler.RecommendationQueryParams) ([]config.RecommendationRecord, error)
+	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
 }
 
 // PurchaseManagerInterface defines the methods required for the purchase manager component
