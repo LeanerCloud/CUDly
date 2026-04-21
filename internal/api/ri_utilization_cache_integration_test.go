@@ -6,44 +6,37 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
-	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/LeanerCloud/CUDly/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	"github.com/stretchr/testify/require"
 )
 
-// createRIUtilizationCacheTable creates only the schema this test
-// suite needs. We deliberately skip the full migration set because
-// migration 000027 is non-idempotent on a fresh DB (tries to ADD
-// PRIMARY KEY that migration 000018 already added) — that's a
-// pre-existing bug tracked separately and outside this commit's
-// scope. By creating the table directly we keep the integration
-// test for commit A/B's cache behaviour self-contained and not
-// blocked on the unrelated migration-order issue.
-func createRIUtilizationCacheTable(ctx context.Context, t *testing.T, db *database.Connection) {
-	t.Helper()
-	_, err := db.Pool().Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS ri_utilization_cache (
-		    region        TEXT NOT NULL,
-		    lookback_days INT  NOT NULL,
-		    payload       JSONB NOT NULL,
-		    fetched_at    TIMESTAMPTZ NOT NULL,
-		    PRIMARY KEY (region, lookback_days)
-		);
-	`)
-	require.NoError(t, err)
+// getMigrationsPath resolves the migrations directory relative to this
+// test file so the integration test works regardless of where `go
+// test` is invoked from. Mirrors the helper in
+// internal/config/store_postgres_test.go.
+func getMigrationsPath() string {
+	_, filename, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
 func setupRICacheIntegration(ctx context.Context, t *testing.T) (*config.PostgresStore, func()) {
 	t.Helper()
 	container, err := testhelpers.SetupPostgresContainer(ctx, t)
 	require.NoError(t, err)
-	createRIUtilizationCacheTable(ctx, t, container.DB)
+	// Migration 000027 was made idempotent in commit F — the full
+	// migration chain now runs cleanly on fresh containers, so the
+	// test uses the same schema production does.
+	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
+	require.NoError(t, err)
 	store := config.NewPostgresStore(container.DB)
 	return store, func() { _ = container.Cleanup(ctx) }
 }

@@ -104,6 +104,19 @@ outstanding so future work has a clear starting point.
   test at `internal/api/ri_utilization_cache_integration_test.go`
   (build-tag `integration`).
 
+### Database Migrations
+
+- **Migration 000027 non-idempotent on fresh DBs**: Resolved.
+  `internal/database/postgres/migrations/000027_savings_snapshots_pk.up.sql`
+  now runs `ALTER TABLE savings_snapshots DROP CONSTRAINT IF EXISTS
+  savings_snapshots_pkey;` before the existing DELETE CTE + ADD
+  CONSTRAINT sequence. The guard makes the migration safe on fresh
+  containers (where 000018 already added the PK) without changing
+  behaviour on production DBs where 000027 was the first to add
+  the PK. The `internal/api/ri_utilization_cache_integration_test.go`
+  bootstrap now uses the standard `migrations.RunMigrations` path
+  instead of the earlier table-create workaround.
+
 ### Test Performance
 
 - **t.Parallel() adoption (partial)**: Resolved for three audit-safe
