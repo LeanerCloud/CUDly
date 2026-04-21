@@ -121,3 +121,23 @@ output "all_secret_names" {
     [for secret in azurerm_key_vault_secret.additional : secret.name]
   )
 }
+
+# Emitted when SMTP secrets are created with placeholder values (no
+# smtp_username/smtp_password passed). Prints the exact helper-script
+# invocation the operator should run next to get the portal flow +
+# pre-filled `az keyvault secret set` commands. Empty string when SMTP
+# creation is skipped or credentials were provided at apply time.
+output "smtp_setup_instructions" {
+  description = "Next-step command to generate Azure ACS SMTP credentials, with deployment-specific values pre-filled. Non-empty when SMTP secrets are created; operator should run the printed command if credentials weren't pre-generated elsewhere."
+  # References only non-sensitive vars (resource_group_name, key_vault_name).
+  # We deliberately DON'T condition on smtp_username/smtp_password being
+  # null — those variables are marked sensitive, and checking them
+  # (even for null) taints the output. If creds were passed at apply
+  # time, the printed instructions are harmless no-ops; operators can
+  # ignore them.
+  value = var.create_smtp_secrets ? format(
+    "Generate Azure ACS SMTP credentials if not pre-supplied. Run:\n  bash scripts/azure-smtp-setup.sh %s <acs-domain-name> %s\n(Replace <acs-domain-name> with the email domain you connected to Azure Communication Services; the script emits pre-filled portal + az CLI steps. Skip this step if you passed -var smtp_username=... -var smtp_password=... to terraform apply.)",
+    var.resource_group_name,
+    var.key_vault_name,
+  ) : ""
+}
