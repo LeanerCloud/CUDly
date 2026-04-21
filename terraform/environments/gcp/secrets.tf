@@ -45,26 +45,3 @@ module "secrets" {
 
   labels = local.common_labels
 }
-
-# ==============================================
-# Import recovery: credential-encryption-key secret
-# ==============================================
-#
-# A prior failed apply created the Secret Manager secret
-# `<service_name>-credential-encryption-key` outside Terraform state. The
-# next apply then hit `googleapi: Error 409: Secret already exists.`
-# because the resource was present in GCP but not tracked.
-#
-# This import block pulls the existing secret into state on the next
-# apply. It is idempotent — Terraform skips the import when the resource
-# is already in state. Remove this block after a successful apply that
-# reconciles the imported resource.
-#
-# The secret version is NOT imported: the existing version may not match
-# `local.credential_encryption_key`, so Terraform will create a new
-# version alongside the imported resource, which is the desired
-# behaviour (secret versions are immutable and append-only).
-import {
-  to = module.secrets.google_secret_manager_secret.credential_encryption_key[0]
-  id = "projects/${var.project_id}/secrets/${local.service_name}-credential-encryption-key"
-}
