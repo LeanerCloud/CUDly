@@ -1,6 +1,6 @@
 # UX Review — CUDly Dashboard (April 2026)
 
-> **Audit status (2026-04-20):** `0 still valid · 14 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-21):** `0 still valid · 15 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 >
 > **2026-04-21 resolution pass:** all 14 audit items were already implemented in the current frontend; the audit was written against an earlier snapshot. Each entry below carries a `Resolved-by` paragraph naming the file:line that satisfies the audit's "Expected" outcome. No frontend code changes were needed for this pass — documentation only.
 
@@ -60,7 +60,23 @@ With 0 recommendations and 0 active commitments, "Current Coverage: 100%" previo
 
 ## Recommendations
 
-No functional issues found. Layout is clean, filters work, empty state message is appropriate.
+### ~~LOW: Recommendations page renders two "Refresh" buttons~~ — RESOLVED
+
+The Recommendations page previously showed two "Refresh" buttons — one in the filter/action bar next to "Create Purchase Plan", and another adjacent to the freshness indicator ("Data from &lt;relative-time&gt;"). Confusing and redundant.
+
+The filter-bar button (`refreshRecommendations()` in `frontend/src/recommendations.ts`) showed an `alert()` popup and deferred reload by 5 seconds; the freshness-indicator button (rendered by `renderFreshness` in `frontend/src/freshness.ts`) does the same refresh inline, with a disabled-button affordance and an immediate reload on success. Strictly worse UX on the filter-bar button.
+
+**Status:** ✔️ Resolved
+
+**Resolved by:**
+
+- `frontend/src/index.html` — the `<button id="refresh-recommendations-btn">Refresh</button>` inside the filter bar's `.action-group` was removed (one-line delete).
+- `frontend/src/app.ts::setupButtonHandlers` — the `addEventListener('click', () => void refreshRecommendations())` wiring was removed along with the now-unused `refreshRecommendations` named import.
+- The freshness-indicator button survives and is the canonical Refresh affordance. Its click handler already calls `onRefresh` (= `loadRecommendations`) which re-reads current filter values and re-applies them — so the single button covers both "refetch data" and "re-run filters" semantics.
+
+The `refreshRecommendations()` export in `recommendations.ts` (and its `window.refreshRecommendations` global binding in `index.ts`) are retained for now — they have no remaining callers inside `frontend/src/` but the binding was added to support legacy inline-onclick handlers, so removing them is a separate scope-discipline exercise.
+
+Verification: `npm run build` succeeds; the deployed Recommendations page now renders exactly one Refresh button (the freshness-indicator one).
 
 ---
 

@@ -6,7 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
-import { setupRecommendationsHandlers, refreshRecommendations, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
+import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
 import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, getSettingsSubTabFromPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
@@ -146,12 +146,12 @@ export function setupEventListeners(): void {
  * Setup all button event listeners (Security improvement: replaces inline onclick handlers)
  */
 function setupButtonHandlers(): void {
-  // Recommendations buttons
-  const refreshRecsBtn = document.getElementById('refresh-recommendations-btn');
-  if (refreshRecsBtn) {
-    refreshRecsBtn.addEventListener('click', () => void refreshRecommendations());
-  }
-
+  // Recommendations buttons — the sole Refresh affordance now lives in
+  // the freshness indicator (`recommendations-freshness`), rendered and
+  // wired by renderFreshness in `freshness.ts`. The older filter-bar
+  // Refresh button was removed because it duplicated the freshness-
+  // indicator Refresh with strictly worse UX (alert() popup + 5s delay
+  // vs. the freshness button's inline disable + re-render).
   const createPlanBtn = document.getElementById('create-plan-btn');
   if (createPlanBtn) {
     createPlanBtn.addEventListener('click', () => openCreatePlanModal());
