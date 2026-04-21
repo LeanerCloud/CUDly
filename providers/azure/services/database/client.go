@@ -515,6 +515,10 @@ func (c *DatabaseClient) getSQLPricing(ctx context.Context, sku, region string, 
 // Defence against a server bug returning a NextPageLink that never empties.
 const retailPricesMaxPages = 50
 
+// retailPricesPageTimeout bounds each individual page GET so one slow
+// page can't consume the caller's full context budget.
+const retailPricesPageTimeout = 10 * time.Second
+
 // fetchAzurePricing fetches pricing data from Azure Retail Prices API,
 // following NextPageLink until exhausted or the safety cap fires. The
 // previous version stopped after page 1, so any SKU sitting on later
@@ -534,32 +538,47 @@ func (c *DatabaseClient) fetchAzurePricing(ctx context.Context, filter string) (
 		}
 		seen[nextURL] = struct{}{}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", nextURL, nil)
+		page, err := c.fetchOnePricingPage(ctx, nextURL, pageIdx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create request (page %d): %w", pageIdx, err)
+			return nil, err
 		}
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to call pricing API (page %d): %w", pageIdx, err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return nil, fmt.Errorf("pricing API returned status %d (page %d): %s", resp.StatusCode, pageIdx, string(body))
-		}
-
-		var page AzureRetailPrice
-		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("failed to decode pricing response (page %d): %w", pageIdx, err)
-		}
-		resp.Body.Close()
 
 		combined.Items = append(combined.Items, page.Items...)
 		nextURL = page.NextPageLink
 	}
 
 	return combined, nil
+}
+
+// fetchOnePricingPage issues one GET with a bounded timeout and decodes
+// the response. pageCtx inherits cancellation from the caller's ctx but
+// the per-page timeout is independent. defer cancel() inside a function
+// body correctly releases each page's context — defer inside the loop
+// body would leak contexts on every iteration.
+func (c *DatabaseClient) fetchOnePricingPage(ctx context.Context, pageURL string, pageIdx int) (*AzureRetailPrice, error) {
+	pageCtx, cancel := context.WithTimeout(ctx, retailPricesPageTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(pageCtx, "GET", pageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request (page %d): %w", pageIdx, err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call pricing API (page %d, timeout %s): %w", pageIdx, retailPricesPageTimeout, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("pricing API returned status %d (page %d): %s", resp.StatusCode, pageIdx, string(body))
+	}
+
+	var page AzureRetailPrice
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, fmt.Errorf("failed to decode pricing response (page %d): %w", pageIdx, err)
+	}
+	return &page, nil
 }
 
 // extractSQLPricing extracts on-demand and reservation pricing from price items

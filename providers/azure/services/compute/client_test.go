@@ -632,6 +632,48 @@ func TestFetchAzurePricing_FollowsNextPageLink(t *testing.T) {
 	mockHTTP.AssertExpectations(t)
 }
 
+// TestFetchAzurePricing_PerPageTimeout pins the per-page timeout
+// contract: a slow page (here: the second page) must fail with a scoped
+// error that names the timeout duration + page index, and the caller's
+// outer context must NOT be cancelled as a side effect — so subsequent
+// calls on the same outer ctx still work.
+func TestFetchAzurePricing_PerPageTimeout(t *testing.T) {
+	mockHTTP := &mocks.MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+
+	page1 := `{"Items":[{"armSkuName":"Standard_D2s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":100.0,"unitPrice":100.0,"currencyCode":"USD"}],"NextPageLink":"https://prices.azure.com/api/retail/prices?page=2"}`
+
+	// Page 1 returns fast.
+	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
+		return req.URL.Query().Get("page") == ""
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, page1), nil).Once()
+
+	// Page 2's Do() returns the page-context's Err() — the real
+	// http.Client behaviour on a deadline exceeded. We can't actually
+	// sleep for 10 seconds in a unit test, so we sniff the page's
+	// context.Deadline to prove fetchOnePricingPage applied its own
+	// timeout, and return the deadline-exceeded error synchronously.
+	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
+		return req.URL.Query().Get("page") == "2"
+	})).Return(nil, context.DeadlineExceeded).Run(func(args mock.Arguments) {
+		req := args.Get(0).(*http.Request)
+		if _, ok := req.Context().Deadline(); !ok {
+			t.Errorf("page 2 request context has no deadline — per-page timeout not applied")
+		}
+	}).Once()
+
+	outerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := client.fetchAzurePricing(outerCtx, "anything")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "page 1")
+	assert.Contains(t, err.Error(), "timeout", "error must mention the timeout so the operator can diagnose")
+
+	assert.NoError(t, outerCtx.Err(), "outer ctx must not be cancelled by a per-page timeout")
+	mockHTTP.AssertExpectations(t)
+}
+
 // TestFetchAzurePricing_RejectsSelfReferentialNextPageLink covers the
 // safety check: if the server returns the same NextPageLink twice, the
 // loop must break with an error instead of looping forever.

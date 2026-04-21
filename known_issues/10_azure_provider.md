@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 9 resolved · 0 partially fixed · 0 moved · 1 follow-up outstanding (MEDIUM: fetchAzurePricing has no per-page timeout — tracked for Commit 3)`
+> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 10 resolved · 0 partially fixed · 0 moved · 0 follow-ups outstanding from this audit pass`
 
 ## ~~CRITICAL: Recommendation converters ignore the API response entirely~~ — RESOLVED
 
@@ -340,14 +340,16 @@ The per-recommendation `Region` field is now whatever the per-service converter 
 
 **Effort:** `medium` (4 files + 1 new package + tests).
 
-## MEDIUM: fetchAzurePricing has no per-page timeout (found during 2026-04-21 audit review)
+## ~~MEDIUM: fetchAzurePricing has no per-page timeout~~ — RESOLVED
 
 **File**: `providers/azure/services/{compute,database,cache,cosmosdb}/client.go::fetchAzurePricing`
-**Description**: Commit `04b375f68`'s implementation plan promised "a sensible per-request timeout (not the whole pagination) to avoid a single slow page stalling all callers." The shipped code only respects the caller's `ctx` deadline via `http.NewRequestWithContext(ctx, ...)` — there's no per-page timeout. A 30-second caller context applied to a 50-page walk means one slow page can consume the entire budget and starve the rest.
-**Impact**: Pagination runs that should succeed within the caller's overall budget fail partway through when a single page is slow; the resulting error is attributed to the overall caller context rather than the specific slow page, making diagnosis harder.
-**Status:** ❓ Needs triage (surfaced during the audit review of commit `04b375f68`)
+**Description**: Commit `04b375f68`'s implementation plan promised "a sensible per-request timeout (not the whole pagination) to avoid a single slow page stalling all callers." The shipped code only respected the caller's `ctx` deadline via `http.NewRequestWithContext(ctx, ...)` — there was no per-page timeout. A 30-second caller context applied to a 50-page walk meant one slow page could consume the entire budget and starve the rest.
+**Impact**: Pagination runs that should succeed within the caller's overall budget failed partway through when a single page was slow; the resulting error was attributed to the overall caller context rather than the specific slow page, making diagnosis harder.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** each of the four service clients (`compute`, `database`, `cache`, `cosmosdb`) now exposes a package-level `retailPricesPageTimeout = 10 * time.Second` constant and extracts the per-page GET into a dedicated `fetchOnePricingPage(ctx, pageURL, pageIdx)` method. The helper derives `pageCtx, cancel := context.WithTimeout(ctx, retailPricesPageTimeout)` and `defer cancel()` — the `defer` sits inside the helper (a function body), so each page's context is released at return time without the defer-in-loop leak footgun. The error message on the `c.httpClient.Do(req)` failure path now names the timeout (`"page %d, timeout %s"`) so operators can distinguish a per-page deadline from a network failure. Test coverage added as `TestFetchAzurePricing_PerPageTimeout` in `services/compute/client_test.go` — the other three services share the shape, so one representative test pins the contract (the shared-retail-prices-package refactor tracked in the `LOW` entry below will centralise the test further).
+
+### Original implementation plan
 
 **Goal:** Each GET in the pagination loop has an independent timeout (e.g. 10s), separate from the caller's overall context deadline.
 
