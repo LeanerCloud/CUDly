@@ -602,6 +602,15 @@ func TestComputeClient_ConvertAzureVMRecommendation_PopulatesAllFields(t *testin
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "3yr", out.Term)
 	assert.Equal(t, "upfront", out.PaymentOption)
+
+	// Details is populated from the payload's ResourceType (InstanceType
+	// only — Platform/Tenancy/Scope are deferred to batched enrichment).
+	require.NotNil(t, out.Details)
+	details, ok := out.Details.(common.ComputeDetails)
+	require.True(t, ok, "Details must be a common.ComputeDetails value")
+	assert.Equal(t, "Standard_D2s_v3", details.InstanceType)
+	assert.Empty(t, details.Platform, "Platform is deferred to batched enrichment")
+	assert.Empty(t, details.Tenancy, "Tenancy is deferred to batched enrichment")
 }
 
 // TestFetchAzurePricing_WrapperSmokeTest verifies the compute-specific

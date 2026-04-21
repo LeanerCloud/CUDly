@@ -764,6 +764,15 @@ func TestCacheClient_ConvertAzureRedisRecommendation_PopulatesAllFields(t *testi
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "3yr", out.Term)
 	assert.Equal(t, "upfront", out.PaymentOption)
+
+	// Details carries Engine=redis + NodeType from the SKU string.
+	// Shard count is deferred to batched enrichment.
+	require.NotNil(t, out.Details)
+	details, ok := out.Details.(common.CacheDetails)
+	require.True(t, ok, "Details must be a common.CacheDetails value")
+	assert.Equal(t, "redis", details.Engine)
+	assert.Equal(t, "Premium_P3", details.NodeType)
+	assert.Equal(t, 0, details.Shards, "Shards is deferred to batched enrichment")
 }
 
 // Test the to package is properly imported (used in tests)

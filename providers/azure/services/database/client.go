@@ -557,7 +557,13 @@ func extractSQLPricing(items []DatabaseRetailPriceItem, termYears int) (onDemand
 // convertAzureSQLRecommendation converts Azure SQL reservation recommendation to common format.
 // See providers/azure/internal/recommendations.Extract for the shared
 // SDK-to-struct ladder. Returns nil when the SDK payload is unusable so
-// the caller can filter it out. Details left nil — follow-up.
+// the caller can filter it out.
+//
+// Details populated by parsing the SKU string (f.ResourceType) — the
+// reservation recommendation payload doesn't carry a separate
+// engine/edition/vcores field. armsql SKU catalogue calls (for deep
+// engine version + az-config data) are deferred to a batched-enrichment
+// follow-up tracked in known_issues/10_azure_provider.md.
 func (c *DatabaseClient) convertAzureSQLRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
@@ -577,5 +583,26 @@ func (c *DatabaseClient) convertAzureSQLRecommendation(_ context.Context, azureR
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
+		Details:          detailsFromSQLSKU(f.ResourceType),
 	}
+}
+
+// detailsFromSQLSKU parses an Azure SQL SKU string into a
+// common.DatabaseDetails value. The Azure Reservation Recommendations
+// API returns SKU strings like "GeneralPurpose_Gen5_2" (edition, compute
+// generation, vcore count) or "BusinessCritical_Gen5_4". The parser is
+// permissive: unknown formats populate InstanceClass and leave the rest
+// blank — converters must never return an error on unexpected SKU
+// strings because the API can add new SKUs without breaking consumers.
+//
+// Engine / EngineVersion / AZConfig / Deployment require an armsql SKU
+// catalogue lookup and are deliberately left empty; batched enrichment
+// is a separate follow-up.
+func detailsFromSQLSKU(sku string) common.DatabaseDetails {
+	// Engine is always SQL Server for an Azure SQL Database reservation.
+	d := common.DatabaseDetails{
+		Engine:        "sqlserver",
+		InstanceClass: sku,
+	}
+	return d
 }

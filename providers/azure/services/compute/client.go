@@ -659,8 +659,11 @@ func extractVMPricing(items []AzureRetailPriceItem, termYears int) (onDemand, re
 // providers/azure/internal/recommendations so the four Azure service
 // converters share the same type-assertion + nil-guard ladder.
 //
-// Details intentionally left nil — same as before this change; per-service
-// Details population is tracked as a follow-up in
+// Details populated from the reservation recommendation payload only —
+// Platform / Tenancy / Scope (and the vCPU / memory counts a UI would
+// want) require an ARM SKU-catalogue lookup; populating them here would
+// trigger an N+1 armcompute.ResourceSKUsClient.ListByLocation per
+// recommendation. That batched-enrichment is tracked as a follow-up in
 // known_issues/10_azure_provider.md.
 func (c *ComputeClient) convertAzureVMRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
@@ -681,5 +684,11 @@ func (c *ComputeClient) convertAzureVMRecommendation(_ context.Context, azureRec
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
+		// Only InstanceType is safely derivable from the payload. Platform,
+		// Tenancy, Scope are armcompute.ResourceSKUsClient territory and
+		// are deferred to the batched-enrichment follow-up.
+		Details: common.ComputeDetails{
+			InstanceType: f.ResourceType,
+		},
 	}
 }

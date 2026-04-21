@@ -550,7 +550,11 @@ func extractRedisPricing(items []CacheRetailPriceItem, termYears int) (onDemand,
 // convertAzureRedisRecommendation converts Azure Redis Cache reservation recommendation to common format.
 // See providers/azure/internal/recommendations.Extract for the shared
 // SDK-to-struct ladder. Returns nil when the SDK payload is unusable.
-// Details left nil — follow-up.
+//
+// Details populated by parsing the SKU string into Engine ("redis") and
+// NodeType. Shard count requires an armredis SKU catalogue lookup and is
+// deferred to a batched-enrichment follow-up tracked in
+// known_issues/10_azure_provider.md.
 func (c *CacheClient) convertAzureRedisRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
@@ -570,5 +574,9 @@ func (c *CacheClient) convertAzureRedisRecommendation(_ context.Context, azureRe
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
+		Details: common.CacheDetails{
+			Engine:   "redis",
+			NodeType: f.ResourceType,
+		},
 	}
 }

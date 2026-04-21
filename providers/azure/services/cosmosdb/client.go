@@ -566,7 +566,11 @@ func calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPri
 // convertAzureCosmosRecommendation converts Azure Cosmos DB reservation recommendation to common format.
 // See providers/azure/internal/recommendations.Extract for the shared
 // SDK-to-struct ladder. Returns nil when the SDK payload is unusable.
-// Details left nil — follow-up.
+//
+// Details deliberately left nil: pkg/common has no NoSQLDetails /
+// CosmosDetails type. Adding one is a cross-module change that should
+// land with its own commit — tracked as a follow-up in
+// known_issues/10_azure_provider.md.
 func (c *CosmosDBClient) convertAzureCosmosRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {

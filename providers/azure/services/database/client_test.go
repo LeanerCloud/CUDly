@@ -684,6 +684,17 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields(t *test
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "1yr", out.Term)
 	assert.Equal(t, "upfront", out.PaymentOption)
+
+	// Details carries Engine=sqlserver + InstanceClass from the SKU
+	// string. EngineVersion/AZConfig/Deployment are deferred to batched
+	// enrichment via armsql.
+	require.NotNil(t, out.Details)
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok, "Details must be a common.DatabaseDetails value")
+	assert.Equal(t, "sqlserver", details.Engine)
+	assert.Equal(t, "GeneralPurpose_Gen5_2", details.InstanceClass)
+	assert.Empty(t, details.EngineVersion, "EngineVersion is deferred to batched enrichment")
+	assert.Empty(t, details.AZConfig, "AZConfig is deferred to batched enrichment")
 }
 
 // MockTokenCredential for testing PurchaseCommitment
