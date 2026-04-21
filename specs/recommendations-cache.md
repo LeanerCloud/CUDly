@@ -72,15 +72,20 @@ Lambda deploys rely on scheduled + manual refresh only.
 - `CUDLY_MAX_ACCOUNT_PARALLELISM` (default `20`) — caps per-account
   concurrency inside each provider phase. Shared with the purchase
   manager so both honour the same operator override.
-- `CUDLY_RI_UTILIZATION_CACHE_TTL` (default `15m`) — parsed by
-  `time.ParseDuration`. Controls the TTL of the Postgres-backed RI
-  utilization cache (table `ri_utilization_cache`, migration 000031).
-  Shared across Lambda containers; dashboard + RI-Exchange page loads
-  read from this cache instead of billing a Cost Explorer
-  `GetReservationUtilization` call each. Matches CE's hourly upstream
-  refresh cadence so a 15-minute TTL trades a small freshness budget
-  for a large cost + latency saving. Invalid values fall back to the
-  default with a warning.
+- `CUDLY_RI_UTILIZATION_CACHE_TTL` (default `15m`) — soft-freshness
+  window of the Postgres-backed RI utilization cache (table
+  `ri_utilization_cache`, migration 000031). Reads within this window
+  serve the cached row and issue no Cost Explorer call. Matches CE's
+  hourly upstream refresh cadence. Parsed by `time.ParseDuration`;
+  invalid values fall back to the default with a warning.
+- `CUDLY_RI_UTILIZATION_CACHE_STALE_TTL` (default `30m`) — hard-expiry
+  window. On non-Lambda runtimes, reads in `[soft, hard)` serve the
+  stale row and singleflight-trigger a background refresh
+  (stale-while-revalidate); reads past `hard` force a synchronous
+  refetch. Lambda runtimes always synchronously refetch on any
+  staleness — background goroutines aren't safe there. Parsed by
+  `time.ParseDuration`; invalid values fall back to the default with a
+  warning.
 
 Terraform scheduled-task knobs (per-cloud `enable_scheduled_tasks` +
 `recommendation_schedule`) are unchanged by this feature.

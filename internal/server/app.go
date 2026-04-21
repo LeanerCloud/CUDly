@@ -22,6 +22,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
+	"github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -110,10 +111,11 @@ type ExternalDeps struct {
 	STSClient      purchase.STSClient
 }
 
-// isLambdaRuntime detects if the application is running in AWS Lambda
+// isLambdaRuntime is a thin wrapper over runtime.IsLambda so existing
+// call sites stay unchanged. New code should call runtime.IsLambda
+// directly.
 func isLambdaRuntime() bool {
-	// Lambda sets AWS_LAMBDA_RUNTIME_API when running
-	return os.Getenv("AWS_LAMBDA_RUNTIME_API") != ""
+	return runtime.IsLambda()
 }
 
 // defaultMigrationsTimeout bounds how long ensureDB waits for migrations
