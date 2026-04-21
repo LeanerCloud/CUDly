@@ -1,6 +1,6 @@
 # Known Issues: Database Migrations
 
-> **Audit status (2026-04-21):** `0 from original audit · 9 resolved · 0 partially fixed · 0 moved · 1 follow-up outstanding (MEDIUM: migration 000027 dedup DELETE lock window)`
+> **Audit status (2026-04-21):** `0 from original audit · 10 resolved · 0 partially fixed · 0 moved · 0 follow-ups outstanding`
 
 ## ~~HIGH: savings_snapshots has no PRIMARY KEY~~ — RESOLVED
 
@@ -349,14 +349,18 @@ The Go field stays `string` for now (with the existing `COALESCE(...,'')` reads)
 
 **Effort:** `small`.
 
-## MEDIUM: 000027 dedup DELETE may lock savings_snapshots for a long time on large tables (found during 2026-04-21 audit review)
+## ~~MEDIUM: 000027 dedup DELETE may lock savings_snapshots for a long time on large tables~~ — RESOLVED (docs-only)
 
 **File**: `internal/database/postgres/migrations/000027_savings_snapshots_pk.up.sql`
-**Description**: The migration dedupes `savings_snapshots` via a `WITH duplicates AS (... ROW_NUMBER() ...) DELETE ...` before adding the primary key. Production audit at migration-write time showed zero duplicates, so the DELETE is expected to be a no-op — but the migration will still take a table-scan acquiring a row-exclusive lock. On the largest partition this can be minutes on production-scale data, during which writes queue behind the lock.
+**Description**: The migration dedupes `savings_snapshots` via a `WITH duplicates AS (... ROW_NUMBER() ...) DELETE ...` before adding the primary key. Production audit at migration-write time showed zero duplicates, so the DELETE is expected to be a no-op — but the migration still takes a table-scan acquiring a row-exclusive lock. On the largest partition this can be minutes on production-scale data, during which writes queue behind the lock.
 **Impact**: The migration's apply window blocks writes to `savings_snapshots` for the duration of the scan, even when no rows get deleted. Acceptable if the operator knows to apply during a low-write period; risky if they apply blind during peak collection hours.
-**Status:** ❓ Needs triage (new risk surfaced during audit of commit `c3e428851`)
+**Status:** ✔️ Resolved (docs-only; split-migration variant deferred)
 
-### Implementation plan
+**Resolved by:** `000027_savings_snapshots_pk.up.sql` now carries a multi-paragraph `-- NOTE: Apply during off-peak hours on production-scale deployments.` comment block immediately before the `WITH duplicates` CTE. The note explains: (a) the DELETE scans every row of every partition and takes a row-exclusive lock for the duration of the scan, (b) writes queue behind the lock even when the DELETE deletes no rows, (c) the subsequent `ALTER TABLE ... ADD CONSTRAINT` is fast because Postgres reuses the existing unique index, and (d) operators who need to apply during a write-heavy window can run the DELETE as a separate manual step first so the lock window is isolated and observable.
+
+The split-migration variant (moving the DELETE into its own file the operator runs manually) is intentionally deferred — the note gives the operator enough information to make the call, and committing the split changes the migration count (requires re-numbering) in a way that would churn every downstream environment unnecessarily. If a production apply is blocked by the lock window at any point, the split refactor becomes concrete.
+
+### Original implementation plan
 
 **Goal:** Document the apply window; optionally offer a non-locking variant.
 

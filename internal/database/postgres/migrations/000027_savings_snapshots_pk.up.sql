@@ -14,6 +14,24 @@
 -- then add the constraint. The de-dup is a no-op on clean databases —
 -- production audit shows no duplicates today, but future-proof against
 -- replays during this migration window.
+--
+-- NOTE: Apply during off-peak hours on production-scale deployments.
+--
+-- The `WITH duplicates AS (...) DELETE ...` below takes a row-exclusive
+-- lock on `savings_snapshots` for the duration of the scan. Production
+-- audit at migration-write time showed zero duplicates, so the DELETE
+-- itself deletes no rows — but it still scans every row of every
+-- partition to confirm, and writes queue behind the lock during the
+-- scan. On a ~100M-row `savings_snapshots` that scan can take multiple
+-- minutes on the largest partitions. The rest of the migration (the
+-- subsequent `ALTER TABLE ... ADD CONSTRAINT`) is fast once dedup has
+-- run, and Postgres re-uses the existing unique index for the primary
+-- key so the constraint addition itself doesn't re-scan.
+--
+-- If you need to apply this during a write-heavy window, consider
+-- running the DELETE as a separate manual step (same SQL, before the
+-- migration runner picks it up) so you can reason about the lock
+-- window in isolation.
 
 WITH duplicates AS (
     SELECT id, timestamp, ctid,
