@@ -17,10 +17,32 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
 )
 
-// RecommendationsClientAdapter aggregates Azure reservation recommendations across all services
+// RecommendationsClientAdapter aggregates Azure reservation recommendations across all services.
+//
+// Invariant: subscriptionID must be non-empty. Downstream converters use it as
+// the Recommendation.Account field; an empty subscriptionID would silently
+// produce Account="" recommendations that downstream consumers (account-scoped
+// caches, UI filters, billing reports) can't route. The canonical construction
+// path is NewRecommendationsClientAdapter; direct struct literals bypass the
+// invariant check and should be confined to tests that deliberately exercise
+// the unvalidated shape.
 type RecommendationsClientAdapter struct {
 	cred           azcore.TokenCredential
 	subscriptionID string
+}
+
+// NewRecommendationsClientAdapter builds a RecommendationsClientAdapter with
+// the subscriptionID-non-empty invariant enforced. Returns an error when
+// subscriptionID is the empty string so the caller sees the mis-wiring at
+// construction time rather than via confusing Account="" rows later.
+func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID string) (*RecommendationsClientAdapter, error) {
+	if subscriptionID == "" {
+		return nil, fmt.Errorf("azure recommendations: subscriptionID is required")
+	}
+	return &RecommendationsClientAdapter{
+		cred:           cred,
+		subscriptionID: subscriptionID,
+	}, nil
 }
 
 // GetRecommendations retrieves all Azure reservation recommendations across services.

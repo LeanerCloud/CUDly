@@ -200,7 +200,12 @@ func TestNewAzureProvider_TokenCredentialInjection(t *testing.T) {
 		assert.Equal(t, azcore.TokenCredential(fake), p.cred)
 	})
 
-	t.Run("Wrong-typed credential is silently ignored (defensive type assertion)", func(t *testing.T) {
+	t.Run("Wrong-typed credential falls back to ambient + logs warning (defensive type assertion)", func(t *testing.T) {
+		// The wrong-typed slot is now logged via logging.Warnf so mis-wirings
+		// surface in production logs rather than producing a confusing
+		// "ADC unavailable" error. We don't capture the log output here
+		// (the project has no log-capture harness); the behavioural assertion
+		// is unchanged: p.cred stays nil and NewAzureProvider doesn't error.
 		p, err := NewAzureProvider(&provider.ProviderConfig{
 			AzureSubscriptionID:  "sub-1",
 			AzureTokenCredential: "not-a-credential",

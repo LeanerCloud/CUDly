@@ -1,6 +1,6 @@
 # Known Issues: Provider Interface
 
-> **Audit status (2026-04-20):** `0 from original audit · 6 resolved · 0 partially fixed · 0 moved · 1 new item surfaced during 2026-04-21 audit review`
+> **Audit status (2026-04-21):** `0 from original audit · 7 resolved · 0 partially fixed · 0 moved · 0 follow-ups outstanding`
 
 ## ~~HIGH: Azure `GetSupportedServices` advertises `ServiceNoSQL` but `GetServiceClient` has no handler~~
 
@@ -155,14 +155,21 @@ Existing callers that still use `Profile` continue to work unchanged.
 
 **Effort:** `small`
 
-## LOW: Typed credential slots silently discard wrong-type values (found during 2026-04-21 audit review)
+## ~~LOW: Typed credential slots silently discard wrong-type values~~ — RESOLVED
 
 **File**: `pkg/provider/interface.go` (`GCPTokenSource any`, `AzureTokenCredential any`) + the three provider `NewProvider` functions that consume them
-**Description**: The typed credential slots `AzureTokenCredential any` and `GCPTokenSource any` (added in commit `f0a9da7e8`) are `any` rather than concrete SDK types to keep `pkg/provider` free of Azure/GCP SDK deps. Each provider's `NewProvider` type-asserts to the expected concrete type (`azcore.TokenCredential` / `oauth2.TokenSource`); if the assertion fails, the slot is silently ignored and the provider falls back to ambient credentials (`DefaultAzureCredential` / ADC). The godoc mentions the behaviour, but a production caller that mis-wires the slot (e.g. passes a *string or a typo'd interface) will see "permission denied" errors at request time with no hint that their credential injection was silently dropped.
+**Description**: The typed credential slots `AzureTokenCredential any` and `GCPTokenSource any` (added in commit `f0a9da7e8`) are `any` rather than concrete SDK types to keep `pkg/provider` free of Azure/GCP SDK deps. Each provider's `NewProvider` type-asserts to the expected concrete type (`azcore.TokenCredential` / `oauth2.TokenSource`); if the assertion failed, the slot was silently ignored and the provider fell back to ambient credentials (`DefaultAzureCredential` / ADC). The godoc mentioned the behaviour, but a production caller that mis-wired the slot (e.g. passed a *string or a typo'd interface) would see "permission denied" errors at request time with no hint that their credential injection had been silently dropped.
 **Impact**: Debuggability gap. A caller who thinks they supplied custom credentials but actually passed the wrong type sees the confusing "ADC unavailable" error in environments where ADC genuinely is unavailable (Lambda / Cloud Run with no ambient GCP creds).
-**Status:** ❓ Needs triage
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** both `NewAzureProvider` and `NewProvider` (GCP) now separate "slot is nil" from "slot is non-nil but wrong-typed". On the wrong-typed branch each emits a `logging.Warnf` describing the actual `%T` and the expected concrete type before falling back to ambient credentials:
+
+- `providers/azure/provider.go:118-124`: `logging.Warnf("azure provider: config.AzureTokenCredential is %T, expected azcore.TokenCredential — falling back to ambient credentials", config.AzureTokenCredential)`
+- `providers/gcp/provider.go:118-127`: `logging.Warnf("gcp provider: config.GCPTokenSource is %T, expected oauth2.TokenSource — falling back to ambient credentials", config.GCPTokenSource)`
+
+The existing `TestNewAzureProvider_TokenCredentialInjection` sub-test "Wrong-typed credential is silently ignored" was renamed to "Wrong-typed credential falls back to ambient + logs warning" with a comment explaining the behavioural assertion is unchanged (the project has no log-capture harness to assert on the Warnf emission itself).
+
+### Original implementation plan
 
 **Goal:** Wrong-typed credential slot values are logged at `Warnf` level so mis-wirings surface in logs even though they don't break the pipeline.
 

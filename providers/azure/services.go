@@ -30,10 +30,13 @@ func NewCosmosDBClient(cred azcore.TokenCredential, subscriptionID, region strin
 	return cosmosdb.NewClient(cred, subscriptionID, region)
 }
 
-// NewRecommendationsClient creates a new Azure recommendations client
-func NewRecommendationsClient(cred azcore.TokenCredential, subscriptionID string) provider.RecommendationsClient {
-	return &RecommendationsClientAdapter{
-		cred:           cred,
-		subscriptionID: subscriptionID,
-	}
+// NewRecommendationsClient creates a new Azure recommendations client.
+//
+// Returns an error when subscriptionID is empty — the adapter's downstream
+// converters use it as the Recommendation.Account field, and a silently
+// empty Account would mis-route recommendations in account-scoped caches,
+// UI filters and billing reports. Callers that want the bare struct should
+// use NewRecommendationsClientAdapter directly.
+func NewRecommendationsClient(cred azcore.TokenCredential, subscriptionID string) (provider.RecommendationsClient, error) {
+	return NewRecommendationsClientAdapter(cred, subscriptionID)
 }

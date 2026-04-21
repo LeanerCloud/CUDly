@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-20):** `2 follow-ups from CRITICAL rewrite · 8 resolved · 0 partially fixed · 0 moved · 2 new items surfaced during 2026-04-21 audit review`
+> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 9 resolved · 0 partially fixed · 0 moved · 1 follow-up outstanding (MEDIUM: fetchAzurePricing has no per-page timeout — tracked for Commit 3)`
 
 ## ~~CRITICAL: Recommendation converters ignore the API response entirely~~ — RESOLVED
 
@@ -372,14 +372,16 @@ The per-recommendation `Region` field is now whatever the per-service converter 
 
 **Effort:** `small` (4 identical edits + 1 test).
 
-## LOW: Extract Account field invariant not enforced on RecommendationsClientAdapter (found during 2026-04-21 audit review)
+## ~~LOW: Extract Account field invariant not enforced on RecommendationsClientAdapter~~ — RESOLVED
 
 **File**: `providers/azure/recommendations.go::RecommendationsClientAdapter`
-**Description**: After commit `2d98002f8`, each per-service converter populates `Recommendation.Account = c.subscriptionID`. The client's `subscriptionID` is validated non-empty in `AzureProvider.GetRecommendationsClient` (`providers/azure/provider.go` fallback to `accounts[0].ID`), but `RecommendationsClientAdapter` itself has no invariant-check — a direct test or future refactor that constructs the adapter with an empty `subscriptionID` would silently produce recommendations with `Account == ""`, which downstream account-scoping would drop.
-**Impact**: Defensive-coding gap. Not a runtime bug today (the only production construction path does validate), but a regression risk if the construction path changes.
-**Status:** ❓ Needs triage
+**Description**: After commit `2d98002f8`, each per-service converter populates `Recommendation.Account = c.subscriptionID`. The client's `subscriptionID` was validated non-empty in `AzureProvider.GetRecommendationsClient` (`providers/azure/provider.go` fallback to `accounts[0].ID`), but `RecommendationsClientAdapter` itself had no invariant-check — a direct test or future refactor that constructed the adapter with an empty `subscriptionID` would silently produce recommendations with `Account == ""`, which downstream account-scoping would drop.
+**Impact**: Defensive-coding gap. Not a runtime bug (the only production construction path validated), but a regression risk if the construction path changed.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** `providers/azure/recommendations.go` now exports `NewRecommendationsClientAdapter(cred, subscriptionID)` which rejects an empty `subscriptionID` with `"azure recommendations: subscriptionID is required"`. The package-level `NewRecommendationsClient` factory routes through it and now returns `(provider.RecommendationsClient, error)`; the existing production caller (`AzureProvider.GetRecommendationsClient`) propagates the error. The struct stays public because external tests reference its fields, and the invariant is documented in the godoc. Three test cases added in `services_test.go`: `TestNewRecommendationsClient_RejectsEmptySubscriptionID`, `TestNewRecommendationsClientAdapter_RejectsEmptySubscriptionID`, and the existing `TestNewRecommendationsClient` updated to use the new `(client, err)` signature.
+
+### Original implementation plan
 
 **Goal:** Make the invariant impossible to violate by refactor.
 

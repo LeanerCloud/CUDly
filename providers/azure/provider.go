@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
@@ -111,8 +112,16 @@ func NewAzureProvider(config *provider.ProviderConfig) (*AzureProvider, error) {
 	if config != nil {
 		p.region = config.Region
 		p.subscriptionID = resolveAzureSubscriptionID(config)
-		if cred, ok := config.AzureTokenCredential.(azcore.TokenCredential); ok && cred != nil {
-			p.cred = cred
+		if config.AzureTokenCredential != nil {
+			if cred, ok := config.AzureTokenCredential.(azcore.TokenCredential); ok {
+				p.cred = cred
+			} else {
+				// Non-nil but wrong-typed slot: log so mis-wirings (wrong
+				// concrete type passed to the `any`-typed slot) surface
+				// instead of being silently ignored. Falls back to
+				// DefaultAzureCredential via GetCredentials.
+				logging.Warnf("azure provider: config.AzureTokenCredential is %T, expected azcore.TokenCredential — falling back to ambient credentials", config.AzureTokenCredential)
+			}
 		}
 	}
 
@@ -387,7 +396,7 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 		subscriptionID = accounts[0].ID
 	}
 
-	return NewRecommendationsClient(p.cred, subscriptionID), nil
+	return NewRecommendationsClient(p.cred, subscriptionID)
 }
 
 // Register the Azure provider with the global registry

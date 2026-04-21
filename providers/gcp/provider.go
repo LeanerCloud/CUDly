@@ -17,6 +17,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/cloudsql"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/cloudstorage"
@@ -115,9 +116,14 @@ func NewProvider(config *provider.ProviderConfig) (*GCPProvider, error) {
 
 	projectID := resolveGCPProjectID(config)
 	clientOpts := []option.ClientOption{}
-	if config != nil {
-		if ts, ok := config.GCPTokenSource.(oauth2.TokenSource); ok && ts != nil {
+	if config != nil && config.GCPTokenSource != nil {
+		if ts, ok := config.GCPTokenSource.(oauth2.TokenSource); ok {
 			clientOpts = append(clientOpts, option.WithTokenSource(ts))
+		} else {
+			// Non-nil but wrong-typed slot: log so mis-wirings (wrong
+			// concrete type passed to the `any`-typed slot) surface
+			// instead of being silently ignored. Falls back to ADC.
+			logging.Warnf("gcp provider: config.GCPTokenSource is %T, expected oauth2.TokenSource — falling back to ambient credentials", config.GCPTokenSource)
 		}
 	}
 
