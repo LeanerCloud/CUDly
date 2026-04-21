@@ -131,8 +131,12 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 		if err != nil {
 			return nil, fmt.Errorf("failed to create consumption client: %w", err)
 		}
+		// NewListPager's first argument is the billing scope, NOT the
+		// filter — see the parallel comment in compute/client.go for the
+		// failure mode that the wrong shape produced.
+		scope := fmt.Sprintf("/subscriptions/%s", c.subscriptionID)
 		filter := "properties/scope eq 'Shared'"
-		pager = client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
 	for pager.More() {

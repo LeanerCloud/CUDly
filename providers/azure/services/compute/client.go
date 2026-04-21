@@ -142,8 +142,15 @@ func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.Re
 			return nil, fmt.Errorf("failed to create consumption client: %w", err)
 		}
 
+		// NewListPager's first argument is the billing scope (the subscription
+		// path), NOT the filter. Passing the filter here produced a malformed
+		// URL where the ODATA filter got spliced into the URL path between
+		// management.azure.com and providers/Microsoft.Consumption/... and
+		// every request returned an error. The filter belongs in the
+		// ClientListOptions.Filter field.
+		scope := fmt.Sprintf("/subscriptions/%s", c.subscriptionID)
 		filter := "properties/scope eq 'Shared' and properties/resourceType eq 'VirtualMachines'"
-		pager = client.NewListPager(filter, &armconsumption.ReservationRecommendationsClientListOptions{})
+		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
 	for pager.More() {
