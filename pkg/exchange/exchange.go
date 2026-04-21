@@ -50,12 +50,30 @@ func ParseDecimalRat(s string) (*big.Rat, error) {
 	return r, nil
 }
 
+// TargetConfig is a single target offering in an exchange: a Convertible
+// RI offering to buy and how many of it. AWS accepts multiple targets
+// per exchange (AcceptReservedInstancesExchangeQuote is all-or-nothing
+// across the whole TargetConfigurations slice), which lets callers
+// redistribute RI value across several shapes in one atomic operation.
+type TargetConfig struct {
+	OfferingID string
+	Count      int32
+}
+
 // ExchangeQuoteRequest holds parameters for requesting an exchange quote.
 type ExchangeQuoteRequest struct {
 	Region          string
 	ExpectedAccount string // optional safety check
 	ReservedIDs     []string
 
+	// Targets is the preferred path for multi-target exchanges. When
+	// non-empty, TargetOfferingID / TargetCount are ignored.
+	Targets []TargetConfig
+
+	// TargetOfferingID + TargetCount are the legacy single-target
+	// fields, retained so pre-existing callers (HTTP handlers, sanity
+	// tests, serialized PurchasePlans) don't need a flag-day change.
+	// New code should populate Targets instead.
 	TargetOfferingID string
 	TargetCount      int32
 
@@ -70,12 +88,75 @@ type ExchangeExecuteRequest struct {
 	ExpectedAccount string // optional safety check
 	ReservedIDs     []string
 
+	// Targets is the preferred path for multi-target exchanges. When
+	// non-empty, TargetOfferingID / TargetCount are ignored.
+	Targets []TargetConfig
+
+	// Legacy single-target alias. Prefer Targets for new code.
 	TargetOfferingID string
 	TargetCount      int32
 
 	// Guardrail: require PaymentDue <= MaxPaymentDueUSD to execute.
+	// AWS returns a single aggregated PaymentDue across all targets,
+	// so for multi-target requests this guardrail naturally becomes a
+	// total cap rather than a per-target cap.
 	// If nil, execution is refused.
 	MaxPaymentDueUSD *big.Rat
+}
+
+// targetConfigs returns the ec2types slice to pass to the EC2 API.
+// Prefers r.Targets when set; otherwise falls back to the legacy
+// TargetOfferingID / TargetCount singleton. Empty or negative Count
+// values default to 1 so a caller that forgets to populate Count still
+// gets a usable request — matches the prior singleton behaviour.
+func (r *ExchangeQuoteRequest) targetConfigs() []ec2types.TargetConfigurationRequest {
+	return buildTargetConfigs(r.Targets, r.TargetOfferingID, r.TargetCount)
+}
+
+func (r *ExchangeExecuteRequest) targetConfigs() []ec2types.TargetConfigurationRequest {
+	return buildTargetConfigs(r.Targets, r.TargetOfferingID, r.TargetCount)
+}
+
+func buildTargetConfigs(targets []TargetConfig, legacyOfferingID string, legacyCount int32) []ec2types.TargetConfigurationRequest {
+	if len(targets) > 0 {
+		out := make([]ec2types.TargetConfigurationRequest, 0, len(targets))
+		for _, t := range targets {
+			count := t.Count
+			if count <= 0 {
+				count = 1
+			}
+			out = append(out, ec2types.TargetConfigurationRequest{
+				OfferingId:    sdkaws.String(t.OfferingID),
+				InstanceCount: sdkaws.Int32(count),
+			})
+		}
+		return out
+	}
+	count := legacyCount
+	if count <= 0 {
+		count = 1
+	}
+	return []ec2types.TargetConfigurationRequest{{
+		OfferingId:    sdkaws.String(legacyOfferingID),
+		InstanceCount: sdkaws.Int32(count),
+	}}
+}
+
+// validateTargets returns a non-nil error if neither the Targets slice
+// nor the legacy singleton fields carry a usable target offering.
+func validateTargets(targets []TargetConfig, legacyOfferingID string) error {
+	if len(targets) > 0 {
+		for i, t := range targets {
+			if strings.TrimSpace(t.OfferingID) == "" {
+				return fmt.Errorf("targets[%d].offering_id must be non-empty", i)
+			}
+		}
+		return nil
+	}
+	if strings.TrimSpace(legacyOfferingID) == "" {
+		return fmt.Errorf("must provide target offering ID (either targets[] or target_offering_id)")
+	}
+	return nil
 }
 
 // EC2ExchangeAPI defines the EC2 API methods used by exchange operations.
@@ -153,24 +234,14 @@ func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuo
 	if len(req.ReservedIDs) == 0 {
 		return nil, fmt.Errorf("must provide at least one reserved instance ID")
 	}
-	if strings.TrimSpace(req.TargetOfferingID) == "" {
-		return nil, fmt.Errorf("must provide target offering ID")
-	}
-	// Default TargetCount to 1 if not specified. Note: req is a value copy,
-	// so this default does not mutate the caller's struct.
-	if req.TargetCount <= 0 {
-		req.TargetCount = 1
+	if err := validateTargets(req.Targets, req.TargetOfferingID); err != nil {
+		return nil, err
 	}
 
 	in := &ec2.GetReservedInstancesExchangeQuoteInput{
-		DryRun:              sdkaws.Bool(req.DryRun),
-		ReservedInstanceIds: req.ReservedIDs,
-		TargetConfigurations: []ec2types.TargetConfigurationRequest{
-			{
-				OfferingId:    sdkaws.String(req.TargetOfferingID),
-				InstanceCount: sdkaws.Int32(req.TargetCount),
-			},
-		},
+		DryRun:               sdkaws.Bool(req.DryRun),
+		ReservedInstanceIds:  req.ReservedIDs,
+		TargetConfigurations: req.targetConfigs(),
 	}
 
 	out, err := client.GetReservedInstancesExchangeQuote(ctx, in)
@@ -241,6 +312,7 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 		Region:           req.Region,
 		ExpectedAccount:  req.ExpectedAccount,
 		ReservedIDs:      req.ReservedIDs,
+		Targets:          req.Targets,
 		TargetOfferingID: req.TargetOfferingID,
 		TargetCount:      req.TargetCount,
 		DryRun:           false,
@@ -271,13 +343,8 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 	// (e.g., due to RI valuation changes between GetQuote and Accept).
 	// This is a known API limitation and not something we can prevent here.
 	out, err := client.AcceptReservedInstancesExchangeQuote(ctx, &ec2.AcceptReservedInstancesExchangeQuoteInput{
-		ReservedInstanceIds: req.ReservedIDs,
-		TargetConfigurations: []ec2types.TargetConfigurationRequest{
-			{
-				OfferingId:    sdkaws.String(req.TargetOfferingID),
-				InstanceCount: sdkaws.Int32(req.TargetCount),
-			},
-		},
+		ReservedInstanceIds:  req.ReservedIDs,
+		TargetConfigurations: req.targetConfigs(),
 	})
 	if err != nil {
 		return "", q, err

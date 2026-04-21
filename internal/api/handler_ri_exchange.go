@@ -195,8 +195,13 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	if len(body.RIIDs) == 0 {
 		return nil, NewClientError(400, "ri_ids is required")
 	}
-	if body.TargetOfferingID == "" {
-		return nil, NewClientError(400, "target_offering_id is required")
+	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
+		return nil, NewClientError(400, "either targets[] or target_offering_id is required")
+	}
+	for i, t := range body.Targets {
+		if t.OfferingID == "" {
+			return nil, NewClientError(400, fmt.Sprintf("targets[%d].offering_id is required", i))
+		}
 	}
 
 	region := body.Region
@@ -207,6 +212,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	quote, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
+		Targets:          toExchangeTargets(body.Targets),
 		TargetOfferingID: body.TargetOfferingID,
 		TargetCount:      body.TargetCount,
 	})
@@ -216,6 +222,29 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	}
 
 	return quote, nil
+}
+
+// validateExecuteExchangeBody validates an unmarshalled request body
+// and returns a caller-friendly 400 on the first offending field.
+// Extracted from executeExchange to keep the handler below the
+// cyclomatic-complexity threshold; every branch here becomes a
+// separate test case so the logic stays inspectable.
+func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
+	if len(body.RIIDs) == 0 {
+		return NewClientError(400, "ri_ids is required")
+	}
+	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
+		return NewClientError(400, "either targets[] or target_offering_id is required")
+	}
+	for i, t := range body.Targets {
+		if t.OfferingID == "" {
+			return NewClientError(400, fmt.Sprintf("targets[%d].offering_id is required", i))
+		}
+	}
+	if body.MaxPaymentDueUSD == "" {
+		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
+	}
+	return nil
 }
 
 // executeExchange executes an RI exchange with a spend-cap guardrail.
@@ -228,14 +257,8 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-	if len(body.RIIDs) == 0 {
-		return nil, NewClientError(400, "ri_ids is required")
-	}
-	if body.TargetOfferingID == "" {
-		return nil, NewClientError(400, "target_offering_id is required")
-	}
-	if body.MaxPaymentDueUSD == "" {
-		return nil, NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
+	if err := validateExecuteExchangeBody(body); err != nil {
+		return nil, err
 	}
 
 	maxRat, err := exchange.ParseDecimalRat(body.MaxPaymentDueUSD)
@@ -251,6 +274,7 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	exchangeID, quote, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
+		Targets:          toExchangeTargets(body.Targets),
 		TargetOfferingID: body.TargetOfferingID,
 		TargetCount:      body.TargetCount,
 		MaxPaymentDueUSD: maxRat,
@@ -283,21 +307,55 @@ type ReshapeRecommendationsResponse struct {
 	Recommendations []exchange.ReshapeRecommendation `json:"recommendations"`
 }
 
+// ExchangeTargetBody is one entry in an ExchangeQuote/Execute request's
+// `targets` array. Mirrors pkg/exchange.TargetConfig but with JSON tags
+// shaped for the HTTP surface.
+type ExchangeTargetBody struct {
+	OfferingID string `json:"offering_id"`
+	Count      int32  `json:"count"`
+}
+
 // ExchangeQuoteRequestBody is the request body for the quote endpoint.
+// Callers may supply either the new `targets` array (preferred) or the
+// legacy `target_offering_id` + `target_count` singleton fields. When
+// both are present, `targets` wins. Exactly one of them must be
+// provided (or the handler returns 400).
 type ExchangeQuoteRequestBody struct {
-	RIIDs            []string `json:"ri_ids"`
-	TargetOfferingID string   `json:"target_offering_id"`
-	TargetCount      int32    `json:"target_count"`
-	Region           string   `json:"region,omitempty"`
+	RIIDs            []string             `json:"ri_ids"`
+	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
+	TargetOfferingID string               `json:"target_offering_id,omitempty"`
+	TargetCount      int32                `json:"target_count,omitempty"`
+	Region           string               `json:"region,omitempty"`
 }
 
 // ExchangeExecuteRequestBody is the request body for the execute endpoint.
+// Same `targets` / legacy-alias semantics as ExchangeQuoteRequestBody.
+// `max_payment_due_usd` is a TOTAL cap across all targets in the
+// exchange — AWS returns a single aggregated PaymentDue so spend-cap
+// checking naturally becomes a total when `targets[]` has multiple
+// entries.
 type ExchangeExecuteRequestBody struct {
-	RIIDs            []string `json:"ri_ids"`
-	TargetOfferingID string   `json:"target_offering_id"`
-	TargetCount      int32    `json:"target_count"`
-	MaxPaymentDueUSD string   `json:"max_payment_due_usd"`
-	Region           string   `json:"region,omitempty"`
+	RIIDs            []string             `json:"ri_ids"`
+	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
+	TargetOfferingID string               `json:"target_offering_id,omitempty"`
+	TargetCount      int32                `json:"target_count,omitempty"`
+	MaxPaymentDueUSD string               `json:"max_payment_due_usd"`
+	Region           string               `json:"region,omitempty"`
+}
+
+// toExchangeTargets converts the HTTP-shaped targets into the
+// pkg/exchange shape, preserving nil (not empty) when the caller used
+// the legacy singleton fields so the pkg/exchange layer knows to fall
+// back to them.
+func toExchangeTargets(targets []ExchangeTargetBody) []exchange.TargetConfig {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]exchange.TargetConfig, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, exchange.TargetConfig{OfferingID: t.OfferingID, Count: t.Count})
+	}
+	return out
 }
 
 // ExchangeExecuteResponse is the response from a successful exchange execution.

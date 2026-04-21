@@ -59,13 +59,22 @@ func TestGetExchangeQuote_Validation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ri_ids is required")
 
-	// Missing target_offering_id
+	// Missing both target_offering_id and targets[]
 	_, err = h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer test-token"},
 		Body:    `{"ri_ids":["ri-123"]}`,
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "target_offering_id is required")
+	assert.Contains(t, err.Error(), "targets[] or target_offering_id is required")
+
+	// Empty offering_id inside targets[] is rejected per-entry so a
+	// caller can't sneak through with a zero-valued target.
+	_, err = h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		Body:    `{"ri_ids":["ri-123"],"targets":[{"offering_id":"","count":1}]}`,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "targets[0].offering_id is required")
 }
 
 func TestGetRIUtilization_LookbackValidation(t *testing.T) {
@@ -167,6 +176,22 @@ func TestExecuteExchange_Validation(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid max_payment_due_usd")
+
+	// Missing both target_offering_id and targets[]
+	_, err = h.executeExchange(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		Body:    `{"ri_ids":["ri-123"],"max_payment_due_usd":"10"}`,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "targets[] or target_offering_id is required")
+
+	// Empty offering_id inside targets[] rejected.
+	_, err = h.executeExchange(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		Body:    `{"ri_ids":["ri-123"],"targets":[{"offering_id":"","count":1}],"max_payment_due_usd":"10"}`,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "targets[0].offering_id is required")
 }
 
 // --- Approve/Reject edge case tests ---
