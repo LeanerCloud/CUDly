@@ -5,6 +5,7 @@
 import * as api from './api';
 import * as state from './state';
 import { formatCurrency, escapeHtml, populateAccountFilter } from './utils';
+import { renderFreshness } from './freshness';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 
 // Module state for current purchase modal recommendations
@@ -131,6 +132,11 @@ export async function loadRecommendations(): Promise<void> {
     renderRecommendationsSummary(data.summary || {});
     renderRecommendationsList(data.recommendations || []);
     populateRegionFilter(data.regions || []);
+
+    // Freshness indicator reflects the last collection timestamp; refreshed
+    // on every load so provider/account switches + manual refreshes stay
+    // in sync with the cache state.
+    void renderFreshness('recommendations-freshness', loadRecommendations);
   } catch (error) {
     console.error('Failed to load recommendations:', error);
     const list = document.getElementById('recommendations-list');
@@ -160,7 +166,7 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
     </div>
     <div class="card">
       <h3>Payback Period</h3>
-      <p class="value">${summary.avg_payback_months || 0} months</p>
+      <p class="value">${summary.avg_payback_months ? summary.avg_payback_months.toFixed(1) : 0} months</p>
     </div>
   `;
 }

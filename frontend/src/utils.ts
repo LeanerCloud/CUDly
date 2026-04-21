@@ -37,6 +37,27 @@ export function formatDateTime(date: string | Date | null | undefined): string {
   return d.toLocaleString();
 }
 
+/**
+ * Format a date as a relative time ("5m ago", "2h ago", …). Used by the
+ * recommendations freshness indicator and user-management row timestamps.
+ * Returns an empty string for null/undefined/invalid input so call sites
+ * don't have to guard.
+ */
+export function formatRelativeTime(date: string | Date | null | undefined): string {
+  if (!date) return '';
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  const diffMs = Date.now() - d.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString();
+}
+
 export interface DateParts {
   day: number;
   month: string;

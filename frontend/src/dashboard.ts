@@ -6,6 +6,7 @@ import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
 import { formatCurrency, getDateParts, escapeHtml, populateAccountFilter } from './utils';
+import { renderFreshness } from './freshness';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings } from './types';
 
 // Register Chart.js components
@@ -53,6 +54,10 @@ export async function loadDashboard(): Promise<void> {
     renderDashboardSummary(summaryData as DashboardSummary);
     renderSavingsChart((summaryData as DashboardSummary).by_service || {});
     renderUpcomingPurchases((upcomingData as { purchases?: UpcomingPurchase[] }).purchases || []);
+
+    // Refresh the freshness indicator on every load so provider switches
+    // + data updates both reflect the latest collection timestamp.
+    void renderFreshness('dashboard-freshness', loadDashboard);
   } catch (error) {
     console.error('Failed to load dashboard:', error);
     const summary = document.getElementById('summary');
