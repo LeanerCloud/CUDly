@@ -3,8 +3,6 @@ package purchase
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -198,15 +196,11 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
 }
 
-// getMaxAccountParallelism reads the CUDLY_MAX_ACCOUNT_PARALLELISM env var.
-// Returns DefaultMaxConcurrency if unset or invalid.
+// getMaxAccountParallelism is a thin alias over the shared
+// execution.ConcurrencyFromEnv so the purchase manager and the scheduler
+// both honour the same CUDLY_MAX_ACCOUNT_PARALLELISM override.
 func getMaxAccountParallelism() int {
-	if v := os.Getenv("CUDLY_MAX_ACCOUNT_PARALLELISM"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return execution.DefaultMaxConcurrency
+	return execution.ConcurrencyFromEnv()
 }
 
 func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {

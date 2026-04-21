@@ -3,8 +3,24 @@ package execution
 
 import (
 	"context"
+	"os"
+	"strconv"
 	"sync"
 )
+
+// ConcurrencyFromEnv reads the CUDLY_MAX_ACCOUNT_PARALLELISM env var and
+// returns its value when it's a positive integer, otherwise
+// DefaultMaxConcurrency. Shared between the purchase manager (which drives
+// live cloud API calls) and the scheduler (per-account recommendations
+// collection) so both honour the same operator-level override.
+func ConcurrencyFromEnv() int {
+	if v := os.Getenv("CUDLY_MAX_ACCOUNT_PARALLELISM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return DefaultMaxConcurrency
+}
 
 // Result holds the outcome of running an operation against a single account.
 type Result[T any] struct {

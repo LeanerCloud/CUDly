@@ -9,11 +9,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/execution"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -21,6 +23,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	azureprovider "github.com/LeanerCloud/CUDly/providers/azure"
 	gcpprovider "github.com/LeanerCloud/CUDly/providers/gcp"
+	"golang.org/x/sync/errgroup"
 )
 
 // SchedulerConfig holds configuration for the scheduler
@@ -171,28 +174,30 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 }
 
 // persistCollection writes the collection results to the recommendations
-// cache. On full success it calls ReplaceRecommendations (atomic wipe +
-// reinsert). On partial failure it skips the write to preserve the older
-// cached rows from the providers that didn't run, then surfaces the error
-// through SetRecommendationsCollectionError so the frontend banner renders.
+// cache via UpsertRecommendations, which:
 //
-// Commit 6 replaces this with UpsertRecommendations + per-provider
-// stale-row eviction so partial collects can safely merge fresh data
-// without clobbering the older rows. Keeping the simpler Replace path
-// here keeps commit 3's diff focused on persistence plumbing.
+//   - Upserts each row by natural key so re-collected recommendations
+//     reuse the same PK across runs (stable IDs for frontend).
+//   - Evicts stale rows (collected_at < $now) but ONLY for providers that
+//     successfully collected in this run — older rows from a provider
+//     whose collect failed stay visible so the dashboard isn't blanked
+//     out by transient cloud-API failures.
+//
+// On any failure (including partial), the collection error is additionally
+// recorded in recommendations_state so the frontend banner renders while
+// the user still sees the valid rows we managed to upsert.
 func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulProviders []string, failedProviders map[string]string) {
-	if len(failedProviders) > 0 {
-		logging.Warnf("Skipping Replace due to %d partial-collect failures; existing cached rows preserved", len(failedProviders))
-		if err := s.config.SetRecommendationsCollectionError(ctx, joinProviderErrors(failedProviders)); err != nil {
-			logging.Errorf("Failed to record collection error: %v", err)
+	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulProviders); err != nil {
+		logging.Errorf("Failed to persist recommendations: %v", err)
+		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
+			logging.Errorf("Failed to record write error: %v", setErr)
 		}
 		return
 	}
 
-	if err := s.config.ReplaceRecommendations(ctx, time.Now().UTC(), recs); err != nil {
-		logging.Errorf("Failed to persist recommendations: %v", err)
-		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
-			logging.Errorf("Failed to record write error: %v", setErr)
+	if len(failedProviders) > 0 {
+		if err := s.config.SetRecommendationsCollectionError(ctx, joinProviderErrors(failedProviders)); err != nil {
+			logging.Errorf("Failed to record collection error: %v", err)
 		}
 	}
 }
@@ -234,16 +239,45 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		return s.collectAWSAmbient(ctx, globalCfg)
 	}
 
+	return fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		return s.collectAWSForAccount(ctx, globalCfg, acct)
+	}), nil
+}
+
+// fanOutPerAccount runs fn concurrently across accounts, bounded by the
+// shared CUDLY_MAX_ACCOUNT_PARALLELISM env var. Per-account errors are
+// logged and the run continues — the stale-row preservation in the
+// UpsertRecommendations write path (see commit "parallelise collection")
+// keeps those accounts' older rows visible. Order is not preserved; the
+// SQL read in ListStoredRecommendations re-sorts anyway.
+func fanOutPerAccount(
+	ctx context.Context,
+	providerLabel string,
+	accounts []config.CloudAccount,
+	fn func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error),
+) []config.RecommendationRecord {
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(execution.ConcurrencyFromEnv())
+
+	var mu sync.Mutex
 	var all []config.RecommendationRecord
+
 	for _, acct := range accounts {
-		recs, err := s.collectAWSForAccount(ctx, globalCfg, acct)
-		if err != nil {
-			logging.Errorf("AWS account %s (%s): %v", acct.Name, acct.ExternalID, err)
-			continue
-		}
-		all = append(all, recs...)
+		acct := acct // capture
+		g.Go(func() error {
+			recs, err := fn(gctx, acct)
+			if err != nil {
+				logging.Errorf("%s account %s (%s): %v", providerLabel, acct.Name, acct.ExternalID, err)
+				return nil // never fail the whole group — partial is fine
+			}
+			mu.Lock()
+			all = append(all, recs...)
+			mu.Unlock()
+			return nil
+		})
 	}
-	return all, nil
+	_ = g.Wait() // errs are always nil (swallowed above)
+	return all
 }
 
 func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
@@ -284,16 +318,7 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 		return nil, nil
 	}
 
-	var all []config.RecommendationRecord
-	for _, acct := range accounts {
-		recs, err := s.collectAzureForAccount(ctx, acct)
-		if err != nil {
-			logging.Errorf("Azure account %s (%s): %v", acct.Name, acct.ExternalID, err)
-			continue
-		}
-		all = append(all, recs...)
-	}
-	return all, nil
+	return fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount), nil
 }
 
 func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
@@ -330,16 +355,7 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 		return nil, nil
 	}
 
-	var all []config.RecommendationRecord
-	for _, acct := range accounts {
-		recs, err := s.collectGCPForAccount(ctx, acct)
-		if err != nil {
-			logging.Errorf("GCP account %s (%s): %v", acct.Name, acct.ExternalID, err)
-			continue
-		}
-		all = append(all, recs...)
-	}
-	return all, nil
+	return fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount), nil
 }
 
 func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
