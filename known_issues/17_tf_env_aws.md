@@ -332,7 +332,7 @@
 
 **Effort:** `small`
 
-## LOW: Lambda first-invocation RDS connect timeout (3-4 minutes) — found 2026-04-21
+## ~~LOW: Lambda first-invocation RDS connect timeout (3-4 minutes)~~ — RESOLVED
 
 **File**: `terraform/environments/aws/` (Lambda + RDS + NAT gateway configuration) — symptom surfaces via `internal/database/connection.go`
 
@@ -340,7 +340,9 @@
 
 **Impact**: First user request after idle returns 500/timeout; subsequent requests work.
 
-**Status:** ❓ Needs triage (operational / infrastructure)
+**Status:** ✔️ Resolved
+
+**Resolved by:** `internal/database/connection.go::createConnectionPoolWithRetry` now extracts each individual attempt into a new `attemptOpenPool(ctx, cfg, perAttemptTimeout)` helper that derives `perAttemptCtx, cancel := context.WithTimeout(ctx, perAttemptConnectTimeout); defer cancel()` and passes that bounded ctx into BOTH `pgxpool.NewWithConfig` AND `pool.Ping`. The defer sits inside the helper (function body) so each attempt's ctx is correctly released — defer-in-loop would have leaked. The retry knobs (`maxConnectRetries=5`, `connectRetryBaseDelay=2s`, `connectRetryMaxDelay=30s`, new `perAttemptConnectTimeout=15s`) are now package-level `var`s so tests can shrink them. Worst-case retry budget drops from ~235s to ~135s; common cold-start resolves on the 2nd or 3rd attempt within a minute. New `TestCreateConnectionPoolWithRetry_PerAttemptDeadline` uses pgxpool's `ConnConfig.DialFunc` injection seam to drive a perma-hanging dialer with ms-scale knobs and asserts the wall-clock wait is bounded.
 
 **Implementation plan (recommended):** add a per-attempt deadline to `createConnectionPoolWithRetry` in `internal/database/connection.go` — extract `attemptOpenPool(ctx, cfg, perAttemptTimeout)` with `context.WithTimeout(ctx, 15*time.Second)` wrapping BOTH `pgxpool.NewWithConfig` and `Ping`. Worst-case retry budget drops from ~235s to ~105s; common cold-start finishes in ~60s. Test: inject a hanging `pgxpool.Config.ConnConfig.DialFunc` and assert the wall-clock wait is bounded.
 

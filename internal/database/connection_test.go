@@ -3,9 +3,11 @@ package database
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/tracelog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -570,4 +572,60 @@ func TestNewConnectionWithDirectPassword(t *testing.T) {
 		assert.NotContains(t, err.Error(), "database password not configured")
 		assert.NotContains(t, err.Error(), "failed to retrieve database password")
 	})
+}
+
+// TestCreateConnectionPoolWithRetry_PerAttemptDeadline pins the per-
+// attempt-timeout contract: each individual pool-creation + Ping
+// attempt is bounded by perAttemptConnectTimeout, so one slow attempt
+// can't consume the entire retry budget. Without the wrap, the
+// production cold-start path took ~3m55s (5 attempts × ~45s each as
+// the kernel SYN-retransmits before giving up); with it, the worst-
+// case wait is bounded by maxRetries × perAttemptConnectTimeout +
+// sum(backoffs).
+//
+// Injects a perma-hanging DialFunc via pgxpool's ConnConfig.DialFunc
+// seam (no need to fake the pgconn handshake) and shrinks all retry
+// knobs to ms-scale via t.Cleanup so the suite stays fast.
+func TestCreateConnectionPoolWithRetry_PerAttemptDeadline(t *testing.T) {
+	origMax := maxConnectRetries
+	origBase := connectRetryBaseDelay
+	origMaxDelay := connectRetryMaxDelay
+	origPerAttempt := perAttemptConnectTimeout
+	t.Cleanup(func() {
+		maxConnectRetries = origMax
+		connectRetryBaseDelay = origBase
+		connectRetryMaxDelay = origMaxDelay
+		perAttemptConnectTimeout = origPerAttempt
+	})
+	maxConnectRetries = 3
+	connectRetryBaseDelay = 5 * time.Millisecond
+	connectRetryMaxDelay = 20 * time.Millisecond
+	perAttemptConnectTimeout = 50 * time.Millisecond
+
+	poolConfig, err := pgxpool.ParseConfig("postgres://user:pass@127.0.0.1:1/db?sslmode=disable")
+	require.NoError(t, err)
+
+	dialAttempts := 0
+	poolConfig.ConnConfig.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialAttempts++
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	cfg := &Config{}
+	start := time.Now()
+	pool, err := createConnectionPoolWithRetry(context.Background(), poolConfig, cfg)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "all attempts should fail with deadline exceeded")
+	assert.Nil(t, pool)
+
+	// Lower bound: at least maxRetries × perAttemptTimeout / 2 (loose).
+	// Upper bound: 500ms (backoffs 5+10+20=35ms + 3 attempts × 50ms = 185ms expected; allow CI noise).
+	assert.GreaterOrEqual(t, elapsed, time.Duration(maxConnectRetries)*perAttemptConnectTimeout/2,
+		"elapsed should reflect multiple attempts each hitting the per-attempt deadline")
+	assert.Less(t, elapsed, 500*time.Millisecond,
+		"elapsed should be bounded by the shrunk retry budget, not seconds")
+
+	assert.GreaterOrEqual(t, dialAttempts, 1, "DialFunc should have been invoked at least once")
 }

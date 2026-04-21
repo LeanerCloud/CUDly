@@ -95,22 +95,70 @@ func extractPasswordFromSecret(secret string) (string, error) {
 	return "", fmt.Errorf("secret is JSON but missing 'password' field")
 }
 
+// Retry / per-attempt-deadline knobs for createConnectionPoolWithRetry.
+// Declared as `var` (not `const`) so tests can shrink them via t.Cleanup
+// to keep the test suite fast.
+//
+// perAttemptConnectTimeout bounds each individual pool-creation + Ping
+// attempt. Without it, on Lambda cold-start the kernel TCP SYN
+// retransmit hangs a single attempt for ~30-45s before pgx surfaces
+// "failed to write startup message: timeout: context deadline
+// exceeded"; multiplied by maxConnectRetries that produced the
+// observed 3m55s total wait in production logs (2026-04-21T17:59:01Z
+// and 18:02:04Z, cudly-dev-426fc8af-api). With the 15s per-attempt
+// cap, worst-case retry budget is bounded to ~135s and the common
+// cold-start case resolves on the 2nd or 3rd attempt within a minute
+// once the ENI attaches.
+var (
+	maxConnectRetries        = 5
+	connectRetryBaseDelay    = 2 * time.Second
+	connectRetryMaxDelay     = 30 * time.Second
+	perAttemptConnectTimeout = 15 * time.Second
+)
+
+// attemptOpenPool runs ONE pool-creation + Ping attempt under a bounded
+// per-attempt context. The bounded context is independent of the outer
+// ctx (cancellation still propagates because context.WithTimeout takes
+// the earlier of the two deadlines), so a hung attempt fails after
+// perAttemptConnectTimeout and the retry loop can move forward.
+//
+// `defer cancel()` is correct here because it sits inside a function
+// body — putting the same defer inside the retry loop would leak a
+// context per iteration. Same pattern as
+// providers/azure/services/compute/client.go::fetchOnePricingPage
+// (committed in f416b614c for identical defer-in-loop avoidance).
+//
+// Both NewWithConfig and Ping receive perAttemptCtx. pgxpool defers
+// the actual TCP dial until the first acquire/Ping, so wrapping only
+// NewWithConfig wouldn't bound the cold-start hang.
+func attemptOpenPool(ctx context.Context, poolConfig *pgxpool.Config, perAttemptTimeout time.Duration) (*pgxpool.Pool, error) {
+	perAttemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+	defer cancel()
+
+	pool, err := pgxpool.NewWithConfig(perAttemptCtx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection pool: %w", err)
+	}
+
+	if err := pool.Ping(perAttemptCtx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	return pool, nil
+}
+
 // createConnectionPoolWithRetry creates a connection pool with exponential backoff retry
 // This is necessary for Lambda functions in VPCs where the ENI may not be fully attached during init
 func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Config, config *Config) (*pgxpool.Pool, error) {
-	maxRetries := 5
-	baseDelay := 2 * time.Second
-	maxDelay := 30 * time.Second
-
-	var pool *pgxpool.Pool
 	var lastErr error
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < maxConnectRetries; attempt++ {
 		if attempt > 0 {
 			// Calculate exponential backoff delay: 4s, 8s, 16s, 30s (capped)
-			delay := time.Duration(1<<uint(attempt)) * baseDelay
-			if delay > maxDelay {
-				delay = maxDelay
+			delay := time.Duration(1<<uint(attempt)) * connectRetryBaseDelay
+			if delay > connectRetryMaxDelay {
+				delay = connectRetryMaxDelay
 			}
 
 			logging.Warnf("Connection attempt %d failed, retrying in %v...", attempt, delay)
@@ -124,23 +172,9 @@ func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Conf
 			}
 		}
 
-		// Attempt to create connection pool.
-		// Note: The context passed to pgxpool.NewWithConfig is used as-is for each attempt.
-		// If the context has a deadline shorter than the total retry window (~60s),
-		// later attempts will fail immediately due to context cancellation rather than
-		// retrying meaningfully. Callers should ensure the context deadline accounts
-		// for the full retry budget, or the retry loop provides no benefit.
-		var err error
-		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		pool, err := attemptOpenPool(ctx, poolConfig, perAttemptConnectTimeout)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to create connection pool (attempt %d/%d): %w", attempt+1, maxRetries, err)
-			continue
-		}
-
-		// Test connection with ping
-		if err := pool.Ping(ctx); err != nil {
-			lastErr = fmt.Errorf("failed to ping database (attempt %d/%d): %w", attempt+1, maxRetries, err)
-			pool.Close()
+			lastErr = fmt.Errorf("attempt %d/%d (timeout %s): %w", attempt+1, maxConnectRetries, perAttemptConnectTimeout, err)
 			continue
 		}
 
@@ -151,7 +185,7 @@ func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Conf
 		return pool, nil
 	}
 
-	return nil, fmt.Errorf("failed to connect to database after %d attempts: %w", maxRetries, lastErr)
+	return nil, fmt.Errorf("failed to connect to database after %d attempts: %w", maxConnectRetries, lastErr)
 }
 
 // buildPoolConfig creates a pgxpool.Config from our Config
