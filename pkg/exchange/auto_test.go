@@ -107,6 +107,7 @@ func defaultParams(store RIExchangeStore, client ExchangeClientInterface) RunAut
 }
 
 func TestRunAutoExchange_ManualMode_CreatesPendingRecords(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
@@ -131,6 +132,7 @@ func TestRunAutoExchange_ManualMode_CreatesPendingRecords(t *testing.T) {
 }
 
 func TestRunAutoExchange_AutoMode_ExecutesExchange(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteResult: defaultQuote(), executeResult: "exch-abc-123"}
 	params := defaultParams(store, client)
@@ -153,6 +155,7 @@ func TestRunAutoExchange_AutoMode_ExecutesExchange(t *testing.T) {
 }
 
 func TestRunAutoExchange_NoRecommendations(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
@@ -170,6 +173,7 @@ func TestRunAutoExchange_NoRecommendations(t *testing.T) {
 }
 
 func TestRunAutoExchange_OfferingLookupFails(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
@@ -185,6 +189,7 @@ func TestRunAutoExchange_OfferingLookupFails(t *testing.T) {
 }
 
 func TestRunAutoExchange_QuoteFails(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteErr: fmt.Errorf("API throttled")}
 	params := defaultParams(store, client)
@@ -197,6 +202,7 @@ func TestRunAutoExchange_QuoteFails(t *testing.T) {
 }
 
 func TestRunAutoExchange_PerExchangeCapExceeded(t *testing.T) {
+	t.Parallel()
 	due, _ := ParseDecimalRat("200.00")
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteResult: &ExchangeQuoteSummary{
@@ -217,6 +223,7 @@ func TestRunAutoExchange_PerExchangeCapExceeded(t *testing.T) {
 }
 
 func TestRunAutoExchange_AutoMode_DailyCapExceeded(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "450.00"}
 	due, _ := ParseDecimalRat("60.00")
 	client := &mockExchangeClient{quoteResult: &ExchangeQuoteSummary{
@@ -239,6 +246,7 @@ func TestRunAutoExchange_AutoMode_DailyCapExceeded(t *testing.T) {
 }
 
 func TestRunAutoExchange_AutoMode_DailySpendDBError_FailsClosed(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpendErr: fmt.Errorf("connection refused")}
 	client := &mockExchangeClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
@@ -252,6 +260,7 @@ func TestRunAutoExchange_AutoMode_DailySpendDBError_FailsClosed(t *testing.T) {
 }
 
 func TestRunAutoExchange_AutoMode_ExecutionFails(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{
 		quoteResult: defaultQuote(),
@@ -273,6 +282,7 @@ func TestRunAutoExchange_AutoMode_ExecutionFails(t *testing.T) {
 }
 
 func TestRunAutoExchange_InvalidExchange(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteResult: &ExchangeQuoteSummary{
 		IsValidExchange:         false,
@@ -288,6 +298,7 @@ func TestRunAutoExchange_InvalidExchange(t *testing.T) {
 }
 
 func TestRunAutoExchange_IdleRI_Skipped(t *testing.T) {
+	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
 	client := &mockExchangeClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)

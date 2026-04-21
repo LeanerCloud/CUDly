@@ -68,6 +68,7 @@ func (m *MockEC2Client) AcceptReservedInstancesExchangeQuote(ctx context.Context
 }
 
 func TestNewClient(t *testing.T) {
+	t.Parallel()
 	cfg := aws.Config{
 		Region: "us-east-1",
 	}
@@ -80,16 +81,19 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClient_GetServiceType(t *testing.T) {
+	t.Parallel()
 	client := &Client{region: "us-east-1"}
 	assert.Equal(t, common.ServiceCompute, client.GetServiceType())
 }
 
 func TestClient_GetRegion(t *testing.T) {
+	t.Parallel()
 	client := &Client{region: "eu-west-1"}
 	assert.Equal(t, "eu-west-1", client.GetRegion())
 }
 
 func TestClient_GetRecommendations(t *testing.T) {
+	t.Parallel()
 	client := &Client{region: "us-east-1"}
 	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
 	assert.NoError(t, err)
@@ -97,6 +101,7 @@ func TestClient_GetRecommendations(t *testing.T) {
 }
 
 func TestClient_GetExistingCommitments(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		setupMocks  func(*MockEC2Client)
@@ -195,6 +200,7 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 }
 
 func TestClient_GetValidResourceTypes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		setupMocks    func(*MockEC2Client)
@@ -269,6 +275,7 @@ func TestClient_GetValidResourceTypes(t *testing.T) {
 }
 
 func TestClient_ValidateOffering(t *testing.T) {
+	t.Parallel()
 	mockEC2 := &MockEC2Client{}
 	client := &Client{
 		client: mockEC2,
@@ -307,6 +314,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 }
 
 func TestClient_PurchaseCommitment(t *testing.T) {
+	t.Parallel()
 	mockEC2 := &MockEC2Client{}
 	client := &Client{
 		client: mockEC2,
@@ -355,6 +363,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 }
 
 func TestClient_GetOfferingDetails(t *testing.T) {
+	t.Parallel()
 	mockEC2 := &MockEC2Client{}
 	client := &Client{
 		client: mockEC2,
@@ -401,6 +410,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 }
 
 func TestClient_GetOfferingClass(t *testing.T) {
+	t.Parallel()
 	client := &Client{}
 
 	tests := []struct {
@@ -423,6 +433,7 @@ func TestClient_GetOfferingClass(t *testing.T) {
 }
 
 func TestClient_GetDurationValue(t *testing.T) {
+	t.Parallel()
 	client := &Client{}
 
 	tests := []struct {

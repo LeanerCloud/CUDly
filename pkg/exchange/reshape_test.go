@@ -7,6 +7,7 @@ import (
 )
 
 func TestAnalyzeReshaping(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		ris         []RIInfo
@@ -152,6 +153,7 @@ func TestAnalyzeReshaping(t *testing.T) {
 }
 
 func TestNormalizationFactorForSize(t *testing.T) {
+	t.Parallel()
 	// Verify key normalization factors via the public accessor
 	assert.Equal(t, 0.25, NormalizationFactorForSize("nano"))
 	assert.Equal(t, 0.5, NormalizationFactorForSize("micro"))
@@ -164,6 +166,7 @@ func TestNormalizationFactorForSize(t *testing.T) {
 }
 
 func TestParseInstanceType(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input      string
 		wantFamily string

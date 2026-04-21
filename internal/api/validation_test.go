@@ -9,6 +9,7 @@ import (
 )
 
 func TestValidateRegion(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		region    string
@@ -41,6 +42,7 @@ func TestValidateRegion(t *testing.T) {
 }
 
 func TestValidateProvider(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		provider  string
@@ -68,6 +70,7 @@ func TestValidateProvider(t *testing.T) {
 }
 
 func TestValidateServiceName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		serviceName string
@@ -98,6 +101,7 @@ func TestValidateServiceName(t *testing.T) {
 }
 
 func TestValidateServicePath(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		path      string
@@ -127,6 +131,7 @@ func TestValidateServicePath(t *testing.T) {
 }
 
 func TestValidateUUID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		uuid      string
@@ -155,6 +160,7 @@ func TestValidateUUID(t *testing.T) {
 }
 
 func TestValidateContentType(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		method    string
@@ -196,6 +202,7 @@ func TestValidateContentType(t *testing.T) {
 }
 
 func TestValidateCredentialPayload(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		credentialType string
@@ -299,6 +306,7 @@ func TestValidateCredentialPayload(t *testing.T) {
 }
 
 func TestValidateRequestBodySize(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		bodySize  int

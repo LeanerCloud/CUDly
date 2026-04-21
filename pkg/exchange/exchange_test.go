@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseDecimalRat(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in      string
 		want    string
@@ -38,6 +39,7 @@ func TestParseDecimalRat(t *testing.T) {
 }
 
 func TestPaymentDueUSDStr_InJSON(t *testing.T) {
+	t.Parallel()
 	s := &ExchangeQuoteSummary{
 		IsValidExchange:  true,
 		PaymentDueRaw:    "123.456000",
@@ -71,6 +73,7 @@ func TestPaymentDueUSDStr_InJSON(t *testing.T) {
 }
 
 func TestSpendCapComparison(t *testing.T) {
+	t.Parallel()
 	// paymentDue > cap => reject
 	payment := new(big.Rat).SetInt64(6)
 	cap := new(big.Rat).SetInt64(5)
