@@ -106,7 +106,7 @@ export function renderUsers(users: APIUser[]): void {
                 : '<span class="badge badge-warning"><i class="icon-shield-off"></i> Disabled</span>'}
             </td>
             <td><span class="text-muted">${user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}</span></td>
-            <td><span class="text-muted">${(user as any).last_login ? formatRelativeTime((user as any).last_login) : 'Never'}</span></td>
+            <td><span class="text-muted">${user.last_login ? formatRelativeTime(user.last_login) : 'Never'}</span></td>
             <td>
               <div class="action-buttons">
                 <button class="btn-small btn-icon edit-user-btn" data-user-id="${escapeHtml(user.id)}" title="Edit user">

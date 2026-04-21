@@ -231,6 +231,7 @@ export interface APIUser {
   mfa_enabled: boolean;
   created_at?: string;
   updated_at?: string;
+  last_login?: string;
 }
 
 export interface CreateUserRequest {

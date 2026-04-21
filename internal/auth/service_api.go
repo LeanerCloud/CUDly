@@ -17,6 +17,7 @@ type APIUser struct {
 	MFAEnabled bool     `json:"mfa_enabled"`
 	CreatedAt  string   `json:"created_at,omitempty"`
 	UpdatedAt  string   `json:"updated_at,omitempty"`
+	LastLogin  string   `json:"last_login,omitempty"`
 }
 
 // APIGroup is the group type for API responses
@@ -85,6 +86,10 @@ func userToAPIUser(u *User) *APIUser {
 	if u == nil {
 		return nil
 	}
+	var lastLogin string
+	if u.LastLoginAt != nil {
+		lastLogin = u.LastLoginAt.Format(time.RFC3339)
+	}
 	return &APIUser{
 		ID:         u.ID,
 		Email:      u.Email,
@@ -93,6 +98,7 @@ func userToAPIUser(u *User) *APIUser {
 		MFAEnabled: u.MFAEnabled,
 		CreatedAt:  u.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:  u.UpdatedAt.Format(time.RFC3339),
+		LastLogin:  lastLogin,
 	}
 }
 
