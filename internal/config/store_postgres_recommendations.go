@@ -64,7 +64,7 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
+	if err := insertRecommendationsBatched(ctx, tx, collectedAt, dedupeByNaturalKey(recs), true); err != nil {
 		return err
 	}
 
@@ -95,6 +95,62 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		return fmt.Errorf("failed to commit upsert: %w", err)
 	}
 	return nil
+}
+
+// dedupeByNaturalKey collapses recs that collide on the ON CONFLICT key
+// `(account_key, provider, service, region, resource_type)` to a single
+// representative, keeping the highest-savings entry. Without this, a
+// single batch can contain two rows with the same natural key and
+// Postgres rejects the whole statement with SQLSTATE 21000:
+//
+//	"ON CONFLICT DO UPDATE command cannot affect row a second time"
+//
+// The collision happens in practice because Azure's reservation
+// recommendations API returns multiple term/lookback variants per VM
+// (e.g. 1yr and 3yr for the same Standard_D2s_v3 in eastus), and our
+// natural key doesn't include `term` or `payment_option`. Broadening
+// the key is a schema change tracked separately; deduping at write time
+// preserves the most-valuable variant per natural key, which matches
+// what the UI currently renders (one rec per resource shape).
+//
+// cloud_account_id is allowed to be nil (ambient-credential path), so
+// the dedupe key uses a sentinel for nils.
+func dedupeByNaturalKey(recs []RecommendationRecord) []RecommendationRecord {
+	if len(recs) == 0 {
+		return recs
+	}
+	type natKey struct {
+		AccountID    string
+		Provider     string
+		Service      string
+		Region       string
+		ResourceType string
+	}
+	bestIdx := make(map[natKey]int, len(recs))
+	for i, rec := range recs {
+		accountID := ""
+		if rec.CloudAccountID != nil {
+			accountID = *rec.CloudAccountID
+		}
+		k := natKey{
+			AccountID:    accountID,
+			Provider:     rec.Provider,
+			Service:      rec.Service,
+			Region:       rec.Region,
+			ResourceType: rec.ResourceType,
+		}
+		if prev, ok := bestIdx[k]; !ok || recs[i].Savings > recs[prev].Savings {
+			bestIdx[k] = i
+		}
+	}
+	if len(bestIdx) == len(recs) {
+		return recs // no collisions
+	}
+	out := make([]RecommendationRecord, 0, len(bestIdx))
+	for _, i := range bestIdx {
+		out = append(out, recs[i])
+	}
+	return out
 }
 
 // insertRecommendationsBatched performs a batched multi-row INSERT of recs
