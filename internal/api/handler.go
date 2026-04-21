@@ -45,6 +45,26 @@ type Handler struct {
 
 	sourceIdentityOnce sync.Once       // guards one-time source identity resolution
 	sourceID           *sourceIdentity // cached source cloud identity
+
+	// Postgres-backed TTL cache for Cost Explorer
+	// GetReservationUtilization. Dashboard + RI Exchange page hits
+	// read from the shared cache table so Lambda containers don't each
+	// fan out to a paid CE API call on every page load. See
+	// ri_utilization_cache.go for the rationale; in-memory was ruled
+	// out because Lambda's short container lifetime means each cold
+	// start would bypass the cache entirely.
+	riUtilizationCacheOnce sync.Once
+	riUtilizationCache     *riUtilizationCache
+}
+
+// getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
+// Explorer results, lazy-initialised on first call so tests that never
+// exercise the RI Exchange paths don't need to wire it up.
+func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
+	h.riUtilizationCacheOnce.Do(func() {
+		h.riUtilizationCache = newRIUtilizationCache(h.config)
+	})
+	return h.riUtilizationCache
 }
 
 // NewHandler creates a new API handler

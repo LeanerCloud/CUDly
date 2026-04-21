@@ -202,3 +202,9 @@ func (m *mockConfigStoreForHealth) GetRecommendationsFreshness(_ context.Context
 func (m *mockConfigStoreForHealth) SetRecommendationsCollectionError(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockConfigStoreForHealth) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) UpsertRIUtilizationCache(_ context.Context, _ string, _ int, _ []byte, _ time.Time) error {
+	return nil
+}

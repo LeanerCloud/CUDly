@@ -312,6 +312,22 @@ func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context,
 	}
 	return m.Called(ctx, errMsg).Error(0)
 }
+func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
+	if !m.hasRecExpectation("GetRIUtilizationCache") {
+		return nil, nil
+	}
+	args := m.Called(ctx, region, lookbackDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.RIUtilizationCacheEntry), args.Error(1)
+}
+func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error {
+	if !m.hasRecExpectation("UpsertRIUtilizationCache") {
+		return nil
+	}
+	return m.Called(ctx, region, lookbackDays, payload, fetchedAt).Error(0)
+}
 func (m *MockConfigStore) CreateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
 	args := m.Called(ctx, reg)
 	return args.Error(0)

@@ -83,6 +83,16 @@ type StoreInterface interface {
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 
+	// RI utilization cache. Postgres-backed TTL cache for Cost Explorer
+	// GetReservationUtilization; shared across Lambda containers so
+	// dashboard loads don't each fan out to a paid CE API call. A
+	// per-process in-memory cache effectively never hits because each
+	// cold container starts empty. GetRIUtilizationCache returns nil
+	// when the (region, lookback_days) key is absent — callers treat
+	// that as a miss and re-fetch.
+	GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*RIUtilizationCacheEntry, error)
+	UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error
+
 	// Account registrations (self-service enrollment via federation IaC)
 	CreateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
 	GetAccountRegistration(ctx context.Context, id string) (*AccountRegistration, error)

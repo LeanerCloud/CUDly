@@ -175,6 +175,19 @@ type RecommendationsFreshness struct {
 	LastCollectionError *string    `json:"last_collection_error"`
 }
 
+// RIUtilizationCacheEntry is a single cached Cost Explorer
+// GetReservationUtilization result keyed by (region, lookback_days).
+// Payload is the JSON encoding of the caller's utilization slice — kept
+// opaque here so the config package stays free of AWS-provider types.
+// TTL freshness is evaluated in the caller (api-layer cache wrapper)
+// based on FetchedAt vs. a caller-supplied TTL.
+type RIUtilizationCacheEntry struct {
+	Region       string
+	LookbackDays int
+	Payload      []byte
+	FetchedAt    time.Time
+}
+
 // PurchaseHistoryRecord stores completed purchase information
 type PurchaseHistoryRecord struct {
 	AccountID        string    `json:"account_id" dynamodbav:"account_id"`

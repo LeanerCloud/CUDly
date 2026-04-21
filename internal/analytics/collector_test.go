@@ -303,6 +303,12 @@ func (m *mockConfigStore) GetRecommendationsFreshness(_ context.Context) (*confi
 func (m *mockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockConfigStore) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) UpsertRIUtilizationCache(_ context.Context, _ string, _ int, _ []byte, _ time.Time) error {
+	return nil
+}
 
 // TestNewCollector tests the NewCollector function
 func TestNewCollector(t *testing.T) {

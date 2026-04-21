@@ -444,6 +444,12 @@ func (m *MockConfigStore) GetRecommendationsFreshness(_ context.Context) (*confi
 func (m *MockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
 	return nil
 }
+func (m *MockConfigStore) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) UpsertRIUtilizationCache(_ context.Context, _ string, _ int, _ []byte, _ time.Time) error {
+	return nil
+}
 
 // Verify MockConfigStore implements config.StoreInterface
 var _ config.StoreInterface = (*MockConfigStore)(nil)

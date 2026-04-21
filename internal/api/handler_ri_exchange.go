@@ -82,7 +82,7 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	}
 
 	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
-	utilization, err := recsAdapter.GetRIUtilization(ctx, lookbackDays)
+	utilization, err := h.getRIUtilizationCache().getOrFetch(ctx, region, lookbackDays, riUtilizationCacheTTL, recsAdapter.GetRIUtilization)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
@@ -171,7 +171,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
-	utilData, err := recsAdapter.GetRIUtilization(ctx, lookbackDays)
+	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, region, lookbackDays, riUtilizationCacheTTL, recsAdapter.GetRIUtilization)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
