@@ -1,6 +1,6 @@
 # Known Issues: Terraform AWS Environment
 
-> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 1 not applicable · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-21):** `0 still valid · 7 resolved · 1 not applicable · 0 partially fixed · 0 moved · 1 needs triage (Lambda first-invocation RDS connect timeout — found in production logs)`
 
 ## ~~CRITICAL: Fargate compute platform has no multi-account support~~ — RESOLVED
 
@@ -331,3 +331,17 @@
 **Related issues:** none
 
 **Effort:** `small`
+
+## LOW: Lambda first-invocation RDS connect timeout (3-4 minutes) — found 2026-04-21
+
+**File**: `terraform/environments/aws/` (Lambda + RDS + NAT gateway configuration) — symptom surfaces via `internal/database/connection.go`
+
+**Description**: After Lambda idle, the first invocation fails with `failed to write startup message: timeout: context deadline exceeded ... time:3m55s`. Observed twice in cudly-dev logs on 2026-04-21 (17:59:01Z and 18:02:04Z). Lines up with cold-start ENI attachment + NAT gateway warmup. The existing `createConnectionPoolWithRetry` runs 5 attempts × ~45s each = the observed 235s.
+
+**Impact**: First user request after idle returns 500/timeout; subsequent requests work.
+
+**Status:** ❓ Needs triage (operational / infrastructure)
+
+**Implementation plan (recommended):** add a per-attempt deadline to `createConnectionPoolWithRetry` in `internal/database/connection.go` — extract `attemptOpenPool(ctx, cfg, perAttemptTimeout)` with `context.WithTimeout(ctx, 15*time.Second)` wrapping BOTH `pgxpool.NewWithConfig` and `Ping`. Worst-case retry budget drops from ~235s to ~105s; common cold-start finishes in ~60s. Test: inject a hanging `pgxpool.Config.ConnConfig.DialFunc` and assert the wall-clock wait is bounded.
+
+**Alternatives** (longer-term): VPC endpoints for RDS + Secrets Manager (removes NAT hop); provisioned concurrency (~$4/month per provisioned exec); EventBridge warm-up.

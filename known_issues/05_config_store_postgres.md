@@ -1,6 +1,6 @@
 # Known Issues: Config Types and PostgreSQL Store
 
-> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 0 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-21):** `0 still valid · 7 resolved · 0 partially fixed · 0 moved · 1 needs triage (DB rate limiter race — found in production logs)`
 
 ## ~~CRITICAL: `SavePurchaseHistory` silently drops `cloud_account_id`~~ — RESOLVED
 
@@ -114,3 +114,15 @@
 - `go test ./internal/config/...`
 
 **Effort:** `small`
+
+## MEDIUM: DB rate limiter race — INSERT-on-not-found can hit duplicate-key under concurrency (found 2026-04-21)
+
+**File**: `internal/api/db_rate_limiter.go::rateLimitOutcome` (~lines 104-117) + the `rate_limits` table
+
+**Description**: The DB-backed rate limiter uses a check-then-insert pattern: SELECT then on `pgx.ErrNoRows` separate INSERT. Two concurrent requests for the same id both hit `ErrNoRows`, both attempt INSERT, second hits `rate_limits_pkey` (SQLSTATE 23505). Visible in production as `[WARN] Rate limiter error for IP 135.18.238.2: ... (SQLSTATE 23505)` at 2026-04-21T18:06:57Z.
+
+**Impact**: Spurious rate-limit error returns under burst load from a single IP.
+
+**Status:** ❓ Needs triage
+
+**Implementation plan:** replace the SELECT+INSERT with a single atomic `INSERT ... ON CONFLICT (id) DO UPDATE SET count = CASE WHEN reset_time < $now THEN 1 ELSE count + 1 END, reset_time = CASE WHEN reset_time < $now THEN $newResetTime ELSE reset_time END, updated_at = $now RETURNING count, reset_time`. Drop the `queryErr/count/existingResetTime` arguments from `rateLimitOutcome`. Tests: `TestDBRateLimiter_ConcurrentFirstRequest` (20 goroutines hit same id, assert no SQLSTATE 23505 + final count = 20) and `TestDBRateLimiter_WindowExpiry_AtomicReset` (pre-seed past reset_time, single call resets count to 1).
