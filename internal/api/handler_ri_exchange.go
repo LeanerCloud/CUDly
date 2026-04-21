@@ -23,6 +23,43 @@ import (
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 )
 
+// reshapeEC2Client is the narrow slice of the EC2 client that
+// getReshapeRecommendations needs. Scoped to this handler so mocks
+// stay small. The concrete *ec2svc.Client returned by
+// awsprovider.NewEC2ClientDirect already implements these methods
+// (Go structural typing), so the nil-factory fallback path casts it
+// directly.
+type reshapeEC2Client interface {
+	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
+	FindConvertibleOfferings(ctx context.Context, instanceTypes []string) ([]exchange.OfferingOption, error)
+}
+
+// reshapeRecsClient is the narrow slice of the recommendations
+// adapter that getReshapeRecommendations needs (the utilization
+// fetcher injected into the cache wrapper). Scoped identically.
+type reshapeRecsClient interface {
+	GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
+}
+
+// buildReshapeEC2Client honours the injected factory when set, falling
+// back to the direct AWS SDK constructor otherwise. Tests inject a
+// stub via Handler.reshapeEC2Factory; prod leaves the field nil.
+func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
+	if h.reshapeEC2Factory != nil {
+		return h.reshapeEC2Factory(cfg)
+	}
+	return awsprovider.NewEC2ClientDirect(cfg)
+}
+
+// buildReshapeRecsClient mirrors buildReshapeEC2Client for the
+// recommendations adapter.
+func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient {
+	if h.reshapeRecsFactory != nil {
+		return h.reshapeRecsFactory(cfg)
+	}
+	return awsprovider.NewRecommendationsClientDirect(cfg)
+}
+
 // getBaseAWSConfig returns the cached base AWS config, loading it once via sync.Once.
 func (h *Handler) getBaseAWSConfig(ctx context.Context) (aws.Config, error) {
 	h.awsCfgOnce.Do(func() {
@@ -164,13 +201,13 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	ec2Client := awsprovider.NewEC2ClientDirect(cfg)
+	ec2Client := h.buildReshapeEC2Client(cfg)
 	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
 	}
 
-	recsAdapter := awsprovider.NewRecommendationsClientDirect(cfg)
+	recsAdapter := h.buildReshapeRecsClient(cfg)
 	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, region, lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, recsAdapter.GetRIUtilization)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)

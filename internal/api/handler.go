@@ -56,6 +56,19 @@ type Handler struct {
 	// start would bypass the cache entirely.
 	riUtilizationCacheOnce sync.Once
 	riUtilizationCache     *riUtilizationCache
+
+	// Optional AWS-client injection points used by the reshape handler
+	// integration test. When nil (the production default), the
+	// handler falls back to the direct AWS SDK constructors
+	// `awsprovider.NewEC2ClientDirect` and
+	// `awsprovider.NewRecommendationsClientDirect`. Tests set these
+	// to stubs that satisfy the narrow interfaces declared in
+	// `handler_ri_exchange.go` (reshapeEC2Client / reshapeRecsClient)
+	// so the test can exercise the handler end-to-end without live
+	// AWS credentials. Prod behaviour is unchanged because both
+	// fields stay nil.
+	reshapeEC2Factory  func(aws.Config) reshapeEC2Client
+	reshapeRecsFactory func(aws.Config) reshapeRecsClient
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
