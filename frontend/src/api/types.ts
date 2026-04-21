@@ -404,10 +404,24 @@ export interface ReshapeRecommendation {
   reason: string;
 }
 
+// ExchangeTarget is one entry in a multi-target exchange request.
+// Matches the Go struct pkg/exchange.TargetConfig.
+export interface ExchangeTarget {
+  offering_id: string;
+  count: number;
+}
+
+// ExchangeQuoteRequest shape: callers may supply either the new
+// `targets[]` array (preferred) or the legacy singleton fields
+// (`target_offering_id` + `target_count`). When `targets[]` is
+// present, the singleton fields are ignored server-side. The
+// backend's validateExecuteExchangeBody accepts either shape since
+// commit 5eb274690.
 export interface ExchangeQuoteRequest {
   ri_ids: string[];
-  target_offering_id: string;
-  target_count: number;
+  targets?: ExchangeTarget[];
+  target_offering_id?: string;
+  target_count?: number;
   region?: string;
 }
 
@@ -425,10 +439,16 @@ export interface ExchangeQuoteSummary {
   OutputReservedInstancesExp?: string;
 }
 
+// ExchangeExecuteRequest: same `targets[]` vs legacy singleton
+// semantics as ExchangeQuoteRequest. `max_payment_due_usd` is a
+// TOTAL cap across all targets — AWS returns a single aggregated
+// PaymentDue so spend-cap checking becomes a total when `targets[]`
+// has multiple entries.
 export interface ExchangeExecuteRequest {
   ri_ids: string[];
-  target_offering_id: string;
-  target_count: number;
+  targets?: ExchangeTarget[];
+  target_offering_id?: string;
+  target_count?: number;
   max_payment_due_usd: string;
   region?: string;
 }

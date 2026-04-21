@@ -221,6 +221,15 @@ export function fillQuoteFromRI(riId: string, count: number): void {
 // RI Exchange Modal
 // ──────────────────────────────────────────────
 
+// TargetRow captures the DOM inputs for one target-offering entry in
+// the multi-target modal. Tests assert on the posted request shape by
+// finding these inputs through their data-row-index attribute.
+interface TargetRow {
+  offeringInput: HTMLInputElement;
+  countInput: HTMLInputElement;
+  rowEl: HTMLDivElement;
+}
+
 export function openExchangeModal(riId: string, count: number, suggestedTargetType?: string): void {
   const modalEl = document.getElementById('ri-exchange-modal');
   if (!modalEl) return;
@@ -229,9 +238,17 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   const content = modal.querySelector('.modal-content');
   if (!content) return;
 
-  // Scoped state for this modal session
+  // Scoped state for this modal session. Stored against the modal
+  // across quote/execute so execute can re-post the same shape the
+  // user saw quoted.
+  type QuoteReqShape = {
+    ri_ids: string[];
+    targets?: Array<{ offering_id: string; count: number }>;
+    target_offering_id?: string;
+    target_count?: number;
+  };
   let modalQuote: ExchangeQuoteSummary | null = null;
-  let modalQuoteReq: { ri_ids: string[]; target_offering_id: string; target_count: number } | null = null;
+  let modalQuoteReq: QuoteReqShape | null = null;
 
   // Build header
   const h3 = document.createElement('h3');
@@ -251,33 +268,75 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   riRow.appendChild(riLabel);
   content.appendChild(riRow);
 
-  // Count input
-  const countRow = document.createElement('div');
-  countRow.className = 'setting-row';
-  const countLabel = document.createElement('label');
-  countLabel.textContent = 'Target Count: ';
-  const countInput = document.createElement('input');
-  countInput.type = 'number';
-  countInput.min = '1';
-  countInput.value = String(count);
-  countInput.id = 'modal-exchange-count';
-  countLabel.appendChild(countInput);
-  countRow.appendChild(countLabel);
-  content.appendChild(countRow);
+  // Targets container: one or more rows, each with offering ID +
+  // count. Users click "+ Add target" to split a source RI across
+  // multiple target shapes in a single atomic AWS exchange.
+  const targetsContainer = document.createElement('div');
+  targetsContainer.id = 'modal-exchange-targets';
+  targetsContainer.className = 'exchange-targets-container';
+  content.appendChild(targetsContainer);
 
-  // Target offering ID input
-  const targetRow = document.createElement('div');
-  targetRow.className = 'setting-row';
-  const targetLabel = document.createElement('label');
-  targetLabel.textContent = 'Target Offering ID: ';
-  const targetInput = document.createElement('input');
-  targetInput.type = 'text';
-  targetInput.id = 'modal-exchange-target';
-  targetInput.placeholder = 'e.g. t3.medium';
-  if (suggestedTargetType) targetInput.value = suggestedTargetType;
-  targetLabel.appendChild(targetInput);
-  targetRow.appendChild(targetLabel);
-  content.appendChild(targetRow);
+  const targetRows: TargetRow[] = [];
+
+  const addTargetRow = (initialOffering?: string, initialCount?: number): void => {
+    const rowIndex = targetRows.length;
+    const rowEl = document.createElement('div');
+    rowEl.className = 'setting-row exchange-target-row';
+    rowEl.dataset.rowIndex = String(rowIndex);
+
+    const offeringLabel = document.createElement('label');
+    offeringLabel.textContent = 'Target Offering ID: ';
+    const offeringInput = document.createElement('input');
+    offeringInput.type = 'text';
+    offeringInput.className = 'modal-exchange-target';
+    offeringInput.placeholder = 'e.g. t3.medium';
+    if (initialOffering) offeringInput.value = initialOffering;
+    offeringLabel.appendChild(offeringInput);
+    rowEl.appendChild(offeringLabel);
+
+    const countLabel = document.createElement('label');
+    countLabel.textContent = 'Count: ';
+    const countInput = document.createElement('input');
+    countInput.type = 'number';
+    countInput.min = '1';
+    countInput.value = String(initialCount ?? 1);
+    countInput.className = 'modal-exchange-count';
+    countLabel.appendChild(countInput);
+    rowEl.appendChild(countLabel);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn exchange-remove-target';
+    removeBtn.textContent = '×';
+    removeBtn.setAttribute('aria-label', 'Remove target');
+    removeBtn.addEventListener('click', () => {
+      if (targetRows.length <= 1) return; // keep at least one row
+      const idx = targetRows.findIndex((r) => r.rowEl === rowEl);
+      if (idx >= 0) {
+        targetRows.splice(idx, 1);
+        rowEl.remove();
+      }
+    });
+    rowEl.appendChild(removeBtn);
+
+    targetsContainer.appendChild(rowEl);
+    targetRows.push({ offeringInput, countInput, rowEl });
+  };
+
+  // Seed the modal with the current behaviour: one row, pre-filled
+  // from the suggested target type + count passed in by the caller.
+  addTargetRow(suggestedTargetType, count);
+
+  const addTargetBtnRow = document.createElement('div');
+  addTargetBtnRow.className = 'setting-row';
+  const addTargetBtn = document.createElement('button');
+  addTargetBtn.type = 'button';
+  addTargetBtn.className = 'btn';
+  addTargetBtn.id = 'modal-exchange-add-target';
+  addTargetBtn.textContent = '+ Add target';
+  addTargetBtn.addEventListener('click', () => addTargetRow());
+  addTargetBtnRow.appendChild(addTargetBtn);
+  content.appendChild(addTargetBtnRow);
 
   // Result container
   const resultContainer = document.createElement('div');
@@ -321,26 +380,58 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     void submitModalExecute();
   });
 
-  async function submitModalQuote(): Promise<void> {
-    const targetOfferingId = targetInput.value.trim();
-    const rawCount = parseInt(countInput.value, 10);
-    const targetCount = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;
+  // collectTargets reads each row into a validated target. Rows with
+  // empty offering IDs are treated as an error; the first offending
+  // row's message is surfaced to the user. Count defaults to 1 when
+  // the input is empty or non-numeric (matches the pre-multi-target
+  // behaviour).
+  function collectTargets(): { targets: Array<{ offering_id: string; count: number }>; error?: string } {
+    const targets: Array<{ offering_id: string; count: number }> = [];
+    for (let i = 0; i < targetRows.length; i++) {
+      const row = targetRows[i];
+      if (!row) continue;
+      const offeringId = row.offeringInput.value.trim();
+      if (!offeringId) {
+        return { targets: [], error: `Please enter a target offering ID for target ${i + 1}.` };
+      }
+      const rawCount = parseInt(row.countInput.value, 10);
+      const targetCount = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;
+      targets.push({ offering_id: offeringId, count: targetCount });
+    }
+    return { targets };
+  }
 
-    if (!targetOfferingId) {
-      setResultText(resultContainer, 'Please enter a target offering ID.', 'error');
+  // buildQuoteReq shapes the request body. With one target we post
+  // the singleton shape (target_offering_id + target_count) for
+  // backward-compat with older backends and simpler CI harnesses.
+  // With >1 target we post targets[] so the backend builds a
+  // multi-element TargetConfigurations slice in the AWS Accept call.
+  function buildQuoteReq(targets: Array<{ offering_id: string; count: number }>): QuoteReqShape {
+    const first = targets[0];
+    if (targets.length === 1 && first) {
+      return {
+        ri_ids: [riId],
+        target_offering_id: first.offering_id,
+        target_count: first.count,
+      };
+    }
+    return { ri_ids: [riId], targets };
+  }
+
+  async function submitModalQuote(): Promise<void> {
+    const { targets, error } = collectTargets();
+    if (error) {
+      setResultText(resultContainer, error, 'error');
       return;
     }
 
     setResultText(resultContainer, 'Getting exchange quote...', 'loading');
     executeBtn.classList.add('hidden');
 
+    const quoteReq = buildQuoteReq(targets);
     try {
-      modalQuote = await api.getExchangeQuote({
-        ri_ids: [riId],
-        target_offering_id: targetOfferingId,
-        target_count: targetCount,
-      });
-      modalQuoteReq = { ri_ids: [riId], target_offering_id: targetOfferingId, target_count: targetCount };
+      modalQuote = await api.getExchangeQuote(quoteReq);
+      modalQuoteReq = quoteReq;
       renderModalQuoteResult(resultContainer, modalQuote);
       if (modalQuote.IsValidExchange) executeBtn.classList.remove('hidden');
     } catch (error) {
@@ -358,6 +449,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     try {
       const result = await api.executeExchange({
         ri_ids: modalQuoteReq.ri_ids,
+        targets: modalQuoteReq.targets,
         target_offering_id: modalQuoteReq.target_offering_id,
         target_count: modalQuoteReq.target_count,
         max_payment_due_usd: modalQuote.PaymentDueRaw,
