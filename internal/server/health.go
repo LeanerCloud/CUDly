@@ -46,6 +46,14 @@ func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request
 		health.Status = "degraded"
 	}
 
+	// Check migrations. "disabled" and "healthy" are both acceptable; only
+	// "pending" and "failed" flip the overall status to degraded.
+	health.Checks["migrations"] = app.checkMigrations()
+	switch health.Checks["migrations"].Status {
+	case "failed", "pending":
+		health.Status = "degraded"
+	}
+
 	// Always return 200 for the health endpoint so startup/liveness probes pass.
 	// The actual health status is in the JSON body. "degraded" means the app is
 	// running but some dependencies (like DB) aren't connected yet - this is
@@ -56,6 +64,34 @@ func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request
 	setHealthResponseHeaders(w, app.appConfig.CORSAllowedOrigin)
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(health)
+}
+
+// checkMigrations reports the outcome of the most recent migration run.
+// disabled = AutoMigrate is off; migrations happen elsewhere (e.g. CI)
+// pending  = AutoMigrate is on but ensureDB hasn't completed yet
+// failed   = last attempt returned an error OR timed out
+// healthy  = last attempt completed without error
+func (app *Application) checkMigrations() CheckResult {
+	// No dbConfig means the app isn't using PostgreSQL at all (DynamoDB or
+	// test mode). AutoMigrate off means migrations are handled elsewhere
+	// (e.g. a dedicated CI deploy step). Either way, "disabled" correctly
+	// reports that this health facet is not applicable — the overall
+	// status stays healthy.
+	if app.dbConfig == nil || !app.dbConfig.AutoMigrate {
+		return CheckResult{Status: "disabled", Message: "AutoMigrate is off"}
+	}
+	err, finishedAt := app.snapshotMigrationState()
+	switch {
+	case finishedAt.IsZero():
+		return CheckResult{Status: "pending", Message: "migrations have not run yet"}
+	case err != nil:
+		return CheckResult{Status: "failed", Message: err.Error()}
+	default:
+		return CheckResult{
+			Status:  "healthy",
+			Message: fmt.Sprintf("last run %s ago", time.Since(finishedAt).Truncate(time.Second)),
+		}
+	}
 }
 
 // checkConfigStore checks the health of the configuration store

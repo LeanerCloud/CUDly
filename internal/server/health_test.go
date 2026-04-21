@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
+	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 )
 
@@ -347,4 +350,65 @@ func TestCheckAuthStore(t *testing.T) {
 			testutil.AssertEqual(t, tt.expectedStatus, result.Status)
 		})
 	}
+}
+
+func TestCheckMigrations_Disabled(t *testing.T) {
+	t.Run("nil dbConfig (non-PostgreSQL mode)", func(t *testing.T) {
+		app := &Application{}
+		got := app.checkMigrations()
+		testutil.AssertEqual(t, "disabled", got.Status)
+	})
+	t.Run("AutoMigrate off", func(t *testing.T) {
+		app := &Application{dbConfig: &database.Config{AutoMigrate: false}}
+		got := app.checkMigrations()
+		testutil.AssertEqual(t, "disabled", got.Status)
+	})
+}
+
+func TestCheckMigrations_Pending(t *testing.T) {
+	app := &Application{dbConfig: &database.Config{AutoMigrate: true}}
+	// migrationFinishedAt is zero value → pending.
+	got := app.checkMigrations()
+	testutil.AssertEqual(t, "pending", got.Status)
+}
+
+func TestCheckMigrations_Failed(t *testing.T) {
+	app := &Application{dbConfig: &database.Config{AutoMigrate: true}}
+	app.recordMigrationResult(errors.New("dirty at 27"))
+	got := app.checkMigrations()
+	testutil.AssertEqual(t, "failed", got.Status)
+	if got.Message == "" || got.Message != "dirty at 27" {
+		t.Fatalf("expected message to contain the error; got %q", got.Message)
+	}
+}
+
+func TestCheckMigrations_Healthy(t *testing.T) {
+	app := &Application{dbConfig: &database.Config{AutoMigrate: true}}
+	app.recordMigrationResult(nil)
+	got := app.checkMigrations()
+	testutil.AssertEqual(t, "healthy", got.Status)
+	// recordMigrationResult sets migrationFinishedAt to now; message says
+	// "last run 0s ago" at the second-precision this code truncates to.
+	if !containsSubstr(got.Message, "last run") {
+		t.Fatalf("expected message to mention last run; got %q", got.Message)
+	}
+	// Sanity: finishedAt is close to now.
+	_, finishedAt := app.snapshotMigrationState()
+	if time.Since(finishedAt) > 5*time.Second {
+		t.Fatalf("finishedAt too old: %v", finishedAt)
+	}
+}
+
+// containsSubstr is a tiny local helper so we don't pull in strings for one check.
+func containsSubstr(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && indexOf(s, sub) >= 0))
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }

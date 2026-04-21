@@ -27,6 +27,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Application holds all components of the CUDly server
@@ -53,6 +54,15 @@ type Application struct {
 	dbConnected    bool
 	dbErr          error
 	appConfig      ApplicationConfig
+
+	// State from the most recent migration attempt. Surfaced by /health so
+	// ops can see failures. Protected by its OWN dedicated mutex — NOT
+	// dbMu, because ensureDB holds dbMu for its full duration. If /health
+	// reached into dbMu it would block behind a long-running ensureDB,
+	// which defeats the point of non-fatal migrations.
+	migrationErr        error
+	migrationFinishedAt time.Time
+	migrationMu         sync.Mutex
 
 	// OIDC signer (optional, backs /.well-known/* and the Azure
 	// federated credential path). Nil when the deployment has not
@@ -104,6 +114,89 @@ type ExternalDeps struct {
 func isLambdaRuntime() bool {
 	// Lambda sets AWS_LAMBDA_RUNTIME_API when running
 	return os.Getenv("AWS_LAMBDA_RUNTIME_API") != ""
+}
+
+// defaultMigrationsTimeout bounds how long ensureDB waits for migrations
+// before giving up and proceeding. Deliberately shorter than the default
+// Lambda timeout (30s at this writing) so a runaway migration gets
+// cancelled cleanly inside ensureDB rather than by Lambda mid-invocation
+// (which is exactly what leaves schema_migrations.dirty = true).
+const defaultMigrationsTimeout = 20 * time.Second
+
+// migrationsTimeout is resolved once at package init time from
+// CUDLY_MIGRATION_TIMEOUT (time.ParseDuration). Declared as a var (not
+// const) so tests can overwrite it inside t.Cleanup to exercise the
+// timeout path with a 50ms budget. Tests that overwrite this MUST NOT
+// call t.Parallel() since there's no synchronisation on the variable.
+var migrationsTimeout = resolveMigrationsTimeout()
+
+func resolveMigrationsTimeout() time.Duration {
+	v := os.Getenv("CUDLY_MIGRATION_TIMEOUT")
+	if v == "" {
+		return defaultMigrationsTimeout
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		log.Printf("CUDLY_MIGRATION_TIMEOUT invalid (%q); using default %s", v, defaultMigrationsTimeout)
+		return defaultMigrationsTimeout
+	}
+	return d
+}
+
+// runMigrations is a package-level indirection so tests can swap in a fake
+// that returns error / hangs / succeeds without running real SQL. Same
+// parallel-test restriction as migrationsTimeout.
+var runMigrations = migrations.RunMigrations
+
+// recordMigrationResult stores the outcome of the most recent migration
+// attempt. Takes migrationMu briefly. Called from inside ensureDB which
+// holds dbMu — lock order is dbMu then migrationMu. Never take them the
+// other way around.
+func (app *Application) recordMigrationResult(err error) {
+	app.migrationMu.Lock()
+	defer app.migrationMu.Unlock()
+	app.migrationErr = err
+	app.migrationFinishedAt = time.Now()
+}
+
+// snapshotMigrationState returns a point-in-time copy of the migration
+// state suitable for /health rendering.
+func (app *Application) snapshotMigrationState() (err error, finishedAt time.Time) {
+	app.migrationMu.Lock()
+	defer app.migrationMu.Unlock()
+	return app.migrationErr, app.migrationFinishedAt
+}
+
+// runMigrationsBounded runs the package-level runMigrations hook in a
+// goroutine bounded by timeout. The returned error is either the runner's
+// own error, a panic wrapped as an error, or a timeout error — never a
+// nil-with-goroutine-still-alive. The goroutine is guaranteed to have
+// exited before this function returns (the timeout branch waits on
+// <-done after cancelling the ctx), so no orphan goroutine survives past
+// this call — critical on Lambda where goroutines freeze between
+// invocations.
+func runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string, timeout time.Duration) error {
+	migCtx, cancelMig := context.WithTimeout(context.Background(), timeout)
+	defer cancelMig()
+
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Errorf("migration panic: %v", r)
+			}
+		}()
+		done <- runMigrations(migCtx, pool, migrationsPath, adminEmail, adminPassword)
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		cancelMig()
+		<-done
+		return fmt.Errorf("migration timed out after %s", timeout)
+	}
 }
 
 // resolveOIDCIssuerURL picks the canonical OIDC issuer URL for the
@@ -351,23 +444,28 @@ func (app *Application) ensureDB(ctx context.Context) error {
 	app.DB = dbConn
 	log.Println("PostgreSQL connection established successfully")
 
-	// Run migrations if AutoMigrate is enabled
+	// Run migrations if AutoMigrate is enabled. Failures are non-fatal:
+	// we log, surface via /health's migrations check, and proceed. The app
+	// stays up; handlers that need the missing schema error at query time.
+	// See specs/migration-resilience.md (or the plan) for the rationale.
 	if app.dbConfig.AutoMigrate {
 		log.Println("Running database migrations...")
 
 		adminEmail := os.Getenv("ADMIN_EMAIL")
 		adminPassword, err := app.resolveAdminPassword(ctx)
 		if err != nil {
-			return err
+			return err // secret-resolution failure is still fatal — env/config, not a migration runtime error
 		}
 
-		if err := migrations.RunMigrations(ctx, dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword); err != nil {
-			log.Printf("Migration failed: %v", err)
-			dbConn.Close()
-			app.DB = nil
-			return fmt.Errorf("failed to run migrations: %w", err)
+		migErr := runMigrationsBounded(dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword, migrationsTimeout)
+		app.recordMigrationResult(migErr)
+
+		if migErr != nil {
+			log.Printf("⚠️ Migration failed — app continuing with existing schema: %v", migErr)
+			// Intentionally do NOT return, do NOT close dbConn, do NOT clear app.DB.
+		} else {
+			log.Println("Database migrations completed successfully")
 		}
-		log.Println("Database migrations completed successfully")
 	}
 
 	// Re-initialize all stores and services with the live DB connection

@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/database"
@@ -18,6 +20,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestIsLambdaRuntime(t *testing.T) {
@@ -530,4 +533,70 @@ func TestHandleScheduledHTTP_EnsureDBError(t *testing.T) {
 	app.handleScheduledHTTP(w, req)
 
 	testutil.AssertEqual(t, 503, w.Code)
+}
+
+// ---------- runMigrationsBounded tests ----------
+//
+// These tests exercise the goroutine+timeout+recover logic in isolation by
+// swapping the package-level runMigrations hook. They do NOT hit a real DB,
+// so the *pgxpool.Pool passed in is a typed-nil — the fake runner never
+// dereferences it. MUST NOT run in parallel since the hook is global.
+
+func withFakeMigrations(t *testing.T, fake func(ctx context.Context, pool *pgxpool.Pool, path, email, pw string) error) {
+	t.Helper()
+	orig := runMigrations
+	runMigrations = fake
+	t.Cleanup(func() { runMigrations = orig })
+}
+
+func TestRunMigrationsBounded_Success(t *testing.T) {
+	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
+		return nil
+	})
+	err := runMigrationsBounded(nil, "", "", "", 1*time.Second)
+	testutil.AssertNoError(t, err)
+}
+
+func TestRunMigrationsBounded_FailureReturnsError(t *testing.T) {
+	sentinel := errors.New("dirty at 27")
+	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
+		return sentinel
+	})
+	err := runMigrationsBounded(nil, "", "", "", 1*time.Second)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected error to wrap sentinel, got: %v", err)
+	}
+}
+
+func TestRunMigrationsBounded_Timeout(t *testing.T) {
+	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
+		<-ctx.Done() // block until runMigrationsBounded cancels the ctx
+		return ctx.Err()
+	})
+
+	start := time.Now()
+	err := runMigrationsBounded(nil, "", "", "", 50*time.Millisecond)
+	elapsed := time.Since(start)
+
+	testutil.AssertError(t, err)
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected 'timed out' in error; got %q", err.Error())
+	}
+	// runMigrationsBounded must return shortly after the timeout elapses.
+	// If it took significantly longer than 2× the budget, the <-done
+	// rendezvous hung — meaning the goroutine wasn't properly cleaned up.
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("runMigrationsBounded took too long (%s); goroutine may have leaked", elapsed)
+	}
+}
+
+func TestRunMigrationsBounded_PanicRecovered(t *testing.T) {
+	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
+		panic("boom")
+	})
+	err := runMigrationsBounded(nil, "", "", "", 1*time.Second)
+	testutil.AssertError(t, err)
+	if !strings.Contains(err.Error(), "panic") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected panic error to mention both 'panic' and 'boom'; got %q", err.Error())
+	}
 }
