@@ -21,6 +21,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
 
@@ -606,22 +607,12 @@ func (c *ComputeClient) getVMPricing(ctx context.Context, vmSize, region string,
 	}, nil
 }
 
-// retailPricesMaxPages caps fetchAzurePricing's NextPageLink loop. The
-// Azure Retail Prices API paginates at 100 items per page, so 50 pages
-// covers 5000 items — more than any realistic SKU/region/term query. The
-// cap exists purely as a defence against a server bug returning a
-// NextPageLink that never empties.
-const retailPricesMaxPages = 50
-
-// retailPricesPageTimeout bounds each individual page GET. The caller's
-// overall context is preserved for cross-page cancellation, but one slow
-// page can no longer consume the caller's full budget — a hung page
-// returns after pageTimeout so the caller can move on or surface a
-// scoped error.
-const retailPricesPageTimeout = 10 * time.Second
-
 // fetchAzurePricing fetches pricing data from Azure Retail Prices API,
-// following NextPageLink until exhausted (or the safety cap is hit).
+// following NextPageLink until exhausted (or the shared safety cap is
+// hit). Delegates the pagination walk to pricing.FetchAll so every
+// service client shares the same per-page timeout, seen-URL guard, and
+// max-pages cap — see providers/azure/internal/pricing for those
+// invariants.
 //
 // The earlier version issued a single GET and decoded just the first
 // page, so any SKU/term/region combination that landed on page 2+
@@ -632,59 +623,12 @@ func (c *ComputeClient) fetchAzurePricing(ctx context.Context, filter string) (*
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	combined := &AzureRetailPrice{Items: make([]AzureRetailPriceItem, 0)}
-	nextURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
-	seen := map[string]struct{}{}
-
-	for pageIdx := 0; pageIdx < retailPricesMaxPages && nextURL != ""; pageIdx++ {
-		if _, ok := seen[nextURL]; ok {
-			// Server returned the same NextPageLink twice — break instead of looping.
-			return nil, fmt.Errorf("pricing API returned a self-referential NextPageLink (page %d)", pageIdx)
-		}
-		seen[nextURL] = struct{}{}
-
-		page, err := c.fetchOnePricingPage(ctx, nextURL, pageIdx)
-		if err != nil {
-			return nil, err
-		}
-
-		combined.Items = append(combined.Items, page.Items...)
-		nextURL = page.NextPageLink
-	}
-
-	return combined, nil
-}
-
-// fetchOnePricingPage issues one GET with a bounded timeout and decodes
-// the response. pageCtx is derived from the caller's ctx so outer
-// cancellation still propagates, but the per-page timeout is independent
-// so one slow page doesn't consume the caller's whole budget. defer
-// cancel() inside a function body correctly releases each page's context
-// on every return path — using defer inside the loop body would leak.
-func (c *ComputeClient) fetchOnePricingPage(ctx context.Context, pageURL string, pageIdx int) (*AzureRetailPrice, error) {
-	pageCtx, cancel := context.WithTimeout(ctx, retailPricesPageTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(pageCtx, "GET", pageURL, nil)
+	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
+	items, err := pricing.FetchAll[AzureRetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request (page %d): %w", pageIdx, err)
+		return nil, err
 	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call pricing API (page %d, timeout %s): %w", pageIdx, retailPricesPageTimeout, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("pricing API returned status %d (page %d): %s", resp.StatusCode, pageIdx, string(body))
-	}
-
-	var page AzureRetailPrice
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		return nil, fmt.Errorf("failed to decode pricing response (page %d): %w", pageIdx, err)
-	}
-	return &page, nil
+	return &AzureRetailPrice{Items: items}, nil
 }
 
 // extractVMPricing extracts on-demand and reservation pricing from price items

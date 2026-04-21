@@ -209,21 +209,8 @@ func TestCacheClient_ValidateOffering_InvalidSKU(t *testing.T) {
 }
 
 func TestAzureRetailPriceStructure(t *testing.T) {
-	// Test that the struct can be properly constructed
 	price := AzureRetailPrice{
-		Count: 5,
-		Items: []struct {
-			CurrencyCode    string  `json:"currencyCode"`
-			RetailPrice     float64 `json:"retailPrice"`
-			UnitPrice       float64 `json:"unitPrice"`
-			ArmRegionName   string  `json:"armRegionName"`
-			ProductName     string  `json:"productName"`
-			ServiceName     string  `json:"serviceName"`
-			ArmSKUName      string  `json:"armSkuName"`
-			MeterName       string  `json:"meterName"`
-			ReservationTerm string  `json:"reservationTerm"`
-			Type            string  `json:"type"`
-		}{
+		Items: []CacheRetailPriceItem{
 			{
 				CurrencyCode:    "USD",
 				RetailPrice:     100.0,
@@ -237,10 +224,8 @@ func TestAzureRetailPriceStructure(t *testing.T) {
 				Type:            "Reservation",
 			},
 		},
-		NextPageLink: "https://example.com/next",
 	}
 
-	assert.Equal(t, 5, price.Count)
 	require.Len(t, price.Items, 1)
 	assert.Equal(t, "USD", price.Items[0].CurrencyCode)
 	assert.Equal(t, 100.0, price.Items[0].RetailPrice)

@@ -192,22 +192,7 @@ func TestSQLPricingStructure(t *testing.T) {
 
 func TestAzureRetailPriceStructure(t *testing.T) {
 	price := AzureRetailPrice{
-		Count: 3,
-		Items: []struct {
-			CurrencyCode    string  `json:"currencyCode"`
-			RetailPrice     float64 `json:"retailPrice"`
-			UnitPrice       float64 `json:"unitPrice"`
-			ArmRegionName   string  `json:"armRegionName"`
-			Location        string  `json:"location"`
-			MeterName       string  `json:"meterName"`
-			SKUName         string  `json:"skuName"`
-			ProductName     string  `json:"productName"`
-			ServiceName     string  `json:"serviceName"`
-			UnitOfMeasure   string  `json:"unitOfMeasure"`
-			Type            string  `json:"type"`
-			ArmSKUName      string  `json:"armSkuName"`
-			ReservationTerm string  `json:"reservationTerm"`
-		}{
+		Items: []DatabaseRetailPriceItem{
 			{
 				CurrencyCode:    "USD",
 				RetailPrice:     500.0,
@@ -224,10 +209,8 @@ func TestAzureRetailPriceStructure(t *testing.T) {
 				ReservationTerm: "1 Year",
 			},
 		},
-		NextPageLink: "",
 	}
 
-	assert.Equal(t, 3, price.Count)
 	require.Len(t, price.Items, 1)
 	assert.Equal(t, "USD", price.Items[0].CurrencyCode)
 	assert.Equal(t, "Standard_S0", price.Items[0].ArmSKUName)

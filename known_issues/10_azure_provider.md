@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 10 resolved · 0 partially fixed · 0 moved · 0 follow-ups outstanding from this audit pass`
+> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 11 resolved · 0 partially fixed · 0 moved · 0 follow-ups outstanding from this audit pass`
 
 ## ~~CRITICAL: Recommendation converters ignore the API response entirely~~ — RESOLVED
 
@@ -311,14 +311,36 @@ The per-recommendation `Region` field is now whatever the per-service converter 
 
 **Effort:** `medium` (each service is ~30 LOC + a fixture test).
 
-## LOW: Four parallel `AzureRetailPrice` types in azure service clients
+## ~~LOW: Four parallel `AzureRetailPrice` types in azure service clients~~ — RESOLVED
 
 **File**: `providers/azure/services/compute/client.go:124`, `database/client.go:120`, `cache/client.go:118`, `cosmosdb/client.go:121`
-**Description**: Each service client defines its own `AzureRetailPrice` struct. Compute exports a typed `AzureRetailPriceItem`; the other three use inline anonymous structs with service-specific fields (`MeterName`, `ProductName`, `ServiceName`, `ArmSKUName`, etc.). After the pagination fix in commit `04b375f68`, the same `NextPageLink` walking loop (with seen-map, page cap, per-page error wrapping) now lives in all four `fetchAzurePricing` methods — ~50 LOC of identical boilerplate per service.
-**Impact**: Maintenance friction — any future schema change (API version bump, new response field, different auth) has to be made in four places. Current runtime cost is low (the loop bodies are small, the schemas are stable), but the duplication will ossify as each copy drifts.
-**Status:** ✅ Still valid
+**Description**: Each service client defined its own `AzureRetailPrice` struct. Compute exported a typed `AzureRetailPriceItem`; the other three used inline anonymous structs with service-specific fields (`MeterName`, `ProductName`, `ServiceName`, `ArmSKUName`, etc.). After the pagination fix in commit `04b375f68`, the same `NextPageLink` walking loop (with seen-map, page cap, per-page error wrapping) lived in all four `fetchAzurePricing` methods — ~50 LOC of identical boilerplate per service.
+**Impact**: Maintenance friction — any future schema change (API version bump, new response field, different auth) would have to be made in four places. Current runtime cost was low (the loop bodies were small, the schemas were stable), but the duplication would ossify as each copy drifted.
+**Status:** ✔️ Resolved
 
-### Implementation plan
+**Resolved by:** new `providers/azure/internal/pricing/` package owns the shared walker. Key pieces:
+
+- `pricing.Page[T any]` is the generic envelope (`Items []T`, `NextPageLink string`, `Count int`) — one decode target, one envelope shape, parameterised by the per-service item type.
+- `pricing.FetchAll[T any](ctx, httpClient, initialURL, pageTimeout, maxPages)` walks the `NextPageLink` chain and returns the flat `[]T` slice. Enforces a per-page timeout (`DefaultPageTimeout = 10 * time.Second`), a max-pages cap (`DefaultMaxPages = 50`), and a seen-URL guard against self-referential `NextPageLink`. Returns scoped errors naming the page index + timeout duration so operators can distinguish cases in logs.
+- `pricing.HTTPClient` is a minimal interface (single `Do(req)` method) declared in the shared package so it has no upstream dependency on per-service types.
+
+Per-service changes:
+
+- `compute/client.go` keeps its exported `AzureRetailPriceItem` named type and passes it as the `T` parameter. `fetchAzurePricing` is now a ~10-line wrapper: build the URL with `$filter` + `api-version`, call `pricing.FetchAll[AzureRetailPriceItem]`, wrap the returned slice in `&AzureRetailPrice{Items: items}`. The per-service `fetchOnePricingPage` helper is gone.
+- `database/client.go` lifts its inline anonymous Items struct to a named `DatabaseRetailPriceItem` type. `extractSQLPricing`'s signature becomes `([]DatabaseRetailPriceItem, int)` — simpler and smaller.
+- `cache/client.go` same lift → `CacheRetailPriceItem`; `extractRedisPricing` takes the named type.
+- `cosmosdb/client.go` same lift → `CosmosRetailPriceItem`; `extractCosmosPricing` takes the named type.
+
+Each service's `AzureRetailPrice` type is preserved as a thin envelope `{ Items []<ServiceItem> }` so the existing `priceData.Items` call sites and `TestAzureRetailPriceStructure` tests keep compiling — the `Count` and `NextPageLink` fields were removed from the envelope (they're never read outside the walker, which now lives in the shared package).
+
+Test coverage:
+
+- `providers/azure/internal/pricing/retail_prices_test.go` — six scenarios: multi-page merge, self-referential NextPageLink, max-pages cap, per-page timeout (verifies the request context carries a deadline and the outer ctx is NOT cancelled on per-page failure), non-OK status codes, zero-maxPages guard.
+- `services/compute/client_test.go::TestFetchAzurePricing_WrapperSmokeTest` — one per-service smoke test proving the wrapper builds the URL correctly and re-wraps the returned slice in the service-local envelope. Database/cache/cosmos exercise the same shape through their existing extractor tests.
+
+Before: ~50 LOC of duplicated pagination loop × 4 services = ~200 LOC. After: ~120 LOC in the shared package (including tests) + ~15 LOC wrapper × 4 services = ~180 LOC, no duplication.
+
+### Original implementation plan
 
 **Goal:** Single `providers/azure/internal/pricing/` package owning the shared retail-prices payload + pagination loop, with service-specific extractor helpers on top.
 

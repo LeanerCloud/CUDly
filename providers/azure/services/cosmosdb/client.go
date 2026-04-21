@@ -20,6 +20,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
 
@@ -102,25 +103,28 @@ func (c *CosmosDBClient) GetRegion() string {
 	return c.region
 }
 
-// AzureRetailPrice represents pricing information from Azure Retail Prices API
+// CosmosRetailPriceItem is the Azure Retail Prices API item shape for
+// Cosmos DB. Lifted from the previous inline anonymous struct so it can
+// serve as the type parameter to pricing.FetchAll.
+type CosmosRetailPriceItem struct {
+	CurrencyCode    string  `json:"currencyCode"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
+	ArmRegionName   string  `json:"armRegionName"`
+	Location        string  `json:"location"`
+	MeterName       string  `json:"meterName"`
+	SKUName         string  `json:"skuName"`
+	ProductName     string  `json:"productName"`
+	ServiceName     string  `json:"serviceName"`
+	UnitOfMeasure   string  `json:"unitOfMeasure"`
+	Type            string  `json:"type"`
+	ArmSKUName      string  `json:"armSkuName"`
+	ReservationTerm string  `json:"reservationTerm"`
+}
+
+// AzureRetailPrice is the service-local envelope consumers still reference.
 type AzureRetailPrice struct {
-	Items []struct {
-		CurrencyCode    string  `json:"currencyCode"`
-		RetailPrice     float64 `json:"retailPrice"`
-		UnitPrice       float64 `json:"unitPrice"`
-		ArmRegionName   string  `json:"armRegionName"`
-		Location        string  `json:"location"`
-		MeterName       string  `json:"meterName"`
-		SKUName         string  `json:"skuName"`
-		ProductName     string  `json:"productName"`
-		ServiceName     string  `json:"serviceName"`
-		UnitOfMeasure   string  `json:"unitOfMeasure"`
-		Type            string  `json:"type"`
-		ArmSKUName      string  `json:"armSkuName"`
-		ReservationTerm string  `json:"reservationTerm"`
-	} `json:"Items"`
-	NextPageLink string `json:"NextPageLink"`
-	Count        int    `json:"Count"`
+	Items []CosmosRetailPriceItem `json:"Items"`
 }
 
 // GetRecommendations gets Cosmos DB reservation recommendations from Azure Consumption API
@@ -509,92 +513,25 @@ func (c *CosmosDBClient) getCosmosPricing(ctx context.Context, sku, region strin
 	}, nil
 }
 
-// retailPricesMaxPages caps fetchAzurePricing's NextPageLink loop. The
-// Azure Retail Prices API paginates at 100 items per page, so 50 pages
-// covers 5000 items — more than any realistic SKU/region/term query.
-const retailPricesMaxPages = 50
-
-// retailPricesPageTimeout bounds each individual page GET so one slow
-// page can't consume the caller's full context budget.
-const retailPricesPageTimeout = 10 * time.Second
-
 // fetchAzurePricing fetches pricing data from Azure Retail Prices API,
-// following NextPageLink until exhausted or the safety cap fires.
+// following NextPageLink until exhausted or the shared safety cap fires.
+// Delegates pagination to pricing.FetchAll.
 func (c *CosmosDBClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	baseURL := "https://prices.azure.com/api/retail/prices"
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	combined := &AzureRetailPrice{}
-	nextURL := baseURL + "?" + params.Encode()
-	seen := map[string]struct{}{}
-
-	for pageIdx := 0; pageIdx < retailPricesMaxPages && nextURL != ""; pageIdx++ {
-		if _, ok := seen[nextURL]; ok {
-			return nil, fmt.Errorf("pricing API returned a self-referential NextPageLink (page %d)", pageIdx)
-		}
-		seen[nextURL] = struct{}{}
-
-		page, err := c.fetchOnePricingPage(ctx, nextURL, pageIdx)
-		if err != nil {
-			return nil, err
-		}
-
-		combined.Items = append(combined.Items, page.Items...)
-		nextURL = page.NextPageLink
-	}
-
-	return combined, nil
-}
-
-// fetchOnePricingPage issues one GET with a bounded timeout and decodes
-// the response. pageCtx inherits cancellation from the caller's ctx but
-// the per-page timeout is independent. defer cancel() inside a function
-// body correctly releases each page's context — defer inside the loop
-// body would leak contexts on every iteration.
-func (c *CosmosDBClient) fetchOnePricingPage(ctx context.Context, pageURL string, pageIdx int) (*AzureRetailPrice, error) {
-	pageCtx, cancel := context.WithTimeout(ctx, retailPricesPageTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(pageCtx, "GET", pageURL, nil)
+	initialURL := baseURL + "?" + params.Encode()
+	items, err := pricing.FetchAll[CosmosRetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request (page %d): %w", pageIdx, err)
+		return nil, err
 	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call pricing API (page %d, timeout %s): %w", pageIdx, retailPricesPageTimeout, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("pricing API returned status %d (page %d): %s", resp.StatusCode, pageIdx, string(body))
-	}
-
-	var page AzureRetailPrice
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		return nil, fmt.Errorf("failed to decode pricing response (page %d): %w", pageIdx, err)
-	}
-	return &page, nil
+	return &AzureRetailPrice{Items: items}, nil
 }
 
 // extractCosmosPricing extracts on-demand and reservation pricing from price items
-func extractCosmosPricing(items []struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	Location        string  `json:"location"`
-	MeterName       string  `json:"meterName"`
-	SKUName         string  `json:"skuName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	UnitOfMeasure   string  `json:"unitOfMeasure"`
-	Type            string  `json:"type"`
-	ArmSKUName      string  `json:"armSkuName"`
-	ReservationTerm string  `json:"reservationTerm"`
-}, termYears int) (onDemand, reservation float64, currency string) {
+func extractCosmosPricing(items []CosmosRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := fmt.Sprintf("%d Years", termYears)
 

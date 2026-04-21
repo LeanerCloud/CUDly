@@ -604,89 +604,23 @@ func TestComputeClient_ConvertAzureVMRecommendation_PopulatesAllFields(t *testin
 	assert.Equal(t, "upfront", out.PaymentOption)
 }
 
-// TestFetchAzurePricing_FollowsNextPageLink pins the pagination behaviour
-// added to fix the "stops after page 1" bug: when the first response
-// includes NextPageLink, the loop must follow it and merge items from the
-// next page into the combined result. Without this, any SKU/region/term
-// query whose data spilled past page 100 silently returned zero matches.
-func TestFetchAzurePricing_FollowsNextPageLink(t *testing.T) {
+// TestFetchAzurePricing_WrapperSmokeTest verifies the compute-specific
+// wrapper around pricing.FetchAll — constructs the URL with filter +
+// api-version, passes the compute item type, and re-wraps the returned
+// slice in the service-local *AzureRetailPrice envelope. Exhaustive
+// pagination / self-referential / per-page-timeout behaviour lives in
+// providers/azure/internal/pricing/retail_prices_test.go and is not
+// duplicated here.
+func TestFetchAzurePricing_WrapperSmokeTest(t *testing.T) {
 	mockHTTP := &mocks.MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
-	page1 := `{"Items":[{"armSkuName":"Standard_D2s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":100.0,"unitPrice":100.0,"currencyCode":"USD"}],"NextPageLink":"https://prices.azure.com/api/retail/prices?page=2"}`
-	page2 := `{"Items":[{"armSkuName":"Standard_D4s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":200.0,"unitPrice":200.0,"currencyCode":"USD"}],"NextPageLink":""}`
-
-	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
-		return req.URL.Query().Get("page") == ""
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, page1), nil).Once()
-	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
-		return req.URL.Query().Get("page") == "2"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, page2), nil).Once()
+	body := `{"Items":[{"armSkuName":"Standard_D2s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":100.0,"unitPrice":100.0,"currencyCode":"USD"}],"NextPageLink":""}`
+	mockHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, body), nil).Once()
 
 	result, err := client.fetchAzurePricing(context.Background(), "anything")
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, result.Items, 2, "items from both pages must be merged")
+	require.Len(t, result.Items, 1)
 	assert.Equal(t, "Standard_D2s_v3", result.Items[0].ArmSKUName)
-	assert.Equal(t, "Standard_D4s_v3", result.Items[1].ArmSKUName)
-	mockHTTP.AssertExpectations(t)
-}
-
-// TestFetchAzurePricing_PerPageTimeout pins the per-page timeout
-// contract: a slow page (here: the second page) must fail with a scoped
-// error that names the timeout duration + page index, and the caller's
-// outer context must NOT be cancelled as a side effect — so subsequent
-// calls on the same outer ctx still work.
-func TestFetchAzurePricing_PerPageTimeout(t *testing.T) {
-	mockHTTP := &mocks.MockHTTPClient{}
-	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
-
-	page1 := `{"Items":[{"armSkuName":"Standard_D2s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":100.0,"unitPrice":100.0,"currencyCode":"USD"}],"NextPageLink":"https://prices.azure.com/api/retail/prices?page=2"}`
-
-	// Page 1 returns fast.
-	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
-		return req.URL.Query().Get("page") == ""
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, page1), nil).Once()
-
-	// Page 2's Do() returns the page-context's Err() — the real
-	// http.Client behaviour on a deadline exceeded. We can't actually
-	// sleep for 10 seconds in a unit test, so we sniff the page's
-	// context.Deadline to prove fetchOnePricingPage applied its own
-	// timeout, and return the deadline-exceeded error synchronously.
-	mockHTTP.On("Do", mock.MatchedBy(func(req *http.Request) bool {
-		return req.URL.Query().Get("page") == "2"
-	})).Return(nil, context.DeadlineExceeded).Run(func(args mock.Arguments) {
-		req := args.Get(0).(*http.Request)
-		if _, ok := req.Context().Deadline(); !ok {
-			t.Errorf("page 2 request context has no deadline — per-page timeout not applied")
-		}
-	}).Once()
-
-	outerCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	_, err := client.fetchAzurePricing(outerCtx, "anything")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "page 1")
-	assert.Contains(t, err.Error(), "timeout", "error must mention the timeout so the operator can diagnose")
-
-	assert.NoError(t, outerCtx.Err(), "outer ctx must not be cancelled by a per-page timeout")
-	mockHTTP.AssertExpectations(t)
-}
-
-// TestFetchAzurePricing_RejectsSelfReferentialNextPageLink covers the
-// safety check: if the server returns the same NextPageLink twice, the
-// loop must break with an error instead of looping forever.
-func TestFetchAzurePricing_RejectsSelfReferentialNextPageLink(t *testing.T) {
-	mockHTTP := &mocks.MockHTTPClient{}
-	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
-
-	// Returns a NextPageLink that points at the same initial URL — exact
-	// match including query string. The seen-set should detect the loop.
-	loopBody := `{"Items":[],"NextPageLink":"https://prices.azure.com/api/retail/prices?%24filter=anything&api-version=2023-01-01-preview"}`
-	mockHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, loopBody), nil)
-
-	_, err := client.fetchAzurePricing(context.Background(), "anything")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "self-referential")
 }
