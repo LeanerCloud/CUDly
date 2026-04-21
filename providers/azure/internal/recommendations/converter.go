@@ -3,12 +3,23 @@
 // converter (compute, database, cache, cosmosdb) needs to populate on
 // common.Recommendation.
 //
-// The Azure SDK hands each per-service converter an
-// `armconsumption.ReservationRecommendationClassification`. The real data
-// lives three indirections down (type-assert to *LegacyReservationRecommendation,
-// unwrap Properties via GetLegacyReservationRecommendationProperties(), then
-// read the struct fields). All four services go through the same ladder, so
-// doing it here once prevents drift.
+// The API returns one of two response shapes — Azure picks based on the
+// subscription's billing account type and signals it via the top-level
+// `Kind` field. The SDK models both as concrete types under the same
+// `ReservationRecommendationClassification` interface:
+//
+//   - `"legacy"` → *LegacyReservationRecommendation (Enterprise Agreement
+//     subscriptions and older MCA subscription-scope billing).
+//   - `"modern"` → *ModernReservationRecommendation (newer Microsoft
+//     Customer Agreement billing accounts, 2019+ rollouts).
+//
+// Real deployments get whichever shape their billing account emits; the
+// client does not choose. Handling only Legacy would leave MCA customers
+// with zero recommendations — so Extract type-switches between the two
+// and normalises both into a single `*ExtractedFields`. Fields that look
+// the same on the surface (`*float64` on Legacy, `*Amount` wrapping
+// currency on Modern) are normalised here so the per-service converters
+// never see the difference.
 package recommendations
 
 import (
@@ -18,16 +29,8 @@ import (
 )
 
 // ExtractedFields holds the per-rec data common to all four Azure
-// reservation recommendation services.
-//
-// Source-of-truth mapping:
-//
-//   - Region comes from the OUTER *LegacyReservationRecommendation.Location.
-//   - Every other field comes from the INNER LegacyReservationRecommendationProperties
-//     (reached via Properties.GetLegacyReservationRecommendationProperties(),
-//     which the SDK provides for all three concrete property types: the
-//     base LegacyReservationRecommendationProperties and the Shared/Single
-//     scope variants).
+// reservation recommendation services, normalised across both Legacy
+// and Modern API response shapes.
 type ExtractedFields struct {
 	Region           string
 	ResourceType     string
@@ -39,38 +42,52 @@ type ExtractedFields struct {
 	Scope            string
 }
 
-// Extract reads the Azure Legacy reservation recommendation shape into
-// *ExtractedFields. Returns nil if the input is nil, not a
-// *LegacyReservationRecommendation, or has nil Properties — callers gate
+// Extract reads the Azure reservation recommendation payload into
+// *ExtractedFields, normalising the Legacy/Modern shape difference.
+// Returns nil if the input is:
 //
-//	if f := Extract(rec); f != nil { ... }
+//   - nil,
+//   - neither `*LegacyReservationRecommendation` nor `*ModernReservationRecommendation`
+//     (defensively handles future SDK additions — a new Kind would surface
+//     as a Warnf log and be filtered out rather than break the pipeline),
+//   - missing Properties.
 //
-// and build their service-specific *common.Recommendation around the
-// returned fields. Returning nil (rather than (struct, bool)) keeps the
-// per-service wrappers to a single early return.
+// Callers gate on the return and build their service-specific
+// *common.Recommendation around the returned fields.
 func Extract(rec armconsumption.ReservationRecommendationClassification) *ExtractedFields {
 	if rec == nil {
 		return nil
 	}
-	legacy, ok := rec.(*armconsumption.LegacyReservationRecommendation)
-	if !ok || legacy == nil || legacy.Properties == nil {
+	switch v := rec.(type) {
+	case *armconsumption.LegacyReservationRecommendation:
+		return extractLegacy(v)
+	case *armconsumption.ModernReservationRecommendation:
+		return extractModern(v)
+	default:
+		logging.Warnf("azure recommendations: unsupported concrete type %T — dropping rec", rec)
 		return nil
 	}
-	props := legacy.Properties.GetLegacyReservationRecommendationProperties()
+}
+
+// extractLegacy handles EA (and older MCA) subscription recommendations.
+// Location lives on the envelope; cost fields are bare *float64.
+func extractLegacy(rec *armconsumption.LegacyReservationRecommendation) *ExtractedFields {
+	if rec == nil || rec.Properties == nil {
+		return nil
+	}
+	props := rec.Properties.GetLegacyReservationRecommendationProperties()
 	if props == nil {
 		return nil
 	}
 
 	out := &ExtractedFields{
-		Region:       strDeref(legacy.Location),
-		ResourceType: resolveResourceType(props),
+		Region:       strDeref(rec.Location),
+		ResourceType: resolveLegacyResourceType(props),
 		Term:         normaliseTerm(props.Term),
 		Scope:        strDeref(props.Scope),
 	}
 
 	if props.RecommendedQuantity != nil {
-		// Go truncates float→int toward zero; for the non-negative quantities
-		// Azure returns this matches the desired round-down.
 		out.Count = int(*props.RecommendedQuantity)
 	}
 	if props.CostWithNoReservedInstances != nil {
@@ -80,30 +97,77 @@ func Extract(rec armconsumption.ReservationRecommendationClassification) *Extrac
 		out.CommitmentCost = *props.TotalCostWithReservedInstances
 	}
 	if props.NetSavings != nil {
-		// NetSavings is reported over the LookBackPeriod (the API's usage
-		// window). Existing downstream consumers treat EstimatedSavings as
-		// monthly, and Azure's reservation recommendation API returns
-		// lookback-period savings that are typically equivalent to the
-		// monthly cost delta for the recommended SKU × quantity. Pass
-		// through verbatim; if a future audit shows this needs /12 (as the
-		// Advisor path does — see commit 2c0bb9102 for the Advisor
-		// annualSavingsAmount/12 conversion), revisit this line.
+		// See package godoc — pass-through; existing downstream consumers
+		// treat EstimatedSavings as lookback-period ≈ monthly.
 		out.EstimatedSavings = *props.NetSavings
 	}
+	return out
+}
+
+// extractModern handles MCA billing-account recommendations. Location is
+// on the envelope (preferred) with a fallback to the inner Properties
+// copy. Cost fields are `*Amount{Currency, Value}` — we unwrap .Value to
+// a bare float; currency is discarded (downstream consumers assume a
+// single-currency view per subscription, same as Legacy).
+func extractModern(rec *armconsumption.ModernReservationRecommendation) *ExtractedFields {
+	if rec == nil || rec.Properties == nil {
+		return nil
+	}
+	props := rec.Properties
+
+	region := strDeref(rec.Location)
+	if region == "" {
+		region = strDeref(props.Location)
+	}
+
+	out := &ExtractedFields{
+		Region:       region,
+		ResourceType: resolveModernResourceType(props),
+		Term:         normaliseTerm(props.Term),
+		Scope:        strDeref(props.Scope),
+	}
+
+	if props.RecommendedQuantity != nil {
+		out.Count = int(*props.RecommendedQuantity)
+	}
+	out.OnDemandCost = amountValue(props.CostWithNoReservedInstances)
+	out.CommitmentCost = amountValue(props.TotalCostWithReservedInstances)
+	out.EstimatedSavings = amountValue(props.NetSavings)
 
 	return out
 }
 
-// resolveResourceType returns the SKU identifier for the recommendation,
-// preferring the explicit NormalizedSize string when set, falling back to
-// the first SKUProperty named "SKUName" (Azure's convention for the
-// resource SKU in the key/value SKUProperties list), and finally to the
-// first non-empty value in the list.
-func resolveResourceType(props *armconsumption.LegacyReservationRecommendationProperties) string {
+// resolveLegacyResourceType follows the Legacy field ladder:
+// NormalizedSize → SKUProperties[Name==SKUName|skuName].Value → first
+// non-empty SKUProperty.Value.
+func resolveLegacyResourceType(props *armconsumption.LegacyReservationRecommendationProperties) string {
 	if s := strDeref(props.NormalizedSize); s != "" {
 		return s
 	}
-	for _, sku := range props.SKUProperties {
+	return resourceTypeFromSKUProperties(props.SKUProperties)
+}
+
+// resolveModernResourceType follows the Modern field ladder. Modern adds
+// a top-level SKUName pointer (the cleanest source), so the preference is
+// SKUName → NormalizedSize → SKUProperties fallback. The SKUProperties
+// fallback matches Legacy's contract so a switch between billing-account
+// types doesn't change ResourceType semantics.
+func resolveModernResourceType(props *armconsumption.ModernReservationRecommendationProperties) string {
+	if s := strDeref(props.SKUName); s != "" {
+		return s
+	}
+	if s := strDeref(props.NormalizedSize); s != "" {
+		return s
+	}
+	return resourceTypeFromSKUProperties(props.SKUProperties)
+}
+
+// resourceTypeFromSKUProperties scans a SKUProperties key/value list for
+// an identifier. Preference: entry named "SKUName" (Azure's convention
+// for the resource SKU) or "skuName" (seen on some responses), then the
+// first non-empty value as a last resort.
+func resourceTypeFromSKUProperties(skus []*armconsumption.SKUProperty) string {
+	for _, sku := range skus {
 		if sku == nil {
 			continue
 		}
@@ -113,7 +177,7 @@ func resolveResourceType(props *armconsumption.LegacyReservationRecommendationPr
 			}
 		}
 	}
-	for _, sku := range props.SKUProperties {
+	for _, sku := range skus {
 		if sku == nil {
 			continue
 		}
@@ -125,11 +189,11 @@ func resolveResourceType(props *armconsumption.LegacyReservationRecommendationPr
 }
 
 // normaliseTerm maps Azure's ISO-8601 duration term strings ("P1Y", "P3Y")
-// to the codebase's "1yr" / "3yr" convention. A nil or empty term defaults
-// to "1yr" to match the previous stub's invariant (downstream code like
-// the purchase flow assumes a non-empty term). Unknown values are passed
-// through verbatim and logged so a future SDK enum addition surfaces in
-// logs without silently breaking the pipeline.
+// to the codebase's "1yr" / "3yr" convention. A nil or empty term
+// defaults to "1yr" (matches the previous stub's invariant — downstream
+// code like the purchase flow assumes a non-empty term). Unknown values
+// pass through verbatim and are logged so a future SDK enum addition
+// surfaces rather than breaking the pipeline silently.
 func normaliseTerm(term *string) string {
 	if term == nil || *term == "" {
 		return "1yr"
@@ -143,6 +207,17 @@ func normaliseTerm(term *string) string {
 		logging.Warnf("azure recommendations: unrecognised Term value %q; passing through verbatim", *term)
 		return *term
 	}
+}
+
+// amountValue unwraps Modern's *Amount{Currency, Value} wrapper to a
+// bare float. Returns 0 for nil or missing-Value payloads. Currency is
+// discarded — downstream Recommendation consumers assume a single-
+// currency view per subscription, same as the Legacy path.
+func amountValue(a *armconsumption.Amount) float64 {
+	if a == nil || a.Value == nil {
+		return 0
+	}
+	return *a.Value
 }
 
 func strDeref(s *string) string {

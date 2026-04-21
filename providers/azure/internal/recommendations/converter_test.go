@@ -137,3 +137,75 @@ func TestExtract_MissingCostsReadAsZero(t *testing.T) {
 	assert.InDelta(t, 0.0, f.CommitmentCost, 1e-9)
 	assert.InDelta(t, 0.0, f.EstimatedSavings, 1e-9)
 }
+
+// --- Modern (MCA billing account) ----------------------------------------
+
+func TestExtract_Modern_NilProperties(t *testing.T) {
+	rec := mocks.BuildModernReservationRecommendation(mocks.WithModernNilProperties())
+	assert.Nil(t, Extract(rec))
+}
+
+func TestExtract_Modern_AllFieldsSet(t *testing.T) {
+	rec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernRegion("westeurope"),
+		mocks.WithModernScope("Shared"),
+		mocks.WithModernTerm("P3Y"),
+		mocks.WithModernQuantity(4),
+		mocks.WithModernSKUName("Standard_D4s_v5"),
+		mocks.WithModernCosts(400, 260, 140),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Equal(t, "westeurope", f.Region)
+	assert.Equal(t, "Shared", f.Scope)
+	assert.Equal(t, "3yr", f.Term)
+	assert.Equal(t, 4, f.Count)
+	assert.Equal(t, "Standard_D4s_v5", f.ResourceType)
+	assert.InDelta(t, 400.0, f.OnDemandCost, 1e-9)
+	assert.InDelta(t, 260.0, f.CommitmentCost, 1e-9)
+	assert.InDelta(t, 140.0, f.EstimatedSavings, 1e-9)
+}
+
+func TestExtract_Modern_RegionFallsBackToInnerProperties(t *testing.T) {
+	// Envelope Location is nil; Properties.Location supplies the fallback.
+	rec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernInnerRegion("northeurope"),
+		mocks.WithModernSKUName("Standard_D2"),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Equal(t, "northeurope", f.Region)
+}
+
+func TestExtract_Modern_ResourceTypePrefersSKUNameOverNormalizedSize(t *testing.T) {
+	// Both populated — Modern's top-level SKUName wins over NormalizedSize
+	// (matches the Modern field-preference documented in resolveModernResourceType).
+	rec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernSKUName("Standard_E4s_v5"),
+		mocks.WithModernNormalizedSize("Standard_D2"),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Equal(t, "Standard_E4s_v5", f.ResourceType)
+}
+
+func TestExtract_Modern_ResourceTypeFallsBackToNormalizedSize(t *testing.T) {
+	// No SKUName — should fall back to NormalizedSize (second preference).
+	rec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernNormalizedSize("Standard_D2"),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Equal(t, "Standard_D2", f.ResourceType)
+}
+
+func TestExtract_Modern_MissingCostAmountsReadAsZero(t *testing.T) {
+	// *Amount fields left nil by default — amountValue guards both
+	// "nil *Amount" and "non-nil *Amount with nil Value".
+	rec := mocks.BuildModernReservationRecommendation()
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.InDelta(t, 0.0, f.OnDemandCost, 1e-9)
+	assert.InDelta(t, 0.0, f.CommitmentCost, 1e-9)
+	assert.InDelta(t, 0.0, f.EstimatedSavings, 1e-9)
+}

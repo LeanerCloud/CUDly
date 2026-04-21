@@ -127,3 +127,112 @@ func WithNilProperties() LegacyOpt {
 		rec.Properties = nil
 	}
 }
+
+// ModernOpt configures a *ModernReservationRecommendation fixture built
+// by BuildModernReservationRecommendation. Mirror of LegacyOpt.
+type ModernOpt func(*armconsumption.ModernReservationRecommendation, *armconsumption.ModernReservationRecommendationProperties)
+
+// BuildModernReservationRecommendation returns an SDK-typed
+// *ModernReservationRecommendation (MCA billing account shape). Defaults
+// mirror the Legacy builder: "eastus" location, "Shared" scope, "P1Y"
+// term, quantity 1, empty SKU. Cost fields use Azure's *Amount wrapper —
+// pass WithModernCosts or leave them nil to exercise the amountValue
+// nil-guard.
+func BuildModernReservationRecommendation(opts ...ModernOpt) *armconsumption.ModernReservationRecommendation {
+	location := "eastus"
+	scope := "Shared"
+	term := "P1Y"
+	qty := float64(1)
+
+	props := &armconsumption.ModernReservationRecommendationProperties{
+		Scope:               &scope,
+		Term:                &term,
+		RecommendedQuantity: &qty,
+	}
+	rec := &armconsumption.ModernReservationRecommendation{
+		Location:   &location,
+		Properties: props,
+	}
+	for _, opt := range opts {
+		opt(rec, props)
+	}
+	return rec
+}
+
+// WithModernRegion sets the outer envelope Location (the preferred source
+// for Region extraction).
+func WithModernRegion(region string) ModernOpt {
+	return func(rec *armconsumption.ModernReservationRecommendation, _ *armconsumption.ModernReservationRecommendationProperties) {
+		rec.Location = &region
+	}
+}
+
+// WithModernInnerRegion clears the outer Location and sets the inner
+// Properties.Location instead — exercises the fallback path.
+func WithModernInnerRegion(region string) ModernOpt {
+	return func(rec *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		rec.Location = nil
+		props.Location = &region
+	}
+}
+
+// WithModernScope overrides the default "Shared" scope.
+func WithModernScope(scope string) ModernOpt {
+	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		props.Scope = &scope
+	}
+}
+
+// WithModernTerm overrides the Azure term. Empty string clears the field
+// entirely to exercise the "missing defaults to 1yr" path.
+func WithModernTerm(term string) ModernOpt {
+	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		if term == "" {
+			props.Term = nil
+			return
+		}
+		props.Term = &term
+	}
+}
+
+// WithModernQuantity overrides RecommendedQuantity.
+func WithModernQuantity(qty float64) ModernOpt {
+	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		props.RecommendedQuantity = &qty
+	}
+}
+
+// WithModernSKUName sets the top-level Modern SKUName — the preferred
+// source for ResourceType on Modern recs.
+func WithModernSKUName(sku string) ModernOpt {
+	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		props.SKUName = &sku
+	}
+}
+
+// WithModernNormalizedSize populates NormalizedSize (second-preference
+// source for ResourceType on Modern).
+func WithModernNormalizedSize(size string) ModernOpt {
+	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		props.NormalizedSize = &size
+	}
+}
+
+// WithModernCosts sets the three *Amount cost fields. All three receive
+// the same currency ("USD" default); pass an empty currency to cover the
+// "currency not sent" edge case (the converter discards currency anyway).
+func WithModernCosts(onDemand, commitment, savings float64) ModernOpt {
+	return func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		currency := "USD"
+		props.CostWithNoReservedInstances = &armconsumption.Amount{Currency: &currency, Value: &onDemand}
+		props.TotalCostWithReservedInstances = &armconsumption.Amount{Currency: &currency, Value: &commitment}
+		props.NetSavings = &armconsumption.Amount{Currency: &currency, Value: &savings}
+	}
+}
+
+// WithModernNilProperties zeroes Properties, exercising the guard.
+func WithModernNilProperties() ModernOpt {
+	return func(rec *armconsumption.ModernReservationRecommendation, _ *armconsumption.ModernReservationRecommendationProperties) {
+		rec.Properties = nil
+	}
+}

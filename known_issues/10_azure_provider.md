@@ -9,7 +9,7 @@
 **Impact**: Every `GetRecommendations` call returned useless stub objects. Purchase flows driven from these would attempt to buy empty resource types with quantity 0.
 **Status:** ✔️ Resolved
 
-**Resolved by:** New shared helper `providers/azure/internal/recommendations/converter.go::Extract` owns the type ladder (type-assert to `*armconsumption.LegacyReservationRecommendation`, unwrap `Properties` via `GetLegacyReservationRecommendationProperties()`) and every nil-pointer guard. Each of the four service converters now calls `recommendations.Extract(azureRec)` and returns nil when the helper returns nil (unusable payload — caller filters it out) or builds a fully-populated `common.Recommendation` when extraction succeeds.
+**Resolved by:** New shared helper `providers/azure/internal/recommendations/converter.go::Extract` owns the type ladder and every nil-pointer guard. Handles BOTH `*LegacyReservationRecommendation` (EA / older MCA subscriptions) and `*ModernReservationRecommendation` (newer MCA billing accounts) — Azure picks the shape based on the subscription's billing account type, so supporting both is mandatory (MCA customers would otherwise see zero Azure recs). Each of the four service converters now calls `recommendations.Extract(azureRec)` and returns nil when the helper returns nil (unusable payload — caller filters it out) or builds a fully-populated `common.Recommendation` when extraction succeeds. Unknown future kinds log a `Warnf` and return nil — they're filtered without breaking the pipeline.
 
 Fields populated:
 
