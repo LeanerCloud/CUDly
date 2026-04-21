@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
 // MockRecommendationsPager mocks the RecommendationsPager interface
@@ -745,20 +746,39 @@ func TestCacheClient_GetCommonSKUs(t *testing.T) {
 	assert.Contains(t, skus, "Premium_P5")
 }
 
-func TestCacheClient_ConvertAzureRedisRecommendation(t *testing.T) {
-	ctx := context.Background()
+// TestCacheClient_ConvertAzureRedisRecommendation_NilGuards pins the new
+// contract: unusable SDK payloads produce a nil *Recommendation.
+func TestCacheClient_ConvertAzureRedisRecommendation_NilGuards(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
+	assert.Nil(t, client.convertAzureRedisRecommendation(context.Background(), nil))
+}
 
-	// Test with nil recommendation
-	rec := client.convertAzureRedisRecommendation(ctx, nil)
-	require.NotNil(t, rec)
-	assert.Equal(t, common.ProviderAzure, rec.Provider)
-	assert.Equal(t, common.ServiceCache, rec.Service)
-	assert.Equal(t, "test-subscription", rec.Account)
-	assert.Equal(t, "eastus", rec.Region)
-	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
-	assert.Equal(t, "1yr", rec.Term)
-	assert.Equal(t, "upfront", rec.PaymentOption)
+// TestCacheClient_ConvertAzureRedisRecommendation_PopulatesAllFields asserts
+// the converter forwards every helper-extracted field + applies the
+// Cache-service-specific constants.
+func TestCacheClient_ConvertAzureRedisRecommendation_PopulatesAllFields(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithTerm("P3Y"),
+		mocks.WithQuantity(1),
+		mocks.WithNormalizedSize("Premium_P3"),
+		mocks.WithCosts(50, 35, 15),
+	)
+	out := client.convertAzureRedisRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	assert.Equal(t, common.ProviderAzure, out.Provider)
+	assert.Equal(t, common.ServiceCache, out.Service)
+	assert.Equal(t, "test-subscription", out.Account)
+	assert.Equal(t, "eastus", out.Region)
+	assert.Equal(t, "Premium_P3", out.ResourceType)
+	assert.Equal(t, 1, out.Count)
+	assert.InDelta(t, 50.0, out.OnDemandCost, 1e-9)
+	assert.InDelta(t, 35.0, out.CommitmentCost, 1e-9)
+	assert.InDelta(t, 15.0, out.EstimatedSavings, 1e-9)
+	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
+	assert.Equal(t, "3yr", out.Term)
+	assert.Equal(t, "upfront", out.PaymentOption)
 }
 
 // Test the to package is properly imported (used in tests)

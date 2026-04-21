@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
 // MockRecommendationsPager mocks the RecommendationsPager interface
@@ -842,18 +843,37 @@ func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
 }
 
-func TestCosmosDBClient_ConvertAzureCosmosRecommendation(t *testing.T) {
-	ctx := context.Background()
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_NilGuards pins the
+// new contract: unusable SDK payloads produce a nil *Recommendation.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_NilGuards(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
+	assert.Nil(t, client.convertAzureCosmosRecommendation(context.Background(), nil))
+}
 
-	// Test with nil recommendation
-	rec := client.convertAzureCosmosRecommendation(ctx, nil)
-	require.NotNil(t, rec)
-	assert.Equal(t, common.ProviderAzure, rec.Provider)
-	assert.Equal(t, common.ServiceNoSQL, rec.Service)
-	assert.Equal(t, "test-subscription", rec.Account)
-	assert.Equal(t, "eastus", rec.Region)
-	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
-	assert.Equal(t, "1yr", rec.Term)
-	assert.Equal(t, "upfront", rec.PaymentOption)
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields
+// asserts the converter forwards every helper-extracted field + applies
+// the CosmosDB-service-specific constants.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("westus2"),
+		mocks.WithTerm("P1Y"),
+		mocks.WithQuantity(3),
+		mocks.WithNormalizedSize("CosmosDB_RU_1000"),
+		mocks.WithCosts(300, 210, 90),
+	)
+	out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	assert.Equal(t, common.ProviderAzure, out.Provider)
+	assert.Equal(t, common.ServiceNoSQL, out.Service)
+	assert.Equal(t, "test-subscription", out.Account)
+	assert.Equal(t, "westus2", out.Region)
+	assert.Equal(t, "CosmosDB_RU_1000", out.ResourceType)
+	assert.Equal(t, 3, out.Count)
+	assert.InDelta(t, 300.0, out.OnDemandCost, 1e-9)
+	assert.InDelta(t, 210.0, out.CommitmentCost, 1e-9)
+	assert.InDelta(t, 90.0, out.EstimatedSavings, 1e-9)
+	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
+	assert.Equal(t, "1yr", out.Term)
+	assert.Equal(t, "upfront", out.PaymentOption)
 }

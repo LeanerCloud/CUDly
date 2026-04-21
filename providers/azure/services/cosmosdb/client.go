@@ -20,6 +20,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
 
 // HTTPClient interface for HTTP operations (enables mocking)
@@ -606,18 +607,28 @@ func calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPri
 	return ((onDemandTotal - reservationPrice) / onDemandTotal) * 100
 }
 
-// convertAzureCosmosRecommendation converts Azure Cosmos DB reservation recommendation to common format
-func (c *CosmosDBClient) convertAzureCosmosRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
-	rec := &common.Recommendation{
-		Provider:       common.ProviderAzure,
-		Service:        common.ServiceNoSQL,
-		Account:        c.subscriptionID,
-		Region:         c.region,
-		CommitmentType: common.CommitmentReservedInstance,
-		Timestamp:      time.Now(),
-		Term:           "1yr",
-		PaymentOption:  "upfront",
+// convertAzureCosmosRecommendation converts Azure Cosmos DB reservation recommendation to common format.
+// See providers/azure/internal/recommendations.Extract for the shared
+// SDK-to-struct ladder. Returns nil when the SDK payload is unusable.
+// Details left nil — follow-up.
+func (c *CosmosDBClient) convertAzureCosmosRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+	f := recommendations.Extract(azureRec)
+	if f == nil {
+		return nil
 	}
-
-	return rec
+	return &common.Recommendation{
+		Provider:         common.ProviderAzure,
+		Service:          common.ServiceNoSQL,
+		Account:          c.subscriptionID,
+		Region:           f.Region,
+		ResourceType:     f.ResourceType,
+		Count:            f.Count,
+		OnDemandCost:     f.OnDemandCost,
+		CommitmentCost:   f.CommitmentCost,
+		EstimatedSavings: f.EstimatedSavings,
+		CommitmentType:   common.CommitmentReservedInstance,
+		Term:             f.Term,
+		PaymentOption:    "upfront",
+		Timestamp:        time.Now(),
+	}
 }

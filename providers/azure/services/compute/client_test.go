@@ -564,19 +564,44 @@ func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
 }
 
-func TestComputeClient_ConvertAzureVMRecommendation(t *testing.T) {
-	ctx := context.Background()
+// TestComputeClient_ConvertAzureVMRecommendation_NilGuards pins the new
+// contract: unusable SDK payloads (nil, wrong concrete type, nil Properties)
+// produce a nil *Recommendation so the caller can filter it out. Before
+// this converter was wired through the shared Extract helper the stub
+// returned a non-nil but useless recommendation for every nil input.
+func TestComputeClient_ConvertAzureVMRecommendation_NilGuards(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
+	assert.Nil(t, client.convertAzureVMRecommendation(context.Background(), nil))
+}
 
-	rec := client.convertAzureVMRecommendation(ctx, nil)
-	require.NotNil(t, rec)
-	assert.Equal(t, common.ProviderAzure, rec.Provider)
-	assert.Equal(t, common.ServiceCompute, rec.Service)
-	assert.Equal(t, "test-subscription", rec.Account)
-	assert.Equal(t, "eastus", rec.Region)
-	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
-	assert.Equal(t, "1yr", rec.Term)
-	assert.Equal(t, "upfront", rec.PaymentOption)
+// TestComputeClient_ConvertAzureVMRecommendation_PopulatesAllFields asserts
+// the converter forwards every helper-extracted field into the result and
+// applies the Compute-service-specific constants (Service, CommitmentType,
+// PaymentOption). Subscription/Account comes from the client, not the rec.
+func TestComputeClient_ConvertAzureVMRecommendation_PopulatesAllFields(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("westeurope"),
+		mocks.WithScope("Shared"),
+		mocks.WithTerm("P3Y"),
+		mocks.WithQuantity(2),
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		mocks.WithCosts(100, 70, 30),
+	)
+	out := client.convertAzureVMRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	assert.Equal(t, common.ProviderAzure, out.Provider)
+	assert.Equal(t, common.ServiceCompute, out.Service)
+	assert.Equal(t, "test-subscription", out.Account)
+	assert.Equal(t, "westeurope", out.Region)
+	assert.Equal(t, "Standard_D2s_v3", out.ResourceType)
+	assert.Equal(t, 2, out.Count)
+	assert.InDelta(t, 100.0, out.OnDemandCost, 1e-9)
+	assert.InDelta(t, 70.0, out.CommitmentCost, 1e-9)
+	assert.InDelta(t, 30.0, out.EstimatedSavings, 1e-9)
+	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
+	assert.Equal(t, "3yr", out.Term)
+	assert.Equal(t, "upfront", out.PaymentOption)
 }
 
 // TestFetchAzurePricing_FollowsNextPageLink pins the pagination behaviour

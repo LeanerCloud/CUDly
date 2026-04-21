@@ -20,6 +20,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
 
 // HTTPClient interface for HTTP operations (enables mocking)
@@ -595,22 +596,28 @@ func extractSQLPricing(items []struct {
 	return onDemand, reservation, currency
 }
 
-// convertAzureSQLRecommendation converts Azure SQL reservation recommendation to common format
-func (c *DatabaseClient) convertAzureSQLRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
-	rec := &common.Recommendation{
-		Provider:       common.ProviderAzure,
-		Service:        common.ServiceRelationalDB,
-		Account:        c.subscriptionID,
-		Region:         c.region,
-		CommitmentType: common.CommitmentReservedInstance,
-		Timestamp:      time.Now(),
-		Term:           "1yr",
-		PaymentOption:  "upfront",
+// convertAzureSQLRecommendation converts Azure SQL reservation recommendation to common format.
+// See providers/azure/internal/recommendations.Extract for the shared
+// SDK-to-struct ladder. Returns nil when the SDK payload is unusable so
+// the caller can filter it out. Details left nil — follow-up.
+func (c *DatabaseClient) convertAzureSQLRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+	f := recommendations.Extract(azureRec)
+	if f == nil {
+		return nil
 	}
-
-	// Azure recommendations need to be parsed based on their specific type
-	// The API returns different structures for different resource types
-	// Extract common fields that are available across all types
-
-	return rec
+	return &common.Recommendation{
+		Provider:         common.ProviderAzure,
+		Service:          common.ServiceRelationalDB,
+		Account:          c.subscriptionID,
+		Region:           f.Region,
+		ResourceType:     f.ResourceType,
+		Count:            f.Count,
+		OnDemandCost:     f.OnDemandCost,
+		CommitmentCost:   f.CommitmentCost,
+		EstimatedSavings: f.EstimatedSavings,
+		CommitmentType:   common.CommitmentReservedInstance,
+		Term:             f.Term,
+		PaymentOption:    "upfront",
+		Timestamp:        time.Now(),
+	}
 }

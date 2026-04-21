@@ -21,6 +21,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
 
 // RecommendationsPager defines the interface for paging through recommendations
@@ -683,18 +684,35 @@ func extractVMPricing(items []AzureRetailPriceItem, termYears int) (onDemand, re
 	return onDemand, reservation, currency
 }
 
-// convertAzureVMRecommendation converts Azure VM reservation recommendation to common format
-func (c *ComputeClient) convertAzureVMRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
-	rec := &common.Recommendation{
-		Provider:       common.ProviderAzure,
-		Service:        common.ServiceCompute,
-		Account:        c.subscriptionID,
-		Region:         c.region,
-		CommitmentType: common.CommitmentReservedInstance,
-		Timestamp:      time.Now(),
-		Term:           "1yr",
-		PaymentOption:  "upfront",
+// convertAzureVMRecommendation converts Azure VM reservation recommendation to common format.
+//
+// Returns nil when the SDK payload is unusable (nil, wrong concrete type,
+// or missing Properties) so the caller can filter it out rather than
+// append an empty recommendation. The field extraction lives in
+// providers/azure/internal/recommendations so the four Azure service
+// converters share the same type-assertion + nil-guard ladder.
+//
+// Details intentionally left nil — same as before this change; per-service
+// Details population is tracked as a follow-up in
+// known_issues/10_azure_provider.md.
+func (c *ComputeClient) convertAzureVMRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+	f := recommendations.Extract(azureRec)
+	if f == nil {
+		return nil
 	}
-
-	return rec
+	return &common.Recommendation{
+		Provider:         common.ProviderAzure,
+		Service:          common.ServiceCompute,
+		Account:          c.subscriptionID,
+		Region:           f.Region,
+		ResourceType:     f.ResourceType,
+		Count:            f.Count,
+		OnDemandCost:     f.OnDemandCost,
+		CommitmentCost:   f.CommitmentCost,
+		EstimatedSavings: f.EstimatedSavings,
+		CommitmentType:   common.CommitmentReservedInstance,
+		Term:             f.Term,
+		PaymentOption:    "upfront",
+		Timestamp:        time.Now(),
+	}
 }
