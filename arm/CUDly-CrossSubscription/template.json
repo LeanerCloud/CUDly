@@ -23,13 +23,10 @@
   },
 
   "variables": {
-    "subscriptionScope": "[concat('/subscriptions/', subscription().subscriptionId)]",
-
     "roles": {
-      "reader":                     "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7')]",
-      "costManagementReader":        "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/72fafb9e-0641-4937-9268-a91bfd8191a3')]",
-      "reservationPurchaser":        "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/f7b75c60-3036-4b75-91c3-6b41c27c1689')]",
-      "reservationReader":           "[concat(variables('subscriptionScope'), '/providers/Microsoft.Authorization/roleDefinitions/582fc458-8989-419f-a480-75249a578f9d')]"
+      "reader":               "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
+      "costManagementReader": "/providers/Microsoft.Authorization/roleDefinitions/72fafb9e-0641-4937-9268-a91bfd8191a3",
+      "reservationPurchaser": "/providers/Microsoft.Authorization/roleDefinitions/f7b75c60-3036-4b75-91c3-6b41c27c1689"
     }
   },
 
@@ -64,18 +61,19 @@
         "roleDefinitionId": "[variables('roles').reservationPurchaser]",
         "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal",
-        "description": "CUDly — purchase Azure Reservations"
+        "description": "CUDly — purchase Azure Reservations in this subscription"
       }
     },
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "name": "[guid(parameters('servicePrincipalObjectId'), 'reservationReader', subscription().subscriptionId)]",
+      "scope": "/providers/Microsoft.Capacity",
+      "name": "[guid(parameters('servicePrincipalObjectId'), 'reservationPurchaserCapacity')]",
       "properties": {
-        "roleDefinitionId": "[variables('roles').reservationReader]",
+        "roleDefinitionId": "[variables('roles').reservationPurchaser]",
         "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal",
-        "description": "CUDly — read existing Azure Reservations"
+        "description": "CUDly — read + purchase Azure Reservations at tenant capacity scope. Supersets Reservation Reader (582fc458-8989-419f-a480-75249a578f9d), which is not provisioned in every tenant and would otherwise fail with RoleDefinitionDoesNotExist on those tenants."
       }
     }
   ],

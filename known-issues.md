@@ -4,7 +4,7 @@ No critical issues at this time. The following are known limitations:
 
 ## Azure
 
-- **ARM template role definition scoping breaks `Reservation Reader` assignment**: The `arm/CUDly-CrossSubscription/template.json` constructs role definition IDs scoped to the subscription (e.g. `/subscriptions/{subId}/providers/Microsoft.Authorization/roleDefinitions/...`). Azure built-in roles are global resources — this causes ARM to look for the role definition within the subscription, where it may not be registered. `Reservation Reader` (`582fc458-8989-419f-a480-75249a578f9d`) is a billing/capacity-scope role and consistently fails with `RoleDefinitionDoesNotExist`. **Fix:** use the unscoped global path for all role definitions (e.g. `/providers/Microsoft.Authorization/roleDefinitions/{id}`). **Workaround:** assign the first three roles via `az role assignment create --scope /subscriptions/{subId}` using `arm/CUDly-CrossSubscription/assign-roles.sh`. `Reservation Reader` (`582fc458-8989-419f-a480-75249a578f9d`) is not provisioned in all Azure tenants — confirmed absent in Archera's test tenant via `az role definition list` (only `Reservation Purchaser` appears under reservation-related roles). This is a Microsoft tenant provisioning gap, not a permissions issue. Registering the `Microsoft.Capacity` resource provider (`az provider register --namespace Microsoft.Capacity`) may cause the role to appear; alternatively, the tenant may require an active Reservation purchase or EA agreement. **Workaround:** assign `Reservation Purchaser` at `/providers/Microsoft.Capacity` scope instead — it is a superset of `Reservation Reader` and is available in tenants without active reservations: `az role assignment create --assignee-object-id <sp-object-id> --assignee-principal-type ServicePrincipal --role "Reservation Purchaser" --scope /providers/Microsoft.Capacity`
+- ~~**ARM template role definition scoping + `Reservation Reader` tenant gap**~~: Previously, `arm/CUDly-CrossSubscription/template.json` built role-definition IDs scoped to the subscription (`/subscriptions/{subId}/providers/Microsoft.Authorization/roleDefinitions/...`). Azure built-in roles are GLOBAL resources — scoping the definition ID to the subscription caused ARM to look for the role inside the subscription, where it isn't registered; `Reservation Reader` (`582fc458-8989-419f-a480-75249a578f9d`) consistently failed with `RoleDefinitionDoesNotExist`, and `Reservation Reader` itself is not provisioned in every Azure tenant. **Resolved:** the template now uses the unscoped global path (`/providers/Microsoft.Authorization/roleDefinitions/{id}`) for all three surviving role definitions, and the `Reservation Reader` assignment was dropped in favour of a FOURTH `Reservation Purchaser` assignment at `/providers/Microsoft.Capacity` scope (a superset that is available in every tenant). Operators who previously applied the buggy template may need to clean up the orphaned subscription-scoped `Reservation Reader` assignment manually via `az role assignment delete --assignee <sp-object-id> --role "Reservation Reader" --scope /subscriptions/<subId>` — the next `az deployment sub create` won't delete it because ARM's resource model no longer references the obsolete assignment name.
 
 - **Azure SMTP credential generation requires manual Azure Portal step**: Azure Communication Services SMTP credentials cannot be auto-generated via Terraform. See the documentation in `terraform/modules/secrets/azure/main.tf` for manual setup instructions.
 
@@ -25,11 +25,13 @@ No critical issues at this time. The following are known limitations:
 ### Test parallelization
 
 Unit tests do not use t.Parallel(). Adding it could provide 2-4x speedup but requires:
+
 - Auditing test files for shared state (global vars, package-level mocks)
 - Ensuring test helpers (createTestUser, createTestService) are goroutine-safe
 - Starting with low-risk packages (pkg/exchange, providers/aws/services/ec2) before auth
 
 Candidate packages (low shared state risk, audit still required):
+
 - pkg/exchange
 - providers/aws/services/ec2
 - internal/api (validation tests only)
