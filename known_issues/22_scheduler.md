@@ -8,7 +8,7 @@ natural-key fix (commit `9fa4170a1`). Both items live in the
 collection pipeline (`internal/scheduler/scheduler.go` +
 `internal/config/store_postgres_recommendations.go`).
 
-## MEDIUM: `fanOutPerAccount` swallows per-account errors and reports the provider as successful
+## ~~MEDIUM: `fanOutPerAccount` swallows per-account errors and reports the provider as successful~~ — RESOLVED
 
 **File**: `internal/scheduler/scheduler.go::fanOutPerAccount` (≈ lines 298-326) + `CollectRecommendations` loop (≈ lines 161-176)
 
@@ -32,7 +32,9 @@ Net effect: an Azure tenant where *all* subscriptions hit a credential or permis
 
 **Impact**: A region-wide credential expiry, a tenant-wide IAM regression, or even a typo in a single subscription's federation config can silently zero-out the Recommendations page for that provider with no banner. Inferring the failure mode requires log spelunking. The current GCP `serene-bazaar-666` 403 is masked by exactly this path (see logs `2026-04-21T16:28:22Z`+ — `[ERROR] GCP account ... Required 'compute.regions.list' permission` is logged but the provider is still reported as successful in the next "Collected N recommendations" line).
 
-**Status:** ❓ Needs triage
+**Status:** ✔️ Resolved
+
+**Resolved by:** `internal/scheduler/scheduler.go::fanOutPerAccount` now returns `([]RecommendationRecord, accountOutcome)` where `accountOutcome` carries `{SucceededCount, FailedCount, LastErr}`. The same `sync.Mutex` that guards the recs accumulator now also guards the outcome counters — single critical section, no second mutex. `LastErr` is formatted with the failed account's Name + ExternalID so the freshness banner can surface useful context. `collectAWSRecommendations`, `collectAzureRecommendations`, `collectGCPRecommendations` all check `outcome.FailedCount == len(accounts) && len(accounts) > 0` and return `errAllAccountsFailed(...)` in that case; `CollectRecommendations` then routes the provider into `failedProviders` (line ~167), `joinProviderErrors` aggregates, and `SetRecommendationsCollectionError` persists. AWS's ambient-credential fallback (`collectAWSAmbient`, len(accounts)==0) is untouched. Three new tests in `scheduler_test.go`: `TestFanOutPerAccount_AllAccountsFail`, `TestFanOutPerAccount_PartialSuccess`, `TestFanOutPerAccount_ZeroAccounts`. The existing `TestFanOutPerAccount_RespectsParallelismLimit` was updated for the new two-return signature.
 
 ### Implementation plan
 

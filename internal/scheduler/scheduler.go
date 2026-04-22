@@ -284,9 +284,28 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		return s.collectAWSAmbient(ctx, globalCfg)
 	}
 
-	return fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
 		return s.collectAWSForAccount(ctx, globalCfg, acct)
-	}), nil
+	})
+	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
+		return nil, errAllAccountsFailed("AWS", outcome)
+	}
+	return recs, nil
+}
+
+// accountOutcome is the per-provider summary returned by
+// fanOutPerAccount alongside the merged recommendations slice. The
+// caller uses this to decide whether the provider's collection
+// succeeded overall: if every registered account failed
+// (FailedCount == len(accounts) > 0) the caller should surface an
+// error so the provider lands in failedProviders + the freshness
+// banner shows the failure. Partial success (some accounts succeeded)
+// stays a success at the provider level — the per-account [ERROR]
+// logs are the operator signal for the failed minority.
+type accountOutcome struct {
+	SucceededCount int
+	FailedCount    int
+	LastErr        string // most-recent per-account error message, for surfacing in the banner
 }
 
 // fanOutPerAccount runs fn concurrently across accounts, bounded by the
@@ -295,17 +314,24 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 // UpsertRecommendations write path (see commit "parallelise collection")
 // keeps those accounts' older rows visible. Order is not preserved; the
 // SQL read in ListStoredRecommendations re-sorts anyway.
+//
+// Returns the merged recommendations + an accountOutcome the caller
+// uses to detect "all accounts failed" → return error → provider
+// flagged as failed in CollectRecommendations.
 func fanOutPerAccount(
 	ctx context.Context,
 	providerLabel string,
 	accounts []config.CloudAccount,
 	fn func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error),
-) []config.RecommendationRecord {
+) ([]config.RecommendationRecord, accountOutcome) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(execution.ConcurrencyFromEnv())
 
+	// One mutex guards both the recs accumulator AND the outcome
+	// counters — the same critical section, no second mutex needed.
 	var mu sync.Mutex
 	var all []config.RecommendationRecord
+	var outcome accountOutcome
 
 	for _, acct := range accounts {
 		acct := acct // capture
@@ -313,16 +339,29 @@ func fanOutPerAccount(
 			recs, err := fn(gctx, acct)
 			if err != nil {
 				logging.Errorf("%s account %s (%s): %v", providerLabel, acct.Name, acct.ExternalID, err)
+				mu.Lock()
+				outcome.FailedCount++
+				outcome.LastErr = fmt.Sprintf("account %s (%s): %v", acct.Name, acct.ExternalID, err)
+				mu.Unlock()
 				return nil // never fail the whole group — partial is fine
 			}
 			mu.Lock()
 			all = append(all, recs...)
+			outcome.SucceededCount++
 			mu.Unlock()
 			return nil
 		})
 	}
 	_ = g.Wait() // errs are always nil (swallowed above)
-	return all
+	return all, outcome
+}
+
+// errAllAccountsFailed wraps an accountOutcome's LastErr so callers
+// (the per-provider collect funcs) can surface a single error to
+// CollectRecommendations when every registered account failed.
+func errAllAccountsFailed(providerLabel string, outcome accountOutcome) error {
+	return fmt.Errorf("%s: all %d accounts failed; last error: %s",
+		providerLabel, outcome.FailedCount, outcome.LastErr)
 }
 
 func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
@@ -363,7 +402,11 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 		return nil, nil
 	}
 
-	return fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount), nil
+	recs, outcome := fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount)
+	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
+		return nil, errAllAccountsFailed("Azure", outcome)
+	}
+	return recs, nil
 }
 
 func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
@@ -400,7 +443,11 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 		return nil, nil
 	}
 
-	return fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount), nil
+	recs, outcome := fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount)
+	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
+		return nil, errAllAccountsFailed("GCP", outcome)
+	}
+	return recs, nil
 }
 
 func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {

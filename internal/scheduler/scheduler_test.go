@@ -1084,9 +1084,77 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		return []config.RecommendationRecord{{ID: acct.ID}}, nil
 	}
 
-	out := fanOutPerAccount(context.Background(), "Test", accounts, fn)
+	out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
 	assert.Len(t, out, len(accounts), "all accounts contribute one record")
 	assert.LessOrEqual(t, peak.Load(), int32(3), "peak in-flight must not exceed CUDLY_MAX_ACCOUNT_PARALLELISM")
+	assert.Equal(t, len(accounts), outcome.SucceededCount)
+	assert.Zero(t, outcome.FailedCount)
+}
+
+// TestFanOutPerAccount_AllAccountsFail pins the new accountOutcome
+// contract: when every account's fn returns an error, the outcome
+// reports zero successes, len(accounts) failures, and the most-recent
+// error message. This is what the per-provider collect funcs check
+// to decide "all accounts failed → return error → flag the provider
+// as failed in CollectRecommendations".
+func TestFanOutPerAccount_AllAccountsFail(t *testing.T) {
+	accounts := []config.CloudAccount{
+		{ID: "acct-1", Name: "acct-1", ExternalID: "ext-1"},
+		{ID: "acct-2", Name: "acct-2", ExternalID: "ext-2"},
+		{ID: "acct-3", Name: "acct-3", ExternalID: "ext-3"},
+	}
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		return nil, fmt.Errorf("cred error for %s", acct.ID)
+	}
+
+	recs, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
+	assert.Empty(t, recs, "no recs should accumulate when every account fails")
+	assert.Zero(t, outcome.SucceededCount)
+	assert.Equal(t, 3, outcome.FailedCount)
+	assert.Contains(t, outcome.LastErr, "cred error for acct-",
+		"LastErr should carry one of the per-account errors (any one — order is non-deterministic)")
+	assert.Contains(t, outcome.LastErr, "account",
+		"LastErr should be formatted with the account context that the freshness banner can show")
+}
+
+// TestFanOutPerAccount_PartialSuccess: 2 accounts succeed, 1 fails.
+// The succeeded accounts' recs are merged in; outcome reports the
+// 2/1 split. The caller then keeps the provider in successfulProviders
+// because FailedCount < len(accounts).
+func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
+	accounts := []config.CloudAccount{
+		{ID: "acct-ok-1", Name: "acct-ok-1", ExternalID: "e1"},
+		{ID: "acct-ok-2", Name: "acct-ok-2", ExternalID: "e2"},
+		{ID: "acct-bad", Name: "acct-bad", ExternalID: "ebad"},
+	}
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		if acct.ID == "acct-bad" {
+			return nil, fmt.Errorf("transient")
+		}
+		return []config.RecommendationRecord{{ID: acct.ID, Provider: "test"}}, nil
+	}
+
+	recs, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
+	assert.Len(t, recs, 2, "only the 2 succeeded accounts contribute recs")
+	assert.Equal(t, 2, outcome.SucceededCount)
+	assert.Equal(t, 1, outcome.FailedCount)
+	assert.Contains(t, outcome.LastErr, "transient",
+		"LastErr should reflect the failed account's error")
+}
+
+// TestFanOutPerAccount_ZeroAccounts: empty input → empty outcome,
+// no errors. The caller's "FailedCount == len(accounts) > 0" guard
+// correctly skips the all-failed error path.
+func TestFanOutPerAccount_ZeroAccounts(t *testing.T) {
+	recs, outcome := fanOutPerAccount(context.Background(), "Test", nil,
+		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+			t.Fatalf("fn must not be called for zero-accounts input")
+			return nil, nil
+		})
+	assert.Empty(t, recs)
+	assert.Zero(t, outcome.SucceededCount)
+	assert.Zero(t, outcome.FailedCount)
+	assert.Empty(t, outcome.LastErr)
 }
 
 // persistCollection writes via Upsert and surfaces the per-provider
