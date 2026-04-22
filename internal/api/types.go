@@ -546,9 +546,15 @@ type HistoryResponse struct {
 	Purchases []config.PurchaseHistoryRecord `json:"purchases"`
 }
 
-// HistorySummary provides aggregate statistics for purchase history
+// HistorySummary provides aggregate statistics for purchase history.
+// TotalPurchases is the total count of rows (completed + pending);
+// TotalCompleted / TotalPending break that down so the UI can render both.
+// Dollar totals count completed rows only — pending hasn't been committed
+// yet, so folding it in would inflate "what I have spent".
 type HistorySummary struct {
 	TotalPurchases      int     `json:"total_purchases"`
+	TotalCompleted      int     `json:"total_completed"`
+	TotalPending        int     `json:"total_pending"`
 	TotalUpfront        float64 `json:"total_upfront"`
 	TotalMonthlySavings float64 `json:"total_monthly_savings"`
 	TotalAnnualSavings  float64 `json:"total_annual_savings"`

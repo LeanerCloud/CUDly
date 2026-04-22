@@ -635,6 +635,11 @@ func TestHandler_HandleRequest_GetHistory(t *testing.T) {
 
 	history := []config.PurchaseHistoryRecord{{PurchaseID: "purchase-1"}}
 	mockStore.On("GetAllPurchaseHistory", mock.Anything, 100).Return(history, nil)
+	// getHistory now also lists pending executions to include them in the
+	// merged response — mock a no-op return so this integration-style test
+	// that only cares about the completed-row path still exercises the
+	// end-to-end routing.
+	mockStore.On("GetPendingExecutions", mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	handler := &Handler{config: mockStore, apiKey: "test-key"}
 

@@ -9,6 +9,18 @@ import { switchTab } from './navigation';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
+type StatusFilter = 'all' | 'pending' | 'completed' | 'cancelled';
+
+// Cache of the last-rendered purchase list so the status-chip click handler
+// can re-render without re-fetching. Cleared on each loadHistory / viewPlanHistory.
+let lastPurchases: HistoryPurchase[] = [];
+let activeStatusFilter: StatusFilter = 'all';
+
+function normalizeStatus(p: HistoryPurchase): string {
+  // Absent status → legacy DB row → counts as completed for filtering.
+  return p.status || 'completed';
+}
+
 function populateHistoryAccountFilter(provider?: string): Promise<void> {
   return populateAccountFilter('history-account-filter', api.listAccounts, provider);
 }
@@ -102,10 +114,19 @@ function renderHistorySummary(summary: HistorySummary): void {
   const container = document.getElementById('history-summary');
   if (!container) return;
 
+  // total_completed / total_pending fall back to total_purchases so the
+  // summary renders sensibly against an older API deploy that hasn't shipped
+  // the new counters yet.
+  const total = summary.total_purchases ?? 0;
+  const completed = summary.total_completed ?? total;
+  const pending = summary.total_pending ?? 0;
+  const detail = pending > 0 ? `<p class="detail">${completed} completed · ${pending} pending</p>` : '';
+
   container.innerHTML = `
     <div class="card">
       <h3>Total Purchases</h3>
-      <p class="value">${summary.total_purchases || 0}</p>
+      <p class="value">${total}</p>
+      ${detail}
     </div>
     <div class="card">
       <h3>Total Upfront Spent</h3>
@@ -122,19 +143,114 @@ function renderHistorySummary(summary: HistorySummary): void {
   `;
 }
 
+function statusBadgeHTML(status: string): string {
+  const normalized = (status || 'completed').toLowerCase();
+  switch (normalized) {
+    case 'pending':
+    case 'notified':
+      return '<span class="badge badge-warning">Pending</span>';
+    case 'cancelled':
+      return '<span class="badge badge-muted">Cancelled</span>';
+    case 'failed':
+      return '<span class="badge badge-danger">Failed</span>';
+    default:
+      return '<span class="badge badge-success">Completed</span>';
+  }
+}
+
+function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilter): string {
+  const counts: Record<StatusFilter, number> = { all: purchases.length, pending: 0, completed: 0, cancelled: 0 };
+  for (const p of purchases) {
+    const s = normalizeStatus(p).toLowerCase();
+    if (s === 'pending' || s === 'notified') counts.pending++;
+    else if (s === 'cancelled') counts.cancelled++;
+    else counts.completed++;
+  }
+  const chips: Array<{ key: StatusFilter; label: string }> = [
+    { key: 'all', label: 'All' },
+    { key: 'pending', label: 'Pending' },
+    { key: 'completed', label: 'Completed' },
+    { key: 'cancelled', label: 'Cancelled' },
+  ];
+  return `
+    <div class="status-chip-row" role="tablist" aria-label="Filter history by status">
+      ${chips.map(c => `
+        <button type="button"
+          class="status-chip${active === c.key ? ' active' : ''}"
+          data-history-status="${c.key}"
+          role="tab"
+          aria-selected="${active === c.key}"
+        >${c.label} (${counts[c.key]})</button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function providerCell(p: HistoryPurchase): string {
+  if (!p.provider || p.provider === 'multiple') return '<span class="provider-badge">Multiple</span>';
+  return `<span class="provider-badge ${p.provider}">${p.provider.toUpperCase()}</span>`;
+}
+
 function renderHistoryList(purchases: HistoryPurchase[]): void {
   const container = document.getElementById('history-list');
   if (!container) return;
+
+  lastPurchases = purchases;
+
+  // Reset the filter when the dataset changes so the user isn't stuck on an
+  // empty "Cancelled" slice after reloading with a fresh query.
+  if (activeStatusFilter !== 'all' && !purchases.some(p => {
+    const s = normalizeStatus(p).toLowerCase();
+    if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified';
+    if (activeStatusFilter === 'completed') return s === 'completed' || !p.status;
+    return s === activeStatusFilter;
+  })) {
+    activeStatusFilter = 'all';
+  }
 
   if (!purchases || purchases.length === 0) {
     container.innerHTML = '<p class="empty">No purchase history found for the selected period.</p>';
     return;
   }
 
-  container.innerHTML = `
+  const visible = purchases.filter(p => {
+    if (activeStatusFilter === 'all') return true;
+    const s = normalizeStatus(p).toLowerCase();
+    if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified';
+    if (activeStatusFilter === 'completed') return s === 'completed' || !p.status;
+    return s === activeStatusFilter;
+  });
+
+  const tableRows = visible.map(p => {
+    const statusCell = (() => {
+      const badge = statusBadgeHTML(normalizeStatus(p));
+      const pending = normalizeStatus(p).toLowerCase() === 'pending' || normalizeStatus(p).toLowerCase() === 'notified';
+      if (!pending || !p.approver) return badge;
+      return `${badge}<div class="history-approver">awaiting approval from <strong>${escapeHtml(p.approver)}</strong></div>`;
+    })();
+    return `
+      <tr>
+        <td>${statusCell}</td>
+        <td>${formatDate(p.timestamp)}</td>
+        <td>${providerCell(p)}</td>
+        <td>${escapeHtml(p.service)}</td>
+        <td>${escapeHtml(p.resource_type)}</td>
+        <td>${escapeHtml(p.region)}</td>
+        <td>${p.count}</td>
+        <td>${formatTerm(p.term)}</td>
+        <td>${formatCurrency(p.upfront_cost)}</td>
+        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${escapeHtml(p.plan_name || '-')}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const markup = `
+    ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
     <table>
       <thead>
         <tr>
+          <th>Status</th>
           <th>Date</th>
           <th>Provider</th>
           <th>Service</th>
@@ -148,21 +264,18 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         </tr>
       </thead>
       <tbody>
-        ${purchases.map(p => `
-          <tr>
-            <td>${formatDate(p.timestamp)}</td>
-            <td><span class="provider-badge ${p.provider}">${p.provider.toUpperCase()}</span></td>
-            <td>${escapeHtml(p.service)}</td>
-            <td>${escapeHtml(p.resource_type)}</td>
-            <td>${escapeHtml(p.region)}</td>
-            <td>${p.count}</td>
-            <td>${formatTerm(p.term)}</td>
-            <td>${formatCurrency(p.upfront_cost)}</td>
-            <td class="savings">${formatCurrency(p.estimated_savings)}</td>
-            <td>${escapeHtml(p.plan_name || '-')}</td>
-          </tr>
-        `).join('')}
+        ${tableRows}
       </tbody>
     </table>
   `;
+  container.innerHTML = markup;
+
+  container.querySelectorAll<HTMLButtonElement>('.status-chip[data-history-status]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const next = btn.dataset['historyStatus'] as StatusFilter | undefined;
+      if (!next || next === activeStatusFilter) return;
+      activeStatusFilter = next;
+      renderHistoryList(lastPurchases);
+    });
+  });
 }

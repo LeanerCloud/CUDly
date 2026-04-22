@@ -120,12 +120,15 @@ export interface HistoryResponse {
 
 export interface HistorySummary {
   total_purchases?: number;
+  total_completed?: number;
+  total_pending?: number;
   total_upfront?: number;
   total_monthly_savings?: number;
   total_annual_savings?: number;
 }
 
 export interface HistoryPurchase {
+  purchase_id?: string;
   timestamp: string;
   provider: string;
   service: string;
@@ -136,6 +139,14 @@ export interface HistoryPurchase {
   upfront_cost: number;
   estimated_savings: number;
   plan_name?: string;
+  // Status is set by the API to "completed" or "pending". Legacy pre-schema
+  // rows come back without it; the UI treats absent status as completed for
+  // counting + badge rendering.
+  status?: string;
+  // Approver: the email address the approval request was sent to. Only set
+  // on pending rows — the UI renders "awaiting approval from <approver>" so
+  // the user knows exactly whose inbox to check.
+  approver?: string;
 }
 
 // Savings Analytics types

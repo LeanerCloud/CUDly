@@ -205,7 +205,12 @@ type RIUtilizationCacheEntry struct {
 	FetchedAt    time.Time
 }
 
-// PurchaseHistoryRecord stores completed purchase information
+// PurchaseHistoryRecord is the response-layer representation for rows on the
+// /api/history page. DB-backed rows always describe *completed* purchases; the
+// handler additionally synthesises rows for pending executions so users can
+// see (and cancel) in-flight approvals. Status is the discriminator — the DB
+// layer never writes it (tag `dynamodbav:"-"` keeps it out of persistence),
+// and the API layer populates it as "completed" or "pending" before returning.
 type PurchaseHistoryRecord struct {
 	AccountID        string    `json:"account_id" dynamodbav:"account_id"`
 	PurchaseID       string    `json:"purchase_id" dynamodbav:"purchase_id"`
@@ -224,6 +229,12 @@ type PurchaseHistoryRecord struct {
 	PlanName         string    `json:"plan_name,omitempty" dynamodbav:"plan_name,omitempty"`
 	RampStep         int       `json:"ramp_step,omitempty" dynamodbav:"ramp_step,omitempty"`
 	CloudAccountID   *string   `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
+	Status           string    `json:"status,omitempty" dynamodbav:"-"`
+	// Approver holds the email address the approval request was sent to (or
+	// would have been, if SES failed). Set only on pending rows, so the
+	// History UI can show "awaiting approval from <addr>" and the user knows
+	// exactly whose inbox to check. Excluded from DB persistence.
+	Approver string `json:"approver,omitempty" dynamodbav:"-"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

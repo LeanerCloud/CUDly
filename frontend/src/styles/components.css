@@ -1042,6 +1042,61 @@ tr.recommendation-row:hover {
     color: #999;
 }
 
+/* Generic status badges used by the Purchase History status column and the
+ * Accounts table status column. Base `.badge` sets the pill shape; the
+ * modifier classes set the colour pair. Kept alongside the existing role
+ * badges so any table can drop a `<span class="badge badge-xxx">` inline.
+ */
+.badge {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    letter-spacing: 0.01em;
+}
+
+.badge-success {
+    background: #e6f4ea;
+    color: #137333;
+}
+
+.badge-warning {
+    background: #fef7e0;
+    color: #8a6d0c;
+}
+
+.badge-danger {
+    background: #fce8e6;
+    color: #c5221f;
+}
+
+.badge-muted {
+    background: #f0f0f0;
+    color: #666;
+}
+
+.badge-info {
+    background: #e8f0fe;
+    color: #1a73e8;
+}
+
+/* Subline rendered under the Pending badge in the Purchase History Status
+ * column. Surfaces the approver's email address (the recipient of the
+ * approval email) so the user knows which inbox to check.
+ */
+.history-approver {
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    color: #555;
+    line-height: 1.25;
+}
+
+.history-approver strong {
+    color: #333;
+    font-weight: 600;
+}
+
 /* Purchase detail status badges */
 .status-badge.completed {
     background: #e6f4ea;
