@@ -190,7 +190,7 @@ func (c *MemorystoreClient) GetExistingCommitments(ctx context.Context) ([]commo
 }
 
 // PurchaseCommitment purchases a Memorystore Redis commitment
-func (c *MemorystoreClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *MemorystoreClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

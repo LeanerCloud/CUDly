@@ -288,7 +288,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			SavingsPlanId: aws.String("sp-789"),
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -307,7 +307,7 @@ func TestClient_PurchaseCommitment_InvalidDetails(t *testing.T) {
 		},
 	}
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -336,7 +336,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 			SearchResults: []types.SavingsPlanOffering{},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -371,7 +371,7 @@ func TestClient_PurchaseCommitment_CreateFails(t *testing.T) {
 	mockSP.On("CreateSavingsPlan", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -408,7 +408,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			SavingsPlanId: nil, // Empty response
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)

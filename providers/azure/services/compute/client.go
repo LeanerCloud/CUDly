@@ -393,7 +393,7 @@ func (c *ComputeClient) doPurchaseWithRetry(ctx context.Context, purchaseURL str
 }
 
 // PurchaseCommitment purchases a VM Reserved Instance
-func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

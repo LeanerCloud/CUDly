@@ -326,7 +326,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	}
 
 	// Execute the purchase
-	result, err := serviceClient.PurchaseCommitment(ctx, recommendation)
+	result, err := serviceClient.PurchaseCommitment(ctx, recommendation, common.PurchaseOptions{})
 	if err != nil {
 		return result, fmt.Errorf("purchase failed: %w", err)
 	}

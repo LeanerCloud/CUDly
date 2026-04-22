@@ -68,7 +68,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 	// Mock provider factory to return a mock provider
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
 	}, nil)
@@ -416,7 +416,7 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success: true, CommitmentID: "ri-99999",
 	}, nil)
 

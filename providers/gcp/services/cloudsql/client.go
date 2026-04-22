@@ -234,7 +234,7 @@ func (c *CloudSQLClient) GetExistingCommitments(ctx context.Context) ([]common.C
 }
 
 // PurchaseCommitment purchases a Cloud SQL commitment
-func (c *CloudSQLClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *CloudSQLClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

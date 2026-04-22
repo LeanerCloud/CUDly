@@ -104,7 +104,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 }
 
 // PurchaseCommitment purchases a Redshift Reserved Node
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

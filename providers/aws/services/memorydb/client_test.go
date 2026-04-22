@@ -269,7 +269,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -518,7 +518,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 			ReservedNodesOfferings: []types.ReservedNodesOffering{},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -560,7 +560,7 @@ func TestClient_PurchaseCommitment_PurchaseError(t *testing.T) {
 	mockMDB.On("PurchaseReservedNodesOffering", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -604,7 +604,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedNode: nil,
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)

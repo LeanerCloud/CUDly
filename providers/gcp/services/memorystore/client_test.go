@@ -423,7 +423,7 @@ func TestMemorystoreClient_PurchaseCommitment_WithMockService(t *testing.T) {
 				CommitmentCost: 100.0,
 			}
 
-			result, err := client.PurchaseCommitment(ctx, rec)
+			result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 
 			if tt.wantSuccess {
 				require.NoError(t, err)

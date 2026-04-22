@@ -469,7 +469,7 @@ func TestCloudSQLClient_PurchaseCommitment_WithMock(t *testing.T) {
 		CommitmentCost: 1000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.NotEmpty(t, result.CommitmentID)
@@ -491,7 +491,7 @@ func TestCloudSQLClient_PurchaseCommitment_InProgress(t *testing.T) {
 		ResourceType: "db-n1-standard-1",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "instance creation in progress")
@@ -510,7 +510,7 @@ func TestCloudSQLClient_PurchaseCommitment_Error(t *testing.T) {
 		ResourceType: "db-n1-standard-1",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to create SQL instance")

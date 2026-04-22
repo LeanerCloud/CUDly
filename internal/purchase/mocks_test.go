@@ -101,8 +101,8 @@ type MockServiceClient struct {
 	mock.Mock
 }
 
-func (m *MockServiceClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
-	args := m.Called(ctx, rec)
+func (m *MockServiceClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+	args := m.Called(ctx, rec, opts)
 	return args.Get(0).(common.PurchaseResult), args.Error(1)
 }
 

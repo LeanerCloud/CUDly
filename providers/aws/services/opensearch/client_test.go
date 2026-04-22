@@ -220,7 +220,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			ReservedInstanceId: aws.String("os-789"),
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -437,7 +437,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 			ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -478,7 +478,7 @@ func TestClient_PurchaseCommitment_PurchaseError(t *testing.T) {
 	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -521,7 +521,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedInstanceId: nil,
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)

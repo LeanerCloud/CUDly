@@ -340,3 +340,33 @@ func TestRegion_Struct(t *testing.T) {
 	assert.Equal(t, "us-east-1", region.ID)
 	assert.Equal(t, "US East (N. Virginia)", region.DisplayName)
 }
+
+func TestNormalizeSource(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"cli lowercase", "cudly-cli", "cudly-cli", false},
+		{"web lowercase", "cudly-web", "cudly-web", false},
+		{"cli mixed case", "CUDly-CLI", "cudly-cli", false},
+		{"web mixed case", "CUDly-Web", "cudly-web", false},
+		{"cli with whitespace", "  cudly-cli\n", "cudly-cli", false},
+		{"empty string", "", "", true},
+		{"whitespace only", "   ", "", true},
+		{"unknown source", "cudly-api", "", true},
+		{"injection attempt", "cudly-cli; DROP TABLE", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSource(tc.in)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

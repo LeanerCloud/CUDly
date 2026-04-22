@@ -375,7 +375,7 @@ func TestCloudStorageClient_PurchaseCommitment_WithMock(t *testing.T) {
 		CommitmentCost: 100.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.NotEmpty(t, result.CommitmentID)
@@ -395,7 +395,7 @@ func TestCloudStorageClient_PurchaseCommitment_Error(t *testing.T) {
 		ResourceType: "STANDARD",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to create storage bucket")

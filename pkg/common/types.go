@@ -3,6 +3,8 @@ package common
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -139,6 +141,43 @@ type PurchaseResult struct {
 	Cost           float64        `json:"cost"`
 	DryRun         bool           `json:"dry_run"`
 	Timestamp      time.Time      `json:"timestamp"`
+}
+
+// Source values for PurchaseOptions.Source. Kept lowercase so they can be used
+// directly as GCP label values (GCP labels must be lowercase) and match AWS
+// tag / Azure reservation tag conventions.
+const (
+	PurchaseSourceCLI = "cudly-cli"
+	PurchaseSourceWeb = "cudly-web"
+)
+
+// PurchaseTagKey is the tag/label key every CUDly-purchased commitment carries
+// so customers and CUDly itself can attribute commitments back to the tool.
+const PurchaseTagKey = "purchase-automation"
+
+// PurchaseOptions carries per-execution metadata threaded through
+// ServiceClient.PurchaseCommitment. Source is the CUDly surface that triggered
+// the purchase (CLI vs web); every provider stamps it onto the commitment it
+// creates (as a tag, label, or — where the cloud API permits nothing else —
+// encoded in the commitment description).
+type PurchaseOptions struct {
+	Source string
+}
+
+// NormalizeSource lowercases s and returns it when it matches an allowed
+// source. Returns an error on anything else so cloud tags cannot be polluted
+// with arbitrary caller-supplied strings (which would be impossible to
+// retroactively remove from committed resources).
+func NormalizeSource(s string) (string, error) {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	switch lower {
+	case PurchaseSourceCLI, PurchaseSourceWeb:
+		return lower, nil
+	case "":
+		return "", fmt.Errorf("purchase source is required")
+	default:
+		return "", fmt.Errorf("invalid purchase source %q (allowed: %s, %s)", s, PurchaseSourceCLI, PurchaseSourceWeb)
+	}
 }
 
 // Commitment represents an existing commitment (RI/SP/CUD/etc)

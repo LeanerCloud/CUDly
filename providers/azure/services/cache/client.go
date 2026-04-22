@@ -243,7 +243,7 @@ func (c *CacheClient) convertRedisReservation(detail *armconsumption.Reservation
 }
 
 // PurchaseCommitment purchases Redis Cache reserved capacity via Azure Reservations API
-func (c *CacheClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *CacheClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

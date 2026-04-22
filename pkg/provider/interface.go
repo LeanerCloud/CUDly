@@ -45,7 +45,7 @@ type ServiceClient interface {
 
 	// Commitments (RI/SP/CUD/etc)
 	GetExistingCommitments(ctx context.Context) ([]common.Commitment, error)
-	PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error)
+	PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error)
 	ValidateOffering(ctx context.Context, rec common.Recommendation) error
 	GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error)
 

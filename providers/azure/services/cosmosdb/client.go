@@ -246,7 +246,7 @@ func (c *CosmosDBClient) convertCosmosReservation(detail *armconsumption.Reserva
 }
 
 // PurchaseCommitment purchases Cosmos DB reserved capacity via Azure Reservations API
-func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

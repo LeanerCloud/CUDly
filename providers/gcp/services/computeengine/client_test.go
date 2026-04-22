@@ -469,7 +469,7 @@ func TestComputeEngineClient_PurchaseCommitment_WithMock(t *testing.T) {
 		Count:          5,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.NotEmpty(t, result.CommitmentID)
@@ -490,7 +490,7 @@ func TestComputeEngineClient_PurchaseCommitment_3Year(t *testing.T) {
 		Term:         "3yr",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 }
@@ -506,7 +506,7 @@ func TestComputeEngineClient_PurchaseCommitment_InsertError(t *testing.T) {
 
 	rec := common.Recommendation{ResourceType: "n1-standard-1"}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to create commitment")
@@ -523,7 +523,7 @@ func TestComputeEngineClient_PurchaseCommitment_WaitError(t *testing.T) {
 
 	rec := common.Recommendation{ResourceType: "n1-standard-1"}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "commitment creation failed")

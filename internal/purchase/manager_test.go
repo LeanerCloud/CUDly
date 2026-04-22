@@ -217,7 +217,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 
 	mockFactory.On("CreateAndValidateProvider", ctx, "", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
 	}, nil)

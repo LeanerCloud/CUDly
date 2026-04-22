@@ -354,7 +354,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			ReservedInstancesId: aws.String("ri-12345678"),
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)

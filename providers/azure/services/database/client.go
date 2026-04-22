@@ -247,7 +247,7 @@ func (c *DatabaseClient) convertSQLReservation(detail *armconsumption.Reservatio
 }
 
 // PurchaseCommitment purchases SQL Database reserved capacity via Azure Reservations API
-func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

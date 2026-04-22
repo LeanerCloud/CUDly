@@ -236,7 +236,7 @@ func (c *SearchClient) convertSearchReservation(detail *armconsumption.Reservati
 }
 
 // PurchaseCommitment purchases Search reserved capacity via Azure Reservations API
-func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

@@ -419,7 +419,7 @@ func unwrapNonSentinel(err error) error {
 }
 
 // PurchaseCommitment purchases a Compute Engine CUD
-func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,

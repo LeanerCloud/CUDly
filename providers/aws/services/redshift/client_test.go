@@ -282,7 +282,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -421,7 +421,7 @@ func TestClient_PurchaseCommitment_FindOfferingError(t *testing.T) {
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error")).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -463,7 +463,7 @@ func TestClient_PurchaseCommitment_PurchaseAPIError(t *testing.T) {
 	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed")).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -507,7 +507,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedNode: nil,
 		}, nil).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)

@@ -812,7 +812,7 @@ func TestCacheClient_PurchaseCommitment_Success(t *testing.T) {
 		CommitmentCost: 1000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.NotEmpty(t, result.CommitmentID)
@@ -837,7 +837,7 @@ func TestCacheClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 		CommitmentCost: 2500.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 }
@@ -860,7 +860,7 @@ func TestCacheClient_PurchaseCommitment_Accepted(t *testing.T) {
 		CommitmentCost: 1000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 }
@@ -876,7 +876,7 @@ func TestCacheClient_PurchaseCommitment_TokenError(t *testing.T) {
 		Term:         "1yr",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to get access token")
@@ -895,7 +895,7 @@ func TestCacheClient_PurchaseCommitment_HTTPError(t *testing.T) {
 		Term:         "1yr",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to purchase reservation")
@@ -917,7 +917,7 @@ func TestCacheClient_PurchaseCommitment_BadStatus(t *testing.T) {
 		Term:         "1yr",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
