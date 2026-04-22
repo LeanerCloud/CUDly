@@ -5,6 +5,10 @@
 #
 # Required GitHub Secrets:
 #   - ADMIN_EMAIL: Admin email for notifications
+#   - FROM_EMAIL: SES-verified FROM address used for outbound approval emails.
+#                 Required for purchase-approval emails on deployments that
+#                 don't set subdomain_zone_name (bare Lambda Function URL).
+#                 Must be verified in the target AWS account's SES identities.
 #
 # Required GitHub Variables:
 #   - AWS_REGION: AWS region (e.g., us-east-1)
@@ -134,6 +138,7 @@ jobs:
         id: plan
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
         run: |
           cd terraform/environments/aws
           terraform plan \
@@ -144,6 +149,7 @@ jobs:
       - name: Terraform Apply
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
         run: |
           cd terraform/environments/aws
           terraform apply -auto-approve tfplan
