@@ -302,13 +302,13 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
 		"notification_sent", "approval_token", "recommendations",
 		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
-		"cloud_account_id",
+		"cloud_account_id", "source",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
 		sql.NullTime{}, "tok-123", recsJSON,
 		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
-		nil,
+		nil, "",
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -331,14 +331,14 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
 		"notification_sent", "approval_token", "recommendations",
 		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
-		"cloud_account_id",
+		"cloud_account_id", "source",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-2", "completed", 1, now,
 		sql.NullTime{Valid: true, Time: now}, "tok", recsJSON,
 		100.0, 200.0, sql.NullTime{Valid: true, Time: now}, "some error",
 		sql.NullTime{Valid: true, Time: future},
-		nil,
+		nil, "cudly-web",
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -1148,7 +1148,7 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(17)...).
+	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(18)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := store.SavePurchaseHistory(ctx, &PurchaseHistoryRecord{

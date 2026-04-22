@@ -381,4 +381,8 @@ type AuditRecord struct {
 	Timestamp         time.Time       `json:"timestamp"`
 	DryRun            bool            `json:"dry_run"`
 	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty"`
+	// Source identifies the CUDly surface (cudly-cli / cudly-web) that
+	// triggered the purchase. Mirrors the value stamped on the commitment
+	// itself via purchase-automation tag/label.
+	Source string `json:"source,omitempty"`
 }

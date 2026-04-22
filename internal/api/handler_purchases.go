@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
@@ -359,6 +360,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		TotalUpfrontCost: totalUpfront,
 		EstimatedSavings: totalSavings,
 		ApprovalToken:    uuid.New().String(),
+		Source:           common.PurchaseSourceWeb,
 	}
 
 	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {

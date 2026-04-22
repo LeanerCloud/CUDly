@@ -34,7 +34,9 @@ func WriteAuditRecord(record AuditRecord, path string) error {
 
 // NewAuditRecord constructs an AuditRecord from a Recommendation and a PurchaseResult.
 // status must be one of: "success", "error", "skipped" (dry-run), "skipped_covered" (idempotency).
-func NewAuditRecord(runID string, rec Recommendation, result PurchaseResult, status string, dryRun bool) AuditRecord {
+// source is the CUDly surface that triggered the run — copied into the JSONL so CLI
+// audit logs can be reconciled against the DB's purchase_history.source column.
+func NewAuditRecord(runID string, rec Recommendation, result PurchaseResult, status string, dryRun bool, source string) AuditRecord {
 	errMsg := ""
 	if result.Error != nil {
 		errMsg = result.Error.Error()
@@ -58,6 +60,7 @@ func NewAuditRecord(runID string, rec Recommendation, result PurchaseResult, sta
 		Timestamp:         time.Now().UTC(),
 		DryRun:            dryRun,
 		RawRecommendation: rec.RawRecommendation,
+		Source:            source,
 	}
 }
 

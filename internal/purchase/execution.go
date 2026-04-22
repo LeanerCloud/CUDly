@@ -207,6 +207,11 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	var totalSavings, totalUpfront float64
 	var purchaseErrors []string
 
+	// Source is set once per execution (web handler writes cudly-web; approval
+	// flow preserves it through the DB round-trip) and propagates into every
+	// per-account/per-rec purchase so the tag is stamped consistently.
+	opts := common.PurchaseOptions{Source: exec.Source}
+
 	for i, rec := range exec.Recommendations {
 		if !rec.Selected {
 			continue
@@ -214,7 +219,7 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 
 		logging.Infof("Purchasing: %dx %s in %s", rec.Count, rec.ResourceType, rec.Region)
 
-		purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg)
+		purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, opts)
 		if err != nil {
 			logging.Errorf("Failed to purchase %s: %v", rec.ResourceType, err)
 			exec.Recommendations[i].Error = err.Error()
@@ -253,6 +258,7 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 		PlanName:         plan.Name,
 		RampStep:         exec.StepNumber,
 		CloudAccountID:   exec.CloudAccountID,
+		Source:           exec.Source,
 	}
 	if err := m.config.SavePurchaseHistory(ctx, historyRecord); err != nil {
 		logging.Errorf("Failed to save history: %v", err)
@@ -290,7 +296,9 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 
 // executeSinglePurchase executes a single purchase using the appropriate provider.
 // provCfg carries optional per-account credentials; pass nil to use ambient credentials.
-func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig) (common.PurchaseResult, error) {
+// opts carries execution-level metadata (the source surface) that providers stamp
+// onto the commitment they create.
+func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	// Create the provider
 	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(ctx, rec.Provider, provCfg)
 	if err != nil {
@@ -326,7 +334,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	}
 
 	// Execute the purchase
-	result, err := serviceClient.PurchaseCommitment(ctx, recommendation, common.PurchaseOptions{})
+	result, err := serviceClient.PurchaseCommitment(ctx, recommendation, opts)
 	if err != nil {
 		return result, fmt.Errorf("purchase failed: %w", err)
 	}

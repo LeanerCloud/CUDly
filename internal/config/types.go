@@ -132,6 +132,10 @@ type PurchaseExecution struct {
 	Error            string                 `json:"error,omitempty" dynamodbav:"error,omitempty"`
 	TTL              int64                  `json:"ttl,omitempty" dynamodbav:"ttl,omitempty"`
 	CloudAccountID   *string                `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
+	// Source identifies the CUDly surface that triggered this execution
+	// ("cudly-cli" or "cudly-web"). Propagated into PurchaseOptions and
+	// stamped as a tag/label onto every commitment this execution buys.
+	Source string `json:"source,omitempty" dynamodbav:"source,omitempty"`
 }
 
 // RecommendationRecord stores a recommendation with purchase status
@@ -235,6 +239,7 @@ type PurchaseHistoryRecord struct {
 	// History UI can show "awaiting approval from <addr>" and the user knows
 	// exactly whose inbox to check. Excluded from DB persistence.
 	Approver string `json:"approver,omitempty" dynamodbav:"-"`
+	Source   string `json:"source,omitempty" dynamodbav:"source,omitempty"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

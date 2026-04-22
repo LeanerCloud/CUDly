@@ -608,8 +608,8 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 			plan_id, execution_id, status, step_number, scheduled_date,
 			notification_sent, approval_token, recommendations,
 			total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-			cloud_account_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			cloud_account_id, source
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -621,6 +621,7 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 			error = $12,
 			expires_at = $13,
 			cloud_account_id = $14,
+			source = $15,
 			updated_at = NOW()
 	`
 
@@ -649,6 +650,7 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 		execution.Error,
 		timeFromTTL(execution.TTL),
 		execution.CloudAccountID,
+		execution.Source,
 	)
 
 	if err != nil {
@@ -669,7 +671,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		          cloud_account_id
+		          cloud_account_id, source
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
@@ -694,7 +696,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id
+		       cloud_account_id, source
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -711,7 +713,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id
+		       cloud_account_id, source
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -734,7 +736,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id
+		       cloud_account_id, source
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -783,6 +785,7 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 			&exec.Error,
 			&expiresAt,
 			&exec.CloudAccountID,
+			&exec.Source,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
@@ -871,8 +874,9 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		INSERT INTO purchase_history (
 			account_id, purchase_id, timestamp, provider, service, region,
 			resource_type, count, term, payment, upfront_cost, monthly_cost,
-			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+			source
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -893,6 +897,7 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		nullStringFromString(record.PlanName),
 		record.RampStep,
 		record.CloudAccountID,
+		record.Source,
 	)
 
 	if err != nil {

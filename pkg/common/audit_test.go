@@ -118,7 +118,7 @@ func TestNewAuditRecord_Fields(t *testing.T) {
 	}
 	result := PurchaseResult{CommitmentID: "ri-xyz", Success: true}
 
-	ar := NewAuditRecord("run-001", rec, result, "success", false)
+	ar := NewAuditRecord("run-001", rec, result, "success", false, PurchaseSourceCLI)
 
 	assert.Equal(t, "run-001", ar.RunID)
 	assert.Equal(t, ProviderAWS, ar.Provider)
