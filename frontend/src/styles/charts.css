@@ -39,7 +39,9 @@
     font-size: 0.75rem;
     color: #666;
     margin-bottom: 0.5rem;
-    text-transform: uppercase;
+    /* Labels render in sentence case from the HTML — matches the
+     * Dashboard KPI cards. The ALL-CAPS treatment used to clash with
+     * "Potential Monthly Savings" / "Active Commitments" elsewhere. */
 }
 
 .stat-value {

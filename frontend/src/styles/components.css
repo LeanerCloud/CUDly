@@ -801,7 +801,9 @@ tr.recommendation-row:hover {
     border-radius: 4px;
     font-size: 0.75rem;
     font-weight: 600;
-    text-transform: uppercase;
+    /* No text-transform: let the HTML control casing. Acronyms (AWS,
+     * GCP) render as-written; brand names (Azure) keep their native
+     * title case rather than being SHOUT-CASED by CSS. */
 }
 
 .provider-badge.aws {
@@ -930,10 +932,13 @@ tr.recommendation-row:hover {
 .role-badge {
     font-size: 0.75rem;
     font-weight: 600;
-    padding: 0.15rem 0.4rem;
-    border-radius: 4px;
-    background: rgba(255,255,255,0.2);
-    color: rgba(255,255,255,0.9);
+    padding: 0.15rem 0.5rem;
+    margin-left: 0.4rem;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.95);
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
 }
 
 /* Role badges in user table */

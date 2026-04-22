@@ -5,15 +5,24 @@
 import type { CloudAccount, AccountListFilters } from './api';
 
 /**
- * Format a number as currency
+ * Format a number as currency.
+ *
+ * `digits` controls fraction digits (defaults to 0 — the dashboard KPI
+ * format). Callers that need cents, e.g. Purchase History summary cards
+ * and RI Exchange cost chips, pass `digits: 2`. Having a single helper
+ * keeps "$0" / "$0.00" / "$0.00/hr" from diverging across the app.
  */
-export function formatCurrency(value: number | null | undefined, currency: string = '$'): string {
+export function formatCurrency(
+  value: number | null | undefined,
+  currency: string = '$',
+  digits: number = 0
+): string {
   if (value === null || value === undefined || isNaN(value)) {
-    return `${currency}0`;
+    return `${currency}${(0).toFixed(digits)}`;
   }
   return `${currency}${value.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
   })}`;
 }
 

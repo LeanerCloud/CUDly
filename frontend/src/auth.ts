@@ -574,10 +574,13 @@ export function updateUserUI(): void {
       userEmailEl.parentNode?.replaceChild(freshEmailEl, userEmailEl);
       freshEmailEl.addEventListener('click', () => void openProfileModal());
     }
-    // Show role badge for admin users
+    // Show role badge for admin users. The parenthesised form was
+    // visually indistinct from the email address (read as a domain
+    // suffix); drop the parens and rely on the pill styling for
+    // separation.
     if (roleEl) {
       if (currentUser.role === 'admin') {
-        roleEl.textContent = '(admin)';
+        roleEl.textContent = 'admin';
         roleEl.style.display = '';
       } else {
         roleEl.textContent = '';
