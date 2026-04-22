@@ -3,7 +3,11 @@
 **Surfaced during:** 2026-04-22 UX audit, Priority 6 ("Recommendations: bulk
 actions + sortable columns + row-click detail")
 **Related commit:** `b66abc4d8` (Phase-1 + Phase-2 UX work)
-**Status:** open — blocks completing Priority 6
+**Status:** partially closed — the drawer now renders a client-side
+confidence badge (high/medium/low heuristic based on savings × count)
+and a provenance line derived from `/api/recommendations/freshness`
+(last-collected timestamp + provider name). The `usage_history`
+time-series drill-down still requires the backend endpoint below.
 
 ## Problem
 

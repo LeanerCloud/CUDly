@@ -4,8 +4,9 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatTerm, escapeHtml, populateAccountFilter } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, populateAccountFilter, formatRelativeTime } from './utils';
 import { renderFreshness } from './freshness';
+import { getRecommendationsFreshness } from './api/recommendations';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 
 // Module state for current purchase modal recommendations
@@ -299,17 +300,85 @@ function openDetailDrawer(rec: LocalRecommendation): void {
   });
   drawer.appendChild(dl);
 
-  // Usage-history / confidence-bucket / provenance fields are gated on a
-  // backend endpoint that doesn't yet exist (see P6 plan: backend-verification
-  // scope-cap). When that endpoint lands, fetch + append a usage chart here.
-  const note = document.createElement('p');
-  note.className = 'detail-drawer-note';
-  note.textContent = 'Usage history and confidence data are not yet available from the backend.';
-  drawer.appendChild(note);
+  // Confidence bucket — computed client-side from the savings magnitude
+  // + instance count. A proper per-recommendation confidence score that
+  // accounts for historical usage variance needs a backend endpoint
+  // (tracked in known_issues/28_recommendations_detail_endpoint.md);
+  // this client-side heuristic gives users a directional signal in the
+  // meantime.
+  const bucket = confidenceBucketFor(rec);
+  const confidenceRow = document.createElement('dl');
+  confidenceRow.className = 'detail-drawer-fields';
+  const confDt = document.createElement('dt');
+  confDt.textContent = 'Confidence';
+  const confDd = document.createElement('dd');
+  const badge = document.createElement('span');
+  badge.className = `confidence-badge confidence-${bucket}`;
+  badge.textContent = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+  confDd.appendChild(badge);
+  confidenceRow.appendChild(confDt);
+  confidenceRow.appendChild(confDd);
+  drawer.appendChild(confidenceRow);
+
+  // Provenance — render immediately with a placeholder, then fill in
+  // asynchronously from /api/recommendations/freshness (the endpoint is
+  // already hit by the freshness pill so its response is cached on the
+  // network side; this fetch is fast and non-blocking to the drawer
+  // opening).
+  const provenance = document.createElement('p');
+  provenance.className = 'detail-drawer-note';
+  provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs. Last collection timing loading\u2026`;
+  drawer.appendChild(provenance);
+  void getRecommendationsFreshness()
+    .then((f) => {
+      const rel = f.last_collected_at ? formatRelativeTime(f.last_collected_at) : 'never';
+      provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs. Last collected ${rel}.`;
+    })
+    .catch(() => {
+      provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs.`;
+    });
+
+  // Usage-history drill-down still requires backend work — see
+  // known_issues/28_recommendations_detail_endpoint.md for the endpoint
+  // contract (GET /api/recommendations/:id/detail returning a usage
+  // series).
+  const usageNote = document.createElement('p');
+  usageNote.className = 'detail-drawer-note detail-drawer-note-muted';
+  usageNote.textContent = 'Usage history over the collection window is not yet available; the detail endpoint is tracked separately.';
+  drawer.appendChild(usageNote);
 
   document.body.appendChild(backdrop);
   document.body.appendChild(drawer);
   closeBtn.focus();
+}
+
+type ConfidenceBucket = 'low' | 'medium' | 'high';
+
+/**
+ * Client-side confidence heuristic. A real confidence score needs
+ * historical usage variance from the backend (tracked in known_issues
+ * #28); this directional bucket surfaces "probably a solid pick" vs
+ * "marginal" to users immediately based on savings magnitude + size
+ * of the target footprint.
+ */
+function confidenceBucketFor(rec: LocalRecommendation): ConfidenceBucket {
+  const savings = rec.savings || 0;
+  const count = rec.count || 1;
+  // High: material monthly savings AND a non-trivial fleet — a single
+  // $1000/mo rec from one tiny instance is likely an outlier, so we
+  // require both signals.
+  if (savings >= 200 && count >= 3) return 'high';
+  if (savings >= 50) return 'medium';
+  return 'low';
+}
+
+function providerDisplayName(provider: string): string {
+  switch (provider.toLowerCase()) {
+    case 'aws': return 'AWS';
+    case 'azure': return 'Azure';
+    case 'gcp': return 'GCP';
+    default: return provider;
+  }
 }
 
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<number>): string {

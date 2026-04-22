@@ -928,6 +928,34 @@ tr.recommendation-row:hover {
     opacity: 1;
 }
 
+/* Confidence badge in the recommendation detail drawer. A directional
+ * client-computed high/medium/low bucket — a proper per-recommendation
+ * score requires backend usage-history (known_issues #28). */
+.confidence-badge {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.confidence-high {
+    background: #e6f4ea;
+    color: #0f5132;
+}
+.confidence-medium {
+    background: #fff3cd;
+    color: #7c5600;
+}
+.confidence-low {
+    background: #f3f4f6;
+    color: #5f6368;
+}
+.detail-drawer-note-muted {
+    color: #777;
+    font-size: 0.85rem;
+}
+
 /* Role badge */
 .role-badge {
     font-size: 0.75rem;
