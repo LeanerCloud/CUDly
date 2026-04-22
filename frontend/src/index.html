@@ -56,6 +56,19 @@
                 </section>
                 <section id="dashboard-freshness" class="freshness-indicator" aria-live="polite"></section>
                 <section id="summary"></section>
+                <section id="savings-trend-section" class="card chart-section">
+                    <div class="section-header">
+                        <h3>Savings over time</h3>
+                        <div class="trend-range-toggle" role="group" aria-label="Savings trend range">
+                            <button type="button" class="btn btn-small trend-range" data-range="7">7d</button>
+                            <button type="button" class="btn btn-small trend-range" data-range="30">30d</button>
+                            <button type="button" class="btn btn-small trend-range active" data-range="90">90d</button>
+                            <button type="button" class="btn btn-small trend-range" data-range="all">All</button>
+                        </div>
+                    </div>
+                    <canvas id="savings-trend-chart" role="img" aria-label="Line chart showing cumulative savings over time"></canvas>
+                    <p id="savings-trend-empty" class="empty hidden">No purchase history yet — the chart will populate once you start executing plans.</p>
+                </section>
                 <section id="savings-chart-section" class="card chart-section">
                     <h3>Potential Savings by Service</h3>
                     <canvas id="savings-chart" role="img" aria-label="Chart showing savings by cloud service"></canvas>
@@ -246,7 +259,10 @@
                 <section class="card">
                     <div class="section-header">
                         <h2>Convertible RI Exchange</h2>
-                        <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
+                        <div class="section-header-actions">
+                            <button id="ri-exchange-settings-btn" class="btn btn-small" title="Jump to Exchange Automation settings in Settings → Purchasing">⚙︎ Exchange settings</button>
+                            <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
+                        </div>
                     </div>
                     <p class="settings-description">View active convertible Reserved Instances, get automated reshape recommendations, and execute exchanges.</p>
                 </section>
@@ -345,8 +361,8 @@
                         </fieldset>
 
                         <div class="settings-buttons">
-                            <button type="button" id="reset-settings-btn">Reset to Defaults</button>
-                            <button type="submit" id="save-settings-btn">Save Settings</button>
+                            <button type="button" id="reset-settings-btn" class="btn btn-destructive">Reset to Defaults</button>
+                            <button type="submit" id="save-settings-btn" class="btn btn-primary">Save Settings</button>
                         </div>
                     </form>
                     <div id="settings-error" class="error-message hidden"></div>
@@ -357,7 +373,7 @@
                     <h2>Purchasing Settings</h2>
                     <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
 
-                    <fieldset class="settings-category">
+                    <fieldset class="settings-category" id="purchasing-global-defaults">
                         <legend>Global Purchase Defaults</legend>
                         <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options only apply to AWS services; Azure and GCP reservations are always paid upfront.</p>
                         <div class="setting-row">
@@ -395,7 +411,7 @@
 
                     <!-- AWS Settings -->
                     <fieldset class="settings-category provider-settings" id="aws-settings">
-                        <legend><span class="provider-badge aws">AWS</span> Settings</legend>
+                        <legend><span class="provider-badge aws">AWS</span> Service Defaults</legend>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label>Credentials</label>
@@ -441,7 +457,7 @@
 
                     <!-- Azure Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="azure-settings">
-                        <legend><span class="provider-badge azure">Azure</span> Settings</legend>
+                        <legend><span class="provider-badge azure">Azure</span> Service Defaults</legend>
                         <h4 class="subsection-title">Service Defaults</h4>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
@@ -465,7 +481,7 @@
 
                     <!-- GCP Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="gcp-settings">
-                        <legend><span class="provider-badge gcp">GCP</span> Settings</legend>
+                        <legend><span class="provider-badge gcp">GCP</span> Service Defaults</legend>
                         <h4 class="subsection-title">Service Defaults</h4>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
@@ -491,7 +507,7 @@
                     <div id="ri-exchange-automation-settings"></div>
 
                     <div class="settings-buttons">
-                        <button type="button" id="reset-purchasing-btn">Reset to Defaults</button>
+                        <button type="button" id="reset-purchasing-btn" class="btn btn-destructive">Reset to Defaults</button>
                     </div>
                 </section>
 
@@ -500,7 +516,7 @@
                     <h2>Accounts</h2>
                     <p class="settings-description">Onboard new cloud accounts via federation IaC, review account registrations, and manage per-provider accounts.</p>
 
-                    <fieldset class="settings-category">
+                    <fieldset class="settings-category" id="accounts-federation">
                         <legend>Federation Setup (Add New Account)</legend>
                         <p class="settings-description">Download pre-populated IaC to onboard a new account via workload identity federation. No long-lived credentials needed.</p>
                         <div class="target-cloud-row">
@@ -511,7 +527,7 @@
                         <div id="federation-setup-panel" class="federation-accounts"></div>
                     </fieldset>
 
-                    <fieldset class="settings-category">
+                    <fieldset class="settings-category" id="accounts-registrations">
                         <legend>Account Registrations</legend>
                         <p class="settings-description">Target accounts that submitted federation IaC. Approve, reject, or delete entries here.</p>
                         <div class="controls-bar">
@@ -561,7 +577,7 @@
                     <h2>User Management</h2>
                     <p class="settings-description">Manage users and their permissions.</p>
 
-                    <fieldset class="settings-category">
+                    <fieldset class="settings-category" id="users-fieldset">
                         <legend>Users</legend>
                         <div class="section-header">
                             <button type="button" id="create-user-btn" class="primary">Create User</button>
@@ -569,7 +585,7 @@
                         <div id="users-list" class="mt-3"></div>
                     </fieldset>
 
-                    <fieldset class="settings-category">
+                    <fieldset class="settings-category" id="groups-fieldset">
                         <legend>Groups &amp; Permissions</legend>
                         <div class="section-header">
                             <button type="button" id="create-group-btn" class="primary">Create Group</button>
@@ -577,7 +593,7 @@
                         <div id="groups-list" class="mt-3"></div>
                     </fieldset>
 
-                    <fieldset class="settings-category">
+                    <fieldset class="settings-category" id="permission-overview-fieldset">
                         <legend>Permission Overview</legend>
                         <div id="permission-matrix"></div>
                     </fieldset>

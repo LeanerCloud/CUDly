@@ -99,3 +99,9 @@ footer a:hover {
     align-items: center;
     margin-bottom: 1rem;
 }
+
+.section-header-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}

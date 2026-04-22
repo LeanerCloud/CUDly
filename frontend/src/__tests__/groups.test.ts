@@ -19,6 +19,14 @@ jest.mock('../users/userActions', () => ({
   loadUsers: jest.fn().mockResolvedValue(undefined),
 }));
 
+// Mock confirmDialog — groupActions.deleteGroup migrated from window.confirm
+// to the shared destructive-confirm dialog; without a mock the dialog waits
+// for DOM interaction that never arrives and the tests time out.
+const mockConfirmDialog = jest.fn<Promise<boolean>, [unknown]>();
+jest.mock('../confirmDialog', () => ({
+  confirmDialog: (opts: unknown) => mockConfirmDialog(opts)
+}));
+
 import * as api from '../api';
 import { loadUsers } from '../users/userActions';
 import * as groupState from '../groups/state';
@@ -280,7 +288,7 @@ describe('groups/groupList', () => {
 
     it('should attach click handlers to delete buttons', async () => {
       (api.deleteGroup as jest.Mock).mockResolvedValue(undefined);
-      (global.confirm as jest.Mock).mockReturnValue(true);
+      mockConfirmDialog.mockResolvedValue(true);
       userState.setAvailableGroups(mockGroups as any);
 
       groupList.renderGroups(mockGroups);
@@ -288,10 +296,11 @@ describe('groups/groupList', () => {
       const deleteBtn = document.querySelector('.delete-group-btn') as HTMLButtonElement;
       deleteBtn.click();
 
-      // Wait for async operation
+      // Wait for the async confirmDialog + API call chain
+      await new Promise(resolve => setTimeout(resolve, 0));
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(global.confirm).toHaveBeenCalled();
+      expect(mockConfirmDialog).toHaveBeenCalled();
       expect(api.deleteGroup).toHaveBeenCalledWith('group-1');
     });
   });
@@ -592,7 +601,7 @@ describe('groups/groupModals', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveGroup(event);
 
-      expect(document.querySelector('.toast-success')?.textContent).toBe('Group created successfully');
+      expect(document.querySelector('.toast-success')?.textContent).toContain('Group created successfully');
     });
 
     it('should show success message after updating group', async () => {
@@ -603,7 +612,7 @@ describe('groups/groupModals', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveGroup(event);
 
-      expect(document.querySelector('.toast-success')?.textContent).toBe('Group updated successfully');
+      expect(document.querySelector('.toast-success')?.textContent).toContain('Group updated successfully');
     });
 
     it('should close modal after successful save', async () => {
@@ -842,7 +851,7 @@ describe('groups/groupActions', () => {
     `;
     userState.setAvailableGroups(mockGroups as any);
     jest.clearAllMocks();
-    (global.confirm as jest.Mock).mockReturnValue(true);
+    mockConfirmDialog.mockResolvedValue(true);
     (api.deleteGroup as jest.Mock).mockResolvedValue(undefined);
     (loadUsers as jest.Mock).mockResolvedValue(undefined);
   });
@@ -851,8 +860,8 @@ describe('groups/groupActions', () => {
     it('should confirm before deleting', async () => {
       await groupActions.deleteGroup('group-1');
 
-      expect(global.confirm).toHaveBeenCalledWith(
-        expect.stringContaining('Administrators')
+      expect(mockConfirmDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: expect.stringContaining('Administrators') })
       );
     });
 
@@ -871,11 +880,11 @@ describe('groups/groupActions', () => {
     it('should show success message after deletion', async () => {
       await groupActions.deleteGroup('group-1');
 
-      expect(document.querySelector('.toast-success')?.textContent).toBe('Group deleted successfully');
+      expect(document.querySelector('.toast-success')?.textContent).toContain('Group deleted successfully');
     });
 
     it('should not delete when user cancels', async () => {
-      (global.confirm as jest.Mock).mockReturnValue(false);
+      mockConfirmDialog.mockResolvedValueOnce(false);
 
       await groupActions.deleteGroup('group-1');
 
@@ -885,7 +894,7 @@ describe('groups/groupActions', () => {
     it('should not delete when group not found', async () => {
       await groupActions.deleteGroup('nonexistent-group');
 
-      expect(global.confirm).not.toHaveBeenCalled();
+      expect(mockConfirmDialog).not.toHaveBeenCalled();
       expect(api.deleteGroup).not.toHaveBeenCalled();
     });
 
@@ -894,7 +903,7 @@ describe('groups/groupActions', () => {
 
       await groupActions.deleteGroup('group-1');
 
-      expect(document.querySelector('.toast-error')?.textContent).toBe('Failed to delete group');
+      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete group');
     });
   });
 
@@ -1200,7 +1209,7 @@ describe('groups/groupModals — duplicate', () => {
       await openAndFill();
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveDuplicateGroup(event);
-      expect(document.querySelector('.toast-success')?.textContent).toBe('Group duplicated successfully');
+      expect(document.querySelector('.toast-success')?.textContent).toContain('Group duplicated successfully');
     });
 
     it('shows an error toast on API failure', async () => {
@@ -1217,7 +1226,7 @@ describe('groups/groupModals — duplicate', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveDuplicateGroup(event);
       expect(api.createGroup).not.toHaveBeenCalled();
-      expect(document.querySelector('.toast-error')?.textContent).toBe('No source group to duplicate');
+      expect(document.querySelector('.toast-error')?.textContent).toContain('No source group to duplicate');
     });
   });
 

@@ -5,6 +5,7 @@ import {
   formatCurrency,
   formatDate,
   formatDateTime,
+  formatTerm,
   getDateParts,
   debounce,
   throttle,
@@ -45,17 +46,14 @@ describe('formatCurrency', () => {
 });
 
 describe('formatDate', () => {
-  test('formats valid date string', () => {
-    const date = '2024-03-15';
-    const result = formatDate(date);
-    expect(result).toBeTruthy();
-    expect(result).toMatch(/\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}|March|Mar/i);
+  test('renders canonical "Mon DD, YYYY" form regardless of browser locale', () => {
+    // 2024-03-15 → "Mar 15, 2024" in en-US short-month format. The check
+    // is locale-invariant because formatDate forces en-US.
+    expect(formatDate('2024-03-15')).toBe('Mar 15, 2024');
   });
 
-  test('formats Date object', () => {
-    const date = new Date('2024-03-15');
-    const result = formatDate(date);
-    expect(result).toBeTruthy();
+  test('formats Date object into the same canonical form', () => {
+    expect(formatDate(new Date('2024-03-15T00:00:00Z'))).toMatch(/^Mar \d{1,2}, 2024$/);
   });
 
   test('returns empty string for null/undefined', () => {
@@ -71,15 +69,44 @@ describe('formatDate', () => {
 });
 
 describe('formatDateTime', () => {
-  test('formats valid datetime', () => {
-    const date = '2024-03-15T14:30:00';
-    const result = formatDateTime(date);
-    expect(result).toBeTruthy();
+  test('renders "Mon DD, YYYY, HH:mm" with 24-hour clock', () => {
+    // Construct a known UTC instant and assert the format shape. The exact
+    // hour digits depend on TZ, so match the structure instead of a literal.
+    const result = formatDateTime('2024-03-15T14:30:00Z');
+    expect(result).toMatch(/^Mar \d{1,2}, 2024, \d{2}:\d{2}$/);
+  });
+
+  test('uses 24-hour clock (no AM/PM)', () => {
+    const result = formatDateTime('2024-03-15T14:30:00Z');
+    expect(result).not.toMatch(/AM|PM/i);
   });
 
   test('returns empty string for invalid input', () => {
     expect(formatDateTime(null as unknown as string)).toBe('');
     expect(formatDateTime('')).toBe('');
+  });
+});
+
+describe('formatTerm', () => {
+  test('renders "1 Year" (singular) and "3 Years" (plural)', () => {
+    expect(formatTerm(1)).toBe('1 Year');
+    expect(formatTerm(3)).toBe('3 Years');
+  });
+
+  test('rounds floats to nearest integer for pluralization', () => {
+    expect(formatTerm(1.0)).toBe('1 Year');
+    expect(formatTerm(2.9)).toBe('3 Years');
+  });
+
+  test('returns empty string for null/undefined/NaN', () => {
+    expect(formatTerm(null)).toBe('');
+    expect(formatTerm(undefined)).toBe('');
+    expect(formatTerm(NaN)).toBe('');
+  });
+
+  test('handles arbitrary positive integers', () => {
+    expect(formatTerm(5)).toBe('5 Years');
+    expect(formatTerm(0)).toBe('0 Years');
   });
 });
 

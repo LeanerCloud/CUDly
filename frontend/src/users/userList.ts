@@ -13,7 +13,7 @@ import {
   removeSelectedUserId,
   clearSelectedUserIds
 } from './state';
-import { escapeHtml, formatRelativeTime } from './utils';
+import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError } from './utils';
 import { openEditUserModal, deleteUser, loadUsers } from './userActions';
 
 /**
@@ -86,7 +86,7 @@ export function renderUsers(users: APIUser[]): void {
               <input type="checkbox" class="user-checkbox" data-user-id="${escapeHtml(user.id)}" ${selectedUserIds.has(user.id) ? 'checked' : ''}>
             </td>
             <td>
-              <button class="btn-small btn-icon user-expand-btn" data-user-id="${escapeHtml(user.id)}" title="Expand" aria-expanded="false">&#x25B8;</button>
+              <button class="btn-small btn-icon user-expand-btn" data-user-id="${escapeHtml(user.id)}" title="Expand" aria-label="Expand user ${escapeHtml(user.email)}" aria-expanded="false">&#x25B8;</button>
             </td>
             <td>
               <div class="user-email">
@@ -105,15 +105,15 @@ export function renderUsers(users: APIUser[]): void {
                 ? '<span class="badge badge-success"><i class="icon-shield"></i> Enabled</span>'
                 : '<span class="badge badge-warning"><i class="icon-shield-off"></i> Disabled</span>'}
             </td>
-            <td><span class="text-muted">${user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}</span></td>
+            <td><span class="text-muted">${user.created_at ? formatDate(user.created_at) : '-'}</span></td>
             <td><span class="text-muted">${user.last_login ? formatRelativeTime(user.last_login) : 'Never'}</span></td>
             <td>
               <div class="action-buttons">
-                <button class="btn-small btn-icon edit-user-btn" data-user-id="${escapeHtml(user.id)}" title="Edit user">
-                  <i class="icon-edit"></i>
+                <button class="btn-small btn-icon edit-user-btn" data-user-id="${escapeHtml(user.id)}" title="Edit user" aria-label="Edit user ${escapeHtml(user.email)}">
+                  <i class="icon-edit" aria-hidden="true"></i>
                 </button>
-                <button class="btn-small btn-icon btn-danger delete-user-btn" data-user-id="${escapeHtml(user.id)}" title="Delete user">
-                  <i class="icon-trash"></i>
+                <button class="btn-small btn-icon btn-danger delete-user-btn" data-user-id="${escapeHtml(user.id)}" title="Delete user" aria-label="Delete user ${escapeHtml(user.email)}">
+                  <i class="icon-trash" aria-hidden="true"></i>
                 </button>
               </div>
             </td>
@@ -216,15 +216,27 @@ async function toggleUserGroup(userId: string, groupId: string, checked: boolean
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
 
+  const group = availableGroups.find(g => g.id === groupId);
+  const groupLabel = group ? group.name : groupId;
+
   const next = checked
     ? [...new Set([...user.groups, groupId])]
     : user.groups.filter(g => g !== groupId);
 
   try {
     await api.updateUser(userId, { groups: next });
+    // Surface inline-save confirmation so users know the toggle stuck.
+    // Addresses the audit's "unclear if edits persist on collapse"
+    // concern by showing a toast instead of requiring an explicit
+    // Save/Cancel flow.
+    showSuccess(checked
+      ? `Added ${user.email} to "${groupLabel}"`
+      : `Removed ${user.email} from "${groupLabel}"`);
     await loadUsers();
   } catch (error) {
-    console.error('Failed to update user groups:', error);
+    const err = error as Error;
+    console.error('Failed to update user groups:', err);
+    showError(`Failed to update group membership: ${err.message}`);
     // Revert the checkbox
     const cb = document.querySelector<HTMLInputElement>(
       `.group-assign-checkbox[data-user-id="${userId}"][data-group-id="${groupId}"]`,

@@ -14,8 +14,21 @@ jest.mock('../api', () => ({
   updateRIExchangeConfig: jest.fn(),
 }));
 
-import { fillQuoteFromRI, loadReshapeRecommendations, openExchangeModal } from '../riexchange';
+// Mock navigation to avoid loading dashboard/plans/... transitively.
+jest.mock('../navigation', () => ({
+  switchTab: jest.fn(),
+  switchSettingsSubTab: jest.fn(),
+}));
+
+import {
+  fillQuoteFromRI,
+  loadReshapeRecommendations,
+  loadRIExchange,
+  openExchangeModal,
+  setupRIExchangeHandlers,
+} from '../riexchange';
 import * as api from '../api';
+import * as navigation from '../navigation';
 
 function createModal(): HTMLDivElement {
   const modal = document.createElement('div');
@@ -350,5 +363,90 @@ describe('reshape recommendations table', () => {
     const cells = row?.querySelectorAll<HTMLTableCellElement>('td');
     expect(cells?.[3]?.textContent).toBe('—');
     expect(tableContainer.querySelectorAll('.cost-chip').length).toBe(0);
+  });
+});
+
+// Empty-state copy varies with RI-fleet presence. Prior to commit P4 the
+// "All convertible RIs are well-utilized" copy ran on every zero-rec state
+// including a totally empty fleet — a truthy claim about an empty set.
+describe('reshape recommendations empty state', () => {
+  let instancesEl: HTMLDivElement;
+  let recsEl: HTMLDivElement;
+  let historyEl: HTMLDivElement;
+
+  const sampleRI = {
+    reserved_instance_id: 'ri-1',
+    instance_type: 'm5.large',
+    availability_zone: 'us-east-1a',
+    instance_count: 1,
+    start: '2026-01-01T00:00:00Z',
+    end: '2027-01-01T00:00:00Z',
+    offering_type: 'Convertible',
+    fixed_price: 0,
+    usage_price: 0,
+    state: 'active',
+    normalization_factor: 4,
+  };
+
+  beforeEach(() => {
+    instancesEl = document.createElement('div');
+    instancesEl.id = 'ri-exchange-instances-list';
+    recsEl = document.createElement('div');
+    recsEl.id = 'ri-exchange-recommendations-list';
+    historyEl = document.createElement('div');
+    historyEl.id = 'ri-exchange-history-list';
+    document.body.append(instancesEl, recsEl, historyEl);
+
+    (api.getRIUtilization as jest.Mock).mockResolvedValue([]);
+    (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([]);
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    const body = document.body;
+    while (body.firstChild) body.removeChild(body.firstChild);
+    jest.resetAllMocks();
+  });
+
+  it('advises the user their accounts have no convertible RIs yet when both lists are empty', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([]);
+
+    await loadRIExchange();
+
+    expect(recsEl.textContent).toContain('none are registered yet');
+    expect(recsEl.textContent).not.toContain('well-utilized');
+    expect(recsEl.textContent).not.toContain('utilization threshold');
+  });
+
+  it('claims all RIs meet the threshold only when RIs actually exist', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([sampleRI]);
+
+    await loadRIExchange();
+
+    expect(recsEl.textContent).toContain('meet your utilization threshold');
+    expect(recsEl.textContent).toContain('1 convertible RI ');
+    expect(recsEl.textContent).not.toContain('none are registered');
+  });
+});
+
+describe('⚙︎ Exchange settings deep-link', () => {
+  beforeEach(() => {
+    const btn = document.createElement('button');
+    btn.id = 'ri-exchange-settings-btn';
+    document.body.appendChild(btn);
+  });
+
+  afterEach(() => {
+    const body = document.body;
+    while (body.firstChild) body.removeChild(body.firstChild);
+    jest.resetAllMocks();
+  });
+
+  it('switches to Settings → Purchasing when clicked', () => {
+    setupRIExchangeHandlers();
+    const btn = document.getElementById('ri-exchange-settings-btn')!;
+    btn.click();
+    expect(navigation.switchTab).toHaveBeenCalledWith('settings');
+    expect(navigation.switchSettingsSubTab).toHaveBeenCalledWith('purchasing');
   });
 });

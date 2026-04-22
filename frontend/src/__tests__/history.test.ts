@@ -15,6 +15,7 @@ jest.mock('../navigation', () => ({
 jest.mock('../utils', () => ({
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
+  formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
   populateAccountFilter: jest.fn(() => Promise.resolve())
 }));

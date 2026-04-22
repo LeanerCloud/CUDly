@@ -28,6 +28,20 @@ jest.mock('../federation', () => ({
   initFederationPanel: jest.fn().mockResolvedValue(undefined),
 }));
 
+// Mock confirmDialog so tests can control confirm/cancel without driving
+// the real modal UI. mockConfirmDialog default is "confirmed" (true);
+// individual tests can mockResolvedValueOnce(false) to simulate cancel.
+const mockConfirmDialog = jest.fn<Promise<boolean>, [unknown]>(() => Promise.resolve(true));
+jest.mock('../confirmDialog', () => ({
+  confirmDialog: (opts: unknown) => mockConfirmDialog(opts),
+}));
+
+// Q7: saveGlobalSettings + error paths now use showToast.
+const mockShowToast = jest.fn<{ dismiss: () => void }, [unknown]>(() => ({ dismiss: jest.fn() }));
+jest.mock('../toast', () => ({
+  showToast: (opts: unknown) => mockShowToast(opts),
+}));
+
 import * as api from '../api';
 
 describe('Settings Module', () => {
@@ -87,8 +101,28 @@ describe('Settings Module', () => {
       <code id="test-copy-element">test-value</code>
       <button class="copy-btn"><span class="copy-icon">Copy</span></button>
     `;
+    // Seed the default selects to match prod's <option selected> markup so
+    // cascade-confirm tests have an unambiguous baseline ("3 Years" term,
+    // "all-upfront" payment) to transition away from.
+    (document.getElementById('setting-default-term') as HTMLSelectElement).value = '3';
+    (document.getElementById('setting-default-payment') as HTMLSelectElement).value = 'all-upfront';
+    // Mirror the same baseline onto every per-service select so the cascade
+    // diff only reports genuinely-changed rows.
+    ['aws-ec2-term','aws-rds-term','aws-elasticache-term','aws-opensearch-term','aws-redshift-term','aws-savingsplans-term','azure-vm-term','azure-sql-term','azure-cosmos-term','gcp-compute-term','gcp-sql-term'].forEach(id => {
+      const el = document.getElementById(id) as HTMLSelectElement | null;
+      if (el) el.value = '3';
+    });
+    ['aws-ec2-payment','aws-rds-payment','aws-elasticache-payment','aws-opensearch-payment','aws-redshift-payment','aws-savingsplans-payment'].forEach(id => {
+      const el = document.getElementById(id) as HTMLSelectElement | null;
+      if (el) el.value = 'all-upfront';
+    });
 
     jest.clearAllMocks();
+    // clearAllMocks only clears call history; flush the queued
+    // mockResolvedValueOnce stack too so a test that doesn't consume a
+    // queued value can't leak it into the next test.
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockImplementation(() => Promise.resolve(true));
   });
 
   describe('setupSettingsHandlers', () => {
@@ -146,28 +180,62 @@ describe('Settings Module', () => {
       expect(scheduleRow?.style.display).toBe('none');
     });
 
-    test('sets up default term to propagate to services', () => {
+    test('sets up default term to propagate to services (after confirm)', async () => {
       setupSettingsHandlers();
+      mockConfirmDialog.mockResolvedValueOnce(true);
 
+      // Baseline is "3" via the parent beforeEach; flip to "1" so the
+      // cascade has real work to do.
       const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement;
       defaultTerm.value = '1';
       defaultTerm.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 0));
 
+      expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
       expect((document.getElementById('aws-ec2-term') as HTMLSelectElement).value).toBe('1');
       expect((document.getElementById('aws-rds-term') as HTMLSelectElement).value).toBe('1');
       expect((document.getElementById('azure-vm-term') as HTMLSelectElement).value).toBe('1');
       expect((document.getElementById('gcp-compute-term') as HTMLSelectElement).value).toBe('1');
     });
 
-    test('sets up default payment to propagate to AWS services', () => {
+    test('sets up default payment to propagate to AWS services (after confirm)', async () => {
       setupSettingsHandlers();
+      mockConfirmDialog.mockResolvedValueOnce(true);
 
       const defaultPayment = document.getElementById('setting-default-payment') as HTMLSelectElement;
       defaultPayment.value = 'no-upfront';
       defaultPayment.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 0));
 
+      expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
       expect((document.getElementById('aws-ec2-payment') as HTMLSelectElement).value).toBe('no-upfront');
       expect((document.getElementById('aws-rds-payment') as HTMLSelectElement).value).toBe('no-upfront');
+    });
+
+    test('cancelling the cascade restores the default term to its prior value', async () => {
+      setupSettingsHandlers();
+      mockConfirmDialog.mockResolvedValueOnce(false);
+
+      const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement;
+      // Baseline: all services at "3" (seeded in beforeEach). Attempt to switch to "1".
+      defaultTerm.value = '1';
+      defaultTerm.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(defaultTerm.value).toBe('3');
+      expect((document.getElementById('aws-ec2-term') as HTMLSelectElement).value).toBe('3');
+    });
+
+    test('cascade confirm skipped when no services would change', async () => {
+      setupSettingsHandlers();
+      // All services and default already at "3" (via parent beforeEach).
+      // Flip default to "3" (self) and assert no prompt fires.
+      const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement;
+      defaultTerm.value = '3';
+      defaultTerm.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockConfirmDialog).not.toHaveBeenCalled();
     });
 
   });
@@ -395,7 +463,10 @@ describe('Settings Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await saveGlobalSettings(event);
 
-      expect(window.alert).toHaveBeenCalledWith('Settings saved successfully');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Settings saved successfully',
+        kind: 'success',
+      }));
     });
 
     test('shows error alert on failure', async () => {
@@ -405,7 +476,10 @@ describe('Settings Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await saveGlobalSettings(event);
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to save settings: Save failed');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Failed to save settings: Save failed',
+        kind: 'error',
+      }));
     });
 
     test('handles missing form elements gracefully', async () => {
@@ -447,19 +521,19 @@ describe('Settings Module', () => {
       (document.getElementById('setting-notification-days') as HTMLInputElement).value = '7';
     });
 
-    test('does nothing if user cancels confirmation', () => {
-      window.confirm = jest.fn().mockReturnValue(false);
+    test('does nothing if user cancels confirmation', async () => {
+      mockConfirmDialog.mockResolvedValueOnce(false);
 
-      resetSettings();
+      await resetSettings();
 
       // Values should not change
       expect((document.getElementById('provider-azure') as HTMLInputElement).checked).toBe(true);
     });
 
-    test('resets all fields to defaults on confirmation', () => {
-      window.confirm = jest.fn().mockReturnValue(true);
+    test('resets all fields to defaults on confirmation', async () => {
+      mockConfirmDialog.mockResolvedValueOnce(true);
 
-      resetSettings();
+      await resetSettings();
 
       expect((document.getElementById('provider-aws') as HTMLInputElement).checked).toBe(true);
       expect((document.getElementById('provider-azure') as HTMLInputElement).checked).toBe(false);

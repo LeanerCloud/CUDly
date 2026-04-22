@@ -94,8 +94,20 @@ function formatOptionsFor(target: string): FormatOption[] {
 function makeFormatButton(opt: FormatOption, target: string, source: string): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'btn btn-small btn-multiline';
+  btn.className = 'btn btn-small btn-multiline btn-download';
   btn.title = opt.title;
+  // Make the button's download affordance obvious to assistive tech
+  // (the visual label alone reads like static text; aria-label + the
+  // .btn-download class together signal the click action).
+  btn.setAttribute('aria-label', `Download ${opt.label} (${opt.sublabel}) for ${target.toUpperCase()}`);
+
+  // A leading ↓ glyph communicates "download" visually. aria-hidden so
+  // screen readers rely on the aria-label above, not the glyph.
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'download-icon';
+  iconSpan.setAttribute('aria-hidden', 'true');
+  iconSpan.textContent = '↓';
+  btn.appendChild(iconSpan);
 
   const labelSpan = document.createElement('span');
   labelSpan.className = 'label';

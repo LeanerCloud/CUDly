@@ -21,12 +21,15 @@ jest.mock('../state', () => ({
   getSelectedRecommendations: jest.fn().mockReturnValue(new Set()),
   clearSelectedRecommendations: jest.fn(),
   addSelectedRecommendation: jest.fn(),
-  removeSelectedRecommendation: jest.fn()
+  removeSelectedRecommendation: jest.fn(),
+  getRecommendationsSort: jest.fn().mockReturnValue({ column: 'savings', direction: 'desc' }),
+  setRecommendationsSort: jest.fn(),
 }));
 
 // Mock utils
 jest.mock('../utils', () => ({
   formatCurrency: jest.fn((val) => `$${val || 0}`),
+  formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
   populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
@@ -377,6 +380,74 @@ describe('Recommendations Module', () => {
 
       const list = document.getElementById('recommendations-list');
       expect(list?.innerHTML).toContain('medium-savings');
+    });
+  });
+
+  describe('P6: sort + bulk toolbar + detail drawer', () => {
+    const twoRecs = [
+      { provider: 'aws', service: 'ec2', resource_type: 't3.large', region: 'us-east-1', count: 2, term: 1, savings: 100, upfront_cost: 500 },
+      { provider: 'aws', service: 'rds', resource_type: 'db.m5.large', region: 'us-east-1', count: 4, term: 3, savings: 1500, upfront_cost: 9000 },
+    ];
+
+    beforeEach(() => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        recommendations: twoRecs,
+        summary: {},
+        available_regions: [],
+      });
+    });
+
+    test('renders sortable column headers with indicators', async () => {
+      await loadRecommendations();
+      const list = document.getElementById('recommendations-list');
+      // Four sortable columns: count, term, savings (default), upfront_cost.
+      const sortables = list?.querySelectorAll('th.sortable');
+      expect(sortables?.length).toBe(4);
+      // The default sort is savings desc → that header shows an active ▼.
+      const savingsHeader = list?.querySelector('th[data-sort="savings"]');
+      expect(savingsHeader?.innerHTML).toContain('active');
+    });
+
+    test('clicking a sortable header calls setRecommendationsSort', async () => {
+      await loadRecommendations();
+      const header = document.querySelector<HTMLTableCellElement>('th[data-sort="upfront_cost"]');
+      header?.click();
+      expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'desc' });
+    });
+
+    test('bulk toolbar appears when at least one row is selected', async () => {
+      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      await loadRecommendations();
+      const toolbar = document.querySelector('.recommendations-bulk-toolbar');
+      expect(toolbar).not.toBeNull();
+      expect(toolbar?.textContent).toContain('1 selected');
+    });
+
+    test('bulk toolbar is absent when no row is selected', async () => {
+      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set());
+      await loadRecommendations();
+      expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
+    });
+
+    test('clicking a row opens the detail drawer with that recommendation', async () => {
+      await loadRecommendations();
+      // Simulate clicking the first data row (not on a checkbox / button).
+      const firstRow = document.querySelector<HTMLTableRowElement>('tr.recommendation-row');
+      const cell = firstRow?.querySelectorAll('td')[3]; // Service cell — safe to click
+      cell?.click();
+      const drawer = document.querySelector('.detail-drawer');
+      expect(drawer).not.toBeNull();
+      expect(drawer?.querySelector('h3')?.textContent).toContain('AWS');
+    });
+
+    test('ESC closes the detail drawer', async () => {
+      await loadRecommendations();
+      const firstRow = document.querySelector<HTMLTableRowElement>('tr.recommendation-row');
+      const cell = firstRow?.querySelectorAll('td')[3];
+      cell?.click();
+      expect(document.querySelector('.detail-drawer')).not.toBeNull();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(document.querySelector('.detail-drawer')).toBeNull();
     });
   });
 

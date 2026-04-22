@@ -4,6 +4,9 @@
 
 import * as api from './api';
 import { initFederationPanel } from './federation';
+import { confirmDialog } from './confirmDialog';
+import { reflectDirtyState } from './settings-subnav';
+import { showToast } from './toast';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -114,10 +117,12 @@ function snapshotAllFields(): void {
 }
 
 function updateDirtyMarkers(): void {
+  let anyDirty = false;
   TRACKED_FIELDS.forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     const dirty = getFieldValue(id) !== savedSnapshot[id];
+    if (dirty) anyDirty = true;
     if (el instanceof HTMLInputElement && el.type === 'checkbox') {
       // Highlight the containing setting-input div for checkboxes
       el.closest<HTMLElement>('.setting-input')?.classList.toggle('dirty', dirty);
@@ -125,6 +130,9 @@ function updateDirtyMarkers(): void {
       el.classList.toggle('dirty', dirty);
     }
   });
+  // Surface aggregate dirty state to the Settings top-tab (badge dot) and
+  // the sticky save bar (toggle "Unsaved changes" affordance).
+  reflectDirtyState(anyDirty);
 }
 
 /** Returns true if any tracked field has been changed since the last save/load. */
@@ -216,72 +224,137 @@ async function renderSelfAccountBanner(container: HTMLElement, accounts: api.Clo
 }
 
 /**
- * Render accounts list into a container element
+ * Render accounts list into a container element as a scannable table.
+ *
+ * Replaces the prior inline-row layout ("Account Name (12345) Edit Test
+ * Credentials Overrides Delete" as a single text-flow). The table surfaces
+ * each field in its own column, uses a status pill for Active/Disabled,
+ * and isolates the destructive Delete action in the right-most column.
  */
 function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): void {
-  // Remove old account rows (banner is managed by renderSelfAccountBanner)
-  container.querySelectorAll('.account-row:not(.self-account-banner), .account-overrides-panel').forEach(el => el.remove());
+  // Remove prior rendered rows (Overrides panels are sibling elements,
+  // banner lives in a separate className managed by renderSelfAccountBanner).
+  container.querySelectorAll('.accounts-table, .account-overrides-panel, .accounts-empty').forEach(el => el.remove());
 
   if (!accounts || accounts.length === 0) {
     if (!container.querySelector('.self-account-banner')) {
-      container.textContent = 'No accounts configured.';
+      const empty = document.createElement('p');
+      empty.className = 'accounts-empty';
+      empty.textContent = 'No accounts configured.';
+      container.appendChild(empty);
     }
     return;
   }
 
-  accounts.forEach(account => {
-    const row = document.createElement('div');
-    row.className = 'account-row';
+  const table = document.createElement('table');
+  table.className = 'accounts-table';
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  ['Name', 'Account ID', 'Status', 'Actions'].forEach((label) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
 
-    const info = document.createElement('span');
-    info.className = 'account-info';
-    const selfBadge = account.is_self ? ' [Self]' : '';
-    info.textContent = `${account.name} (${account.external_id})${selfBadge}${account.enabled ? '' : ' [disabled]'}`;
-    row.appendChild(info);
+  const tbody = document.createElement('tbody');
+  const panels: HTMLDivElement[] = [];
+
+  accounts.forEach((account) => {
+    const accountLabel = `${account.name} (${account.external_id})`;
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.textContent = account.name;
+    if (account.is_self) {
+      const self = document.createElement('span');
+      self.className = 'badge badge-info';
+      self.textContent = ' Self';
+      self.setAttribute('title', 'The cloud account running CUDly itself');
+      nameTd.appendChild(self);
+    }
+    tr.appendChild(nameTd);
+
+    const idTd = document.createElement('td');
+    idTd.className = 'monospace';
+    idTd.textContent = account.external_id;
+    tr.appendChild(idTd);
+
+    const statusTd = document.createElement('td');
+    const status = document.createElement('span');
+    status.className = account.enabled
+      ? 'badge badge-success'
+      : 'badge badge-warning';
+    status.textContent = account.enabled ? 'Active' : 'Disabled';
+    statusTd.appendChild(status);
+    tr.appendChild(statusTd);
+
+    const actionsTd = document.createElement('td');
+    actionsTd.className = 'account-actions';
 
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.className = 'btn btn-small';
     editBtn.textContent = 'Edit';
+    editBtn.setAttribute('aria-label', `Edit ${accountLabel}`);
     editBtn.addEventListener('click', () => openAccountModal(provider, account));
-    row.appendChild(editBtn);
+    actionsTd.appendChild(editBtn);
 
     const testBtn = document.createElement('button');
     testBtn.type = 'button';
     testBtn.className = 'btn btn-small';
     testBtn.textContent = 'Test';
+    testBtn.setAttribute('aria-label', `Test credentials for ${accountLabel}`);
     testBtn.addEventListener('click', () => void testAccount(account.id, testBtn));
-    row.appendChild(testBtn);
+    actionsTd.appendChild(testBtn);
 
     const credsBtn = document.createElement('button');
     credsBtn.type = 'button';
     credsBtn.className = 'btn btn-small';
     credsBtn.textContent = 'Credentials';
+    credsBtn.setAttribute('aria-label', `Edit credentials for ${accountLabel}`);
     credsBtn.addEventListener('click', () => openAccountModal(provider, account));
-    row.appendChild(credsBtn);
+    actionsTd.appendChild(credsBtn);
 
     const overridesBtn = document.createElement('button');
     overridesBtn.type = 'button';
     overridesBtn.className = 'btn btn-small';
     overridesBtn.textContent = 'Overrides';
+    overridesBtn.setAttribute('aria-label', `Service overrides for ${accountLabel}`);
     const overridesPanel = document.createElement('div');
     overridesPanel.className = 'account-overrides-panel hidden';
     overridesBtn.addEventListener('click', () => {
       const hidden = overridesPanel.classList.toggle('hidden');
       if (!hidden) void loadOverridesPanel(account.id, overridesPanel);
     });
-    row.appendChild(overridesBtn);
+    actionsTd.appendChild(overridesBtn);
+
+    // Destructive Delete lives in its own subgroup to isolate it from the
+    // routine actions. A small spacer + btn-destructive class (from P2)
+    // signal "be careful".
+    const spacer = document.createElement('span');
+    spacer.className = 'account-actions-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    actionsTd.appendChild(spacer);
 
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
-    deleteBtn.className = 'btn btn-small btn-danger';
+    deleteBtn.className = 'btn btn-small btn-destructive';
     deleteBtn.textContent = 'Delete';
+    deleteBtn.setAttribute('aria-label', `Delete ${accountLabel}`);
     deleteBtn.addEventListener('click', () => void deleteAccount(account.id, provider, container));
-    row.appendChild(deleteBtn);
+    actionsTd.appendChild(deleteBtn);
 
-    container.appendChild(row);
-    container.appendChild(overridesPanel);
+    tr.appendChild(actionsTd);
+    tbody.appendChild(tr);
+    panels.push(overridesPanel);
   });
+  table.appendChild(tbody);
+  container.appendChild(table);
+  // Append overrides panels after the table so "show overrides" expands
+  // below the row rather than inside it.
+  panels.forEach((p) => container.appendChild(p));
 }
 
 /**
@@ -326,12 +399,18 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promis
       resetBtn.className = 'btn btn-small btn-danger';
       resetBtn.textContent = 'Reset';
       resetBtn.addEventListener('click', async () => {
-        if (!confirm(`Reset ${o.provider}/${o.service} override to global default?`)) return;
+        const ok = await confirmDialog({
+          title: 'Reset override?',
+          body: `Reset ${o.provider}/${o.service} override to the global default? Any per-service values you set will be replaced.`,
+          confirmLabel: 'Reset override',
+          destructive: true,
+        });
+        if (!ok) return;
         try {
           await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
           await loadOverridesPanel(accountId, panel);
         } catch (err) {
-          alert(`Failed to reset override: ${(err as Error).message}`);
+          showToast({ message: `Failed to reset override: ${(err as Error).message}`, kind: 'error' });
         }
       });
       actionTd.appendChild(resetBtn);
@@ -346,13 +425,19 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promis
  * Delete an account after confirmation
  */
 async function deleteAccount(accountId: string, provider: AccountProvider, _container: HTMLElement): Promise<void> {
-  if (!confirm('Delete this account? This also removes its credentials and service overrides.')) return;
+  const ok = await confirmDialog({
+    title: 'Delete account?',
+    body: 'Delete this account? This also removes its credentials and service overrides. This action cannot be undone.',
+    confirmLabel: 'Delete account',
+    destructive: true,
+  });
+  if (!ok) return;
   try {
     await api.deleteAccount(accountId);
     await loadAccountsForProvider(provider);
   } catch (err) {
     console.error('Failed to delete account:', err);
-    alert(`Failed to delete account: ${(err as Error).message}`);
+    showToast({ message: `Failed to delete account: ${(err as Error).message}`, kind: 'error' });
     void loadAccountsForProvider(provider);
   }
 }
@@ -655,7 +740,7 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
       closeAccountModal();
     } catch (err) {
       console.error('Custom save failed:', err);
-      alert(`Failed to save: ${(err as Error).message}`);
+      showToast({ message: `Failed to save: ${(err as Error).message}`, kind: 'error' });
     }
     return;
   }
@@ -680,7 +765,11 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
       console.error('Account saved but credentials could not be stored:', credErr);
       closeAccountModal();
       await loadAccountsForProvider(provider);
-      alert(`Account saved, but credentials could not be stored: ${(credErr as Error).message}\nPlease edit the account to re-enter credentials.`);
+      showToast({
+        message: `Account saved, but credentials could not be stored: ${(credErr as Error).message}. Edit the account to re-enter credentials.`,
+        kind: 'warning',
+        timeout: null,
+      });
       return;
     }
 
@@ -688,7 +777,7 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
     await loadAccountsForProvider(provider);
   } catch (err) {
     console.error('Failed to save account:', err);
-    alert(`Failed to save account: ${(err as Error).message}`);
+    showToast({ message: `Failed to save account: ${(err as Error).message}`, kind: 'error' });
   }
 }
 
@@ -698,11 +787,11 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
 async function handleDiscoverOrgAccounts(): Promise<void> {
   try {
     const result = await api.discoverOrgAccounts();
-    alert(`Org discovery started: ${result.message || result.status}`);
+    showToast({ message: `Org discovery started: ${result.message || result.status}`, kind: 'success' });
     await loadAccountsForProvider('aws');
   } catch (err) {
     console.error('Org discovery failed:', err);
-    alert(`Org discovery failed: ${(err as Error).message}`);
+    showToast({ message: `Org discovery failed: ${(err as Error).message}`, kind: 'error' });
   }
 }
 
@@ -723,12 +812,26 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   const autoCollect = document.getElementById('setting-auto-collect') as HTMLInputElement | null;
   autoCollect?.addEventListener('change', () => updateCollectionScheduleVisibility(), { signal });
 
-  // Global defaults - propagate to all services when changed
+  // Global defaults — propagate to all services when changed. The actual
+  // propagation is gated behind a diff-preview confirmation (see
+  // confirmAndPropagateTerm / confirmAndPropagatePayment) so the user
+  // understands which per-service rows will be rewritten.
   const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement | null;
   const defaultPayment = document.getElementById('setting-default-payment') as HTMLSelectElement | null;
-
-  defaultTerm?.addEventListener('change', () => propagateTermToServices(defaultTerm.value), { signal });
-  defaultPayment?.addEventListener('change', () => propagatePaymentToServices(defaultPayment.value), { signal });
+  if (defaultTerm) {
+    defaultTerm.dataset['previous'] = defaultTerm.value;
+    defaultTerm.addEventListener('focus', () => { defaultTerm.dataset['previous'] = defaultTerm.value; }, { signal });
+    defaultTerm.addEventListener('change', () => {
+      void confirmAndPropagateTerm(defaultTerm);
+    }, { signal });
+  }
+  if (defaultPayment) {
+    defaultPayment.dataset['previous'] = defaultPayment.value;
+    defaultPayment.addEventListener('focus', () => { defaultPayment.dataset['previous'] = defaultPayment.value; }, { signal });
+    defaultPayment.addEventListener('change', () => {
+      void confirmAndPropagatePayment(defaultPayment);
+    }, { signal });
+  }
 
   // Set up dirty-field tracking
   setupDirtyTracking(signal);
@@ -829,6 +932,96 @@ function propagatePaymentToServices(payment: string): void {
         select.value = payment;
       }
     });
+}
+
+function termLabel(value: string): string {
+  return value === '1' ? '1 Year' : value === '3' ? '3 Years' : `${value} Years`;
+}
+
+function paymentLabel(value: string): string {
+  switch (value) {
+    case 'no-upfront': return 'No Upfront';
+    case 'partial-upfront': return 'Partial Upfront';
+    case 'all-upfront': return 'All Upfront';
+    default: return value;
+  }
+}
+
+function buildAffectedList(affected: { provider: string; service: string }[]): HTMLDivElement {
+  // Build the diff list via DOM APIs (not innerHTML) so we don't need an
+  // escapeHtml import; provider + service values come from the SERVICE_FIELDS
+  // constant so they're inherently safe, but constructor-free DOM is the
+  // simpler contract.
+  const wrap = document.createElement('div');
+  const count = affected.length;
+  const intro = document.createElement('p');
+  intro.textContent = `${count} service${count === 1 ? '' : 's'} will change:`;
+  wrap.appendChild(intro);
+  const ul = document.createElement('ul');
+  affected.forEach((f) => {
+    const li = document.createElement('li');
+    li.textContent = `${f.provider.toUpperCase()} ${f.service}`;
+    ul.appendChild(li);
+  });
+  wrap.appendChild(ul);
+  return wrap;
+}
+
+async function confirmAndPropagateTerm(select: HTMLSelectElement): Promise<void> {
+  const previousValue = select.dataset['previous'] ?? select.value;
+  const newValue = select.value;
+  if (newValue === previousValue) return;
+  const affected = SERVICE_FIELDS.filter(({ termId }) => {
+    const svc = document.getElementById(termId) as HTMLSelectElement | null;
+    return svc && svc.value !== newValue;
+  });
+  if (affected.length === 0) {
+    // Everything already matches — nothing to propagate, no need to prompt.
+    select.dataset['previous'] = newValue;
+    return;
+  }
+  const ok = await confirmDialog({
+    title: `Apply "${termLabel(newValue)}" to ${affected.length} service${affected.length === 1 ? '' : 's'}?`,
+    body: buildAffectedList(affected),
+    confirmLabel: 'Apply to all',
+  });
+  if (ok) {
+    propagateTermToServices(newValue);
+    select.dataset['previous'] = newValue;
+    updateDirtyMarkers();
+  } else {
+    // User cancelled — restore the default select to its prior value so
+    // the visible state matches what's persisted/saved.
+    select.value = previousValue;
+  }
+}
+
+async function confirmAndPropagatePayment(select: HTMLSelectElement): Promise<void> {
+  const previousValue = select.dataset['previous'] ?? select.value;
+  const newValue = select.value;
+  if (newValue === previousValue) return;
+  const affected = SERVICE_FIELDS
+    .filter(f => f.paymentId !== null)
+    .filter(({ paymentId }) => {
+      const svc = document.getElementById(paymentId!) as HTMLSelectElement | null;
+      return svc && svc.value !== newValue;
+    });
+  if (affected.length === 0) {
+    select.dataset['previous'] = newValue;
+    return;
+  }
+  const ok = await confirmDialog({
+    title: `Apply "${paymentLabel(newValue)}" to ${affected.length} AWS service${affected.length === 1 ? '' : 's'}?`,
+    body: buildAffectedList(affected),
+    confirmLabel: 'Apply to all',
+  });
+  if (ok) {
+    propagatePaymentToServices(newValue);
+    select.dataset['previous'] = newValue;
+    updateDirtyMarkers();
+  } else {
+    select.value = previousValue;
+  }
 }
 
 /**
@@ -994,11 +1187,11 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 
     snapshotAllFields();
     updateDirtyMarkers();
-    alert('Settings saved successfully');
+    showToast({ message: 'Settings saved successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {
     console.error('Failed to save settings:', error);
     const err = error as Error;
-    alert(`Failed to save settings: ${err.message}`);
+    showToast({ message: `Failed to save settings: ${err.message}`, kind: 'error' });
   } finally {
     saveInFlight = false;
     if (saveBtn) saveBtn.disabled = false;
@@ -1008,8 +1201,14 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 /**
  * Reset settings to defaults
  */
-export function resetSettings(): void {
-  if (!confirm('Are you sure you want to reset all settings to defaults?')) return;
+export async function resetSettings(): Promise<void> {
+  const ok = await confirmDialog({
+    title: 'Reset all settings?',
+    body: 'This clears your provider selection, collection schedule, and notification email back to factory defaults. Service-level defaults stay as-is.',
+    confirmLabel: 'Reset settings',
+    destructive: true,
+  });
+  if (!ok) return;
 
   const awsCheck = document.getElementById('provider-aws') as HTMLInputElement | null;
   const azureCheck = document.getElementById('provider-azure') as HTMLInputElement | null;

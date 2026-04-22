@@ -41,9 +41,21 @@ jest.mock('../commitmentOptions', () => ({
   normalizePaymentValue: jest.fn((value) => value)
 }));
 
+// Q7: plans.ts migrated alert() → showToast and destructive confirm() →
+// confirmDialog. Mock both so tests can assert calls and control confirm.
+const mockShowToast = jest.fn<{ dismiss: () => void }, [unknown]>(() => ({ dismiss: jest.fn() }));
+jest.mock('../toast', () => ({
+  showToast: (opts: unknown) => mockShowToast(opts),
+}));
+const mockConfirmDialog = jest.fn<Promise<boolean>, [unknown]>(() => Promise.resolve(true));
+jest.mock('../confirmDialog', () => ({
+  confirmDialog: (opts: unknown) => mockConfirmDialog(opts),
+}));
+
 // Mock utils
 jest.mock('../utils', () => ({
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
+  formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   formatRampSchedule: jest.fn((val) => val || 'Unknown'),
   getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
   escapeHtml: jest.fn((str) => str || ''),
@@ -573,7 +585,7 @@ describe('Plans Module', () => {
 
       expect(window.confirm).toHaveBeenCalled();
       expect(api.runPlannedPurchase).toHaveBeenCalledWith('purchase-1');
-      expect(window.alert).toHaveBeenCalledWith('Purchase executed successfully');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Purchase executed successfully' }));
     });
 
     test('run action cancelled by user', async () => {
@@ -634,7 +646,7 @@ describe('Plans Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to pause purchase: API Error');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to pause purchase: API Error' }));
     });
   });
 
@@ -713,7 +725,7 @@ describe('Plans Module', () => {
       await savePlan(event);
 
       expect(api.createPlan).toHaveBeenCalled();
-      expect(window.alert).toHaveBeenCalledWith('Plan created successfully');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Plan created successfully' }));
     });
 
     test('updates existing plan when plan ID present', async () => {
@@ -726,7 +738,7 @@ describe('Plans Module', () => {
       await savePlan(event);
 
       expect(api.updatePlan).toHaveBeenCalledWith('plan-123', expect.any(Object));
-      expect(window.alert).toHaveBeenCalledWith('Plan updated successfully');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Plan updated successfully' }));
     });
 
     test('includes custom ramp settings when custom schedule selected', async () => {
@@ -785,7 +797,7 @@ describe('Plans Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await savePlan(event);
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to save plan: Save failed');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to save plan: Save failed' }));
     });
 
     test('uses weekly-25pct ramp schedule', async () => {
@@ -846,7 +858,7 @@ describe('Plans Module', () => {
 
       openCreatePlanModal();
 
-      expect(window.alert).toHaveBeenCalledWith('Please select at least one recommendation');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Please select at least one recommendation' }));
     });
 
     test('opens modal when recommendations are selected', () => {
@@ -1023,7 +1035,7 @@ describe('Plans Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to update plan');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to update plan' }));
     });
 
     test('edit plan button loads plan details and opens modal', async () => {
@@ -1264,7 +1276,7 @@ describe('Plans Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to load plan details');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to load plan details' }));
     });
 
     test('view history button calls viewPlanHistory', async () => {
@@ -1353,7 +1365,7 @@ describe('Plans Module', () => {
         ]
       });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
-      window.confirm = jest.fn().mockReturnValue(false);
+      mockConfirmDialog.mockResolvedValueOnce(false);
 
       await loadPlans();
 
@@ -1398,7 +1410,7 @@ describe('Plans Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to delete plan');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to delete plan' }));
     });
 
     test('add purchases button opens modal', async () => {
@@ -1474,7 +1486,7 @@ describe('Plans Module', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(api.createPlannedPurchases).toHaveBeenCalledWith('plan-1', 3, expect.any(String));
-      expect(window.alert).toHaveBeenCalledWith('Successfully scheduled 3 purchases');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Successfully scheduled 3 purchases' }));
     });
 
     test('submit form with single purchase shows singular message', async () => {
@@ -1489,7 +1501,7 @@ describe('Plans Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Successfully scheduled 1 purchase');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Successfully scheduled 1 purchase' }));
     });
 
     test('submit form shows error on failure', async () => {

@@ -3,7 +3,7 @@
  */
 
 import * as api from './api';
-import { formatCurrency, formatDate, escapeHtml, populateAccountFilter } from './utils';
+import { formatCurrency, formatDate, formatTerm, escapeHtml, populateAccountFilter } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 
@@ -156,7 +156,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
             <td>${escapeHtml(p.resource_type)}</td>
             <td>${escapeHtml(p.region)}</td>
             <td>${p.count}</td>
-            <td>${p.term} year</td>
+            <td>${formatTerm(p.term)}</td>
             <td>${formatCurrency(p.upfront_cost)}</td>
             <td class="savings">${formatCurrency(p.estimated_savings)}</td>
             <td>${escapeHtml(p.plan_name || '-')}</td>

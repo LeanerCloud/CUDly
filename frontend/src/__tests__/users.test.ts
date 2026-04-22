@@ -20,6 +20,14 @@ jest.mock('../groups/groupList', () => ({
   renderGroups: jest.fn(),
 }));
 
+// Q7: userActions.deleteUser / bulkDeleteUsers migrated from window.confirm
+// to confirmDialog. Mock it so existing tests don't hang waiting for a
+// real modal click.
+const mockConfirmDialog = jest.fn<Promise<boolean>, [unknown]>(() => Promise.resolve(true));
+jest.mock('../confirmDialog', () => ({
+  confirmDialog: (opts: unknown) => mockConfirmDialog(opts),
+}));
+
 import * as api from '../api';
 import { renderGroups } from '../groups/groupList';
 import * as userUtils from '../users/utils';
@@ -93,19 +101,21 @@ describe('users/utils', () => {
     it('should return formatted date for times 7 days or older', () => {
       const date = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
       const result = userUtils.formatRelativeTime(date.toISOString());
-      expect(result).toMatch(/\d{1,2}\/\d{1,2}\/\d{4}/);
+      // Canonical en-US short-month form: "Mar 15, 2026"
+      expect(result).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{4}$/);
     });
 
     it('should return formatted date for older times', () => {
       const date = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000); // 10 days ago
       const result = userUtils.formatRelativeTime(date.toISOString());
-      expect(result).toMatch(/\d{1,2}\/\d{1,2}\/\d{4}/); // Date format
+      expect(result).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{4}$/);
     });
 
     it('should handle dates far in the past', () => {
       const date = new Date('2020-01-01T00:00:00Z');
       const result = userUtils.formatRelativeTime(date.toISOString());
-      expect(result).toMatch(/1\/1\/2020/);
+      // TZ-adjusted — could be Dec 31 2019 or Jan 1 2020. Match shape + year.
+      expect(result).toMatch(/^[A-Z][a-z]{2} \d{1,2}, (2019|2020)$/);
     });
   });
 
@@ -159,7 +169,9 @@ describe('users/utils', () => {
 
       const toast = document.querySelector('.toast-error');
       expect(toast).toBeTruthy();
-      expect(toast?.textContent).toBe('Test error message');
+      // New toast DOM includes icon + close button siblings, so textContent
+      // is a concatenation. The message is in its own .toast-message child.
+      expect(toast?.querySelector('.toast-message')?.textContent).toBe('Test error message');
       expect(toast?.classList.contains('toast')).toBe(true);
     });
 
@@ -168,7 +180,9 @@ describe('users/utils', () => {
 
       expect(document.querySelector('.toast-error')).toBeTruthy();
 
-      jest.advanceTimersByTime(5000);
+      // Q4 default for errors is 30s; plus the transition-end fallback (200ms).
+      jest.advanceTimersByTime(30_000);
+      jest.advanceTimersByTime(200);
 
       expect(document.querySelector('.toast-error')).toBeFalsy();
     });
@@ -196,7 +210,7 @@ describe('users/utils', () => {
 
       const toast = document.querySelector('.toast-success');
       expect(toast).toBeTruthy();
-      expect(toast?.textContent).toBe('Success message');
+      expect(toast?.querySelector('.toast-message')?.textContent).toBe('Success message');
       expect(toast?.classList.contains('toast')).toBe(true);
     });
 
@@ -205,7 +219,9 @@ describe('users/utils', () => {
 
       expect(document.querySelector('.toast-success')).toBeTruthy();
 
-      jest.advanceTimersByTime(3000);
+      // Q4: showSuccess uses a 5s timeout + 200ms transition fallback.
+      jest.advanceTimersByTime(5_000);
+      jest.advanceTimersByTime(200);
 
       expect(document.querySelector('.toast-success')).toBeFalsy();
     });
@@ -814,7 +830,9 @@ describe('users/userList', () => {
       userList.renderUsers(mockUsers as any);
 
       const container = document.getElementById('users-list');
-      expect(container?.innerHTML).toContain('1/1/2024');
+      // Canonical format via formatDate: "Jan 1, 2024" (day varies with TZ
+      // interpretation of the 00:00Z instant, so match structure + year).
+      expect(container?.innerHTML).toMatch(/Jan \d{1,2}, 2024|Dec 3\d, 2023/);
     });
 
     it('should show dash for missing created_at', () => {
@@ -1058,8 +1076,8 @@ describe('users/userActions', () => {
     it('should show confirmation dialog', async () => {
       await userActions.deleteUser('1');
 
-      expect(global.confirm).toHaveBeenCalledWith(
-        expect.stringContaining('user1@test.com')
+      expect(mockConfirmDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: expect.stringContaining('user1@test.com') })
       );
     });
 
@@ -1084,7 +1102,7 @@ describe('users/userActions', () => {
     });
 
     it('should not delete when cancelled', async () => {
-      (global.confirm as jest.Mock).mockReturnValue(false);
+      mockConfirmDialog.mockResolvedValueOnce(false);
 
       await userActions.deleteUser('1');
 
@@ -1129,8 +1147,8 @@ describe('users/userActions', () => {
 
       await userActions.bulkDeleteUsers();
 
-      expect(global.confirm).toHaveBeenCalledWith(
-        expect.stringContaining('2 user(s)')
+      expect(mockConfirmDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: expect.stringContaining('2 user') })
       );
     });
 
@@ -1143,7 +1161,7 @@ describe('users/userActions', () => {
     });
 
     it('should not delete when cancelled', async () => {
-      (global.confirm as jest.Mock).mockReturnValue(false);
+      mockConfirmDialog.mockResolvedValueOnce(false);
       userState.addSelectedUserId('1');
 
       await userActions.bulkDeleteUsers();

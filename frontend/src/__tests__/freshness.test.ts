@@ -133,3 +133,116 @@ test('clears the container when the freshness fetch fails', async () => {
 
   expect(document.getElementById('fresh')!.children).toHaveLength(0);
 });
+
+// P5a: colour-coded staleness bands.
+test('renders --fresh badge for data younger than 3 hours', async () => {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  mockedGet.mockResolvedValue({ last_collected_at: oneHourAgo, last_collection_error: null });
+  await renderFreshness('fresh', jest.fn());
+  const pill = document.querySelector('.freshness-badge');
+  expect(pill?.classList.contains('freshness-badge--fresh')).toBe(true);
+});
+
+test('renders --warn badge for data 3-12 hours old', async () => {
+  const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+  mockedGet.mockResolvedValue({ last_collected_at: sixHoursAgo, last_collection_error: null });
+  await renderFreshness('fresh', jest.fn());
+  const pill = document.querySelector('.freshness-badge');
+  expect(pill?.classList.contains('freshness-badge--warn')).toBe(true);
+});
+
+test('renders --stale badge for data older than 12 hours', async () => {
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  mockedGet.mockResolvedValue({ last_collected_at: oneDayAgo, last_collection_error: null });
+  await renderFreshness('fresh', jest.fn());
+  const pill = document.querySelector('.freshness-badge');
+  expect(pill?.classList.contains('freshness-badge--stale')).toBe(true);
+});
+
+test('renders --stale badge when the cache has never been populated', async () => {
+  mockedGet.mockResolvedValue({ last_collected_at: null, last_collection_error: null });
+  await renderFreshness('fresh', jest.fn());
+  const pill = document.querySelector('.freshness-badge');
+  expect(pill?.classList.contains('freshness-badge--stale')).toBe(true);
+});
+
+// Q6: richer collection-error banner. jest setup.ts installs a stateless
+// jest.fn() sessionStorage mock; swap in a real Map-backed one per-test so
+// we can verify the hash-dismissal round-trip.
+describe('collection-error banner', () => {
+  let store: Map<string, string>;
+  beforeEach(() => {
+    store = new Map();
+    Object.defineProperty(global, 'sessionStorage', {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => { store.set(k, v); },
+        removeItem: (k: string) => { store.delete(k); },
+        clear: () => store.clear(),
+        key: (i: number) => Array.from(store.keys())[i] ?? null,
+        get length() { return store.size; },
+      },
+    });
+  });
+
+  test('renders icon, summary, expandable details, and dismiss button', async () => {
+    mockedGet.mockResolvedValue({
+      last_collected_at: new Date().toISOString(),
+      last_collection_error: 'aws: access denied (retry)',
+    });
+    await renderFreshness('fresh', jest.fn());
+
+    const banner = document.querySelector('#fresh .collection-error-banner');
+    expect(banner).not.toBeNull();
+    expect(banner?.querySelector('.collection-error-icon')?.textContent).toBe('\u26A0');
+    expect(banner?.querySelector('.collection-error-summary')?.textContent).toContain('Last collection had errors');
+    expect(banner?.querySelector('.collection-error-details summary')?.textContent).toBe('Show details');
+    expect(banner?.querySelector('.collection-error-text')?.textContent).toBe('aws: access denied (retry)');
+    expect(banner?.querySelector('.collection-error-dismiss')).not.toBeNull();
+  });
+
+  test('clicking × dismisses the banner and records the hash in sessionStorage', async () => {
+    mockedGet.mockResolvedValue({
+      last_collected_at: new Date().toISOString(),
+      last_collection_error: 'aws: access denied',
+    });
+    await renderFreshness('fresh', jest.fn());
+
+    const dismiss = document.querySelector<HTMLButtonElement>('.collection-error-dismiss');
+    expect(dismiss).not.toBeNull();
+    dismiss!.click();
+    expect(document.querySelector('.collection-error-banner')).toBeNull();
+    // sessionStorage key name is opaque; just assert at least one key exists.
+    expect(sessionStorage.length).toBeGreaterThan(0);
+  });
+
+  test('once dismissed, the SAME error stays hidden on re-render', async () => {
+    mockedGet.mockResolvedValue({
+      last_collected_at: new Date().toISOString(),
+      last_collection_error: 'aws: access denied',
+    });
+    await renderFreshness('fresh', jest.fn());
+    document.querySelector<HTMLButtonElement>('.collection-error-dismiss')!.click();
+
+    await renderFreshness('fresh', jest.fn());
+    expect(document.querySelector('.collection-error-banner')).toBeNull();
+  });
+
+  test('a DIFFERENT error message re-appears after dismissal of the first', async () => {
+    mockedGet.mockResolvedValue({
+      last_collected_at: new Date().toISOString(),
+      last_collection_error: 'aws: access denied',
+    });
+    await renderFreshness('fresh', jest.fn());
+    document.querySelector<HTMLButtonElement>('.collection-error-dismiss')!.click();
+
+    mockedGet.mockResolvedValue({
+      last_collected_at: new Date().toISOString(),
+      last_collection_error: 'azure: rate limit exceeded',
+    });
+    await renderFreshness('fresh', jest.fn());
+    expect(document.querySelector('.collection-error-banner')).not.toBeNull();
+    expect(document.querySelector('.collection-error-text')?.textContent).toBe('azure: rate limit exceeded');
+  });
+});

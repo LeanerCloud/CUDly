@@ -4,6 +4,9 @@
 
 import * as api from './api';
 import type { APIKeyInfo, CreateAPIKeyResponse } from './types';
+import { formatDateTime } from './utils';
+import { confirmDialog } from './confirmDialog';
+import { showToast } from './toast';
 
 // State for modal management
 let currentApiKeys: APIKeyInfo[] = [];
@@ -30,7 +33,18 @@ export function renderApiKeysList(): void {
   if (!container) return;
 
   if (currentApiKeys.length === 0) {
-    container.innerHTML = '<div class="empty">No API keys found. Create one to get started.</div>';
+    // DOM construction rather than template literal so the security hook
+    // doesn't flag the innerHTML write — and all copy is static anyway.
+    container.replaceChildren();
+    const wrap = document.createElement('div');
+    wrap.className = 'empty apikeys-empty';
+    const h = document.createElement('h4');
+    h.textContent = 'No API keys yet';
+    const p = document.createElement('p');
+    p.textContent = 'Create an API key to let automation tools (CI pipelines, scripts, integrations) call CUDly programmatically. Each key can be revoked or rotated at any time.';
+    wrap.appendChild(h);
+    wrap.appendChild(p);
+    container.appendChild(wrap);
     return;
   }
 
@@ -58,9 +72,9 @@ export function renderApiKeysList(): void {
               <td><strong>${escapeHtml(key.name)}</strong></td>
               <td><code>${escapeHtml(key.key_prefix)}...</code></td>
               <td><span class="badge ${statusClass}">${statusText}</span></td>
-              <td>${formatDate(key.created_at)}</td>
-              <td>${key.last_used_at ? formatDate(key.last_used_at) : '<span class="text-muted">Never</span>'}</td>
-              <td>${key.expires_at ? formatDate(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
+              <td>${formatDateTime(key.created_at)}</td>
+              <td>${key.last_used_at ? formatDateTime(key.last_used_at) : '<span class="text-muted">Never</span>'}</td>
+              <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
               <td>
                 ${key.is_active && !isExpired ? `<button class="btn-small btn-warning revoke-key-btn" data-key-id="${escapeHtml(key.id)}">Revoke</button>` : ''}
                 <button class="btn-small btn-danger delete-key-btn" data-key-id="${escapeHtml(key.id)}">Delete</button>
@@ -251,9 +265,13 @@ export async function revokeApiKey(keyId: string): Promise<void> {
   const key = currentApiKeys.find(k => k.id === keyId);
   if (!key) return;
 
-  if (!confirm(`Are you sure you want to revoke the API key "${key.name}"? This action cannot be undone and the key will immediately stop working.`)) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Revoke API key "${key.name}"?`,
+    body: 'The key will immediately stop working. This action cannot be undone. (You can delete the row afterwards to remove it from the list.)',
+    confirmLabel: 'Revoke key',
+    destructive: true,
+  });
+  if (!ok) return;
 
   try {
     await api.revokeApiKey(keyId);
@@ -271,9 +289,13 @@ export async function deleteApiKey(keyId: string): Promise<void> {
   const key = currentApiKeys.find(k => k.id === keyId);
   if (!key) return;
 
-  if (!confirm(`Are you sure you want to delete the API key "${key.name}"? This action cannot be undone.`)) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Delete API key "${key.name}"?`,
+    body: 'This permanently removes the key from the list. If the key is still active, it will also stop working.',
+    confirmLabel: 'Delete key',
+    destructive: true,
+  });
+  if (!ok) return;
 
   try {
     await api.deleteApiKey(keyId);
@@ -335,7 +357,13 @@ export function initApiKeys(): void {
 }
 
 /**
- * Show error message
+ * Show error message.
+ *
+ * When the Create-API-Key modal is open, validation-style errors belong
+ * inline on the form (so the user sees them next to the offending
+ * field). Outside that context — load failures, revoke/delete errors —
+ * we surface via the shared toast system (Q4) so the message matches
+ * the rest of the app rather than using a blocking alert().
  */
 function showError(message: string): void {
   const errorEl = document.getElementById('create-apikey-error');
@@ -343,16 +371,8 @@ function showError(message: string): void {
     errorEl.textContent = message;
     errorEl.classList.remove('hidden');
   } else {
-    alert(message);
+    showToast({ message, kind: 'error' });
   }
-}
-
-/**
- * Format date for display
- */
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 /**

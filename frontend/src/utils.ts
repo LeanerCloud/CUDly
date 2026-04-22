@@ -18,23 +18,31 @@ export function formatCurrency(value: number | null | undefined, currency: strin
 }
 
 /**
- * Format a date for display
+ * Canonical date-only format used everywhere in the UI: "Apr 17, 2026".
+ * The en-US locale + `month: 'short'` removes ambiguity from pure numeric
+ * forms ("3/25/2026" vs "25.3.2026") and stays compact enough for table
+ * cells while being readable for non-technical users.
  */
 export function formatDate(date: string | Date | null | undefined): string {
   if (!date) return '';
   const d = new Date(date);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleDateString();
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 /**
- * Format a date with time
+ * Canonical date+time format: "Apr 17, 2026, 00:06". 24-hour clock chosen
+ * over 12-hour "12:06 AM" because timestamps frequently compare relative
+ * durations (purchase at T, next at T+N) and 24h is unambiguous.
  */
 export function formatDateTime(date: string | Date | null | undefined): string {
   if (!date) return '';
   const d = new Date(date);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleString();
+  return d.toLocaleString('en-US', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
 }
 
 /**
@@ -55,7 +63,21 @@ export function formatRelativeTime(date: string | Date | null | undefined): stri
   if (diffMins < 60) return `${diffMins}m ago`;
   if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays < 7) return `${diffDays}d ago`;
-  return d.toLocaleDateString();
+  // Fall back to the canonical formatDate so the Last-Login-style columns
+  // don't mix "18h ago" with a raw-locale "3/25/2026" once the entry ages
+  // past 7 days.
+  return formatDate(d);
+}
+
+/**
+ * Canonical term rendering: "1 Year" / "3 Years". Matches the case used
+ * by the Default Term dropdown in Settings → Purchasing (commitmentOptions)
+ * so tables and selectors agree.
+ */
+export function formatTerm(years: number | null | undefined): string {
+  if (years === null || years === undefined || isNaN(years)) return '';
+  const n = Math.round(years);
+  return `${n} Year${n === 1 ? '' : 's'}`;
 }
 
 export interface DateParts {

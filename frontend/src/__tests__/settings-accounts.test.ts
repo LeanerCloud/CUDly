@@ -18,6 +18,16 @@ jest.mock('../api', () => ({
   saveAccountCredentials: jest.fn()
 }));
 
+const mockShowToast = jest.fn<{ dismiss: () => void }, [unknown]>(() => ({ dismiss: jest.fn() }));
+jest.mock('../toast', () => ({
+  showToast: (opts: unknown) => mockShowToast(opts)
+}));
+
+const mockConfirmDialog = jest.fn<Promise<boolean>, [unknown]>();
+jest.mock('../confirmDialog', () => ({
+  confirmDialog: (opts: unknown) => mockConfirmDialog(opts)
+}));
+
 import * as api from '../api';
 
 // ---------------------------------------------------------------------------
@@ -154,9 +164,12 @@ describe('loadAccountsForProvider', () => {
     await loadAccountsForProvider('aws');
 
     const container = document.getElementById('aws-accounts-list')!;
-    expect(container.querySelectorAll('.account-row')).toHaveLength(2);
+    // P3 replaced inline .account-row divs with an accounts-table.
+    const table = container.querySelector('table.accounts-table');
+    expect(table).not.toBeNull();
+    expect(table?.querySelectorAll('tbody tr')).toHaveLength(2);
     expect(container.textContent).toContain('Prod');
-    expect(container.textContent).toContain('[disabled]');
+    expect(container.textContent).toContain('Disabled');
   });
 
   test('renders "No accounts configured." for empty list', async () => {
@@ -164,7 +177,9 @@ describe('loadAccountsForProvider', () => {
 
     await loadAccountsForProvider('aws');
 
-    expect(document.getElementById('aws-accounts-list')!.textContent).toBe('No accounts configured.');
+    // P3 wraps the empty copy in a dedicated <p.accounts-empty>.
+    const container = document.getElementById('aws-accounts-list')!;
+    expect(container.querySelector('.accounts-empty')?.textContent).toBe('No accounts configured.');
   });
 
   test('renders error message on API failure', async () => {
@@ -357,7 +372,7 @@ describe('Account form submit', () => {
 
   test('shows alert on create failure', async () => {
     (api.createAccount as jest.Mock).mockRejectedValue(new Error('Server error'));
-    window.alert = jest.fn();
+    mockShowToast.mockClear();
 
     document.getElementById('add-aws-account-btn')!.click();
     (document.getElementById('account-name') as HTMLInputElement).value = 'Acct';
@@ -366,7 +381,10 @@ describe('Account form submit', () => {
     document.getElementById('account-form')!.dispatchEvent(new Event('submit'));
     await new Promise(r => setTimeout(r, 0));
 
-    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Failed to save account'));
+    expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('Failed to save account'),
+      kind: 'error'
+    }));
   });
 
   test('saves azure credentials when secret field is filled', async () => {

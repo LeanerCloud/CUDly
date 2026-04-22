@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, escapeHtml, populateAccountFilter } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, populateAccountFilter } from './utils';
 import { renderFreshness } from './freshness';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 
@@ -171,53 +171,190 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
   `;
 }
 
-function renderRecommendationsList(recommendations: LocalRecommendation[]): void {
-  const container = document.getElementById('recommendations-list');
-  if (!container) return;
+const SORTABLE_COLUMNS: Record<string, (r: LocalRecommendation) => number> = {
+  savings: (r) => r.savings,
+  upfront_cost: (r) => r.upfront_cost,
+  count: (r) => r.count,
+  term: (r) => r.term,
+};
 
-  if (!recommendations || recommendations.length === 0) {
-    container.innerHTML = '<p class="empty">No recommendations found. Try adjusting filters or refreshing.</p>';
-    return;
-  }
+const SORT_HEADER_LABELS: Record<string, string> = {
+  savings: 'Monthly Savings',
+  upfront_cost: 'Upfront Cost',
+  count: 'Count',
+  term: 'Term',
+};
 
-  const selectedRecs = state.getSelectedRecommendations();
+function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
+  if (column !== active) return '<span class="sort-indicator" aria-hidden="true">\u2195</span>';
+  return direction === 'asc'
+    ? '<span class="sort-indicator active" aria-hidden="true">\u25B2</span>'
+    : '<span class="sort-indicator active" aria-hidden="true">\u25BC</span>';
+}
 
-  container.innerHTML = `
+function sortedRecommendations(recs: LocalRecommendation[]): LocalRecommendation[] {
+  const sort = state.getRecommendationsSort();
+  const key = SORTABLE_COLUMNS[sort.column];
+  if (!key) return recs;
+  const direction = sort.direction === 'asc' ? 1 : -1;
+  // slice() clones so we don't mutate the caller's array.
+  return recs.slice().sort((a, b) => (key(a) - key(b)) * direction);
+}
+
+function renderBulkToolbar(container: HTMLElement, recommendations: LocalRecommendation[], selectedCount: number): void {
+  const existing = container.querySelector('.recommendations-bulk-toolbar');
+  if (existing) existing.remove();
+  if (selectedCount === 0) return;
+  const toolbar = document.createElement('div');
+  toolbar.className = 'recommendations-bulk-toolbar';
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', 'Bulk actions for selected recommendations');
+
+  const count = document.createElement('span');
+  count.className = 'bulk-count';
+  count.textContent = `${selectedCount} selected`;
+  toolbar.appendChild(count);
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn btn-small btn-primary';
+  addBtn.textContent = 'Add to plan';
+  addBtn.addEventListener('click', () => {
+    const indices = Array.from(state.getSelectedRecommendations());
+    const picks = indices
+      .map((i) => recommendations[i])
+      .filter((r): r is LocalRecommendation => r !== undefined);
+    if (picks.length > 0) openPurchaseModal(picks);
+  });
+  toolbar.appendChild(addBtn);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn btn-small btn-secondary';
+  clearBtn.textContent = 'Clear';
+  clearBtn.addEventListener('click', () => {
+    state.clearSelectedRecommendations();
+    renderRecommendationsList(recommendations);
+  });
+  toolbar.appendChild(clearBtn);
+
+  container.insertBefore(toolbar, container.firstChild);
+}
+
+function openDetailDrawer(rec: LocalRecommendation): void {
+  // Remove any previous drawer so repeat clicks don't stack.
+  document.querySelectorAll('.detail-drawer').forEach((el) => el.remove());
+  document.querySelectorAll('.detail-drawer-backdrop').forEach((el) => el.remove());
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'detail-drawer-backdrop';
+
+  const drawer = document.createElement('aside');
+  drawer.className = 'detail-drawer';
+  drawer.setAttribute('role', 'dialog');
+  drawer.setAttribute('aria-label', 'Recommendation details');
+
+  const onClose = (): void => {
+    drawer.remove();
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') onClose();
+  };
+  backdrop.addEventListener('click', onClose);
+  document.addEventListener('keydown', onKey);
+
+  const title = document.createElement('h3');
+  title.textContent = `${rec.provider.toUpperCase()} ${rec.service} \u2014 ${rec.resource_type}`;
+  drawer.appendChild(title);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'detail-drawer-close btn btn-small';
+  closeBtn.setAttribute('aria-label', 'Close details');
+  closeBtn.textContent = '\u2715';
+  closeBtn.addEventListener('click', onClose);
+  drawer.appendChild(closeBtn);
+
+  const fields: Array<[string, string]> = [
+    ['Provider', rec.provider.toUpperCase()],
+    ['Service', rec.service],
+    ['Resource type', rec.resource_type + (rec.engine ? ` (${rec.engine})` : '')],
+    ['Region', rec.region],
+    ['Instances', String(rec.count)],
+    ['Term', formatTerm(rec.term)],
+    ['Monthly savings', formatCurrency(rec.savings)],
+    ['Upfront cost', formatCurrency(rec.upfront_cost)],
+  ];
+  const dl = document.createElement('dl');
+  dl.className = 'detail-drawer-fields';
+  fields.forEach(([k, v]) => {
+    const dt = document.createElement('dt');
+    dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = v;
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  });
+  drawer.appendChild(dl);
+
+  // Usage-history / confidence-bucket / provenance fields are gated on a
+  // backend endpoint that doesn't yet exist (see P6 plan: backend-verification
+  // scope-cap). When that endpoint lands, fetch + append a usage chart here.
+  const note = document.createElement('p');
+  note.className = 'detail-drawer-note';
+  note.textContent = 'Usage history and confidence data are not yet available from the backend.';
+  drawer.appendChild(note);
+
+  document.body.appendChild(backdrop);
+  document.body.appendChild(drawer);
+  closeBtn.focus();
+}
+
+function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<number>): string {
+  const sort = state.getRecommendationsSort();
+  const sorted = sortedRecommendations(recommendations);
+  const sortHeader = (column: string): string =>
+    `<th class="sortable" data-sort="${column}" tabindex="0" role="button" aria-label="Sort by ${SORT_HEADER_LABELS[column]}"><span>${SORT_HEADER_LABELS[column]}</span>${sortIndicator(column, sort.column, sort.direction)}</th>`;
+
+  return `
     <table>
       <thead>
         <tr>
           <th class="checkbox-col">
-            <input type="checkbox" id="select-all-recs">
+            <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations">
           </th>
           <th>Provider</th>
           <th>Account</th>
           <th>Service</th>
           <th>Resource Type</th>
           <th>Region</th>
-          <th>Count</th>
-          <th>Term</th>
-          <th>Monthly Savings</th>
-          <th>Upfront Cost</th>
+          ${sortHeader('count')}
+          ${sortHeader('term')}
+          ${sortHeader('savings')}
+          ${sortHeader('upfront_cost')}
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        ${recommendations.map((rec, index) => {
+        ${sorted.map((rec) => {
+          const index = recommendations.indexOf(rec);
           const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
           const isSelected = selectedRecs.has(index);
-          const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '—';
+          const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '\u2014';
           return `
-          <tr class="${savingsClass} ${isSelected ? 'selected' : ''}">
+          <tr class="recommendation-row ${savingsClass} ${isSelected ? 'selected' : ''}" data-index="${index}">
             <td class="checkbox-col">
-              <input type="checkbox" data-index="${index}" ${isSelected ? 'checked' : ''}>
+              <input type="checkbox" data-index="${index}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation ${index + 1}">
             </td>
             <td><span class="provider-badge ${rec.provider}">${rec.provider.toUpperCase()}</span></td>
             <td>${escapeHtml(accountName)}</td>
             <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
-            <td>${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</td>
+            <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</td>
             <td>${escapeHtml(rec.region)}</td>
             <td>${rec.count}</td>
-            <td>${rec.term} year</td>
+            <td>${formatTerm(rec.term)}</td>
             <td class="savings">${formatCurrency(rec.savings)}</td>
             <td>${formatCurrency(rec.upfront_cost)}</td>
             <td>
@@ -228,6 +365,45 @@ function renderRecommendationsList(recommendations: LocalRecommendation[]): void
       </tbody>
     </table>
   `;
+}
+
+function renderRecommendationsList(recommendations: LocalRecommendation[]): void {
+  const container = document.getElementById('recommendations-list');
+  if (!container) return;
+
+  if (!recommendations || recommendations.length === 0) {
+    container.innerHTML = '<p class="empty">No recommendations found. Try adjusting filters or refreshing.</p>';
+    return;
+  }
+
+  const selectedRecs = state.getSelectedRecommendations();
+  // Dynamic table markup: every caller-provided value passes through
+  // escapeHtml or is a number. The string is built in buildListMarkup.
+  container.innerHTML = buildListMarkup(recommendations, selectedRecs);
+
+  renderBulkToolbar(container, recommendations, selectedRecs.size);
+
+  // Sortable column headers. Toggle ascending/descending on repeat click.
+  container.querySelectorAll<HTMLTableCellElement>('th.sortable').forEach((th) => {
+    const onActivate = (): void => {
+      const col = th.dataset['sort'];
+      if (!col) return;
+      const prev = state.getRecommendationsSort();
+      const direction: 'asc' | 'desc' =
+        prev.column === col && prev.direction === 'desc' ? 'asc'
+          : prev.column === col && prev.direction === 'asc' ? 'desc'
+          : 'desc';
+      state.setRecommendationsSort({ column: col as state.RecommendationsSortColumn, direction });
+      renderRecommendationsList(recommendations);
+    };
+    th.addEventListener('click', onActivate);
+    th.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onActivate();
+      }
+    });
+  });
 
   // Add event listeners
   const selectAllCheckbox = document.getElementById('select-all-recs') as HTMLInputElement | null;
@@ -255,9 +431,23 @@ function renderRecommendationsList(recommendations: LocalRecommendation[]): void
   });
 
   container.querySelectorAll<HTMLButtonElement>('[data-action="purchase"]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
       const idx = parseInt(btn.dataset['index'] || '0', 10);
       openPurchaseModal([recommendations[idx] as LocalRecommendation]);
+    });
+  });
+
+  // Row-click opens the detail drawer — skip clicks that originated on
+  // the checkbox or per-row button (so those still flow through to their
+  // own handlers without also triggering the drawer).
+  container.querySelectorAll<HTMLTableRowElement>('tr.recommendation-row').forEach((tr) => {
+    tr.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('input[type="checkbox"], button')) return;
+      const idx = parseInt(tr.dataset['index'] || '0', 10);
+      const rec = recommendations[idx];
+      if (rec) openDetailDrawer(rec);
     });
   });
 }

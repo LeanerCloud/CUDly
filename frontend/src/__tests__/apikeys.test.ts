@@ -22,6 +22,14 @@ jest.mock('../api', () => ({
   deleteApiKey: jest.fn()
 }));
 
+// confirmDialog (introduced in P2) is used for revoke/delete in place of
+// native window.confirm. Mock it so tests can flip approve/cancel via
+// mockResolvedValueOnce without having to drive the actual modal UI.
+const mockConfirmDialog = jest.fn<Promise<boolean>, [unknown]>(() => Promise.resolve(true));
+jest.mock('../confirmDialog', () => ({
+  confirmDialog: (opts: unknown) => mockConfirmDialog(opts),
+}));
+
 import * as api from '../api';
 
 describe('API Keys Module', () => {
@@ -47,6 +55,10 @@ describe('API Keys Module', () => {
     jest.clearAllMocks();
     window.alert = jest.fn();
     window.confirm = jest.fn().mockReturnValue(true);
+    // Reset the confirmDialog mock between tests — clearAllMocks only
+    // clears call history, not the mockResolvedValueOnce queue.
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockImplementation(() => Promise.resolve(true));
   });
 
   describe('loadApiKeys', () => {
@@ -90,7 +102,9 @@ describe('API Keys Module', () => {
       await loadApiKeys();
 
       expect(consoleError).toHaveBeenCalledWith('Failed to load API keys:', expect.any(Error));
-      expect(window.alert).toHaveBeenCalledWith('Failed to load API keys');
+      // Q4: fallback when #create-apikey-error is absent now surfaces
+      // via toast rather than blocking alert().
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to load API keys');
       consoleError.mockRestore();
     });
   });
@@ -103,7 +117,7 @@ describe('API Keys Module', () => {
       // Call renderApiKeysList (it uses internal state, so we need to load first)
       loadApiKeys().then(() => {
         const container = document.getElementById('apikeys-list');
-        expect(container?.innerHTML).toContain('No API keys found');
+        expect(container?.innerHTML).toContain('No API keys yet');
       });
     });
 
@@ -605,7 +619,7 @@ describe('API Keys Module', () => {
     });
 
     test('does nothing if user cancels confirmation', async () => {
-      window.confirm = jest.fn().mockReturnValue(false);
+      mockConfirmDialog.mockResolvedValueOnce(false);
 
       await revokeApiKey('key-1');
 
@@ -631,7 +645,7 @@ describe('API Keys Module', () => {
       await revokeApiKey('key-1');
 
       expect(consoleError).toHaveBeenCalledWith('Failed to revoke API key:', expect.any(Error));
-      expect(window.alert).toHaveBeenCalledWith('Failed to revoke API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key');
       consoleError.mockRestore();
     });
   });
@@ -659,7 +673,7 @@ describe('API Keys Module', () => {
     });
 
     test('does nothing if user cancels confirmation', async () => {
-      window.confirm = jest.fn().mockReturnValue(false);
+      mockConfirmDialog.mockResolvedValueOnce(false);
 
       await deleteApiKey('key-1');
 
@@ -685,7 +699,7 @@ describe('API Keys Module', () => {
       await deleteApiKey('key-1');
 
       expect(consoleError).toHaveBeenCalledWith('Failed to delete API key:', expect.any(Error));
-      expect(window.alert).toHaveBeenCalledWith('Failed to delete API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to delete API key');
       consoleError.mockRestore();
     });
   });
@@ -799,14 +813,15 @@ describe('API Keys Module', () => {
       expect(errorEl?.textContent).not.toBe('');
     });
 
-    test('falls back to alert when error element not available', async () => {
-      // Remove the error element
+    test('falls back to toast when error element not available', async () => {
+      // Remove the inline error element so showError falls back to the
+      // shared toast system (Q4).
       document.getElementById('create-apikey-error')?.remove();
 
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await handleCreateApiKey(event);
 
-      expect(window.alert).toHaveBeenCalledWith('API key name is required');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('API key name is required');
     });
   });
 

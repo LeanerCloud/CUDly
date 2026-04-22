@@ -6,6 +6,9 @@ import * as api from '../api';
 import type { AccountRegistration } from '../api/registrations';
 import type { CloudAccount, CloudAccountRequest } from '../api/accounts';
 import { openAccountModal, loadAccountsForProvider } from '../settings';
+import { formatDateTime } from '../utils';
+import { showToast } from '../toast';
+import { confirmDialog } from '../confirmDialog';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -38,16 +41,6 @@ function registrationToAccount(reg: AccountRegistration): CloudAccount {
 
 function providerLabel(p: string): string {
   return p === 'aws' ? 'AWS' : p === 'azure' ? 'Azure' : p === 'gcp' ? 'GCP' : p;
-}
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
 }
 
 function createStatusBadge(status: string): HTMLSpanElement {
@@ -132,7 +125,7 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
     row.appendChild(createNameCell(reg.account_name));
     row.appendChild(createCodeCell(reg.external_id));
     row.appendChild(createCell(reg.contact_email));
-    row.appendChild(createCell(formatDate(reg.created_at)));
+    row.appendChild(createCell(formatDateTime(reg.created_at)));
 
     const statusTd = document.createElement('td');
     statusTd.appendChild(createStatusBadge(reg.status));
@@ -227,12 +220,18 @@ function handleApprove(reg: AccountRegistration): void {
 }
 
 async function handleDelete(reg: AccountRegistration): Promise<void> {
-  if (!confirm(`Delete registration for "${reg.account_name}" (${reg.provider} / ${reg.external_id})?`)) return;
+  const ok = await confirmDialog({
+    title: `Delete registration for "${reg.account_name}"?`,
+    body: `Provider: ${reg.provider}. External ID: ${reg.external_id}. This removes the registration request. The target account itself is not affected.`,
+    confirmLabel: 'Delete registration',
+    destructive: true,
+  });
+  if (!ok) return;
   try {
     await api.deleteRegistration(reg.id);
     await loadRegistrations();
   } catch {
-    alert('Failed to delete registration.');
+    showToast({ message: 'Failed to delete registration.', kind: 'error' });
   }
 }
 

@@ -3,6 +3,17 @@
  */
 
 // Mock Chart.js - must be done before import
+// Q4/Q7: dashboard now uses showToast and confirmDialog instead of
+// alert/confirm. Mock both so tests can assert on calls.
+const mockShowToast = jest.fn<{ dismiss: () => void }, [unknown]>(() => ({ dismiss: jest.fn() }));
+jest.mock('../toast', () => ({
+  showToast: (opts: unknown) => mockShowToast(opts),
+}));
+const mockConfirmDialog = jest.fn<Promise<boolean>, [unknown]>(() => Promise.resolve(true));
+jest.mock('../confirmDialog', () => ({
+  confirmDialog: (opts: unknown) => mockConfirmDialog(opts),
+}));
+
 jest.mock('chart.js', () => {
   const MockChart = jest.fn().mockImplementation(() => ({
     destroy: jest.fn()
@@ -58,6 +69,9 @@ describe('Dashboard Module', () => {
     jest.clearAllMocks();
     window.alert = jest.fn();
     window.confirm = jest.fn().mockReturnValue(true);
+    mockShowToast.mockClear();
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockImplementation(() => Promise.resolve(true));
   });
 
   describe('loadDashboard', () => {
@@ -320,7 +334,11 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to load purchase details: API Error');
+      // Q7: alert() migrated to showToast with kind:'error'.
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Failed to load purchase details: API Error',
+        kind: 'error',
+      }));
     });
 
     test('cancel purchase button cancels and reloads', async () => {
@@ -357,7 +375,10 @@ describe('Dashboard Module', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(api.cancelPurchase).toHaveBeenCalledWith('exec-123');
-      expect(window.alert).toHaveBeenCalledWith('Purchase cancelled successfully');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Purchase cancelled successfully',
+        kind: 'success',
+      }));
     });
 
     test('cancel purchase does nothing if user declines confirmation', async () => {
@@ -379,7 +400,7 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      window.confirm = jest.fn().mockReturnValue(false);
+      mockConfirmDialog.mockResolvedValueOnce(false);
 
       await loadDashboard();
 
@@ -421,7 +442,10 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to cancel purchase');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Failed to cancel purchase',
+        kind: 'error',
+      }));
     });
   });
 });

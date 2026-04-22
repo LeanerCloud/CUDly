@@ -4,7 +4,9 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, getStatusBadge, escapeHtml, formatCurrency, populateAccountFilter } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, populateAccountFilter } from './utils';
+import { showToast } from './toast';
+import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
@@ -164,7 +166,7 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string): 
       case 'run':
         if (confirm('Run this purchase now? This will immediately execute the purchase.')) {
           await api.runPlannedPurchase(purchaseId);
-          alert('Purchase executed successfully');
+          showToast({ message: 'Purchase executed successfully', kind: 'success', timeout: 5_000 });
         }
         break;
       case 'pause':
@@ -190,7 +192,7 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string): 
   } catch (error) {
     console.error(`Failed to ${action} planned purchase:`, error);
     const err = error as Error;
-    alert(`Failed to ${action} purchase: ${err.message}`);
+    showToast({ message: `Failed to ${action} purchase: ${err.message}`, kind: 'error' });
   }
 }
 
@@ -326,7 +328,7 @@ function renderPlans(plans: LocalPlan[]): void {
             </div>
             <div class="plan-detail">
               <span class="plan-detail-label">Term</span>
-              <span class="plan-detail-value">${info.term} year</span>
+              <span class="plan-detail-value">${formatTerm(info.term)}</span>
             </div>
             <div class="plan-detail">
               <span class="plan-detail-label">Coverage</span>
@@ -388,7 +390,7 @@ async function togglePlan(planId: string, enabled: boolean): Promise<void> {
     await loadPlans();
   } catch (error) {
     console.error('Failed to toggle plan:', error);
-    alert('Failed to update plan');
+    showToast({ message: 'Failed to update plan', kind: 'error' });
     await loadPlans();
   }
 }
@@ -459,21 +461,26 @@ async function editPlan(planId: string): Promise<void> {
     document.getElementById('plan-modal')?.classList.remove('hidden');
   } catch (error) {
     console.error('Failed to load plan:', error);
-    alert('Failed to load plan details');
+    showToast({ message: 'Failed to load plan details', kind: 'error' });
   }
 }
 
 async function deletePlanAction(planId: string): Promise<void> {
-  if (!confirm('Are you sure you want to delete this plan? This action cannot be undone.')) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: 'Delete this plan?',
+    body: 'This removes the plan and cancels all its scheduled purchases. This action cannot be undone.',
+    confirmLabel: 'Delete plan',
+    destructive: true,
+  });
+  if (!ok) return;
 
   try {
     await api.deletePlan(planId);
     await loadPlans();
+    showToast({ message: 'Plan deleted', kind: 'success', timeout: 5_000 });
   } catch (error) {
     console.error('Failed to delete plan:', error);
-    alert('Failed to delete plan');
+    showToast({ message: 'Failed to delete plan', kind: 'error' });
   }
 }
 
@@ -529,11 +536,11 @@ export async function savePlan(e: Event): Promise<void> {
 
     closePlanModal();
     await loadPlans();
-    alert(planId ? 'Plan updated successfully' : 'Plan created successfully');
+    showToast({ message: planId ? 'Plan updated successfully' : 'Plan created successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {
     console.error('Failed to save plan:', error);
     const err = error as Error;
-    alert(`Failed to save plan: ${err.message}`);
+    showToast({ message: `Failed to save plan: ${err.message}`, kind: 'error' });
   }
 }
 
@@ -659,7 +666,7 @@ async function setupPlanAccountsSection(planId?: string): Promise<void> {
 export function openCreatePlanModal(): void {
   const selectedRecs = state.getSelectedRecommendations();
   if (selectedRecs.size === 0) {
-    alert('Please select at least one recommendation');
+    showToast({ message: 'Please select at least one recommendation', kind: 'warning' });
     return;
   }
   const titleEl = document.getElementById('plan-modal-title');
@@ -998,7 +1005,7 @@ async function handleAddPurchases(e: Event): Promise<void> {
 
     closeAddPurchasesModal();
     await loadPlannedPurchases();
-    alert(`Successfully scheduled ${count} purchase${count > 1 ? 's' : ''}`);
+    showToast({ message: `Successfully scheduled ${count} purchase${count > 1 ? 's' : ''}`, kind: 'success', timeout: 5_000 });
   } catch (error) {
     const err = error as Error;
     if (errorDiv) {

@@ -13,6 +13,7 @@ import {
   clearSelectedUserIds
 } from './state';
 import { showError, showSuccess } from './utils';
+import { confirmDialog } from '../confirmDialog';
 import { applyFilters } from './filters';
 import { renderUsers, renderUserStats } from './userList';
 import { renderGroups } from '../groups/groupList';
@@ -75,9 +76,13 @@ export async function deleteUser(userId: string): Promise<void> {
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
 
-  if (!confirm(`Are you sure you want to delete user "${user.email}"?`)) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Delete user "${user.email}"?`,
+    body: 'This removes the user from the system along with all of their group memberships. This action cannot be undone.',
+    confirmLabel: 'Delete user',
+    destructive: true,
+  });
+  if (!ok) return;
 
   try {
     await api.deleteUser(userId);
@@ -96,9 +101,13 @@ export async function bulkDeleteUsers(): Promise<void> {
   if (selectedUserIds.size === 0) return;
 
   const count = selectedUserIds.size;
-  if (!confirm(`Are you sure you want to delete ${count} user(s)? This action cannot be undone.`)) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Delete ${count} user${count === 1 ? '' : 's'}?`,
+    body: 'This removes the selected users from the system along with all of their group memberships. This action cannot be undone.',
+    confirmLabel: `Delete ${count} user${count === 1 ? '' : 's'}`,
+    destructive: true,
+  });
+  if (!ok) return;
 
   try {
     // Delete users in parallel

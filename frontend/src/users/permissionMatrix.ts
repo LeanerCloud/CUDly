@@ -51,9 +51,12 @@ export function renderPermissionMatrix(groups: APIGroup[], container: HTMLElemen
 
       if (matchingResources.length > 0) {
         const titleAttr = ` title="${escapeHtml(matchingResources.join(', '))}"`;
-        return `<td class="has-perm"${titleAttr}>\u2713</td>`;
+        // WCAG 1.4.1: pair the ✓ glyph with an sr-only label so screen
+        // readers announce "Granted" instead of reading nothing / reading
+        // a bare checkmark symbol.
+        return `<td class="has-perm"${titleAttr} aria-label="Granted">\u2713<span class="sr-only"> Granted</span></td>`;
       }
-      return '<td class="no-perm">\u2014</td>';
+      return '<td class="no-perm" aria-label="Not granted">\u2014<span class="sr-only"> Not granted</span></td>';
     }).join('');
 
     return `<tr><td>${escapeHtml(action)}</td>${cells}</tr>`;

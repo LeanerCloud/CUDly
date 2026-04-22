@@ -8,9 +8,17 @@ import * as state from './state';
 import { formatCurrency, getDateParts, escapeHtml, populateAccountFilter } from './utils';
 import { renderFreshness } from './freshness';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings } from './types';
+import type { SavingsDataPoint } from './api';
+import { showToast } from './toast';
+import { confirmDialog } from './confirmDialog';
 
 // Register Chart.js components
 Chart.register(...registerables);
+
+// Separate Chart instance for the trend widget so renderSavingsChart's
+// state.savingsChart doesn't conflict.
+let savingsTrendChart: Chart | null = null;
+let savingsTrendRange: '7' | '30' | '90' | 'all' = '90';
 
 /**
  * Setup dashboard event handlers
@@ -38,6 +46,7 @@ export function setupDashboardHandlers(): void {
   }
 
   void populateAccountFilter('dashboard-account-filter', api.listAccounts, state.getCurrentProvider());
+  setupSavingsTrendHandlers();
 }
 
 /**
@@ -54,6 +63,9 @@ export async function loadDashboard(): Promise<void> {
     renderDashboardSummary(summaryData as DashboardSummary);
     renderSavingsChart((summaryData as DashboardSummary).by_service || {});
     renderUpcomingPurchases((upcomingData as { purchases?: UpcomingPurchase[] }).purchases || []);
+    // Load the savings-over-time widget independently — failure shouldn't
+    // block the rest of the dashboard (e.g. analytics not configured).
+    void loadSavingsTrendChart();
 
     // Refresh the freshness indicator on every load so provider switches
     // + data updates both reflect the latest collection timestamp.
@@ -280,35 +292,151 @@ async function viewPurchaseDetails(executionId: string): Promise<void> {
     const cancelBtn = modal.querySelector('#cancel-purchase-detail-btn') as HTMLButtonElement | null;
     if (cancelBtn) {
       cancelBtn.addEventListener('click', async () => {
-        if (!confirm('Are you sure you want to cancel this purchase?')) return;
+        const ok = await confirmDialog({
+          title: 'Cancel this purchase?',
+          body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
+          confirmLabel: 'Cancel purchase',
+          destructive: true,
+        });
+        if (!ok) return;
         try {
           await api.cancelPurchase(executionId);
           modal.remove();
           await loadDashboard();
+          showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
         } catch (cancelError) {
           console.error('Failed to cancel purchase:', cancelError);
-          alert('Failed to cancel purchase');
+          showToast({ message: 'Failed to cancel purchase', kind: 'error' });
         }
       });
     }
   } catch (error) {
     console.error('Failed to load purchase details:', error);
     const err = error as Error;
-    alert(`Failed to load purchase details: ${err.message}`);
+    showToast({ message: `Failed to load purchase details: ${err.message}`, kind: 'error' });
   }
 }
 
 async function cancelScheduledPurchase(executionId: string): Promise<void> {
-  if (!confirm('Are you sure you want to cancel this scheduled purchase?')) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: 'Cancel this scheduled purchase?',
+    body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
+    confirmLabel: 'Cancel purchase',
+    destructive: true,
+  });
+  if (!ok) return;
 
   try {
     await api.cancelPurchase(executionId);
     await loadDashboard();
-    alert('Purchase cancelled successfully');
+    showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {
     console.error('Failed to cancel purchase:', error);
-    alert('Failed to cancel purchase');
+    showToast({ message: 'Failed to cancel purchase', kind: 'error' });
   }
+}
+
+/**
+ * Load the savings-over-time trend chart for the dashboard. Fetches the
+ * history analytics endpoint with the currently-selected range and
+ * renders a line chart of cumulative savings. Failure modes (analytics
+ * not configured, empty data) degrade gracefully to an empty-state note.
+ */
+async function loadSavingsTrendChart(): Promise<void> {
+  const canvas = document.getElementById('savings-trend-chart') as HTMLCanvasElement | null;
+  const empty = document.getElementById('savings-trend-empty');
+  if (!canvas) return;
+  const end = new Date();
+  const days = savingsTrendRange === 'all' ? 365 : parseInt(savingsTrendRange, 10);
+  const start = new Date(end.getTime() - days * 86400_000);
+  const interval = days <= 7 ? 'hourly' : days <= 90 ? 'daily' : 'weekly';
+
+  try {
+    // Q5: honour the account-filter dropdown. Backend's /history/analytics
+    // takes a single account_id (Athena limitation, see handler_analytics.go).
+    // The dashboard filter is single-select so we pass the only selected
+    // ID or omit to query all accessible accounts.
+    const accountIDs = state.getCurrentAccountIDs();
+    const data = await api.getSavingsAnalytics({
+      start: start.toISOString(),
+      end: end.toISOString(),
+      interval,
+      ...(accountIDs.length === 1 ? { account_ids: accountIDs } : {}),
+    });
+    if (!data.data_points || data.data_points.length === 0) {
+      if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      canvas.style.display = 'none';
+      empty?.classList.remove('hidden');
+      return;
+    }
+    canvas.style.display = '';
+    empty?.classList.add('hidden');
+
+    if (savingsTrendChart) savingsTrendChart.destroy();
+    const labels = data.data_points.map((p: SavingsDataPoint) => {
+      const d = new Date(p.timestamp);
+      return interval === 'hourly'
+        ? d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    });
+    const cumulative = data.data_points.map((p: SavingsDataPoint) => p.cumulative_savings || 0);
+
+    savingsTrendChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Cumulative savings',
+          data: cumulative,
+          borderColor: '#1a73e8',
+          backgroundColor: 'rgba(26, 115, 232, 0.1)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `Cumulative savings: $${(ctx.raw as number).toLocaleString()}`,
+            },
+          },
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { callback: (v) => '$' + (v as number).toLocaleString() },
+          },
+        },
+      },
+    });
+  } catch (err) {
+    // Analytics may not be configured (S3/Athena required). Don't break
+    // the rest of the dashboard — hide the widget instead.
+    console.warn('Savings trend chart unavailable:', err);
+    if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+    canvas.style.display = 'none';
+    if (empty) {
+      empty.textContent = 'Savings history is not available. Configure analytics (S3/Athena) to see the trend.';
+      empty.classList.remove('hidden');
+    }
+  }
+}
+
+// Wire up the range-toggle buttons. Called once during dashboard setup.
+export function setupSavingsTrendHandlers(): void {
+  document.querySelectorAll<HTMLButtonElement>('.trend-range').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const range = btn.dataset['range'];
+      if (range !== '7' && range !== '30' && range !== '90' && range !== 'all') return;
+      savingsTrendRange = range;
+      document.querySelectorAll('.trend-range').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      void loadSavingsTrendChart();
+    });
+  });
 }

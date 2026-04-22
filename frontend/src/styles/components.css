@@ -164,6 +164,581 @@ button.danger:hover {
     color: white;
 }
 
+/* Canonical top-level button variants. Existing .btn + .btn-small classes
+ * keep their current appearance; these new variants give callers a single
+ * semantic class (primary / destructive / tertiary) without needing to
+ * compose `.btn-small.primary` etc. .btn-secondary already existed.
+ */
+.btn-primary {
+    background: #1a73e8;
+    color: white;
+    border: 1px solid #1a73e8;
+}
+
+.btn-primary:hover {
+    background: #1557b0;
+    border-color: #1557b0;
+}
+
+.btn-destructive {
+    background: #ea4335;
+    color: white;
+    border: 1px solid #ea4335;
+}
+
+.btn-destructive:hover {
+    background: #c5221f;
+    border-color: #c5221f;
+}
+
+.btn-tertiary {
+    background: transparent;
+    color: #1a73e8;
+    border: none;
+    text-decoration: none;
+    padding: 0.5rem 0.75rem;
+}
+
+.btn-tertiary:hover {
+    background: #e8f0fe;
+    text-decoration: underline;
+}
+
+/* Collection-error banner (Q6). Upgrades the previous plain-text banner
+ * with a warning icon, an expandable `<details>` for long provider
+ * errors, and a × dismiss button that sets a session-scoped suppression
+ * keyed by the error-message hash.
+ */
+.collection-error-banner {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #fef7e0;
+    border: 1px solid #f9d68a;
+    border-radius: 4px;
+    color: #5f4500;
+    margin-bottom: 0.75rem;
+}
+
+.collection-error-icon {
+    font-size: 1.2rem;
+    color: #b06000;
+    line-height: 1.2;
+}
+
+.collection-error-body {
+    line-height: 1.4;
+}
+
+.collection-error-summary {
+    font-weight: 500;
+}
+
+.collection-error-details {
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+}
+
+.collection-error-details summary {
+    cursor: pointer;
+    color: #1a73e8;
+    text-decoration: underline;
+    display: inline;
+    list-style: none;
+}
+
+.collection-error-details summary::-webkit-details-marker {
+    display: none;
+}
+
+.collection-error-text {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem 0.75rem;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 4px;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #333;
+}
+
+.collection-error-dismiss {
+    background: transparent;
+    border: none;
+    color: #b06000;
+    cursor: pointer;
+    font-size: 1.2rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+}
+
+.collection-error-dismiss:hover {
+    color: #5f4500;
+}
+
+/* Toast notifications (bottom-right stack, AutoSpotting-style).
+ * Rendered by toast.ts. Default timeout 30s. Kind classes set the
+ * left-border + icon colour.
+ */
+.toast-container {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    z-index: 2100;
+    pointer-events: none;
+    max-width: 400px;
+}
+
+.toast {
+    pointer-events: auto;
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: start;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: white;
+    border-radius: 6px;
+    border-left: 4px solid #888;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    font-size: 0.9rem;
+    color: #222;
+    animation: toast-enter 0.18s ease-out;
+    transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+}
+
+.toast--leaving {
+    opacity: 0;
+    transform: translateX(12px);
+}
+
+.toast--success { border-left-color: #1e8e3e; }
+.toast--info    { border-left-color: #1a73e8; }
+.toast--warning { border-left-color: #b06000; }
+.toast--error   { border-left-color: #c5221f; }
+
+.toast-icon {
+    font-weight: bold;
+    font-size: 1.1rem;
+    line-height: 1.2;
+}
+
+.toast--success .toast-icon { color: #1e8e3e; }
+.toast--info    .toast-icon { color: #1a73e8; }
+.toast--warning .toast-icon { color: #b06000; }
+.toast--error   .toast-icon { color: #c5221f; }
+
+.toast-message {
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.toast-actions {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.toast-close {
+    background: transparent;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    font-size: 1.1rem;
+    line-height: 1;
+    align-self: start;
+}
+
+.toast-close:hover {
+    color: #222;
+}
+
+@keyframes toast-enter {
+    from { opacity: 0; transform: translateX(12px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Visually-hidden label that remains announced by screen readers. Used
+ * to pair decorative symbols (✓ / ▲ / em-dash) with a verbal meaning.
+ */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Federation download buttons. The ↓ glyph is hidden from AT (aria-hidden
+ * on the span) but signals clickability to sighted users. Pointer cursor
+ * reinforces the affordance.
+ */
+.btn-download {
+    cursor: pointer;
+}
+
+.btn-download .download-icon {
+    margin-right: 0.4rem;
+    font-weight: bold;
+    color: #1a73e8;
+}
+
+/* Utilization colour pills with a paired glyph so meaning isn't carried
+ * by colour alone (WCAG 1.4.1).
+ */
+.util-green::before { content: '▲ '; }
+.util-yellow::before { content: '■ '; }
+.util-red::before { content: '▼ '; }
+
+/* Sticky sub-nav rail for long Settings panels. Rendered by
+ * settings-subnav.ts into Purchasing / Accounts / Users & API Keys.
+ * On narrow viewports the rail collapses to a single-column layout.
+ */
+.settings-layout {
+    display: block;
+}
+
+@media (min-width: 1024px) {
+    .settings-layout {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        gap: 1.5rem;
+        align-items: start;
+    }
+}
+
+.settings-subnav {
+    border-right: 1px solid #e0e0e0;
+    padding: 1rem 1rem 1rem 0;
+    position: sticky;
+    top: 80px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    align-self: start;
+}
+
+.settings-subnav ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.settings-subnav li {
+    margin-bottom: 0.25rem;
+}
+
+.settings-subnav a {
+    display: block;
+    padding: 0.5rem 0.75rem;
+    color: #555;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    border-left: 3px solid transparent;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.settings-subnav a:hover {
+    background: #f5f5f5;
+    color: #222;
+}
+
+.settings-subnav a.active {
+    background: #e8f0fe;
+    color: #1a73e8;
+    border-left-color: #1a73e8;
+    font-weight: 500;
+}
+
+/* Sticky save bar — the existing .settings-buttons row gets sticky
+ * positioning at the bottom of the viewport and a visible shadow when
+ * any tracked field is dirty. updateDirtyMarkers in settings.ts adds/
+ * removes .dirty based on aggregate state.
+ */
+.settings-savebar {
+    position: sticky;
+    bottom: 0;
+    background: white;
+    padding: 1rem;
+    margin-top: 1rem;
+    border-top: 1px solid transparent;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.settings-savebar.dirty {
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
+    border-top-color: #e0e0e0;
+}
+
+.settings-savebar.dirty::before {
+    content: 'Unsaved changes';
+    display: inline-block;
+    padding: 0.25rem 0.6rem;
+    background: #fff3cd;
+    color: #856404;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    margin-right: 0.75rem;
+    vertical-align: middle;
+}
+
+/* Dirty-indicator dot on the Settings top-tab button when any settings
+ * form field has unsaved changes. Lives in the tab bar so the user
+ * notices even from another tab.
+ */
+.tab-btn.has-unsaved::after {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #ea4335;
+    border-radius: 50%;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+}
+
+/* Dashboard savings-trend range toggle. Active pill is highlighted
+ * blue; non-active pills are the base btn-small style.
+ */
+.trend-range-toggle {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.trend-range.active {
+    background: #1a73e8;
+    color: white;
+    border-color: #1a73e8;
+}
+
+/* Per-provider accounts table (P3). Replaces the prior inline-row
+ * layout with a standard table so Name/Account ID/Status/Actions
+ * separate cleanly and the destructive Delete is visually isolated.
+ */
+.accounts-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+}
+
+.accounts-table th,
+.accounts-table td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #eee;
+    vertical-align: middle;
+}
+
+.accounts-table th {
+    font-size: 0.85rem;
+    color: #666;
+    font-weight: 500;
+    background: #fafafa;
+}
+
+.account-actions {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.account-actions-spacer {
+    display: inline-block;
+    width: 1.25rem;
+    border-left: 1px solid #e0e0e0;
+    height: 1.4rem;
+    margin: 0 0.25rem;
+}
+
+.accounts-empty {
+    color: #888;
+    font-style: italic;
+    margin: 0.5rem 0;
+}
+
+/* Freshness pill: colour-coded by staleness band. Green < 3h, amber
+ * 3–12h, red > 12h. Pair colour with text (band name read by SR via
+ * aria-label on the pill) so information isn't carried by colour alone.
+ */
+.freshness-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    gap: 0.25rem;
+}
+
+.freshness-badge--fresh {
+    background: #e6f4ea;
+    color: #1e8e3e;
+    border: 1px solid #b7e1c1;
+}
+
+.freshness-badge--warn {
+    background: #fef7e0;
+    color: #b06000;
+    border: 1px solid #f9d68a;
+}
+
+.freshness-badge--stale {
+    background: #fce8e6;
+    color: #c5221f;
+    border: 1px solid #f2b8b5;
+}
+
+/* Recommendations-table affordances: bulk toolbar, sortable headers,
+ * row-click detail drawer. See P6 of the UX audit for rationale.
+ */
+.recommendations-bulk-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    margin-bottom: 0.75rem;
+    background: #e8f0fe;
+    border: 1px solid #a9c7f5;
+    border-radius: 4px;
+}
+
+.recommendations-bulk-toolbar .bulk-count {
+    font-weight: 500;
+    color: #1a73e8;
+    margin-right: auto;
+}
+
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+th.sortable:hover {
+    background: #f5f5f5;
+}
+
+th.sortable .sort-indicator {
+    margin-left: 0.35rem;
+    color: #bbb;
+    font-size: 0.75em;
+}
+
+th.sortable .sort-indicator.active {
+    color: #1a73e8;
+}
+
+tr.recommendation-row {
+    cursor: pointer;
+}
+
+tr.recommendation-row:hover {
+    background: #f8f9fb;
+}
+
+.detail-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.25);
+    z-index: 1500;
+}
+
+.detail-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(480px, 90vw);
+    background: white;
+    box-shadow: -6px 0 24px rgba(0, 0, 0, 0.15);
+    padding: 1.5rem;
+    z-index: 1600;
+    overflow-y: auto;
+}
+
+.detail-drawer h3 {
+    margin: 0 0 1rem;
+    padding-right: 2rem;
+}
+
+.detail-drawer-close {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+}
+
+.detail-drawer-fields {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.5rem 1rem;
+    margin: 0 0 1rem;
+}
+
+.detail-drawer-fields dt {
+    color: #666;
+    font-size: 0.85rem;
+}
+
+.detail-drawer-fields dd {
+    margin: 0;
+    color: #222;
+    font-size: 0.9rem;
+}
+
+.detail-drawer-note {
+    color: #888;
+    font-size: 0.85rem;
+    font-style: italic;
+    margin: 1rem 0 0;
+}
+
+/* Confirm-dialog modal. Rendered via confirmDialog.ts. */
+.modal-confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.modal-confirm {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    max-width: 480px;
+    min-width: 320px;
+    padding: 1.5rem;
+}
+
+.modal-confirm-title {
+    margin: 0 0 0.75rem;
+    font-size: 1.1rem;
+    color: #222;
+}
+
+.modal-confirm-body {
+    margin-bottom: 1.25rem;
+    color: #444;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+
+.modal-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
 /* Provider badges */
 .provider-badge {
     display: inline-block;

@@ -15,6 +15,8 @@ import { initApiKeys } from './apikeys';
 import { loadHistory } from './history';
 import { initSavingsHistory } from './modules/savings-history';
 import { setupRIExchangeHandlers } from './riexchange';
+import { showToast } from './toast';
+import { confirmDialog } from './confirmDialog';
 
 /**
  * Initialize app
@@ -223,13 +225,17 @@ function setupButtonHandlers(): void {
 async function handleExecutePurchase(): Promise<void> {
   const localRecs = getPurchaseModalRecommendations();
   if (localRecs.length === 0) {
-    alert('No recommendations selected for purchase.');
+    showToast({ message: 'No recommendations selected for purchase.', kind: 'warning' });
     return;
   }
 
-  if (!confirm(`Are you sure you want to execute ${localRecs.length} purchase(s)? This action will purchase cloud commitments.`)) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Execute ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'}?`,
+    body: 'This will spend real money on cloud commitments. Make sure the selection + terms + payment options are what you intend.',
+    confirmLabel: 'Execute purchases',
+    destructive: true,
+  });
+  if (!ok) return;
 
   // Map LocalRecommendation to API Recommendation format
   const apiRecs: api.Recommendation[] = localRecs.map((r, i) => ({
@@ -259,11 +265,11 @@ async function handleExecutePurchase(): Promise<void> {
     closePurchaseModal();
     clearPurchaseModalRecommendations();
 
-    alert('Purchase submitted — check your email to approve.');
+    showToast({ message: 'Purchase submitted — check your email to approve.', kind: 'success', timeout: 10_000 });
     await loadDashboard();
   } catch (error) {
     const err = error as Error;
-    alert(`Failed to execute purchase: ${err.message}`);
+    showToast({ message: `Failed to execute purchase: ${err.message}`, kind: 'error' });
   } finally {
     if (executeBtn) {
       executeBtn.disabled = false;

@@ -5,6 +5,8 @@
 
 import * as api from './api';
 import { formatDate, formatDateTime, escapeHtml } from './utils';
+import { switchTab, switchSettingsSubTab } from './navigation';
+import { confirmDialog } from './confirmDialog';
 import type {
   ConvertibleRI,
   RIUtilization,
@@ -52,6 +54,20 @@ export function setupRIExchangeHandlers(): void {
   const refreshBtn = document.getElementById('ri-exchange-refresh-btn');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => void loadRIExchange());
+  }
+
+  const settingsBtn = document.getElementById('ri-exchange-settings-btn');
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', () => {
+      switchTab('settings');
+      switchSettingsSubTab('purchasing');
+      const target = document.getElementById('ri-exchange-automation-settings');
+      if (target) {
+        requestAnimationFrame(() => {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+    });
   }
 }
 
@@ -163,7 +179,14 @@ export async function loadReshapeRecommendations(): Promise<void> {
 
 function renderRecommendations(container: HTMLElement): void {
   if (!currentRecommendations || currentRecommendations.length === 0) {
-    container.innerHTML = '<p class="empty">No reshape recommendations. All convertible RIs are well-utilized.</p>';
+    // The "well-utilized" copy is only truthful when the RI fleet actually
+    // contains convertibles to be utilized. Prior to this commit the same
+    // message fired regardless of fleet presence, so a brand-new tenant saw
+    // a claim about utilization of a non-existent fleet.
+    const copy = currentRIs.length === 0
+      ? 'Reshape recommendations appear once your accounts have active convertible Reserved Instances — none are registered yet.'
+      : `All ${currentRIs.length} convertible RI${currentRIs.length === 1 ? '' : 's'} meet your utilization threshold. No reshape needed.`;
+    container.innerHTML = `<p class="empty">${escapeHtml(copy)}</p>`;
     return;
   }
 
@@ -793,12 +816,15 @@ async function saveAutomationSettings(): Promise<void> {
     return;
   }
 
-  // Confirm auto mode
+  // Confirm auto mode — financial operations ship without further review
+  // once enabled, so this gets the destructive-style confirm.
   if (mode === 'auto') {
-    const confirmed = window.confirm(
-      'You are enabling Fully Automated mode. RI exchanges will be executed ' +
-      'automatically without manual approval. Are you sure?'
-    );
+    const confirmed = await confirmDialog({
+      title: 'Enable Fully Automated mode?',
+      body: 'RI exchanges will be executed automatically without manual approval. Make sure the payment caps below are set to values you are comfortable spending.',
+      confirmLabel: 'Enable automation',
+      destructive: true,
+    });
     if (!confirmed) return;
   }
 

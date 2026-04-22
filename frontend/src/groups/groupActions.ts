@@ -6,6 +6,7 @@ import * as api from '../api';
 import { availableGroups } from '../users/state';
 import { showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
+import { confirmDialog } from '../confirmDialog';
 
 /**
  * Delete group
@@ -14,9 +15,13 @@ export async function deleteGroup(groupId: string): Promise<void> {
   const group = availableGroups.find(g => g.id === groupId);
   if (!group) return;
 
-  if (!confirm(`Are you sure you want to delete group "${group.name}"?`)) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Delete group "${group.name}"?`,
+    body: 'Members of this group will lose any permissions granted by it. Users themselves are not deleted. This action cannot be undone.',
+    confirmLabel: 'Delete group',
+    destructive: true,
+  });
+  if (!ok) return;
 
   try {
     await api.deleteGroup(groupId);

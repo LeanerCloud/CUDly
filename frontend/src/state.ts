@@ -4,6 +4,12 @@
 
 import type { AppState } from './types';
 
+export type RecommendationsSortColumn = 'savings' | 'upfront_cost' | 'count' | 'term' | 'payback';
+export interface RecommendationsSort {
+  column: RecommendationsSortColumn;
+  direction: 'asc' | 'desc';
+}
+
 // Singleton state instance
 export const state: AppState = {
   currentUser: null,
@@ -13,6 +19,19 @@ export const state: AppState = {
   selectedRecommendations: new Set(),
   savingsChart: null
 };
+
+// Sort state is separate from AppState so the recommendations module can
+// evolve it independently. Default is savings descending (the audit's
+// most-requested view: "biggest wins first").
+let recommendationsSort: RecommendationsSort = { column: 'savings', direction: 'desc' };
+
+export function getRecommendationsSort(): RecommendationsSort {
+  return { ...recommendationsSort };
+}
+
+export function setRecommendationsSort(sort: RecommendationsSort): void {
+  recommendationsSort = { ...sort };
+}
 
 // State accessor functions
 export function getCurrentUser() {

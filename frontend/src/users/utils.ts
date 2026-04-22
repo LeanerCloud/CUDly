@@ -7,7 +7,7 @@
  * users/ namespace keeps its existing import surface while dashboards +
  * recommendations use the same implementation.
  */
-export { formatRelativeTime } from '../utils';
+export { formatRelativeTime, formatDate } from '../utils';
 
 /**
  * Escape HTML to prevent XSS
@@ -18,24 +18,22 @@ export function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
+import { showToast } from '../toast';
+
 /**
- * Show error message
+ * Show error message. Delegates to the shared toast system so callers
+ * across the codebase get consistent bottom-right stacked toasts with
+ * severity colours, × dismiss, and the 30s default timeout.
  */
 export function showError(message: string): void {
-  const errorDiv = document.createElement('div');
-  errorDiv.className = 'toast toast-error';
-  errorDiv.textContent = message;
-  document.body.appendChild(errorDiv);
-  setTimeout(() => errorDiv.remove(), 5000);
+  showToast({ message, kind: 'error' });
 }
 
 /**
- * Show success message
+ * Show success message. Uses a shorter 5s timeout because confirms are
+ * transient; the 30s default is tuned for errors that users should
+ * notice.
  */
 export function showSuccess(message: string): void {
-  const successDiv = document.createElement('div');
-  successDiv.className = 'toast toast-success';
-  successDiv.textContent = message;
-  document.body.appendChild(successDiv);
-  setTimeout(() => successDiv.remove(), 3000);
+  showToast({ message, kind: 'success', timeout: 5_000 });
 }

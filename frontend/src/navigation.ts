@@ -7,6 +7,7 @@ import { loadRecommendations } from './recommendations';
 import { loadPlans } from './plans';
 import { initHistoryDateRange } from './history';
 import { loadGlobalSettings, isUnsavedChanges, loadAccountsTab } from './settings';
+import { renderSubNav } from './settings-subnav';
 import { loadUsers } from './users';
 import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
@@ -176,6 +177,10 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
 
   document.title = SETTINGS_SUBTABS[subTab]!.title;
   currentSettingsSubTab = subTab;
+
+  // Render sticky sub-nav for panels with ≥2 sections. General is
+  // single-section and deliberately omitted.
+  renderSubNav(subTab);
 
   if (isSelfSwitch) return;
 
