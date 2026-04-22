@@ -205,6 +205,60 @@ describe('loadAccountsForProvider', () => {
 
     expect(api.listAccounts).toHaveBeenCalledWith({ provider: 'gcp' });
   });
+
+  test('renders status-chip row with counts and All active by default', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: '1', name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+      { id: '2', name: 'Stage', provider: 'aws', external_id: '222', enabled: false },
+      { id: '3', name: 'Dev', provider: 'aws', external_id: '333', enabled: true },
+    ]);
+
+    await loadAccountsForProvider('aws');
+
+    const container = document.getElementById('aws-accounts-list')!;
+    const chips = Array.from(container.querySelectorAll('.status-chip'));
+    expect(chips).toHaveLength(3);
+    expect(chips[0]!.textContent).toBe('All (3)');
+    expect(chips[1]!.textContent).toBe('Active (2)');
+    expect(chips[2]!.textContent).toBe('Disabled (1)');
+    expect(chips[0]!.classList.contains('active')).toBe(true);
+    expect(chips[1]!.classList.contains('active')).toBe(false);
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(3);
+  });
+
+  test('clicking Active chip filters out disabled rows', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: '1', name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+      { id: '2', name: 'Stage', provider: 'aws', external_id: '222', enabled: false },
+    ]);
+
+    await loadAccountsForProvider('aws');
+    const container = document.getElementById('aws-accounts-list')!;
+    const chips = Array.from(container.querySelectorAll('.status-chip')) as HTMLButtonElement[];
+    chips[1]!.click();
+
+    const rows = Array.from(container.querySelectorAll('tbody tr'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain('Prod');
+    expect(rows[0]!.textContent).not.toContain('Stage');
+    const afterChips = Array.from(container.querySelectorAll('.status-chip')) as HTMLButtonElement[];
+    expect(afterChips[1]!.classList.contains('active')).toBe(true);
+  });
+
+  test('clicking All restores full row set after a filter', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: '1', name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+      { id: '2', name: 'Stage', provider: 'aws', external_id: '222', enabled: false },
+    ]);
+
+    await loadAccountsForProvider('aws');
+    const container = document.getElementById('aws-accounts-list')!;
+    const chips = () => Array.from(container.querySelectorAll('.status-chip')) as HTMLButtonElement[];
+    chips()[2]!.click();
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(1);
+    chips()[0]!.click();
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

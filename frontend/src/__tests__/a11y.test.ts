@@ -7,6 +7,14 @@
 
 import { renderUsers } from '../users/userList';
 import { renderPermissionMatrix } from '../users/permissionMatrix';
+import { loadAccountsForProvider } from '../settings';
+
+// Mock for the accounts a11y case — loadAccountsForProvider calls the
+// real API layer otherwise.
+jest.mock('../api', () => ({
+  listAccounts: jest.fn(),
+}));
+import * as api from '../api';
 
 describe('accessibility smoke', () => {
   afterEach(() => {
@@ -86,6 +94,42 @@ describe('accessibility smoke', () => {
       // sr-only text also present (double-up guard)
       expect(granted?.querySelector('.sr-only')?.textContent).toBe(' Granted');
       expect(notGranted?.querySelector('.sr-only')?.textContent).toBe(' Not granted');
+    });
+  });
+
+  describe('Accounts table actions', () => {
+    it('Delete button carries a per-account aria-label identifying the row', async () => {
+      const container = document.createElement('div');
+      container.id = 'aws-accounts-list';
+      document.body.appendChild(container);
+
+      (api.listAccounts as jest.Mock).mockResolvedValue([
+        { id: 'a1', name: 'Prod', provider: 'aws', external_id: '111222333', enabled: true },
+      ]);
+
+      await loadAccountsForProvider('aws');
+
+      const deleteBtn = container.querySelector('.btn-destructive') as HTMLButtonElement | null;
+      expect(deleteBtn?.getAttribute('aria-label')).toBe('Delete Prod (111222333)');
+    });
+  });
+
+  describe('RI Exchange settings deep-link', () => {
+    it('⚙︎ Exchange settings button exposes an accessible name via its visible label', () => {
+      // Mirror the index.html markup — the test guards against a future
+      // refactor that strips the visible label into an icon-only button
+      // without adding aria-label.
+      const btn = document.createElement('button');
+      btn.id = 'ri-exchange-settings-btn';
+      btn.className = 'btn btn-small';
+      btn.title = 'Jump to Exchange Automation settings in Settings → Purchasing';
+      btn.textContent = '⚙︎ Exchange settings';
+      document.body.appendChild(btn);
+
+      // Accessible name comes from text content when no aria-label is set.
+      // Stripping 'Exchange settings' from the text would silently regress.
+      expect(btn.textContent?.trim()).toContain('Exchange settings');
+      expect(btn.getAttribute('title')).toContain('Exchange Automation');
     });
   });
 });

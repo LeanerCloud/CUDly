@@ -519,6 +519,39 @@ button.danger:hover {
     border-color: #1a73e8;
 }
 
+/* Status-chip filter row above the accounts table (Q8 / audit P3 gap).
+ * All | Active | Disabled scoped to states the per-provider table shows.
+ */
+.status-chip-row {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.75rem 0 0.25rem;
+    flex-wrap: wrap;
+}
+
+.status-chip {
+    appearance: none;
+    border: 1px solid #d0d7de;
+    background: #fff;
+    color: #333;
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+.status-chip:hover {
+    background: #f5f7fa;
+}
+
+.status-chip.active {
+    background: #e8f0fe;
+    border-color: #4a90e2;
+    color: #1a56c4;
+    font-weight: 600;
+}
+
 /* Per-provider accounts table (P3). Replaces the prior inline-row
  * layout with a standard table so Name/Account ID/Status/Actions
  * separate cleanly and the destructive Delete is visually isolated.

@@ -342,7 +342,7 @@ async function cancelScheduledPurchase(executionId: string): Promise<void> {
  * renders a line chart of cumulative savings. Failure modes (analytics
  * not configured, empty data) degrade gracefully to an empty-state note.
  */
-async function loadSavingsTrendChart(): Promise<void> {
+export async function loadSavingsTrendChart(): Promise<void> {
   const canvas = document.getElementById('savings-trend-chart') as HTMLCanvasElement | null;
   const empty = document.getElementById('savings-trend-empty');
   if (!canvas) return;

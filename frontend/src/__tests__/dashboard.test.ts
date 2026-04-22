@@ -28,14 +28,18 @@ jest.mock('chart.js', () => {
 import { loadDashboard } from '../dashboard';
 import { Chart } from 'chart.js';
 
-// Mock the api module
+// Mock the api module. `getSavingsAnalytics` is re-exported from
+// ../api/history via ../api/index, so mock it here for dashboard's
+// `import * as api from './api'` usage in loadSavingsTrendChart.
 jest.mock('../api', () => ({
   getDashboardSummary: jest.fn(),
   getUpcomingPurchases: jest.fn(),
   getPurchaseDetails: jest.fn(),
   cancelPurchase: jest.fn(),
-  listAccounts: jest.fn().mockResolvedValue([])
+  listAccounts: jest.fn().mockResolvedValue([]),
+  getSavingsAnalytics: jest.fn().mockResolvedValue({ data_points: [] }),
 }));
+import { loadSavingsTrendChart, setupSavingsTrendHandlers } from '../dashboard';
 
 // Mock state module
 jest.mock('../state', () => ({
@@ -446,6 +450,49 @@ describe('Dashboard Module', () => {
         message: 'Failed to cancel purchase',
         kind: 'error',
       }));
+    });
+  });
+
+  describe('savings-trend chart', () => {
+    beforeEach(() => {
+      const canvas = document.createElement('canvas');
+      canvas.id = 'savings-trend-chart';
+      const empty = document.createElement('div');
+      empty.id = 'savings-trend-empty';
+      empty.className = 'hidden';
+      const b90 = document.createElement('button');
+      b90.className = 'trend-range active';
+      b90.dataset['range'] = '90';
+      b90.textContent = '90d';
+      const b30 = document.createElement('button');
+      b30.className = 'trend-range';
+      b30.dataset['range'] = '30';
+      b30.textContent = '30d';
+      document.body.replaceChildren(canvas, empty, b90, b30);
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+    });
+
+    test('uses daily interval for the default 90-day range', async () => {
+      await loadSavingsTrendChart();
+
+      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ interval: 'daily' })
+      );
+    });
+
+    test('clicking a different trend-range button re-fetches with the new bucket', async () => {
+      setupSavingsTrendHandlers();
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+
+      (document.querySelector('.trend-range[data-range="30"]') as HTMLButtonElement).click();
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ interval: 'daily' })
+      );
+      const call = (api.getSavingsAnalytics as jest.Mock).mock.calls[0]?.[0];
+      const span = new Date(call.end).getTime() - new Date(call.start).getTime();
+      expect(Math.round(span / 86400_000)).toBe(30);
     });
   });
 });

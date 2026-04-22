@@ -231,10 +231,19 @@ async function renderSelfAccountBanner(container: HTMLElement, accounts: api.Clo
  * each field in its own column, uses a status pill for Active/Disabled,
  * and isolates the destructive Delete action in the right-most column.
  */
-function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): void {
+type AccountStatusFilter = 'all' | 'active' | 'disabled';
+
+function renderAccountsList(
+  container: HTMLElement,
+  accounts: api.CloudAccount[],
+  provider: AccountProvider,
+  filter: AccountStatusFilter = 'all'
+): void {
   // Remove prior rendered rows (Overrides panels are sibling elements,
   // banner lives in a separate className managed by renderSelfAccountBanner).
-  container.querySelectorAll('.accounts-table, .account-overrides-panel, .accounts-empty').forEach(el => el.remove());
+  container.querySelectorAll(
+    '.accounts-table, .account-overrides-panel, .accounts-empty, .status-chip-row'
+  ).forEach(el => el.remove());
 
   if (!accounts || accounts.length === 0) {
     if (!container.querySelector('.self-account-banner')) {
@@ -245,6 +254,40 @@ function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[]
     }
     return;
   }
+
+  // Status chip filter — mirrors the P3 audit recommendation scoped to
+  // states the per-provider table actually exposes (Active/Disabled).
+  const activeCount = accounts.filter(a => a.enabled).length;
+  const disabledCount = accounts.length - activeCount;
+  const chipRow = document.createElement('div');
+  chipRow.className = 'status-chip-row';
+  chipRow.setAttribute('role', 'tablist');
+  chipRow.setAttribute('aria-label', 'Filter accounts by status');
+  const chips: Array<{ key: AccountStatusFilter; label: string; count: number }> = [
+    { key: 'all', label: 'All', count: accounts.length },
+    { key: 'active', label: 'Active', count: activeCount },
+    { key: 'disabled', label: 'Disabled', count: disabledCount },
+  ];
+  chips.forEach(({ key, label, count }) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'status-chip' + (filter === key ? ' active' : '');
+    chip.textContent = `${label} (${count})`;
+    chip.setAttribute('role', 'tab');
+    chip.setAttribute('aria-selected', String(filter === key));
+    chip.addEventListener('click', () => {
+      if (filter === key) return;
+      renderAccountsList(container, accounts, provider, key);
+    });
+    chipRow.appendChild(chip);
+  });
+  container.appendChild(chipRow);
+
+  const visible = accounts.filter(a => {
+    if (filter === 'active') return a.enabled;
+    if (filter === 'disabled') return !a.enabled;
+    return true;
+  });
 
   const table = document.createElement('table');
   table.className = 'accounts-table';
@@ -261,7 +304,7 @@ function renderAccountsList(container: HTMLElement, accounts: api.CloudAccount[]
   const tbody = document.createElement('tbody');
   const panels: HTMLDivElement[] = [];
 
-  accounts.forEach((account) => {
+  visible.forEach((account) => {
     const accountLabel = `${account.name} (${account.external_id})`;
     const tr = document.createElement('tr');
 
