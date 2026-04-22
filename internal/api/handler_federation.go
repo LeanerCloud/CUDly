@@ -441,14 +441,15 @@ func buildAzureTemplateZip(format string, data federationIaCData, target, slug s
 	return buf.Bytes(), slug + "-azure-wif-" + format + ".zip", nil
 }
 
-// writeAzureTemplateFiles reads the static Azure template + deploy script,
-// renders the parameters file and README, and writes all four into the zip.
+// writeAzureTemplateFiles reads the static Azure template, renders the
+// parameters file, deploy script, and README, then writes all four into the zip.
+// The deploy script is marked executable (mode 0755) in the zip header.
 func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, templateName string) error {
 	templateBytes, err := cudlyiac.Modules.ReadFile("federation/azure-target/bicep/" + templateName)
 	if err != nil {
 		return fmt.Errorf("azure %s: read template: %w", format, err)
 	}
-	deployScript, err := renderTemplate("templates/azure-wif-deploy.sh.tmpl", data)
+	deployScript, err := renderTemplate("templates/azure-wif-bicep-deploy.sh.tmpl", data)
 	if err != nil {
 		return fmt.Errorf("azure %s: render deploy script: %w", format, err)
 	}
@@ -456,19 +457,25 @@ func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, tem
 	if err != nil {
 		return fmt.Errorf("azure %s: render params: %w", format, err)
 	}
+
+	// Non-executable entries.
 	entries := []struct {
 		name    string
 		content []byte
 	}{
 		{templateName, templateBytes},
 		{"azure-wif-bicep-params.json", []byte(paramsJSON)},
-		{"deploy-azure.sh", []byte(deployScript)},
 		{"README.txt", []byte(buildAzureTemplateReadme(data, format))},
 	}
 	for _, e := range entries {
 		if err = addBytesToZip(zw, e.name, e.content); err != nil {
 			return fmt.Errorf("azure %s: write %s: %w", format, e.name, err)
 		}
+	}
+
+	// deploy-azure.sh must be executable so customers can run it directly.
+	if err = addExecBytesToZip(zw, "deploy-azure.sh", []byte(deployScript)); err != nil {
+		return fmt.Errorf("azure %s: write deploy-azure.sh: %w", format, err)
 	}
 	return nil
 }
@@ -718,6 +725,22 @@ func addDirToZip(zw *zip.Writer, fsys fs.ReadFileFS, srcDir, destPrefix string) 
 
 func addBytesToZip(zw *zip.Writer, name string, content []byte) error {
 	f, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(content)
+	return err
+}
+
+// addExecBytesToZip writes content to the zip with Unix mode 0755 so that
+// customers can run the resulting shell script without an explicit chmod.
+func addExecBytesToZip(zw *zip.Writer, name string, content []byte) error {
+	hdr := &zip.FileHeader{
+		Name:   name,
+		Method: zip.Deflate,
+	}
+	hdr.SetMode(0755)
+	f, err := zw.CreateHeader(hdr)
 	if err != nil {
 		return err
 	}

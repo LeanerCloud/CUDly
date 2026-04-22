@@ -54,3 +54,38 @@ az deployment sub create \
 echo ""
 echo "=== Done ==="
 echo "Set azure_auth_mode=workload_identity_federation in CUDly."
+{{- if .CUDlyAPIURL}}
+
+# ---------------------------------------------------------------------------
+# Register with CUDly
+# ---------------------------------------------------------------------------
+echo ""
+echo "Registering account with CUDly..."
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-$(az account show --query id -o tsv)}"
+TENANT_ID=$(az account show --query tenantId -o tsv)
+ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"
+# AZURE_CLIENT_ID is written by the preceding azure-wif-cli.sh step.
+CLIENT_ID="${AZURE_CLIENT_ID:-}"
+read -r -d '' PAYLOAD <<JSON || true
+{
+  "provider": "azure",
+  "external_id": "${SUBSCRIPTION_ID}",
+  "account_name": "${ACCOUNT_NAME}",
+  "contact_email": "${CONTACT_EMAIL}",
+  "azure_auth_mode": "workload_identity_federation",
+  "azure_subscription_id": "${SUBSCRIPTION_ID}",
+  "azure_tenant_id": "${TENANT_ID}",
+  "azure_client_id": "${CLIENT_ID}"
+}
+JSON
+HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+  -X POST "{{.CUDlyAPIURL}}/api/register" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}")
+case "$HTTP_CODE" in
+  200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+  409)     echo "Registration already pending for this account — continuing." ;;
+  *)       echo "ERROR: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out; exit 1 ;;
+esac
+{{- end}}

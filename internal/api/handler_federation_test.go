@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -725,6 +726,66 @@ func TestRenderedCFNDeployScript_HasRegistrationBlock(t *testing.T) {
 				"deploy script must include registration curl call")
 			assert.Contains(t, deployScript, `case "$HTTP_CODE"`,
 				"deploy script must handle registration HTTP response codes")
+		})
+	}
+}
+
+// TestBuildAzureTemplateZip_IncludesRenderedDeployScript verifies that the
+// bicep zip bundle contains a rendered deploy-azure.sh with:
+//   - the original az deployment sub create invocation,
+//   - the registration block (curl /api/register, HTTP-code case statement,
+//     CONTACT_EMAIL pre-fill), and
+//   - executable Unix mode (0755).
+func TestBuildAzureTemplateZip_IncludesRenderedDeployScript(t *testing.T) {
+	for _, format := range []string{"bicep", "arm"} {
+		format := format
+		t.Run(format, func(t *testing.T) {
+			h := federationHandler()
+			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+				"target": "azure", "source": "aws", "format": format,
+			}))
+			require.NoError(t, err)
+
+			zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+			require.NoError(t, err)
+			zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+			require.NoError(t, err)
+
+			var deployFile *zip.File
+			for _, f := range zr.File {
+				if f.Name == "deploy-azure.sh" {
+					deployFile = f
+					break
+				}
+			}
+			require.NotNil(t, deployFile, "zip must contain deploy-azure.sh")
+
+			// Verify executable mode.
+			assert.Equal(t, fs.FileMode(0755), deployFile.Mode(),
+				"deploy-azure.sh must be marked executable (0755)")
+
+			rc, err := deployFile.Open()
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			_, _ = buf.ReadFrom(rc)
+			rc.Close()
+			script := buf.String()
+
+			// Original deployment commands must be present.
+			assert.Contains(t, script, "az deployment sub create",
+				"deploy script must invoke az deployment sub create")
+
+			// Registration block must be rendered (CUDlyAPIURL is set via federationReqWithDomain).
+			assert.Contains(t, script, "/api/register",
+				"deploy script must include registration curl call")
+			assert.Contains(t, script, `case "$HTTP_CODE"`,
+				"deploy script must handle HTTP response codes")
+			assert.Contains(t, script, "200|201",
+				"deploy script must handle success codes")
+			assert.Contains(t, script, "409",
+				"deploy script must handle 409 already-pending")
+			assert.Contains(t, script, `CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-`,
+				"deploy script must pre-fill CONTACT_EMAIL with env-override support")
 		})
 	}
 }
