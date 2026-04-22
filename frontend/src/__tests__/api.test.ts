@@ -354,6 +354,27 @@ describe('API Requests', () => {
         expect((error as { status?: number }).status).toBe(500);
       }
     });
+
+    // Q3: defence-in-depth — even if Q1 somehow misses a nil-body case,
+    // the frontend tolerates empty / malformed 2xx bodies without
+    // crashing with SyntaxError.
+    test('tolerates empty 2xx body and resolves to null', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+      });
+      await expect(apiRequest('/test')).resolves.toBeNull();
+    });
+
+    test('tolerates malformed 2xx body and resolves to null', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new SyntaxError('Unexpected token in JSON at position 0')),
+      });
+      await expect(apiRequest('/test')).resolves.toBeNull();
+    });
   });
 
   describe('login', () => {

@@ -178,7 +178,17 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
     throw error;
   }
 
-  return response.json() as Promise<T>;
+  // Q3: handlers that intentionally produce no body (e.g. DELETE
+  // /accounts/:id) used to crash the caller with SyntaxError from
+  // response.json() on an empty body. Q1 fixed this at the backend by
+  // emitting "{}" instead, but keep a defensive catch here for any
+  // upstream proxy that strips the body, 204 No Content responses, or
+  // future handlers that might miss the convention.
+  try {
+    return await response.json() as T;
+  } catch {
+    return null as T;
+  }
 }
 
 /**
