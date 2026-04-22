@@ -14,7 +14,7 @@ import { setupUserHandlers } from './users';
 import { initApiKeys } from './apikeys';
 import { loadHistory } from './history';
 import { initSavingsHistory } from './modules/savings-history';
-import { setupRIExchangeHandlers } from './riexchange';
+import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 
@@ -212,15 +212,22 @@ function setupButtonHandlers(): void {
   }
 
   // Purchasing save button — mirrors the General tab's Save Settings by
-  // dispatching submit on the shared #global-settings-form, which reads
-  // both General-tab and Purchasing-tab fields from across the DOM.
-  // Without this button the Purchasing tab had only Reset in its sticky
-  // bar, forcing users to jump to General to persist changes.
+  // dispatching submit on the shared #global-settings-form (which reads
+  // both General-tab and Purchasing-tab fields from across the DOM) and
+  // *also* saves the RI Exchange Automation settings when that form is
+  // loaded. Keeping both saves behind a single button avoids the prior
+  // duplicate "Save Settings" in the panel: the scrolling one inside the
+  // RI Exchange form was removed and its persistence rolled into this
+  // sticky bar. If the RI Exchange form hasn't rendered yet (panel never
+  // visited), the guard inside saveAutomationSettings no-ops cleanly.
   const savePurchasingBtn = document.getElementById('save-purchasing-btn');
   if (savePurchasingBtn) {
     savePurchasingBtn.addEventListener('click', () => {
       const form = document.getElementById('global-settings-form') as HTMLFormElement | null;
       if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      if (document.getElementById('ri-exchange-settings-form')) {
+        void saveAutomationSettings();
+      }
     });
   }
 

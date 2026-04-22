@@ -43,7 +43,13 @@ jest.mock('../plans', () => ({
 
 jest.mock('../settings', () => ({
   saveGlobalSettings: jest.fn(),
-  setupSettingsHandlers: jest.fn()
+  setupSettingsHandlers: jest.fn(),
+  resetSettings: jest.fn(),
+}));
+
+jest.mock('../riexchange', () => ({
+  setupRIExchangeHandlers: jest.fn(),
+  saveAutomationSettings: jest.fn(),
 }));
 
 import { init, setupEventListeners } from '../app';
@@ -54,6 +60,7 @@ import * as dashboard from '../dashboard';
 import * as navigation from '../navigation';
 import * as plans from '../plans';
 import * as settings from '../settings';
+import * as riexchange from '../riexchange';
 
 describe('App Module', () => {
   beforeEach(() => {
@@ -229,6 +236,44 @@ describe('App Module', () => {
       document.body.innerHTML = '';
 
       expect(() => setupEventListeners()).not.toThrow();
+    });
+
+    test('save-purchasing-btn triggers both global form submit and RI Exchange save when the RI form is loaded', () => {
+      const globalForm = document.createElement('form');
+      globalForm.id = 'global-settings-form';
+      const submitBtn = document.createElement('button');
+      submitBtn.type = 'submit';
+      globalForm.appendChild(submitBtn);
+      const savePurchasingBtn = document.createElement('button');
+      savePurchasingBtn.id = 'save-purchasing-btn';
+      savePurchasingBtn.type = 'button';
+      const riForm = document.createElement('form');
+      riForm.id = 'ri-exchange-settings-form';
+      document.body.append(globalForm, savePurchasingBtn, riForm);
+
+      setupEventListeners();
+      savePurchasingBtn.click();
+
+      expect(settings.saveGlobalSettings).toHaveBeenCalledTimes(1);
+      expect(riexchange.saveAutomationSettings).toHaveBeenCalledTimes(1);
+    });
+
+    test('save-purchasing-btn skips RI Exchange save when that form is not in the DOM', () => {
+      const globalForm = document.createElement('form');
+      globalForm.id = 'global-settings-form';
+      const submitBtn = document.createElement('button');
+      submitBtn.type = 'submit';
+      globalForm.appendChild(submitBtn);
+      const savePurchasingBtn = document.createElement('button');
+      savePurchasingBtn.id = 'save-purchasing-btn';
+      savePurchasingBtn.type = 'button';
+      document.body.append(globalForm, savePurchasingBtn);
+
+      setupEventListeners();
+      savePurchasingBtn.click();
+
+      expect(settings.saveGlobalSettings).toHaveBeenCalledTimes(1);
+      expect(riexchange.saveAutomationSettings).not.toHaveBeenCalled();
     });
   });
 });

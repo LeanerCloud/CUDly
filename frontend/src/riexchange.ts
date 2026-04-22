@@ -723,7 +723,6 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     +   '<div class="setting-input"><input type="number" id="ri-exchange-lookback" value="' + config.lookback_days + '" min="1" max="365"></div>'
     + '</div>'
     + '</fieldset>'
-    + '<div class="settings-buttons"><button type="submit" class="primary">Save Settings</button></div>'
     + '<div id="ri-exchange-settings-message" class="mt-3"></div>'
     + '</form>';
 
@@ -740,11 +739,14 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     if (slot) slot.appendChild(buildAutoWarningBanner());
   }
 
+  // No per-form Save button: the Purchasing panel's sticky "Save Settings"
+  // bar is the single source of truth and calls saveAutomationSettings()
+  // alongside the global config save. We still stop any stray submit (e.g.
+  // Enter inside a number field) so it doesn't navigate the page.
   const form = document.getElementById('ri-exchange-settings-form');
   if (form) {
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      void saveAutomationSettings();
     });
   }
 
@@ -763,7 +765,7 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
   }
 }
 
-async function saveAutomationSettings(): Promise<void> {
+export async function saveAutomationSettings(): Promise<void> {
   const messageContainer = document.getElementById('ri-exchange-settings-message');
   if (!messageContainer) return;
 

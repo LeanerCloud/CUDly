@@ -28,15 +28,15 @@
     font-weight: 600;
 }
 
-/* Settings styles */
-#settings-section {
-    background: white;
-    padding: 2rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-#settings-section h2 {
+/* Settings panel chrome (white bg, padding, radius, shadow) comes from the
+ * .card class applied uniformly to #settings-section, #purchasing-panel,
+ * #accounts-section, #users-section, and #apikeys-section. This keeps all
+ * four sub-tabs visually consistent with the rest of the app's card layout.
+ */
+#settings-section h2,
+#purchasing-panel h2,
+#accounts-section h2,
+#users-section h2 {
     margin-bottom: 0.5rem;
     color: #333;
 }

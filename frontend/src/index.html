@@ -293,7 +293,7 @@
                     <button class="sub-tab-btn admin-only" data-settings-tab="accounts" role="tab" aria-selected="false">Accounts</button>
                     <button class="sub-tab-btn admin-only" data-settings-tab="users" role="tab" aria-selected="false">Users &amp; API Keys</button>
                 </div>
-                <section id="settings-section">
+                <section id="settings-section" class="card">
                     <h2>Global Configuration</h2>
                     <p class="settings-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
                     <div id="settings-loading" class="loading">Loading settings...</div>
@@ -369,7 +369,7 @@
                 </section>
 
                 <!-- Purchasing Section -->
-                <section id="purchasing-panel" style="display:none">
+                <section id="purchasing-panel" class="card" style="display:none">
                     <h2>Purchasing Settings</h2>
                     <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
 
@@ -574,7 +574,7 @@
                 </section>
 
                 <!-- User Management Section (Admin Only) -->
-                <section id="users-section" class="admin-only" style="display:none">
+                <section id="users-section" class="admin-only card" style="display:none">
                     <h2>User Management</h2>
                     <p class="settings-description">Manage users and their permissions.</p>
 
@@ -601,7 +601,7 @@
                 </section>
 
                 <!-- API Keys Section (Admin Only) -->
-                <section id="apikeys-section" class="admin-only" style="display:none">
+                <section id="apikeys-section" class="admin-only card" style="display:none">
                     <fieldset class="settings-category">
                         <legend>API Keys</legend>
                         <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>
