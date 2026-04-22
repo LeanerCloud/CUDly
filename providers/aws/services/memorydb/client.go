@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/memorydb/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/tagging"
 )
 
 // MemoryDBAPI defines the interface for MemoryDB operations (enables mocking)
@@ -291,39 +292,17 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	return nodeTypes, nil
 }
 
-// createPurchaseTags creates standard tags for the purchase. If source is a
-// non-empty CUDly surface (cudly-cli / cudly-web), a purchase-automation tag
-// is added so customers can filter CUDly-owned reserved nodes.
+// createPurchaseTags creates standard tags for the purchase. The tag shape
+// is shared across RDS/ElastiCache/MemoryDB via tagging.PurchasePairs; the
+// only per-service customizations are the Purpose string and the AWS
+// convention for the instance-type tag key.
 func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
-	tags := []types.Tag{
-		{
-			Key:   aws.String("Purpose"),
-			Value: aws.String("Reserved Node Purchase"),
-		},
-		{
-			Key:   aws.String("NodeType"),
-			Value: aws.String(rec.ResourceType),
-		},
-		{
-			Key:   aws.String("Region"),
-			Value: aws.String(rec.Region),
-		},
-		{
-			Key:   aws.String("PurchaseDate"),
-			Value: aws.String(time.Now().Format("2006-01-02")),
-		},
-		{
-			Key:   aws.String("Tool"),
-			Value: aws.String("CUDly"),
-		},
+	pairs := tagging.PurchasePairs(rec, "Reserved Node Purchase", "NodeType", source)
+	out := make([]types.Tag, len(pairs))
+	for i, p := range pairs {
+		out[i] = types.Tag{Key: aws.String(p.Key), Value: aws.String(p.Value)}
 	}
-	if source != "" {
-		tags = append(tags, types.Tag{
-			Key:   aws.String(common.PurchaseTagKey),
-			Value: aws.String(source),
-		})
-	}
-	return tags
+	return out
 }
 
 // getTermMonthsFromDuration converts duration in seconds to months

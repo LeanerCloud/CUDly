@@ -208,20 +208,6 @@ outstanding so future work has a clear starting point.
   GCP provider is reported as successful even when this account fails,
   so the operator only sees the issue if they tail logs.
 
-- **`createPurchaseTags` is triplicated across AWS services**:
-  `providers/aws/services/{rds,elasticache,memorydb}/client.go` each
-  carry an identical `createPurchaseTags(rec, source)` method with only
-  the `NodeType`/`ResourceType` and `Purpose` string differing. The
-  `purchase-automation` tag work (feat/purchase-automation-tag) extended
-  all three in lockstep, which is a scaling problem — the next tag
-  convention added across AWS RIs will need the same three-file edit.
-  Follow-up: extract to a shared helper, likely as
-  `common.BuildPurchaseTagMap(rec, source, purpose, nodeTypeKey)` in
-  `pkg/common` or `buildAWSPurchaseTags` in a new
-  `providers/aws/internal/tagging` package. Each service keeps only its
-  service-specific string constants. Deferred from the purchase-
-  automation change itself to keep that diff reviewable.
-
 - **OpenSearch RI tagging: best-effort, may be rejected by AWS**:
   Implemented in `providers/aws/services/opensearch/client.go`. The
   client now resolves the caller's AWS account ID via STS (cached on
