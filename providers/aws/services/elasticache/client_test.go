@@ -410,3 +410,26 @@ func TestClient_ConvertPaymentOption(t *testing.T) {
 		})
 	}
 }
+
+func TestCreatePurchaseTags_IncludesPurchaseAutomation(t *testing.T) {
+	c := &Client{}
+	rec := common.Recommendation{ResourceType: "cache.m5.large", Region: "us-east-1"}
+	tags := c.createPurchaseTags(rec, common.PurchaseSourceWeb)
+	var found bool
+	for _, tag := range tags {
+		if aws.ToString(tag.Key) == common.PurchaseTagKey {
+			assert.Equal(t, common.PurchaseSourceWeb, aws.ToString(tag.Value))
+			found = true
+		}
+	}
+	assert.True(t, found, "expected purchase-automation tag to be present when source is set")
+}
+
+func TestCreatePurchaseTags_OmitsPurchaseAutomationWhenSourceEmpty(t *testing.T) {
+	c := &Client{}
+	rec := common.Recommendation{ResourceType: "cache.m5.large", Region: "us-east-1"}
+	tags := c.createPurchaseTags(rec, "")
+	for _, tag := range tags {
+		assert.NotEqual(t, common.PurchaseTagKey, aws.ToString(tag.Key), "tag must be skipped when source is empty")
+	}
+}

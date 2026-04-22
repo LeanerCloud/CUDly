@@ -554,3 +554,26 @@ func TestClient_GetDurationString(t *testing.T) {
 		})
 	}
 }
+
+func TestCreatePurchaseTags_IncludesPurchaseAutomation(t *testing.T) {
+	c := &Client{}
+	rec := common.Recommendation{ResourceType: "db.m5.large", Region: "eu-west-1"}
+	tags := c.createPurchaseTags(rec, common.PurchaseSourceCLI)
+	var found bool
+	for _, tag := range tags {
+		if aws.ToString(tag.Key) == common.PurchaseTagKey {
+			assert.Equal(t, common.PurchaseSourceCLI, aws.ToString(tag.Value))
+			found = true
+		}
+	}
+	assert.True(t, found, "expected purchase-automation tag to be present when source is set")
+}
+
+func TestCreatePurchaseTags_OmitsPurchaseAutomationWhenSourceEmpty(t *testing.T) {
+	c := &Client{}
+	rec := common.Recommendation{ResourceType: "db.m5.large", Region: "eu-west-1"}
+	tags := c.createPurchaseTags(rec, "")
+	for _, tag := range tags {
+		assert.NotEqual(t, common.PurchaseTagKey, aws.ToString(tag.Key), "tag must be skipped when source is empty")
+	}
+}

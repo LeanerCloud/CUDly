@@ -125,7 +125,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		ReservedNodesOfferingId: aws.String(offeringID),
 		ReservationId:           aws.String(reservationID),
 		NodeCount:               aws.Int32(int32(rec.Count)),
-		Tags:                    c.createPurchaseTags(rec),
+		Tags:                    c.createPurchaseTags(rec, opts.Source),
 	}
 
 	response, err := c.client.PurchaseReservedNodesOffering(ctx, input)
@@ -291,9 +291,11 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	return nodeTypes, nil
 }
 
-// createPurchaseTags creates standard tags for the purchase
-func (c *Client) createPurchaseTags(rec common.Recommendation) []types.Tag {
-	return []types.Tag{
+// createPurchaseTags creates standard tags for the purchase. If source is a
+// non-empty CUDly surface (cudly-cli / cudly-web), a purchase-automation tag
+// is added so customers can filter CUDly-owned reserved nodes.
+func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
+	tags := []types.Tag{
 		{
 			Key:   aws.String("Purpose"),
 			Value: aws.String("Reserved Node Purchase"),
@@ -315,6 +317,13 @@ func (c *Client) createPurchaseTags(rec common.Recommendation) []types.Tag {
 			Value: aws.String("CUDly"),
 		},
 	}
+	if source != "" {
+		tags = append(tags, types.Tag{
+			Key:   aws.String(common.PurchaseTagKey),
+			Value: aws.String(source),
+		})
+	}
+	return tags
 }
 
 // getTermMonthsFromDuration converts duration in seconds to months

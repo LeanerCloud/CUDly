@@ -136,7 +136,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		ReservedDBInstancesOfferingId: aws.String(offeringID),
 		ReservedDBInstanceId:          aws.String(reservationID),
 		DBInstanceCount:               aws.Int32(int32(rec.Count)),
-		Tags:                          c.createPurchaseTags(rec),
+		Tags:                          c.createPurchaseTags(rec, opts.Source),
 	}
 
 	response, err := c.client.PurchaseReservedDBInstancesOffering(ctx, input)
@@ -356,9 +356,11 @@ func (c *Client) normalizeEngineName(engine string) string {
 	return engineLower
 }
 
-// createPurchaseTags creates standard tags for the purchase
-func (c *Client) createPurchaseTags(rec common.Recommendation) []types.Tag {
-	return []types.Tag{
+// createPurchaseTags creates standard tags for the purchase. If source is a
+// non-empty CUDly surface (cudly-cli / cudly-web), a purchase-automation tag
+// is added so customers can filter CUDly-owned RIs in their cost tools.
+func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
+	tags := []types.Tag{
 		{
 			Key:   aws.String("Purpose"),
 			Value: aws.String("Reserved Instance Purchase"),
@@ -380,4 +382,11 @@ func (c *Client) createPurchaseTags(rec common.Recommendation) []types.Tag {
 			Value: aws.String("CUDly"),
 		},
 	}
+	if source != "" {
+		tags = append(tags, types.Tag{
+			Key:   aws.String(common.PurchaseTagKey),
+			Value: aws.String(source),
+		})
+	}
+	return tags
 }

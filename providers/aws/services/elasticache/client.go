@@ -129,7 +129,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		ReservedCacheNodesOfferingId: aws.String(offeringID),
 		CacheNodeCount:               aws.Int32(int32(rec.Count)),
 		ReservedCacheNodeId:          aws.String(reservationID),
-		Tags:                         c.createPurchaseTags(rec),
+		Tags:                         c.createPurchaseTags(rec, opts.Source),
 	}
 
 	response, err := c.client.PurchaseReservedCacheNodesOffering(ctx, input)
@@ -298,9 +298,11 @@ func (c *Client) convertPaymentOption(option string) string {
 	}
 }
 
-// createPurchaseTags creates standard tags for the purchase
-func (c *Client) createPurchaseTags(rec common.Recommendation) []types.Tag {
-	return []types.Tag{
+// createPurchaseTags creates standard tags for the purchase. If source is a
+// non-empty CUDly surface (cudly-cli / cudly-web), a purchase-automation tag
+// is added so customers can filter CUDly-owned reserved cache nodes.
+func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
+	tags := []types.Tag{
 		{
 			Key:   aws.String("Purpose"),
 			Value: aws.String("Reserved Cache Node Purchase"),
@@ -322,4 +324,11 @@ func (c *Client) createPurchaseTags(rec common.Recommendation) []types.Tag {
 			Value: aws.String("CUDly"),
 		},
 	}
+	if source != "" {
+		tags = append(tags, types.Tag{
+			Key:   aws.String(common.PurchaseTagKey),
+			Value: aws.String(source),
+		})
+	}
+	return tags
 }
