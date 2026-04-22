@@ -124,6 +124,17 @@ admin_email = "admin@example.com"
 # admin_password = "YourSecurePassword123!"
 
 # ==============================================
+# Approval email FROM address
+# ==============================================
+# FROM address for purchase approval emails. When left empty, the default
+# is "noreply@${subdomain_zone_name}" — which requires both subdomain_zone_name
+# and the matching SES DKIM records to be set (see ses.tf, gated on
+# length(frontend_domain_names) > 0). For deployments running on a bare
+# Lambda Function URL with no custom domain, set this explicitly to an
+# SES-verified identity in the target AWS account, e.g.:
+# from_email = "noreply@example.com"
+
+# ==============================================
 # Additional Environment Variables
 # ==============================================
 

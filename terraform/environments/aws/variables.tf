@@ -184,6 +184,22 @@ variable "admin_email" {
   type        = string
 }
 
+variable "from_email" {
+  description = <<-EOT
+    FROM address for outbound approval emails (SES SendEmail). When empty,
+    falls back to "noreply@${"$"}{var.subdomain_zone_name}" — which only produces
+    a valid address on deployments that also set subdomain_zone_name.
+    Deployments running on a bare Lambda Function URL (no custom domain,
+    no subdomain_zone_name) MUST set this explicitly to an address that
+    is SES-verified in the target AWS account. The derived domain part is
+    also passed to the compute module's email_from_domain so the Lambda's
+    SES IAM policy scopes to the right identity/* ARN without granting
+    wildcard SES access.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "admin_password" {
   description = "Optional initial admin password (skips password reset requirement)"
   type        = string

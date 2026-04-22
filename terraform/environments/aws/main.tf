@@ -57,6 +57,29 @@ locals {
   # Priority: custom domain > CDN domain > compute default endpoint
   dashboard_url = length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" : ""
 
+  # FROM_EMAIL resolution order:
+  #   1. Explicit var.from_email (use when subdomain_zone_name is unset
+  #      but a different SES-verified identity exists in the account).
+  #   2. noreply@<subdomain_zone_name> (the default for deployments with
+  #      a custom domain and matching DKIM records in ses.tf).
+  #   3. Empty string — handed to the Lambda env, which the app's
+  #      Sender validates and maps to ErrNoFromEmail so the UI surfaces
+  #      "FROM_EMAIL not configured" instead of producing SES 400s from
+  #      a malformed "noreply@" (trailing empty domain).
+  effective_from_email = (
+    var.from_email != "" ? var.from_email :
+    var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" :
+    ""
+  )
+  # Derive the domain half of effective_from_email for SES IAM scoping.
+  # An empty string disables the SES policy entirely in the compute
+  # module (its count gate on email_from_domain is the kill switch for
+  # "no SES send permissions" deployments).
+  effective_email_from_domain = (
+    local.effective_from_email == "" ? "" :
+    split("@", local.effective_from_email)[1]
+  )
+
   common_tags = {
     Project     = var.project_name
     Environment = var.environment

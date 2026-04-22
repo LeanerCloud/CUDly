@@ -81,4 +81,10 @@ recommendation_schedule = "rate(1 day)"
 #   TF_VAR_image_uri      = (from build step)
 #   TF_VAR_subdomain_zone_name    = cudly.leanercloud.com
 #   TF_VAR_frontend_domain_names  = ["lambda-dev.cudly.leanercloud.com"]
+#   TF_VAR_from_email     = ${{ secrets.FROM_EMAIL }}
+#     # Required when subdomain_zone_name is unset. Must be an SES-verified
+#     # identity in the target account. Without it, FROM_EMAIL reaches the
+#     # Lambda as "" and the Sender returns ErrNoFromEmail, which the UI
+#     # surfaces as "FROM_EMAIL not configured for this deployment" on the
+#     # Purchase History page.
 # ==============================================

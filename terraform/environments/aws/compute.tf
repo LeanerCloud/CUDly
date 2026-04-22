@@ -61,7 +61,7 @@ module "compute_lambda" {
       STATIC_DIR                           = "/app/static"
       DASHBOARD_URL                        = local.dashboard_url
       CORS_ALLOWED_ORIGIN                  = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      FROM_EMAIL                           = "noreply@${var.subdomain_zone_name}"
+      FROM_EMAIL                           = local.effective_from_email
       CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN = module.secrets.credential_encryption_key_secret_arn
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                   = "aws"
@@ -80,7 +80,10 @@ module "compute_lambda" {
   # SES From domain — scopes the Lambda's SES policy to identity/{domain}
   # plus configuration-set/{stack}*. Leave empty to disable SES entirely
   # (deployments without email notifications don't get any SES permissions).
-  email_from_domain = var.subdomain_zone_name
+  # Derived from effective_from_email so an override via var.from_email
+  # correctly scopes IAM to whatever identity is being used (e.g.
+  # "leanercloud.com" when FROM_EMAIL is contact@leanercloud.com).
+  email_from_domain = local.effective_email_from_domain
 
   tags = local.common_tags
 
@@ -165,7 +168,7 @@ module "compute_fargate" {
       STATIC_DIR                           = "/app/static"
       DASHBOARD_URL                        = local.dashboard_url
       CORS_ALLOWED_ORIGIN                  = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      FROM_EMAIL                           = "noreply@${var.subdomain_zone_name}"
+      FROM_EMAIL                           = local.effective_from_email
       CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN = module.secrets.credential_encryption_key_secret_arn
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                   = "aws"
@@ -181,7 +184,7 @@ module "compute_fargate" {
   cross_account_role_name_prefix       = "CUDly"
   enable_org_discovery                 = true
   credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn
-  email_from_domain                    = var.subdomain_zone_name
+  email_from_domain                    = local.effective_email_from_domain
 
   tags = local.common_tags
 
