@@ -151,23 +151,27 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	}
 
 	// Collect recommendations from each enabled provider, tracking per-provider
-	// outcomes so persistence can scope stale-row eviction to providers that
-	// actually ran.
+	// outcomes so persistence can scope stale-row eviction to (provider, account)
+	// pairs that actually ran. A partial collection (e.g. one of three Azure
+	// subscriptions failed) preserves the failed pairs' previous-cycle rows
+	// instead of wiping the whole provider's slice.
 	var allRecommendations []config.RecommendationRecord
 	var totalSavings float64
 	var successfulProviders []string
+	var successfulCollects []config.SuccessfulCollect
 	failedProviders := map[string]string{}
 
 	for _, providerName := range globalCfg.EnabledProviders {
 		logging.Infof("Collecting recommendations from %s...", providerName)
 
-		recs, err := s.collectProviderRecommendations(ctx, providerName, globalCfg)
+		recs, succeededAccountIDs, err := s.collectProviderRecommendations(ctx, providerName, globalCfg)
 		if err != nil {
 			logging.Errorf("Failed to collect %s recommendations: %v", providerName, err)
 			failedProviders[providerName] = err.Error()
 			continue
 		}
 		successfulProviders = append(successfulProviders, providerName)
+		successfulCollects = append(successfulCollects, expandSuccessfulCollects(providerName, succeededAccountIDs)...)
 
 		for _, rec := range recs {
 			totalSavings += rec.Savings
@@ -178,7 +182,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	logging.Infof("Collected %d recommendations with $%.2f/month potential savings",
 		len(allRecommendations), totalSavings)
 
-	s.persistCollection(ctx, allRecommendations, successfulProviders, failedProviders)
+	s.persistCollection(ctx, allRecommendations, successfulCollects, failedProviders)
 
 	// Send notification if we have recommendations
 	if len(allRecommendations) > 0 && totalSavings > 0 {
@@ -223,16 +227,17 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 //
 //   - Upserts each row by natural key so re-collected recommendations
 //     reuse the same PK across runs (stable IDs for frontend).
-//   - Evicts stale rows (collected_at < $now) but ONLY for providers that
-//     successfully collected in this run — older rows from a provider
-//     whose collect failed stay visible so the dashboard isn't blanked
-//     out by transient cloud-API failures.
+//   - Evicts stale rows (collected_at < $now) but ONLY for the
+//     (provider, account) pairs that successfully collected in this run.
+//     Failed pairs' rows stay visible so the dashboard isn't blanked out
+//     by transient cloud-API failures, even when one of several accounts
+//     under the same provider succeeded.
 //
 // On any failure (including partial), the collection error is additionally
 // recorded in recommendations_state so the frontend banner renders while
 // the user still sees the valid rows we managed to upsert.
-func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulProviders []string, failedProviders map[string]string) {
-	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulProviders); err != nil {
+func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string) {
+	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects); err != nil {
 		logging.Errorf("Failed to persist recommendations: %v", err)
 		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
 			logging.Errorf("Failed to record write error: %v", setErr)
@@ -258,8 +263,14 @@ func joinProviderErrors(failed map[string]string) string {
 	return strings.Join(parts, "; ")
 }
 
-// collectProviderRecommendations collects recommendations from a specific provider
-func (s *Scheduler) collectProviderRecommendations(ctx context.Context, providerName string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+// collectProviderRecommendations collects recommendations from a specific
+// provider. The succeededAccountIDs return value is the per-account roster
+// that completed in this run; the scheduler threads it into
+// []config.SuccessfulCollect for account-scoped eviction. For the AWS
+// ambient path (no registered accounts) the slice contains a single empty
+// string sentinel that expandSuccessfulCollects translates into a nil
+// CloudAccountID. Provider-level errors propagate unchanged.
+func (s *Scheduler) collectProviderRecommendations(ctx context.Context, providerName string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	switch providerName {
 	case "aws":
 		return s.collectAWSRecommendations(ctx, globalCfg)
@@ -269,28 +280,53 @@ func (s *Scheduler) collectProviderRecommendations(ctx context.Context, provider
 		return s.collectGCPRecommendations(ctx, globalCfg)
 	default:
 		logging.Warnf("Unknown provider: %s", providerName)
-		return nil, nil
+		return nil, nil, nil
 	}
+}
+
+// expandSuccessfulCollects converts the per-account ID slice returned by
+// each provider collect into the typed []SuccessfulCollect the persist
+// layer expects. The empty-string sentinel is translated into a nil
+// CloudAccountID so the eviction's account_key join uses uuid.Nil
+// (matching the AWS ambient-credential path).
+func expandSuccessfulCollects(providerName string, accountIDs []string) []config.SuccessfulCollect {
+	out := make([]config.SuccessfulCollect, 0, len(accountIDs))
+	for _, id := range accountIDs {
+		sc := config.SuccessfulCollect{Provider: providerName}
+		if id != "" {
+			id := id // pin
+			sc.CloudAccountID = &id
+		}
+		out = append(out, sc)
+	}
+	return out
 }
 
 // collectAWSRecommendations fans out across all enabled AWS accounts.
 // If no accounts are registered and CUDly runs on AWS, it falls back to
 // ambient credentials (backward compatibility with single-account setups).
-func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+// Returns the merged recommendations + the IDs of accounts that succeeded
+// (or [""] for the ambient path so the caller can synthesise a nil
+// CloudAccountID for eviction).
+func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	accounts := s.enabledAccounts(ctx, "aws")
 
 	// Backward-compatible fallback: no registered accounts → ambient credentials
 	if len(accounts) == 0 {
-		return s.collectAWSAmbient(ctx, globalCfg)
+		recs, err := s.collectAWSAmbient(ctx, globalCfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		return recs, []string{""}, nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
 		return s.collectAWSForAccount(ctx, globalCfg, acct)
 	})
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
-		return nil, errAllAccountsFailed("AWS", outcome)
+		return nil, nil, errAllAccountsFailed("AWS", outcome)
 	}
-	return recs, nil
+	return recs, outcome.SucceededAccountIDs, nil
 }
 
 // accountOutcome is the per-provider summary returned by
@@ -302,10 +338,17 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 // banner shows the failure. Partial success (some accounts succeeded)
 // stays a success at the provider level — the per-account [ERROR]
 // logs are the operator signal for the failed minority.
+//
+// SucceededAccountIDs lists the IDs of accounts whose collection
+// completed; the scheduler threads these into the
+// []SuccessfulCollect slice that drives UpsertRecommendations'
+// account-scoped eviction. Order is not preserved — the eviction
+// query treats it as a set.
 type accountOutcome struct {
-	SucceededCount int
-	FailedCount    int
-	LastErr        string // most-recent per-account error message, for surfacing in the banner
+	SucceededCount      int
+	FailedCount         int
+	LastErr             string   // most-recent per-account error message, for surfacing in the banner
+	SucceededAccountIDs []string // IDs of accounts that succeeded this run
 }
 
 // fanOutPerAccount runs fn concurrently across accounts, bounded by the
@@ -348,6 +391,7 @@ func fanOutPerAccount(
 			mu.Lock()
 			all = append(all, recs...)
 			outcome.SucceededCount++
+			outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
 			mu.Unlock()
 			return nil
 		})
@@ -395,18 +439,18 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 
 // collectAzureRecommendations fans out across all enabled Azure accounts,
 // resolving per-account federated credentials via the KMS signer.
-func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	accounts := s.enabledAccounts(ctx, "azure")
 	if len(accounts) == 0 {
 		logging.Info("No enabled Azure accounts — skipping Azure recommendations")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount)
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
-		return nil, errAllAccountsFailed("Azure", outcome)
+		return nil, nil, errAllAccountsFailed("Azure", outcome)
 	}
-	return recs, nil
+	return recs, outcome.SucceededAccountIDs, nil
 }
 
 func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
@@ -436,18 +480,18 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 
 // collectGCPRecommendations fans out across all enabled GCP accounts,
 // resolving per-account federated credentials via the KMS signer.
-func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, error) {
+func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	accounts := s.enabledAccounts(ctx, "gcp")
 	if len(accounts) == 0 {
 		logging.Info("No enabled GCP accounts — skipping GCP recommendations")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount)
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
-		return nil, errAllAccountsFailed("GCP", outcome)
+		return nil, nil, errAllAccountsFailed("GCP", outcome)
 	}
-	return recs, nil
+	return recs, outcome.SucceededAccountIDs, nil
 }
 
 func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {

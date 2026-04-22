@@ -432,7 +432,7 @@ func (m *MockConfigStore) DeleteAccountRegistration(_ context.Context, _ string)
 func (m *MockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
 	return nil
 }
-func (m *MockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []string) error {
+func (m *MockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {
 	return nil
 }
 func (m *MockConfigStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {

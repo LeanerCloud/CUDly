@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -53,32 +54,45 @@ func (s *PostgresStore) ReplaceRecommendations(ctx context.Context, collectedAt 
 
 // UpsertRecommendations is the incremental write path: it upserts each row
 // by natural key (cloud_account_id, provider, service, region,
-// resource_type) and then evicts stale rows for the set of providers that
-// successfully collected in this run. Providers whose collection failed
-// are NOT in successfulProviders and their stale rows stay — callers see
-// older data with a banner rather than a blank section.
-func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulProviders []string) error {
+// resource_type, term, payment_option) and then evicts stale rows for the
+// set of (provider, account) pairs that successfully collected in this run.
+// Pairs whose collection failed are NOT in successfulCollects and their
+// stale rows stay — callers see older data with a banner rather than a
+// blank section.
+//
+// Migration 000032 broadened the natural key to include term + payment_option,
+// so per-rec ON CONFLICT no longer collides on SQLSTATE 21000.
+//
+// The eviction predicate uses (provider, account_key) IN (unnest($2, $3))
+// where account_key matches the generated column on the table — nil
+// CloudAccountID maps to uuid.Nil at the Go boundary, matching the
+// COALESCE(cloud_account_id, '00000000-...') rule the table applies on
+// insert. This collapses ambient and registered identities consistently
+// on both sides of the join.
+func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Migration 000032 broadened the natural key to include term + payment_option, so per-rec ON CONFLICT no longer collides on SQLSTATE 21000.
 	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
 		return err
 	}
 
-	// Evict rows that weren't re-seen in this collection, but only for
-	// providers we actually collected from. Rows from a provider whose
-	// collect failed this run keep their older collected_at and stay
-	// visible.
-	if len(successfulProviders) > 0 {
+	if len(successfulCollects) > 0 {
+		providers, accountKeys, err := successfulCollectArrays(successfulCollects)
+		if err != nil {
+			return fmt.Errorf("failed to materialise successful-collect arrays: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM recommendations
 			 WHERE collected_at < $1
-			   AND provider     = ANY($2)
-		`, collectedAt, successfulProviders); err != nil {
+			   AND (provider, account_key) IN (
+			       SELECT p, a
+			         FROM unnest($2::text[], $3::uuid[]) AS t(p, a)
+			   )
+		`, collectedAt, providers, accountKeys); err != nil {
 			return fmt.Errorf("failed to evict stale rows: %w", err)
 		}
 	}
@@ -96,6 +110,29 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		return fmt.Errorf("failed to commit upsert: %w", err)
 	}
 	return nil
+}
+
+// successfulCollectArrays converts the SuccessfulCollect slice into the two
+// parallel arrays the eviction unnest() expects. nil CloudAccountID becomes
+// uuid.Nil so the join matches the generated account_key column for
+// ambient-credential rows; non-nil pointers go through uuid.Parse with
+// errors surfaced.
+func successfulCollectArrays(scs []SuccessfulCollect) (providers []string, accountKeys []uuid.UUID, err error) {
+	providers = make([]string, len(scs))
+	accountKeys = make([]uuid.UUID, len(scs))
+	for i, sc := range scs {
+		providers[i] = sc.Provider
+		if sc.CloudAccountID == nil {
+			accountKeys[i] = uuid.Nil
+			continue
+		}
+		parsed, perr := uuid.Parse(*sc.CloudAccountID)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("invalid cloud_account_id %q for provider %q: %w", *sc.CloudAccountID, sc.Provider, perr)
+		}
+		accountKeys[i] = parsed
+	}
+	return providers, accountKeys, nil
 }
 
 // insertRecommendationsBatched performs a batched multi-row INSERT of recs

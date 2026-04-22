@@ -125,3 +125,26 @@ New integration test `TestPostgresStore_UpsertRecommendations_StoresAllTermVaria
 **Verification:** `go test -tags=integration -count=1 ./internal/config/... ./internal/database/postgres/migrations/...`
 
 **Effort:** `medium` (cross-cuts schema + write path + remove the dedupe helper; needs the multi-commit sequencing above so production is never in an inconsistent state).
+
+## ~~MEDIUM: Eviction wipes failed accounts' rows when ANY account in the same provider succeeds~~ — RESOLVED
+
+**File**: `internal/config/store_postgres_recommendations.go::UpsertRecommendations` (eviction `DELETE FROM recommendations WHERE collected_at < $1 AND provider = ANY($2)`) + `internal/scheduler/scheduler.go::persistCollection`
+
+**Description**: Sibling bug to the `fanOutPerAccount` partial-account-error fix above. Even after the per-provider error tracking landed, the eviction predicate was still scoped to `provider = ANY($2)`. So when 1 of 3 Azure subscriptions succeeded, all three subscriptions' previous-cycle rows were evicted — the dashboard for the failed two went blank until the next successful collect for them.
+
+Concretely: an Azure tenant with subs `A`, `B`, `C`. Cycle N succeeds for all three. Cycle N+1 only succeeds for `A` (e.g. `B`'s federation token expires). The eviction query deletes every `provider='azure' AND collected_at < $now` row, taking `B`'s and `C`'s with it.
+
+**Impact**: A single per-account credential expiry could blank ~⅔ of the dashboard for an Azure tenant for the rest of a release cycle (until the next successful cycle for the remaining accounts), even though the operator-visible signal said "Azure: 1/3 accounts collected".
+
+**Status:** ✔️ Resolved
+
+**Resolved by:** the eviction predicate is now scoped to (provider, account_key) pairs via a new `[]SuccessfulCollect{Provider, *CloudAccountID}` parameter on `UpsertRecommendations`. The scheduler builds the slice from `accountOutcome.SucceededAccountIDs` (extended in this commit) and passes it through `persistCollection`. nil `CloudAccountID` is converted to `uuid.Nil` at the Go boundary so the join matches the generated `account_key` column for ambient-credential rows; `uuid.Nil` is distinct from any real account UUID, so ambient and registered identities are evicted independently.
+
+The new SQL eviction is `(provider, account_key) IN (SELECT p, a FROM unnest($2::text[], $3::uuid[]) AS t(p, a))`, with two parallel arrays bound from the `[]SuccessfulCollect` slice. Empty `successfulCollects` (every provider + every account failed) makes the IN-list empty → eviction is a no-op → stale rows from the last successful run remain visible.
+
+**Tests** (in `internal/config/store_postgres_recommendations_test.go`):
+
+- `TestPostgresStore_UpsertRecommendations_AccountScopedEviction` — two Azure accounts, partial-collect at t1 only includes acct-1; assert acct-2's rows survive.
+- `TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist` — ambient (nil CloudAccountID) + registered AWS row at t0; partial-collect at t1 only includes the registered account; assert ambient row survives.
+
+The two existing tests (`PartialCollect` for cross-provider and `EvictsStaleInSuccessfulProvider` for same-account stale eviction) were updated to the new `[]SuccessfulCollect` shape and continue to pass.

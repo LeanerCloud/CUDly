@@ -524,8 +524,8 @@ func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedA
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulProviders []string) error {
-	args := m.Called(ctx, collectedAt, recs, successfulProviders)
+func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
+	args := m.Called(ctx, collectedAt, recs, successfulCollects)
 	return args.Error(0)
 }
 

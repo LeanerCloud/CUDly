@@ -175,6 +175,23 @@ type RecommendationsFreshness struct {
 	LastCollectionError *string    `json:"last_collection_error"`
 }
 
+// SuccessfulCollect identifies a (provider, account) pair whose collection
+// completed in the current cycle. UpsertRecommendations scopes the
+// stale-row eviction DELETE to the union of these pairs so a partially-
+// failed provider preserves the failed accounts' previous-cycle rows
+// (the dashboard for those accounts isn't blanked out by transient
+// cloud-API failures).
+//
+// CloudAccountID is nil for the AWS ambient-credentials path (no
+// registered account); the eviction collapses nil to the zero UUID via
+// the same generated-column rule that applies to inserts, so ambient
+// rows are evicted independently of any registered-account rows under
+// the same provider.
+type SuccessfulCollect struct {
+	Provider       string
+	CloudAccountID *string
+}
+
 // RIUtilizationCacheEntry is a single cached Cost Explorer
 // GetReservationUtilization result keyed by (region, lookback_days).
 // Payload is the JSON encoding of the caller's utilization slice — kept

@@ -315,11 +315,11 @@ func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedA
 	}
 	return m.Called(ctx, collectedAt, recs).Error(0)
 }
-func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulProviders []string) error {
+func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
 	if !m.hasExpectation("UpsertRecommendations") {
 		return nil
 	}
-	return m.Called(ctx, collectedAt, recs, successfulProviders).Error(0)
+	return m.Called(ctx, collectedAt, recs, successfulCollects).Error(0)
 }
 func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	if !m.hasExpectation("ListStoredRecommendations") {
@@ -614,7 +614,7 @@ func TestScheduler_CollectAWSRecommendations(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.Error(t, err) // Should error due to mock provider failing
 	assert.Nil(t, recs)
 }
@@ -632,7 +632,7 @@ func TestScheduler_CollectAzureRecommendations_NoAccounts(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -650,7 +650,7 @@ func TestScheduler_CollectGCPRecommendations_NoAccounts_Alt(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -688,7 +688,7 @@ func TestScheduler_CollectProviderRecommendations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
-			recs, err := scheduler.collectProviderRecommendations(ctx, tt.provider, globalCfg)
+			recs, _, err := scheduler.collectProviderRecommendations(ctx, tt.provider, globalCfg)
 			if tt.expectError {
 				require.Error(t, err)
 			} else {
@@ -1166,7 +1166,7 @@ func TestScheduler_persistCollection_PartialFailure(t *testing.T) {
 	recs := []config.RecommendationRecord{
 		{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1"},
 	}
-	successful := []string{"aws"}
+	successful := []config.SuccessfulCollect{{Provider: "aws"}}
 	failed := map[string]string{"azure": "auth failed", "gcp": "quota"}
 
 	mockStore.On("UpsertRecommendations", ctx, mock.Anything, recs, successful).Return(nil)
@@ -1192,7 +1192,11 @@ func TestScheduler_persistCollection_FullSuccess(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
 	recs := []config.RecommendationRecord{{ID: "r1", Provider: "aws"}}
-	successful := []string{"aws", "azure", "gcp"}
+	successful := []config.SuccessfulCollect{
+		{Provider: "aws"},
+		{Provider: "azure"},
+		{Provider: "gcp"},
+	}
 
 	mockStore.On("UpsertRecommendations", ctx, mock.Anything, recs, successful).Return(nil)
 
@@ -1317,7 +1321,7 @@ func TestScheduler_CollectAWSRecommendations_Success(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 	assert.Equal(t, "ec2", recs[0].Service)
@@ -1343,7 +1347,7 @@ func TestScheduler_CollectAWSRecommendations_RecClientError(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
@@ -1370,7 +1374,7 @@ func TestScheduler_CollectAWSRecommendations_GetRecsError(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
@@ -1403,7 +1407,7 @@ func TestScheduler_CollectAzureRecommendations_Success(t *testing.T) {
 		config: mockStore,
 	}
 
-	recs, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	// In test environment without Azure credentials, 0 recommendations is expected
 	// (the error is logged and skipped). The test validates the per-account loop runs.
@@ -1426,7 +1430,7 @@ func TestScheduler_CollectGCPRecommendations_NoAccounts(t *testing.T) {
 		config: mockStore,
 	}
 
-	recs, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Len(t, recs, 0)
 }
@@ -1515,7 +1519,7 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 }

@@ -280,11 +280,11 @@ func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedA
 	}
 	return m.Called(ctx, collectedAt, recs).Error(0)
 }
-func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulProviders []string) error {
+func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
 	if !m.hasRecExpectation("UpsertRecommendations") {
 		return nil
 	}
-	return m.Called(ctx, collectedAt, recs, successfulProviders).Error(0)
+	return m.Called(ctx, collectedAt, recs, successfulCollects).Error(0)
 }
 func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	if !m.hasRecExpectation("ListStoredRecommendations") {

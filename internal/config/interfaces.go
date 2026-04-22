@@ -75,10 +75,12 @@ type StoreInterface interface {
 	// dashboard serves provider-switch clicks from SQL instead of live cloud
 	// API calls). ReplaceRecommendations is the "force full resync" path;
 	// UpsertRecommendations is the steady-state write path and takes a list
-	// of successful providers so partial-collect failures don't wipe
-	// healthy rows from providers whose collection didn't run.
+	// of (provider, account) pairs that successfully collected this cycle.
+	// Stale-row eviction is scoped to that union so a partially-failed
+	// provider preserves the failed accounts' previous-cycle rows. See
+	// SuccessfulCollect for the per-row semantics.
 	ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error
-	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulProviders []string) error
+	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error

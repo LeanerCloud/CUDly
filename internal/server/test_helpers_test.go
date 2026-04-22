@@ -190,7 +190,7 @@ func (m *mockConfigStoreForHealth) DeleteAccountRegistration(_ context.Context, 
 func (m *mockConfigStoreForHealth) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
 	return nil
 }
-func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []string) error {
+func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {
 	return nil
 }
 func (m *mockConfigStoreForHealth) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
