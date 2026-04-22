@@ -16,6 +16,19 @@ type RIInfo struct {
 	InstanceCount       int32
 	OfferingClass       string  // must be "convertible" — standard RIs cannot be exchanged
 	NormalizationFactor float64 // AWS normalization factor for the instance size
+	// MonthlyCost is the effective per-instance per-month price (amortised
+	// upfront + recurring charges, AWS-canonical 730 hours per month).
+	// Used by the local passesDollarUnitsCheck pre-filter that gates
+	// cross-family alternatives. Zero when the caller didn't compute it
+	// (e.g. older callers that only need primary-target analysis); the
+	// pre-filter treats zero as "skip the check" so existing behaviour
+	// is preserved.
+	MonthlyCost float64
+	// CurrencyCode is the ISO-4217 currency the prices are denominated
+	// in (typically "USD"). Used by the cross-family check to refuse
+	// comparisons across currencies. Empty matches the same "skip"
+	// semantics as MonthlyCost == 0.
+	CurrencyCode string
 }
 
 // UtilizationInfo provides utilization data for a specific RI.
@@ -37,6 +50,18 @@ type OfferingOption struct {
 	InstanceType         string  `json:"instance_type"`
 	OfferingID           string  `json:"offering_id"`
 	EffectiveMonthlyCost float64 `json:"effective_monthly_cost"`
+	// NormalizationFactor is the AWS normalization factor for the
+	// offering's instance size — needed by the local
+	// passesDollarUnitsCheck pre-filter that gates which cross-family
+	// alternatives surface in the UI. Populated by FindConvertibleOfferings;
+	// zero on missing means the alternative cannot be safely compared
+	// and the pre-filter excludes it.
+	NormalizationFactor float64 `json:"normalization_factor,omitempty"`
+	// CurrencyCode is the ISO-4217 currency the EffectiveMonthlyCost is
+	// denominated in (typically "USD"). The pre-filter requires source
+	// and target currencies to match; empty on either side falls back to
+	// "skip the currency guard" so today's USD-only fixtures stay green.
+	CurrencyCode string `json:"currency_code,omitempty"`
 }
 
 // OfferingLookup is the signature of the closure that resolves
@@ -78,12 +103,14 @@ type ReshapeRecommendation struct {
 // broadens their options without pushing them into shapes that will
 // fail the AWS exchange-units check at quote time.
 //
-// Scope discipline: only the mainstream general/compute/memory
-// families and the burstable t-family are listed. Specialty (p*/g*/
-// x*/hpc*) and legacy-generation (m4/c4/r3) families are deliberately
-// omitted — those exchanges have awkward $-units and frequently fail
-// at AWS level, so suggesting them would hurt user trust more than it
-// helps. Tracked as a follow-up in known-issues.md.
+// Specialty (GPU / HPC) and legacy-generation families are now also
+// included; the new local passesDollarUnitsCheck pre-filter (applied
+// in fillAlternativesFromOfferings) drops any alternative whose
+// (NormalizationFactor × EffectiveMonthlyCost) wouldn't survive AWS's
+// runtime exchange-validity rule, so suggestions stay actionable
+// without a per-pair GetReservedInstancesExchangeQuote API call.
+// False positives still go through the existing auto.go IsValidExchange
+// skip path at execution time.
 var peerFamilyGroups = map[string][]string{
 	// general-purpose
 	"m5":  {"m5", "m6i", "m7g"},
@@ -104,6 +131,52 @@ var peerFamilyGroups = map[string][]string{
 	"t3":  {"t3", "t3a", "t4g"},
 	"t3a": {"t3", "t3a", "t4g"},
 	"t4g": {"t3", "t3a", "t4g"},
+	// Specialty: GPU / inference / HPC. Cross-family within each
+	// group; the $-units check below filters unviable pairs.
+	"p3":     {"p3", "p4d", "p5"},
+	"p4d":    {"p3", "p4d", "p5"},
+	"p5":     {"p3", "p4d", "p5"},
+	"g4dn":   {"g4dn", "g5"},
+	"g5":     {"g4dn", "g5"},
+	"hpc6a":  {"hpc6a", "hpc6id", "hpc7g"},
+	"hpc6id": {"hpc6a", "hpc6id", "hpc7g"},
+	"hpc7g":  {"hpc6a", "hpc6id", "hpc7g"},
+	// Legacy generations — useful when operators want to migrate
+	// off a legacy family to the current generation without
+	// changing shape entirely. The $-units check makes most legacy
+	// → current moves viable for the same size.
+	"m4": {"m4", "m5"},
+	"c4": {"c4", "c5"},
+	"r3": {"r3", "r4", "r5"},
+	"r4": {"r3", "r4", "r5"},
+}
+
+// passesDollarUnitsCheck approximates AWS's exchange-validity rule
+// locally: a target offering passes if (target.NF × target.EMC) >=
+// (srcNF × srcMonthlyCost). AWS's actual rule is two parallel
+// ≥-checks (new upfront ≥ original AND new recurring ≥ original);
+// the single product approximates both because EffectiveMonthlyCost
+// folds upfront amortisation + recurring + usage into one number.
+//
+// Currency must match between source and target. Empty CurrencyCode
+// on either side is treated as "skip the currency guard" so today's
+// USD-only fixtures and call-sites that don't populate it stay
+// green.
+//
+// The approximation can produce false positives — those are caught
+// at exchange time by the existing auto.go skip path on
+// IsValidExchange=false. The win: zero per-pair
+// GetReservedInstancesExchangeQuote API calls during recommendation
+// generation, which used to make cross-family alternatives
+// prohibitively expensive to surface.
+func passesDollarUnitsCheck(srcNF, srcMonthlyCost float64, srcCurrency string, target OfferingOption) bool {
+	if srcCurrency != "" && target.CurrencyCode != "" && srcCurrency != target.CurrencyCode {
+		return false
+	}
+	if srcNF <= 0 || target.EffectiveMonthlyCost <= 0 || target.NormalizationFactor <= 0 {
+		return false
+	}
+	return target.NormalizationFactor*target.EffectiveMonthlyCost >= srcNF*srcMonthlyCost
 }
 
 // candidateFamilies returns the peer families (including sourceFamily
@@ -326,7 +399,14 @@ func AnalyzeReshapingWithOfferings(
 		return recs
 	}
 
-	fillAlternativesFromOfferings(recs, offerings)
+	// Build the RI-by-ID lookup so the per-rec dollar-units pre-filter
+	// can resolve source NF / MonthlyCost / CurrencyCode without
+	// extending ReshapeRecommendation with internal-only fields.
+	risByID := make(map[string]RIInfo, len(ris))
+	for _, r := range ris {
+		risByID[r.ID] = r
+	}
+	fillAlternativesFromOfferings(recs, offerings, risByID)
 	return recs
 }
 
@@ -356,13 +436,21 @@ func distinctCandidateTypes(recs []ReshapeRecommendation) []string {
 // fillAlternativesFromOfferings replaces each rec's AlternativeTargets
 // with the matching OfferingOption from the lookup result. Missing
 // instance types are silently dropped (per the doc on
-// AnalyzeReshapingWithOfferings). The output is sorted ascending by
-// EffectiveMonthlyCost so the UI shows cheapest alternatives first —
-// this matches user intent (the primary advisory signal of this list
-// is "is there a cheaper option than the primary target?") even though
-// it differs from the peer-family allowlist order that the base
-// AnalyzeReshaping emits.
-func fillAlternativesFromOfferings(recs []ReshapeRecommendation, offerings []OfferingOption) {
+// AnalyzeReshapingWithOfferings).
+//
+// risByID lets the helper apply the local passesDollarUnitsCheck per
+// rec — alternatives that wouldn't survive AWS's runtime exchange-
+// validity rule are dropped here so the UI doesn't show options that
+// would fail at quote time. When the source RI isn't in the map (or
+// has zero NF / MonthlyCost), the check is skipped for that rec to
+// preserve today's behaviour for callers that don't supply pricing.
+//
+// The output is sorted ascending by EffectiveMonthlyCost so the UI
+// shows cheapest alternatives first — this matches user intent (the
+// primary advisory signal of this list is "is there a cheaper option
+// than the primary target?") even though it differs from the peer-
+// family allowlist order that the base AnalyzeReshaping emits.
+func fillAlternativesFromOfferings(recs []ReshapeRecommendation, offerings []OfferingOption, risByID map[string]RIInfo) {
 	offByType := make(map[string]OfferingOption, len(offerings))
 	for _, o := range offerings {
 		if _, exists := offByType[o.InstanceType]; !exists {
@@ -370,11 +458,22 @@ func fillAlternativesFromOfferings(recs []ReshapeRecommendation, offerings []Off
 		}
 	}
 	for i := range recs {
+		src, hasSrc := risByID[recs[i].SourceRIID]
 		filled := make([]OfferingOption, 0, len(recs[i].AlternativeTargets))
 		for _, alt := range recs[i].AlternativeTargets {
-			if found, ok := offByType[alt.InstanceType]; ok {
-				filled = append(filled, found)
+			found, ok := offByType[alt.InstanceType]
+			if !ok {
+				continue
 			}
+			// Apply the pre-filter only when source pricing info is
+			// available; otherwise keep today's behaviour and pass
+			// the alternative through untouched.
+			if hasSrc && src.MonthlyCost > 0 {
+				if !passesDollarUnitsCheck(src.NormalizationFactor, src.MonthlyCost, src.CurrencyCode, found) {
+					continue
+				}
+			}
+			filled = append(filled, found)
 		}
 		sort.Slice(filled, func(a, b int) bool {
 			return filled[a].EffectiveMonthlyCost < filled[b].EffectiveMonthlyCost

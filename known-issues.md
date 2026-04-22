@@ -146,15 +146,7 @@ outstanding so future work has a clear starting point.
 
 ## Outstanding follow-ups
 
-- **Cross-family RI recommendations for specialty + legacy families**:
-  `pkg/exchange/reshape.go`'s `peerFamilyGroups` allowlist covers
-  general/compute/memory/burstable mainstream families only. Specialty
-  families (`p*`, `g*`, `x*`, `hpc*`) and legacy generations (`m4`,
-  `c4`, `r3`) return no cross-family alternatives because AWS's
-  `$`-units check routinely rejects exchanges for these shapes — adding
-  them would hurt user trust. A proper fix requires live offering
-  enumeration via `DescribeReservedInstancesOfferings` + pricing
-  comparison, which is a multi-day feature scoped separately.
+- ~~**Cross-family RI recommendations for specialty + legacy families**~~ **— RESOLVED.** Extended `peerFamilyGroups` in `pkg/exchange/reshape.go` with specialty (`p3/p4d/p5`, `g4dn/g5`, `hpc6a/hpc6id/hpc7g`) and legacy-generation (`m4/m5`, `c4/c5`, `r3/r4/r5`) groups. Added a local `passesDollarUnitsCheck(srcNF, srcMonthlyCost, srcCurrency, target)` pre-filter applied in `fillAlternativesFromOfferings`: a target survives only if `target.NF × target.EffectiveMonthlyCost >= src.NF × src.MonthlyCost` (with an explicit currency-equality guard that's a no-op when either side is empty). The check approximates AWS's runtime two-parallel-≥-checks rule using the already-computed `EffectiveMonthlyCost` (which folds upfront amortisation + recurring + usage), so no per-pair `GetReservedInstancesExchangeQuote` API calls are needed — false positives are caught by the existing `auto.go` `IsValidExchange=false` skip path at execution time. `OfferingOption` gained `NormalizationFactor` + `CurrencyCode` fields populated by `FindConvertibleOfferings`; `ConvertibleRI` gained `CurrencyCode` + `RecurringHourlyAmount` populated by `ListConvertibleReservedInstances`; `RIInfo` gained `MonthlyCost` + `CurrencyCode` populated by both API and server handlers via a new `monthlyCostFromConvertibleRI` helper using AWS's canonical `(FixedPrice/hours_per_term + UsagePrice + recurring_hourly) × 730` formula.
 
 - **t.Parallel() adoption for remaining packages**: Adoption is complete
   only for `pkg/exchange/`, `providers/aws/services/ec2/`, and

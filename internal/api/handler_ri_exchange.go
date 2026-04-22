@@ -154,6 +154,29 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 	return f, nil
 }
 
+// monthlyCostFromConvertibleRI computes the per-instance per-month
+// effective cost from an RI's pricing fields, matching the same
+// formula effectiveMonthlyCost uses for offerings:
+//
+//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
+//
+// 730 is AWS's canonical hours-per-month constant. Returns zero when
+// Duration is zero (defensive — would otherwise divide by zero).
+//
+// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
+// dollar-units pre-filter can compare against per-target offering
+// costs computed with the same formula.
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+	if ri.Duration <= 0 {
+		return 0
+	}
+	hoursPerTerm := float64(ri.Duration) / 3600
+	if hoursPerTerm <= 0 {
+		return 0
+	}
+	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730
+}
+
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
 func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo) {
 	riInfos := make([]exchange.RIInfo, len(instances))
@@ -164,6 +187,8 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 			InstanceCount:       inst.InstanceCount,
 			OfferingClass:       "convertible",
 			NormalizationFactor: inst.NormalizationFactor,
+			MonthlyCost:         monthlyCostFromConvertibleRI(inst),
+			CurrencyCode:        inst.CurrencyCode,
 		}
 	}
 

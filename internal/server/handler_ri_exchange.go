@@ -202,6 +202,26 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 	return data
 }
 
+// monthlyCostFromConvertibleRI computes the per-instance per-month
+// effective cost from an RI's pricing fields, matching the same
+// formula the AWS effectiveMonthlyCost function uses for offerings:
+//
+//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
+//
+// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
+// dollar-units pre-filter compares apples-to-apples against per-target
+// offering costs.
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+	if ri.Duration <= 0 {
+		return 0
+	}
+	hoursPerTerm := float64(ri.Duration) / 3600
+	if hoursPerTerm <= 0 {
+		return 0
+	}
+	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730
+}
+
 // convertForAutoExchange converts provider-specific types to exchange package types,
 // including RI metadata needed for offering lookup.
 func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, map[string]exchange.RIMetadataInfo) {
@@ -215,6 +235,8 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 			InstanceCount:       inst.InstanceCount,
 			OfferingClass:       "convertible",
 			NormalizationFactor: inst.NormalizationFactor,
+			MonthlyCost:         monthlyCostFromConvertibleRI(inst),
+			CurrencyCode:        inst.CurrencyCode,
 		}
 		riMetadata[inst.ReservedInstanceID] = exchange.RIMetadataInfo{
 			ProductDescription: inst.ProductDescription,

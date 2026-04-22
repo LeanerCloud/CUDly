@@ -326,6 +326,17 @@ type ConvertibleRI struct {
 	InstanceTenancy     string    `json:"instance_tenancy"`
 	Scope               string    `json:"scope"`
 	Duration            int64     `json:"duration"`
+	// CurrencyCode is the ISO-4217 currency that FixedPrice / UsagePrice
+	// are denominated in (typically "USD"). Plumbed through to
+	// exchange.RIInfo so the dollar-units pre-filter on cross-family
+	// alternatives can refuse comparisons across currencies.
+	CurrencyCode string `json:"currency_code,omitempty"`
+	// RecurringHourlyAmount is the per-hour recurring charge (sum across
+	// the SDK's RecurringCharges slice) — this is non-zero for
+	// no-upfront and partial-upfront RIs where some of the cost is
+	// billed hourly rather than as the upfront FixedPrice. Used by the
+	// exchange-package dollar-units calculation.
+	RecurringHourlyAmount float64 `json:"recurring_hourly_amount,omitempty"`
 }
 
 // ListConvertibleReservedInstances returns all active convertible RIs in the region.
@@ -353,22 +364,28 @@ func (c *Client) ListConvertibleReservedInstances(ctx context.Context) ([]Conver
 		instanceType := string(ri.InstanceType)
 		normFactor := normalizationFactorForInstanceType(instanceType)
 
+		var recurringHourly float64
+		for _, rc := range ri.RecurringCharges {
+			recurringHourly += aws.ToFloat64(rc.Amount)
+		}
 		result = append(result, ConvertibleRI{
-			ReservedInstanceID:  aws.ToString(ri.ReservedInstancesId),
-			InstanceType:        instanceType,
-			AvailabilityZone:    aws.ToString(ri.AvailabilityZone),
-			InstanceCount:       aws.ToInt32(ri.InstanceCount),
-			Start:               aws.ToTime(ri.Start),
-			End:                 aws.ToTime(ri.End),
-			OfferingType:        string(ri.OfferingType),
-			FixedPrice:          float64(aws.ToFloat32(ri.FixedPrice)),
-			UsagePrice:          float64(aws.ToFloat32(ri.UsagePrice)),
-			State:               string(ri.State),
-			NormalizationFactor: normFactor,
-			ProductDescription:  string(ri.ProductDescription),
-			InstanceTenancy:     string(ri.InstanceTenancy),
-			Scope:               string(ri.Scope),
-			Duration:            aws.ToInt64(ri.Duration),
+			ReservedInstanceID:    aws.ToString(ri.ReservedInstancesId),
+			InstanceType:          instanceType,
+			AvailabilityZone:      aws.ToString(ri.AvailabilityZone),
+			InstanceCount:         aws.ToInt32(ri.InstanceCount),
+			Start:                 aws.ToTime(ri.Start),
+			End:                   aws.ToTime(ri.End),
+			OfferingType:          string(ri.OfferingType),
+			FixedPrice:            float64(aws.ToFloat32(ri.FixedPrice)),
+			UsagePrice:            float64(aws.ToFloat32(ri.UsagePrice)),
+			State:                 string(ri.State),
+			NormalizationFactor:   normFactor,
+			ProductDescription:    string(ri.ProductDescription),
+			InstanceTenancy:       string(ri.InstanceTenancy),
+			Scope:                 string(ri.Scope),
+			Duration:              aws.ToInt64(ri.Duration),
+			CurrencyCode:          string(ri.CurrencyCode),
+			RecurringHourlyAmount: recurringHourly,
 		})
 	}
 
@@ -440,6 +457,8 @@ func (c *Client) FindConvertibleOfferings(ctx context.Context, instanceTypes []s
 			InstanceType:         instanceType,
 			OfferingID:           aws.ToString(o.ReservedInstancesOfferingId),
 			EffectiveMonthlyCost: cost,
+			NormalizationFactor:  normalizationFactorForInstanceType(instanceType),
+			CurrencyCode:         string(o.CurrencyCode),
 		}
 	}
 
