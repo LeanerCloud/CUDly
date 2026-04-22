@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -676,6 +677,8 @@ type mockConfigStoreAccounts struct {
 	listResult          []config.CloudAccount
 	planAccountsResult  []config.CloudAccount
 	listOverridesResult []config.AccountServiceOverride
+	createErr           error // optional override: return this err from CreateCloudAccount
+	updateErr           error // optional override: return this err from UpdateCloudAccount
 }
 
 func (m *mockConfigStoreAccounts) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
@@ -692,4 +695,65 @@ func (m *mockConfigStoreAccounts) GetPlanAccounts(ctx context.Context, planID st
 
 func (m *mockConfigStoreAccounts) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
 	return m.listOverridesResult, nil
+}
+
+func (m *mockConfigStoreAccounts) CreateCloudAccount(ctx context.Context, a *config.CloudAccount) error {
+	return m.createErr
+}
+
+func (m *mockConfigStoreAccounts) UpdateCloudAccount(ctx context.Context, a *config.CloudAccount) error {
+	return m.updateErr
+}
+
+// Q2: duplicate-key errors from the store surface as 409 ClientErrors, not
+// the generic 500 "accounts: %w" wrap. Previously the UI got an "Internal
+// Server Error" toast when creating an already-existing account.
+func TestCreateAccount_DuplicateKey_Returns409(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		createErr:       errors.New("ERROR: duplicate key value violates unique constraint (SQLSTATE 23505)"),
+	}
+	handler := &Handler{auth: mockAuth, config: customStore}
+
+	body := `{"name":"Acme","provider":"aws","external_id":"123456789012"}`
+	_, err := handler.createAccount(ctx, adminRequest(body))
+
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got %T", err)
+	assert.Equal(t, 409, ce.code, "duplicate-key should surface as 409, not 500")
+	assert.Contains(t, ce.Error(), "already exists")
+	assert.Contains(t, ce.Error(), "123456789012")
+	assert.Contains(t, ce.Error(), "aws")
+}
+
+func TestUpdateAccount_DuplicateKey_Returns409(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	// updateAccount loads the existing account first; wire a valid getResult.
+	existing := sampleAccount()
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		getResult:       &existing,
+		updateErr:       errors.New("duplicate key"),
+	}
+	handler := &Handler{auth: mockAuth, config: customStore}
+
+	body := `{"name":"Acme","provider":"aws","external_id":"111111111111"}`
+	req := adminRequest(body)
+	req.RequestContext.HTTP.Method = "PUT"
+	req.RequestContext.HTTP.Path = "/api/accounts/" + existing.ID
+
+	_, err := handler.updateAccount(ctx, req, existing.ID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.Error(), "already exists")
 }

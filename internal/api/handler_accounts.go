@@ -186,14 +186,33 @@ func (h *Handler) createSelfAccount(ctx context.Context, httpReq *events.LambdaF
 	account.Enabled = true
 
 	if err := h.config.CreateCloudAccount(ctx, account); err != nil {
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
-			return nil, NewClientError(409, "self-account already exists")
-		}
-		return nil, fmt.Errorf("accounts: %w", err)
+		return nil, classifyStoreError(err, "self-account already exists")
 	}
 
 	account.IsSelf = true
 	return account, nil
+}
+
+// isDuplicateKeyError matches Postgres unique-constraint violations bubbled
+// up by internal/config. Tolerates both the human-readable "duplicate key"
+// prefix and the raw SQLSTATE 23505 token.
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "duplicate key") || strings.Contains(s, "23505")
+}
+
+// classifyStoreError wraps a config-store error so handler callers can
+// surface a 409 with a friendly message when the root cause is a duplicate-
+// key violation. Non-duplicate errors pass through as `accounts: <err>`
+// (matching the prior wrap) so existing callers still get a 500.
+func classifyStoreError(err error, msg409 string) error {
+	if isDuplicateKeyError(err) {
+		return NewClientError(409, msg409)
+	}
+	return fmt.Errorf("accounts: %w", err)
 }
 
 func buildSelfAccountRequest(si *sourceIdentity) CloudAccountRequest {
@@ -241,7 +260,7 @@ func (h *Handler) createAccount(ctx context.Context, httpReq *events.LambdaFunct
 	account.UpdatedAt = now
 
 	if err := h.config.CreateCloudAccount(ctx, account); err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
+		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", req.ExternalID, req.Provider))
 	}
 
 	return account, nil
@@ -386,7 +405,7 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 	account.UpdatedAt = time.Now()
 
 	if err := h.config.UpdateCloudAccount(ctx, account); err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
+		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", req.ExternalID, req.Provider))
 	}
 
 	return account, nil
