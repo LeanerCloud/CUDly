@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/LeanerCloud/CUDly/pkg/retry"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -148,44 +149,44 @@ func attemptOpenPool(ctx context.Context, poolConfig *pgxpool.Config, perAttempt
 	return pool, nil
 }
 
-// createConnectionPoolWithRetry creates a connection pool with exponential backoff retry
-// This is necessary for Lambda functions in VPCs where the ENI may not be fully attached during init
-func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Config, config *Config) (*pgxpool.Pool, error) {
-	var lastErr error
+// createConnectionPoolWithRetry creates a connection pool with exponential
+// backoff retry. This is necessary for Lambda functions in VPCs where the
+// ENI may not be fully attached during init — a single attempt can hang
+// for ~30-45s on a TCP SYN retransmit, so each attempt is wrapped in a
+// PerAttemptTimeout via the shared retry helper.
+func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Config, _ *Config) (*pgxpool.Pool, error) {
+	var pool *pgxpool.Pool
 
-	for attempt := 0; attempt < maxConnectRetries; attempt++ {
-		if attempt > 0 {
-			// Calculate exponential backoff delay: 4s, 8s, 16s, 30s (capped)
-			delay := time.Duration(1<<uint(attempt)) * connectRetryBaseDelay
-			if delay > connectRetryMaxDelay {
-				delay = connectRetryMaxDelay
+	cfg := retry.Config{
+		MaxAttempts:       maxConnectRetries,
+		BaseDelay:         connectRetryBaseDelay,
+		MaxDelay:          connectRetryMaxDelay,
+		PerAttemptTimeout: perAttemptConnectTimeout,
+		OnAttempt: func(attempt int, prevErr error) {
+			if prevErr != nil {
+				logging.Warnf("Connection attempt %d failed (%v), retrying...", attempt-1, prevErr)
 			}
-
-			logging.Warnf("Connection attempt %d failed, retrying in %v...", attempt, delay)
-
-			// Check if context is cancelled
-			select {
-			case <-ctx.Done():
-				return nil, fmt.Errorf("connection cancelled: %w", ctx.Err())
-			case <-time.After(delay):
-				// Continue to retry
-			}
-		}
-
-		pool, err := attemptOpenPool(ctx, poolConfig, perAttemptConnectTimeout)
-		if err != nil {
-			lastErr = fmt.Errorf("attempt %d/%d (timeout %s): %w", attempt+1, maxConnectRetries, perAttemptConnectTimeout, err)
-			continue
-		}
-
-		// Success!
-		if attempt > 0 {
-			logging.Infof("Successfully connected to database after %d attempts", attempt+1)
-		}
-		return pool, nil
+		},
 	}
 
-	return nil, fmt.Errorf("failed to connect to database after %d attempts: %w", maxConnectRetries, lastErr)
+	err := retry.Do(ctx, cfg, func(perAttemptCtx context.Context, attempt int) error {
+		// attemptOpenPool already wraps its work in its own per-attempt
+		// context for the nested NewWithConfig + Ping pair. Pass
+		// perAttemptCtx through so the outer retry budget cooperates.
+		p, err := attemptOpenPool(perAttemptCtx, poolConfig, perAttemptConnectTimeout)
+		if err != nil {
+			return fmt.Errorf("attempt %d/%d (timeout %s): %w", attempt, maxConnectRetries, perAttemptConnectTimeout, err)
+		}
+		pool = p
+		if attempt > 1 {
+			logging.Infof("Successfully connected to database after %d attempts", attempt)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+	return pool, nil
 }
 
 // buildPoolConfig creates a pgxpool.Config from our Config

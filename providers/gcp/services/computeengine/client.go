@@ -3,6 +3,7 @@ package computeengine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/retry"
 )
 
 // CommitmentsService interface for commitments operations (enables mocking)
@@ -380,6 +382,42 @@ func isResourceExhausted(err error) bool {
 	return strings.Contains(s, "ResourceExhausted") || strings.Contains(s, "RESOURCE_EXHAUSTED") || strings.Contains(s, "429")
 }
 
+// stripPermanentPrefix removes the `retry: permanent error, do not retry: `
+// text added when a non-retryable SDK error is wrapped via
+// fmt.Errorf("%w: <message>: %w", retry.ErrPermanent, sdkErr). The original
+// SDK error remains in the chain (errors.Is/As still work) but the
+// user-facing message no longer leaks the retry sentinel. Errors that don't
+// carry the sentinel are returned unchanged.
+func stripPermanentPrefix(err error) error {
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, retry.ErrPermanent) {
+		return err
+	}
+	prefix := retry.ErrPermanent.Error() + ": "
+	if msg := err.Error(); strings.HasPrefix(msg, prefix) {
+		// Build a new error with the trimmed message but preserve unwrap
+		// chain access to the underlying SDK error.
+		return errors.Join(errors.New(msg[len(prefix):]), unwrapNonSentinel(err))
+	}
+	return err
+}
+
+// unwrapNonSentinel returns the first non-ErrPermanent error in a multi-%w
+// chain. Used to keep errors.Is/As access to the SDK error after we strip
+// the user-facing sentinel prefix.
+func unwrapNonSentinel(err error) error {
+	if mw, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, inner := range mw.Unwrap() {
+			if !errors.Is(inner, retry.ErrPermanent) {
+				return inner
+			}
+		}
+	}
+	return nil
+}
+
 // PurchaseCommitment purchases a Compute Engine CUD
 func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
@@ -433,26 +471,36 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 		CommitmentResource: commitment,
 	}
 
-	// Exponential backoff on RESOURCE_EXHAUSTED: 1s, 2s, 4s (max 3 retries = 4 total attempts).
-	backoff := time.Second
-	const maxRetries = 3
-	for attempt := 0; ; attempt++ {
-		op, err := svc.Insert(ctx, insertReq)
+	// Exponential backoff on RESOURCE_EXHAUSTED: BaseDelay 1s with 2× growth
+	// capped at MaxDelay 4s gives the same 1s/2s/4s sequence the open-coded
+	// loop produced (max 4 attempts = original + 3 retries). Non-retryable
+	// SDK errors are wrapped with retry.ErrPermanent so the helper short-
+	// circuits without consuming the retry budget.
+	cfg := retry.Config{
+		MaxAttempts: 4,
+		BaseDelay:   time.Second,
+		MaxDelay:    4 * time.Second,
+	}
+	doErr := retry.Do(ctx, cfg, func(perAttemptCtx context.Context, _ int) error {
+		op, err := svc.Insert(perAttemptCtx, insertReq)
 		if err != nil {
-			if isResourceExhausted(err) && attempt < maxRetries {
-				time.Sleep(backoff)
-				backoff *= 2
-				continue
+			if isResourceExhausted(err) {
+				return fmt.Errorf("failed to create commitment: %w", err) // retryable
 			}
-			result.Error = fmt.Errorf("failed to create commitment: %w", err)
-			return result, result.Error
+			return fmt.Errorf("%w: failed to create commitment: %w", retry.ErrPermanent, err)
 		}
-
-		if err := op.Wait(ctx); err != nil {
-			result.Error = fmt.Errorf("commitment creation failed: %w", err)
-			return result, result.Error
+		if err := op.Wait(perAttemptCtx); err != nil {
+			// Wait failures aren't quota-related — don't retry.
+			return fmt.Errorf("%w: commitment creation failed: %w", retry.ErrPermanent, err)
 		}
-		break
+		return nil
+	})
+	if doErr != nil {
+		// Strip the `retry: permanent error, do not retry: ` prefix so the
+		// user-facing message matches the pre-refactor shape, while keeping
+		// the original SDK error reachable via errors.Is/As.
+		result.Error = stripPermanentPrefix(doErr)
+		return result, result.Error
 	}
 
 	result.Success = true
