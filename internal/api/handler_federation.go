@@ -585,18 +585,25 @@ func bundleModuleDir(target, source string) string {
 }
 
 // bundleTfvarsSpec returns the template path and zip destination name for the .tfvars file.
+//
+// The destination uses Terraform's `*.auto.tfvars` convention so the customer
+// can run `terraform init && terraform apply` with no `-var-file=` flag —
+// Terraform auto-loads any file matching that pattern from the current
+// working directory. The descriptive `<slug>-<target>` prefix is preserved
+// so admins downloading bundles for multiple accounts can keep them
+// distinguishable on disk.
 func bundleTfvarsSpec(target, source, slug string) (tmplPath, name string) {
 	switch {
 	case target == "aws" && source == "aws":
-		return "templates/aws-cross-account.tfvars.tmpl", "terraform/" + slug + "-aws-cross-account.tfvars"
+		return "templates/aws-cross-account.tfvars.tmpl", "terraform/" + slug + "-aws-cross-account.auto.tfvars"
 	case target == "aws":
-		return "templates/aws-wif.tfvars.tmpl", "terraform/" + slug + "-aws-wif.tfvars"
+		return "templates/aws-wif.tfvars.tmpl", "terraform/" + slug + "-aws-wif.auto.tfvars"
 	case target == "azure":
-		return "templates/azure-wif.tfvars.tmpl", "terraform/" + slug + "-azure-wif.tfvars"
+		return "templates/azure-wif.tfvars.tmpl", "terraform/" + slug + "-azure-wif.auto.tfvars"
 	case target == "gcp" && source == "gcp":
-		return "templates/gcp-sa-impersonation.tfvars.tmpl", "terraform/" + slug + "-gcp-sa-impersonation.tfvars"
+		return "templates/gcp-sa-impersonation.tfvars.tmpl", "terraform/" + slug + "-gcp-sa-impersonation.auto.tfvars"
 	default:
-		return "templates/gcp-wif.tfvars.tmpl", "terraform/" + slug + "-gcp-wif.tfvars"
+		return "templates/gcp-wif.tfvars.tmpl", "terraform/" + slug + "-gcp-wif.auto.tfvars"
 	}
 }
 
@@ -623,42 +630,42 @@ func buildBundleReadme(data federationIaCData, target, source string) string {
 	switch {
 	case target == "aws" && source == "aws":
 		sb.WriteString("Contents:\n  terraform/           - Cross-account IAM role Terraform module\n")
-		sb.WriteString("  terraform/*.tfvars   - Pre-filled variable values for this account\n")
+		sb.WriteString("  terraform/*.auto.tfvars - Pre-filled variable values (auto-loaded by Terraform)\n")
 		sb.WriteString("  cloudformation/      - CloudFormation alternative\n\n")
 		sb.WriteString("Deploy (Terraform):\n")
-		sb.WriteString(fmt.Sprintf("  cd terraform && terraform init && terraform apply -var-file=%s-aws-cross-account.tfvars\n\n", data.AccountSlug))
+		sb.WriteString("  cd terraform && terraform init && terraform apply\n\n")
 		sb.WriteString("Deploy (CloudFormation):\n")
 		sb.WriteString("  cd cloudformation && bash deploy-cfn.sh --region <region>\n\n")
 		sb.WriteString("After apply, set aws_auth_mode=role_arn and aws_role_arn in CUDly.\n")
 	case target == "aws":
 		sb.WriteString("Contents:\n  terraform/           - IAM OIDC provider + role Terraform module\n")
-		sb.WriteString("  terraform/*.tfvars   - Pre-filled variable values for this account\n")
+		sb.WriteString("  terraform/*.auto.tfvars - Pre-filled variable values (auto-loaded by Terraform)\n")
 		sb.WriteString("  cloudformation/      - CloudFormation alternative\n\n")
 		sb.WriteString("Deploy (Terraform):\n")
-		sb.WriteString(fmt.Sprintf("  cd terraform && terraform init && terraform apply -var-file=%s-aws-wif.tfvars\n\n", data.AccountSlug))
+		sb.WriteString("  cd terraform && terraform init && terraform apply\n\n")
 		sb.WriteString("Deploy (CloudFormation):\n")
 		sb.WriteString("  cd cloudformation && bash deploy-cfn.sh --region <region>\n\n")
 		sb.WriteString("After apply, set aws_auth_mode=workload_identity_federation and aws_role_arn in CUDly.\n")
 	case target == "azure":
 		sb.WriteString("Contents:\n  terraform/           - Azure App Registration + cert WIF Terraform module\n")
-		sb.WriteString("  terraform/*.tfvars   - Pre-filled variable values for this account\n\n")
+		sb.WriteString("  terraform/*.auto.tfvars - Pre-filled variable values (auto-loaded by Terraform)\n\n")
 		sb.WriteString("Prerequisites:\n  1. Generate an RSA key and self-signed certificate (see tfvars comments).\n")
 		sb.WriteString("  2. Paste the certificate PEM into the tfvars file.\n")
 		sb.WriteString("  3. Store the private key PEM in CUDly as azure_wif_private_key.\n\n")
 		sb.WriteString("Deploy (Terraform):\n")
-		sb.WriteString(fmt.Sprintf("  cd terraform && terraform init && terraform apply -var-file=%s-azure-wif.tfvars\n\n", data.AccountSlug))
+		sb.WriteString("  cd terraform && terraform init && terraform apply\n\n")
 		sb.WriteString("After apply, set azure_auth_mode=workload_identity_federation in CUDly.\n")
 	case target == "gcp" && source == "gcp":
 		sb.WriteString("Contents:\n  terraform/           - Service account impersonation Terraform module\n")
-		sb.WriteString("  terraform/*.tfvars   - Pre-filled variable values for this account\n\n")
+		sb.WriteString("  terraform/*.auto.tfvars - Pre-filled variable values (auto-loaded by Terraform)\n\n")
 		sb.WriteString("Deploy (Terraform):\n")
-		sb.WriteString(fmt.Sprintf("  cd terraform && terraform init && terraform apply -var-file=%s-gcp-sa-impersonation.tfvars\n\n", data.AccountSlug))
+		sb.WriteString("  cd terraform && terraform init && terraform apply\n\n")
 		sb.WriteString("After apply, set gcp_auth_mode=application_default in CUDly.\n")
 	case target == "gcp":
 		sb.WriteString("Contents:\n  terraform/           - Workload Identity Pool + provider Terraform module\n")
-		sb.WriteString("  terraform/*.tfvars   - Pre-filled variable values for this account\n\n")
+		sb.WriteString("  terraform/*.auto.tfvars - Pre-filled variable values (auto-loaded by Terraform)\n\n")
 		sb.WriteString("Deploy (Terraform):\n")
-		sb.WriteString(fmt.Sprintf("  cd terraform && terraform init && terraform apply -var-file=%s-gcp-wif.tfvars\n\n", data.AccountSlug))
+		sb.WriteString("  cd terraform && terraform init && terraform apply\n\n")
 		sb.WriteString("After apply, run the gcloud_command output to generate the WIF credential JSON,\nthen paste it into CUDly as gcp_workload_identity_config.\n")
 	}
 

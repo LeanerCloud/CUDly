@@ -577,6 +577,58 @@ func TestGetFederationIaC_PrefillContactEmailFromSession(t *testing.T) {
 		"contact_email must be pre-filled from Session.Email")
 }
 
+// TestGetFederationIaC_TfvarsAutoLoadedByTerraform pins that the bundle's
+// tfvars file ships with the .auto.tfvars suffix so customers can run
+// `terraform init && terraform apply` with no -var-file= flag — Terraform
+// auto-loads any file matching that pattern from the working directory.
+// Regression guard against accidentally reverting to the plain .tfvars
+// shape, which would silently re-introduce the manual flag requirement.
+func TestGetFederationIaC_TfvarsAutoLoadedByTerraform(t *testing.T) {
+	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	h := federationHandler()
+
+	cases := []struct {
+		name           string
+		target, source string
+	}{
+		{"aws-cross-account", "aws", "aws"},
+		{"aws-wif", "aws", "gcp"},
+		{"azure-wif", "azure", "gcp"},
+		{"gcp-sa-impersonation", "gcp", "gcp"},
+		{"gcp-wif", "gcp", "aws"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// aws-cross-account requires sourceCloud()=="aws" for the STS resolution
+			// to succeed; every other case can run under the gcp default above.
+			if tc.target == "aws" && tc.source == "aws" {
+				t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
+				t.Skip("aws-cross-account needs real STS resolution; covered by TestGetFederationIaC_FailsLoudOnEmptySourceAccountID")
+			}
+			res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+				"target": tc.target, "source": tc.source, "format": "bundle",
+			}))
+			require.NoError(t, err)
+
+			zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+			require.NoError(t, err)
+			zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+			require.NoError(t, err)
+
+			var foundAutoTfvars bool
+			for _, f := range zr.File {
+				if strings.HasSuffix(f.Name, ".auto.tfvars") {
+					foundAutoTfvars = true
+					assert.False(t, strings.HasSuffix(f.Name, ".tfvars") && !strings.HasSuffix(f.Name, ".auto.tfvars"),
+						"tfvars file %s must use .auto.tfvars (not plain .tfvars) for Terraform auto-loading", f.Name)
+					break
+				}
+			}
+			assert.True(t, foundAutoTfvars, "bundle must contain a *.auto.tfvars file for Terraform auto-loading")
+		})
+	}
+}
+
 // TestGetFederationIaC_PreservesPlusInSessionEmail verifies that a + in the
 // email address is not mangled by shell-escaping when rendering CLI scripts.
 func TestGetFederationIaC_PreservesPlusInSessionEmail(t *testing.T) {
