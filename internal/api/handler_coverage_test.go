@@ -49,7 +49,10 @@ func TestHandler_buildResponse_NilBody(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, "", resp.Body)
+	// Q1 (Phase-2 UX plan): nil-body success serialises as "{}" so the
+	// frontend's response.json() doesn't throw SyntaxError on DELETE and
+	// other empty-response paths.
+	assert.Equal(t, "{}", resp.Body)
 }
 
 // Tests for validateSecurity

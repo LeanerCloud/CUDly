@@ -363,6 +363,13 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 				Body:       `{"error": "internal server error"}`,
 			}, nil
 		}
+	} else {
+		// Nil-body success paths (e.g. DELETE /accounts/:id returning
+		// (nil, nil)) previously emitted an empty string, which made the
+		// frontend's `response.json()` throw SyntaxError on an otherwise-
+		// successful request. Emit an explicit empty JSON object instead
+		// so every 2xx response parses cleanly.
+		bodyBytes = []byte("{}")
 	}
 
 	return &events.LambdaFunctionURLResponse{

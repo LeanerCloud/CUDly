@@ -1132,3 +1132,26 @@ func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 400, resp.StatusCode)
 }
+
+// Nil-body success responses (e.g. DELETE /accounts/:id) must serialise as
+// "{}" rather than the empty string. Empty-string bodies caused
+// `response.json()` in the frontend to throw SyntaxError, surfacing as a
+// "JSON format error" toast even though the underlying delete succeeded.
+func TestHandler_buildResponse_NilBodyEmitsEmptyJSONObject(t *testing.T) {
+	h := &Handler{}
+	headers := map[string]string{"Content-Type": "application/json"}
+
+	resp, err := h.buildResponse(200, headers, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "{}", resp.Body, "nil-body success must serialise as {} so the frontend's response.json() doesn't throw")
+}
+
+func TestHandler_buildResponse_BodyMarshalsAsBefore(t *testing.T) {
+	h := &Handler{}
+	headers := map[string]string{"Content-Type": "application/json"}
+
+	resp, err := h.buildResponse(200, headers, map[string]string{"hello": "world"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, `{"hello":"world"}`, resp.Body)
+}
