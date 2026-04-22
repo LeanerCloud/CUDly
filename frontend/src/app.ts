@@ -211,6 +211,19 @@ function setupButtonHandlers(): void {
     resetPurchasingBtn.addEventListener('click', () => resetSettings());
   }
 
+  // Purchasing save button — mirrors the General tab's Save Settings by
+  // dispatching submit on the shared #global-settings-form, which reads
+  // both General-tab and Purchasing-tab fields from across the DOM.
+  // Without this button the Purchasing tab had only Reset in its sticky
+  // bar, forcing users to jump to General to persist changes.
+  const savePurchasingBtn = document.getElementById('save-purchasing-btn');
+  if (savePurchasingBtn) {
+    savePurchasingBtn.addEventListener('click', () => {
+      const form = document.getElementById('global-settings-form') as HTMLFormElement | null;
+      if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    });
+  }
+
   // History button
   const loadHistoryBtn = document.getElementById('load-history-btn');
   if (loadHistoryBtn) {

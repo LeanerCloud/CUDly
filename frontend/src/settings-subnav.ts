@@ -154,11 +154,18 @@ export function renderSubNav(subTab: string): void {
 /**
  * Update the "Unsaved changes" sticky footer + dirty dot on the Settings
  * top-tab. Called whenever the settings form's dirty state changes.
+ *
+ * The RI Exchange fieldset renders its own `<form>` with its own
+ * `.settings-buttons` + Save Settings button; that one is *not*
+ * panel-level and must not stick to the viewport bottom — two sticky
+ * save-bars stack awkwardly, and the user asked for Save + Reset in a
+ * single bar. Filter nested ones out here.
  */
 export function reflectDirtyState(dirty: boolean): void {
   const tabBtn = document.getElementById('settings-tab-btn');
   if (tabBtn) tabBtn.classList.toggle('has-unsaved', dirty);
   document.querySelectorAll('.settings-buttons').forEach((el) => {
+    if (el.closest('#ri-exchange-automation-settings')) return;
     el.classList.toggle('settings-savebar', true);
     el.classList.toggle('dirty', dirty);
   });

@@ -400,29 +400,51 @@ button.danger:hover {
 
 /* Sticky sub-nav rail for long Settings panels. Rendered by
  * settings-subnav.ts into Purchasing / Accounts / Users & API Keys.
- * On narrow viewports the rail collapses to a single-column layout.
+ *
+ * Layout intent: the rail floats in the page's left gutter so the
+ * panel's content width matches the General tab (no grid column
+ * reservation). On viewports narrower than the floating-rail threshold
+ * the rail collapses inline above the content.
  */
 .settings-layout {
+    position: relative;
+}
+
+.settings-layout-content {
+    /* Full width — the rail sits outside this wrapper on wide viewports. */
     display: block;
 }
 
-@media (min-width: 1024px) {
-    .settings-layout {
-        display: grid;
-        grid-template-columns: 220px 1fr;
-        gap: 1.5rem;
-        align-items: start;
-    }
-}
-
 .settings-subnav {
+    background: white;
     border-right: 1px solid #e0e0e0;
     padding: 1rem 1rem 1rem 0;
-    position: sticky;
-    top: 80px;
-    max-height: calc(100vh - 100px);
-    overflow-y: auto;
-    align-self: start;
+    margin-bottom: 1rem;
+}
+
+@media (min-width: 1280px) {
+    /* Wide-enough viewports: pull the rail out of the content flow so
+     * content width matches the General tab. Float + sticky lets the
+     * rail stick to the top while leaving the content column at full
+     * width — the negative margin-left parks it outside the panel's
+     * box, in the page gutter. Main has `max-width: 1600px` + padding
+     * 2rem, so at 1280–1600px the rail lives inside that padding; at
+     * >1600px it's in the auto-centred page margin. Either way, it
+     * does not displace the card. */
+    .settings-layout > .settings-subnav {
+        position: sticky;
+        top: 80px;
+        float: left;
+        width: 200px;
+        margin-left: -220px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        margin-bottom: 0;
+        border-right: none;
+    }
+    .settings-layout-content {
+        min-width: 0;
+    }
 }
 
 .settings-subnav ul {
