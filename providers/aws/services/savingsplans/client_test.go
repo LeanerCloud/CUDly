@@ -768,3 +768,16 @@ func TestClient_SetSavingsPlansAPI(t *testing.T) {
 
 	assert.Equal(t, mockAPI, client.client)
 }
+
+func TestBuildSavingsPlanTags_IncludesPurchaseAutomation(t *testing.T) {
+	tags := buildSavingsPlanTags(common.PurchaseSourceWeb)
+	assert.Equal(t, common.PurchaseSourceWeb, tags[common.PurchaseTagKey])
+	assert.Equal(t, "CUDly", tags["Tool"])
+}
+
+func TestBuildSavingsPlanTags_OmitsPurchaseAutomationWhenSourceEmpty(t *testing.T) {
+	tags := buildSavingsPlanTags("")
+	_, present := tags[common.PurchaseTagKey]
+	assert.False(t, present, "purchase-automation tag must be skipped when source is empty")
+	assert.Equal(t, "CUDly", tags["Tool"])
+}

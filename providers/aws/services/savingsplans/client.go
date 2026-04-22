@@ -132,6 +132,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Commitment:            aws.String(fmt.Sprintf("%.2f", spDetails.HourlyCommitment)),
 		UpfrontPaymentAmount:  nil, // AWS calculates this based on payment option
 		PurchaseTime:          aws.Time(time.Now()),
+		Tags:                  buildSavingsPlanTags(opts.Source),
 	}
 
 	response, err := c.client.CreateSavingsPlan(ctx, input)
@@ -328,4 +329,19 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 		"SageMaker",
 		"Database",
 	}, nil
+}
+
+// buildSavingsPlanTags returns the tag map to stamp onto a newly-created
+// Savings Plan. The Tags map on CreateSavingsPlanInput accepts tags at
+// purchase time, so no follow-up call is needed. When source is empty the
+// purchase-automation tag is skipped rather than writing an empty value.
+func buildSavingsPlanTags(source string) map[string]string {
+	tags := map[string]string{
+		"Tool":         "CUDly",
+		"PurchaseDate": time.Now().Format("2006-01-02"),
+	}
+	if source != "" {
+		tags[common.PurchaseTagKey] = source
+	}
+	return tags
 }
