@@ -210,7 +210,23 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	// Source is set once per execution (web handler writes cudly-web; approval
 	// flow preserves it through the DB round-trip) and propagates into every
 	// per-account/per-rec purchase so the tag is stamped consistently.
-	opts := common.PurchaseOptions{Source: exec.Source}
+	//
+	// Defence-in-depth: NormalizeSource rejects anything outside the allowed
+	// whitelist. If the DB has been tampered with (or a future code path
+	// assigns an unexpected value), we don't want arbitrary strings landing
+	// on cloud commitments where they'd be expensive to retract. Fall back to
+	// untagged rather than failing the already-approved execution.
+	source := exec.Source
+	if source != "" {
+		normalized, err := common.NormalizeSource(source)
+		if err != nil {
+			logging.Warnf("Invalid purchase source %q on execution %s: %v — proceeding untagged", source, exec.ExecutionID, err)
+			source = ""
+		} else {
+			source = normalized
+		}
+	}
+	opts := common.PurchaseOptions{Source: source}
 
 	for i, rec := range exec.Recommendations {
 		if !rec.Selected {

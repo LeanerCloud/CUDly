@@ -95,6 +95,108 @@ func TestManager_ExecutePurchase(t *testing.T) {
 	mockFactory.AssertExpectations(t)
 }
 
+// TestManager_ExecutePurchase_WebSourcePropagates covers the gap noted in the
+// plan audit: the CLI path has a source-asserting test via TestExecutePurchase,
+// but the web path (web handler → DB → Manager.executePurchase → provider)
+// needs its own check that exec.Source ends up as opts.Source on the
+// provider's PurchaseCommitment call.
+func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockSTS := new(MockSTSClient)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	plan := &config.PurchasePlan{ID: "plan-web", Name: "Web Plan"}
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-web",
+		PlanID:      "plan-web",
+		StepNumber:  1,
+		Source:      common.PurchaseSourceWeb,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, Selected: true},
+		},
+	}
+
+	mockStore.On("GetPurchasePlan", ctx, "plan-web").Return(plan, nil)
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
+		Account: aws.String("123456789012"),
+	}, nil)
+	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.AnythingOfType("common.Recommendation"),
+		common.PurchaseOptions{Source: common.PurchaseSourceWeb},
+	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-web"}, nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		stsClient:       mockSTS,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	_, err := manager.executePurchase(ctx, exec)
+	require.NoError(t, err)
+	mockServiceClient.AssertExpectations(t)
+}
+
+// TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged verifies the
+// NormalizeSource defence-in-depth: a DB row with an unexpected source value
+// proceeds with an empty source (untagged) rather than failing the already-
+// approved execution or poisoning cloud tags with arbitrary strings.
+func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockSTS := new(MockSTSClient)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	plan := &config.PurchasePlan{ID: "plan-bad", Name: "Bad Plan"}
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-bad",
+		PlanID:      "plan-bad",
+		StepNumber:  1,
+		Source:      "cudly-evil", // not in whitelist — should be rejected
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, Selected: true},
+		},
+	}
+
+	mockStore.On("GetPurchasePlan", ctx, "plan-bad").Return(plan, nil)
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
+		Account: aws.String("123456789012"),
+	}, nil)
+	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	// Expect EMPTY source, not "cudly-evil" — NormalizeSource must have wiped it.
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.AnythingOfType("common.Recommendation"),
+		common.PurchaseOptions{Source: ""},
+	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-bad"}, nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		stsClient:       mockSTS,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	_, err := manager.executePurchase(ctx, exec)
+	require.NoError(t, err)
+	mockServiceClient.AssertExpectations(t)
+}
+
 func TestManager_ExecutePurchase_PlanNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
