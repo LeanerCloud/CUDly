@@ -624,8 +624,18 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 			updated_at = NOW()
 	`
 
+	// Direct-execute purchases (from the Recommendations page, no plan)
+	// arrive with an empty PlanID. The column is UUID — pass nil rather
+	// than the empty string so PostgreSQL stores NULL instead of trying
+	// to parse "" as a UUID (which crashed the handler with a generic
+	// 500). Migration 000033 relaxed the NOT NULL so this is safe.
+	var planIDArg any
+	if execution.PlanID != "" {
+		planIDArg = execution.PlanID
+	}
+
 	_, err = s.db.Exec(ctx, query,
-		execution.PlanID,
+		planIDArg,
 		execution.ExecutionID,
 		execution.Status,
 		execution.StepNumber,
@@ -754,9 +764,12 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 		var exec PurchaseExecution
 		var recommendationsJSON []byte
 		var notifSent, completedAt, expiresAt sql.NullTime
+		// plan_id is nullable since migration 000033 (direct-execute
+		// rows from the Recommendations page have no originating plan).
+		var planID sql.NullString
 
 		err := rows.Scan(
-			&exec.PlanID,
+			&planID,
 			&exec.ExecutionID,
 			&exec.Status,
 			&exec.StepNumber,
@@ -773,6 +786,10 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
+		}
+
+		if planID.Valid {
+			exec.PlanID = planID.String
 		}
 
 		// Unmarshal recommendations
