@@ -240,6 +240,12 @@ type PurchaseHistoryRecord struct {
 	// exactly whose inbox to check. Excluded from DB persistence.
 	Approver string `json:"approver,omitempty" dynamodbav:"-"`
 	Source   string `json:"source,omitempty" dynamodbav:"source,omitempty"`
+	// StatusDescription carries a short human-readable explanation for non-
+	// completed rows. For "failed", this is the stored Error message (e.g.
+	// "send failed: Missing domain"). For "expired", a canned reminder that
+	// the 7-day approval window elapsed. Empty on completed/pending rows —
+	// those speak for themselves via Status alone.
+	StatusDescription string `json:"status_description,omitempty" dynamodbav:"-"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

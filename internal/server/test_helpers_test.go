@@ -62,6 +62,10 @@ func (m *mockConfigStoreForHealth) GetPendingExecutions(ctx context.Context) ([]
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) GetExecutionByID(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }

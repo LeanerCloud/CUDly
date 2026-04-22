@@ -160,6 +160,10 @@ func (m *mockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.Pu
 	return nil, nil
 }
 
+func (m *mockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) GetExecutionByID(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }

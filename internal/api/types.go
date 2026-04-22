@@ -547,14 +547,17 @@ type HistoryResponse struct {
 }
 
 // HistorySummary provides aggregate statistics for purchase history.
-// TotalPurchases is the total count of rows (completed + pending);
-// TotalCompleted / TotalPending break that down so the UI can render both.
-// Dollar totals count completed rows only — pending hasn't been committed
-// yet, so folding it in would inflate "what I have spent".
+// TotalPurchases is the total count of rows (completed + all non-completed
+// states); the per-state counters break it down so the UI can render
+// meaningful totals. Dollar totals count completed rows only — none of the
+// non-completed states have committed money yet, so folding them in would
+// inflate "what I have spent".
 type HistorySummary struct {
 	TotalPurchases      int     `json:"total_purchases"`
 	TotalCompleted      int     `json:"total_completed"`
 	TotalPending        int     `json:"total_pending"`
+	TotalFailed         int     `json:"total_failed"`
+	TotalExpired        int     `json:"total_expired"`
 	TotalUpfront        float64 `json:"total_upfront"`
 	TotalMonthlySavings float64 `json:"total_monthly_savings"`
 	TotalAnnualSavings  float64 `json:"total_annual_savings"`

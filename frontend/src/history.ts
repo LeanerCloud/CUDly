@@ -9,7 +9,7 @@ import { switchTab } from './navigation';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
-type StatusFilter = 'all' | 'pending' | 'completed' | 'cancelled';
+type StatusFilter = 'all' | 'pending' | 'completed' | 'failed' | 'expired' | 'cancelled';
 
 // Cache of the last-rendered purchase list so the status-chip click handler
 // can re-render without re-fetching. Cleared on each loadHistory / viewPlanHistory.
@@ -153,25 +153,43 @@ function statusBadgeHTML(status: string): string {
       return '<span class="badge badge-muted">Cancelled</span>';
     case 'failed':
       return '<span class="badge badge-danger">Failed</span>';
+    case 'expired':
+      return '<span class="badge badge-muted">Expired</span>';
     default:
       return '<span class="badge badge-success">Completed</span>';
   }
 }
 
 function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilter): string {
-  const counts: Record<StatusFilter, number> = { all: purchases.length, pending: 0, completed: 0, cancelled: 0 };
+  const counts: Record<StatusFilter, number> = {
+    all: purchases.length,
+    pending: 0,
+    completed: 0,
+    failed: 0,
+    expired: 0,
+    cancelled: 0,
+  };
   for (const p of purchases) {
     const s = normalizeStatus(p).toLowerCase();
     if (s === 'pending' || s === 'notified') counts.pending++;
     else if (s === 'cancelled') counts.cancelled++;
+    else if (s === 'failed') counts.failed++;
+    else if (s === 'expired') counts.expired++;
     else counts.completed++;
   }
-  const chips: Array<{ key: StatusFilter; label: string }> = [
+  // Only render Failed / Expired / Cancelled chips when there's something in
+  // them — keeps the row uncluttered on healthy deployments that have never
+  // seen one. All / Pending / Completed always render so the user has a
+  // consistent filter affordance even on an empty or fresh dataset.
+  const allChips: Array<{ key: StatusFilter; label: string }> = [
     { key: 'all', label: 'All' },
     { key: 'pending', label: 'Pending' },
     { key: 'completed', label: 'Completed' },
+    { key: 'failed', label: 'Failed' },
+    { key: 'expired', label: 'Expired' },
     { key: 'cancelled', label: 'Cancelled' },
   ];
+  const chips = allChips.filter(c => c.key === 'all' || c.key === 'pending' || c.key === 'completed' || counts[c.key] > 0);
   return `
     <div class="status-chip-row" role="tablist" aria-label="Filter history by status">
       ${chips.map(c => `
@@ -224,9 +242,14 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   const tableRows = visible.map(p => {
     const statusCell = (() => {
       const badge = statusBadgeHTML(normalizeStatus(p));
-      const pending = normalizeStatus(p).toLowerCase() === 'pending' || normalizeStatus(p).toLowerCase() === 'notified';
-      if (!pending || !p.approver) return badge;
-      return `${badge}<div class="history-approver">awaiting approval from <strong>${escapeHtml(p.approver)}</strong></div>`;
+      const s = normalizeStatus(p).toLowerCase();
+      if ((s === 'pending' || s === 'notified') && p.approver) {
+        return `${badge}<div class="history-approver">awaiting approval from <strong>${escapeHtml(p.approver)}</strong></div>`;
+      }
+      if (p.status_description) {
+        return `${badge}<div class="history-approver">${escapeHtml(p.status_description)}</div>`;
+      }
+      return badge;
     })();
     return `
       <tr>

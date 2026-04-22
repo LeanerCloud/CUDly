@@ -26,6 +26,13 @@ type StoreInterface interface {
 	// Purchase executions
 	SavePurchaseExecution(ctx context.Context, execution *PurchaseExecution) error
 	GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error)
+	// GetExecutionsByStatuses returns executions in any of the given states,
+	// newest first, capped at `limit`. Used by the History handler to render
+	// pending + failed + expired alongside completed purchases; the scheduler
+	// keeps using GetPendingExecutions (which is narrower and doesn't share
+	// this method's status filter) to avoid accidental double-processing of
+	// failed / expired rows.
+	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
 	GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error)
 	GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error)
 	CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error)

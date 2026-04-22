@@ -690,6 +690,34 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 	return &records[0], nil
 }
 
+// GetExecutionsByStatuses returns executions whose Status is any of the
+// supplied values, newest-first, capped at `limit`. Used by the History
+// handler to merge pending/failed/expired rows alongside completed purchases
+// without changing the narrower GetPendingExecutions contract the scheduler
+// depends on.
+func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+	query := `
+		SELECT plan_id, execution_id, status, step_number, scheduled_date,
+		       notification_sent, approval_token, recommendations,
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id
+		FROM purchase_executions
+		WHERE status = ANY($1)
+		ORDER BY scheduled_date DESC
+		LIMIT $2
+	`
+	return s.queryExecutions(ctx, query, statuses, limit)
+}
+
 // GetPendingExecutions retrieves all pending purchase executions
 func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error) {
 	query := `

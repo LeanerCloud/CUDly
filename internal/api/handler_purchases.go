@@ -296,6 +296,53 @@ type ExecutePurchaseRequest struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 }
 
+// validateExecutePurchaseRequest handles the permission check, body parse,
+// and recommendation-list bounds + scope checks. Extracted so executePurchase
+// itself stays linear and under the gocyclo threshold.
+func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (ExecutePurchaseRequest, *Session, error) {
+	session, err := h.requirePermission(ctx, req, "execute", "purchases")
+	if err != nil {
+		return ExecutePurchaseRequest{}, nil, err
+	}
+	var execReq ExecutePurchaseRequest
+	if err := json.Unmarshal([]byte(req.Body), &execReq); err != nil {
+		return ExecutePurchaseRequest{}, nil, NewClientError(400, "invalid request body")
+	}
+	const maxRecommendations = 1000
+	if len(execReq.Recommendations) == 0 {
+		return ExecutePurchaseRequest{}, nil, NewClientError(400, "no recommendations provided")
+	}
+	if len(execReq.Recommendations) > maxRecommendations {
+		return ExecutePurchaseRequest{}, nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
+	}
+	// Scope: reject the whole request if any recommendation targets an
+	// account outside the session's allowed_accounts. Safer than silently
+	// dropping the out-of-scope ones — the user explicitly chose those
+	// recommendations; a partial execution would misrepresent intent.
+	if err := h.validatePurchaseRecommendationScope(ctx, session, execReq.Recommendations); err != nil {
+		return ExecutePurchaseRequest{}, nil, err
+	}
+	return execReq, session, nil
+}
+
+// finalizePurchaseStatus flips an execution's stored status to "failed" if
+// the approval email couldn't send, and returns the status string the API
+// response should carry. Returns the original "pending" when email_sent is
+// true or when the failed-state write itself fails (best-effort — the UI
+// still gets email_sent=false and can point the user at History).
+func (h *Handler) finalizePurchaseStatus(ctx context.Context, execution *config.PurchaseExecution, emailSent bool, emailReason string) string {
+	if emailSent {
+		return "pending"
+	}
+	execution.Status = "failed"
+	execution.Error = emailReason
+	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+		logging.Errorf("failed to mark execution %s as failed after email send error: %v", execution.ExecutionID, err)
+		return "pending"
+	}
+	return "failed"
+}
+
 // validateAndTotalRecommendations validates each recommendation and returns totals.
 func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfront, savings float64, err error) {
 	const maxAmount = 10_000_000 // $10M sanity cap
@@ -320,29 +367,8 @@ func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfron
 
 // executePurchase handles direct purchase execution from recommendations
 func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	session, err := h.requirePermission(ctx, req, "execute", "purchases")
+	execReq, session, err := h.validateExecutePurchaseRequest(ctx, req)
 	if err != nil {
-		return nil, err
-	}
-
-	var execReq ExecutePurchaseRequest
-	if err := json.Unmarshal([]byte(req.Body), &execReq); err != nil {
-		return nil, NewClientError(400, "invalid request body")
-	}
-
-	const maxRecommendations = 1000
-	if len(execReq.Recommendations) == 0 {
-		return nil, NewClientError(400, "no recommendations provided")
-	}
-	if len(execReq.Recommendations) > maxRecommendations {
-		return nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
-	}
-
-	// Scope: reject the whole request if any recommendation targets an
-	// account outside the session's allowed_accounts. Safer than silently
-	// dropping the out-of-scope ones, because the user explicitly chose
-	// those recommendations — a partial execution would misrepresent intent.
-	if err := h.validatePurchaseRecommendationScope(ctx, session, execReq.Recommendations); err != nil {
 		return nil, err
 	}
 
@@ -350,6 +376,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	if err != nil {
 		return nil, err
 	}
+	_ = session
 
 	executionID := uuid.New().String()
 	execution := &config.PurchaseExecution{
@@ -373,6 +400,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	// email_sent / email_reason fields let the UI tell the user whether they
 	// should wait for an inbox or cancel/retry manually.
 	emailSent, emailReason := h.sendPurchaseApprovalEmail(ctx, execution, execReq.Recommendations, totalUpfront, totalSavings)
+	status := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
 
 	message := "Purchase execution created and pending approval"
 	if !emailSent {
@@ -380,7 +408,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	}
 	resp := map[string]any{
 		"execution_id":         executionID,
-		"status":               "pending",
+		"status":               status,
 		"recommendation_count": len(execReq.Recommendations),
 		"total_upfront_cost":   totalUpfront,
 		"estimated_savings":    totalSavings,

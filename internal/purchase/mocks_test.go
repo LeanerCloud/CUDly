@@ -243,6 +243,14 @@ func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.Pu
 	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
 }
 
+func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, statuses, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
 func (m *MockConfigStore) GetExecutionByID(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
 	args := m.Called(ctx, executionID)
 	if args.Get(0) == nil {

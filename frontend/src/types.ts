@@ -122,6 +122,8 @@ export interface HistorySummary {
   total_purchases?: number;
   total_completed?: number;
   total_pending?: number;
+  total_failed?: number;
+  total_expired?: number;
   total_upfront?: number;
   total_monthly_savings?: number;
   total_annual_savings?: number;
@@ -147,6 +149,10 @@ export interface HistoryPurchase {
   // on pending rows — the UI renders "awaiting approval from <approver>" so
   // the user knows exactly whose inbox to check.
   approver?: string;
+  // StatusDescription: short reason rendered below the status badge for
+  // non-ok rows. "failed" → backend's send-error message; "expired" → canned
+  // 7-day-window reminder. Empty on completed / pending rows.
+  status_description?: string;
 }
 
 // Savings Analytics types

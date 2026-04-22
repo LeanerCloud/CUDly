@@ -100,6 +100,14 @@ func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.Pu
 	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
 }
 
+func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, statuses, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
 func (m *MockConfigStore) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

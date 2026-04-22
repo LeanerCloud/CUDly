@@ -619,16 +619,16 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	resultMap := result.(map[string]interface{})
-	assert.Equal(t, "pending", resultMap["status"])
+	// With no emailNotifier wired on the handler the approval email cannot
+	// send, and the execution is dead on arrival (no one can ever approve
+	// it — the token only lives in the email). The handler flips the status
+	// from "pending" to "failed" so the History view shows it correctly
+	// instead of parking it in Pending forever.
+	assert.Equal(t, "failed", resultMap["status"])
 	assert.Equal(t, 2, resultMap["recommendation_count"])
 	assert.Equal(t, 300.0, resultMap["total_upfront_cost"])
 	assert.Equal(t, 150.0, resultMap["estimated_savings"])
 	assert.NotEmpty(t, resultMap["execution_id"])
-	// With no emailNotifier wired on the handler, the response must surface
-	// that the approval email did NOT send so the UI can tell the user to
-	// approve/cancel from History. Before this change the response lied:
-	// "Purchase execution created and pending approval" regardless of the
-	// email path's silent SNS no-op.
 	assert.Equal(t, false, resultMap["email_sent"], "email_sent must be false when emailNotifier is nil")
 	assert.Equal(t, "email notifier not configured for this deployment", resultMap["email_reason"])
 }

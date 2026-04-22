@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +37,7 @@ func TestHandler_getHistory(t *testing.T) {
 	}
 
 	mockStore.On("GetPurchaseHistory", ctx, "123456789012", 100).Return(history, nil)
-	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
@@ -68,7 +70,7 @@ func TestHandler_getHistory_AllAccounts(t *testing.T) {
 	}
 
 	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(history, nil)
-	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
@@ -99,8 +101,12 @@ func TestHandler_getHistory_IncludesPending(t *testing.T) {
 	}
 	pending := []config.PurchaseExecution{
 		{
-			ExecutionID:      "pend-1",
-			Status:           "pending",
+			ExecutionID: "pend-1",
+			Status:      "pending",
+			// Fresh scheduled_date keeps expireIfStale from transitioning
+			// this row to "expired" during the test. The stale-approval
+			// path is covered by its own test below.
+			ScheduledDate:    time.Now(),
 			TotalUpfrontCost: 999.0,
 			EstimatedSavings: 99.0,
 			Recommendations: []config.RecommendationRecord{
@@ -112,7 +118,7 @@ func TestHandler_getHistory_IncludesPending(t *testing.T) {
 
 	approverEmail := "ops@example.com"
 	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(completed, nil)
-	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -151,7 +157,7 @@ func TestHandler_getHistory_CustomLimit(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
 	mockStore.On("GetAllPurchaseHistory", ctx, 50).Return([]config.PurchaseHistoryRecord{}, nil)
-	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}

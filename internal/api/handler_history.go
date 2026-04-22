@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -33,14 +34,16 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 		completed[i].Status = "completed"
 	}
 
-	// Pull in-flight ad-hoc executions so the user can see (and cancel) their
-	// own pending approvals without waiting for the email. Pending executions
-	// live in a separate table (purchase_executions) from the completed
-	// purchase_history rows, so we merge after the fact. A failure to list
-	// pending executions must not hide completed history — log, skip, continue.
-	pending := h.fetchPendingAsHistory(ctx)
+	// Pull non-completed executions so the user can see (and cancel) their
+	// own in-flight approvals without waiting for the email, AND see the
+	// ones that never made it out (failed) or that sat unapproved past the
+	// 7-day cutoff (expired). Executions live in a separate table
+	// (purchase_executions) from the completed purchase_history rows, so we
+	// merge after the fact. A failure to list executions must not hide
+	// completed history — log, skip, continue.
+	extra := h.fetchExecutionsAsHistory(ctx)
 
-	all := append(completed, pending...) //nolint:gocritic // intentional new slice
+	all := append(completed, extra...) //nolint:gocritic // intentional new slice
 
 	all, err = h.filterPurchaseHistoryByAllowedAccounts(ctx, session, all)
 	if err != nil {
@@ -59,18 +62,34 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	}, nil
 }
 
-// fetchPendingAsHistory returns pending PurchaseExecutions as synthetic
-// PurchaseHistoryRecord entries so the /api/history response is a single flat
-// list. Execution-level aggregates (TotalUpfrontCost / EstimatedSavings)
-// become the row's cost fields; provider/service collapse to "multiple"
-// because a single execution can span providers. The approver address is
-// looked up from global config once and attached to every pending row so the
-// UI can tell the user exactly whose inbox holds the approval link. A
-// listing error is logged and skipped — completed history must still render.
-func (h *Handler) fetchPendingAsHistory(ctx context.Context) []config.PurchaseHistoryRecord {
-	executions, err := h.config.GetPendingExecutions(ctx)
+// historyExecutionStatuses enumerates the PurchaseExecution statuses the
+// History view shows alongside completed purchases. Scheduler-visible states
+// only; completed/approved/cancelled are intentionally excluded (approved
+// becomes a purchase_history row once the scheduler processes it; cancelled
+// is self-explanatory; completed is already in purchase_history).
+var historyExecutionStatuses = []string{"pending", "notified", "failed", "expired"}
+
+// approvalExpiryWindow is how long a pending approval stays actionable
+// before the History view flips it to "expired". Aligns with the
+// cleanup-executions TTL and the user expectation that a week-old
+// approval link is stale.
+const approvalExpiryWindow = 7 * 24 * time.Hour
+
+// fetchExecutionsAsHistory returns non-completed PurchaseExecutions as
+// synthetic PurchaseHistoryRecord entries so the /api/history response is a
+// single flat list. Execution-level aggregates (TotalUpfrontCost /
+// EstimatedSavings) become the row's cost fields; provider/service collapse
+// to "multiple" because a single execution can span providers. The approver
+// address is looked up from global config once and attached to pending/
+// notified rows so the UI can tell the user exactly whose inbox holds the
+// approval link. Pending executions older than approvalExpiryWindow are
+// lazily transitioned to "expired" in the store so a stale approval link
+// can't be clicked and the History badge reflects reality. A listing error
+// is logged and skipped — completed history must still render.
+func (h *Handler) fetchExecutionsAsHistory(ctx context.Context) []config.PurchaseHistoryRecord {
+	executions, err := h.config.GetExecutionsByStatuses(ctx, historyExecutionStatuses, config.DefaultListLimit)
 	if err != nil {
-		logging.Warnf("history: failed to load pending executions: %v", err)
+		logging.Warnf("history: failed to load non-completed executions: %v", err)
 		return nil
 	}
 	if len(executions) == 0 {
@@ -79,13 +98,29 @@ func (h *Handler) fetchPendingAsHistory(ctx context.Context) []config.PurchaseHi
 	approver := h.resolvePendingApproverEmail(ctx)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
 	for _, exec := range executions {
-		row, ok := pendingExecutionToHistoryRow(exec, approver)
-		if !ok {
-			continue
-		}
-		out = append(out, row)
+		exec = h.expireIfStale(ctx, exec)
+		out = append(out, executionToHistoryRow(exec, approver))
 	}
 	return out
+}
+
+// expireIfStale transitions a pending/notified execution to "expired" when
+// its ScheduledDate is older than approvalExpiryWindow. Returns the possibly-
+// updated execution. Transition failures are non-fatal — the row still
+// renders, just with its original status.
+func (h *Handler) expireIfStale(ctx context.Context, exec config.PurchaseExecution) config.PurchaseExecution {
+	if exec.Status != "pending" && exec.Status != "notified" {
+		return exec
+	}
+	if time.Since(exec.ScheduledDate) < approvalExpiryWindow {
+		return exec
+	}
+	updated, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired")
+	if err != nil {
+		logging.Warnf("history: failed to expire execution %s: %v", exec.ExecutionID, err)
+		return exec
+	}
+	return *updated
 }
 
 // resolvePendingApproverEmail returns the notification email the approval
@@ -106,19 +141,18 @@ func (h *Handler) resolvePendingApproverEmail(ctx context.Context) string {
 	return *globalCfg.NotificationEmail
 }
 
-// pendingExecutionToHistoryRow projects a PurchaseExecution into the
-// flat history-row shape. Returns ok=false for terminal states so the
-// belt-and-suspenders filter stays cheap at the call site (keeps the
-// call-site loop linear, under the cyclo threshold).
-func pendingExecutionToHistoryRow(exec config.PurchaseExecution, approver string) (config.PurchaseHistoryRecord, bool) {
-	if exec.Status != "pending" && exec.Status != "notified" {
-		return config.PurchaseHistoryRecord{}, false
-	}
+// executionToHistoryRow projects any non-completed PurchaseExecution into
+// the flat history-row shape. Status maps 1:1 onto the history Status field.
+// For pending/notified rows we attach the approver email so the UI can show
+// "awaiting approval from X"; for failed rows we surface the stored Error
+// message as the status description so the user sees WHY it failed (e.g.
+// "send failed: Missing domain").
+func executionToHistoryRow(exec config.PurchaseExecution, approver string) config.PurchaseHistoryRecord {
 	var accountID string
 	if exec.CloudAccountID != nil {
 		accountID = *exec.CloudAccountID
 	}
-	return config.PurchaseHistoryRecord{
+	row := config.PurchaseHistoryRecord{
 		AccountID:        accountID,
 		PurchaseID:       exec.ExecutionID,
 		Timestamp:        exec.ScheduledDate,
@@ -129,9 +163,17 @@ func pendingExecutionToHistoryRow(exec config.PurchaseExecution, approver string
 		UpfrontCost:      exec.TotalUpfrontCost,
 		EstimatedSavings: exec.EstimatedSavings,
 		PlanID:           exec.PlanID,
-		Status:           "pending",
-		Approver:         approver,
-	}, true
+		Status:           exec.Status,
+	}
+	switch exec.Status {
+	case "pending", "notified":
+		row.Approver = approver
+	case "failed":
+		row.StatusDescription = exec.Error
+	case "expired":
+		row.StatusDescription = "approval link expired (not approved within 7 days)"
+	}
+	return row
 }
 
 // collapseRecommendationProvider returns the single provider shared by every
@@ -205,12 +247,20 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistorySummary {
 	summary := HistorySummary{TotalPurchases: len(purchases)}
 	for _, p := range purchases {
-		// Pending rows count toward TotalPurchases / TotalPending but not
-		// toward the dollar totals — the money hasn't been committed yet.
-		// "completed" and unset (legacy DB rows that pre-date the status
-		// field) both count as completed.
-		if p.Status == "pending" || p.Status == "notified" {
+		// Non-completed rows count toward TotalPurchases and their specific
+		// bucket (pending / failed / expired) but are excluded from the
+		// dollar totals — the money hasn't been committed for any of those
+		// states. "completed" and unset (legacy DB rows that pre-date the
+		// status field) both count as completed.
+		switch p.Status {
+		case "pending", "notified":
 			summary.TotalPending++
+			continue
+		case "failed":
+			summary.TotalFailed++
+			continue
+		case "expired":
+			summary.TotalExpired++
 			continue
 		}
 		summary.TotalCompleted++
