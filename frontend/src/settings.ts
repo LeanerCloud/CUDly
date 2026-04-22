@@ -349,16 +349,8 @@ function renderAccountsList(
     testBtn.className = 'btn btn-small';
     testBtn.textContent = 'Test';
     testBtn.setAttribute('aria-label', `Test credentials for ${accountLabel}`);
-    testBtn.addEventListener('click', () => void testAccount(account.id, testBtn));
+    testBtn.addEventListener('click', () => void testAccount(account.id, accountLabel, testBtn));
     actionsTd.appendChild(testBtn);
-
-    const credsBtn = document.createElement('button');
-    credsBtn.type = 'button';
-    credsBtn.className = 'btn btn-small';
-    credsBtn.textContent = 'Credentials';
-    credsBtn.setAttribute('aria-label', `Edit credentials for ${accountLabel}`);
-    credsBtn.addEventListener('click', () => openAccountModal(provider, account));
-    actionsTd.appendChild(credsBtn);
 
     const overridesBtn = document.createElement('button');
     overridesBtn.type = 'button';
@@ -486,21 +478,38 @@ async function deleteAccount(accountId: string, provider: AccountProvider, _cont
 }
 
 /**
- * Test account credentials
+ * Test account credentials. Surfaces progress + outcome via toast so the
+ * signal isn't confined to the button label (which auto-clears in 3s and
+ * provides no detail beyond OK/Failed). The button keeps its inline status
+ * as a secondary affordance so the user's gaze point — the row they just
+ * clicked — still gets feedback.
  */
-async function testAccount(accountId: string, btn: HTMLButtonElement): Promise<void> {
+async function testAccount(accountId: string, accountLabel: string, btn: HTMLButtonElement): Promise<void> {
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Testing...';
+  showToast({ message: `Testing credentials for ${accountLabel}…`, kind: 'info', timeout: 3_000 });
   try {
     const result = await api.testAccountCredentials(accountId);
     btn.textContent = result.ok ? 'OK' : 'Failed';
+    if (result.ok) {
+      const detail = result.message ? `: ${result.message}` : '';
+      showToast({ message: `Credentials OK for ${accountLabel}${detail}`, kind: 'success', timeout: 5_000 });
+    } else {
+      showToast({
+        message: `Credentials failed for ${accountLabel}${result.message ? `: ${result.message}` : ''}`,
+        kind: 'error',
+        timeout: null,
+      });
+    }
     setTimeout(() => {
       btn.textContent = original;
       btn.disabled = false;
     }, 3000);
-  } catch {
+  } catch (err: unknown) {
     btn.textContent = 'Error';
+    const msg = err instanceof Error ? err.message : String(err);
+    showToast({ message: `Failed to test credentials for ${accountLabel}: ${msg}`, kind: 'error', timeout: null });
     setTimeout(() => {
       btn.textContent = original;
       btn.disabled = false;
