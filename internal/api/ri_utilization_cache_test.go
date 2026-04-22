@@ -245,11 +245,21 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	}
 	wg.Wait()
 
-	// All 10 readers finished (they all got the stale copy). Now
-	// release the gated fetcher and give any outstanding refresh
-	// goroutine time to complete.
+	// All 10 getOrFetch calls returned the stale copy. The 10
+	// background-refresh goroutines are now racing to enter sf.Do —
+	// under CPU pressure (full test suite with -race) they can lag
+	// behind the getOrFetch returns, and a straggler that arrives
+	// after the first singleflight batch finishes would open a
+	// second batch and bump calls to 2. Give the scheduler enough
+	// runway for all 10 to reach sf.Do (where they'll block on
+	// release) before we unblock the in-flight fetch.
+	time.Sleep(250 * time.Millisecond)
+
+	// Unblock the single in-flight fetch and wait for the collapsed
+	// batch's storePayload to complete so calls.Load() reflects the
+	// final state.
 	close(release)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("expected exactly 1 fetch call under singleflight; got %d", n)

@@ -529,9 +529,24 @@ func TestGetFederationIaC_Bicep_RejectsNonAzure(t *testing.T) {
 // empty source_account_id.
 func TestGetFederationIaC_FailsLoudOnEmptySourceAccountID(t *testing.T) {
 	// sourceCloud() returns "aws" by default (and we explicitly set it here for
-	// clarity). resolveAWSAccountID returns "" because there are no real AWS
-	// credentials in the test environment, which triggers the fail-loud path.
+	// clarity). resolveAWSAccountID must return "" to trigger the fail-loud
+	// path — actively clear every AWS credential env var a developer (or
+	// pre-commit hook inheriting the shell env) might have set, otherwise the
+	// SDK default chain picks them up, STS succeeds, and the assertion flips.
 	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
+	for _, k := range []string{
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"AWS_PROFILE",
+		"AWS_DEFAULT_PROFILE",
+		"AWS_SHARED_CREDENTIALS_FILE",
+		"AWS_CONFIG_FILE",
+		"AWS_WEB_IDENTITY_TOKEN_FILE",
+		"AWS_ROLE_ARN",
+	} {
+		t.Setenv(k, "")
+	}
 	h := federationHandler()
 
 	_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
