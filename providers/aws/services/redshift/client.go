@@ -4,6 +4,7 @@ package redshift
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -103,7 +104,16 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	return commitments, nil
 }
 
-// PurchaseCommitment purchases a Redshift Reserved Node
+// PurchaseCommitment purchases a Redshift Reserved Node.
+//
+// Known limitation: Redshift reserved nodes technically accept tags via
+// redshift:CreateTags, but that API requires a full ARN
+// (arn:aws:redshift:<region>:<account>:reservednode:<id>) and the purchase
+// response doesn't include it — constructing the ARN needs the caller's
+// account ID (sts:GetCallerIdentity), infrastructure that isn't plumbed
+// through this client yet. Until that lands, the source is logged here and
+// persisted in purchase_history.source; the reserved node itself remains
+// untagged in the AWS console.
 func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -138,6 +148,10 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	} else {
 		result.Error = fmt.Errorf("purchase response was empty")
 		return result, result.Error
+	}
+
+	if opts.Source != "" {
+		log.Printf("INFO: Redshift reserved node %s created by %s (tagging requires ARN construction not yet available; source tracked in purchase_history)", result.CommitmentID, opts.Source)
 	}
 
 	return result, nil

@@ -4,6 +4,7 @@ package opensearch
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -103,7 +104,16 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	return commitments, nil
 }
 
-// PurchaseCommitment purchases an OpenSearch Reserved Instance
+// PurchaseCommitment purchases an OpenSearch Reserved Instance.
+//
+// Known limitation: OpenSearch reserved instances cannot be tagged via any
+// AWS API. PurchaseReservedInstanceOfferingInput has no Tags field, and
+// opensearch:AddTags only accepts domain/data-source/application ARNs — not
+// reserved-instance ARNs. ResourceGroupsTaggingAPI also doesn't list
+// opensearch:reserved-instance as a taggable resource type. The source is
+// logged here and persisted in purchase_history.source so CUDly can still
+// reconcile its purchases, but the commitment itself remains untagged in the
+// AWS console.
 func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -138,6 +148,10 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	} else {
 		result.Error = fmt.Errorf("purchase response was empty")
 		return result, result.Error
+	}
+
+	if opts.Source != "" {
+		log.Printf("INFO: OpenSearch RI %s created by %s (AWS does not support tagging reserved instances; source tracked in purchase_history)", result.CommitmentID, opts.Source)
 	}
 
 	return result, nil
