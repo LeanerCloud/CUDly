@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
+	redshifttypes "github.com/aws/aws-sdk-go-v2/service/redshift/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/retry"
 )
 
 // RedshiftAPI defines the interface for Redshift operations (enables mocking)
@@ -19,25 +23,46 @@ type RedshiftAPI interface {
 	PurchaseReservedNodeOffering(ctx context.Context, params *redshift.PurchaseReservedNodeOfferingInput, optFns ...func(*redshift.Options)) (*redshift.PurchaseReservedNodeOfferingOutput, error)
 	DescribeReservedNodeOfferings(ctx context.Context, params *redshift.DescribeReservedNodeOfferingsInput, optFns ...func(*redshift.Options)) (*redshift.DescribeReservedNodeOfferingsOutput, error)
 	DescribeReservedNodes(ctx context.Context, params *redshift.DescribeReservedNodesInput, optFns ...func(*redshift.Options)) (*redshift.DescribeReservedNodesOutput, error)
+	CreateTags(ctx context.Context, params *redshift.CreateTagsInput, optFns ...func(*redshift.Options)) (*redshift.CreateTagsOutput, error)
+}
+
+// STSAPI is the subset of STS this client calls to resolve the caller's
+// account ID for ARN construction. Declared at package level so tests can
+// substitute a fake.
+type STSAPI interface {
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
 // Client handles AWS Redshift Reserved Nodes
 type Client struct {
-	client RedshiftAPI
-	region string
+	client    RedshiftAPI
+	stsClient STSAPI
+	region    string
+
+	// accountID is resolved lazily on first tag call via STS. Guarded by
+	// accountOnce so concurrent purchases don't each call STS.
+	accountOnce sync.Once
+	accountID   string
+	accountErr  error
 }
 
 // NewClient creates a new Redshift client
 func NewClient(cfg aws.Config) *Client {
 	return &Client{
-		client: redshift.NewFromConfig(cfg),
-		region: cfg.Region,
+		client:    redshift.NewFromConfig(cfg),
+		stsClient: sts.NewFromConfig(cfg),
+		region:    cfg.Region,
 	}
 }
 
 // SetRedshiftAPI sets a custom Redshift API client (for testing)
 func (c *Client) SetRedshiftAPI(api RedshiftAPI) {
 	c.client = api
+}
+
+// SetSTSAPI sets a custom STS client (for testing)
+func (c *Client) SetSTSAPI(api STSAPI) {
+	c.stsClient = api
 }
 
 // GetServiceType returns the service type
@@ -106,14 +131,12 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 
 // PurchaseCommitment purchases a Redshift Reserved Node.
 //
-// Known limitation: Redshift reserved nodes technically accept tags via
-// redshift:CreateTags, but that API requires a full ARN
-// (arn:aws:redshift:<region>:<account>:reservednode:<id>) and the purchase
-// response doesn't include it — constructing the ARN needs the caller's
-// account ID (sts:GetCallerIdentity), infrastructure that isn't plumbed
-// through this client yet. Until that lands, the source is logged here and
-// persisted in purchase_history.source; the reserved node itself remains
-// untagged in the AWS console.
+// PurchaseReservedNodeOfferingInput has no Tags field — tagging happens
+// post-purchase via redshift:CreateTags, which requires a full ARN
+// (arn:aws:redshift:<region>:<account>:reservednode:<id>). The account ID
+// is resolved lazily on first tag call via sts:GetCallerIdentity and cached
+// for the lifetime of the client. Tagging failure is logged but does NOT
+// fail the purchase — the reserved node is already bought.
 func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -150,11 +173,77 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	if opts.Source != "" {
-		log.Printf("INFO: Redshift reserved node %s created by %s (tagging requires ARN construction not yet available; source tracked in purchase_history)", result.CommitmentID, opts.Source)
+	if err := c.tagReservedNode(ctx, result.CommitmentID, rec, opts.Source); err != nil {
+		log.Printf("WARNING: failed to tag Redshift reserved node %s after purchase (node is bought; tag missing): %v", result.CommitmentID, err)
 	}
 
 	return result, nil
+}
+
+// resolveAccountID fetches the caller's AWS account ID via STS and caches it.
+// Returns ("", nil) — i.e. an empty string with no error — when the STS
+// client is nil (e.g. a test client that skipped SetSTSAPI). Callers must
+// treat empty as "can't tag" and skip the tag call.
+func (c *Client) resolveAccountID(ctx context.Context) (string, error) {
+	c.accountOnce.Do(func() {
+		if c.stsClient == nil {
+			return
+		}
+		out, err := c.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+		if err != nil {
+			c.accountErr = err
+			return
+		}
+		if out != nil && out.Account != nil {
+			c.accountID = *out.Account
+		}
+	})
+	return c.accountID, c.accountErr
+}
+
+// tagReservedNode constructs the reserved-node ARN and calls redshift:CreateTags.
+// Retries up to 4 attempts (1s/2s/4s backoff) on validation errors that can
+// indicate the node isn't yet visible to the tagging API. Returns nil when
+// source is empty (opt-out) OR when the account ID can't be resolved — both
+// mean "don't tag", logged by the caller.
+func (c *Client) tagReservedNode(ctx context.Context, nodeID string, rec common.Recommendation, source string) error {
+	if source == "" {
+		return nil
+	}
+	accountID, err := c.resolveAccountID(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve account ID: %w", err)
+	}
+	if accountID == "" {
+		return fmt.Errorf("account ID unavailable (no STS client)")
+	}
+
+	arn := fmt.Sprintf("arn:aws:redshift:%s:%s:reservednode:%s", c.region, accountID, nodeID)
+	tags := []redshifttypes.Tag{
+		{Key: aws.String("Purpose"), Value: aws.String("Reserved Node Purchase")},
+		{Key: aws.String("NodeType"), Value: aws.String(rec.ResourceType)},
+		{Key: aws.String("Region"), Value: aws.String(rec.Region)},
+		{Key: aws.String("PurchaseDate"), Value: aws.String(time.Now().Format("2006-01-02"))},
+		{Key: aws.String("Tool"), Value: aws.String("CUDly")},
+		{Key: aws.String(common.PurchaseTagKey), Value: aws.String(source)},
+	}
+
+	cfg := retry.Config{MaxAttempts: 4, BaseDelay: time.Second, MaxDelay: 4 * time.Second}
+	return retry.Do(ctx, cfg, func(perAttemptCtx context.Context, _ int) error {
+		_, err := c.client.CreateTags(perAttemptCtx, &redshift.CreateTagsInput{
+			ResourceName: aws.String(arn),
+			Tags:         tags,
+		})
+		if err == nil {
+			return nil
+		}
+		// All Redshift CreateTags errors that aren't transient (e.g. auth,
+		// invalid ARN) are permanent. No documented "resource not yet
+		// visible" retry condition for reserved nodes, so a single pass
+		// is usually enough; the retry budget exists to absorb network
+		// flakes not state-machine delays.
+		return fmt.Errorf("%w: %w", retry.ErrPermanent, err)
+	})
 }
 
 // findOfferingID finds the appropriate Reserved Node offering ID

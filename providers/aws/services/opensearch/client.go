@@ -5,13 +5,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/opensearch"
 	"github.com/aws/aws-sdk-go-v2/service/opensearch/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/retry"
 )
 
 // OpenSearchAPI defines the interface for OpenSearch operations (enables mocking)
@@ -19,25 +22,43 @@ type OpenSearchAPI interface {
 	PurchaseReservedInstanceOffering(ctx context.Context, params *opensearch.PurchaseReservedInstanceOfferingInput, optFns ...func(*opensearch.Options)) (*opensearch.PurchaseReservedInstanceOfferingOutput, error)
 	DescribeReservedInstanceOfferings(ctx context.Context, params *opensearch.DescribeReservedInstanceOfferingsInput, optFns ...func(*opensearch.Options)) (*opensearch.DescribeReservedInstanceOfferingsOutput, error)
 	DescribeReservedInstances(ctx context.Context, params *opensearch.DescribeReservedInstancesInput, optFns ...func(*opensearch.Options)) (*opensearch.DescribeReservedInstancesOutput, error)
+	AddTags(ctx context.Context, params *opensearch.AddTagsInput, optFns ...func(*opensearch.Options)) (*opensearch.AddTagsOutput, error)
+}
+
+// STSAPI is the subset of STS this client calls to resolve the caller's
+// account ID for ARN construction.
+type STSAPI interface {
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
 // Client handles AWS OpenSearch Reserved Instances
 type Client struct {
-	client OpenSearchAPI
-	region string
+	client    OpenSearchAPI
+	stsClient STSAPI
+	region    string
+
+	accountOnce sync.Once
+	accountID   string
+	accountErr  error
 }
 
 // NewClient creates a new OpenSearch client
 func NewClient(cfg aws.Config) *Client {
 	return &Client{
-		client: opensearch.NewFromConfig(cfg),
-		region: cfg.Region,
+		client:    opensearch.NewFromConfig(cfg),
+		stsClient: sts.NewFromConfig(cfg),
+		region:    cfg.Region,
 	}
 }
 
 // SetOpenSearchAPI sets a custom OpenSearch API client (for testing)
 func (c *Client) SetOpenSearchAPI(api OpenSearchAPI) {
 	c.client = api
+}
+
+// SetSTSAPI sets a custom STS client (for testing)
+func (c *Client) SetSTSAPI(api STSAPI) {
+	c.stsClient = api
 }
 
 // GetServiceType returns the service type
@@ -106,14 +127,14 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 
 // PurchaseCommitment purchases an OpenSearch Reserved Instance.
 //
-// Known limitation: OpenSearch reserved instances cannot be tagged via any
-// AWS API. PurchaseReservedInstanceOfferingInput has no Tags field, and
-// opensearch:AddTags only accepts domain/data-source/application ARNs — not
-// reserved-instance ARNs. ResourceGroupsTaggingAPI also doesn't list
-// opensearch:reserved-instance as a taggable resource type. The source is
-// logged here and persisted in purchase_history.source so CUDly can still
-// reconcile its purchases, but the commitment itself remains untagged in the
-// AWS console.
+// PurchaseReservedInstanceOfferingInput has no Tags field — tagging happens
+// post-purchase via opensearch:AddTags with a reserved-instance ARN
+// (arn:aws:es:<region>:<account>:reserved-instance/<uuid>). AWS hasn't
+// explicitly documented reserved-instance as a supported resource type for
+// AddTags (only domain/data-source/application), so the call may return a
+// validation error — in which case retry.ErrPermanent short-circuits and the
+// failure is logged without blocking the purchase. If AWS ever adds support,
+// this will start working with no code change.
 func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -150,11 +171,70 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	if opts.Source != "" {
-		log.Printf("INFO: OpenSearch RI %s created by %s (AWS does not support tagging reserved instances; source tracked in purchase_history)", result.CommitmentID, opts.Source)
+	if err := c.tagReservedInstance(ctx, result.CommitmentID, rec, opts.Source); err != nil {
+		log.Printf("WARNING: failed to tag OpenSearch RI %s after purchase (RI is bought; tag missing, source recorded in purchase_history): %v", result.CommitmentID, err)
 	}
 
 	return result, nil
+}
+
+// resolveAccountID fetches the caller's AWS account ID via STS and caches it.
+func (c *Client) resolveAccountID(ctx context.Context) (string, error) {
+	c.accountOnce.Do(func() {
+		if c.stsClient == nil {
+			return
+		}
+		out, err := c.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+		if err != nil {
+			c.accountErr = err
+			return
+		}
+		if out != nil && out.Account != nil {
+			c.accountID = *out.Account
+		}
+	})
+	return c.accountID, c.accountErr
+}
+
+// tagReservedInstance constructs the reserved-instance ARN and calls
+// opensearch:AddTags. Short-circuits when source is empty (opt-out) or when
+// the account ID can't be resolved. AddTags support for reserved-instance
+// ARNs isn't guaranteed by AWS; failures are wrapped in retry.ErrPermanent
+// so the first attempt is final and the outer retry budget isn't burned on
+// a call AWS will never accept today.
+func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec common.Recommendation, source string) error {
+	if source == "" {
+		return nil
+	}
+	accountID, err := c.resolveAccountID(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve account ID: %w", err)
+	}
+	if accountID == "" {
+		return fmt.Errorf("account ID unavailable (no STS client)")
+	}
+
+	arn := fmt.Sprintf("arn:aws:es:%s:%s:reserved-instance/%s", c.region, accountID, riID)
+	tagList := []types.Tag{
+		{Key: aws.String("Purpose"), Value: aws.String("Reserved Instance Purchase")},
+		{Key: aws.String("ResourceType"), Value: aws.String(rec.ResourceType)},
+		{Key: aws.String("Region"), Value: aws.String(rec.Region)},
+		{Key: aws.String("PurchaseDate"), Value: aws.String(time.Now().Format("2006-01-02"))},
+		{Key: aws.String("Tool"), Value: aws.String("CUDly")},
+		{Key: aws.String(common.PurchaseTagKey), Value: aws.String(source)},
+	}
+
+	cfg := retry.Config{MaxAttempts: 2, BaseDelay: time.Second, MaxDelay: 2 * time.Second}
+	return retry.Do(ctx, cfg, func(perAttemptCtx context.Context, _ int) error {
+		_, err := c.client.AddTags(perAttemptCtx, &opensearch.AddTagsInput{
+			ARN:     aws.String(arn),
+			TagList: tagList,
+		})
+		if err == nil {
+			return nil
+		}
+		return fmt.Errorf("%w: %w", retry.ErrPermanent, err)
+	})
 }
 
 // findOfferingID finds the appropriate Reserved Instance offering ID

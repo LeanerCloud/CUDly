@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/opensearch"
 	"github.com/aws/aws-sdk-go-v2/service/opensearch/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -41,6 +42,27 @@ func (m *MockOpenSearchClient) DescribeReservedInstances(ctx context.Context, pa
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*opensearch.DescribeReservedInstancesOutput), args.Error(1)
+}
+
+func (m *MockOpenSearchClient) AddTags(ctx context.Context, params *opensearch.AddTagsInput, optFns ...func(*opensearch.Options)) (*opensearch.AddTagsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*opensearch.AddTagsOutput), args.Error(1)
+}
+
+// MockOpenSearchSTSClient implements STSAPI for testing.
+type MockOpenSearchSTSClient struct {
+	mock.Mock
+}
+
+func (m *MockOpenSearchSTSClient) GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sts.GetCallerIdentityOutput), args.Error(1)
 }
 
 func TestNewClient(t *testing.T) {
@@ -413,6 +435,95 @@ func TestClient_GetOfferingDetails_APIError(t *testing.T) {
 	assert.Nil(t, details)
 	assert.Contains(t, err.Error(), "failed to get offering details")
 	mockOS.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_AddTagsWithResolvedARN(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	mockSTS := &MockOpenSearchSTSClient{}
+	client := &Client{client: mockOS, stsClient: mockSTS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceSearch,
+		ResourceType:  "m5.large.search",
+		Count:         1,
+		Term:          "1yr",
+		Region:        "us-east-1",
+		PaymentOption: "all-upfront",
+	}
+
+	mockOS.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+			ReservedInstanceOfferings: []types.ReservedInstanceOffering{{
+				ReservedInstanceOfferingId: aws.String("off-os"),
+				InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+				Duration:                   31536000,
+				PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+			}},
+		}, nil)
+
+	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).
+		Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+			ReservedInstanceId: aws.String("ri-os"),
+		}, nil)
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil)
+
+	expectedARN := "arn:aws:es:us-east-1:123456789012:reserved-instance/ri-os"
+	mockOS.On("AddTags", mock.Anything, mock.MatchedBy(func(in *opensearch.AddTagsInput) bool {
+		if aws.ToString(in.ARN) != expectedARN {
+			return false
+		}
+		for _, tag := range in.TagList {
+			if aws.ToString(tag.Key) == common.PurchaseTagKey && aws.ToString(tag.Value) == common.PurchaseSourceWeb {
+				return true
+			}
+		}
+		return false
+	})).Return(&opensearch.AddTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	mockOS.AssertExpectations(t)
+	mockSTS.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_AddTagsFailureDoesNotFailPurchase(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	mockSTS := &MockOpenSearchSTSClient{}
+	client := &Client{client: mockOS, stsClient: mockSTS, region: "us-east-1"}
+
+	rec := common.Recommendation{Service: common.ServiceSearch, ResourceType: "m5.large.search", Count: 1, Term: "1yr", PaymentOption: "all-upfront"}
+
+	mockOS.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+			ReservedInstanceOfferings: []types.ReservedInstanceOffering{{
+				ReservedInstanceOfferingId: aws.String("off-os-fail"),
+				InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+				Duration:                   31536000,
+				PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+			}},
+		}, nil)
+
+	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).
+		Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+			ReservedInstanceId: aws.String("ri-os-fail"),
+		}, nil)
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil)
+
+	// AWS rejects AddTags on reserved-instance ARNs — AWS may or may not
+	// support this today. We return a validation error and verify the
+	// purchase still reports success.
+	mockOS.On("AddTags", mock.Anything, mock.Anything).
+		Return(nil, fmt.Errorf("ValidationException: reserved-instance is not a valid resource type"))
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	assert.NoError(t, err, "tag failure must not surface as a purchase error")
+	assert.True(t, result.Success, "purchase must remain successful even when tagging fails")
+	assert.Equal(t, "ri-os-fail", result.CommitmentID)
 }
 
 func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {

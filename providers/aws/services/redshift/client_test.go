@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
 	"github.com/aws/aws-sdk-go-v2/service/redshift/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -41,6 +42,27 @@ func (m *MockRedshiftClient) DescribeReservedNodes(ctx context.Context, params *
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*redshift.DescribeReservedNodesOutput), args.Error(1)
+}
+
+func (m *MockRedshiftClient) CreateTags(ctx context.Context, params *redshift.CreateTagsInput, optFns ...func(*redshift.Options)) (*redshift.CreateTagsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*redshift.CreateTagsOutput), args.Error(1)
+}
+
+// MockRedshiftSTSClient implements STSAPI for testing.
+type MockRedshiftSTSClient struct {
+	mock.Mock
+}
+
+func (m *MockRedshiftSTSClient) GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sts.GetCallerIdentityOutput), args.Error(1)
 }
 
 func TestNewClient(t *testing.T) {
@@ -289,6 +311,64 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 	assert.Equal(t, "rn-789", result.CommitmentID)
 	assert.Equal(t, 40000.0, result.Cost)
 	mockRS.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_TagsWithResolvedARN(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	mockSTS := &MockRedshiftSTSClient{}
+	client := &Client{
+		client:    mockRS,
+		stsClient: mockSTS,
+		region:    "eu-west-1",
+	}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.xlplus",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Region:        "eu-west-1",
+		Details:       common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 1},
+	}
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{{
+				ReservedNodeOfferingId:   aws.String("off-tag"),
+				NodeType:                 aws.String("ra3.xlplus"),
+				Duration:                 aws.Int32(31536000),
+				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				FixedPrice:               aws.Float64(100.0),
+			}},
+		}, nil)
+
+	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
+		Return(&redshift.PurchaseReservedNodeOfferingOutput{
+			ReservedNode: &types.ReservedNode{ReservedNodeId: aws.String("rn-tag"), FixedPrice: aws.Float64(100.0)},
+		}, nil)
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil)
+
+	expectedARN := "arn:aws:redshift:eu-west-1:123456789012:reservednode:rn-tag"
+	mockRS.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *redshift.CreateTagsInput) bool {
+		if aws.ToString(in.ResourceName) != expectedARN {
+			return false
+		}
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == common.PurchaseTagKey && aws.ToString(tag.Value) == common.PurchaseSourceCLI {
+				return true
+			}
+		}
+		return false
+	})).Return(&redshift.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	mockRS.AssertExpectations(t)
+	mockSTS.AssertExpectations(t)
 }
 
 func TestClient_MatchesDuration(t *testing.T) {

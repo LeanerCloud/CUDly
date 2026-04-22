@@ -222,26 +222,17 @@ outstanding so future work has a clear starting point.
   service-specific string constants. Deferred from the purchase-
   automation change itself to keep that diff reviewable.
 
-- **OpenSearch RI `purchase-automation` tagging not possible**:
-  Documented inline in `providers/aws/services/opensearch/client.go`.
-  `opensearch:AddTags` only accepts domain/data-source/application
-  ARNs, and `ResourceGroupsTaggingAPI` doesn't list
-  `opensearch:reserved-instance` as a taggable resource type — the
-  reserved instance itself is genuinely untaggable via any AWS API.
-  Source is persisted in `purchase_history.source` so CUDly can still
-  reconcile purchases against its own DB, but the RI stays untagged in
-  the AWS console. This needs an AWS feature request upstream, not a
-  code change; flagged here for visibility.
-
-- **Redshift RI `purchase-automation` tagging deferred (needs ARN
-  construction)**: Documented inline in
-  `providers/aws/services/redshift/client.go`. `redshift:CreateTags`
-  does accept tags on reserved nodes, but it requires a full ARN
-  (`arn:aws:redshift:<region>:<account>:reservednode:<id>`) which
-  needs the caller's AWS account ID — plumbed via
-  `sts:GetCallerIdentity` in some clients but not yet in the Redshift
-  service client. Follow-up: add account-ID resolution (either cached
-  at client construction or lazy on first tag call) and then call
-  `CreateTags` post-purchase in the same shape as the EC2 RI
-  implementation in commit `321a9b697`. Source is already persisted in
+- **OpenSearch RI tagging: best-effort, may be rejected by AWS**:
+  Implemented in `providers/aws/services/opensearch/client.go`. The
+  client now resolves the caller's AWS account ID via STS (cached on
+  first tag call), constructs an ARN
+  (`arn:aws:es:<region>:<account>:reserved-instance/<id>`), and calls
+  `opensearch:AddTags` post-purchase. AWS documentation only explicitly
+  supports AddTags on domain/data-source/application ARNs, so the call
+  MAY be rejected with a `ValidationException`. When that happens,
+  `retry.ErrPermanent` short-circuits the retry budget and the failure
+  is logged at WARN — the purchase still succeeds. If AWS extends
+  AddTags to cover reserved-instance ARNs (or CUDly switches to
+  ResourceGroupsTaggingAPI if that ever adds the resource type), the
+  code will start working with no change. Source is also persisted in
   `purchase_history.source` for DB-side reconciliation.
