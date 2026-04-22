@@ -20,9 +20,15 @@ export async function loadPlans(): Promise<void> {
     const data = await api.getPlans() as unknown as PlansResponse;
     let plans = data.plans || [];
 
-    // Client-side provider filter
+    // Client-side provider filter. Backend `config.PurchasePlan` has no
+    // top-level `provider` field — the plan's provider is derived from
+    // its first service entry (see extractPlanInfo below). Filtering on
+    // `p.provider` directly silently returned zero rows for every
+    // non-empty filter value.
     const providerFilter = (document.getElementById('plans-provider-filter') as HTMLSelectElement | null)?.value;
-    if (providerFilter) plans = plans.filter(p => p.provider === providerFilter);
+    if (providerFilter) {
+      plans = plans.filter(p => extractPlanInfo(p as unknown as BackendPlan).provider === providerFilter);
+    }
 
     renderPlans(plans);
   } catch (error) {

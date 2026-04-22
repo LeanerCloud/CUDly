@@ -152,6 +152,49 @@ describe('renderSubNav', () => {
     expect(active.length).toBe(1);
     expect(active[0]?.dataset['anchor']).toBe('purchasing-global-defaults');
   });
+
+  // Regression: prior to this wrapping, each pre-existing child of the
+  // panel became its own grid item and auto-placed into alternating
+  // columns — producing the "heading overlaps the sub-nav" and "AWS card
+  // shows in the left rail" layouts we saw in the 2026-04-22 screenshots.
+  it('wraps pre-existing panel children into a single content column', () => {
+    const panel = buildPurchasingPanel();
+    const originalChildIds = Array.from(panel.children).map((c) => c.id);
+
+    renderSubNav('purchasing');
+
+    // Panel now has exactly 2 grid children: the nav + a content wrapper.
+    const directChildren = Array.from(panel.children);
+    expect(directChildren.length).toBe(2);
+    expect(directChildren[0]?.classList.contains('settings-subnav')).toBe(true);
+    expect(directChildren[1]?.classList.contains('settings-layout-content')).toBe(true);
+
+    // All original children live inside the content wrapper, in order.
+    const wrapped = Array.from(directChildren[1]?.children ?? []).map((c) => c.id);
+    expect(wrapped).toEqual(originalChildIds);
+
+    // The layout class is applied to the panel itself so the 220px rail
+    // + 1fr content grid kicks in.
+    expect(panel.classList.contains('settings-layout')).toBe(true);
+  });
+
+  it('unwraps the content column when tearing down the rail', () => {
+    const panel = buildPurchasingPanel();
+    const originalChildIds = Array.from(panel.children).map((c) => c.id);
+
+    renderSubNav('purchasing');
+    expect(panel.querySelector('.settings-layout-content')).not.toBeNull();
+
+    // Teardown path: re-render into a sub-tab with no matching container
+    // (General) — rail must disappear AND the wrapper must be gone, with
+    // original children restored as direct panel children.
+    renderSubNav('general');
+
+    expect(panel.querySelector('.settings-layout-content')).toBeNull();
+    expect(panel.querySelector('.settings-subnav')).toBeNull();
+    expect(panel.classList.contains('settings-layout')).toBe(false);
+    expect(Array.from(panel.children).map((c) => c.id)).toEqual(originalChildIds);
+  });
 });
 
 describe('reflectDirtyState', () => {

@@ -178,6 +178,49 @@ describe('Plans Module', () => {
       expect(list?.innerHTML).toContain('No purchase plans configured');
     });
 
+    test('provider filter derives provider from first service entry', async () => {
+      // Regression: backend config.PurchasePlan has no top-level
+      // `provider` field — it lives on each service inside the `services`
+      // map. Filtering via p.provider directly returned 0 rows every
+      // time and was the cause of "switching Provider: AWS empties the
+      // list" seen in the 2026-04-22 screenshots.
+      const filter = document.createElement('select');
+      filter.id = 'plans-provider-filter';
+      ['', 'aws', 'azure', 'gcp'].forEach((v) => {
+        const o = document.createElement('option');
+        o.value = v;
+        filter.appendChild(o);
+      });
+      filter.value = 'aws';
+      document.body.appendChild(filter);
+
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-aws',
+            name: 'AWS fanout',
+            enabled: true,
+            services: { ec2: { provider: 'aws', service: 'ec2', term: 3, coverage: 80 } },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+          },
+          {
+            id: 'plan-gcp',
+            name: 'GCP CUDs',
+            enabled: true,
+            services: { compute: { provider: 'gcp', service: 'compute', term: 3, coverage: 80 } },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+          },
+        ],
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('AWS fanout');
+      expect(list?.innerHTML).not.toContain('GCP CUDs');
+    });
+
     test('shows error on API failure', async () => {
       (api.getPlans as jest.Mock).mockRejectedValue(new Error('API Error'));
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });

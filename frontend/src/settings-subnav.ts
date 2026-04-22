@@ -54,9 +54,16 @@ export function renderSubNav(subTab: string): void {
 
   // Always remove a previously rendered rail, regardless of what we're
   // about to show — switching from Purchasing to General should not leave
-  // the Purchasing rail lingering in the DOM.
+  // the Purchasing rail lingering in the DOM. Also unwrap any
+  // .settings-layout-content we created previously so the panel's children
+  // are siblings of the container again before we re-wrap.
   document.querySelectorAll('.settings-subnav').forEach((el) => el.remove());
   document.querySelectorAll('.settings-layout').forEach((el) => {
+    const wrapper = el.querySelector(':scope > .settings-layout-content');
+    if (wrapper) {
+      while (wrapper.firstChild) el.insertBefore(wrapper.firstChild, wrapper);
+      wrapper.remove();
+    }
     el.classList.remove('settings-layout');
   });
 
@@ -104,10 +111,18 @@ export function renderSubNav(subTab: string): void {
   });
   nav.appendChild(ul);
 
-  // Wrap: wrap the container's existing children in a content div, and
-  // insert the nav as a sibling inside a two-column grid.
+  // Wrap: move the container's existing children into a single content
+  // div so the grid has exactly two children (nav + content). Without
+  // this wrapper each pre-existing child becomes its own grid item and
+  // auto-places into alternating columns, which is what produced the
+  // "heading overlaps the sub-nav" and "AWS card shows in the left rail"
+  // layouts we saw in the 2026-04-22 screenshots.
+  const content = document.createElement('div');
+  content.className = 'settings-layout-content';
+  while (container.firstChild) content.appendChild(container.firstChild);
   container.classList.add('settings-layout');
-  container.insertBefore(nav, container.firstChild);
+  container.appendChild(nav);      // grid col 1 (sticky rail)
+  container.appendChild(content);  // grid col 2 (all original children)
 
   // Scrollspy: highlight whichever section is currently most-visible.
   const links = Array.from(nav.querySelectorAll<HTMLAnchorElement>('a[data-anchor]'));
