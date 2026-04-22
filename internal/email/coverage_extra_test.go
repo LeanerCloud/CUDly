@@ -408,6 +408,45 @@ func TestSender_SendPurchaseApprovalRequest_NoFromEmail(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoFromEmail)
 }
 
+// TestSender_SendPurchaseApprovalRequest_MalformedFromEmail pins the
+// regression for the "Missing domain" SES BadRequestException the user hit
+// when a deployment's subdomain_zone_name tfvar was unset and Terraform
+// expanded FROM_EMAIL to "noreply@" with a trailing empty domain. The
+// sender should reject the malformed value locally rather than hand it to
+// SES, so the failure reason reads as "FROM_EMAIL not configured" on the
+// History page.
+func TestSender_SendPurchaseApprovalRequest_MalformedFromEmail(t *testing.T) {
+	cases := []struct {
+		name      string
+		fromEmail string
+	}{
+		{"trailing empty domain", "noreply@"},
+		{"missing @", "noreply-cudly.example.com"},
+		{"leading empty local", "@example.com"},
+		{"domain has no dot", "noreply@localhost"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			mockSNS := &mockSNSPublisher{}
+			mockSES := &mockSESEmailSender{}
+			sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{FromEmail: tc.fromEmail})
+			data := NotificationData{
+				DashboardURL:   "https://dashboard.example.com",
+				ApprovalToken:  "tok",
+				ExecutionID:    "exec",
+				RecipientEmail: "user@example.com",
+				Recommendations: []RecommendationSummary{
+					{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1},
+				},
+			}
+			err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+			require.ErrorIs(t, err, ErrNoFromEmail)
+			require.Equal(t, 0, mockSES.sendEmailCalls, "malformed FROM_EMAIL must not reach SES")
+		})
+	}
+}
+
 func TestSender_SendPurchaseApprovalRequest_SendsViaSES(t *testing.T) {
 	// Happy path: both FromEmail and RecipientEmail are set, the sender
 	// routes through SES SendEmail (not SNS Publish). This is the

@@ -315,7 +315,12 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
-	if s.fromEmail == "" {
+	// Both empty and malformed FROM_EMAIL (e.g. "noreply@" when the
+	// subdomain_zone_name tfvar is unset) map to ErrNoFromEmail so the
+	// handler can report "FROM_EMAIL not configured" — the prior behaviour
+	// handed the bad string to SES and surfaced a BadRequestException stack
+	// trace ("Missing domain") to the user.
+	if !isValidFromEmail(s.fromEmail) {
 		return ErrNoFromEmail
 	}
 	body, err := RenderPurchaseApprovalRequestEmail(data)

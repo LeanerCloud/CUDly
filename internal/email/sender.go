@@ -50,6 +50,29 @@ func NewSender(cfg SenderConfig) (*Sender, error) {
 	return NewSenderWithContext(context.Background(), cfg)
 }
 
+// isValidFromEmail checks that a FROM_EMAIL value has the minimum "x@y.z"
+// shape SES will accept. We don't RFC5322-validate — just guard against the
+// two misconfigurations we've actually seen:
+//   - empty string (env var unset)
+//   - "noreply@" with a trailing empty domain (Terraform template expanded
+//     against an unset subdomain_zone_name tfvar)
+//
+// Anything else is handed to SES which will reject with a clear error.
+func isValidFromEmail(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	at := strings.IndexByte(addr, '@')
+	if at <= 0 || at == len(addr)-1 {
+		return false
+	}
+	domain := addr[at+1:]
+	if !strings.Contains(domain, ".") {
+		return false
+	}
+	return true
+}
+
 // NewSenderWithContext creates a new email sender with the provided context
 func NewSenderWithContext(ctx context.Context, cfg SenderConfig) (*Sender, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
