@@ -87,30 +87,29 @@ echo ""
 echo "In CUDly, set gcp_auth_mode = workload_identity_federation. No JSON config file or keys are required — CUDly mints and signs the subject token itself on each call."
 
 {{- if .CUDlyAPIURL}}
-if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
-  echo ""
-  echo "Registering account with CUDly..."
-  ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-GCP ${PROJECT_ID}}"
-  read -r -d '' PAYLOAD <<JSON || true
+echo ""
+echo "Registering account with CUDly..."
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-GCP ${PROJECT_ID}}"
+read -r -d '' PAYLOAD <<JSON || true
 {
   "provider": "gcp",
   "external_id": "${PROJECT_ID}",
   "account_name": "${ACCOUNT_NAME}",
-  "contact_email": "${CUDLY_CONTACT_EMAIL}",
+  "contact_email": "${CONTACT_EMAIL}",
   "gcp_auth_mode": "workload_identity_federation",
   "gcp_project_id": "${PROJECT_ID}",
   "gcp_client_email": "${SERVICE_ACCOUNT_EMAIL}",
   "gcp_wif_audience": "${WIF_AUDIENCE}"
 }
 JSON
-  HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
-    -X POST "{{.CUDlyAPIURL}}/api/register" \
-    -H "Content-Type: application/json" \
-    -d "${PAYLOAD}")
-  case "$HTTP_CODE" in
-    200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
-    409)     echo "Registration already pending for this account — continuing." ;;
-    *)       echo "WARNING: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out ;;
-  esac
-fi
+HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+  -X POST "{{.CUDlyAPIURL}}/api/register" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}")
+case "$HTTP_CODE" in
+  200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+  409)     echo "Registration already pending for this account — continuing." ;;
+  *)       echo "ERROR: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out; exit 1 ;;
+esac
 {{- end}}

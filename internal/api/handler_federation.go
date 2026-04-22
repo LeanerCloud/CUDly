@@ -38,6 +38,9 @@ type federationIaCData struct {
 	ServiceAccountEmail string
 	OIDCIssuerURI       string
 	CUDlyAPIURL         string
+	// ContactEmail is the email of the authenticated user who downloaded the bundle.
+	// Pre-filled from Session.Email — no manual entry required.
+	ContactEmail string
 }
 
 // FederationIaCResponse is returned by the /api/federation/iac endpoint.
@@ -122,7 +125,8 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 //   - format="arm"      → zip with ARM JSON template + params + deploy script (azure target only)
 //   - format="bundle"   → zip with Terraform module + pre-filled tfvars (and CFN fallback on aws)
 func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFunctionURLRequest) (*FederationIaCResponse, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "accounts"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "accounts")
+	if err != nil {
 		return nil, err
 	}
 
@@ -131,24 +135,58 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	slug := "target"
-	apiURL := h.dashboardURL
-	if apiURL == "" {
-		// Derive from Lambda Function URL context (trusted, not Host header).
-		if domain := req.RequestContext.DomainName; domain != "" {
-			apiURL = "https://" + domain
-		}
-	}
+	apiURL := deriveFederationAPIURL(h.dashboardURL, req.RequestContext.DomainName)
 	data := buildGenericIaCData(target, source, apiURL)
-	if sourceCloud() == "aws" {
-		data.SourceAccountID = h.resolveSourceAccountID(ctx)
+	if err = h.populateSourceAccountID(ctx, source, &data); err != nil {
+		return nil, err
 	}
+	// ContactEmail is always the email of the authenticated user who requested
+	// the bundle — the route is Auth: AuthUser so session.Email is always set
+	// for normal traffic. No env-var override, no admin-curated fallback: the
+	// person who downloads the bundle IS the contact.
+	data.ContactEmail = session.Email
 
 	if formatNeedsZip(format) {
-		return h.buildZipResponse(data, target, source, format, slug)
+		return h.buildZipResponse(data, target, source, format, "target")
 	}
+	return h.renderSingleFile(data, target, source, format)
+}
 
-	tmplPath, filename, contentType, err := singleFileSpec(target, source, format, slug)
+// deriveFederationAPIURL returns the configured dashboard URL, or derives it
+// from the Lambda Function URL domain name (trusted, not the Host header).
+func deriveFederationAPIURL(configured, lambdaDomain string) string {
+	if configured != "" {
+		return configured
+	}
+	if lambdaDomain != "" {
+		return "https://" + lambdaDomain
+	}
+	return ""
+}
+
+// populateSourceAccountID fills data.SourceAccountID when CUDly runs on AWS,
+// and returns an error if the cross-account bundle would embed an empty account ID.
+// WIF targets (source=gcp|azure) don't use SourceAccountID — their trust is based
+// on the OIDC issuer, not CUDly's AWS account number, so no error is returned for them.
+func (h *Handler) populateSourceAccountID(ctx context.Context, source string, data *federationIaCData) error {
+	if sourceCloud() != "aws" {
+		return nil
+	}
+	data.SourceAccountID = h.resolveSourceAccountID(ctx)
+	if source == "aws" && data.SourceAccountID == "" {
+		// resolveAWSAccountID returns "" on AWS SDK config load failure or STS
+		// GetCallerIdentity failure. Check Lambda logs for the preceding
+		// "Failed to resolve source account ID via STS" warning, and verify
+		// the execution role has sts:GetCallerIdentity and AWS_REGION is set.
+		return fmt.Errorf("federation iac: CUDly failed to resolve its own AWS account ID; " +
+			"check that the execution role has sts:GetCallerIdentity and AWS_REGION is set")
+	}
+	return nil
+}
+
+// renderSingleFile renders a single-file IaC template (currently only "cli" is supported).
+func (h *Handler) renderSingleFile(data federationIaCData, target, source, format string) (*FederationIaCResponse, error) {
+	tmplPath, filename, contentType, err := singleFileSpec(target, source, format, "target")
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +219,7 @@ func shellEscapeData(data federationIaCData) federationIaCData {
 	d.OIDCIssuerURI = shellEscape(data.OIDCIssuerURI)
 	d.CUDlyAPIURL = shellEscape(data.CUDlyAPIURL)
 	d.SourceAccountID = shellEscape(data.SourceAccountID)
+	d.ContactEmail = shellEscape(data.ContactEmail)
 	return d
 }
 
@@ -450,8 +489,8 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 	sb.WriteString("assignment template. No certificate or secret is created.\n\n")
 	sb.WriteString("One-step deployment:\n\n")
 	sb.WriteString("  bash deploy-azure.sh [--location <region>] [--template " + format + "]\n\n")
-	sb.WriteString("To auto-register with CUDly:\n\n")
-	sb.WriteString("  CUDLY_CONTACT_EMAIL=you@example.com bash deploy-azure.sh\n\n")
+	sb.WriteString("Registration with CUDly runs automatically after deployment.\n")
+	sb.WriteString("Set CUDLY_CONTACT_EMAIL to override the pre-filled contact email.\n\n")
 	sb.WriteString("After deployment, set azure_auth_mode=workload_identity_federation in CUDly.\n")
 	return sb.String()
 }

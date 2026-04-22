@@ -1,5 +1,5 @@
 locals {
-  do_register      = var.cudly_api_url != "" && var.contact_email != ""
+  do_register      = var.cudly_api_url != ""
   reg_account_name = var.account_name != "" ? var.account_name : "GCP ${local.project}"
 
   # WIF audience string — used in the credential config JSON AND in the

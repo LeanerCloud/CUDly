@@ -1,7 +1,7 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  do_register      = var.cudly_api_url != "" && var.contact_email != ""
+  do_register      = var.cudly_api_url != ""
   reg_account_name = var.account_name != "" ? var.account_name : "AWS ${data.aws_caller_identity.current.account_id}"
 
   reg_payload = local.do_register ? jsonencode({

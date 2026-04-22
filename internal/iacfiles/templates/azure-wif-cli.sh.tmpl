@@ -72,30 +72,29 @@ echo ""
 echo "In CUDly, set azure_auth_mode = workload_identity_federation. No key or secret is required — CUDly mints and signs the assertion JWT itself on each call."
 
 {{- if .CUDlyAPIURL}}
-if [[ -n "${CUDLY_CONTACT_EMAIL:-}" ]]; then
-  echo ""
-  echo "Registering account with CUDly..."
-  ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"
-  read -r -d '' PAYLOAD <<JSON || true
+echo ""
+echo "Registering account with CUDly..."
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"
+read -r -d '' PAYLOAD <<JSON || true
 {
   "provider": "azure",
   "external_id": "${SUBSCRIPTION_ID}",
   "account_name": "${ACCOUNT_NAME}",
-  "contact_email": "${CUDLY_CONTACT_EMAIL}",
+  "contact_email": "${CONTACT_EMAIL}",
   "azure_auth_mode": "workload_identity_federation",
   "azure_subscription_id": "${SUBSCRIPTION_ID}",
   "azure_tenant_id": "${TENANT_ID}",
   "azure_client_id": "${APP_ID}"
 }
 JSON
-  HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
-    -X POST "{{.CUDlyAPIURL}}/api/register" \
-    -H "Content-Type: application/json" \
-    -d "${PAYLOAD}")
-  case "$HTTP_CODE" in
-    200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
-    409)     echo "Registration already pending for this account — continuing." ;;
-    *)       echo "WARNING: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out ;;
-  esac
-fi
+HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+  -X POST "{{.CUDlyAPIURL}}/api/register" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}")
+case "$HTTP_CODE" in
+  200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+  409)     echo "Registration already pending for this account — continuing." ;;
+  *)       echo "ERROR: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out; exit 1 ;;
+esac
 {{- end}}

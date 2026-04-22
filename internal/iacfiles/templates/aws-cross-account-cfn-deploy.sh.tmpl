@@ -27,14 +27,6 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Deploying stack ${STACK_NAME} to ${REGION}..."
 
-CUDLY_API_URL="${CUDLY_API_URL:-{{.CUDlyAPIURL}}}"
-CUDLY_CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-}"
-
-REG_PARAMS=""
-if [[ -n "${CUDLY_CONTACT_EMAIL}" && -n "${CUDLY_API_URL}" ]]; then
-  REG_PARAMS="CUDlyAPIURL=${CUDLY_API_URL} ContactEmail=${CUDLY_CONTACT_EMAIL}"
-fi
-
 # shellcheck disable=SC2086
 aws cloudformation deploy \
   $PROFILE_ARG \
@@ -45,7 +37,6 @@ aws cloudformation deploy \
     "SourceAccountID=${SOURCE_ACCOUNT_ID}" \
     "ExternalID=${EXTERNAL_ID}" \
     "RoleName=CUDly-{{.AccountSlug}}" \
-    ${REG_PARAMS} \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset
 
@@ -58,3 +49,39 @@ aws cloudformation describe-stacks \
   --stack-name "$STACK_NAME" \
   --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" \
   --output table
+
+{{- if .CUDlyAPIURL}}
+echo ""
+echo "Registering account with CUDly..."
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+# shellcheck disable=SC2086
+TARGET_ACCOUNT_ID=$(aws sts get-caller-identity $PROFILE_ARG --query Account --output text)
+ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-AWS ${TARGET_ACCOUNT_ID}}"
+# shellcheck disable=SC2086
+ROLE_ARN=$(aws cloudformation describe-stacks \
+  $PROFILE_ARG \
+  --region "$REGION" \
+  --stack-name "$STACK_NAME" \
+  --query "Stacks[0].Outputs[?OutputKey=='RoleArn'].OutputValue" \
+  --output text)
+read -r -d '' PAYLOAD <<JSON || true
+{
+  "provider": "aws",
+  "external_id": "${TARGET_ACCOUNT_ID}",
+  "account_name": "${ACCOUNT_NAME}",
+  "contact_email": "${CONTACT_EMAIL}",
+  "aws_auth_mode": "role_arn",
+  "aws_role_arn": "${ROLE_ARN}",
+  "aws_external_id": "${EXTERNAL_ID}"
+}
+JSON
+HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+  -X POST "{{.CUDlyAPIURL}}/api/register" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}")
+case "$HTTP_CODE" in
+  200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+  409)     echo "Registration already pending for this account — continuing." ;;
+  *)       echo "ERROR: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out; exit 1 ;;
+esac
+{{- end}}

@@ -1,5 +1,5 @@
 locals {
-  do_register      = var.cudly_api_url != "" && var.contact_email != ""
+  do_register      = var.cudly_api_url != ""
   reg_account_name = var.account_name != "" ? var.account_name : "Azure ${local.subscription_id}"
 
   reg_payload = local.do_register ? jsonencode({

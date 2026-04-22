@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -15,12 +16,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// federationHandler returns a Handler wired for federation IaC tests.
+//
+// Sets CUDLY_SOURCE_CLOUD=gcp when the env var is not already set, so that
+// tests which do not specifically exercise the AWS-source fail-loud STS check
+// are not broken by missing AWS credentials in the test environment. Tests
+// that need CUDLY_SOURCE_CLOUD=aws must call t.Setenv("CUDLY_SOURCE_CLOUD","aws")
+// BEFORE calling federationHandler (the check below will see the already-set
+// value and skip the override).
 func federationHandler() *Handler {
-	// getFederationIaC is permission-gated on view:accounts — wire an admin
-	// auth service into the handler so test requests with the admin token
-	// short-circuit requirePermission. ValidateSession is configured with
-	// mock.Anything so the helper works in both context.Background() and
-	// other contexts the tests may use.
+	if os.Getenv("CUDLY_SOURCE_CLOUD") == "" {
+		_ = os.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	}
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -35,6 +42,16 @@ func federationReq(params map[string]string) *events.LambdaFunctionURLRequest {
 		Headers:               map[string]string{"Authorization": "Bearer admin-token"},
 		QueryStringParameters: params,
 	}
+}
+
+// federationReqWithDomain returns a request that also sets DomainName so the
+// handler derives CUDlyAPIURL from it, which causes the {{if .CUDlyAPIURL}}
+// sections in templates to be rendered. Use in tests that need to verify the
+// registration block is present in the rendered output.
+func federationReqWithDomain(params map[string]string) *events.LambdaFunctionURLRequest {
+	req := federationReq(params)
+	req.RequestContext.DomainName = "cudly.example.com"
+	return req
 }
 
 // ---------------------------------------------------------------------------
@@ -499,4 +516,245 @@ func TestGetFederationIaC_Bicep_RejectsNonAzure(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, ce.Error(), "target=azure")
+}
+
+// ---------------------------------------------------------------------------
+// Zero-touch registration: ContactEmail pre-fill + fail-loud STS tests
+// ---------------------------------------------------------------------------
+
+// TestGetFederationIaC_FailsLoudOnEmptySourceAccountID verifies that when
+// CUDLY_SOURCE_CLOUD=aws and STS GetCallerIdentity fails (returns ""), the
+// handler returns a non-nil error instead of shipping a broken bundle with an
+// empty source_account_id.
+func TestGetFederationIaC_FailsLoudOnEmptySourceAccountID(t *testing.T) {
+	// sourceCloud() returns "aws" by default (and we explicitly set it here for
+	// clarity). resolveAWSAccountID returns "" because there are no real AWS
+	// credentials in the test environment, which triggers the fail-loud path.
+	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
+	h := federationHandler()
+
+	_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "aws", "source": "aws", "format": "cli",
+	}))
+	require.Error(t, err, "expected error when SourceAccountID is empty")
+	// Must NOT be a client error (400/401/403) — it's a server-side misconfiguration.
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "STS failure should produce a 500-class error, not a client error")
+	assert.Contains(t, err.Error(), "federation iac")
+}
+
+// TestGetFederationIaC_PrefillContactEmailFromSession verifies that the bundle
+// is rendered with contact_email equal to the authenticated user's email.
+func TestGetFederationIaC_PrefillContactEmailFromSession(t *testing.T) {
+	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	h := federationHandler()
+
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "aws", "source": "gcp", "format": "bundle",
+	}))
+	require.NoError(t, err)
+
+	zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	require.NoError(t, err)
+
+	var tfvarsContent string
+	for _, f := range zr.File {
+		if strings.HasSuffix(f.Name, ".tfvars") {
+			rc, err := f.Open()
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			_, _ = buf.ReadFrom(rc)
+			rc.Close()
+			tfvarsContent = buf.String()
+			break
+		}
+	}
+	require.NotEmpty(t, tfvarsContent, "bundle must contain a .tfvars file")
+	assert.Contains(t, tfvarsContent, `contact_email = "admin@example.com"`,
+		"contact_email must be pre-filled from Session.Email")
+}
+
+// TestGetFederationIaC_PreservesPlusInSessionEmail verifies that a + in the
+// email address is not mangled by shell-escaping when rendering CLI scripts.
+func TestGetFederationIaC_PreservesPlusInSessionEmail(t *testing.T) {
+	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
+		UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+		Email:  "user+tag@example.com",
+		Role:   "admin",
+	}, nil)
+	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
+
+	// Use federationReqWithDomain so the {{if .CUDlyAPIURL}} block renders and
+	// the CONTACT_EMAIL line (with the pre-filled email) appears in the output.
+	res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+		"target": "gcp", "source": "aws", "format": "cli",
+	}))
+	require.NoError(t, err)
+	// '+' has no special meaning in double-quoted bash strings — it must be preserved.
+	assert.Contains(t, res.Content, "user+tag@example.com",
+		"+ in email must be preserved in CLI script")
+}
+
+// TestGetFederationIaC_NoSessionEmail_ShipsBundleWithEmptyContact verifies the
+// defensive edge case: if Session.Email is empty (e.g. admin API key path where
+// Email is not set), the bundle downloads successfully with contact_email=""
+// and the customer's deploy will fail with a clear HTTP 400 at registration time.
+func TestGetFederationIaC_NoSessionEmail_ShipsBundleWithEmptyContact(t *testing.T) {
+	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
+		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+		Email:  "", // empty — admin API key path
+		Role:   "admin",
+	}, nil)
+	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
+
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "gcp", "source": "aws", "format": "bundle",
+	}))
+	// Bundle must still download — the 400 happens at registration time, not here.
+	require.NoError(t, err)
+	assert.Equal(t, "base64", res.ContentEncoding)
+
+	zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	require.NoError(t, err)
+	var tfvarsContent string
+	for _, f := range zr.File {
+		if strings.HasSuffix(f.Name, ".tfvars") {
+			rc, err := f.Open()
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			_, _ = buf.ReadFrom(rc)
+			rc.Close()
+			tfvarsContent = buf.String()
+			break
+		}
+	}
+	require.NotEmpty(t, tfvarsContent)
+	assert.Contains(t, tfvarsContent, `contact_email = ""`,
+		"empty email must render as empty string in tfvars")
+}
+
+// ---------------------------------------------------------------------------
+// Per-format render assertions
+// ---------------------------------------------------------------------------
+
+// TestRenderedCLIShellScript_RegistrationAlwaysRuns verifies that all CLI
+// shell templates no longer gate registration on CUDLY_CONTACT_EMAIL being set,
+// and instead use CONTACT_EMAIL with a pre-filled default.
+func TestRenderedCLIShellScript_RegistrationAlwaysRuns(t *testing.T) {
+	cases := []struct{ target, source string }{
+		{"aws", "aws"},
+		{"aws", "gcp"},
+		{"azure", "aws"},
+		{"gcp", "gcp"},
+		{"gcp", "aws"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.target+"/"+tc.source, func(t *testing.T) {
+			h := federationHandler()
+			// Use federationReqWithDomain so CUDlyAPIURL is populated and the
+			// {{if .CUDlyAPIURL}} registration block is rendered.
+			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+				"target": tc.target, "source": tc.source, "format": "cli",
+			}))
+			require.NoError(t, err)
+
+			// Old gate must be gone.
+			assert.NotContains(t, res.Content, `if [[ -n "${CUDLY_CONTACT_EMAIL:-}"`,
+				"old CUDLY_CONTACT_EMAIL gate must be removed")
+			// New env-override-with-default pattern must be present.
+			assert.Contains(t, res.Content, `CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-`,
+				"CONTACT_EMAIL must use env-override-with-default pattern")
+			// Error handling must fail loud.
+			assert.Contains(t, res.Content, "exit 1",
+				"non-2xx/409 registration response must exit 1")
+			assert.NotContains(t, res.Content, "WARNING: CUDly registration",
+				"WARNING must be replaced with ERROR+exit")
+		})
+	}
+}
+
+// TestRenderedCFNDeployScript_HasRegistrationBlock verifies both CFN deploy
+// templates include a curl POST to /api/register after the stack deploy.
+func TestRenderedCFNDeployScript_HasRegistrationBlock(t *testing.T) {
+	cases := []struct {
+		target, source string
+		format         string
+	}{
+		{"aws", "gcp", "cfn"}, // WIF
+		{"aws", "aws", "cfn"}, // cross-account
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.target+"/"+tc.source, func(t *testing.T) {
+			h := federationHandler()
+			// Use federationReqWithDomain so CUDlyAPIURL is populated and the
+			// {{if .CUDlyAPIURL}} registration block is rendered in the deploy script.
+			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+				"target": tc.target, "source": tc.source, "format": tc.format,
+			}))
+			require.NoError(t, err)
+
+			zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+			require.NoError(t, err)
+			zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+			require.NoError(t, err)
+
+			var deployScript string
+			for _, f := range zr.File {
+				if f.Name == "cloudformation/deploy-cfn.sh" {
+					rc, err := f.Open()
+					require.NoError(t, err)
+					var buf bytes.Buffer
+					_, _ = buf.ReadFrom(rc)
+					rc.Close()
+					deployScript = buf.String()
+					break
+				}
+			}
+			require.NotEmpty(t, deployScript, "cfn zip must contain deploy-cfn.sh")
+			assert.Contains(t, deployScript, "/api/register",
+				"deploy script must include registration curl call")
+			assert.Contains(t, deployScript, `case "$HTTP_CODE"`,
+				"deploy script must handle registration HTTP response codes")
+		})
+	}
+}
+
+// TestRenderedTerraformRegistrationTF_GateOnURLOnly reads the static
+// registration.tf files and asserts that do_register only checks cudly_api_url,
+// not contact_email.
+func TestRenderedTerraformRegistrationTF_GateOnURLOnly(t *testing.T) {
+	dirs := []string{
+		"../../iac/federation/aws-cross-account/terraform/registration.tf",
+		"../../iac/federation/aws-target/terraform/registration.tf",
+		"../../iac/federation/azure-target/terraform/registration.tf",
+		"../../iac/federation/gcp-target/terraform/registration.tf",
+		"../../iac/federation/gcp-sa-impersonation/terraform/registration.tf",
+	}
+	for _, path := range dirs {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			content, err := os.ReadFile(path)
+			require.NoError(t, err, "registration.tf must exist at %s", path)
+			src := string(content)
+
+			// The file uses `do_register      =` (extra whitespace); check for
+			// the key substrings rather than the exact spacing.
+			assert.Contains(t, src, `do_register`,
+				"registration.tf must define do_register local")
+			assert.Contains(t, src, `var.cudly_api_url != ""`,
+				"do_register must gate on cudly_api_url being non-empty")
+			assert.NotContains(t, src, `&& var.contact_email != ""`,
+				"do_register must NOT gate on contact_email")
+		})
+	}
 }

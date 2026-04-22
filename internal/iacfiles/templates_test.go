@@ -25,6 +25,7 @@ type testTemplateData struct {
 	OIDCIssuerURI       string
 	CUDlyAPIURL         string
 	SourceAccountID     string
+	ContactEmail        string
 }
 
 func renderCLITemplate(t *testing.T, path string, data testTemplateData) string {
@@ -52,6 +53,7 @@ func baseData() testTemplateData {
 		Source:          "aws",
 		CUDlyAPIURL:     "https://cudly.example.com",
 		SourceAccountID: "123456789012",
+		ContactEmail:    "ops@example.com",
 	}
 }
 

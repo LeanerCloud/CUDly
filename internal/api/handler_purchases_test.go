@@ -863,4 +863,3 @@ func TestHandler_pausePlannedPurchase_OutOfScope(t *testing.T) {
 	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus")
 }
-

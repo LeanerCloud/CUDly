@@ -459,6 +459,14 @@ func (h *Handler) resolveSourceAccountID(ctx context.Context) string {
 	return h.resolveSourceIdentity(ctx).AccountID
 }
 
+// resolveAWSAccountID returns the AWS account ID where CUDly runs by calling
+// STS GetCallerIdentity. Returns "" on AWS SDK config load failure or STS
+// error (logs WARN in either case).
+//
+// WARNING: empty string is the silent-failure path. Callers in user-facing
+// flows MUST check the result and fail loud rather than rendering an empty
+// account ID into a bundle — a bundle with an empty source_account_id
+// produces a broken trust policy that silently fails at apply time.
 func (h *Handler) resolveAWSAccountID(ctx context.Context) string {
 	h.awsCfgOnce.Do(func() {
 		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)

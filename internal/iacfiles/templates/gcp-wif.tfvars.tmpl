@@ -27,5 +27,5 @@ oidc_issuer_uri = "{{.OIDCIssuerURI}}"{{if eq .Source "azure"}}  # Azure: https:
 
 # --- CUDly auto-registration (optional) ---
 cudly_api_url = "{{.CUDlyAPIURL}}"
-contact_email = ""  # REQUIRED for auto-registration — enter your email
+contact_email = "{{.ContactEmail}}"
 account_name  = "{{.AccountName}}"
