@@ -3,6 +3,7 @@ package email
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,20 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
+)
+
+// Sentinel errors returned by send-path methods when preconditions aren't met.
+// Callers use errors.Is to branch on these without pattern-matching on strings.
+var (
+	// ErrNoRecipient — the NotificationData has no RecipientEmail for a send
+	// that requires a specific recipient (e.g. purchase approval for the user
+	// who submitted the purchase, not a broadcast to SNS subscribers).
+	ErrNoRecipient = errors.New("email: no recipient address")
+
+	// ErrNoFromEmail — the sender has no FROM_EMAIL configured; nothing can go
+	// out. Distinct from ErrNoRecipient so the caller can report which side
+	// of the wire is unconfigured.
+	ErrNoFromEmail = errors.New("email: no from address")
 )
 
 // SenderConfig holds configuration for the email sender
@@ -212,6 +227,12 @@ type NotificationData struct {
 	PurchaseDate      string
 	DaysUntilPurchase int
 	PlanName          string
+	// RecipientEmail addresses the individual recipient for flows that target
+	// a specific user (e.g. purchase approval). Leave empty for broadcast
+	// flows that go to preconfigured subscribers via SNS. Purchase approvals
+	// MUST set this — silently broadcasting an approval link to every
+	// subscriber of an SNS alerts topic would leak the approval token.
+	RecipientEmail string
 }
 
 // RecommendationSummary is a simplified recommendation for email display

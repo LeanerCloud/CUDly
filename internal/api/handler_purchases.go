@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -364,28 +365,50 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, fmt.Errorf("failed to save execution: %w", err)
 	}
 
-	// Send approval email (non-blocking; failure is logged but doesn't abort the response)
-	h.sendPurchaseApprovalEmail(ctx, execution, execReq.Recommendations, totalUpfront, totalSavings)
+	// Send approval email synchronously so the response can surface the
+	// actual outcome. The DB write above is the source of truth — email is
+	// best-effort and never blocks the response body; the returned
+	// email_sent / email_reason fields let the UI tell the user whether they
+	// should wait for an inbox or cancel/retry manually.
+	emailSent, emailReason := h.sendPurchaseApprovalEmail(ctx, execution, execReq.Recommendations, totalUpfront, totalSavings)
 
-	return map[string]any{
+	message := "Purchase execution created and pending approval"
+	if !emailSent {
+		message = "Purchase execution created but approval email could not be sent — see email_reason"
+	}
+	resp := map[string]any{
 		"execution_id":         executionID,
 		"status":               "pending",
 		"recommendation_count": len(execReq.Recommendations),
 		"total_upfront_cost":   totalUpfront,
 		"estimated_savings":    totalSavings,
-		"message":              "Purchase execution created and pending approval",
-	}, nil
+		"email_sent":           emailSent,
+		"message":              message,
+	}
+	if emailReason != "" {
+		resp["email_reason"] = emailReason
+	}
+	return resp, nil
 }
 
-// sendPurchaseApprovalEmail sends an approval-request email for a newly created execution.
-// Errors are logged but do not propagate — email failure must not block the API response.
-func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) {
+// sendPurchaseApprovalEmail sends an approval-request email for a newly created
+// execution and returns a structured outcome:
+//   - (true, "") on successful send
+//   - (false, "<reason>") on any preflight gate or send error
+//
+// Errors are also logged at Errorf level so they show up in CloudWatch, but
+// the reason string is what the API response surfaces to the UI.
+func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) (bool, string) {
 	if h.emailNotifier == nil {
-		return
+		return false, "email notifier not configured for this deployment"
 	}
 	globalCfg, err := h.config.GetGlobalConfig(ctx)
-	if err != nil || globalCfg.NotificationEmail == nil || *globalCfg.NotificationEmail == "" {
-		return
+	if err != nil {
+		logging.Errorf("Failed to load global config for approval email: %v", err)
+		return false, fmt.Sprintf("failed to load settings: %v", err)
+	}
+	if globalCfg.NotificationEmail == nil || *globalCfg.NotificationEmail == "" {
+		return false, "no notification email set in Settings → General"
 	}
 	summaries := make([]email.RecommendationSummary, 0, len(recs))
 	for _, rec := range recs {
@@ -405,8 +428,18 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, execution *conf
 		TotalSavings:     totalSavings,
 		TotalUpfrontCost: totalUpfront,
 		Recommendations:  summaries,
+		RecipientEmail:   *globalCfg.NotificationEmail,
 	}
 	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
 		logging.Errorf("Failed to send purchase approval email: %v", err)
+		switch {
+		case errors.Is(err, email.ErrNoRecipient):
+			return false, "no notification email set in Settings → General"
+		case errors.Is(err, email.ErrNoFromEmail):
+			return false, "FROM_EMAIL not configured for this deployment"
+		default:
+			return false, fmt.Sprintf("send failed: %v", err)
+		}
 	}
+	return true, ""
 }

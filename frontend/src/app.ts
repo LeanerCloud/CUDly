@@ -281,11 +281,24 @@ async function handleExecutePurchase(): Promise<void> {
   }
 
   try {
-    await api.executePurchase(apiRecs);
+    const result = await api.executePurchase(apiRecs);
     closePurchaseModal();
     clearPurchaseModalRecommendations();
 
-    showToast({ message: 'Purchase submitted — check your email to approve.', kind: 'success', timeout: 10_000 });
+    // The backend now surfaces email-send status so the toast can be honest
+    // about what the user should do next. When email_sent is undefined we
+    // fall back to the old "check your email" message for backward compat
+    // with any pre-deploy caller that hasn't picked up the new field yet.
+    if (result.email_sent === false) {
+      const reason = result.email_reason || 'reason unavailable';
+      showToast({
+        message: `Purchase queued as pending (id ${result.execution_id.slice(0, 8)}…) but the approval email did not send: ${reason}. Approve or cancel it from the Purchase History tab.`,
+        kind: 'warning',
+        timeout: null,
+      });
+    } else {
+      showToast({ message: 'Purchase submitted — check your email to approve.', kind: 'success', timeout: 10_000 });
+    }
     await loadDashboard();
   } catch (error) {
     const err = error as Error;

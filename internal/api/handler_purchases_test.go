@@ -624,6 +624,13 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 	assert.Equal(t, 300.0, resultMap["total_upfront_cost"])
 	assert.Equal(t, 150.0, resultMap["estimated_savings"])
 	assert.NotEmpty(t, resultMap["execution_id"])
+	// With no emailNotifier wired on the handler, the response must surface
+	// that the approval email did NOT send so the UI can tell the user to
+	// approve/cancel from History. Before this change the response lied:
+	// "Purchase execution created and pending approval" regardless of the
+	// email path's silent SNS no-op.
+	assert.Equal(t, false, resultMap["email_sent"], "email_sent must be false when emailNotifier is nil")
+	assert.Equal(t, "email notifier not configured for this deployment", resultMap["email_reason"])
 }
 
 func TestHandler_executePurchase_InvalidBody(t *testing.T) {

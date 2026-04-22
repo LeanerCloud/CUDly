@@ -179,7 +179,17 @@ export interface PublicInfo {
 export interface PurchaseResult {
   execution_id: string;
   status: string;
-  results: Array<{
+  recommendation_count?: number;
+  total_upfront_cost?: number;
+  estimated_savings?: number;
+  message?: string;
+  // Whether the approval email was actually sent. When false, email_reason
+  // carries a human-readable explanation (e.g. "no notification email set in
+  // Settings → General") so the UI can tell the user to approve/cancel from
+  // History instead of waiting for an inbox.
+  email_sent?: boolean;
+  email_reason?: string;
+  results?: Array<{
     recommendation_id: string;
     status: string;
     error?: string;

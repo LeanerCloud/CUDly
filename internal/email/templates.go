@@ -304,15 +304,27 @@ To cancel this purchase, click the link below:
 This is an automated message from CUDly. Do not share these links.
 `
 
-// SendPurchaseApprovalRequest sends an email asking the user to approve a direct purchase
+// SendPurchaseApprovalRequest sends an email asking the user to approve a direct
+// purchase. Routes through SES SendEmail (not the SNS alerts topic) because the
+// approval URL carries a one-time token scoped to the submitter — broadcasting
+// that to every SNS subscriber would leak the authorisation. Returns
+// ErrNoRecipient when data.RecipientEmail is empty and ErrNoFromEmail when
+// FROM_EMAIL is unconfigured, so the caller can surface a precise reason in
+// the API response instead of the prior silent no-op.
 func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
+	if data.RecipientEmail == "" {
+		return ErrNoRecipient
+	}
+	if s.fromEmail == "" {
+		return ErrNoFromEmail
+	}
 	body, err := RenderPurchaseApprovalRequestEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase approval request email: %w", err)
 	}
 
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	return s.SendNotification(ctx, subject, body)
+	return s.SendToEmail(ctx, data.RecipientEmail, subject, body)
 }
 
 // ---------------------------------------------------------------------------

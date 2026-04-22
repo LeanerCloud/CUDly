@@ -265,7 +265,10 @@ func TestSMTPSender_SendRIExchangeCompleted_NoFromEmail(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestSMTPSender_SendPurchaseApprovalRequest_NoFromEmail(t *testing.T) {
+func TestSMTPSender_SendPurchaseApprovalRequest_NoRecipient(t *testing.T) {
+	// With no data.RecipientEmail set and no notifyEmail fallback, the SMTP
+	// sender must surface ErrNoRecipient instead of silently succeeding —
+	// the caller uses this signal to tell the user the email wasn't sent.
 	sender := &SMTPSender{
 		host:      "smtp.example.com",
 		port:      587,
@@ -282,7 +285,7 @@ func TestSMTPSender_SendPurchaseApprovalRequest_NoFromEmail(t *testing.T) {
 	}
 
 	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
 // Tests for SMTPSender using notifyEmail (not fromEmail)
@@ -359,7 +362,11 @@ func TestSender_SendRIExchangeCompleted_NoTopic(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestSender_SendPurchaseApprovalRequest_NoTopic(t *testing.T) {
+func TestSender_SendPurchaseApprovalRequest_NoRecipient(t *testing.T) {
+	// With data.RecipientEmail empty the SES-backed Sender must return
+	// ErrNoRecipient. Approval emails carry a one-time token; silently
+	// skipping the send (the old SNS path) meant the user had no way to
+	// approve the purchase. The handler now surfaces this as a warning toast.
 	mockSNS := &mockSNSPublisher{}
 	mockSES := &mockSESEmailSender{}
 	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
@@ -376,7 +383,58 @@ func TestSender_SendPurchaseApprovalRequest_NoTopic(t *testing.T) {
 	}
 
 	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	require.ErrorIs(t, err, ErrNoRecipient)
+}
+
+func TestSender_SendPurchaseApprovalRequest_NoFromEmail(t *testing.T) {
+	// RecipientEmail set but FROM_EMAIL unconfigured — surfaces the distinct
+	// ErrNoFromEmail so the handler can tell ops the deployment env is
+	// missing FROM_EMAIL (vs the per-tenant notification email being unset).
+	mockSNS := &mockSNSPublisher{}
+	mockSES := &mockSESEmailSender{}
+	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{})
+
+	data := NotificationData{
+		DashboardURL:   "https://dashboard.example.com",
+		ApprovalToken:  "tok-req",
+		ExecutionID:    "exec-req",
+		RecipientEmail: "user@example.com",
+		Recommendations: []RecommendationSummary{
+			{Service: "rds", ResourceType: "db.m5.large", Region: "eu-west-1", Count: 3},
+		},
+	}
+
+	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	require.ErrorIs(t, err, ErrNoFromEmail)
+}
+
+func TestSender_SendPurchaseApprovalRequest_SendsViaSES(t *testing.T) {
+	// Happy path: both FromEmail and RecipientEmail are set, the sender
+	// routes through SES SendEmail (not SNS Publish). This is the
+	// behavioural contract — approval tokens must target the specific user,
+	// not broadcast to every subscriber of an SNS alerts topic.
+	mockSNS := &mockSNSPublisher{} // must NOT be called
+	mockSES := &mockSESEmailSender{}
+	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
+		FromEmail: "noreply@cudly.example.com",
+	})
+
+	data := NotificationData{
+		DashboardURL:   "https://dashboard.example.com",
+		ApprovalToken:  "tok-happy",
+		ExecutionID:    "exec-happy",
+		RecipientEmail: "user@example.com",
+		Recommendations: []RecommendationSummary{
+			{Service: "ec2", ResourceType: "m5.xlarge", Region: "us-east-1", Count: 2},
+		},
+	}
+
+	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
 	require.NoError(t, err)
+	require.Equal(t, 1, mockSES.sendEmailCalls, "expected 1 SES SendEmail call, got %d", mockSES.sendEmailCalls)
+	require.Equal(t, 0, mockSNS.publishCalls, "SNS Publish must not be used for purchase approvals, got %d calls", mockSNS.publishCalls)
+	require.Equal(t, "user@example.com", mockSES.lastTo, "approval email must target data.RecipientEmail")
+	require.Equal(t, "noreply@cudly.example.com", mockSES.lastFrom, "approval email must use configured FROM_EMAIL")
 }
 
 // Tests for redactEmail edge cases
@@ -460,16 +518,35 @@ func TestSMTPSender_NotifyEmailExplicit(t *testing.T) {
 // Mock helpers used by the Sender tests above
 
 // mockSNSPublisher satisfies SNSPublisher for tests that never reach the network.
-type mockSNSPublisher struct{}
+// publishCalls lets assertions verify the SNS path is (or isn't) taken.
+type mockSNSPublisher struct {
+	publishCalls int
+}
 
 func (m *mockSNSPublisher) Publish(ctx context.Context, params *sns.PublishInput, optFns ...func(*sns.Options)) (*sns.PublishOutput, error) {
+	m.publishCalls++
 	return &sns.PublishOutput{}, nil
 }
 
-// mockSESEmailSender satisfies SESEmailSender with no-op methods.
-type mockSESEmailSender struct{}
+// mockSESEmailSender satisfies SESEmailSender with no-op methods. sendEmailCalls
+// / lastTo / lastFrom let happy-path tests assert the SES wire was exercised
+// with the right addressing.
+type mockSESEmailSender struct {
+	sendEmailCalls int
+	lastTo         string
+	lastFrom       string
+}
 
 func (m *mockSESEmailSender) SendEmail(ctx context.Context, params *sesv2.SendEmailInput, optFns ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {
+	m.sendEmailCalls++
+	if params != nil {
+		if params.FromEmailAddress != nil {
+			m.lastFrom = *params.FromEmailAddress
+		}
+		if params.Destination != nil && len(params.Destination.ToAddresses) > 0 {
+			m.lastTo = params.Destination.ToAddresses[0]
+		}
+	}
 	return &sesv2.SendEmailOutput{}, nil
 }
 

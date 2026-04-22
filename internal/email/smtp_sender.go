@@ -277,14 +277,24 @@ func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchang
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendPurchaseApprovalRequest sends a purchase approval request email via SMTP
+// SendPurchaseApprovalRequest sends a purchase approval request email via SMTP.
+// Prefers data.RecipientEmail (the submitter's notification email from app
+// settings) over the static SMTP-configured s.notifyEmail so the approval token
+// lands in the right inbox per submitter.
 func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
+	recipient := data.RecipientEmail
+	if recipient == "" {
+		recipient = s.notifyEmail
+	}
+	if recipient == "" {
+		return ErrNoRecipient
+	}
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
 	body, err := RenderPurchaseApprovalRequestEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase approval request email: %w", err)
 	}
-	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+	return s.SendToEmail(ctx, recipient, subject, body)
 }
 
 // SendRegistrationReceivedNotification sends an email to the admin for a new registration via SMTP.
