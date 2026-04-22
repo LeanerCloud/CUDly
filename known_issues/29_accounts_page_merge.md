@@ -2,7 +2,12 @@
 
 **Surfaced during:** 2026-04-22 UX audit, Priority 3 ("Rework Accounts page mental model")
 **Related commit:** `b66abc4d8` (Phase-1 + Phase-2 UX work)
-**Status:** open — Priority 3 is partially resolved; this is the deferred rework
+**Status:** further partial step shipped — top-of-page **Accounts overview**
+chip row now renders `[Pending N | Active N | Disabled N | Rejected N]`
+counts aggregated across providers + registrations; chip click scrolls
+to the relevant section. Full unification into a single per-provider
+`[All | Pending | Active | Rejected]` table is still deferred (see
+"What's still deferred" below).
 
 ## What shipped in Phase-1
 

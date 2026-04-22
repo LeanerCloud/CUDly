@@ -517,6 +517,13 @@
                     <h2>Accounts</h2>
                     <p class="settings-description">Onboard new cloud accounts via federation IaC, review account registrations, and manage per-provider accounts.</p>
 
+                    <!-- Accounts overview summary (known_issues #29 partial). Counts each
+                         status across providers + registrations; clicking a chip jumps to
+                         the relevant section so users get a single at-a-glance view of
+                         "what's going on with all my accounts" without rebuilding into a
+                         single unified table. -->
+                    <div id="accounts-overview" class="accounts-overview" aria-label="Accounts overview"></div>
+
                     <fieldset class="settings-category" id="accounts-federation">
                         <legend>Federation Setup (Add New Account)</legend>
                         <p class="settings-description">Download pre-populated IaC to onboard a new account via workload identity federation. No long-lived credentials needed.</p>

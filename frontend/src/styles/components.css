@@ -541,6 +541,48 @@ button.danger:hover {
     border-color: #1a73e8;
 }
 
+/* Accounts overview chips at the top of the Accounts sub-tab
+ * (known_issues #29 partial). Total counts per status across all
+ * providers + registrations, click to scroll to the relevant section. */
+.accounts-overview {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: 0 0 1rem;
+}
+
+.accounts-overview-chip {
+    appearance: none;
+    border: 1px solid #d0d7de;
+    background: #fff;
+    color: #333;
+    padding: 0.5rem 0.85rem;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    line-height: 1.2;
+    min-width: 100px;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.accounts-overview-chip:hover {
+    background: #f5f7fa;
+    border-color: #4a90e2;
+}
+
+.accounts-overview-chip-count {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #1a73e8;
+}
+
+.accounts-overview-chip-label {
+    font-size: 0.85rem;
+    color: #555;
+}
+
 /* Status-chip filter row above the accounts table (Q8 / audit P3 gap).
  * All | Active | Disabled scoped to states the per-provider table shows.
  */

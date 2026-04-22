@@ -1169,6 +1169,71 @@ export async function loadAccountsTab(): Promise<void> {
   void loadAccountsForProvider('gcp');
   void initFederationPanel(source);
   void import('./modules/registrations').then(m => m.initRegistrations());
+  void renderAccountsOverview();
+}
+
+/**
+ * Render the Accounts overview chip row (known_issues #29 partial).
+ * Pulls counts from /api/accounts and /api/registrations across all
+ * providers, presents `[Pending N | Active N | Disabled N | Rejected N]`
+ * chips. Each chip click scrolls to the relevant section so users get
+ * a single at-a-glance view without rebuilding into a unified table.
+ *
+ * Failures are rendered as an empty state — the per-section tables are
+ * the authoritative views and will surface their own errors.
+ */
+async function renderAccountsOverview(): Promise<void> {
+  const container = document.getElementById('accounts-overview');
+  if (!container) return;
+  container.replaceChildren();
+
+  type Bucket = { label: string; count: number; targetId: string };
+  const buckets: Bucket[] = [
+    { label: 'Pending', count: 0, targetId: 'accounts-registrations' },
+    { label: 'Active', count: 0, targetId: 'accounts-aws-block' },
+    { label: 'Disabled', count: 0, targetId: 'accounts-aws-block' },
+    { label: 'Rejected', count: 0, targetId: 'accounts-registrations' },
+  ];
+
+  try {
+    const [accounts, registrations] = await Promise.all([
+      api.listAccounts(),
+      // Registrations endpoint may 404 / 403 in some deployments; tolerate.
+      api.listRegistrations().catch(() => [] as api.AccountRegistration[]),
+    ]);
+    accounts.forEach(a => {
+      if (a.enabled) buckets[1]!.count += 1;
+      else buckets[2]!.count += 1;
+    });
+    registrations.forEach(r => {
+      if (r.status === 'pending') buckets[0]!.count += 1;
+      else if (r.status === 'rejected') buckets[3]!.count += 1;
+    });
+  } catch {
+    // Leave overview empty — per-section tables surface their own errors.
+    return;
+  }
+
+  buckets.forEach(({ label, count, targetId }) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'accounts-overview-chip';
+    chip.dataset['count'] = String(count);
+    chip.setAttribute('aria-label', `${count} ${label.toLowerCase()} — jump to section`);
+    const labelEl = document.createElement('span');
+    labelEl.className = 'accounts-overview-chip-label';
+    labelEl.textContent = label;
+    const countEl = document.createElement('span');
+    countEl.className = 'accounts-overview-chip-count';
+    countEl.textContent = String(count);
+    chip.appendChild(countEl);
+    chip.appendChild(labelEl);
+    chip.addEventListener('click', () => {
+      const target = document.getElementById(targetId);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    container.appendChild(chip);
+  });
 }
 
 /**
