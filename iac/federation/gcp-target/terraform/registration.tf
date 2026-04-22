@@ -12,7 +12,7 @@ locals {
     type                              = "external_account"
     audience                          = local.wif_audience
     subject_token_type                = "urn:ietf:params:aws:token-type:aws4_request"
-    service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${var.service_account_email}:generateAccessToken"
+    service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${local.service_account_email}:generateAccessToken"
     token_url                         = "https://sts.googleapis.com/v1/token"
     credential_source = {
       environment_id                 = "aws1"
@@ -24,7 +24,7 @@ locals {
     type                              = "external_account"
     audience                          = local.wif_audience
     subject_token_type                = "urn:ietf:params:oauth:token-type:id_token"
-    service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${var.service_account_email}:generateAccessToken"
+    service_account_impersonation_url = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${local.service_account_email}:generateAccessToken"
     token_url                         = "https://sts.googleapis.com/v1/token"
     credential_source = {
       file = "/var/run/secrets/azure/tokens/azure-identity-token"
@@ -38,7 +38,7 @@ locals {
     contact_email      = var.contact_email
     description        = "Registered via Terraform federation IaC (gcp-target/wif)"
     gcp_project_id     = local.project
-    gcp_client_email   = var.service_account_email
+    gcp_client_email   = local.service_account_email
     gcp_auth_mode      = "workload_identity_federation"
     gcp_wif_audience   = local.wif_audience
     credential_type    = "gcp_workload_identity_config"

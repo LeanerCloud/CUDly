@@ -10,7 +10,12 @@
 # After apply, run the gcloud_command output to generate the external account
 # credential JSON, then paste it into CUDly as gcp_workload_identity_config.
 
-project               = "{{.ProjectID}}"
+project = "{{.ProjectID}}"
+
+# service_account_email — leave empty (default) to have Terraform create a
+# dedicated least-privilege SA (name: service_account_id, default "cudly-wif")
+# with commitment-management roles. Set to an existing SA email to reuse it
+# instead — in that case, grant the required roles yourself.
 service_account_email = "{{.ServiceAccountEmail}}"
 {{- if eq .Source "aws"}}
 provider_type  = "aws"

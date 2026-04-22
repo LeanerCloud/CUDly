@@ -111,8 +111,77 @@ variable "oidc_credential_source_format" {
 }
 
 variable "service_account_email" {
-  description = "Email of the GCP service account CUDly will impersonate."
+  description = <<-EOT
+    Email of the GCP service account CUDly impersonates via WIF.
+    Leave empty (default) to have Terraform create a dedicated SA named
+    var.service_account_id and grant it var.service_account_project_roles.
+    Set to an existing SA email to reuse a pre-provisioned SA instead —
+    in that case grant roles yourself.
+  EOT
   type        = string
+  default     = ""
+}
+
+variable "service_account_id" {
+  description = <<-EOT
+    Short ID (local-part before @) for the service account Terraform
+    creates when var.service_account_email is empty. Ignored otherwise.
+  EOT
+  type        = string
+  default     = "cudly-wif"
+}
+
+variable "service_account_project_roles" {
+  description = <<-EOT
+    Extra project-level built-in roles granted to the service account
+    Terraform creates when var.service_account_email is empty. Ignored
+    otherwise.
+
+    The bundle already creates a dedicated custom role
+    (var.custom_role_id, default "cudlyCommitmentWriter") holding the
+    minimum Compute commitment permissions and grants it to the SA —
+    this list is for any additional built-in roles the operator wants
+    to layer on top. Leave empty (default) for least privilege.
+
+    Note: GCP's built-in commitment/billing roles (e.g.
+    roles/commerceorgpolicy.commitmentAdmin, roles/billing.viewer) are
+    organization- or billing-account-scoped and will 400 if granted at
+    project scope. Grant those at the correct scope outside this
+    module.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "custom_role_id" {
+  description = <<-EOT
+    Project-scoped custom role ID Terraform creates (when var.service_account_email
+    is empty) and binds to the service account. The role carries the minimum
+    permissions required to purchase and manage Compute Engine CUDs on behalf
+    of CUDly. Ignored when service_account_email is set to an existing SA.
+  EOT
+  type        = string
+  default     = "cudlyCommitmentWriter"
+}
+
+variable "custom_role_permissions" {
+  description = <<-EOT
+    Permissions bundled into the custom role created when
+    var.service_account_email is empty. Defaults cover the full
+    purchase/update/read lifecycle of Compute Engine commitments and
+    the read-only enumeration CUDly performs while matching commitments
+    to workloads (regions, zones, machine types).
+  EOT
+  type        = list(string)
+  default = [
+    "compute.commitments.create",
+    "compute.commitments.update",
+    "compute.commitments.get",
+    "compute.commitments.list",
+    "compute.regions.list",
+    "compute.zones.list",
+    "compute.machineTypes.list",
+  ]
 }
 
 variable "cudly_api_url" {
