@@ -281,7 +281,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	account.UpdatedAt = now
 
 	if err := h.config.CreateCloudAccount(ctx, account); err != nil {
-		return nil, fmt.Errorf("registrations: create account: %w", err)
+		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", acctReq.ExternalID, acctReq.Provider))
 	}
 
 	// Auto-store credentials if the registration included them.
