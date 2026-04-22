@@ -335,7 +335,10 @@ const (
 )
 
 // buildReservationBody builds the JSON body for a reservation PUT request.
-func (c *ComputeClient) buildReservationBody(rec common.Recommendation) ([]byte, error) {
+// When source is non-empty, a top-level tags map carrying purchase-automation
+// is attached — Azure's Microsoft.Capacity/reservationOrders PUT body accepts
+// tags at creation, so no follow-up call is needed.
+func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source string) ([]byte, error) {
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
 		termYears = 3
@@ -352,6 +355,9 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation) ([]byte,
 			"appliedScopeType":     "Shared",
 			"renew":                false,
 		},
+	}
+	if source != "" {
+		requestBody["tags"] = map[string]string{common.PurchaseTagKey: source}
 	}
 	return json.Marshal(requestBody)
 }
@@ -404,7 +410,7 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 	// Ensure Microsoft.Capacity provider is registered (cached after first call).
 	c.ensureCapacityProviderRegistered(ctx)
 
-	bodyBytes, err := c.buildReservationBody(rec)
+	bodyBytes, err := c.buildReservationBody(rec, opts.Source)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to marshal request: %w", err)
 		return result, result.Error

@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -632,4 +633,31 @@ func TestFetchAzurePricing_WrapperSmokeTest(t *testing.T) {
 	require.NotNil(t, result)
 	require.Len(t, result.Items, 1)
 	assert.Equal(t, "Standard_D2s_v3", result.Items[0].ArmSKUName)
+}
+
+func TestBuildReservationBody_IncludesPurchaseAutomationTag(t *testing.T) {
+	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
+
+	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb)
+	require.NoError(t, err)
+
+	var got map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &got))
+	tags, ok := got["tags"].(map[string]interface{})
+	require.True(t, ok, "tags map missing from reservation body")
+	assert.Equal(t, common.PurchaseSourceWeb, tags[common.PurchaseTagKey])
+}
+
+func TestBuildReservationBody_OmitsTagsWhenSourceEmpty(t *testing.T) {
+	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
+
+	body, err := c.buildReservationBody(rec, "")
+	require.NoError(t, err)
+
+	var got map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &got))
+	_, present := got["tags"]
+	assert.False(t, present, "tags must be absent when source is empty")
 }

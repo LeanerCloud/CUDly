@@ -283,6 +283,7 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 			"renew":                false,
 		},
 	}
+	applyPurchaseAutomationTag(requestBody, opts.Source)
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -609,4 +610,15 @@ func detailsFromSQLSKU(sku string) common.DatabaseDetails {
 		InstanceClass: sku,
 	}
 	return d
+}
+
+// applyPurchaseAutomationTag attaches the purchase-automation tag to an Azure
+// reservation request body when source is non-empty. Extracted out of
+// PurchaseCommitment to keep the function under the cyclomatic-complexity
+// threshold enforced by the pre-commit hook.
+func applyPurchaseAutomationTag(body map[string]interface{}, source string) {
+	if source == "" {
+		return
+	}
+	body["tags"] = map[string]string{common.PurchaseTagKey: source}
 }

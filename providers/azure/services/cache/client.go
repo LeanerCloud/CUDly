@@ -276,6 +276,7 @@ func (c *CacheClient) PurchaseCommitment(ctx context.Context, rec common.Recomme
 			"renew":                false,
 		},
 	}
+	applyPurchaseAutomationTag(requestBody, opts.Source)
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -583,4 +584,15 @@ func (c *CacheClient) convertAzureRedisRecommendation(_ context.Context, azureRe
 			NodeType: f.ResourceType,
 		},
 	}
+}
+
+// applyPurchaseAutomationTag attaches the purchase-automation tag to an Azure
+// reservation request body when source is non-empty. Extracted out of
+// PurchaseCommitment to keep the function under the cyclomatic-complexity
+// threshold enforced by the pre-commit hook.
+func applyPurchaseAutomationTag(body map[string]interface{}, source string) {
+	if source == "" {
+		return
+	}
+	body["tags"] = map[string]string{common.PurchaseTagKey: source}
 }
