@@ -67,6 +67,14 @@ func (m *MockEC2Client) AcceptReservedInstancesExchangeQuote(ctx context.Context
 	return args.Get(0).(*ec2.AcceptReservedInstancesExchangeQuoteOutput), args.Error(1)
 }
 
+func (m *MockEC2Client) CreateTags(ctx context.Context, params *ec2.CreateTagsInput, optFns ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.CreateTagsOutput), args.Error(1)
+}
+
 func TestNewClient(t *testing.T) {
 	t.Parallel()
 	cfg := aws.Config{
@@ -354,11 +362,65 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			ReservedInstancesId: aws.String("ri-12345678"),
 		}, nil)
 
+	// Post-purchase tagging call (EC2 RIs don't accept tags at purchase time).
+	mockEC2.On("CreateTags", mock.Anything, mock.Anything).
+		Return(&ec2.CreateTagsOutput{}, nil)
+
 	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "ri-12345678", result.CommitmentID)
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_StampsPurchaseAutomationTag(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCompute,
+		ResourceType:  "t3.micro",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Region:        "us-east-1",
+		Details:       &common.ComputeDetails{Platform: "Linux/UNIX", Tenancy: "default", Scope: "Region"},
+	}
+
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{{
+				ReservedInstancesOfferingId: aws.String("off-tag"),
+				InstanceType:                types.InstanceTypeT3Micro,
+				Duration:                    aws.Int64(31536000),
+				OfferingType:                types.OfferingTypeValuesAllUpfront,
+				ProductDescription:          types.RIProductDescriptionLinuxUnix,
+				InstanceTenancy:             types.TenancyDefault,
+			}},
+		}, nil)
+
+	mockEC2.On("PurchaseReservedInstancesOffering", mock.Anything, mock.Anything).
+		Return(&ec2.PurchaseReservedInstancesOfferingOutput{
+			ReservedInstancesId: aws.String("ri-tag-test"),
+		}, nil)
+
+	mockEC2.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *ec2.CreateTagsInput) bool {
+		if len(in.Resources) != 1 || in.Resources[0] != "ri-tag-test" {
+			return false
+		}
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == common.PurchaseTagKey && aws.ToString(tag.Value) == common.PurchaseSourceWeb {
+				return true
+			}
+		}
+		return false
+	})).Return(&ec2.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
 	mockEC2.AssertExpectations(t)
 }
 

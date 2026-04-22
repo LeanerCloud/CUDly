@@ -4,6 +4,7 @@ package ec2
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
+	"github.com/LeanerCloud/CUDly/pkg/retry"
 )
 
 // EC2API defines the interface for EC2 operations (enables mocking)
@@ -24,6 +26,7 @@ type EC2API interface {
 	DescribeInstanceTypeOfferings(ctx context.Context, params *ec2.DescribeInstanceTypeOfferingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstanceTypeOfferingsOutput, error)
 	GetReservedInstancesExchangeQuote(ctx context.Context, params *ec2.GetReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.GetReservedInstancesExchangeQuoteOutput, error)
 	AcceptReservedInstancesExchangeQuote(ctx context.Context, params *ec2.AcceptReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.AcceptReservedInstancesExchangeQuoteOutput, error)
+	CreateTags(ctx context.Context, params *ec2.CreateTagsInput, optFns ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
 }
 
 // Client handles AWS EC2 Reserved Instances
@@ -138,7 +141,60 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
+	// PurchaseReservedInstancesOfferingInput has no TagSpecifications — tag the
+	// commitment post-purchase. Failure is logged but does NOT fail the
+	// purchase: the RI is already bought, and failing here would leave the
+	// customer with a paid-for-but-untagged commitment and no way to retry
+	// without double-purchasing.
+	if err := c.tagReservedInstance(ctx, result.CommitmentID, rec, opts.Source); err != nil {
+		log.Printf("WARNING: failed to tag EC2 RI %s after purchase (commitment is bought; tag missing): %v", result.CommitmentID, err)
+	}
+
 	return result, nil
+}
+
+// tagReservedInstance applies the standard CUDly tag set (including the
+// purchase-automation attribution tag when source is non-empty) to an RI
+// that was just created by PurchaseReservedInstancesOffering.
+//
+// Retries up to 4 attempts (1s/2s/4s backoff) on InvalidReservationID.NotFound,
+// since AWS sometimes needs a couple of seconds before the RI ID is visible
+// to CreateTags. Non-NotFound errors short-circuit immediately.
+func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec common.Recommendation, source string) error {
+	tags := []types.Tag{
+		{Key: aws.String("Purpose"), Value: aws.String("Reserved Instance Purchase")},
+		{Key: aws.String("ResourceType"), Value: aws.String(rec.ResourceType)},
+		{Key: aws.String("Region"), Value: aws.String(rec.Region)},
+		{Key: aws.String("PurchaseDate"), Value: aws.String(time.Now().Format("2006-01-02"))},
+		{Key: aws.String("Tool"), Value: aws.String("CUDly")},
+	}
+	if source != "" {
+		tags = append(tags, types.Tag{
+			Key:   aws.String(common.PurchaseTagKey),
+			Value: aws.String(source),
+		})
+	}
+
+	cfg := retry.Config{
+		MaxAttempts: 4,
+		BaseDelay:   time.Second,
+		MaxDelay:    4 * time.Second,
+	}
+	return retry.Do(ctx, cfg, func(perAttemptCtx context.Context, _ int) error {
+		_, err := c.client.CreateTags(perAttemptCtx, &ec2.CreateTagsInput{
+			Resources: []string{riID},
+			Tags:      tags,
+		})
+		if err == nil {
+			return nil
+		}
+		// Only retry if the RI isn't yet visible. Anything else is a
+		// permanent failure (permissions, bad tag shape, etc.).
+		if strings.Contains(err.Error(), "InvalidReservationID.NotFound") {
+			return err // retryable
+		}
+		return fmt.Errorf("%w: %w", retry.ErrPermanent, err)
+	})
 }
 
 // buildOfferingFilters constructs the EC2 API filters for finding an RI offering.
