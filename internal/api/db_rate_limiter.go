@@ -3,14 +3,12 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,9 +47,24 @@ func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 	rl.limits[endpoint] = config
 }
 
-// Allow checks if a request should be allowed based on rate limits
-// The key should be formatted as "IP#{ip}" or "EMAIL#{email}"
-// The endpoint identifies which rate limit configuration to use
+// Allow checks if a request should be allowed based on rate limits.
+// The key should be formatted as "IP#{ip}" or "EMAIL#{email}".
+// The endpoint identifies which rate limit configuration to use.
+//
+// Implementation: a single atomic INSERT ... ON CONFLICT DO UPDATE
+// statement performs the read-modify-write in one round trip, so two
+// concurrent first-requests for the same id can never collide on the
+// PK (the older check-then-insert flow hit SQLSTATE 23505 in
+// production — see commit 9fa4170a1's sibling note in
+// known_issues/05_config_store_postgres.md).
+//
+// Behaviour: each call increments `count` (or resets to 1 if the
+// window has expired). The returned `count` is then compared to
+// `config.MaxAttempts` to decide allow/deny. `count` may temporarily
+// drift past MaxAttempts under sustained over-limit traffic — the
+// rate limiter still denies correctly, and `cleanup()` evicts
+// expired rows on its 24-hour cycle. This is a small accounting
+// trade for atomicity and is acceptable for rate-limit semantics.
 func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string) (bool, error) {
 	if rl == nil || rl.pool == nil {
 		return true, nil
@@ -65,87 +78,36 @@ func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string)
 	rl.limitsMu.RUnlock()
 
 	id := fmt.Sprintf("%s#ENDPOINT#%s", key, endpoint)
-
-	tx, err := rl.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx) // Will be no-op if committed
+	now := time.Now()
+	newResetTime := now.Add(config.Window)
 
 	var count int
-	var existingResetTime time.Time
-	queryErr := tx.QueryRow(ctx,
-		`SELECT count, reset_time FROM rate_limits WHERE id = $1 FOR UPDATE`,
-		id,
-	).Scan(&count, &existingResetTime)
-
-	allowed, err := rateLimitOutcome(ctx, tx, id, config, queryErr, count, existingResetTime)
+	var resetTime time.Time
+	err := rl.pool.QueryRow(ctx, `
+		INSERT INTO rate_limits (id, count, reset_time, created_at, updated_at)
+		VALUES ($1, 1, $2, $3, $3)
+		ON CONFLICT (id) DO UPDATE SET
+			count      = CASE WHEN rate_limits.reset_time < $3
+			                  THEN 1
+			                  ELSE rate_limits.count + 1 END,
+			reset_time = CASE WHEN rate_limits.reset_time < $3
+			                  THEN EXCLUDED.reset_time
+			                  ELSE rate_limits.reset_time END,
+			updated_at = $3
+		RETURNING count, reset_time
+	`, id, newResetTime, now).Scan(&count, &resetTime)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("rate limit upsert failed: %w", err)
 	}
 
-	if allowed && errors.Is(queryErr, pgx.ErrNoRows) {
+	allowed := count <= config.MaxAttempts
+	// count == 1 means either a fresh insert OR a window-reset; both are
+	// good signals that some rows may have aged out and a cleanup pass is
+	// worthwhile.
+	if allowed && count == 1 {
 		rl.maybeCleanup()
 	}
-
 	return allowed, nil
-}
-
-// execAndCommit executes a SQL statement and commits the transaction.
-func execAndCommit(ctx context.Context, tx pgx.Tx, sql string, args ...any) error {
-	if _, err := tx.Exec(ctx, sql, args...); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// rateLimitOutcome decides whether to allow the request, performs the appropriate
-// database mutation, and commits the transaction.
-func rateLimitOutcome(ctx context.Context, tx pgx.Tx, id string, config RateLimitConfig, queryErr error, count int, existingResetTime time.Time) (bool, error) {
-	now := time.Now()
-	resetTime := now.Add(config.Window)
-
-	if errors.Is(queryErr, pgx.ErrNoRows) {
-		err := execAndCommit(ctx, tx,
-			`INSERT INTO rate_limits (id, count, reset_time, created_at, updated_at)
-			 VALUES ($1, 1, $2, $3, $3)`,
-			id, resetTime, now,
-		)
-		if err != nil {
-			return false, fmt.Errorf("failed to create rate limit entry: %w", err)
-		}
-		return true, nil
-	}
-	if queryErr != nil {
-		return false, fmt.Errorf("failed to query rate limit entry: %w", queryErr)
-	}
-
-	if now.After(existingResetTime) {
-		err := execAndCommit(ctx, tx,
-			`UPDATE rate_limits SET count = 1, reset_time = $1, updated_at = $2 WHERE id = $3`,
-			resetTime, now, id,
-		)
-		if err != nil {
-			return false, fmt.Errorf("failed to reset rate limit entry: %w", err)
-		}
-		return true, nil
-	}
-
-	if count >= config.MaxAttempts {
-		if err := tx.Commit(ctx); err != nil {
-			logging.Warnf("Failed to commit after rate limit exceeded: %v", err)
-		}
-		return false, nil
-	}
-
-	err := execAndCommit(ctx, tx,
-		`UPDATE rate_limits SET count = $1, updated_at = $2 WHERE id = $3`,
-		count+1, now, id,
-	)
-	if err != nil {
-		return false, fmt.Errorf("failed to increment rate limit counter: %w", err)
-	}
-	return true, nil
 }
 
 // maybeCleanup triggers cleanup if enough time has passed since the last cleanup

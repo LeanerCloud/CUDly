@@ -115,7 +115,7 @@
 
 **Effort:** `small`
 
-## MEDIUM: DB rate limiter race — INSERT-on-not-found can hit duplicate-key under concurrency (found 2026-04-21)
+## ~~MEDIUM: DB rate limiter race — INSERT-on-not-found can hit duplicate-key under concurrency~~ — RESOLVED
 
 **File**: `internal/api/db_rate_limiter.go::rateLimitOutcome` (~lines 104-117) + the `rate_limits` table
 
@@ -123,6 +123,8 @@
 
 **Impact**: Spurious rate-limit error returns under burst load from a single IP.
 
-**Status:** ❓ Needs triage
+**Status:** ✔️ Resolved
+
+**Resolved by:** `internal/api/db_rate_limiter.go::Allow` no longer issues a `SELECT ... FOR UPDATE` followed by a separate INSERT/UPDATE. Replaced with a single atomic `INSERT ... ON CONFLICT (id) DO UPDATE` that uses `CASE WHEN rate_limits.reset_time < $now THEN 1 ELSE rate_limits.count + 1 END` to handle both the fresh-insert / window-expired-reset / increment branches in one statement, with `RETURNING count, reset_time` driving the allow/deny decision. The dead `rateLimitOutcome` and `execAndCommit` helpers were removed. Three new integration tests in `internal/api/db_rate_limiter_integration_test.go` (build tag `integration`): `TestDBRateLimiter_ConcurrentFirstRequest` (20 goroutines hit the same id, all allowed, no SQLSTATE 23505), `TestDBRateLimiter_WindowExpiry_AtomicReset` (pre-seeded past reset_time → next call resets count to 1), `TestDBRateLimiter_ExceedsLimitDenies` (sanity: 3-allow + 2-deny burst with MaxAttempts=3). Documented trade-off: under sustained over-limit traffic, `count` may temporarily drift past MaxAttempts because the upsert always runs; the limiter still denies correctly and `cleanup()` evicts expired rows on its 24h cycle.
 
 **Implementation plan:** replace the SELECT+INSERT with a single atomic `INSERT ... ON CONFLICT (id) DO UPDATE SET count = CASE WHEN reset_time < $now THEN 1 ELSE count + 1 END, reset_time = CASE WHEN reset_time < $now THEN $newResetTime ELSE reset_time END, updated_at = $now RETURNING count, reset_time`. Drop the `queryErr/count/existingResetTime` arguments from `rateLimitOutcome`. Tests: `TestDBRateLimiter_ConcurrentFirstRequest` (20 goroutines hit same id, assert no SQLSTATE 23505 + final count = 20) and `TestDBRateLimiter_WindowExpiry_AtomicReset` (pre-seed past reset_time, single call resets count to 1).
