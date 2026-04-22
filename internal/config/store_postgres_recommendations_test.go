@@ -5,6 +5,7 @@ package config_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -197,4 +198,50 @@ func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 	require.NotNil(t, fr.LastCollectedAt)
 	require.NotNil(t, fr.LastCollectionError)
 	assert.Equal(t, "aws failed", *fr.LastCollectionError)
+}
+
+// TestPostgresStore_UpsertRecommendations_StoresAllTermVariants pins
+// the broadened-natural-key behaviour from migration 000032: when
+// Azure returns multiple `(term, payment)` variants for the same
+// (account, provider, service, region, resource_type) SKU, all of
+// them must round-trip through the cache as distinct rows. Pre-fix
+// they collided on `ON CONFLICT DO UPDATE command cannot affect
+// row a second time` (SQLSTATE 21000); the worked-around dedupe
+// helper would silently drop all but the highest-savings variant.
+//
+// Schema dependency: requires migration 000032 applied (term and
+// payment_option columns + the 7-column unique index). The
+// setupRecommendationsStore helper runs the full migration chain.
+func TestPostgresStore_UpsertRecommendations_StoresAllTermVariants(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupRecommendationsStore(ctx, t)
+	defer cleanup()
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Three Azure recs that share (account, provider, service, region,
+	// resource_type) but differ in (term, payment) — same SKU, three
+	// variants the user might choose between.
+	azureSKU := "Standard_D2s_v3"
+	variants := []config.RecommendationRecord{
+		{ID: "v1", Provider: "azure", Service: "vm", Region: "eastus", ResourceType: azureSKU, Term: 1, Payment: "upfront", Savings: 100, UpfrontCost: 1000, Count: 1},
+		{ID: "v2", Provider: "azure", Service: "vm", Region: "eastus", ResourceType: azureSKU, Term: 3, Payment: "upfront", Savings: 500, UpfrontCost: 4000, Count: 1},
+		{ID: "v3", Provider: "azure", Service: "vm", Region: "eastus", ResourceType: azureSKU, Term: 3, Payment: "no-upfront", Savings: 350, UpfrontCost: 0, Count: 1},
+	}
+
+	require.NoError(t, store.UpsertRecommendations(ctx, now, variants, []string{"azure"}))
+
+	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{Provider: "azure"})
+	require.NoError(t, err)
+	require.Len(t, got, 3, "all 3 (term, payment) variants must round-trip — pre-fix this would have collapsed to 1")
+
+	// Distinct (Term, Payment) tuples — none missing.
+	seen := map[string]bool{}
+	for _, r := range got {
+		key := fmt.Sprintf("%d/%s", r.Term, r.Payment)
+		seen[key] = true
+	}
+	assert.True(t, seen["1/upfront"], "1yr upfront variant must be present")
+	assert.True(t, seen["3/upfront"], "3yr upfront variant must be present")
+	assert.True(t, seen["3/no-upfront"], "3yr no-upfront variant must be present")
 }

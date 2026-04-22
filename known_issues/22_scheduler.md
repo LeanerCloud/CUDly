@@ -68,7 +68,7 @@ Net effect: an Azure tenant where *all* subscriptions hit a credential or permis
 
 **Effort:** `medium` (touches the scheduler API surface; needs care to avoid regressing partial-success behaviour).
 
-## LOW: Natural-key dedupe drops non-winning term/payment variants
+## ~~LOW: Natural-key dedupe drops non-winning term/payment variants~~ — RESOLVED
 
 **File**: `internal/config/store_postgres_recommendations.go::dedupeByNaturalKey` (added in commit `9fa4170a1`) + the `recommendations` table's UNIQUE constraint
 
@@ -84,7 +84,13 @@ The dedupe keeps the highest-savings variant per natural key. This is correct fo
 
 **Impact**: Latent. No user-facing bug today because the UI doesn't render per-term variants. Becomes a bug the moment a per-term feature lands and the implementer assumes the DB has all variants.
 
-**Status:** ❓ Needs triage
+**Status:** ✔️ Resolved
+
+**Resolved by:** new migration `000032_recommendations_add_term_payment_to_key.up.sql` adds `term INT NOT NULL DEFAULT 0` and `payment_option TEXT NOT NULL DEFAULT ''` columns (metadata-only ALTER), runs a `DO $$ ... RAISE NOTICE` pre-flight that warns on any pre-existing 7-tuple duplicates, then swaps the unique index `recommendations_natural_key_idx` from the 5-column shape to the 7-column shape `(account_key, provider, service, region, resource_type, term, payment_option)`. Pre-migration legacy rows land at `(0, '')` defaults — uniform suffix because the prior dedupe guaranteed at-most-one row per old natural key — and naturally age out via `UpsertRecommendations`' `collected_at < $now` eviction on the next scheduler tick. The `.down.sql` reverses in DROP-INDEX → DROP-COLUMNS → CREATE-INDEX order.
+
+`internal/config/store_postgres_recommendations.go::insertRecommendationsBatch` now binds `rec.Term` + `rec.Payment` (already populated by the scheduler's `convertRecommendations`), bumps `colsPerRow` 9 → 11, and the `ON CONFLICT (...)` column list matches the new 7-column key. `UpsertRecommendations` no longer wraps the input through `dedupeByNaturalKey` — the broader key makes the dedupe unnecessary. The dedupe helper itself is retained one release for safety with a doc-comment in its test file pointing at this commit; planned removal is a follow-up.
+
+New integration test `TestPostgresStore_UpsertRecommendations_StoresAllTermVariants` writes three Azure variants (1yr-upfront, 3yr-upfront, 3yr-no-upfront) for the same SKU and asserts all three round-trip as distinct rows. Pre-fix this would have collapsed to 1.
 
 ### Implementation plan
 

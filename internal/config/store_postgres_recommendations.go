@@ -64,7 +64,12 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	if err := insertRecommendationsBatched(ctx, tx, collectedAt, dedupeByNaturalKey(recs), true); err != nil {
+	// Note: dedupeByNaturalKey wrap removed in plan-Commit-2 — migration
+	// 000032 broadened the natural key to include term + payment_option,
+	// so Azure's term × payment variants are now distinct keys and the
+	// batched ON CONFLICT no longer collides on SQLSTATE 21000. The
+	// helper itself is retained one release for safety pending removal.
+	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
 		return err
 	}
 
@@ -174,14 +179,20 @@ func insertRecommendationsBatched(ctx context.Context, tx pgx.Tx, collectedAt ti
 // insertRecommendationsBatch inserts a single batch of up to
 // recommendationsBatchSize rows. Splits the VALUES placeholder list into
 // (collected_at, cloud_account_id, provider, service, region,
-// resource_type, payload, upfront_cost, monthly_savings) — 9 columns per
-// row (id defaulted via gen_random_uuid() so we send 9 args, no $n for id).
+// resource_type, payload, upfront_cost, monthly_savings, term,
+// payment_option) — 11 columns per row (id defaulted via
+// gen_random_uuid() so we send 11 args, no $n for id).
+//
+// term + payment_option were added as part of the natural-key
+// broadening (migration 000032) so per-rec ON CONFLICT can store
+// every Azure term × payment variant per SKU instead of collapsing
+// onto the highest-savings one.
 func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord, onConflict bool) error {
 	if len(recs) == 0 {
 		return nil
 	}
 
-	const colsPerRow = 9
+	const colsPerRow = 11
 	args := make([]any, 0, len(recs)*colsPerRow)
 	placeholders := make([]string, 0, len(recs))
 
@@ -192,8 +203,8 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 		}
 		base := i * colsPerRow
 		placeholders = append(placeholders, fmt.Sprintf(
-			"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9,
+			"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9, base+10, base+11,
 		))
 		args = append(args,
 			collectedAt,        // collected_at
@@ -205,19 +216,22 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 			payload,            // payload (JSONB)
 			rec.UpfrontCost,    // upfront_cost
 			rec.Savings,        // monthly_savings
+			rec.Term,           // term
+			rec.Payment,        // payment_option
 		)
 	}
 
 	query := fmt.Sprintf(`
 		INSERT INTO recommendations
 		    (collected_at, cloud_account_id, provider, service, region,
-		     resource_type, payload, upfront_cost, monthly_savings)
+		     resource_type, payload, upfront_cost, monthly_savings,
+		     term, payment_option)
 		VALUES %s
 	`, strings.Join(placeholders, ","))
 
 	if onConflict {
 		query += `
-			ON CONFLICT (account_key, provider, service, region, resource_type)
+			ON CONFLICT (account_key, provider, service, region, resource_type, term, payment_option)
 			DO UPDATE SET
 			    payload         = EXCLUDED.payload,
 			    upfront_cost    = EXCLUDED.upfront_cost,

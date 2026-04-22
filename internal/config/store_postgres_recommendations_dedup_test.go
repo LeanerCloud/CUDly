@@ -1,3 +1,11 @@
+// Tests for dedupeByNaturalKey, retained as a safety-net helper after
+// migration 000032 broadened the recommendations natural key to include
+// (term, payment_option). The helper is no longer wired into
+// UpsertRecommendations (commit 9fa4170a1's wrap was removed in
+// plan-Commit-2). The unit tests stay so the helper's contract is
+// documented if it gets re-wired anywhere; planned removal is a
+// follow-up commit once the broader-key migration has baked in
+// production for at least one release cycle.
 package config
 
 import (
