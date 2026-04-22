@@ -220,6 +220,9 @@ func (c *MemorystoreClient) PurchaseCommitment(ctx context.Context, rec common.R
 		// Setting reserved IP range indicates committed use
 		ReservedIpRange: "10.0.0.0/29",
 	}
+	if opts.Source != "" {
+		instance.Labels = map[string]string{common.PurchaseTagKey: opts.Source}
+	}
 
 	insertReq := &redispb.CreateInstanceRequest{
 		Parent:     parent,

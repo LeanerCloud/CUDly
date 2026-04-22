@@ -276,6 +276,9 @@ func (c *CloudStorageClient) PurchaseCommitment(ctx context.Context, rec common.
 		Location:     c.region,
 		StorageClass: rec.ResourceType,
 	}
+	if opts.Source != "" {
+		attrs.Labels = map[string]string{common.PurchaseTagKey: opts.Source}
+	}
 
 	err := bucket.Create(ctx, c.projectID, attrs)
 	if err != nil {

@@ -447,12 +447,21 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 		plan = "THIRTY_SIX_MONTH"
 	}
 
+	// GCP's computepb.Commitment has no Labels field, and the RegionCommitments
+	// client exposes no SetLabels call — CUDs cannot be tagged or labeled via
+	// the API. Encode the source into Description so customers can still
+	// filter with `gcloud compute commitments list --filter="description:..."`.
+	description := fmt.Sprintf("CUD for %s", rec.ResourceType)
+	if opts.Source != "" {
+		description = fmt.Sprintf("%s [%s=%s]", description, common.PurchaseTagKey, opts.Source)
+	}
+
 	// GCP requires both VCPU and MEMORY_MB in a single commitment insert.
 	commitment := &computepb.Commitment{
 		Name:        stringPtr(fmt.Sprintf("cud-%d", time.Now().Unix())),
 		Plan:        stringPtr(plan),
 		Type:        stringPtr("GENERAL_PURPOSE"),
-		Description: stringPtr(fmt.Sprintf("CUD for %s", rec.ResourceType)),
+		Description: stringPtr(description),
 		Resources: []*computepb.ResourceCommitment{
 			{
 				Type:   stringPtr("VCPU"),

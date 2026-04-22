@@ -267,6 +267,9 @@ func (c *CloudSQLClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 			PricingPlan: "PACKAGE", // This indicates a commitment
 		},
 	}
+	if opts.Source != "" {
+		instance.Settings.UserLabels = map[string]string{common.PurchaseTagKey: opts.Source}
+	}
 
 	op, err := svc.InsertInstance(c.projectID, instance)
 	if err != nil {

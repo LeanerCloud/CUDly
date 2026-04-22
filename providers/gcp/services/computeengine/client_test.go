@@ -19,11 +19,12 @@ import (
 
 // MockCommitmentsService mocks the CommitmentsService interface
 type MockCommitmentsService struct {
-	commitments []*computepb.Commitment
-	operation   *MockOperation
-	listErr     error
-	insertErr   error
-	index       int
+	commitments   []*computepb.Commitment
+	operation     *MockOperation
+	listErr       error
+	insertErr     error
+	index         int
+	lastInsertReq *computepb.InsertRegionCommitmentRequest // captured for assertions
 }
 
 func (m *MockCommitmentsService) List(ctx context.Context, req *computepb.ListRegionCommitmentsRequest) CommitmentsIterator {
@@ -31,6 +32,7 @@ func (m *MockCommitmentsService) List(ctx context.Context, req *computepb.ListRe
 }
 
 func (m *MockCommitmentsService) Insert(ctx context.Context, req *computepb.InsertRegionCommitmentRequest) (CommitmentsOperation, error) {
+	m.lastInsertReq = req
 	if m.insertErr != nil {
 		return nil, m.insertErr
 	}
@@ -474,6 +476,39 @@ func TestComputeEngineClient_PurchaseCommitment_WithMock(t *testing.T) {
 	assert.True(t, result.Success)
 	assert.NotEmpty(t, result.CommitmentID)
 	assert.Equal(t, 1000.0, result.Cost)
+}
+
+func TestComputeEngineClient_PurchaseCommitment_EncodesSourceInDescription(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+	client.SetCommitmentsService(mockService)
+
+	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 1}
+
+	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
+	require.NoError(t, err)
+	require.NotNil(t, mockService.lastInsertReq)
+	require.NotNil(t, mockService.lastInsertReq.CommitmentResource)
+	desc := mockService.lastInsertReq.CommitmentResource.GetDescription()
+	assert.Contains(t, desc, "["+common.PurchaseTagKey+"="+common.PurchaseSourceWeb+"]")
+}
+
+func TestComputeEngineClient_PurchaseCommitment_OmitsTagWhenSourceEmpty(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+	client.SetCommitmentsService(mockService)
+
+	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 1}
+
+	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, mockService.lastInsertReq)
+	desc := mockService.lastInsertReq.CommitmentResource.GetDescription()
+	assert.NotContains(t, desc, common.PurchaseTagKey)
 }
 
 func TestComputeEngineClient_PurchaseCommitment_3Year(t *testing.T) {
