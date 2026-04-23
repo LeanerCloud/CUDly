@@ -133,15 +133,17 @@ variable "service_account_id" {
 
 variable "service_account_project_roles" {
   description = <<-EOT
-    Extra project-level built-in roles granted to the service account
+    Project-level built-in roles granted to the service account
     Terraform creates when var.service_account_email is empty. Ignored
     otherwise.
 
-    The bundle already creates a dedicated custom role
-    (var.custom_role_id, default "cudlyCommitmentWriter") holding the
-    minimum Compute commitment permissions and grants it to the SA —
-    this list is for any additional built-in roles the operator wants
-    to layer on top. Leave empty (default) for least privilege.
+    Default: roles/compute.viewer — read access to regions/zones/
+    instance types/commitments, which CUDly's collection pipeline
+    needs to match commitments to workloads. Paired with the custom
+    write-side role (var.custom_role_id). This split mirrors the
+    convention in terraform/modules/compute/gcp/cloud-run, keeping
+    the two modules' definitions of cudlyCommitmentWriter identical
+    so one doesn't stomp the other on apply.
 
     Note: GCP's built-in commitment/billing roles (e.g.
     roles/commerceorgpolicy.commitmentAdmin, roles/billing.viewer) are
@@ -150,7 +152,9 @@ variable "service_account_project_roles" {
     module.
   EOT
   type        = list(string)
-  default     = []
+  default = [
+    "roles/compute.viewer",
+  ]
 }
 
 variable "custom_role_id" {
@@ -167,20 +171,20 @@ variable "custom_role_id" {
 variable "custom_role_permissions" {
   description = <<-EOT
     Permissions bundled into the custom role created when
-    var.service_account_email is empty. Defaults cover the full
-    purchase/update/read lifecycle of Compute Engine commitments and
-    the read-only enumeration CUDly performs while matching commitments
-    to workloads (regions, zones, machine types).
+    var.service_account_email is empty. Defaults match the definition
+    in terraform/modules/compute/gcp/cloud-run (which owns this role
+    when CUDly itself is deployed to the same project), so both
+    modules stay in lockstep and a CUDly deploy can't stomp the
+    federation bundle's role on apply.
+
+    Read-side permissions (regions/zones/machineTypes/commitments
+    .list/.get) come from roles/compute.viewer — see
+    var.service_account_project_roles — not from this role.
   EOT
   type        = list(string)
   default = [
     "compute.commitments.create",
     "compute.commitments.update",
-    "compute.commitments.get",
-    "compute.commitments.list",
-    "compute.regions.list",
-    "compute.zones.list",
-    "compute.machineTypes.list",
   ]
 }
 

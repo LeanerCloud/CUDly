@@ -55,11 +55,13 @@ resource "google_service_account" "cudly" {
 }
 
 resource "google_project_iam_custom_role" "cudly" {
-  count       = local.create_service_account ? 1 : 0
-  project     = local.project
-  role_id     = var.custom_role_id
-  title       = "CUDly Commitment Writer"
-  description = "Minimum permissions for CUDly to purchase and update Compute Engine committed use discounts."
+  count   = local.create_service_account ? 1 : 0
+  project = local.project
+  role_id = var.custom_role_id
+  title   = "CUDly Commitment Writer"
+  # Description matches terraform/modules/compute/gcp/cloud-run exactly
+  # so applies from the two modules are idempotent.
+  description = "Minimum permissions for CUDly to purchase and update committed use discounts."
   permissions = var.custom_role_permissions
   stage       = "GA"
 }
