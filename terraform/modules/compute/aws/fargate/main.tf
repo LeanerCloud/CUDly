@@ -181,8 +181,16 @@ resource "aws_iam_role_policy" "ses_access" {
 
   policy = jsonencode({
     Version = "2012-10-17"
+    # See the Lambda module's comment for the full rationale behind Resource
+    # = "*" on the send actions: SES's identity hierarchy forces the policy
+    # to grant access to parent domains the operator verifies, and
+    # enumerating them is fragile. `*` defers the real authorisation to
+    # SES itself (which still rejects sends from unverified identities at
+    # the service layer); configuration-set access stays stack-scoped so
+    # a compromised task can't touch unrelated stacks' config sets.
     Statement = [
       {
+        Sid    = "SendFromAnyVerifiedIdentity"
         Effect = "Allow"
         Action = [
           "ses:SendEmail",
@@ -190,15 +198,15 @@ resource "aws_iam_role_policy" "ses_access" {
           "ses:GetAccount",
           "ses:GetEmailIdentity",
         ]
-        # See the Lambda module's comment on this policy — dual domain +
-        # email-level ARNs handle both SES verification modes so the policy
-        # matches whether the From address is registered at the domain or
-        # the per-email level (SES sandbox).
-        Resource = [
-          "arn:aws:ses:*:*:identity/${var.email_from_domain}",
-          "arn:aws:ses:*:*:identity/*@${var.email_from_domain}",
-          "arn:aws:ses:*:*:configuration-set/${var.stack_name}*",
+        Resource = "*"
+      },
+      {
+        Sid    = "StackScopedConfigurationSet"
+        Effect = "Allow"
+        Action = [
+          "ses:UseConfigurationSet",
         ]
+        Resource = "arn:aws:ses:*:*:configuration-set/${var.stack_name}*"
       }
     ]
   })

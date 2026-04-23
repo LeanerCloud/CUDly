@@ -219,25 +219,21 @@ resource "aws_iam_role_policy" "secrets_access" {
   })
 }
 
-# SES email sending access — scoped to the verified From domain plus
-# stack-specific configuration sets. ses:CreateEmailIdentity is intentionally
-# NOT in the action list; identity verification is a one-time operator task,
-# and keeping it out of the runtime role blocks a compromised Lambda from
+# SES email sending access. ses:CreateEmailIdentity is intentionally NOT in
+# the action list; identity verification is a one-time operator task, and
+# keeping it out of the runtime role blocks a compromised Lambda from
 # registering arbitrary identities for phishing/spam.
 #
-# Resource list covers both SES identity-verification modes so the policy
-# matches regardless of how the From address was registered in the account:
-#   - "identity/${domain}"   — domain-level identity (DKIM records in ses.tf;
-#                              the standard path for deployments running
-#                              against a verified subdomain).
-#   - "identity/*@${domain}" — wildcard for email-level identities (the
-#                              per-address verification SES hands out in
-#                              sandbox mode). Without this, SES denies
-#                              ses:SendEmail with "not authorized to
-#                              perform ses:SendEmail on resource
-#                              .../identity/<address>" whenever the
-#                              sender's identity is evaluated at the email
-#                              level.
+# Resource = "*" on the send actions — the narrower identity/${domain}
+# patterns we tried earlier don't cover the real case we hit in production:
+# a From address on an unverified subdomain (e.g. noreply@cudly.leanercloud.com)
+# where SES walks up the identity hierarchy and evaluates IAM against the
+# verified parent's ARN (identity/leanercloud.com). Enumerating every
+# ancestor the operator might verify would work on paper but drifts every
+# time the SES identity tree is reorganised; `*` defers the real check to
+# SES itself (which still rejects sends from unverified identities at the
+# service layer). Configuration-set access stays scoped to ${stack_name}*
+# so a compromised Lambda can't touch unrelated stacks' config sets.
 #
 # Only attached when var.email_from_domain is set — deployments without email
 # notifications don't get any SES permissions at all.
@@ -251,6 +247,7 @@ resource "aws_iam_role_policy" "ses_access" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "SendFromAnyVerifiedIdentity"
         Effect = "Allow"
         Action = [
           "ses:SendEmail",
@@ -258,11 +255,15 @@ resource "aws_iam_role_policy" "ses_access" {
           "ses:GetAccount",
           "ses:GetEmailIdentity",
         ]
-        Resource = [
-          "arn:aws:ses:*:*:identity/${var.email_from_domain}",
-          "arn:aws:ses:*:*:identity/*@${var.email_from_domain}",
-          "arn:aws:ses:*:*:configuration-set/${var.stack_name}*",
+        Resource = "*"
+      },
+      {
+        Sid    = "StackScopedConfigurationSet"
+        Effect = "Allow"
+        Action = [
+          "ses:UseConfigurationSet",
         ]
+        Resource = "arn:aws:ses:*:*:configuration-set/${var.stack_name}*"
       }
     ]
   })
