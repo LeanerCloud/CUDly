@@ -25,10 +25,17 @@ import { handlePurchaseDeeplink } from './purchases-deeplink';
 export async function init(): Promise<void> {
   api.initAuth();
 
-  // Check if this is a password reset link
+  // Check if this is a password reset link. Must be scoped to the
+  // /reset-password path specifically — other deep-links (e.g. the
+  // purchase approve/cancel flow at /purchases/{action}/:id?token=…)
+  // also carry a `token` query param and would otherwise hijack into
+  // the reset-password modal. The backend emits exactly
+  // `${dashboardURL}/reset-password?token=…` in
+  // internal/auth/service_password.go:276, so pinning the check to
+  // that path matches the issuer contract.
   const urlParams = new URLSearchParams(window.location.search);
   const resetToken = urlParams.get('token');
-  if (resetToken) {
+  if (resetToken && window.location.pathname.replace(/\/+$/, '') === '/reset-password') {
     await showResetPasswordModal(resetToken);
     return;
   }
