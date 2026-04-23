@@ -296,10 +296,13 @@ Commitments:
 {{end}}
 
 To approve this purchase, click the link below:
-{{.DashboardURL}}/api/purchases/approve/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
+{{.DashboardURL}}/purchases/approve/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
 
 To cancel this purchase, click the link below:
-{{.DashboardURL}}/api/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
+{{.DashboardURL}}/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
+
+Clicking a link will require you to sign in if you aren't already; the
+action is then recorded against your logged-in account.
 
 This is an automated message from CUDly. Do not share these links.
 `

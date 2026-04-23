@@ -17,6 +17,7 @@ import { initSavingsHistory } from './modules/savings-history';
 import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
+import { handlePurchaseDeeplink } from './purchases-deeplink';
 
 /**
  * Initialize app
@@ -50,6 +51,13 @@ export async function init(): Promise<void> {
     const user = await api.getCurrentUser();
     state.setCurrentUser(user);
     initRouter();
+    // Deep-link check BEFORE tab routing: the path /purchases/{approve,
+    // cancel}/:id?token=… isn't a tab — it's a one-shot action landing
+    // page from the approval email. handlePurchaseDeeplink runs the
+    // confirm+POST flow, replaces the URL with /history, then falls
+    // through so the user lands on the History tab with their action's
+    // outcome rendered as a toast.
+    await handlePurchaseDeeplink();
     const target = applyTabFromPath();
     let url = '/' + target;
     if (target === 'settings') {
