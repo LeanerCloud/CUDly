@@ -404,13 +404,13 @@ type MockPurchaseManager struct {
 	mock.Mock
 }
 
-func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token string) error {
-	args := m.Called(ctx, execID, token)
+func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string) error {
+	args := m.Called(ctx, execID, token, actor)
 	return args.Error(0)
 }
 
-func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token string) error {
-	args := m.Called(ctx, execID, token)
+func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token, actor string) error {
+	args := m.Called(ctx, execID, token, actor)
 	return args.Error(0)
 }
 

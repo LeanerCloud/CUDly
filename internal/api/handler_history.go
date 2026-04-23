@@ -169,6 +169,14 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 		PlanID:           exec.PlanID,
 		Status:           exec.Status,
 	}
+	annotateHistoryRowByStatus(&row, exec, approver)
+	return row
+}
+
+// annotateHistoryRowByStatus fills in Approver + StatusDescription on the
+// row based on exec.Status. Split from executionToHistoryRow to keep the
+// switch below under the gocyclo threshold.
+func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
 	switch exec.Status {
 	case "pending", "notified":
 		row.Approver = approver
@@ -177,23 +185,44 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
 	case "cancelled":
-		// Cancelled via the token link in the approval email. The approval
-		// token is a bearer credential — anyone with the email's inbox
-		// access can cancel — so the *click* itself isn't attributable.
-		// We can still attribute the *event* to the notification email
-		// address that received the token, which is the person with cancel
-		// authority for this execution. For the audit trail this is better
-		// than "unknown"; for true per-user attribution (who physically
-		// clicked) we need the session-authed cancel path tracked in
-		// known_issues/30_history_pending_cancel_ui.md.
-		if approver != "" {
-			row.Approver = approver
-			row.StatusDescription = "cancelled by " + approver + " (via approval link)"
-		} else {
-			row.StatusDescription = "cancelled via approval link"
-		}
+		annotateCancelled(row, exec, approver)
+	case "approved", "completed":
+		annotateApproved(row, exec, approver)
 	}
-	return row
+}
+
+// annotateCancelled resolves who cancelled the execution:
+//  1. exec.CancelledBy — populated by the session-authed deep-link flow;
+//     exact session-authed click attribution.
+//  2. approver — the notification inbox that received the cancel token;
+//     authoritative accountable party but not necessarily the clicker.
+//     Used on legacy token-only paths (async workers, old email clicks).
+func annotateCancelled(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
+	if exec.CancelledBy != nil && *exec.CancelledBy != "" {
+		row.Approver = *exec.CancelledBy
+		row.StatusDescription = "cancelled by " + *exec.CancelledBy
+		return
+	}
+	if approver != "" {
+		row.Approver = approver
+		row.StatusDescription = "cancelled by " + approver + " (via approval link)"
+		return
+	}
+	row.StatusDescription = "cancelled via approval link"
+}
+
+// annotateApproved resolves who approved the execution using the same
+// two-tier lookup as annotateCancelled — session-authed click wins,
+// notification inbox fills in otherwise.
+func annotateApproved(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
+	if exec.ApprovedBy != nil && *exec.ApprovedBy != "" {
+		row.Approver = *exec.ApprovedBy
+		row.StatusDescription = "approved by " + *exec.ApprovedBy
+		return
+	}
+	if approver != "" {
+		row.Approver = approver
+	}
 }
 
 // collapseRecommendationProvider returns the single provider shared by every

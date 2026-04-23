@@ -32,7 +32,7 @@ func TestManager_ApproveExecution(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ApproveExecution(ctx, "exec-123", "valid-token")
+	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -58,7 +58,7 @@ func TestManager_ApproveExecution_InvalidToken(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ApproveExecution(ctx, "exec-123", "invalid-token")
+	err := manager.ApproveExecution(ctx, "exec-123", "invalid-token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid approval token")
 
@@ -78,7 +78,7 @@ func TestManager_ApproveExecution_NotFound(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ApproveExecution(ctx, "exec-123", "token")
+	err := manager.ApproveExecution(ctx, "exec-123", "token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "execution not found")
 
@@ -105,7 +105,7 @@ func TestManager_ApproveExecution_AlreadyCompleted(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ApproveExecution(ctx, "exec-123", "valid-token")
+	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "execution cannot be approved")
 
@@ -125,7 +125,7 @@ func TestManager_ApproveExecution_GetError(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ApproveExecution(ctx, "exec-123", "token")
+	err := manager.ApproveExecution(ctx, "exec-123", "token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get execution")
 
@@ -153,7 +153,7 @@ func TestManager_ApproveExecution_NotifiedStatus(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ApproveExecution(ctx, "exec-123", "valid-token")
+	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -180,7 +180,7 @@ func TestManager_CancelExecution(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.CancelExecution(ctx, "exec-123", "valid-token")
+	err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -206,7 +206,7 @@ func TestManager_CancelExecution_InvalidToken(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.CancelExecution(ctx, "exec-123", "invalid-token")
+	err := manager.CancelExecution(ctx, "exec-123", "invalid-token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid approval token")
 
@@ -233,7 +233,7 @@ func TestManager_CancelExecution_AlreadyCompleted(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.CancelExecution(ctx, "exec-123", "valid-token")
+	err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "execution cannot be cancelled")
 
@@ -253,7 +253,7 @@ func TestManager_CancelExecution_NotFound(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.CancelExecution(ctx, "exec-123", "token")
+	err := manager.CancelExecution(ctx, "exec-123", "token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "execution not found")
 
@@ -273,7 +273,7 @@ func TestManager_CancelExecution_GetError(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.CancelExecution(ctx, "exec-123", "token")
+	err := manager.CancelExecution(ctx, "exec-123", "token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get execution")
 

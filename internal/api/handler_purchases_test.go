@@ -19,11 +19,11 @@ func TestHandler_approvePurchase(t *testing.T) {
 	ctx := context.Background()
 	mockPurchase := new(MockPurchaseManager)
 
-	mockPurchase.On("ApproveExecution", ctx, "12345678-1234-1234-1234-123456789abc", "valid-token").Return(nil)
+	mockPurchase.On("ApproveExecution", ctx, "12345678-1234-1234-1234-123456789abc", "valid-token", "").Return(nil)
 
 	handler := &Handler{purchase: mockPurchase}
 
-	result, err := handler.approvePurchase(ctx, "12345678-1234-1234-1234-123456789abc", "valid-token")
+	result, err := handler.approvePurchase(ctx, nil, "12345678-1234-1234-1234-123456789abc", "valid-token")
 	require.NoError(t, err)
 
 	resultMap := result.(map[string]string)
@@ -34,11 +34,11 @@ func TestHandler_cancelPurchase(t *testing.T) {
 	ctx := context.Background()
 	mockPurchase := new(MockPurchaseManager)
 
-	mockPurchase.On("CancelExecution", ctx, "45645645-6456-4564-5645-645645645645", "valid-token").Return(nil)
+	mockPurchase.On("CancelExecution", ctx, "45645645-6456-4564-5645-645645645645", "valid-token", "").Return(nil)
 
 	handler := &Handler{purchase: mockPurchase}
 
-	result, err := handler.cancelPurchase(ctx, "45645645-6456-4564-5645-645645645645", "valid-token")
+	result, err := handler.cancelPurchase(ctx, nil, "45645645-6456-4564-5645-645645645645", "valid-token")
 	require.NoError(t, err)
 
 	resultMap := result.(map[string]string)

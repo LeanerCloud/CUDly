@@ -343,12 +343,12 @@ func (r *Router) getPurchaseDetailsHandler(ctx context.Context, req *events.Lamb
 
 func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	token := req.QueryStringParameters["token"]
-	return r.h.approvePurchase(ctx, params["id"], token)
+	return r.h.approvePurchase(ctx, req, params["id"], token)
 }
 
 func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	token := req.QueryStringParameters["token"]
-	return r.h.cancelPurchase(ctx, params["id"], token)
+	return r.h.cancelPurchase(ctx, req, params["id"], token)
 }
 
 func (r *Router) getPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

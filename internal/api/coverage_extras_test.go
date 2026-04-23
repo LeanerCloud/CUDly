@@ -20,14 +20,14 @@ import (
 
 func TestHandler_approvePurchase_InvalidUUID(t *testing.T) {
 	h := &Handler{}
-	_, err := h.approvePurchase(context.Background(), "not-uuid", "token")
+	_, err := h.approvePurchase(context.Background(), nil, "not-uuid", "token")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid ID format")
 }
 
 func TestHandler_approvePurchase_EmptyToken(t *testing.T) {
 	h := &Handler{}
-	_, err := h.approvePurchase(context.Background(), "11111111-1111-1111-1111-111111111111", "")
+	_, err := h.approvePurchase(context.Background(), nil, "11111111-1111-1111-1111-111111111111", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "approval token is required")
 }
@@ -35,24 +35,24 @@ func TestHandler_approvePurchase_EmptyToken(t *testing.T) {
 func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 	ctx := context.Background()
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", ctx, "11111111-1111-1111-1111-111111111111", "tok").
+	mockPurchase.On("ApproveExecution", ctx, "11111111-1111-1111-1111-111111111111", "tok", "").
 		Return(errors.New("approval failed"))
 
 	h := &Handler{purchase: mockPurchase}
-	_, err := h.approvePurchase(ctx, "11111111-1111-1111-1111-111111111111", "tok")
+	_, err := h.approvePurchase(ctx, nil, "11111111-1111-1111-1111-111111111111", "tok")
 	assert.Error(t, err)
 }
 
 func TestHandler_cancelPurchase_InvalidUUID(t *testing.T) {
 	h := &Handler{}
-	_, err := h.cancelPurchase(context.Background(), "not-uuid", "token")
+	_, err := h.cancelPurchase(context.Background(), nil, "not-uuid", "token")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid ID format")
 }
 
 func TestHandler_cancelPurchase_EmptyToken(t *testing.T) {
 	h := &Handler{}
-	_, err := h.cancelPurchase(context.Background(), "11111111-1111-1111-1111-111111111111", "")
+	_, err := h.cancelPurchase(context.Background(), nil, "11111111-1111-1111-1111-111111111111", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cancellation token is required")
 }
@@ -60,11 +60,11 @@ func TestHandler_cancelPurchase_EmptyToken(t *testing.T) {
 func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 	ctx := context.Background()
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("CancelExecution", ctx, "11111111-1111-1111-1111-111111111111", "tok").
+	mockPurchase.On("CancelExecution", ctx, "11111111-1111-1111-1111-111111111111", "tok", "").
 		Return(errors.New("cancel failed"))
 
 	h := &Handler{purchase: mockPurchase}
-	_, err := h.cancelPurchase(ctx, "11111111-1111-1111-1111-111111111111", "tok")
+	_, err := h.cancelPurchase(ctx, nil, "11111111-1111-1111-1111-111111111111", "tok")
 	assert.Error(t, err)
 }
 

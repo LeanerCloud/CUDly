@@ -136,6 +136,14 @@ type PurchaseExecution struct {
 	// ("cudly-cli" or "cudly-web"). Propagated into PurchaseOptions and
 	// stamped as a tag/label onto every commitment this execution buys.
 	Source string `json:"source,omitempty" dynamodbav:"source,omitempty"`
+	// ApprovedBy / CancelledBy carry the email of the session-authenticated
+	// user who acted on this execution via the auth-gated deep-link flow
+	// (frontend /purchases/{action}/:id → login-if-needed → session-authed
+	// endpoint). Nil on legacy token-only approve/cancel paths — the
+	// handler / History UI falls back to the notification email as the
+	// accountable party in that case. Nullable TEXT in Postgres.
+	ApprovedBy  *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
+	CancelledBy *string `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"`
 }
 
 // RecommendationRecord stores a recommendation with purchase status

@@ -33,8 +33,8 @@ type MockPurchaseManager struct {
 	ProcessScheduledPurchasesFunc         func(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotificationsFunc func(ctx context.Context) (*purchase.NotificationResult, error)
 	ProcessMessageFunc                    func(ctx context.Context, body string) error
-	ApproveExecutionFunc                  func(ctx context.Context, execID, token string) error
-	CancelExecutionFunc                   func(ctx context.Context, execID, token string) error
+	ApproveExecutionFunc                  func(ctx context.Context, execID, token, actor string) error
+	CancelExecutionFunc                   func(ctx context.Context, execID, token, actor string) error
 }
 
 func (m *MockPurchaseManager) ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error) {
@@ -58,16 +58,16 @@ func (m *MockPurchaseManager) ProcessMessage(ctx context.Context, body string) e
 	return nil
 }
 
-func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token string) error {
+func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string) error {
 	if m.ApproveExecutionFunc != nil {
-		return m.ApproveExecutionFunc(ctx, execID, token)
+		return m.ApproveExecutionFunc(ctx, execID, token, actor)
 	}
 	return nil
 }
 
-func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token string) error {
+func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token, actor string) error {
 	if m.CancelExecutionFunc != nil {
-		return m.CancelExecutionFunc(ctx, execID, token)
+		return m.CancelExecutionFunc(ctx, execID, token, actor)
 	}
 	return nil
 }

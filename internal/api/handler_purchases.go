@@ -201,7 +201,7 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 }
 
 // Purchase action handlers
-func (h *Handler) approvePurchase(ctx context.Context, execID, token string) (any, error) {
+func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
@@ -209,14 +209,14 @@ func (h *Handler) approvePurchase(ctx context.Context, execID, token string) (an
 		return nil, NewClientError(400, "approval token is required")
 	}
 
-	if err := h.purchase.ApproveExecution(ctx, execID, token); err != nil {
+	if err := h.purchase.ApproveExecution(ctx, execID, token, h.tryResolveActorEmail(ctx, req)); err != nil {
 		return nil, err
 	}
 
 	return map[string]string{"status": "approved"}, nil
 }
 
-func (h *Handler) cancelPurchase(ctx context.Context, execID, token string) (any, error) {
+func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
@@ -224,11 +224,33 @@ func (h *Handler) cancelPurchase(ctx context.Context, execID, token string) (any
 		return nil, NewClientError(400, "cancellation token is required")
 	}
 
-	if err := h.purchase.CancelExecution(ctx, execID, token); err != nil {
+	if err := h.purchase.CancelExecution(ctx, execID, token, h.tryResolveActorEmail(ctx, req)); err != nil {
 		return nil, err
 	}
 
 	return map[string]string{"status": "cancelled"}, nil
+}
+
+// tryResolveActorEmail returns the email of the session-authenticated user
+// who made the request, or "" when the request carries no valid session.
+// Best-effort: the approve/cancel routes are AuthPublic (token-only), so
+// we don't require a session; we just capture it when present so the
+// auth-gated deep-link flow (frontend /purchases/{action}/:id → login
+// → session-authed call with ?token=…) can record per-user attribution
+// without changing the token-only fallback path used by message workers.
+func (h *Handler) tryResolveActorEmail(ctx context.Context, req *events.LambdaFunctionURLRequest) string {
+	if req == nil || h.auth == nil {
+		return ""
+	}
+	bearer := h.extractBearerToken(req)
+	if bearer == "" {
+		return ""
+	}
+	session, err := h.auth.ValidateSession(ctx, bearer)
+	if err != nil || session == nil {
+		return ""
+	}
+	return session.Email
 }
 
 // buildPurchaseDetailsResponse builds the response map for a purchase execution.

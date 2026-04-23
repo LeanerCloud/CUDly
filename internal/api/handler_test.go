@@ -577,7 +577,7 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	ctx := context.Background()
 	mockPurchase := new(MockPurchaseManager)
 
-	mockPurchase.On("ApproveExecution", mock.Anything, "12345678-1234-1234-1234-123456789abc", "token123").Return(nil)
+	mockPurchase.On("ApproveExecution", mock.Anything, "12345678-1234-1234-1234-123456789abc", "token123", "").Return(nil)
 
 	handler := &Handler{purchase: mockPurchase}
 
@@ -605,7 +605,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	ctx := context.Background()
 	mockPurchase := new(MockPurchaseManager)
 
-	mockPurchase.On("CancelExecution", mock.Anything, "45645645-6456-4564-5645-645645645645", "token456").Return(nil)
+	mockPurchase.On("CancelExecution", mock.Anything, "45645645-6456-4564-5645-645645645645", "token456", "").Return(nil)
 
 	handler := &Handler{purchase: mockPurchase}
 

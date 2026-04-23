@@ -106,7 +106,10 @@ func (m *Manager) handleApproveMessage(ctx context.Context, msg AsyncMessage) er
 	if msg.ExecutionID == "" || msg.Token == "" {
 		return fmt.Errorf("execution_id and token required for approve message")
 	}
-	return m.ApproveExecution(ctx, msg.ExecutionID, msg.Token)
+	// Async-path actors aren't tracked — the SQS message only carries
+	// execution_id + token. Pass empty actor so attribution falls back to
+	// the approver email (reused at render time in fetchExecutionsAsHistory).
+	return m.ApproveExecution(ctx, msg.ExecutionID, msg.Token, "")
 }
 
 // handleCancelMessage processes a cancel message
@@ -114,5 +117,6 @@ func (m *Manager) handleCancelMessage(ctx context.Context, msg AsyncMessage) err
 	if msg.ExecutionID == "" || msg.Token == "" {
 		return fmt.Errorf("execution_id and token required for cancel message")
 	}
-	return m.CancelExecution(ctx, msg.ExecutionID, msg.Token)
+	// Async-path actor fallback — see handleApproveMessage.
+	return m.CancelExecution(ctx, msg.ExecutionID, msg.Token, "")
 }

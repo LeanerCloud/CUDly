@@ -109,10 +109,14 @@ type BreakdownValue struct {
 	Percentage    float64 `json:"percentage"`
 }
 
-// PurchaseManagerInterface defines purchase manager methods used by handler
+// PurchaseManagerInterface defines purchase manager methods used by handler.
+// `actor` is the session-authenticated user's email for per-user
+// attribution via the auth-gated deep-link flow; pass "" for token-only
+// paths (message workers, legacy callers) where attribution falls back to
+// the notification email at render time.
 type PurchaseManagerInterface interface {
-	ApproveExecution(ctx context.Context, execID, token string) error
-	CancelExecution(ctx context.Context, execID, token string) error
+	ApproveExecution(ctx context.Context, execID, token, actor string) error
+	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 
 // SchedulerInterface defines scheduler methods used by handler

@@ -19,8 +19,8 @@ type PurchaseManagerInterface interface {
 	ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotifications(ctx context.Context) (*purchase.NotificationResult, error)
 	ProcessMessage(ctx context.Context, body string) error
-	ApproveExecution(ctx context.Context, execID, token string) error
-	CancelExecution(ctx context.Context, execID, token string) error
+	ApproveExecution(ctx context.Context, execID, token, actor string) error
+	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 
 // AnalyticsStoreInterface defines the methods required for analytics storage
