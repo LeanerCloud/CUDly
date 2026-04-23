@@ -575,18 +575,35 @@ func TestHandler_HandleRequest_DeletePlan(t *testing.T) {
 
 func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	approver := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "token123",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", mock.Anything, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+
 	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveExecution", mock.Anything, execID, "token123", approver).Return(nil)
 
-	mockPurchase.On("ApproveExecution", mock.Anything, "12345678-1234-1234-1234-123456789abc", "token123", "").Return(nil)
-
-	handler := &Handler{purchase: mockPurchase}
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
 		QueryStringParameters: map[string]string{"token": "token123"},
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
 				Method: "POST",
-				Path:   "/api/purchases/approve/12345678-1234-1234-1234-123456789abc",
+				Path:   "/api/purchases/approve/" + execID,
 			},
 		},
 	}
@@ -603,18 +620,35 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 
 func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	ctx := context.Background()
+	execID := "45645645-6456-4564-5645-645645645645"
+	approver := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "token456",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", mock.Anything, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+
 	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("CancelExecution", mock.Anything, execID, "token456", approver).Return(nil)
 
-	mockPurchase.On("CancelExecution", mock.Anything, "45645645-6456-4564-5645-645645645645", "token456", "").Return(nil)
-
-	handler := &Handler{purchase: mockPurchase}
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
 		QueryStringParameters: map[string]string{"token": "token456"},
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
 				Method: "POST",
-				Path:   "/api/purchases/cancel/45645645-6456-4564-5645-645645645645",
+				Path:   "/api/purchases/cancel/" + execID,
 			},
 		},
 	}

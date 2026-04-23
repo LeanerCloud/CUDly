@@ -176,43 +176,90 @@ func (s *Sender) createVerificationRequest(ctx context.Context, email string) er
 // SendToEmail sends an email directly to a specific email address via SES
 // If SES is in sandbox mode, it will automatically verify the recipient email if needed
 func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string) error {
+	return s.SendToEmailWithCC(ctx, toEmail, nil, subject, body)
+}
+
+// SendToEmailWithCC sends an email with a primary To recipient plus optional
+// Cc recipients. The To recipient is treated as the authorised actor for the
+// message (verified in sandbox mode) and Cc recipients are informed of the
+// action without carrying the "you must do something" burden. Duplicate
+// entries across To/Cc are stripped so a single inbox is never addressed
+// twice.
+func (s *Sender) SendToEmailWithCC(ctx context.Context, toEmail string, ccEmails []string, subject, body string) error {
 	if s.fromEmail == "" {
 		logging.Debug("No from email configured, skipping direct email")
 		return nil
 	}
-
 	if s.sesClient == nil {
 		return fmt.Errorf("SES client not initialized")
 	}
+	if err := s.ensureSandboxRecipientVerified(ctx, toEmail); err != nil {
+		return err
+	}
 
-	// Check if SES is in sandbox mode
+	cc := dedupeCCAgainstTo(toEmail, ccEmails)
+
+	input := buildSESSendEmailInput(s.fromEmail, toEmail, cc, subject, body)
+
+	_, err := s.sesClient.SendEmail(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to send email via SES: %w", err)
+	}
+
+	if len(cc) > 0 {
+		logging.Debugf("Sent email to %s (cc %d): %s", redactEmail(toEmail), len(cc), subject)
+	} else {
+		logging.Debugf("Sent email to %s: %s", redactEmail(toEmail), subject)
+	}
+	return nil
+}
+
+// ensureSandboxRecipientVerified short-circuits the SES send path when
+// the account is in sandbox mode and the recipient isn't yet verified —
+// returning a user-facing error asking the recipient to click the
+// verification link SES will have just sent. Non-sandbox accounts always
+// proceed. Errors from the sandbox probe itself are logged and ignored
+// so a transient SES control-plane hiccup doesn't take down the data-
+// plane send path.
+func (s *Sender) ensureSandboxRecipientVerified(ctx context.Context, toEmail string) error {
 	inSandbox, err := s.isInSandbox(ctx)
 	if err != nil {
 		logging.Warnf("Failed to check SES sandbox status: %v", err)
-		// Continue anyway - if we're not in sandbox, the send will work
-	} else if inSandbox {
-		logging.Infof("SES is in sandbox mode - checking if recipient %s is verified", redactEmail(toEmail))
-
-		// Check if recipient email is verified
-		verified, err := s.isEmailVerified(ctx, toEmail)
-		if err != nil {
-			logging.Warnf("Failed to check email verification status: %v", err)
-		} else if !verified {
-			logging.Warnf("Recipient email %s is not verified in sandbox mode - creating verification request", redactEmail(toEmail))
-			if err := s.createVerificationRequest(ctx, toEmail); err != nil {
-				logging.Warnf("Failed to create verification request: %v", err)
-				return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent - please check inbox and click the verification link before trying again", toEmail)
-			}
-			return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent to %s - please check inbox and click the verification link, then try the password reset again", toEmail, toEmail)
-		}
-
-		logging.Infof("Recipient email %s is verified - proceeding with send", redactEmail(toEmail))
+		return nil
 	}
+	if !inSandbox {
+		return nil
+	}
+	logging.Infof("SES is in sandbox mode - checking if recipient %s is verified", redactEmail(toEmail))
 
-	input := &sesv2.SendEmailInput{
-		Destination: &types.Destination{
-			ToAddresses: []string{toEmail},
-		},
+	verified, err := s.isEmailVerified(ctx, toEmail)
+	if err != nil {
+		logging.Warnf("Failed to check email verification status: %v", err)
+		return nil
+	}
+	if verified {
+		logging.Infof("Recipient email %s is verified - proceeding with send", redactEmail(toEmail))
+		return nil
+	}
+	logging.Warnf("Recipient email %s is not verified in sandbox mode - creating verification request", redactEmail(toEmail))
+	if err := s.createVerificationRequest(ctx, toEmail); err != nil {
+		logging.Warnf("Failed to create verification request: %v", err)
+		return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent - please check inbox and click the verification link before trying again", toEmail)
+	}
+	return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent to %s - please check inbox and click the verification link, then try the password reset again", toEmail, toEmail)
+}
+
+// buildSESSendEmailInput constructs a sesv2.SendEmailInput with the
+// destination To + (optional) Cc list and a plain-text body.
+func buildSESSendEmailInput(fromEmail, toEmail string, cc []string, subject, body string) *sesv2.SendEmailInput {
+	destination := &types.Destination{
+		ToAddresses: []string{toEmail},
+	}
+	if len(cc) > 0 {
+		destination.CcAddresses = cc
+	}
+	return &sesv2.SendEmailInput{
+		Destination: destination,
 		Content: &types.EmailContent{
 			Simple: &types.Message{
 				Subject: &types.Content{
@@ -227,16 +274,28 @@ func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string)
 				},
 			},
 		},
-		FromEmailAddress: aws.String(s.fromEmail),
+		FromEmailAddress: aws.String(fromEmail),
 	}
+}
 
-	_, err = s.sesClient.SendEmail(ctx, input)
-	if err != nil {
-		return fmt.Errorf("failed to send email via SES: %w", err)
+// dedupeCCAgainstTo returns cc with the to-address removed (case-insensitive)
+// and duplicate entries collapsed, preserving input order. Empty strings are
+// dropped so a caller can freely pass optional slots without sanitising.
+func dedupeCCAgainstTo(to string, cc []string) []string {
+	if len(cc) == 0 {
+		return nil
 	}
-
-	logging.Debugf("Sent email to %s: %s", redactEmail(toEmail), subject)
-	return nil
+	seen := map[string]bool{strings.ToLower(strings.TrimSpace(to)): true}
+	out := make([]string, 0, len(cc))
+	for _, addr := range cc {
+		norm := strings.ToLower(strings.TrimSpace(addr))
+		if norm == "" || seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		out = append(out, addr)
+	}
+	return out
 }
 
 // NotificationData holds data for rendering email templates
@@ -256,6 +315,19 @@ type NotificationData struct {
 	// MUST set this — silently broadcasting an approval link to every
 	// subscriber of an SNS alerts topic would leak the approval token.
 	RecipientEmail string
+	// CCEmails carries additional recipients (e.g. the global notification
+	// email) for flows where more than one inbox needs visibility into the
+	// action but only one party is authorised to approve. Empty for single-
+	// recipient flows. Purchase approvals use this to keep the global
+	// notification email informed while directing the approver role at the
+	// account's contact email.
+	CCEmails []string
+	// AuthorizedApprovers carries the email(s) of the parties who are
+	// allowed to click the approve/cancel links. The template prints these
+	// verbatim in the message body so recipients on CC know the action
+	// isn't theirs to take. When empty the template omits the authorisation
+	// block (legacy broadcast behaviour).
+	AuthorizedApprovers []string
 }
 
 // RecommendationSummary is a simplified recommendation for email display

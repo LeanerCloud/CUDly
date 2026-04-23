@@ -282,8 +282,15 @@ func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNot
 const purchaseApprovalRequestTemplate = `CUDly - Purchase Approval Required
 ====================================
 
-A direct purchase of {{len .Recommendations}} commitment(s) has been submitted and requires your approval.
-
+A direct purchase of {{len .Recommendations}} commitment(s) has been submitted and requires approval.
+{{if .AuthorizedApprovers}}
+Authorised approver(s):
+{{range .AuthorizedApprovers}}  - {{.}}
+{{end}}
+Only the inbox(es) listed above can approve or cancel this purchase.
+Other recipients are CC'd for visibility only — clicking the links
+below from any other account will fail the authorisation check.
+{{end}}
 Summary:
 --------
 Total Upfront Cost: ${{printf "%.2f" .TotalUpfrontCost}}
@@ -332,7 +339,7 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	}
 
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	return s.SendToEmail(ctx, data.RecipientEmail, subject, body)
+	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 }
 
 // ---------------------------------------------------------------------------

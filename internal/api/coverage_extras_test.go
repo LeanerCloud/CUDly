@@ -34,13 +34,34 @@ func TestHandler_approvePurchase_EmptyToken(t *testing.T) {
 
 func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 	ctx := context.Background()
+	execID := "11111111-1111-1111-1111-111111111111"
+	approver := "approver@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "tok",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", ctx, "11111111-1111-1111-1111-111111111111", "tok", "").
+	mockPurchase.On("ApproveExecution", ctx, execID, "tok", approver).
 		Return(errors.New("approval failed"))
 
-	h := &Handler{purchase: mockPurchase}
-	_, err := h.approvePurchase(ctx, nil, "11111111-1111-1111-1111-111111111111", "tok")
+	h := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := h.approvePurchase(ctx, req, execID, "tok")
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "approval failed")
 }
 
 func TestHandler_cancelPurchase_InvalidUUID(t *testing.T) {
@@ -59,13 +80,34 @@ func TestHandler_cancelPurchase_EmptyToken(t *testing.T) {
 
 func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 	ctx := context.Background()
+	execID := "11111111-1111-1111-1111-111111111111"
+	approver := "approver@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "tok",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("CancelExecution", ctx, "11111111-1111-1111-1111-111111111111", "tok", "").
+	mockPurchase.On("CancelExecution", ctx, execID, "tok", approver).
 		Return(errors.New("cancel failed"))
 
-	h := &Handler{purchase: mockPurchase}
-	_, err := h.cancelPurchase(ctx, nil, "11111111-1111-1111-1111-111111111111", "tok")
+	h := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := h.cancelPurchase(ctx, req, execID, "tok")
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cancel failed")
 }
 
 // ---------------------------------------------------------------------------

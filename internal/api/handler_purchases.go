@@ -209,7 +209,19 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, NewClientError(400, "approval token is required")
 	}
 
-	if err := h.purchase.ApproveExecution(ctx, execID, token, h.tryResolveActorEmail(ctx, req)); err != nil {
+	execution, err := h.config.GetExecutionByID(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get execution: %w", err)
+	}
+	if execution == nil {
+		return nil, NewClientError(404, "execution not found")
+	}
+	actor, err := h.authorizeApprovalAction(ctx, req, execution)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.purchase.ApproveExecution(ctx, execID, token, actor); err != nil {
 		return nil, err
 	}
 
@@ -224,7 +236,19 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 		return nil, NewClientError(400, "cancellation token is required")
 	}
 
-	if err := h.purchase.CancelExecution(ctx, execID, token, h.tryResolveActorEmail(ctx, req)); err != nil {
+	execution, err := h.config.GetExecutionByID(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get execution: %w", err)
+	}
+	if execution == nil {
+		return nil, NewClientError(404, "execution not found")
+	}
+	actor, err := h.authorizeApprovalAction(ctx, req, execution)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
 		return nil, err
 	}
 
@@ -460,8 +484,17 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		logging.Errorf("Failed to load global config for approval email: %v", err)
 		return false, fmt.Sprintf("failed to load settings: %v", err)
 	}
-	if globalCfg.NotificationEmail == nil || *globalCfg.NotificationEmail == "" {
-		return false, "no notification email set in Settings → General"
+	globalNotify := ""
+	if globalCfg.NotificationEmail != nil {
+		globalNotify = *globalCfg.NotificationEmail
+	}
+	to, cc, approvers, err := h.resolveApprovalRecipients(ctx, recs, globalNotify)
+	if err != nil {
+		logging.Errorf("Failed to resolve approval recipients: %v", err)
+		return false, fmt.Sprintf("failed to resolve recipients: %v", err)
+	}
+	if to == "" {
+		return false, "no notification email set in Settings → General and no account contact emails configured"
 	}
 	summaries := make([]email.RecommendationSummary, 0, len(recs))
 	for _, rec := range recs {
@@ -475,13 +508,15 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		})
 	}
 	data := email.NotificationData{
-		DashboardURL:     h.resolveDashboardURL(req),
-		ApprovalToken:    execution.ApprovalToken,
-		ExecutionID:      execution.ExecutionID,
-		TotalSavings:     totalSavings,
-		TotalUpfrontCost: totalUpfront,
-		Recommendations:  summaries,
-		RecipientEmail:   *globalCfg.NotificationEmail,
+		DashboardURL:        h.resolveDashboardURL(req),
+		ApprovalToken:       execution.ApprovalToken,
+		ExecutionID:         execution.ExecutionID,
+		TotalSavings:        totalSavings,
+		TotalUpfrontCost:    totalUpfront,
+		Recommendations:     summaries,
+		RecipientEmail:      to,
+		CCEmails:            cc,
+		AuthorizedApprovers: approvers,
 	}
 	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
 		logging.Errorf("Failed to send purchase approval email: %v", err)
@@ -521,4 +556,164 @@ func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) stri
 		return "https://" + req.RequestContext.DomainName
 	}
 	return ""
+}
+
+// resolveApprovalRecipients computes the To / Cc / authorised-approver sets
+// for a purchase approval email based on the recommendations' account
+// contact emails and the global Settings → General notification email.
+//
+// Intent: the account's contact_email is the party accountable for a
+// purchase in that account; the global notification inbox is informed for
+// visibility. So we direct the email at the contact email(s) as To, list
+// any *other* contact emails plus the global notification email as Cc,
+// and the approve/cancel token is only honoured for session holders whose
+// email matches one of the authorised approvers (case-insensitive).
+//
+// Fallbacks:
+//   - When none of the rec'd accounts carry a contact_email, the global
+//     notification email takes the To slot and is itself the sole
+//     authorised approver (legacy single-recipient behaviour).
+//   - When neither is configured, returns ("", nil, nil, nil); the caller
+//     surfaces a user-facing error.
+func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.RecommendationRecord, globalNotify string) (to string, cc []string, approvers []string, err error) {
+	contactEmails, err := h.gatherAccountContactEmails(ctx, recs)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	globalNotify = strings.TrimSpace(globalNotify)
+
+	if len(contactEmails) == 0 {
+		// No per-account contacts — fall back to the global notification
+		// email as the sole addressee + sole approver.
+		if globalNotify == "" {
+			return "", nil, nil, nil
+		}
+		return globalNotify, nil, []string{globalNotify}, nil
+	}
+
+	to = contactEmails[0]
+	approvers = append([]string(nil), contactEmails...)
+
+	// Cc: remaining contact emails + global notification email, deduped
+	// against the To address (the SES layer dedupes again as a belt-and-
+	// braces guard, but keeping the list tidy here makes logs cleaner).
+	seen := map[string]bool{strings.ToLower(to): true}
+	appendIfNew := func(addr string) {
+		norm := strings.ToLower(strings.TrimSpace(addr))
+		if norm == "" || seen[norm] {
+			return
+		}
+		seen[norm] = true
+		cc = append(cc, addr)
+	}
+	for _, addr := range contactEmails[1:] {
+		appendIfNew(addr)
+	}
+	appendIfNew(globalNotify)
+	return to, cc, approvers, nil
+}
+
+// gatherAccountContactEmails returns the deduped (case-insensitive),
+// insertion-ordered list of contact emails for the unique accounts
+// referenced by recs. Accounts without a CloudAccountID or without a
+// contact_email are silently skipped — they're not an error, just not a
+// contribution to the authorised-approver set.
+func (h *Handler) gatherAccountContactEmails(ctx context.Context, recs []config.RecommendationRecord) ([]string, error) {
+	orderedIDs := uniqueAccountIDsFromRecs(recs)
+	if len(orderedIDs) == 0 {
+		return nil, nil
+	}
+	emailsSeen := map[string]bool{}
+	var out []string
+	for _, id := range orderedIDs {
+		addr := h.lookupContactEmail(ctx, id)
+		if addr == "" {
+			continue
+		}
+		norm := strings.ToLower(addr)
+		if emailsSeen[norm] {
+			continue
+		}
+		emailsSeen[norm] = true
+		out = append(out, addr)
+	}
+	return out, nil
+}
+
+// uniqueAccountIDsFromRecs returns the account IDs referenced by recs in
+// insertion order, with duplicates and blanks stripped.
+func uniqueAccountIDsFromRecs(recs []config.RecommendationRecord) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, rec := range recs {
+		if rec.CloudAccountID == nil || *rec.CloudAccountID == "" {
+			continue
+		}
+		id := *rec.CloudAccountID
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// lookupContactEmail resolves the account's ContactEmail, or returns "" if
+// the account can't be found or doesn't have one. A single missing account
+// should not poison the whole email — errors are logged and swallowed.
+func (h *Handler) lookupContactEmail(ctx context.Context, id string) string {
+	acct, err := h.config.GetCloudAccount(ctx, id)
+	if err != nil {
+		logging.Warnf("resolveApprovalRecipients: GetCloudAccount(%s) failed: %v", id, err)
+		return ""
+	}
+	if acct == nil {
+		return ""
+	}
+	return strings.TrimSpace(acct.ContactEmail)
+}
+
+// authorizeApprovalAction returns the actor email to record on an
+// approve/cancel action, after enforcing that the session-authenticated
+// user's email is on the authorised-approver list for the given execution.
+// Returns a 403 ClientError when the session is missing or the email
+// doesn't match. The returned actor is stored as approved_by/cancelled_by
+// on the execution.
+//
+// Rationale: the approve/cancel API routes are AuthPublic (token-only) for
+// backwards compatibility with the email-link flow, but the web UI now
+// redirects through login before calling this endpoint (see frontend
+// /purchases/{action}/:id). Requiring the session's email to match the
+// account's contact_email closes the gap where anyone holding the token
+// (forwarded email, shared inbox, stolen link) could act on the purchase.
+func (h *Handler) authorizeApprovalAction(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (string, error) {
+	actor := h.tryResolveActorEmail(ctx, req)
+	if actor == "" {
+		return "", NewClientError(401, "sign in with the account's contact email to approve or cancel this purchase")
+	}
+
+	globalNotify := ""
+	if cfg, err := h.config.GetGlobalConfig(ctx); err == nil && cfg != nil && cfg.NotificationEmail != nil {
+		globalNotify = *cfg.NotificationEmail
+	}
+	_, _, approvers, err := h.resolveApprovalRecipients(ctx, execution.Recommendations, globalNotify)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve approvers: %w", err)
+	}
+	if len(approvers) == 0 {
+		// No authorised approvers at all — happens when the account has
+		// no contact email AND Settings → General has no notification
+		// email. Reject; an operator has to set at least one before the
+		// flow works.
+		return "", NewClientError(403, "no authorised approver configured for this execution (set the account's contact email or the global notification email)")
+	}
+	actorLower := strings.ToLower(strings.TrimSpace(actor))
+	for _, addr := range approvers {
+		if strings.ToLower(strings.TrimSpace(addr)) == actorLower {
+			return actor, nil
+		}
+	}
+	return "", NewClientError(403, "your session email is not the authorised approver for this purchase")
 }

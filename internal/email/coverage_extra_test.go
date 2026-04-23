@@ -222,6 +222,48 @@ func TestRenderPurchaseApprovalRequestEmail(t *testing.T) {
 	assert.Contains(t, result, "cancel")
 }
 
+// TestRenderPurchaseApprovalRequestEmail_AuthorizedApprovers pins the
+// feature that makes it obvious to recipients whose action is required:
+// when AuthorizedApprovers is non-empty the body lists each approver
+// verbatim and calls out that CC'd recipients can't click the links.
+func TestRenderPurchaseApprovalRequestEmail_AuthorizedApprovers(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:     "https://dashboard.example.com",
+		ApprovalToken:    "tok",
+		ExecutionID:      "exec-xyz",
+		TotalSavings:     100.0,
+		TotalUpfrontCost: 500.0,
+		Recommendations: []RecommendationSummary{
+			{Service: "ec2", ResourceType: "t4g.nano", Region: "us-east-1", Count: 1, MonthlySavings: 5.0},
+		},
+		AuthorizedApprovers: []string{"contact-a@example.com", "contact-b@example.com"},
+	}
+
+	body, err := RenderPurchaseApprovalRequestEmail(data)
+	require.NoError(t, err)
+	assert.Contains(t, body, "Authorised approver(s)")
+	assert.Contains(t, body, "contact-a@example.com")
+	assert.Contains(t, body, "contact-b@example.com")
+	assert.Contains(t, body, "Only the inbox(es) listed above can approve")
+}
+
+// TestRenderPurchaseApprovalRequestEmail_NoAuthorizedApprovers confirms
+// the template omits the authorisation block entirely when no approvers
+// are specified (legacy broadcast flow).
+func TestRenderPurchaseApprovalRequestEmail_NoAuthorizedApprovers(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:    "https://dashboard.example.com",
+		ApprovalToken:   "tok",
+		ExecutionID:     "exec-xyz",
+		Recommendations: []RecommendationSummary{{Service: "ec2", Count: 1}},
+	}
+
+	body, err := RenderPurchaseApprovalRequestEmail(data)
+	require.NoError(t, err)
+	assert.NotContains(t, body, "Authorised approver")
+	assert.NotContains(t, body, "Only the inbox(es)")
+}
+
 // Tests for SMTPSender RI exchange and approval request methods
 
 func TestSMTPSender_SendRIExchangePendingApproval_NoFromEmail(t *testing.T) {

@@ -17,13 +17,32 @@ import (
 
 func TestHandler_approvePurchase(t *testing.T) {
 	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	approver := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+
 	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", approver).Return(nil)
 
-	mockPurchase.On("ApproveExecution", ctx, "12345678-1234-1234-1234-123456789abc", "valid-token", "").Return(nil)
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
-	handler := &Handler{purchase: mockPurchase}
-
-	result, err := handler.approvePurchase(ctx, nil, "12345678-1234-1234-1234-123456789abc", "valid-token")
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "valid-token")
 	require.NoError(t, err)
 
 	resultMap := result.(map[string]string)
@@ -32,17 +51,233 @@ func TestHandler_approvePurchase(t *testing.T) {
 
 func TestHandler_cancelPurchase(t *testing.T) {
 	ctx := context.Background()
+	execID := "45645645-6456-4564-5645-645645645645"
+	approver := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+
 	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("CancelExecution", ctx, execID, "valid-token", approver).Return(nil)
 
-	mockPurchase.On("CancelExecution", ctx, "45645645-6456-4564-5645-645645645645", "valid-token", "").Return(nil)
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
-	handler := &Handler{purchase: mockPurchase}
-
-	result, err := handler.cancelPurchase(ctx, nil, "45645645-6456-4564-5645-645645645645", "valid-token")
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	result, err := handler.cancelPurchase(ctx, req, execID, "valid-token")
 	require.NoError(t, err)
 
 	resultMap := result.(map[string]string)
 	assert.Equal(t, "cancelled", resultMap["status"])
+}
+
+func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	approver := "approver@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	// Session belongs to someone who is NOT the authorised approver.
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "wrong@example.com"}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not the authorised approver")
+	// ApproveExecution must not have been called — purchase manager mock
+	// asserts nothing by construction; a .On(...) entry above would create
+	// a false positive, so we pin the negative by confirming the error is
+	// the authz error, not an approval-manager error.
+	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+}
+
+func TestHandler_approvePurchase_RejectsMissingSession(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	handler := &Handler{config: mockConfig}
+
+	// No Authorization header → no session → reject.
+	_, err := handler.approvePurchase(ctx, &events.LambdaFunctionURLRequest{}, execID, "valid-token")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sign in")
+}
+
+func TestHandler_approvePurchase_AcceptsContactEmailSession(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	contactEmail := "contact@archera.example"
+	globalNotify := "global@cudly.example"
+	accountID := "acct-1"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &globalNotify,
+	}, nil)
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+
+	mockAuth := new(MockAuthService)
+	// Session email matches the account contact email — global notify is
+	// NOT enough here because a contact email exists for the account.
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contactEmail).Return(nil)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "valid-token")
+	require.NoError(t, err)
+	assert.Equal(t, "approved", result.(map[string]string)["status"])
+}
+
+func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T) {
+	// Regression: once an account has contact_email set, the global
+	// notification email is only CC'd — it should NOT be accepted as an
+	// approver. The session owner of the global notify address must not
+	// be able to approve on that account's behalf.
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	contactEmail := "contact@archera.example"
+	globalNotify := "global@cudly.example"
+	accountID := "acct-1"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &globalNotify,
+	}, nil)
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: globalNotify}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not the authorised approver")
+	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+}
+
+func TestHandler_resolveApprovalRecipients_ContactBecomesTo(t *testing.T) {
+	ctx := context.Background()
+	contactA := "contact-a@example.com"
+	contactB := "contact-b@example.com"
+	globalNotify := "global@cudly.example"
+	accountA := "acct-a"
+	accountB := "acct-b"
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		switch id {
+		case accountA:
+			return &config.CloudAccount{ID: accountA, ContactEmail: contactA}, nil
+		case accountB:
+			return &config.CloudAccount{ID: accountB, ContactEmail: contactB}, nil
+		}
+		return nil, nil
+	}
+
+	h := &Handler{config: mockConfig}
+	recs := []config.RecommendationRecord{
+		{ID: "r1", CloudAccountID: &accountA},
+		{ID: "r2", CloudAccountID: &accountB},
+		{ID: "r3", CloudAccountID: &accountA}, // duplicate account
+	}
+	to, cc, approvers, err := h.resolveApprovalRecipients(ctx, recs, globalNotify)
+	require.NoError(t, err)
+	assert.Equal(t, contactA, to, "first contact email becomes To")
+	assert.Equal(t, []string{contactB, globalNotify}, cc, "other contact + global end up in Cc")
+	assert.Equal(t, []string{contactA, contactB}, approvers, "approvers are the contact emails, not global")
+}
+
+func TestHandler_resolveApprovalRecipients_FallbackToGlobal(t *testing.T) {
+	ctx := context.Background()
+	globalNotify := "global@cudly.example"
+	accountID := "acct-no-contact"
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		// No ContactEmail — legacy account.
+		return &config.CloudAccount{ID: id}, nil
+	}
+
+	h := &Handler{config: mockConfig}
+	recs := []config.RecommendationRecord{
+		{ID: "r1", CloudAccountID: &accountID},
+	}
+	to, cc, approvers, err := h.resolveApprovalRecipients(ctx, recs, globalNotify)
+	require.NoError(t, err)
+	assert.Equal(t, globalNotify, to)
+	assert.Nil(t, cc)
+	assert.Equal(t, []string{globalNotify}, approvers)
 }
 
 func TestHandler_getPlannedPurchases(t *testing.T) {

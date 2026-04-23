@@ -84,6 +84,14 @@ func sanitizeHeader(s string) string {
 
 // SendToEmail sends an email directly to a specific email address via SMTP
 func (s *SMTPSender) SendToEmail(ctx context.Context, toEmail, subject, body string) error {
+	return s.SendToEmailWithCC(ctx, toEmail, nil, subject, body)
+}
+
+// SendToEmailWithCC sends an email with To + optional Cc recipients via SMTP.
+// The Cc header is included in the message envelope so recipients see one
+// another, and the SMTP RCPT TO list carries every address so each inbox
+// actually receives the message.
+func (s *SMTPSender) SendToEmailWithCC(ctx context.Context, toEmail string, ccEmails []string, subject, body string) error {
 	if s.fromEmail == "" {
 		logging.Debug("No from email configured, skipping email")
 		return nil
@@ -93,44 +101,71 @@ func (s *SMTPSender) SendToEmail(ctx context.Context, toEmail, subject, body str
 	toEmail = sanitizeHeader(toEmail)
 	subject = sanitizeHeader(subject)
 
-	// Build email message
+	sanitizedCC := sanitizeCCList(toEmail, ccEmails)
+
+	msg := s.buildSMTPMessage(toEmail, sanitizedCC, subject, body)
+	rcpts := append([]string{toEmail}, sanitizedCC...)
+
+	if err := s.dispatchSMTP(rcpts, msg); err != nil {
+		return err
+	}
+
+	if len(sanitizedCC) > 0 {
+		logging.Debugf("Sent email via SMTP to %s (cc %d): %s", toEmail, len(sanitizedCC), subject)
+	} else {
+		logging.Debugf("Sent email via SMTP to %s: %s", toEmail, subject)
+	}
+	return nil
+}
+
+// sanitizeCCList dedupes cc against toEmail and applies header
+// sanitization to each surviving entry.
+func sanitizeCCList(toEmail string, ccEmails []string) []string {
+	cc := dedupeCCAgainstTo(toEmail, ccEmails)
+	if len(cc) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(cc))
+	for _, addr := range cc {
+		out = append(out, sanitizeHeader(addr))
+	}
+	return out
+}
+
+// buildSMTPMessage assembles the RFC-5322 message bytes (headers + blank
+// line + body) for sending via SMTP. `cc` is already sanitized and
+// deduped by the caller.
+func (s *SMTPSender) buildSMTPMessage(toEmail string, cc []string, subject, body string) []byte {
 	from := s.fromEmail
 	if s.fromName != "" {
 		from = fmt.Sprintf("%s <%s>", sanitizeHeader(s.fromName), s.fromEmail)
 	}
+	headers := fmt.Sprintf("From: %s\r\nTo: %s\r\n", from, toEmail)
+	if len(cc) > 0 {
+		headers += fmt.Sprintf("Cc: %s\r\n", strings.Join(cc, ", "))
+	}
+	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n", subject)
+	return []byte(headers + body + "\r\n")
+}
 
-	msg := []byte(fmt.Sprintf("From: %s\r\n"+
-		"To: %s\r\n"+
-		"Subject: %s\r\n"+
-		"MIME-Version: 1.0\r\n"+
-		"Content-Type: text/plain; charset=UTF-8\r\n"+
-		"\r\n"+
-		"%s\r\n", from, toEmail, subject, body))
-
-	// Connect to SMTP server
+// dispatchSMTP runs the actual SMTP SendMail call, routing through
+// STARTTLS when s.useTLS is true. The rcpts list carries every address
+// that should receive the message (To + Cc).
+func (s *SMTPSender) dispatchSMTP(rcpts []string, msg []byte) error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
-
 	var auth smtp.Auth
 	if s.username != "" && s.password != "" {
 		auth = smtp.PlainAuth("", s.username, s.password, s.host)
 	}
-
-	// Send email
 	if s.useTLS {
-		// Use STARTTLS
-		err := s.sendMailTLS(addr, auth, s.fromEmail, []string{toEmail}, msg)
-		if err != nil {
+		if err := s.sendMailTLS(addr, auth, s.fromEmail, rcpts, msg); err != nil {
 			return fmt.Errorf("failed to send email via SMTP: %w", err)
 		}
-	} else {
-		// Use standard smtp.SendMail
-		err := smtp.SendMail(addr, auth, s.fromEmail, []string{toEmail}, msg)
-		if err != nil {
-			return fmt.Errorf("failed to send email via SMTP: %w", err)
-		}
+		return nil
 	}
-
-	logging.Debugf("Sent email via SMTP to %s: %s", toEmail, subject)
+	if err := smtp.SendMail(addr, auth, s.fromEmail, rcpts, msg); err != nil {
+		return fmt.Errorf("failed to send email via SMTP: %w", err)
+	}
 	return nil
 }
 
@@ -294,7 +329,7 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 	if err != nil {
 		return fmt.Errorf("failed to render purchase approval request email: %w", err)
 	}
-	return s.SendToEmail(ctx, recipient, subject, body)
+	return s.SendToEmailWithCC(ctx, recipient, data.CCEmails, subject, body)
 }
 
 // SendRegistrationReceivedNotification sends an email to the admin for a new registration via SMTP.
