@@ -332,14 +332,23 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 	return s.SendToEmailWithCC(ctx, recipient, data.CCEmails, subject, body)
 }
 
-// SendRegistrationReceivedNotification sends an email to the admin for a new registration via SMTP.
+// SendRegistrationReceivedNotification sends an email to CUDly administrators
+// for a new registration via SMTP. Prefers the caller-resolved
+// data.RecipientEmail + CCEmails (admin emails + global notify) so the To /
+// Cc semantics match the "authorised reviewers" block in the body; falls
+// back to the legacy static s.notifyEmail when the caller didn't resolve
+// recipients (e.g. no admin users configured yet).
 func (s *SMTPSender) SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error {
 	subject := fmt.Sprintf("CUDly - New Account Registration: %s (%s)", data.AccountName, data.Provider)
 	body, err := RenderRegistrationReceivedEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render registration received email: %w", err)
 	}
-	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+	recipient := data.RecipientEmail
+	if recipient == "" {
+		recipient = s.notifyEmail
+	}
+	return s.SendToEmailWithCC(ctx, recipient, data.CCEmails, subject, body)
 }
 
 // SendRegistrationDecisionNotification sends approval/rejection to the registrant via SMTP.

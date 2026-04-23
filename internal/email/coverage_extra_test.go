@@ -264,6 +264,52 @@ func TestRenderPurchaseApprovalRequestEmail_NoAuthorizedApprovers(t *testing.T) 
 	assert.NotContains(t, body, "Only the inbox(es)")
 }
 
+// TestRenderRegistrationReceivedEmail_AdminApprovers pins the new
+// "authorised reviewer(s)" block on the registration notification
+// template: when AdminApprovers is populated the body lists each admin
+// verbatim and calls out that CC'd recipients can't approve.
+func TestRenderRegistrationReceivedEmail_AdminApprovers(t *testing.T) {
+	data := RegistrationNotificationData{
+		AccountName:    "Test Azure Joshua",
+		Provider:       "azure",
+		ExternalID:     "sub-xyz",
+		ContactEmail:   "contact@archera.example",
+		DashboardURL:   "https://dashboard.example.com",
+		AdminApprovers: []string{"admin-a@example.com", "admin-b@example.com"},
+	}
+
+	body, err := RenderRegistrationReceivedEmail(data)
+	require.NoError(t, err)
+	assert.Contains(t, body, "Authorised reviewer(s)")
+	assert.Contains(t, body, "admin-a@example.com")
+	assert.Contains(t, body, "admin-b@example.com")
+	assert.Contains(t, body, "Only CUDly administrators listed above")
+	// The registrant's contact email must not appear in the reviewer
+	// block — they can't self-approve. It still appears as the
+	// "Contact:" line in the account details section, which is fine.
+	reviewerSection := strings.Split(body, "Account Details:")[0]
+	assert.NotContains(t, reviewerSection, "contact@archera.example",
+		"registrant contact email must not appear in the reviewer block")
+}
+
+// TestRenderRegistrationReceivedEmail_NoAdminApprovers confirms the
+// template falls back to the plain notification when no admin approvers
+// are supplied (legacy SNS broadcast path).
+func TestRenderRegistrationReceivedEmail_NoAdminApprovers(t *testing.T) {
+	data := RegistrationNotificationData{
+		AccountName:  "Test AWS",
+		Provider:     "aws",
+		ExternalID:   "123",
+		ContactEmail: "contact@example.com",
+		DashboardURL: "https://dashboard.example.com",
+	}
+
+	body, err := RenderRegistrationReceivedEmail(data)
+	require.NoError(t, err)
+	assert.NotContains(t, body, "Authorised reviewer")
+	assert.NotContains(t, body, "Only CUDly administrators")
+}
+
 // Tests for SMTPSender RI exchange and approval request methods
 
 func TestSMTPSender_SendRIExchangePendingApproval_NoFromEmail(t *testing.T) {

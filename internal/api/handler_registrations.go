@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -108,14 +109,18 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("registrations: %w", err)
 	}
 
-	// Notify admin (synchronous, errors logged but not propagated).
+	// Notify admins (synchronous, errors logged but not propagated).
 	if h.emailNotifier != nil {
+		to, cc, approvers := h.resolveRegistrationRecipients(ctx)
 		if notifyErr := h.emailNotifier.SendRegistrationReceivedNotification(context.Background(), email.RegistrationNotificationData{
-			AccountName:  body.AccountName,
-			Provider:     body.Provider,
-			ExternalID:   body.ExternalID,
-			ContactEmail: body.ContactEmail,
-			DashboardURL: h.dashboardURL,
+			AccountName:    body.AccountName,
+			Provider:       body.Provider,
+			ExternalID:     body.ExternalID,
+			ContactEmail:   body.ContactEmail,
+			DashboardURL:   h.dashboardURL,
+			RecipientEmail: to,
+			CCEmails:       cc,
+			AdminApprovers: approvers,
 		}); notifyErr != nil {
 			logging.Warnf("failed to send registration notification: %v", notifyErr)
 		}
@@ -434,4 +439,97 @@ func generateReferenceToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// resolveRegistrationRecipients returns the To / Cc / admin-approver sets
+// for a new-registration notification email.
+//
+// Rules:
+//   - Every CUDly user with role == "admin" is an authorised reviewer.
+//   - The first admin email is the To; remaining admins + the global
+//     Settings → General notification email go on Cc.
+//   - When no admin users are configured, falls through to the legacy
+//     broadcast path by returning ("", nil, nil) — the SES sender
+//     interprets this as "use SNS / static notify email".
+//
+// The account's own ContactEmail is NOT included in the approver set
+// because the submitter can't review their own registration.
+func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string, cc []string, approvers []string) {
+	adminEmails := h.gatherAdminEmails(ctx)
+	globalNotify := h.globalNotificationEmail(ctx)
+
+	if len(adminEmails) == 0 {
+		// Preserve the historical SNS-broadcast path for deployments
+		// that never provisioned admin users with emails.
+		return "", nil, nil
+	}
+
+	to = adminEmails[0]
+	approvers = append([]string(nil), adminEmails...)
+
+	seen := map[string]bool{strings.ToLower(to): true}
+	appendIfNew := func(addr string) {
+		norm := strings.ToLower(strings.TrimSpace(addr))
+		if norm == "" || seen[norm] {
+			return
+		}
+		seen[norm] = true
+		cc = append(cc, addr)
+	}
+	for _, addr := range adminEmails[1:] {
+		appendIfNew(addr)
+	}
+	appendIfNew(globalNotify)
+	return to, cc, approvers
+}
+
+// gatherAdminEmails returns the deduped, insertion-ordered list of emails
+// for every user with role == "admin". Transport errors are logged and
+// result in an empty return so registration notifications don't block on
+// auth-store hiccups.
+func (h *Handler) gatherAdminEmails(ctx context.Context) []string {
+	if h.auth == nil {
+		return nil
+	}
+	raw, err := h.auth.ListUsersAPI(ctx)
+	if err != nil {
+		logging.Warnf("resolveRegistrationRecipients: ListUsersAPI failed: %v", err)
+		return nil
+	}
+	users, ok := raw.([]*auth.APIUser)
+	if !ok {
+		logging.Warnf("resolveRegistrationRecipients: unexpected ListUsersAPI result type %T", raw)
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, u := range users {
+		if u == nil || u.Role != "admin" {
+			continue
+		}
+		addr := strings.TrimSpace(u.Email)
+		if addr == "" {
+			continue
+		}
+		norm := strings.ToLower(addr)
+		if seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		out = append(out, addr)
+	}
+	return out
+}
+
+// globalNotificationEmail loads the Settings → General notification email
+// (best-effort: returns "" on transport error or when unset).
+func (h *Handler) globalNotificationEmail(ctx context.Context) string {
+	if h.config == nil {
+		return ""
+	}
+	cfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil || cfg == nil || cfg.NotificationEmail == nil {
+		return ""
+	}
+	return strings.TrimSpace(*cfg.NotificationEmail)
 }
