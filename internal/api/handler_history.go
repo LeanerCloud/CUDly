@@ -177,13 +177,21 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
 	case "cancelled":
-		// Cancelled via the token link in the approval email. We don't
-		// currently track who clicked it (the approval token is a bearer
-		// credential, not a per-user one), so the description is generic.
-		// See known_issues/30_history_pending_cancel_ui.md for the
-		// session-authed cancel path that would let us record the
-		// cancelling user.
-		row.StatusDescription = "cancelled via approval link"
+		// Cancelled via the token link in the approval email. The approval
+		// token is a bearer credential — anyone with the email's inbox
+		// access can cancel — so the *click* itself isn't attributable.
+		// We can still attribute the *event* to the notification email
+		// address that received the token, which is the person with cancel
+		// authority for this execution. For the audit trail this is better
+		// than "unknown"; for true per-user attribution (who physically
+		// clicked) we need the session-authed cancel path tracked in
+		// known_issues/30_history_pending_cancel_ui.md.
+		if approver != "" {
+			row.Approver = approver
+			row.StatusDescription = "cancelled by " + approver + " (via approval link)"
+		} else {
+			row.StatusDescription = "cancelled via approval link"
+		}
 	}
 	return row
 }
