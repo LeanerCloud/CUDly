@@ -89,7 +89,14 @@ func (r *Router) registerRoutes() {
 
 		// Purchase actions
 		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler},
+		// Approve + Cancel also accept GET so the one-click links in the
+		// approval email (rendered as <a href>) land on the correct
+		// handler instead of falling through to the catch-all 401 that
+		// refuses any unmatched route. The token travels in the query
+		// string, not the body, so GET is the natural verb anyway.
+		{PathPrefix: "/api/purchases/approve/", Method: "GET", Handler: r.approvePurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler, Auth: AuthPublic},
+		{PathPrefix: "/api/purchases/cancel/", Method: "GET", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 
 		// Planned purchases endpoints (must come before generic /api/purchases/{id})
