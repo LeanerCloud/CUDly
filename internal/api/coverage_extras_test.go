@@ -143,7 +143,7 @@ func TestHandler_sendPurchaseApprovalEmail_ConfigError(t *testing.T) {
 		emailNotifier: &stubEmailNotifier{},
 	}
 	// Should not panic; error is swallowed (non-blocking path)
-	h.sendPurchaseApprovalEmail(ctx, &config.PurchaseExecution{ExecutionID: "x"}, nil, 0, 0)
+	h.sendPurchaseApprovalEmail(ctx, nil, &config.PurchaseExecution{ExecutionID: "x"}, nil, 0, 0)
 }
 
 // ---------------------------------------------------------------------------

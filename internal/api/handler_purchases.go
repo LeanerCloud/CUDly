@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -399,7 +400,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	// best-effort and never blocks the response body; the returned
 	// email_sent / email_reason fields let the UI tell the user whether they
 	// should wait for an inbox or cancel/retry manually.
-	emailSent, emailReason := h.sendPurchaseApprovalEmail(ctx, execution, execReq.Recommendations, totalUpfront, totalSavings)
+	emailSent, emailReason := h.sendPurchaseApprovalEmail(ctx, req, execution, execReq.Recommendations, totalUpfront, totalSavings)
 	status := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
 
 	message := "Purchase execution created and pending approval"
@@ -428,7 +429,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 //
 // Errors are also logged at Errorf level so they show up in CloudWatch, but
 // the reason string is what the API response surfaces to the UI.
-func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) (bool, string) {
+func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) (bool, string) {
 	if h.emailNotifier == nil {
 		return false, "email notifier not configured for this deployment"
 	}
@@ -452,7 +453,7 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, execution *conf
 		})
 	}
 	data := email.NotificationData{
-		DashboardURL:     h.dashboardURL,
+		DashboardURL:     h.resolveDashboardURL(req),
 		ApprovalToken:    execution.ApprovalToken,
 		ExecutionID:      execution.ExecutionID,
 		TotalSavings:     totalSavings,
@@ -472,4 +473,30 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, execution *conf
 		}
 	}
 	return true, ""
+}
+
+// resolveDashboardURL returns the absolute base URL to embed in email
+// approval/cancel links. Preference order matches the OIDC issuer helper's
+// strategy for the same underlying problem (Lambda's Function URL can't be
+// wired into its own env via Terraform without a cycle, so the canonical
+// URL has to be discovered at request time):
+//
+//  1. h.dashboardURL — set from CUDLY_DASHBOARD_URL when the operator has
+//     a custom domain (frontend_domain_names populated in Terraform).
+//  2. The inbound request's trusted DomainName (`https://<lambda-url-host>`)
+//     — the fallback for bare-Function-URL deployments so emails carry
+//     clickable absolute links instead of relative paths.
+//
+// When both are empty the template renders relative links — still valid if
+// the user clicks them from the dashboard itself, but broken in email
+// clients. That case is a deployment misconfiguration (no domain, no
+// Function URL) and deserves to surface.
+func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) string {
+	if h.dashboardURL != "" {
+		return strings.TrimRight(h.dashboardURL, "/")
+	}
+	if req != nil && req.RequestContext.DomainName != "" {
+		return "https://" + req.RequestContext.DomainName
+	}
+	return ""
 }

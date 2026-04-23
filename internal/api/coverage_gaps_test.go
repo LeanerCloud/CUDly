@@ -694,6 +694,7 @@ func TestHandler_sendPurchaseApprovalEmail_NilNotifier(t *testing.T) {
 	// Should not panic.
 	h.sendPurchaseApprovalEmail(
 		context.Background(),
+		nil,
 		&config.PurchaseExecution{ExecutionID: "test-id"},
 		nil,
 		0,
@@ -718,6 +719,7 @@ func TestHandler_sendPurchaseApprovalEmail_NoNotificationEmail(t *testing.T) {
 	// Should not panic or call the notifier.
 	h.sendPurchaseApprovalEmail(
 		ctx,
+		nil, // no inbound request — resolveDashboardURL falls back to h.dashboardURL
 		&config.PurchaseExecution{ExecutionID: "test-id"},
 		nil,
 		0,
