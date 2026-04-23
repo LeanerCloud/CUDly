@@ -738,7 +738,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id
+		       cloud_account_id, source, approved_by, cancelled_by
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date DESC
