@@ -409,6 +409,35 @@
                         </div>
                     </fieldset>
 
+                    <fieldset class="settings-category" id="purchasing-grace-period">
+                        <legend>Post-Purchase Grace Period</legend>
+                        <p class="settings-help">After a purchase is submitted, CUDly hides the just-covered capacity from the Recommendations view for this many days so you don't re-buy the same capacity while cloud-provider utilisation metrics catch up. Set to 0 to disable the feature for a provider. Range: 0–30 days.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-grace-aws"><span class="provider-badge aws">AWS</span> grace period (days)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-grace-aws" value="7" min="0" max="30" step="1">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-grace-azure"><span class="provider-badge azure">Azure</span> grace period (days)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-grace-azure" value="7" min="0" max="30" step="1">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-grace-gcp"><span class="provider-badge gcp">GCP</span> grace period (days)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-grace-gcp" value="7" min="0" max="30" step="1">
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- AWS Settings -->
                     <fieldset class="settings-category provider-settings" id="aws-settings">
                         <legend><span class="provider-badge aws">AWS</span> Service Defaults</legend>

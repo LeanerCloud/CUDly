@@ -222,6 +222,10 @@ export interface GlobalConfig {
   default_payment?: string;
   default_coverage?: number;
   notification_days_before?: number;
+  // Per-provider grace-period window (days) for the recently-purchased
+  // suppression feature. Keys: 'aws' / 'azure' / 'gcp'. Missing keys
+  // fall back to the backend default (7). Explicit 0 = disabled.
+  grace_period_days?: Record<string, number>;
 }
 
 // API Keys types

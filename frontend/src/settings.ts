@@ -47,6 +47,8 @@ const TRACKED_FIELDS = [
   'setting-notification-email', 'setting-auto-collect',
   'setting-collection-schedule', 'setting-notification-days',
   'setting-default-term', 'setting-default-payment', 'setting-default-coverage',
+  // Per-provider grace-period inputs
+  'setting-grace-aws', 'setting-grace-azure', 'setting-grace-gcp',
   // Per-service fields
   ...SERVICE_FIELDS.map(f => f.termId),
   ...SERVICE_FIELDS.filter(f => f.paymentId !== null).map(f => f.paymentId as string),
@@ -78,6 +80,33 @@ let saveInFlight = false;
  * or:
  *   byId<HTMLInputElement>('foo')?.value ?? '';  // read site
  */
+// Grace-period input: 0 is a valid user choice (disables the feature
+// for that provider), so we use empty-string to signal "fall back to
+// default (7)". An explicit 0 must round-trip as 0, not get swallowed.
+function populateGraceInput(id: string, value: number | undefined): void {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (!el) return;
+  el.value = String(value ?? 7);
+}
+
+// readGraceInput parses the grace-period input, returning the numeric
+// value or an error message (out of range, not a number). Empty input
+// defaults to 7.
+function readGraceInput(id: string): { value: number; err?: undefined } | { value: 0; err: string } {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (!el) return { value: 7 };
+  const raw = el.value.trim();
+  if (raw === '') return { value: 7 };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    return { value: 0, err: 'enter a whole number of days' };
+  }
+  if (n < 0 || n > 30) {
+    return { value: 0, err: 'must be between 0 and 30 days' };
+  }
+  return { value: n };
+}
+
 function byId<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
 }
@@ -1122,6 +1151,15 @@ export async function loadGlobalSettings(): Promise<void> {
       const notifyDaysInput = document.getElementById('setting-notification-days') as HTMLInputElement | null;
       if (notifyDaysInput) notifyDaysInput.value = String(data.global.notification_days_before || 3);
 
+      // Grace-period inputs (per provider). An absent key renders the
+      // default (7) so the UI always shows a concrete value; an
+      // explicit 0 is preserved so users can see which providers
+      // have the feature disabled.
+      const gpMap = data.global.grace_period_days || {};
+      populateGraceInput('setting-grace-aws', gpMap['aws']);
+      populateGraceInput('setting-grace-azure', gpMap['azure']);
+      populateGraceInput('setting-grace-gcp', gpMap['gcp']);
+
       // Update visibility based on loaded settings
       updateProviderSettingsVisibility();
       updateCollectionScheduleVisibility();
@@ -1265,6 +1303,22 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   if (byId<HTMLInputElement>('provider-azure')?.checked) enabledProviders.push('azure');
   if (byId<HTMLInputElement>('provider-gcp')?.checked) enabledProviders.push('gcp');
 
+  // Collect per-provider grace-period values before building the
+  // settings object so we can reject out-of-range input early with a
+  // targeted error instead of letting the API surface "invalid range"
+  // without saying which input.
+  const gracePeriodDays: Record<string, number> = {};
+  for (const [provider, id] of [['aws', 'setting-grace-aws'], ['azure', 'setting-grace-azure'], ['gcp', 'setting-grace-gcp']] as const) {
+    const v = readGraceInput(id);
+    if (v.err) {
+      showToast({ message: `${provider.toUpperCase()} grace period: ${v.err}`, kind: 'error' });
+      if (saveBtn) saveBtn.disabled = false;
+      saveInFlight = false;
+      return;
+    }
+    gracePeriodDays[provider] = v.value;
+  }
+
   const settings: api.Config = {
     enabled_providers: enabledProviders,
     notification_email: byId<HTMLInputElement>('setting-notification-email')?.value || '',
@@ -1274,6 +1328,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     default_payment: (byId<HTMLSelectElement>('setting-default-payment')?.value || 'all-upfront') as api.PaymentOption,
     default_coverage: parseInt(byId<HTMLInputElement>('setting-default-coverage')?.value || '80', 10),
     notification_days_before: parseInt(byId<HTMLInputElement>('setting-notification-days')?.value || '3', 10),
+    grace_period_days: gracePeriodDays,
   };
 
   try {
@@ -1351,6 +1406,10 @@ export async function resetSettings(): Promise<void> {
 
   const notifyDaysInput = document.getElementById('setting-notification-days') as HTMLInputElement | null;
   if (notifyDaysInput) notifyDaysInput.value = '3';
+
+  populateGraceInput('setting-grace-aws', 7);
+  populateGraceInput('setting-grace-azure', 7);
+  populateGraceInput('setting-grace-gcp', 7);
 }
 
 /**

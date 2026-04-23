@@ -47,13 +47,15 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		       default_term, default_payment, default_coverage, default_ramp_schedule,
 		       ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
 		       ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
-		       auto_collect, collection_schedule, notification_days_before
+		       auto_collect, collection_schedule, notification_days_before,
+		       grace_period_days
 		FROM global_config
 		WHERE id = 1
 	`
 
 	var config GlobalConfig
 	var enabledProviders []string
+	var gracePeriodJSON string
 
 	err := s.db.QueryRow(ctx, query).Scan(
 		&enabledProviders,
@@ -72,6 +74,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		&config.AutoCollect,
 		&config.CollectionSchedule,
 		&config.NotificationDaysBefore,
+		&gracePeriodJSON,
 	)
 
 	if err != nil {
@@ -97,6 +100,13 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 	}
 
 	config.EnabledProviders = enabledProviders
+	if gracePeriodJSON != "" && gracePeriodJSON != "{}" {
+		var gp map[string]int
+		if err := json.Unmarshal([]byte(gracePeriodJSON), &gp); err != nil {
+			return nil, fmt.Errorf("failed to decode grace_period_days JSON: %w", err)
+		}
+		config.GracePeriodDays = gp
+	}
 	return &config, nil
 }
 
@@ -113,8 +123,9 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			default_term, default_payment, default_coverage, default_ramp_schedule,
 			ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
 			ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
-			auto_collect, collection_schedule, notification_days_before
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			auto_collect, collection_schedule, notification_days_before,
+			grace_period_days
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -132,6 +143,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			auto_collect = $14,
 			collection_schedule = $15,
 			notification_days_before = $16,
+			grace_period_days = $17,
 			updated_at = NOW()
 	`
 
@@ -147,6 +159,18 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 	riExchangeUtilizationThreshold := config.RIExchangeUtilizationThreshold
 	if riExchangeUtilizationThreshold == 0 {
 		riExchangeUtilizationThreshold = 95.0
+	}
+
+	// Marshal GracePeriodDays → JSON text column. Empty map encodes as
+	// "{}" so the DB column is never NULL and GetGlobalConfig can
+	// treat "{}" and "" uniformly as "no explicit entries".
+	gracePeriodJSON := "{}"
+	if len(config.GracePeriodDays) > 0 {
+		gpBytes, err := json.Marshal(config.GracePeriodDays)
+		if err != nil {
+			return fmt.Errorf("failed to encode grace_period_days JSON: %w", err)
+		}
+		gracePeriodJSON = string(gpBytes)
 	}
 
 	_, err := s.db.Exec(ctx, query,
@@ -166,6 +190,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		config.AutoCollect,
 		config.CollectionSchedule,
 		config.NotificationDaysBefore,
+		gracePeriodJSON,
 	)
 
 	if err != nil {

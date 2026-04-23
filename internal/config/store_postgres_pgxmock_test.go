@@ -54,6 +54,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"ri_exchange_enabled", "ri_exchange_mode", "ri_exchange_utilization_threshold",
 		"ri_exchange_max_per_exchange_usd", "ri_exchange_max_daily_usd", "ri_exchange_lookback_days",
 		"auto_collect", "collection_schedule", "notification_days_before",
+		"grace_period_days",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -61,6 +62,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		true, "manual", 95.0,
 		0.0, 0.0, 30,
 		true, "daily", 3,
+		"{}",
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -82,6 +84,71 @@ func TestPGXMock_GetGlobalConfig_ScanError(t *testing.T) {
 	_, err := store.GetGlobalConfig(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get global config")
+}
+
+// TestPGXMock_GetGlobalConfig_GracePeriodDays covers the new
+// grace_period_days TEXT column: "{}" → nil/empty map + default 7
+// per provider, a populated JSON → map round-trips faithfully,
+// malformed JSON → error surfaced to caller (don't silently swallow
+// a corrupt DB cell).
+func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
+	baseCols := []string{
+		"enabled_providers", "notification_email", "approval_required",
+		"default_term", "default_payment", "default_coverage", "default_ramp_schedule",
+		"ri_exchange_enabled", "ri_exchange_mode", "ri_exchange_utilization_threshold",
+		"ri_exchange_max_per_exchange_usd", "ri_exchange_max_daily_usd", "ri_exchange_lookback_days",
+		"auto_collect", "collection_schedule", "notification_days_before",
+		"grace_period_days",
+	}
+	baseRow := func(graceJSON string) []any {
+		return []any{
+			[]string{}, (*string)(nil), true,
+			3, "no-upfront", 70.0, RampImmediate,
+			false, "manual", 95.0,
+			0.0, 0.0, 30,
+			true, "daily", 3,
+			graceJSON,
+		}
+	}
+
+	t.Run("empty json object", func(t *testing.T) {
+		mock := newMock(t)
+		store := storeWith(mock)
+		mock.ExpectQuery("SELECT").WillReturnRows(
+			pgxmock.NewRows(baseCols).AddRow(baseRow("{}")...),
+		)
+		cfg, err := store.GetGlobalConfig(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, cfg.GracePeriodDays)
+		// GracePeriodFor returns the default for every provider.
+		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("aws"))
+		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("azure"))
+	})
+
+	t.Run("populated json round-trips", func(t *testing.T) {
+		mock := newMock(t)
+		store := storeWith(mock)
+		mock.ExpectQuery("SELECT").WillReturnRows(
+			pgxmock.NewRows(baseCols).AddRow(baseRow(`{"aws":7,"azure":0,"gcp":14}`)...),
+		)
+		cfg, err := store.GetGlobalConfig(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, map[string]int{"aws": 7, "azure": 0, "gcp": 14}, cfg.GracePeriodDays)
+		// Explicit 0 preserved (feature disabled for azure).
+		assert.Equal(t, 0, cfg.GracePeriodFor("azure"))
+		assert.Equal(t, 14, cfg.GracePeriodFor("gcp"))
+	})
+
+	t.Run("malformed json surfaces error", func(t *testing.T) {
+		mock := newMock(t)
+		store := storeWith(mock)
+		mock.ExpectQuery("SELECT").WillReturnRows(
+			pgxmock.NewRows(baseCols).AddRow(baseRow(`not-json`)...),
+		)
+		_, err := store.GetGlobalConfig(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "grace_period_days")
+	})
 }
 
 // ─── GetServiceConfig ─────────────────────────────────────────────────────────

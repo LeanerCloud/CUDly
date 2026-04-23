@@ -18,6 +18,16 @@ type GlobalConfig struct {
 	DefaultCoverage        float64  `json:"default_coverage" dynamodbav:"default_coverage"`
 	DefaultRampSchedule    string   `json:"default_ramp_schedule" dynamodbav:"default_ramp_schedule"`
 
+	// GracePeriodDays is a per-provider window (in days) during which
+	// just-purchased capacity is suppressed from the recommendations
+	// list so users don't re-buy the same capacity while the cloud
+	// provider's utilisation metrics catch up. Keys are provider slugs
+	// ("aws", "azure", "gcp"). Missing keys default to DefaultGracePeriodDays
+	// (7). An explicit 0 disables suppression for that provider. Use
+	// GracePeriodFor to read a specific provider's effective value (it
+	// applies the default + safety clamp).
+	GracePeriodDays map[string]int `json:"grace_period_days,omitempty" dynamodbav:"grace_period_days,omitempty"`
+
 	// RI Exchange automation settings
 	RIExchangeEnabled              bool    `json:"ri_exchange_enabled" dynamodbav:"ri_exchange_enabled"`
 	RIExchangeMode                 string  `json:"ri_exchange_mode" dynamodbav:"ri_exchange_mode"`
@@ -25,6 +35,40 @@ type GlobalConfig struct {
 	RIExchangeMaxPerExchangeUSD    float64 `json:"ri_exchange_max_per_exchange_usd" dynamodbav:"ri_exchange_max_per_exchange_usd"`
 	RIExchangeMaxDailyUSD          float64 `json:"ri_exchange_max_daily_usd" dynamodbav:"ri_exchange_max_daily_usd"`
 	RIExchangeLookbackDays         int     `json:"ri_exchange_lookback_days" dynamodbav:"ri_exchange_lookback_days"`
+}
+
+// DefaultGracePeriodDays is the fallback window used when a provider
+// has no entry in GlobalConfig.GracePeriodDays. A week gives cloud
+// providers enough time to reflect a fresh commitment in their
+// utilisation metrics before we'd re-propose the same capacity.
+const DefaultGracePeriodDays = 7
+
+// MaxGracePeriodDays is the ceiling enforced at read time as a safety
+// net. The UI clamps input to [0, 30]; the DB isn't constrained, so a
+// rogue write through psql shouldn't be able to suppress recs for years.
+const MaxGracePeriodDays = 90
+
+// GracePeriodFor returns the effective grace-period window (in days)
+// for the given provider slug ("aws", "azure", "gcp"). Returns the
+// default when the provider has no explicit entry. Preserves an
+// explicit 0 (which disables the feature for that provider). Clamps
+// the result to [0, MaxGracePeriodDays] so a misconfigured DB row
+// can't suppress recs indefinitely.
+func (g *GlobalConfig) GracePeriodFor(provider string) int {
+	if g == nil {
+		return DefaultGracePeriodDays
+	}
+	days, ok := g.GracePeriodDays[provider]
+	if !ok {
+		return DefaultGracePeriodDays
+	}
+	if days < 0 {
+		days = 0
+	}
+	if days > MaxGracePeriodDays {
+		days = MaxGracePeriodDays
+	}
+	return days
 }
 
 // ServiceConfig represents per-service configuration

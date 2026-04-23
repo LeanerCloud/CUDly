@@ -452,7 +452,11 @@ describe('Settings Module', () => {
         default_term: 3,
         default_payment: 'all-upfront',
         default_coverage: 80,
-        notification_days_before: 3
+        notification_days_before: 3,
+        // Grace-period inputs default to 7 per provider when the DOM
+        // doesn't include the new inputs (older test harness setup).
+        // The save helper reads missing elements as "empty" → default 7.
+        grace_period_days: { aws: 7, azure: 7, gcp: 7 },
       });
     });
 

@@ -42,6 +42,24 @@ func (c *GlobalConfig) Validate() error {
 	if c.NotificationDaysBefore < 0 || c.NotificationDaysBefore > MaxNotificationDaysBefore {
 		return fmt.Errorf("notification_days_before must be between 0 and %d, got: %d", MaxNotificationDaysBefore, c.NotificationDaysBefore)
 	}
+	if err := c.validateGracePeriodDays(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateGracePeriodDays validates the per-provider grace-period map.
+// Keys must be known provider slugs; values must be in [0, MaxGracePeriodDays].
+// A nil / empty map is always valid (falls back to the default).
+func (c *GlobalConfig) validateGracePeriodDays() error {
+	for provider, days := range c.GracePeriodDays {
+		if !isValidProvider(provider) {
+			return fmt.Errorf("grace_period_days: invalid provider key %q (valid: %s)", provider, strings.Join(ValidProviders, ", "))
+		}
+		if days < 0 || days > MaxGracePeriodDays {
+			return fmt.Errorf("grace_period_days[%s] must be between 0 and %d, got: %d", provider, MaxGracePeriodDays, days)
+		}
+	}
 	return nil
 }
 

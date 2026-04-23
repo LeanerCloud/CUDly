@@ -359,3 +359,43 @@ func TestPurchaseHistoryRecord_Fields(t *testing.T) {
 	assert.Equal(t, "EC2 Production Plan", rec.PlanName)
 	assert.Equal(t, 1, rec.RampStep)
 }
+
+func TestGlobalConfig_GracePeriodFor(t *testing.T) {
+	t.Run("nil receiver returns default", func(t *testing.T) {
+		var cfg *GlobalConfig
+		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("aws"))
+	})
+
+	t.Run("absent key returns default", func(t *testing.T) {
+		cfg := &GlobalConfig{}
+		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("aws"))
+	})
+
+	t.Run("explicit 0 preserved (feature disabled)", func(t *testing.T) {
+		cfg := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 0}}
+		assert.Equal(t, 0, cfg.GracePeriodFor("aws"))
+	})
+
+	t.Run("explicit positive returned as-is", func(t *testing.T) {
+		cfg := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 14}}
+		assert.Equal(t, 14, cfg.GracePeriodFor("aws"))
+	})
+
+	t.Run("negative clamped to 0", func(t *testing.T) {
+		cfg := &GlobalConfig{GracePeriodDays: map[string]int{"aws": -5}}
+		assert.Equal(t, 0, cfg.GracePeriodFor("aws"))
+	})
+
+	t.Run("rogue huge value clamped to max", func(t *testing.T) {
+		cfg := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 999}}
+		assert.Equal(t, MaxGracePeriodDays, cfg.GracePeriodFor("aws"))
+	})
+
+	t.Run("per-provider independence", func(t *testing.T) {
+		cfg := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 7, "azure": 0}}
+		assert.Equal(t, 7, cfg.GracePeriodFor("aws"))
+		assert.Equal(t, 0, cfg.GracePeriodFor("azure"))
+		// Missing key still defaults.
+		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("gcp"))
+	})
+}

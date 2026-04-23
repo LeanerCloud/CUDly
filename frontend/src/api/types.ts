@@ -145,6 +145,11 @@ export interface Config {
   default_payment: PaymentOption;
   default_coverage: number;
   default_ramp_schedule?: string;
+  // Per-provider grace-period window (days) during which recently-
+  // purchased capacity is suppressed from the Recommendations view.
+  // Keys: 'aws' / 'azure' / 'gcp'. A missing key defaults to 7 on
+  // the backend. Explicit 0 disables the feature for that provider.
+  grace_period_days?: Record<string, number>;
   ri_exchange_enabled?: boolean;
   ri_exchange_mode?: string;
   ri_exchange_utilization_threshold?: number;
