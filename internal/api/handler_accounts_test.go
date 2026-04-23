@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -756,4 +757,27 @@ func TestUpdateAccount_DuplicateKey_Returns409(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 409, ce.code)
 	assert.Contains(t, ce.Error(), "already exists")
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *mockConfigStoreAccounts) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreAccounts) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreAccounts) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreAccounts) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreAccounts) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreAccounts) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreAccounts) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
+	return fn(nil)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
+	"github.com/jackc/pgx/v5"
 )
 
 // ----- handleCleanupExpiredRecords -----
@@ -290,4 +291,73 @@ func (m *mockConfigStoreForExchangeStale) GetStaleProcessingExchanges(ctx contex
 		return m.staleFunc(ctx, olderThan)
 	}
 	return nil, nil
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *mockConfigStoreForExchangeComplete) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeComplete) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeComplete) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeComplete) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeComplete) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForExchangeComplete) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeComplete) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
+	return fn(nil)
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *mockConfigStoreForExchangeFail) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeFail) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeFail) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeFail) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeFail) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForExchangeFail) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeFail) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
+	return fn(nil)
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *mockConfigStoreForExchangeStale) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeStale) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeStale) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeStale) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchangeStale) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForExchangeStale) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeStale) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
+	return fn(nil)
 }

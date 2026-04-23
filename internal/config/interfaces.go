@@ -3,6 +3,8 @@ package config
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // StoreInterface defines the methods required for configuration storage
@@ -110,4 +112,30 @@ type StoreInterface interface {
 	UpdateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
 	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string) error
 	DeleteAccountRegistration(ctx context.Context, id string) error
+
+	// Purchase suppressions. Written inside a WithTx block during bulk
+	// purchase submit so the execution insert + the suppression rows
+	// commit atomically. Deleted on cancel/expire of the execution,
+	// also inside a WithTx block paired with the status update.
+	//
+	// The plain variants (no Tx) open their own single-call transaction
+	// — useful for tests and one-off admin operations. The Tx variants
+	// reuse a caller-provided transaction so multi-write operations
+	// can roll back atomically.
+	CreateSuppression(ctx context.Context, sup *PurchaseSuppression) error
+	CreateSuppressionTx(ctx context.Context, tx pgx.Tx, sup *PurchaseSuppression) error
+	DeleteSuppressionsByExecution(ctx context.Context, executionID string) error
+	DeleteSuppressionsByExecutionTx(ctx context.Context, tx pgx.Tx, executionID string) error
+	ListActiveSuppressions(ctx context.Context) ([]PurchaseSuppression, error)
+
+	// SavePurchaseExecutionTx is the tx-accepting variant of
+	// SavePurchaseExecution. Used from executePurchase's WithTx block
+	// so the execution insert + suppression writes commit atomically.
+	SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error
+
+	// WithTx opens a pgx transaction, runs fn, and commits on success or
+	// rolls back on error. fn can call any *Tx method on the store to
+	// participate in the transaction. Nested transactions are not
+	// supported — fn must not call WithTx recursively.
+	WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error
 }

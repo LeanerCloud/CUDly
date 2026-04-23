@@ -841,6 +841,11 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	// executePurchase reads GlobalConfig to look up the per-provider
+	// grace period. Return an empty-but-valid config so the grace
+	// window falls back to defaults and no suppression rows get
+	// written (the recs in this request have no CloudAccountID).
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1048,6 +1053,7 @@ func TestHandler_executePurchase_SaveError(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("database error"))
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 

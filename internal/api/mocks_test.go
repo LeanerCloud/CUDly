@@ -7,6 +7,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -372,6 +373,92 @@ func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg 
 func (m *MockConfigStore) DeleteAccountRegistration(ctx context.Context, id string) error {
 	args := m.Called(ctx, id)
 	return args.Error(0)
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// These mocks default to pass-through success so existing tests (which
+// don't care about the suppression lifecycle) don't need to set up
+// expectations for every call site. Tests that specifically exercise
+// the suppression write/delete/list paths register .On(...) Return(...)
+// expectations and those override the defaults via pgxmock ordering.
+
+func (m *MockConfigStore) CreateSuppression(ctx context.Context, sup *config.PurchaseSuppression) error {
+	if !m.isExpected("CreateSuppression") {
+		return nil
+	}
+	args := m.Called(ctx, sup)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) CreateSuppressionTx(ctx context.Context, tx pgx.Tx, sup *config.PurchaseSuppression) error {
+	if !m.isExpected("CreateSuppressionTx") {
+		return nil
+	}
+	args := m.Called(ctx, tx, sup)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) DeleteSuppressionsByExecution(ctx context.Context, executionID string) error {
+	if !m.isExpected("DeleteSuppressionsByExecution") {
+		return nil
+	}
+	args := m.Called(ctx, executionID)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) DeleteSuppressionsByExecutionTx(ctx context.Context, tx pgx.Tx, executionID string) error {
+	if !m.isExpected("DeleteSuppressionsByExecutionTx") {
+		return nil
+	}
+	args := m.Called(ctx, tx, executionID)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.PurchaseSuppression, error) {
+	if !m.isExpected("ListActiveSuppressions") {
+		return nil, nil
+	}
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseSuppression), args.Error(1)
+}
+
+func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *config.PurchaseExecution) error {
+	if !m.isExpected("SavePurchaseExecutionTx") {
+		// Default to calling SavePurchaseExecution so tests that only
+		// assert on the un-tx variant still see the write.
+		return m.SavePurchaseExecution(ctx, execution)
+	}
+	args := m.Called(ctx, tx, execution)
+	return args.Error(0)
+}
+
+// WithTx invokes fn with a sentinel nil tx so callers get to exercise
+// their full tx callback (saving execution, creating suppressions, etc.)
+// and tests assert on the individual *Tx mock methods rather than on
+// WithTx itself. Real tests pass their own tx value via .On("WithTx") if
+// they need to assert on it, but for the vast majority of consumers
+// forwarding through is the cleanest default.
+func (m *MockConfigStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	if m.isExpected("WithTx") {
+		args := m.Called(ctx, fn)
+		return args.Error(0)
+	}
+	return fn(nil)
+}
+
+// isExpected returns true when at least one .On(method, ...) expectation
+// has been registered on this mock. Lets us write "default no-op" stubs
+// above that route through m.Called only when the test explicitly cares.
+func (m *MockConfigStore) isExpected(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
 }
 
 // MockCredentialStore is a simple stub implementing credentials.CredentialStore.

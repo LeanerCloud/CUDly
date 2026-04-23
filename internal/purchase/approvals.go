@@ -5,7 +5,9 @@ import (
 	"crypto/subtle"
 	"fmt"
 
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/jackc/pgx/v5"
 )
 
 // ApproveExecution approves a pending execution. actor carries the email
@@ -60,39 +62,53 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor string) error {
 	logging.Infof("Cancelling execution: %s", executionID)
 
-	// Get the execution
-	execution, err := m.config.GetExecutionByID(ctx, executionID)
+	execution, err := m.loadCancelableExecution(ctx, executionID, token)
 	if err != nil {
-		return fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return fmt.Errorf("execution not found: %s", executionID)
-	}
-
-	// Validate token using constant-time comparison to prevent timing attacks
-	if execution.ApprovalToken == "" || token == "" {
-		return fmt.Errorf("invalid approval token")
-	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
-		return fmt.Errorf("invalid approval token")
-	}
-
-	// Check status
-	if execution.Status == "completed" || execution.Status == "cancelled" {
-		return fmt.Errorf("execution cannot be cancelled, current status: %s", execution.Status)
+		return err
 	}
 
 	// Update status + attribution — see ApproveExecution for the empty-actor
-	// nil-vs-empty-string rationale.
+	// nil-vs-empty-string rationale. Paired with DeleteSuppressionsByExecution
+	// in the same transaction so the status flip and the un-suppression
+	// commit atomically — a crash between the two would otherwise leave the
+	// rec-list hiding capacity the user already cancelled.
 	execution.Status = "cancelled"
 	if actor != "" {
 		a := actor
 		execution.CancelledBy = &a
 	}
-	if err := m.config.SavePurchaseExecution(ctx, execution); err != nil {
+	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := m.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
+			return err
+		}
+		return m.config.DeleteSuppressionsByExecutionTx(ctx, tx, executionID)
+	}); err != nil {
 		return fmt.Errorf("failed to save execution: %w", err)
 	}
 
 	logging.Infof("Execution %s cancelled", executionID)
 	return nil
+}
+
+// loadCancelableExecution fetches an execution, validates the approval
+// token, and checks the status is cancelable. Extracted from
+// CancelExecution to keep both functions below the gocyclo threshold.
+func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, token string) (*config.PurchaseExecution, error) {
+	execution, err := m.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get execution: %w", err)
+	}
+	if execution == nil {
+		return nil, fmt.Errorf("execution not found: %s", executionID)
+	}
+	if execution.ApprovalToken == "" || token == "" {
+		return nil, fmt.Errorf("invalid approval token")
+	}
+	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
+		return nil, fmt.Errorf("invalid approval token")
+	}
+	if execution.Status == "completed" || execution.Status == "cancelled" {
+		return nil, fmt.Errorf("execution cannot be cancelled, current status: %s", execution.Status)
+	}
+	return execution, nil
 }

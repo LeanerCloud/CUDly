@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -605,6 +606,82 @@ func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg 
 func (m *MockConfigStore) DeleteAccountRegistration(ctx context.Context, id string) error {
 	args := m.Called(ctx, id)
 	return args.Error(0)
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// Default to no-op success when no .On() expectation is registered so
+// existing tests don't need to be aware of the suppression lifecycle.
+
+func (m *MockConfigStore) CreateSuppression(ctx context.Context, sup *config.PurchaseSuppression) error {
+	if !isExpected(&m.Mock, "CreateSuppression") {
+		return nil
+	}
+	args := m.Called(ctx, sup)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) CreateSuppressionTx(ctx context.Context, tx pgx.Tx, sup *config.PurchaseSuppression) error {
+	if !isExpected(&m.Mock, "CreateSuppressionTx") {
+		return nil
+	}
+	args := m.Called(ctx, tx, sup)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) DeleteSuppressionsByExecution(ctx context.Context, executionID string) error {
+	if !isExpected(&m.Mock, "DeleteSuppressionsByExecution") {
+		return nil
+	}
+	args := m.Called(ctx, executionID)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) DeleteSuppressionsByExecutionTx(ctx context.Context, tx pgx.Tx, executionID string) error {
+	if !isExpected(&m.Mock, "DeleteSuppressionsByExecutionTx") {
+		return nil
+	}
+	args := m.Called(ctx, tx, executionID)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.PurchaseSuppression, error) {
+	if !isExpected(&m.Mock, "ListActiveSuppressions") {
+		return nil, nil
+	}
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseSuppression), args.Error(1)
+}
+
+func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *config.PurchaseExecution) error {
+	if !isExpected(&m.Mock, "SavePurchaseExecutionTx") {
+		return m.SavePurchaseExecution(ctx, execution)
+	}
+	args := m.Called(ctx, tx, execution)
+	return args.Error(0)
+}
+
+// WithTx invokes fn with a nil sentinel Tx so tests exercise the inner
+// *Tx mocks directly. Tests that want to assert on WithTx itself
+// register .On("WithTx", ...) and that takes precedence.
+func (m *MockConfigStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	if isExpected(&m.Mock, "WithTx") {
+		args := m.Called(ctx, fn)
+		return args.Error(0)
+	}
+	return fn(nil)
+}
+
+// isExpected reports whether mock has any .On() expectation for method.
+func isExpected(mock *mock.Mock, method string) bool {
+	for _, call := range mock.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
 }
 
 // Compile-time interface compliance check

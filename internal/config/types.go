@@ -188,6 +188,12 @@ type PurchaseExecution struct {
 	// accountable party in that case. Nullable TEXT in Postgres.
 	ApprovedBy  *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
 	CancelledBy *string `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"`
+	// CapacityPercent records what fraction of the originally-recommended
+	// counts the user chose when the bulk Purchase flow submitted this
+	// execution (1..100). Audit-only: the Recommendations slice already
+	// carries the scaled counts, so backend math is unaffected by this
+	// field. Defaults to 100 for legacy and scheduler-driven executions.
+	CapacityPercent int `json:"capacity_percent,omitempty" dynamodbav:"capacity_percent,omitempty"`
 }
 
 // RecommendationRecord stores a recommendation with purchase status
@@ -209,6 +215,41 @@ type RecommendationRecord struct {
 	PurchaseID     string  `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
 	Error          string  `json:"error,omitempty" dynamodbav:"error,omitempty"`
 	CloudAccountID *string `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
+	// SuppressedCount is the cumulative count already committed against
+	// this recommendation's 6-tuple (account, provider, service, region,
+	// resource_type, engine) within the active grace window. The
+	// scheduler subtracts this from Count before returning the rec to
+	// the frontend; a rec where SuppressedCount ≥ original count is
+	// dropped entirely. Populated by the scheduler — zero on writes.
+	SuppressedCount int `json:"suppressed_count,omitempty" dynamodbav:"suppressed_count,omitempty"`
+	// SuppressionExpiresAt is the earliest expiry across all active
+	// suppression rows contributing to this tuple. The frontend uses it
+	// to render "Xd remaining" on the recently-purchased badge.
+	SuppressionExpiresAt *time.Time `json:"suppression_expires_at,omitempty" dynamodbav:"suppression_expires_at,omitempty"`
+	// PrimarySuppressionExecutionID identifies the execution whose
+	// suppression contributed the most to this tuple (ties broken by
+	// newest created_at). The frontend badge deep-links to Purchase
+	// History filtered to this execution.
+	PrimarySuppressionExecutionID *string `json:"primary_suppression_execution_id,omitempty" dynamodbav:"primary_suppression_execution_id,omitempty"`
+}
+
+// PurchaseSuppression records the per-tuple grace window after a bulk
+// purchase. See migration 000037 for the full SQL shape + lifecycle
+// documentation. Written inside the same transaction as the execution
+// insert; deleted inside the same transaction as a cancel/expire status
+// transition.
+type PurchaseSuppression struct {
+	ID              string    `json:"id"`
+	ExecutionID     string    `json:"execution_id"`
+	AccountID       string    `json:"account_id"`
+	Provider        string    `json:"provider"`
+	Service         string    `json:"service"`
+	Region          string    `json:"region"`
+	ResourceType    string    `json:"resource_type"`
+	Engine          string    `json:"engine"`
+	SuppressedCount int       `json:"suppressed_count"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // RecommendationFilter parameterises ListStoredRecommendations and the

@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1531,3 +1532,24 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 }
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *MockConfigStore) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *MockConfigStore) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *MockConfigStore) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *MockConfigStore) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *MockConfigStore) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *MockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }

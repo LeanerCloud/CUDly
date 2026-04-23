@@ -617,6 +617,22 @@ func (s *PostgresStore) ListPurchasePlans(ctx context.Context) ([]PurchasePlan, 
 
 // SavePurchaseExecution saves a purchase execution record
 func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *PurchaseExecution) error {
+	// Generate the execution ID before we attempt to open a tx so
+	// pre-existing tests (which passed a nil DB and relied on ID
+	// generation as a side effect) still work as-is.
+	if execution.ExecutionID == "" {
+		execution.ExecutionID = uuid.New().String()
+	}
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		return s.SavePurchaseExecutionTx(ctx, tx, execution)
+	})
+}
+
+// SavePurchaseExecutionTx is the tx-accepting variant of
+// SavePurchaseExecution. Used from handlers that need to bundle the
+// execution insert with other writes (e.g. purchase_suppressions rows)
+// in a single atomic transaction.
+func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error {
 	// Generate execution ID if not provided
 	if execution.ExecutionID == "" {
 		execution.ExecutionID = uuid.New().String()
@@ -628,13 +644,20 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 		return fmt.Errorf("failed to marshal recommendations: %w", err)
 	}
 
+	// Capacity % defaults to 100 (= "bought the full recommendation")
+	// for legacy / scheduler paths that don't set the field.
+	capacityPercent := execution.CapacityPercent
+	if capacityPercent <= 0 {
+		capacityPercent = 100
+	}
+
 	query := `
 		INSERT INTO purchase_executions (
 			plan_id, execution_id, status, step_number, scheduled_date,
 			notification_sent, approval_token, recommendations,
 			total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-			cloud_account_id, source, approved_by, cancelled_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			cloud_account_id, source, approved_by, cancelled_by, capacity_percent
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -649,6 +672,7 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 			source = $15,
 			approved_by = $16,
 			cancelled_by = $17,
+			capacity_percent = $18,
 			updated_at = NOW()
 	`
 
@@ -662,7 +686,7 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 		planIDArg = execution.PlanID
 	}
 
-	_, err = s.db.Exec(ctx, query,
+	_, err = tx.Exec(ctx, query,
 		planIDArg,
 		execution.ExecutionID,
 		execution.Status,
@@ -680,6 +704,7 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 		execution.Source,
 		execution.ApprovedBy,
 		execution.CancelledBy,
+		capacityPercent,
 	)
 
 	if err != nil {
@@ -700,7 +725,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		          cloud_account_id, source, approved_by, cancelled_by
+		          cloud_account_id, source, approved_by, cancelled_by, capacity_percent
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
@@ -738,7 +763,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date DESC
@@ -753,7 +778,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -770,7 +795,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -793,7 +818,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, cancelled_by
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -845,6 +870,7 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 			&exec.Source,
 			&exec.ApprovedBy,
 			&exec.CancelledBy,
+			&exec.CapacityPercent,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)

@@ -369,13 +369,13 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
 		"notification_sent", "approval_token", "recommendations",
 		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
-		"cloud_account_id", "source", "approved_by", "cancelled_by",
+		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
 		sql.NullTime{}, "tok-123", recsJSON,
 		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
-		nil, "", nil, nil,
+		nil, "", nil, nil, 100,
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -398,14 +398,14 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
 		"notification_sent", "approval_token", "recommendations",
 		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
-		"cloud_account_id", "source", "approved_by", "cancelled_by",
+		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-2", "completed", 1, now,
 		sql.NullTime{Valid: true, Time: now}, "tok", recsJSON,
 		100.0, 200.0, sql.NullTime{Valid: true, Time: now}, "some error",
 		sql.NullTime{Valid: true, Time: future},
-		nil, "cudly-web", nil, nil,
+		nil, "cudly-web", nil, nil, 100,
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 

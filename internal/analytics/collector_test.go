@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -839,3 +840,24 @@ func TestConstants(t *testing.T) {
 		assert.Equal(t, 720, HoursPerMonth)
 	})
 }
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *mockConfigStore) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStore) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStore) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStore) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *mockConfigStore) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }

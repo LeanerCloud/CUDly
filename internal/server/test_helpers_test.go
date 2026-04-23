@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/jackc/pgx/v5"
 )
 
 // databaseConfigStub is a type alias used in health tests to simulate pending DB config
@@ -211,4 +212,27 @@ func (m *mockConfigStoreForHealth) GetRIUtilizationCache(_ context.Context, _ st
 }
 func (m *mockConfigStoreForHealth) UpsertRIUtilizationCache(_ context.Context, _ string, _ int, _ []byte, _ time.Time) error {
 	return nil
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *mockConfigStoreForHealth) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForHealth) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForHealth) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
+	return fn(nil)
 }

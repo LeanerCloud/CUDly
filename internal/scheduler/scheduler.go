@@ -608,8 +608,115 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 		return nil, err
 	}
 
+	recs, err = s.applySuppressions(ctx, recs)
+	if err != nil {
+		// A suppression read failure shouldn't block the recs list —
+		// the user-facing cost of that is an empty page; we'd rather
+		// over-show than under-show. Log and continue.
+		logging.Errorf("failed to apply suppressions; returning un-suppressed recs: %v", err)
+	}
+
 	s.maybeKickBackgroundRefresh(freshness)
 	return recs, nil
+}
+
+// suppressionKey is the 6-tuple used to match suppressions to recs.
+type suppressionKey struct {
+	accountID, provider, service, region, resourceType, engine string
+}
+
+// suppressionAgg aggregates all active suppression rows for a single
+// 6-tuple: cumulative count, earliest expiry (drives the badge's
+// "Xd remaining"), and the execution whose suppression contributed
+// the most (drives the badge deep-link).
+type suppressionAgg struct {
+	suppressedCount         int
+	earliestExpiresAt       time.Time
+	primaryExecutionID      string
+	primaryExecutionCreated time.Time
+	primaryExecutionContrib int
+}
+
+// applySuppressions subtracts active purchase_suppressions from each
+// rec's count and annotates the rec with the SuppressedCount /
+// SuppressionExpiresAt / PrimarySuppressionExecutionID fields that
+// drive the "recently purchased" badge on the frontend. Recs whose
+// remaining count hits 0 are dropped entirely.
+func (s *Scheduler) applySuppressions(ctx context.Context, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
+	sups, err := s.config.ListActiveSuppressions(ctx)
+	if err != nil {
+		return recs, err
+	}
+	if len(sups) == 0 {
+		return recs, nil
+	}
+	index := aggregateSuppressions(sups)
+	return applySuppressionIndex(recs, index), nil
+}
+
+// aggregateSuppressions groups a raw suppression list by 6-tuple.
+func aggregateSuppressions(sups []config.PurchaseSuppression) map[suppressionKey]*suppressionAgg {
+	index := make(map[suppressionKey]*suppressionAgg, len(sups))
+	for i := range sups {
+		sup := sups[i]
+		k := suppressionKey{
+			accountID: sup.AccountID, provider: sup.Provider, service: sup.Service,
+			region: sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
+		}
+		a, ok := index[k]
+		if !ok {
+			a = &suppressionAgg{earliestExpiresAt: sup.ExpiresAt}
+			index[k] = a
+		}
+		a.suppressedCount += sup.SuppressedCount
+		if sup.ExpiresAt.Before(a.earliestExpiresAt) {
+			a.earliestExpiresAt = sup.ExpiresAt
+		}
+		// "Most contribution" selects the biggest single suppression
+		// row; ties go to the most-recently-created row so a fresh
+		// cancel of an older peer doesn't leave the badge pointing at
+		// a stale execution.
+		if sup.SuppressedCount > a.primaryExecutionContrib ||
+			(sup.SuppressedCount == a.primaryExecutionContrib && sup.CreatedAt.After(a.primaryExecutionCreated)) {
+			a.primaryExecutionID = sup.ExecutionID
+			a.primaryExecutionCreated = sup.CreatedAt
+			a.primaryExecutionContrib = sup.SuppressedCount
+		}
+	}
+	return index
+}
+
+// applySuppressionIndex walks recs, subtracts the matching aggregate
+// count from each rec, drops recs that go to 0 or below, and
+// annotates the survivors with the badge fields.
+func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppressionKey]*suppressionAgg) []config.RecommendationRecord {
+	out := recs[:0]
+	for _, rec := range recs {
+		accountID := ""
+		if rec.CloudAccountID != nil {
+			accountID = *rec.CloudAccountID
+		}
+		k := suppressionKey{
+			accountID: accountID, provider: rec.Provider, service: rec.Service,
+			region: rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
+		}
+		a, ok := index[k]
+		if !ok {
+			out = append(out, rec)
+			continue
+		}
+		rec.Count -= a.suppressedCount
+		if rec.Count <= 0 {
+			continue // fully covered by recent purchases; hide
+		}
+		rec.SuppressedCount = a.suppressedCount
+		expiry := a.earliestExpiresAt
+		rec.SuppressionExpiresAt = &expiry
+		primary := a.primaryExecutionID
+		rec.PrimarySuppressionExecutionID = &primary
+		out = append(out, rec)
+	}
+	return out
 }
 
 // maybeKickBackgroundRefresh spawns a detached CollectRecommendations

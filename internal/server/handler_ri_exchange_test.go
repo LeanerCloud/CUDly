@@ -14,6 +14,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestHandleRIExchangeReshape_DisabledConfig(t *testing.T) {
@@ -835,4 +836,27 @@ func (m *mockExchangeClient) Execute(ctx context.Context, req exchange.ExchangeE
 		return m.executeFunc(ctx, req)
 	}
 	return "", nil, errors.New("Execute not mocked")
+}
+
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+func (m *mockConfigStoreForExchange) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchange) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
+	return nil
+}
+func (m *mockConfigStoreForExchange) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchange) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
+	return nil
+}
+func (m *mockConfigStoreForExchange) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForExchange) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchange) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
+	return fn(nil)
 }

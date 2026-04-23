@@ -15,7 +15,69 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
+
+// buildSuppressions converts the recs on an executePurchase request into
+// purchase_suppressions rows, one per unique 6-tuple (account, provider,
+// service, region, resource_type, engine). Counts for duplicate tuples
+// within the same request are summed (defensive — the UI should collapse
+// them client-side, but the backend doesn't trust that). Providers with
+// a grace period of 0 (feature disabled) contribute no rows.
+func buildSuppressions(recs []config.RecommendationRecord, executionID string, cfg *config.GlobalConfig, now time.Time) []config.PurchaseSuppression {
+	// Aggregate count per 6-tuple before writing suppression rows so
+	// the UNIQUE(execution_id, ...6-tuple) constraint can't fire from
+	// a request that repeated the same tuple.
+	type key struct {
+		accountID, provider, service, region, resourceType, engine string
+	}
+	agg := map[key]int{}
+	order := []key{}
+	for _, rec := range recs {
+		if rec.Count <= 0 {
+			continue
+		}
+		accountID := ""
+		if rec.CloudAccountID != nil {
+			accountID = *rec.CloudAccountID
+		}
+		k := key{
+			accountID:    accountID,
+			provider:     rec.Provider,
+			service:      rec.Service,
+			region:       rec.Region,
+			resourceType: rec.ResourceType,
+			engine:       rec.Engine,
+		}
+		if _, seen := agg[k]; !seen {
+			order = append(order, k)
+		}
+		agg[k] += rec.Count
+	}
+
+	out := make([]config.PurchaseSuppression, 0, len(order))
+	for _, k := range order {
+		graceDays := config.DefaultGracePeriodDays
+		if cfg != nil {
+			graceDays = cfg.GracePeriodFor(k.provider)
+		}
+		if graceDays <= 0 {
+			continue // feature disabled for this provider
+		}
+		out = append(out, config.PurchaseSuppression{
+			ExecutionID:     executionID,
+			AccountID:       k.accountID,
+			Provider:        k.provider,
+			Service:         k.service,
+			Region:          k.region,
+			ResourceType:    k.resourceType,
+			Engine:          k.engine,
+			SuppressedCount: agg[k],
+			ExpiresAt:       now.Add(time.Duration(graceDays) * 24 * time.Hour),
+		})
+	}
+	return out
+}
 
 func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PlannedPurchasesResponse, error) {
 	session, err := h.requirePermission(ctx, req, "view", "purchases")
@@ -341,6 +403,12 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 // ExecutePurchaseRequest represents the request to execute purchases
 type ExecutePurchaseRequest struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
+	// CapacityPercent is what fraction (1..100) of the originally-
+	// recommended counts the user chose in the bulk Purchase flow.
+	// Audit-only: the Recommendations slice already carries scaled
+	// counts, so backend math ignores this field for purchase work.
+	// 0 / absent defaults to 100 ("full capacity").
+	CapacityPercent int `json:"capacity_percent,omitempty"`
 }
 
 // validateExecutePurchaseRequest handles the permission check, body parse,
@@ -361,6 +429,15 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	}
 	if len(execReq.Recommendations) > maxRecommendations {
 		return ExecutePurchaseRequest{}, nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
+	}
+	// capacity_percent is audit-only but we still bound it: a request
+	// with 0 / absent → default 100; anything outside [1, 100] is a
+	// client bug worth surfacing rather than silently clamping.
+	if execReq.CapacityPercent == 0 {
+		execReq.CapacityPercent = 100
+	}
+	if execReq.CapacityPercent < 1 || execReq.CapacityPercent > 100 {
+		return ExecutePurchaseRequest{}, nil, NewClientError(400, fmt.Sprintf("capacity_percent must be between 1 and 100, got %d", execReq.CapacityPercent))
 	}
 	// Scope: reject the whole request if any recommendation targets an
 	// account outside the session's allowed_accounts. Safer than silently
@@ -435,9 +512,30 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		EstimatedSavings: totalSavings,
 		ApprovalToken:    uuid.New().String(),
 		Source:           common.PurchaseSourceWeb,
+		CapacityPercent:  execReq.CapacityPercent,
 	}
 
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+	// Load the grace-period config once before entering the tx so a
+	// GetGlobalConfig failure fails the whole request cleanly rather
+	// than leaving a half-committed tx state. Errors here don't block
+	// the purchase — we just default the grace period per-provider.
+	var gracePeriodCfg *config.GlobalConfig
+	if g, err := h.config.GetGlobalConfig(ctx); err == nil {
+		gracePeriodCfg = g
+	}
+
+	suppressions := buildSuppressions(execReq.Recommendations, executionID, gracePeriodCfg, time.Now())
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
+			return err
+		}
+		for i := range suppressions {
+			if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("failed to save execution: %w", err)
 	}
 
