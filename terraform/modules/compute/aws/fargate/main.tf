@@ -190,8 +190,13 @@ resource "aws_iam_role_policy" "ses_access" {
           "ses:GetAccount",
           "ses:GetEmailIdentity",
         ]
+        # See the Lambda module's comment on this policy — dual domain +
+        # email-level ARNs handle both SES verification modes so the policy
+        # matches whether the From address is registered at the domain or
+        # the per-email level (SES sandbox).
         Resource = [
           "arn:aws:ses:*:*:identity/${var.email_from_domain}",
+          "arn:aws:ses:*:*:identity/*@${var.email_from_domain}",
           "arn:aws:ses:*:*:configuration-set/${var.stack_name}*",
         ]
       }

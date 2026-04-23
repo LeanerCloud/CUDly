@@ -225,6 +225,20 @@ resource "aws_iam_role_policy" "secrets_access" {
 # and keeping it out of the runtime role blocks a compromised Lambda from
 # registering arbitrary identities for phishing/spam.
 #
+# Resource list covers both SES identity-verification modes so the policy
+# matches regardless of how the From address was registered in the account:
+#   - "identity/${domain}"   — domain-level identity (DKIM records in ses.tf;
+#                              the standard path for deployments running
+#                              against a verified subdomain).
+#   - "identity/*@${domain}" — wildcard for email-level identities (the
+#                              per-address verification SES hands out in
+#                              sandbox mode). Without this, SES denies
+#                              ses:SendEmail with "not authorized to
+#                              perform ses:SendEmail on resource
+#                              .../identity/<address>" whenever the
+#                              sender's identity is evaluated at the email
+#                              level.
+#
 # Only attached when var.email_from_domain is set — deployments without email
 # notifications don't get any SES permissions at all.
 resource "aws_iam_role_policy" "ses_access" {
@@ -246,6 +260,7 @@ resource "aws_iam_role_policy" "ses_access" {
         ]
         Resource = [
           "arn:aws:ses:*:*:identity/${var.email_from_domain}",
+          "arn:aws:ses:*:*:identity/*@${var.email_from_domain}",
           "arn:aws:ses:*:*:configuration-set/${var.stack_name}*",
         ]
       }
