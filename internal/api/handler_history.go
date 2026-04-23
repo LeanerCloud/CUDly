@@ -63,11 +63,15 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 }
 
 // historyExecutionStatuses enumerates the PurchaseExecution statuses the
-// History view shows alongside completed purchases. Scheduler-visible states
-// only; completed/approved/cancelled are intentionally excluded (approved
-// becomes a purchase_history row once the scheduler processes it; cancelled
-// is self-explanatory; completed is already in purchase_history).
-var historyExecutionStatuses = []string{"pending", "notified", "failed", "expired"}
+// History view shows alongside completed purchases. "approved" and
+// "completed" are excluded because an approved execution becomes a
+// purchase_history row once the scheduler processes it, and completed
+// executions live in purchase_history directly — listing them here would
+// duplicate rows. Everything else (pending, notified, failed, expired,
+// cancelled) is a terminal or in-flight state the user needs audit-trail
+// visibility into: a cancelled purchase that simply vanishes is worse UX
+// than a cancelled row with a clear badge.
+var historyExecutionStatuses = []string{"pending", "notified", "failed", "expired", "cancelled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -172,6 +176,14 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 		row.StatusDescription = exec.Error
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
+	case "cancelled":
+		// Cancelled via the token link in the approval email. We don't
+		// currently track who clicked it (the approval token is a bearer
+		// credential, not a per-user one), so the description is generic.
+		// See known_issues/30_history_pending_cancel_ui.md for the
+		// session-authed cancel path that would let us record the
+		// cancelling user.
+		row.StatusDescription = "cancelled via approval link"
 	}
 	return row
 }
