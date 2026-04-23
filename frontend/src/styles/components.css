@@ -809,6 +809,7 @@ tr.recommendation-row:hover {
 }
 
 .modal-confirm {
+    position: relative;
     background: white;
     border-radius: 8px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
@@ -817,8 +818,25 @@ tr.recommendation-row:hover {
     padding: 1.5rem;
 }
 
+.modal-confirm-close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.75rem;
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    color: #666;
+    padding: 0 0.25rem;
+}
+
+.modal-confirm-close:hover {
+    color: #1a73e8;
+}
+
 .modal-confirm-title {
-    margin: 0 0 0.75rem;
+    margin: 0 1.5rem 0.75rem 0;
     font-size: 1.1rem;
     color: #222;
 }

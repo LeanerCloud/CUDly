@@ -68,12 +68,18 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
     return true;
   }
 
-  const verb = dl.action === 'approve' ? 'Approve' : 'Cancel';
+  // Only one action button — "Approve purchase" / "Cancel purchase".
+  // Dismissal is via the close-X, ESC, or a backdrop click, so a
+  // cancel-purchase dialog doesn't end up with two buttons both labelled
+  // "Cancel" (one to dismiss, one to confirm the purchase cancellation).
+  const titleVerb = dl.action === 'approve' ? 'Approve' : 'Cancel';
   const gerund = dl.action === 'approve' ? 'approve' : 'cancel';
+  const confirmLabel = dl.action === 'approve' ? 'Approve purchase' : 'Cancel purchase';
   const ok = await confirmDialog({
-    title: `${verb} purchase ${dl.id.slice(0, 8)}…?`,
+    title: `${titleVerb} purchase ${dl.id.slice(0, 8)}…?`,
     body: `You're about to ${gerund} purchase execution ${dl.id}. This action will be recorded against your logged-in account.`,
-    confirmLabel: verb,
+    confirmLabel,
+    hideCancelButton: true,
     destructive: dl.action === 'cancel',
   });
   if (!ok) {
@@ -82,13 +88,14 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
   }
 
   const endpoint = `/purchases/${dl.action}/${encodeURIComponent(dl.id)}?token=${encodeURIComponent(dl.token)}`;
+  const actionPast = dl.action === 'approve' ? 'approved' : 'cancelled';
   try {
     await apiRequest<{ status: string }>(endpoint, { method: 'POST' });
-    showToast({ message: `${verb} succeeded.`, kind: 'success', timeout: 5_000 });
+    showToast({ message: `Purchase ${actionPast}.`, kind: 'success', timeout: 5_000 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast({
-      message: `${verb} failed: ${msg}`,
+      message: `Failed to ${dl.action} purchase: ${msg}`,
       kind: 'error',
       timeout: null,
     });

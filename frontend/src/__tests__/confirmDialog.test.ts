@@ -10,13 +10,31 @@ describe('confirmDialog', () => {
     while (body.firstChild) body.removeChild(body.firstChild);
   });
 
-  it('renders title + body text + both buttons', () => {
+  it('renders title + body text + close-X + cancel + confirm buttons', () => {
     void confirmDialog({ title: 'Delete?', body: 'Permanent action.', destructive: true });
     const dialog = document.querySelector('.modal-confirm')!;
     expect(dialog.querySelector('.modal-confirm-title')?.textContent).toBe('Delete?');
     expect(dialog.querySelector('.modal-confirm-body')?.textContent).toBe('Permanent action.');
+    // close-X + cancel + confirm = 3 buttons in the default layout.
     const buttons = dialog.querySelectorAll('button');
-    expect(buttons.length).toBe(2);
+    expect(buttons.length).toBe(3);
+    expect(dialog.querySelector('.modal-confirm-close')).not.toBeNull();
+  });
+
+  it('hides the dismiss button when hideCancelButton is true but still renders close-X', () => {
+    void confirmDialog({ title: 't', body: 'b', hideCancelButton: true });
+    const dialog = document.querySelector('.modal-confirm')!;
+    expect(dialog.querySelector('button.btn-secondary')).toBeNull();
+    expect(dialog.querySelector('.modal-confirm-close')).not.toBeNull();
+    expect(dialog.querySelector('button.btn-primary')).not.toBeNull();
+  });
+
+  it('resolves false when the close-X is clicked', async () => {
+    const promise = confirmDialog({ title: 't', body: 'b', hideCancelButton: true });
+    const closeBtn = document.querySelector<HTMLButtonElement>('.modal-confirm-close')!;
+    closeBtn.click();
+    await expect(promise).resolves.toBe(false);
+    expect(document.querySelector('.modal-confirm')).toBeNull();
   });
 
   it('applies .btn-destructive to the confirm button when destructive is true', () => {

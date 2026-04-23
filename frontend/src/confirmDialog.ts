@@ -15,6 +15,12 @@ export interface ConfirmDialogOptions {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  // When true, hides the left dismiss button. Useful when the natural
+  // dismiss label ("Cancel") would collide with the confirm action (e.g.
+  // confirming a purchase cancellation — you'd end up with two buttons
+  // both labelled "Cancel"). Users can still dismiss via the close-X,
+  // ESC, or a backdrop click.
+  hideCancelButton?: boolean;
 }
 
 export function confirmDialog(opts: ConfirmDialogOptions): Promise<boolean> {
@@ -26,6 +32,17 @@ export function confirmDialog(opts: ConfirmDialogOptions): Promise<boolean> {
 
     const dialog = document.createElement('div');
     dialog.className = 'modal-confirm';
+
+    // Close-X in the top-right corner — always present so any dialog can
+    // be dismissed without relying on the left action button. This is
+    // what makes `hideCancelButton: true` a viable option for callers
+    // whose confirm action would otherwise fight the dismiss label.
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'modal-confirm-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.textContent = '×';
+    dialog.appendChild(closeBtn);
 
     const titleEl = document.createElement('h3');
     titleEl.className = 'modal-confirm-title';
@@ -44,6 +61,7 @@ export function confirmDialog(opts: ConfirmDialogOptions): Promise<boolean> {
     const actions = document.createElement('div');
     actions.className = 'modal-confirm-actions';
 
+    const hideCancel = opts.hideCancelButton === true;
     const cancelBtn = document.createElement('button');
     cancelBtn.type = 'button';
     cancelBtn.className = 'btn btn-secondary';
@@ -54,7 +72,9 @@ export function confirmDialog(opts: ConfirmDialogOptions): Promise<boolean> {
     confirmBtn.className = opts.destructive ? 'btn btn-destructive' : 'btn btn-primary';
     confirmBtn.textContent = opts.confirmLabel ?? 'Confirm';
 
-    actions.appendChild(cancelBtn);
+    if (!hideCancel) {
+      actions.appendChild(cancelBtn);
+    }
     actions.appendChild(confirmBtn);
     dialog.appendChild(actions);
     backdrop.appendChild(dialog);
@@ -80,13 +100,20 @@ export function confirmDialog(opts: ConfirmDialogOptions): Promise<boolean> {
         e.preventDefault();
         settle(false);
       } else if (e.key === 'Tab') {
-        // Focus trap: cycle Tab between the two buttons.
+        // Focus trap: cycle Tab between the focusable elements the dialog
+        // actually rendered. When hideCancelButton is true, cycle between
+        // close-X and confirm; otherwise include the dismiss button too.
         e.preventDefault();
-        const next = document.activeElement === confirmBtn ? cancelBtn : confirmBtn;
+        const cycle: HTMLButtonElement[] = hideCancel
+          ? [confirmBtn, closeBtn]
+          : [confirmBtn, cancelBtn, closeBtn];
+        const idx = cycle.indexOf(document.activeElement as HTMLButtonElement);
+        const next = cycle[(idx + 1 + cycle.length) % cycle.length] ?? confirmBtn;
         next.focus();
       }
     };
 
+    closeBtn.addEventListener('click', () => settle(false));
     cancelBtn.addEventListener('click', () => settle(false));
     confirmBtn.addEventListener('click', () => settle(true));
     backdrop.addEventListener('click', (e) => {
