@@ -353,9 +353,9 @@ export async function loadSavingsTrendChart(): Promise<void> {
 
   try {
     // Q5: honour the account-filter dropdown. Backend's /history/analytics
-    // takes a single account_id (Athena limitation, see handler_analytics.go).
-    // The dashboard filter is single-select so we pass the only selected
-    // ID or omit to query all accessible accounts.
+    // takes a single account_id (see handler_analytics.go). The dashboard
+    // filter is single-select so we pass the only selected ID or omit to
+    // query all accessible accounts.
     const accountIDs = state.getCurrentAccountIDs();
     const data = await api.getSavingsAnalytics({
       start: start.toISOString(),
@@ -415,13 +415,14 @@ export async function loadSavingsTrendChart(): Promise<void> {
       },
     });
   } catch (err) {
-    // Analytics may not be configured (S3/Athena required). Don't break
-    // the rest of the dashboard — hide the widget instead.
+    // Analytics is Postgres-backed now, but the endpoint still guards with
+    // a 503 when the analytics client isn't wired. Don't break the rest of
+    // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
     canvas.style.display = 'none';
     if (empty) {
-      empty.textContent = 'Savings history is not available. Configure analytics (S3/Athena) to see the trend.';
+      empty.textContent = 'Savings history is not available yet.';
       empty.classList.remove('hidden');
     }
   }

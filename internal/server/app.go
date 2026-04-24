@@ -583,7 +583,10 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		IsLambda:        app.appConfig.IsLambda,
 	})
 
-	// Update API handler with new config store, scheduler, and rate limiter
+	// Update API handler with new config store, scheduler, and rate limiter.
+	// AnalyticsClient is Postgres-backed (see api.NewPostgresAnalyticsClient) —
+	// it aggregates purchase_history on demand so the History UI charts work
+	// without requiring a separate S3/Athena deployment.
 	app.API = api.NewHandler(api.HandlerConfig{
 		ConfigStore:       app.Config,
 		CredentialStore:   credStore,
@@ -597,6 +600,7 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		RateLimiter:       app.RateLimiter,
 		EmailNotifier:     app.Email,
 		DashboardURL:      app.appConfig.DashboardURL,
+		AnalyticsClient:   api.NewPostgresAnalyticsClient(dbConn),
 		OIDCSigner:        app.signer,
 		OIDCIssuerURL:     resolveOIDCIssuerURL(app.appConfig),
 	})

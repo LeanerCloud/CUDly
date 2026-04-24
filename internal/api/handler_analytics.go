@@ -36,14 +36,14 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	// Analytics requires an S3/Athena backend. When the deployment
-	// hasn't wired one up, return 503 Service Unavailable with a
-	// structured reason rather than a generic 500 — the frontend
-	// treats 503 as "feature intentionally unavailable" and renders
-	// the "Configure analytics (S3/Athena) to see the trend"
-	// empty-state instead of a generic "savings trend failed" error.
+	// Analytics is Postgres-backed (api.PostgresAnalyticsClient) and wired
+	// in server.Application.reinitializeAfterConnect, so analyticsClient
+	// is non-nil whenever the DB is up. The guard stays as defence-in-depth
+	// for test builds and misconfigured callers — the frontend treats 503
+	// as "feature intentionally unavailable" and renders the corresponding
+	// empty-state instead of a generic error.
 	if h.analyticsClient == nil {
-		return nil, NewClientError(503, "analytics not configured — S3/Athena backend required")
+		return nil, NewClientError(503, "analytics not configured")
 	}
 
 	// Parse parameters
@@ -54,8 +54,9 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	}
 
 	// For scoped users we require account_id and validate it's in their scope.
-	// We don't (yet) support analytics across a subset — the Athena query takes
-	// a single account_id. An unrestricted/admin session can pass "" for all.
+	// We don't (yet) support analytics across a subset — the underlying
+	// aggregate takes a single account_id. An unrestricted/admin session
+	// can pass "" to mean "all accessible accounts".
 	if err := h.validateAnalyticsAccountScope(ctx, session, accountID); err != nil {
 		return nil, err
 	}
@@ -66,7 +67,7 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	// Query Athena for historical data
+	// Aggregate history from the analytics client (Postgres-backed).
 	dataPoints, summary, err := h.analyticsClient.QueryHistory(ctx, accountID, start, end, interval)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query analytics: %w", err)
@@ -90,7 +91,7 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 
 	if h.analyticsClient == nil {
 		// See getHistoryAnalytics for the 503 rationale.
-		return nil, NewClientError(503, "analytics not configured — S3/Athena backend required")
+		return nil, NewClientError(503, "analytics not configured")
 	}
 
 	accountID := params["account_id"]
@@ -108,7 +109,7 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	// Query Athena for breakdown data
+	// Fetch the breakdown from the analytics client (Postgres-backed).
 	data, err := h.analyticsClient.QueryBreakdown(ctx, accountID, start, end, dimension)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query breakdown: %w", err)

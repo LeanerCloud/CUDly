@@ -35,7 +35,7 @@ type Handler struct {
 	rateLimiter        RateLimiterInterface
 	emailNotifier      email.SenderInterface       // Optional: purchase approval emails
 	dashboardURL       string                      // Base URL for approval/cancel links
-	analyticsClient    AnalyticsClientInterface    // Optional: S3/Athena analytics client
+	analyticsClient    AnalyticsClientInterface    // Optional: analytics client (Postgres-backed in prod)
 	analyticsCollector AnalyticsCollectorInterface // Optional: Hourly collector
 	signer             oidc.Signer                 // Optional: OIDC issuer signer (backed by cloud KMS)
 	issuerURL          string                      // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
