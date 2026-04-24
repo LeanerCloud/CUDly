@@ -580,7 +580,6 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
     setInputValue('account-azure-tenant-id', account?.azure_tenant_id ?? '');
     setInputValue('account-azure-client-id', account?.azure_client_id ?? '');
     setInputValue('account-azure-client-secret', '');
-    setInputValue('account-azure-wif-private-key', '');
     updateAzureAuthModeFields(azureAuthMode);
   } else if (provider === 'gcp') {
     const gcpMode = account?.gcp_auth_mode ?? 'workload_identity_federation';
@@ -645,13 +644,15 @@ function updateAwsAuthModeFields(mode: string, bastionId?: string): void {
 }
 
 /**
- * Show/hide Azure auth mode sub-fields
+ * Show/hide Azure auth mode sub-fields. Only client_secret mode has an
+ * input block; workload_identity_federation is credential-free (CUDly's
+ * OIDC issuer + the App Registration's federated-identity-credential
+ * handle authentication) and managed_identity is ambient, so neither
+ * needs a visible field block here.
  */
 function updateAzureAuthModeFields(mode: string): void {
   const secretFields = document.getElementById('account-azure-secret-fields');
-  const wifFields = document.getElementById('account-azure-wif-fields');
   secretFields?.classList.toggle('hidden', mode !== 'client_secret');
-  wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
 }
 
 /**
@@ -753,17 +754,11 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
     }
   } else if (provider === 'azure') {
     const azureMode = byId<HTMLSelectElement>('account-azure-auth-mode')?.value ?? 'client_secret';
-    if (azureMode === 'managed_identity') {
-      // No credential to store
-    } else if (azureMode === 'workload_identity_federation') {
-      const pem = byId<HTMLTextAreaElement>('account-azure-wif-private-key')?.value.trim();
-      if (pem) {
-        await api.saveAccountCredentials(accountId, {
-          credential_type: 'azure_wif_private_key',
-          payload: { private_key_pem: pem }
-        });
-      }
-    } else {
+    // managed_identity is ambient; workload_identity_federation is
+    // secret-free (CUDly's OIDC issuer + the Azure App Registration's
+    // federated-identity-credential handle authentication, no material
+    // stored in CUDly). Only client_secret accepts a stored credential.
+    if (azureMode === 'client_secret') {
       const secret = byId<HTMLInputElement>('account-azure-client-secret')?.value ?? '';
       if (secret) {
         await api.saveAccountCredentials(accountId, {

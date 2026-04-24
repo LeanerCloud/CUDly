@@ -39,58 +39,32 @@ type AzureResolveOptions struct {
 }
 
 // resolveAzureWIFCredential handles the workload_identity_federation
-// auth mode. Extracted from ResolveAzureTokenCredentialWithOpts to keep
-// the top-level switch simple.
-//
-// Routing:
-//   - opts.Signer + issuer URL available, no stored PEM → federated
-//     path (BuildAzureFederatedCredential), secret-free.
-//   - opts.Signer set but a stored PEM exists → legacy cert path, for
-//     backward compatibility with accounts registered before the
-//     redesign.
-//   - opts.Signer not set → legacy cert path, requiring a stored PEM.
+// auth mode. The only supported path is the secret-free federated one:
+// CUDly's deployment-wide OIDC signer (KMS-backed) mints a short-lived
+// client-assertion JWT that Azure AD validates against the App
+// Registration's federated-identity-credential binding. No secret
+// material is ever stored in CUDly.
 //
 // The issuer URL comes from opts.IssuerURL if set, otherwise from the
 // package-level oidc.IssuerURL() cache populated by the first inbound
 // HTTP request — see internal/oidc/issuer_cache.go.
+//
+// `store` is accepted for signature parity with the other resolver
+// helpers; it is unused here because no credential is ever loaded.
 func resolveAzureWIFCredential(
-	ctx context.Context,
+	_ context.Context,
 	account *config.CloudAccount,
-	store CredentialStore,
+	_ CredentialStore,
 	opts AzureResolveOptions,
 ) (azcore.TokenCredential, error) {
-	raw, _ := loadOptionalWIFKey(ctx, store, account.ID)
-
 	issuerURL := opts.IssuerURL
 	if issuerURL == "" {
 		issuerURL = oidc.IssuerURL()
 	}
-
-	// Secret-free federated path — opt-in via signer+issuerURL, only
-	// when the account has no legacy PEM stored.
-	if opts.Signer != nil && issuerURL != "" && len(raw) == 0 {
-		return BuildAzureFederatedCredential(opts.Signer, issuerURL, account.AzureTenantID, account.AzureClientID)
+	if opts.Signer == nil || issuerURL == "" {
+		return nil, fmt.Errorf("credentials: azure workload_identity_federation requires a wired OIDC signer and issuer URL (account %s)", account.ID)
 	}
-
-	// Legacy cert-based path.
-	if store == nil {
-		return nil, fmt.Errorf("credentials: credential store required for azure wif account %s", account.ID)
-	}
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("credentials: no wif key stored for account %s", account.ID)
-	}
-	return buildAzureWIFCredential(account, raw)
-}
-
-// loadOptionalWIFKey attempts to read the stored Azure WIF PEM blob for
-// an account. Returns (nil, nil) when the store is absent, when the
-// blob is unset, or when the load fails — callers use the absence of
-// a blob to route, not the error.
-func loadOptionalWIFKey(ctx context.Context, store CredentialStore, accountID string) ([]byte, error) {
-	if store == nil {
-		return nil, nil
-	}
-	return store.LoadRaw(ctx, accountID, CredTypeAzureWIF)
+	return BuildAzureFederatedCredential(opts.Signer, issuerURL, account.AzureTenantID, account.AzureClientID)
 }
 
 // BuildAzureFederatedCredential returns an azcore.TokenCredential that

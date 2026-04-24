@@ -1047,13 +1047,6 @@
                         <div id="account-azure-secret-fields" class="hidden">
                             <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
                         </div>
-                        <!-- workload_identity_federation mode -->
-                        <div id="account-azure-wif-fields" class="hidden">
-                            <label>RSA Private Key (PEM):
-                                <textarea id="account-azure-wif-private-key" rows="6" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
-                            </label>
-                            <small>Generate with: <code>openssl genrsa -out cudly-wif.key 2048</code>. Register the matching self-signed certificate with the Azure App Registration. Download the IaC from the Azure Settings &rarr; Federation Setup section to automate this.</small>
-                        </div>
                     </div>
 
                     <!-- GCP-specific fields -->

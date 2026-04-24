@@ -71,9 +71,8 @@ type credentialPayloadSchema struct {
 }
 
 var credentialPayloadSchemas = map[string]credentialPayloadSchema{
-	"aws_access_keys":       {required: []string{"access_key_id", "secret_access_key"}},
-	"azure_client_secret":   {required: []string{"client_secret"}},
-	"azure_wif_private_key": {required: []string{"private_key_pem"}},
+	"aws_access_keys":     {required: []string{"access_key_id", "secret_access_key"}},
+	"azure_client_secret": {required: []string{"client_secret"}},
 }
 
 // gcpServiceAccountKeys are the fields a Google service-account JSON file is
@@ -110,7 +109,7 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 	}
 
 	switch credentialType {
-	case "aws_access_keys", "azure_client_secret", "azure_wif_private_key":
+	case "aws_access_keys", "azure_client_secret":
 		schema := credentialPayloadSchemas[credentialType]
 		return validateFlatPayload(credentialType, payload, schema.required, schema.optional)
 	case "gcp_service_account":

@@ -524,18 +524,22 @@ func TestAmbientCredResult(t *testing.T) {
 
 func TestCredTypeForAccount(t *testing.T) {
 	tests := []struct {
+		name     string
 		acct     *config.CloudAccount
 		expected string
 	}{
-		{&config.CloudAccount{Provider: "aws"}, "aws_access_keys"},
-		{&config.CloudAccount{Provider: "azure", AzureAuthMode: "service_principal"}, "azure_client_secret"},
-		{&config.CloudAccount{Provider: "azure", AzureAuthMode: "workload_identity_federation"}, "azure_wif_private_key"},
-		{&config.CloudAccount{Provider: "gcp", GCPAuthMode: "service_account"}, "gcp_service_account"},
-		{&config.CloudAccount{Provider: "gcp", GCPAuthMode: "workload_identity_federation"}, "gcp_workload_identity_config"},
+		{"aws", &config.CloudAccount{Provider: "aws"}, "aws_access_keys"},
+		{"azure_service_principal", &config.CloudAccount{Provider: "azure", AzureAuthMode: "service_principal"}, "azure_client_secret"},
+		// Azure WIF is secret-free (KMS-signed assertion, no stored
+		// credential), so credTypeForAccount returns "" — the caller
+		// handles the empty string as "no credential to check".
+		{"azure_wif", &config.CloudAccount{Provider: "azure", AzureAuthMode: "workload_identity_federation"}, ""},
+		{"gcp_service_account", &config.CloudAccount{Provider: "gcp", GCPAuthMode: "service_account"}, "gcp_service_account"},
+		{"gcp_wif", &config.CloudAccount{Provider: "gcp", GCPAuthMode: "workload_identity_federation"}, "gcp_workload_identity_config"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.expected, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expected, credTypeForAccount(tt.acct))
 		})
 	}
