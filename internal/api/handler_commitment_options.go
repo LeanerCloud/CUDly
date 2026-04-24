@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/LeanerCloud/CUDly/internal/commitmentopts"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
 // commitmentOptionsResponse is the JSON shape returned by
@@ -37,10 +38,15 @@ func (h *Handler) getCommitmentOptions(ctx context.Context) (*commitmentOptionsR
 	}
 	opts, err := h.commitmentOpts.Get(ctx)
 	if err != nil {
-		if errors.Is(err, commitmentopts.ErrNoData) {
-			return &commitmentOptionsResponse{Status: "unavailable"}, nil
+		// Any error collapses to "unavailable" so a transient DB blip
+		// or context cancellation doesn't break the Settings page
+		// overlay fetch. ErrNoData is the quiet path (no account
+		// connected / fresh install); anything else is logged so
+		// operators can still trace DB/connection issues.
+		if !errors.Is(err, commitmentopts.ErrNoData) {
+			logging.Warnf("commitmentopts handler: %v", err)
 		}
-		return nil, err
+		return &commitmentOptionsResponse{Status: "unavailable"}, nil
 	}
 
 	awsOpts := opts["aws"]

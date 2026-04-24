@@ -792,5 +792,25 @@ describe('commitmentOptions', () => {
       expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(true);
       expect(isValidCombination('aws', 'rds', 1, 'partial-upfront')).toBe(true);
     });
+
+    it('re-widens after a subsequent overlay reports broader support', async () => {
+      // Settings tab is re-entered after the server probe completes with
+      // a fuller combo set. The overlay must diff against the canonical
+      // STANDARD_TERMS × AWS_PAYMENTS product, not against the narrow
+      // result of the first call, or the UI stays stuck on the
+      // intersection and never widens.
+      const narrow = mockOk({ rds: [{ term: 1, payment: 'all-upfront' }] });
+      await fetchAndPopulateCommitmentOptions(narrow);
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
+
+      const allCombos = [1, 3].flatMap(term =>
+        ['all-upfront', 'partial-upfront', 'no-upfront'].map(payment => ({ term, payment }))
+      );
+      const wide = mockOk({ rds: allCombos });
+      await fetchAndPopulateCommitmentOptions(wide);
+
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(true);
+      expect(isValidCombination('aws', 'rds', 1, 'partial-upfront')).toBe(true);
+    });
   });
 });

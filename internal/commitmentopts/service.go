@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"golang.org/x/sync/errgroup"
 )
@@ -82,6 +83,7 @@ func (s *Service) probeAndPersist(ctx context.Context) (Options, error) {
 
 	cfg, err := s.buildConfig(ctx, account)
 	if err != nil {
+		logging.Warnf("commitmentopts: probe aborted — build config account=%s: %v", account.ID, err)
 		return nil, ErrNoData
 	}
 
@@ -93,7 +95,7 @@ func (s *Service) probeAndPersist(ctx context.Context) (Options, error) {
 		group.Go(func() error {
 			combos, err := p.Probe(gctx, cfg)
 			if err != nil {
-				return err
+				return fmt.Errorf("probe %s: %w", p.Service(), err)
 			}
 			results[i] = combos
 			return nil
@@ -102,6 +104,9 @@ func (s *Service) probeAndPersist(ctx context.Context) (Options, error) {
 	if err := group.Wait(); err != nil {
 		// All-or-nothing: a single service failing must NOT produce a
 		// half-populated cache that subsequent Get calls would trust.
+		// Log the first error so an operator can diagnose missing IAM
+		// permissions or SDK regressions without tailing per-service logs.
+		logging.Warnf("commitmentopts: probe aborted — account=%s: %v", account.ID, err)
 		return nil, ErrNoData
 	}
 

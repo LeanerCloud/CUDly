@@ -292,17 +292,17 @@ export async function fetchAndPopulateCommitmentOptions(fetchFn?: FetchLike): Pr
 
   const awsConfigs = commitmentConfigs.aws ?? (commitmentConfigs.aws = {});
   for (const [service, supportedCombos] of Object.entries(body.aws)) {
-    const existing = awsConfigs[service];
-    const base: CommitmentConfig = existing ?? { terms: STANDARD_TERMS, payments: AWS_PAYMENTS };
-
-    // Derive invalidCombinations as the set difference of (terms × payments)
-    // minus the supported tuples the server returned.
+    // Always diff against the canonical STANDARD_TERMS × AWS_PAYMENTS
+    // product, not against the existing (possibly-narrowed-from-a-prior-
+    // overlay) entry. Otherwise, when the server widens its supported set
+    // on a later fetch, we'd be computing the intersection against a
+    // stale narrow base and the UI would stay restrictive.
     const supportedKeys = new Set(
       supportedCombos.map(c => `${c.term}:${c.payment}`)
     );
     const invalid: Array<{ term: number; payment: string }> = [];
-    for (const term of base.terms) {
-      for (const payment of base.payments) {
+    for (const term of STANDARD_TERMS) {
+      for (const payment of AWS_PAYMENTS) {
         if (!supportedKeys.has(`${term.value}:${payment.value}`)) {
           invalid.push({ term: term.value, payment: payment.value });
         }
@@ -310,8 +310,8 @@ export async function fetchAndPopulateCommitmentOptions(fetchFn?: FetchLike): Pr
     }
 
     awsConfigs[service] = {
-      terms: base.terms,
-      payments: base.payments,
+      terms: STANDARD_TERMS,
+      payments: AWS_PAYMENTS,
       invalidCombinations: invalid.length > 0 ? invalid : undefined,
     };
   }

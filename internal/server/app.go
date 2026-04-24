@@ -600,6 +600,13 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 			if err != nil {
 				return aws.Config{}, err
 			}
+			// us-east-1 hardcoded because reserved offerings are global
+			// facts (not AZ-scoped), and us-east-1 has the widest
+			// instance-type coverage. This fails silently for GovCloud
+			// / China-partition accounts — those return ErrNoData from
+			// the probe and the frontend falls back to hardcoded rules,
+			// which is acceptable since those partitions rarely need
+			// dynamic commitment detection.
 			return awsconfig.LoadDefaultConfig(ctx,
 				awsconfig.WithCredentialsProvider(prov),
 				awsconfig.WithRegion("us-east-1"),
