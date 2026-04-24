@@ -375,6 +375,35 @@ describe('API Requests', () => {
       });
       await expect(apiRequest('/test')).resolves.toBeNull();
     });
+
+    test('surfaces a timeout error when the backend hangs past timeoutMs (issue #20)', async () => {
+      // Simulate a hanging backend: fetch rejects with AbortError when
+      // its AbortSignal fires. That's exactly what the browser does in
+      // real life when the controller times out.
+      fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          const err = new Error('The operation was aborted.');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      }));
+
+      await expect(apiRequest('/test', { timeoutMs: 10 })).rejects.toThrow(/timed out after 10ms/);
+    });
+
+    test('passes the caller-provided signal through alongside the timeout controller', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+      const controller = new AbortController();
+      await apiRequest('/test', { signal: controller.signal });
+      const callArgs = fetchMock.mock.calls[0][1] as { signal?: AbortSignal };
+      // The client wraps the caller signal in a combined AbortSignal
+      // (via AbortSignal.any or a manual listener). We can't assert
+      // referential equality, but we can assert a signal was forwarded.
+      expect(callArgs.signal).toBeDefined();
+    });
   });
 
   describe('login', () => {

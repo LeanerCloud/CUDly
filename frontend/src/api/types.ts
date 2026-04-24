@@ -519,4 +519,11 @@ export interface ApiError extends Error {
 
 export interface RequestOptions extends RequestInit {
   headers?: Record<string, string>;
+  /**
+   * Hard timeout for the request in milliseconds. Defaults to
+   * DEFAULT_API_TIMEOUT_MS (90 000) in client.ts; pass `0` to disable
+   * the timeout (e.g. for long-running admin flows that genuinely
+   * need to block) or a smaller value for cheap endpoints.
+   */
+  timeoutMs?: number;
 }
