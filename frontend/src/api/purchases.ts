@@ -11,12 +11,19 @@ import type {
 } from './types';
 
 /**
- * Execute purchases
+ * Execute purchases. capacity_percent is the user's bulk-toolbar
+ * choice (1..100), recorded on the execution for audit; backend
+ * math uses the already-scaled counts in the recommendations list.
+ * Omit or pass 100 for "full capacity" (default).
  */
-export async function executePurchase(recommendations: Recommendation[]): Promise<PurchaseResult> {
+export async function executePurchase(recommendations: Recommendation[], capacityPercent?: number): Promise<PurchaseResult> {
+  const body: { recommendations: Recommendation[]; capacity_percent?: number } = { recommendations };
+  if (capacityPercent !== undefined && capacityPercent !== 100) {
+    body.capacity_percent = capacityPercent;
+  }
   return apiRequest<PurchaseResult>('/purchases/execute', {
     method: 'POST',
-    body: JSON.stringify({ recommendations })
+    body: JSON.stringify(body)
   });
 }
 

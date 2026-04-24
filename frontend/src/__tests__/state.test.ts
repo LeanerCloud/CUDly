@@ -9,7 +9,7 @@ import {
   setCurrentProvider,
   getRecommendations,
   setRecommendations,
-  getSelectedRecommendations,
+  getSelectedRecommendationIDs,
   clearSelectedRecommendations,
   addSelectedRecommendation,
   removeSelectedRecommendation,
@@ -118,57 +118,57 @@ describe('State Module', () => {
   });
 
   describe('Selected Recommendations State', () => {
-    test('getSelectedRecommendations returns empty Set initially', () => {
-      const selected = getSelectedRecommendations();
+    test('getSelectedRecommendationIDs returns empty Set initially', () => {
+      const selected = getSelectedRecommendationIDs();
       expect(selected.size).toBe(0);
     });
 
-    test('addSelectedRecommendation adds index to set', () => {
-      addSelectedRecommendation(0);
-      addSelectedRecommendation(2);
-      addSelectedRecommendation(5);
+    test('addSelectedRecommendation adds id to set', () => {
+      addSelectedRecommendation('rec-0');
+      addSelectedRecommendation('rec-2');
+      addSelectedRecommendation('rec-5');
 
-      const selected = getSelectedRecommendations();
+      const selected = getSelectedRecommendationIDs();
       expect(selected.size).toBe(3);
-      expect(selected.has(0)).toBe(true);
-      expect(selected.has(2)).toBe(true);
-      expect(selected.has(5)).toBe(true);
-      expect(selected.has(1)).toBe(false);
+      expect(selected.has('rec-0')).toBe(true);
+      expect(selected.has('rec-2')).toBe(true);
+      expect(selected.has('rec-5')).toBe(true);
+      expect(selected.has('rec-1')).toBe(false);
     });
 
-    test('removeSelectedRecommendation removes index from set', () => {
-      addSelectedRecommendation(0);
-      addSelectedRecommendation(1);
-      addSelectedRecommendation(2);
+    test('removeSelectedRecommendation removes id from set', () => {
+      addSelectedRecommendation('rec-0');
+      addSelectedRecommendation('rec-1');
+      addSelectedRecommendation('rec-2');
 
-      removeSelectedRecommendation(1);
+      removeSelectedRecommendation('rec-1');
 
-      const selected = getSelectedRecommendations();
+      const selected = getSelectedRecommendationIDs();
       expect(selected.size).toBe(2);
-      expect(selected.has(0)).toBe(true);
-      expect(selected.has(1)).toBe(false);
-      expect(selected.has(2)).toBe(true);
+      expect(selected.has('rec-0')).toBe(true);
+      expect(selected.has('rec-1')).toBe(false);
+      expect(selected.has('rec-2')).toBe(true);
     });
 
     test('clearSelectedRecommendations clears all selections', () => {
-      addSelectedRecommendation(0);
-      addSelectedRecommendation(1);
-      addSelectedRecommendation(2);
+      addSelectedRecommendation('rec-0');
+      addSelectedRecommendation('rec-1');
+      addSelectedRecommendation('rec-2');
 
       clearSelectedRecommendations();
 
-      expect(getSelectedRecommendations().size).toBe(0);
+      expect(getSelectedRecommendationIDs().size).toBe(0);
     });
 
-    test('adding same index twice does not duplicate', () => {
-      addSelectedRecommendation(0);
-      addSelectedRecommendation(0);
+    test('adding same id twice does not duplicate', () => {
+      addSelectedRecommendation('rec-0');
+      addSelectedRecommendation('rec-0');
 
-      expect(getSelectedRecommendations().size).toBe(1);
+      expect(getSelectedRecommendationIDs().size).toBe(1);
     });
 
-    test('removing non-existent index does not throw', () => {
-      expect(() => removeSelectedRecommendation(999)).not.toThrow();
+    test('removing non-existent id does not throw', () => {
+      expect(() => removeSelectedRecommendation('rec-999')).not.toThrow();
     });
   });
 
@@ -211,13 +211,13 @@ describe('State Module', () => {
         selected: true,
         purchased: false,
       }]);
-      addSelectedRecommendation(0);
+      addSelectedRecommendation('rec-0');
 
       // Verify all state is correct
       expect(getCurrentUser()?.email).toBe('a@b.com');
       expect(getCurrentProvider()).toBe('aws');
       expect(getRecommendations().length).toBe(1);
-      expect(getSelectedRecommendations().has(0)).toBe(true);
+      expect(getSelectedRecommendationIDs().has('rec-0')).toBe(true);
     });
   });
 });

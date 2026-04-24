@@ -58,7 +58,11 @@ export function setRecommendations(recs: AppState['currentRecommendations']) {
   state.currentRecommendations = recs;
 }
 
-export function getSelectedRecommendations(): ReadonlySet<number> {
+// getSelectedRecommendationIDs returns a snapshot of currently-selected
+// rec IDs. Callers intersect this with the visible (post-filter) list
+// to resolve "selected AND visible" — selections outside the filter
+// are silently ignored as stale.
+export function getSelectedRecommendationIDs(): ReadonlySet<string> {
   return new Set(state.selectedRecommendations);
 }
 
@@ -66,12 +70,12 @@ export function clearSelectedRecommendations() {
   state.selectedRecommendations.clear();
 }
 
-export function addSelectedRecommendation(index: number) {
-  state.selectedRecommendations.add(index);
+export function addSelectedRecommendation(id: string) {
+  state.selectedRecommendations.add(id);
 }
 
-export function removeSelectedRecommendation(index: number) {
-  state.selectedRecommendations.delete(index);
+export function removeSelectedRecommendation(id: string) {
+  state.selectedRecommendations.delete(id);
 }
 
 export function getSavingsChart() {

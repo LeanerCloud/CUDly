@@ -519,10 +519,10 @@ export async function savePlan(e: Event): Promise<void> {
     plan.custom_interval_days = parseInt((document.getElementById('ramp-interval-days') as HTMLInputElement).value, 10);
   }
 
-  const selectedRecs = state.getSelectedRecommendations();
-  if (selectedRecs.size > 0) {
+  const selectedIDs = state.getSelectedRecommendationIDs();
+  if (selectedIDs.size > 0) {
     const currentRecs = state.getRecommendations();
-    plan.recommendations = Array.from(selectedRecs).map(i => currentRecs[i] as api.Recommendation);
+    plan.recommendations = currentRecs.filter((r) => selectedIDs.has(r.id)) as api.Recommendation[];
   }
 
   try {
@@ -670,8 +670,8 @@ async function setupPlanAccountsSection(planId?: string): Promise<void> {
  * Open create plan modal with selected recommendations
  */
 export function openCreatePlanModal(): void {
-  const selectedRecs = state.getSelectedRecommendations();
-  if (selectedRecs.size === 0) {
+  const selectedIDs = state.getSelectedRecommendationIDs();
+  if (selectedIDs.size === 0) {
     showToast({ message: 'Please select at least one recommendation', kind: 'warning' });
     return;
   }

@@ -272,9 +272,11 @@ async function handleExecutePurchase(): Promise<void> {
   });
   if (!ok) return;
 
-  // Map LocalRecommendation to API Recommendation format
-  const apiRecs: api.Recommendation[] = localRecs.map((r, i) => ({
-    id: `rec-${i}`,
+  // Map LocalRecommendation to API Recommendation format. The counts +
+  // costs here are already scaled by the bulk-toolbar's capacity % so
+  // the backend records exactly what the user saw in the preview.
+  const apiRecs: api.Recommendation[] = localRecs.map((r) => ({
+    id: r.id,
     provider: r.provider,
     service: r.service,
     region: r.region,
@@ -282,12 +284,20 @@ async function handleExecutePurchase(): Promise<void> {
     count: r.count,
     term: r.term,
     payment: 'all-upfront',
-    upfront_cost: 0,
-    monthly_cost: 0,
+    upfront_cost: r.upfront_cost,
+    monthly_cost: r.monthly_cost ?? 0,
     savings: r.savings,
     selected: true,
     purchased: false,
   }));
+
+  // Read the sticky toolbar Capacity % so the execution record carries
+  // the user's intent in audit logs. Graceful fallback to 100 if the
+  // toolbar hasn't rendered yet (e.g. direct test harness call).
+  const capacityInput = document.getElementById('bulk-purchase-capacity') as HTMLInputElement | null;
+  const capacityPercent = capacityInput
+    ? Math.max(1, Math.min(100, parseInt(capacityInput.value, 10) || 100))
+    : 100;
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
@@ -296,7 +306,7 @@ async function handleExecutePurchase(): Promise<void> {
   }
 
   try {
-    const result = await api.executePurchase(apiRecs);
+    const result = await api.executePurchase(apiRecs, capacityPercent);
     closePurchaseModal();
     clearPurchaseModalRecommendations();
 

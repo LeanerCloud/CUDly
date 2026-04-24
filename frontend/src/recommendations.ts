@@ -7,6 +7,8 @@ import * as state from './state';
 import { formatCurrency, formatTerm, escapeHtml, populateAccountFilter, formatRelativeTime } from './utils';
 import { renderFreshness } from './freshness';
 import { getRecommendationsFreshness } from './api/recommendations';
+import { showToast } from './toast';
+import { isPaymentSupported, type Provider as CompatProvider } from './lib/purchase-compatibility';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 
 // Module state for current purchase modal recommendations
@@ -221,10 +223,7 @@ function renderBulkToolbar(container: HTMLElement, recommendations: LocalRecomme
   addBtn.className = 'btn btn-small btn-primary';
   addBtn.textContent = 'Add to plan';
   addBtn.addEventListener('click', () => {
-    const indices = Array.from(state.getSelectedRecommendations());
-    const picks = indices
-      .map((i) => recommendations[i])
-      .filter((r): r is LocalRecommendation => r !== undefined);
+    const picks = selectedRecsFromVisible(recommendations);
     if (picks.length > 0) openPurchaseModal(picks);
   });
   toolbar.appendChild(addBtn);
@@ -240,6 +239,15 @@ function renderBulkToolbar(container: HTMLElement, recommendations: LocalRecomme
   toolbar.appendChild(clearBtn);
 
   container.insertBefore(toolbar, container.firstChild);
+}
+
+// selectedRecsFromVisible returns the intersection of state-selected
+// IDs with the currently-visible list. Out-of-view selection is
+// silently discarded — the user filtered it out, so it shouldn't
+// affect the bulk action.
+function selectedRecsFromVisible(recommendations: LocalRecommendation[]): LocalRecommendation[] {
+  const selected = state.getSelectedRecommendationIDs();
+  return recommendations.filter((r) => selected.has(r.id));
 }
 
 function openDetailDrawer(rec: LocalRecommendation): void {
@@ -381,7 +389,7 @@ function providerDisplayName(provider: string): string {
   }
 }
 
-function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<number>): string {
+function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
   const sorted = sortedRecommendations(recommendations);
   const sortHeader = (column: string): string =>
@@ -403,37 +411,255 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
           ${sortHeader('term')}
           ${sortHeader('savings')}
           ${sortHeader('upfront_cost')}
-          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         ${sorted.map((rec) => {
-          const index = recommendations.indexOf(rec);
           const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
-          const isSelected = selectedRecs.has(index);
+          const isSelected = selectedRecs.has(rec.id);
           const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '\u2014';
+          const badge = renderSuppressionBadge(rec);
+          const recId = escapeHtml(rec.id);
           return `
-          <tr class="recommendation-row ${savingsClass} ${isSelected ? 'selected' : ''}" data-index="${index}">
+          <tr class="recommendation-row ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
             <td class="checkbox-col">
-              <input type="checkbox" data-index="${index}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation ${index + 1}">
+              <input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">
             </td>
             <td><span class="provider-badge ${rec.provider}">${rec.provider.toUpperCase()}</span></td>
             <td>${escapeHtml(accountName)}</td>
             <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
-            <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</td>
+            <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${badge}</td>
             <td>${escapeHtml(rec.region)}</td>
             <td>${rec.count}</td>
             <td>${formatTerm(rec.term)}</td>
             <td class="savings">${formatCurrency(rec.savings)}</td>
             <td>${formatCurrency(rec.upfront_cost)}</td>
-            <td>
-              <button data-action="purchase" data-index="${index}">Purchase</button>
-            </td>
           </tr>`;
         }).join('')}
       </tbody>
     </table>
   `;
+}
+
+// renderSuppressionBadge returns HTML for the "recently purchased"
+// indicator shown on recs the scheduler has annotated with an active
+// purchase_suppression. Deep-links to Purchase History filtered to
+// the execution whose suppression contributed the most. Returns ''
+// when no suppression applies or the suppression has expired
+// (defence-in-depth \u2014 the scheduler should have dropped such recs).
+//
+//   {suppressed} = rec.suppressed_count
+//   {original}   = rec.count + rec.suppressed_count (rec.count is
+//                  already post-subtraction)
+//   {days}       = ceil((expires_at - now) / 24h), so 23h59m renders
+//                  as "1d remaining" rather than "0d".
+function renderSuppressionBadge(rec: LocalRecommendation): string {
+  const suppressed = rec.suppressed_count ?? 0;
+  if (suppressed <= 0) return '';
+  const original = rec.count + suppressed;
+  const expiresRaw = rec.suppression_expires_at;
+  if (!expiresRaw) return '';
+  const diffMs = new Date(expiresRaw).getTime() - Date.now();
+  if (diffMs <= 0) return '';
+  const days = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+  const execID = rec.primary_suppression_execution_id;
+  const href = execID ? `#history?execution=${encodeURIComponent(execID)}` : '#history';
+  return ` <a class="rec-suppression-badge" href="${href}" title="Capacity from recent purchase; not re-proposed until it expires.">recently purchased ${suppressed}/${original} \u2014 ${days}d remaining</a>`;
+}
+
+// BULK_PURCHASE_LS_KEY holds the persisted Term/Payment/Capacity values
+// so the toolbar remembers the user's last choice across page reloads.
+// Versioned so we can migrate the shape in future without blowing up on
+// a stale cached blob.
+const BULK_PURCHASE_LS_KEY = 'cudly.recommendations.bulkPurchase.v1';
+
+interface BulkPurchaseToolbarState {
+  term: 1 | 3;
+  payment: 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
+  capacity: number; // 1..100
+}
+
+const defaultBulkPurchaseState: BulkPurchaseToolbarState = {
+  term: 3,
+  payment: 'all-upfront',
+  capacity: 100,
+};
+
+// loadBulkPurchaseState reads the toolbar state from localStorage with
+// a try/catch around JSON.parse — a garbage value shouldn't blow up the
+// page render; defaults take over and the next Save overwrites.
+function loadBulkPurchaseState(): BulkPurchaseToolbarState {
+  try {
+    const raw = localStorage.getItem(BULK_PURCHASE_LS_KEY);
+    if (!raw) return { ...defaultBulkPurchaseState };
+    const parsed = JSON.parse(raw) as Partial<BulkPurchaseToolbarState>;
+    return {
+      term: parsed.term === 1 ? 1 : 3,
+      payment: parsed.payment || 'all-upfront',
+      capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
+    };
+  } catch {
+    return { ...defaultBulkPurchaseState };
+  }
+}
+
+function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
+  try {
+    localStorage.setItem(BULK_PURCHASE_LS_KEY, JSON.stringify(s));
+  } catch {
+    // Private-browsing / quota-exceeded — non-fatal, just lose the
+    // sticky choice. The toolbar still works in-session.
+  }
+}
+
+// renderTopBulkPurchaseToolbar renders the always-visible toolbar above
+// the recs list with Term / Payment / Capacity % controls and the
+// Purchase button. Wired via ID-based selection: when no rows are
+// selected the Purchase action targets the full visible list; with
+// any selection, only the selected-and-visible subset.
+function renderTopBulkPurchaseToolbar(container: HTMLElement, recommendations: LocalRecommendation[]): void {
+  const existing = container.querySelector('.recommendations-top-toolbar');
+  if (existing) existing.remove();
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'recommendations-top-toolbar';
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', 'Bulk purchase controls');
+
+  const tbState = loadBulkPurchaseState();
+
+  const termLabel = document.createElement('label');
+  termLabel.innerHTML = 'Term: ';
+  const termSelect = document.createElement('select');
+  termSelect.id = 'bulk-purchase-term';
+  [['1', '1 Year'], ['3', '3 Years']].forEach(([v, t]) => {
+    const opt = document.createElement('option');
+    opt.value = v as string;
+    opt.textContent = t as string;
+    if (Number(v) === tbState.term) opt.selected = true;
+    termSelect.appendChild(opt);
+  });
+  termLabel.appendChild(termSelect);
+  toolbar.appendChild(termLabel);
+
+  const paymentLabel = document.createElement('label');
+  paymentLabel.innerHTML = 'Payment: ';
+  const paymentSelect = document.createElement('select');
+  paymentSelect.id = 'bulk-purchase-payment';
+  [['all-upfront', 'All Upfront'], ['partial-upfront', 'Partial Upfront'], ['no-upfront', 'No Upfront'], ['monthly', 'Monthly']].forEach(([v, t]) => {
+    const opt = document.createElement('option');
+    opt.value = v as string;
+    opt.textContent = t as string;
+    if (v === tbState.payment) opt.selected = true;
+    paymentSelect.appendChild(opt);
+  });
+  paymentLabel.appendChild(paymentSelect);
+  toolbar.appendChild(paymentLabel);
+
+  const capacityLabel = document.createElement('label');
+  capacityLabel.innerHTML = 'Capacity %: ';
+  const capacityInput = document.createElement('input');
+  capacityInput.id = 'bulk-purchase-capacity';
+  capacityInput.type = 'number';
+  capacityInput.min = '1';
+  capacityInput.max = '100';
+  capacityInput.step = '1';
+  capacityInput.value = String(tbState.capacity);
+  capacityLabel.appendChild(capacityInput);
+  toolbar.appendChild(capacityLabel);
+
+  const purchaseBtn = document.createElement('button');
+  purchaseBtn.type = 'button';
+  purchaseBtn.className = 'btn btn-primary';
+  purchaseBtn.id = 'bulk-purchase-btn';
+  purchaseBtn.textContent = 'Purchase…';
+  purchaseBtn.disabled = recommendations.length === 0;
+  if (purchaseBtn.disabled) purchaseBtn.title = 'No recommendations to purchase';
+  toolbar.appendChild(purchaseBtn);
+
+  const persist = (): void => {
+    saveBulkPurchaseState({
+      term: (Number(termSelect.value) === 1 ? 1 : 3) as 1 | 3,
+      payment: paymentSelect.value as BulkPurchaseToolbarState['payment'],
+      capacity: Math.max(1, Math.min(100, parseInt(capacityInput.value, 10) || 100)),
+    });
+  };
+  termSelect.addEventListener('change', persist);
+  paymentSelect.addEventListener('change', persist);
+  capacityInput.addEventListener('change', persist);
+
+  purchaseBtn.addEventListener('click', () => {
+    handleBulkPurchaseClick(recommendations);
+  });
+
+  container.insertBefore(toolbar, container.firstChild);
+}
+
+function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
+  const tb = loadBulkPurchaseState();
+  const selected = selectedRecsFromVisible(recommendations);
+  const target = selected.length > 0 ? selected : recommendations;
+  if (target.length === 0) {
+    showToast({ message: 'No recommendations to purchase.', kind: 'warning' });
+    return;
+  }
+
+  // Scale by capacity %; drop rows whose scaled count floors to 0.
+  const scaled: LocalRecommendation[] = [];
+  for (const r of target) {
+    const newCount = Math.floor((r.count * tb.capacity) / 100);
+    if (newCount <= 0) continue;
+    const ratio = r.count > 0 ? newCount / r.count : 1;
+    scaled.push({
+      ...r,
+      count: newCount,
+      upfront_cost: r.upfront_cost * ratio,
+      monthly_cost: (r.monthly_cost ?? 0) * ratio,
+      savings: r.savings * ratio,
+    });
+  }
+  if (scaled.length === 0) {
+    showToast({
+      message: `Capacity ${tb.capacity}% produces no whole-number purchases from the current selection. Try a higher %.`,
+      kind: 'warning',
+    });
+    return;
+  }
+
+  // Bucket by (provider, service) — the compatibility check runs per
+  // bucket since e.g. AWS EC2 accepts no-upfront but AWS RDS doesn't
+  // for 3yr.
+  const buckets = new Map<string, LocalRecommendation[]>();
+  for (const r of scaled) {
+    const key = `${r.provider}|${r.service}`;
+    const existing = buckets.get(key);
+    if (existing) existing.push(r);
+    else buckets.set(key, [r]);
+  }
+  const bucketEntries = Array.from(buckets.entries());
+
+  // Check compatibility per bucket. A bucket with an unsupported
+  // (term, payment) combo is just as problematic as having multiple
+  // providers — neither case can proceed with a single POST.
+  const incompatible = bucketEntries.filter(([key]) => {
+    const [provider, service] = key.split('|') as [CompatProvider, string];
+    return !isPaymentSupported(provider, service, tb.term as 1 | 3, tb.payment);
+  });
+
+  if (bucketEntries.length > 1 || incompatible.length > 0) {
+    showToast({
+      message:
+        'Multi-provider/service bulk purchase arrives in the next release. Narrow the filter to one provider+service (and compatible payment option) to proceed.',
+      kind: 'warning',
+      timeout: 10_000,
+    });
+    return;
+  }
+
+  // Single-bucket happy path: open the preview modal + submit via the
+  // existing execute-purchase flow. The modal's "Execute Purchase" button
+  // (wired in app.ts) picks up the recs via getPurchaseModalRecommendations.
+  openPurchaseModal(scaled);
 }
 
 function renderRecommendationsList(recommendations: LocalRecommendation[]): void {
@@ -442,15 +668,24 @@ function renderRecommendationsList(recommendations: LocalRecommendation[]): void
 
   if (!recommendations || recommendations.length === 0) {
     container.innerHTML = '<p class="empty">No recommendations found. Try adjusting filters or refreshing.</p>';
+    renderTopBulkPurchaseToolbar(container, []);
     return;
   }
 
-  const selectedRecs = state.getSelectedRecommendations();
+  const selectedIDs = state.getSelectedRecommendationIDs();
   // Dynamic table markup: every caller-provided value passes through
   // escapeHtml or is a number. The string is built in buildListMarkup.
-  container.innerHTML = buildListMarkup(recommendations, selectedRecs);
+  container.innerHTML = buildListMarkup(recommendations, selectedIDs);
 
-  renderBulkToolbar(container, recommendations, selectedRecs.size);
+  // Count only the intersection with currently-visible recs so the
+  // selection toolbar's "N selected" doesn't include stale selections
+  // that live outside the current filter.
+  const visibleSelectedCount = recommendations.reduce(
+    (n, r) => n + (selectedIDs.has(r.id) ? 1 : 0),
+    0,
+  );
+  renderBulkToolbar(container, recommendations, visibleSelectedCount);
+  renderTopBulkPurchaseToolbar(container, recommendations);
 
   // Sortable column headers. Toggle ascending/descending on repeat click.
   container.querySelectorAll<HTMLTableCellElement>('th.sortable').forEach((th) => {
@@ -479,7 +714,7 @@ function renderRecommendationsList(recommendations: LocalRecommendation[]): void
   if (selectAllCheckbox) {
     selectAllCheckbox.addEventListener('change', () => {
       if (selectAllCheckbox.checked) {
-        recommendations.forEach((_, i) => state.addSelectedRecommendation(i));
+        recommendations.forEach((r) => state.addSelectedRecommendation(r.id));
       } else {
         state.clearSelectedRecommendations();
       }
@@ -487,35 +722,33 @@ function renderRecommendationsList(recommendations: LocalRecommendation[]): void
     });
   }
 
-  container.querySelectorAll<HTMLInputElement>('input[data-index]').forEach(cb => {
+  // ID-keyed selection toggles. data-rec-id persists across filter
+  // changes so a stale selection from a previous filter is a no-op
+  // once the user narrows, rather than pointing at whichever rec
+  // happens to occupy the old index position.
+  container.querySelectorAll<HTMLInputElement>('input[data-rec-id]').forEach(cb => {
     cb.addEventListener('change', () => {
-      const idx = parseInt(cb.dataset['index'] || '0', 10);
+      const id = cb.dataset['recId'] || '';
+      if (!id) return;
       if (cb.checked) {
-        state.addSelectedRecommendation(idx);
+        state.addSelectedRecommendation(id);
       } else {
-        state.removeSelectedRecommendation(idx);
+        state.removeSelectedRecommendation(id);
       }
       renderRecommendationsList(recommendations);
     });
   });
 
-  container.querySelectorAll<HTMLButtonElement>('[data-action="purchase"]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset['index'] || '0', 10);
-      openPurchaseModal([recommendations[idx] as LocalRecommendation]);
-    });
-  });
-
   // Row-click opens the detail drawer — skip clicks that originated on
-  // the checkbox or per-row button (so those still flow through to their
-  // own handlers without also triggering the drawer).
+  // the checkbox or any interactive child (anchors, buttons) so those
+  // flow through to their own handlers without also triggering the
+  // drawer.
   container.querySelectorAll<HTMLTableRowElement>('tr.recommendation-row').forEach((tr) => {
     tr.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
-      if (target.closest('input[type="checkbox"], button')) return;
-      const idx = parseInt(tr.dataset['index'] || '0', 10);
-      const rec = recommendations[idx];
+      if (target.closest('input[type="checkbox"], button, a')) return;
+      const id = tr.dataset['recId'] || '';
+      const rec = recommendations.find((r) => r.id === id);
       if (rec) openDetailDrawer(rec);
     });
   });

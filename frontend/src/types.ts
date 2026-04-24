@@ -11,7 +11,12 @@ export interface AppState {
   currentProvider: api.Provider | '';
   currentAccountIDs: string[]; // selected account UUIDs; empty = all accounts
   currentRecommendations: api.Recommendation[];
-  selectedRecommendations: Set<number>;
+  // selectedRecommendations holds rec IDs (not indices). ID-keyed
+  // storage survives filter changes that would reshuffle index
+  // positions — selecting row 3 and then changing filter used to
+  // mean "row 3 is selected" relative to the new list, i.e. some
+  // other rec the user never clicked.
+  selectedRecommendations: Set<string>;
   savingsChart: Chart | null;
 }
 
@@ -51,6 +56,7 @@ export interface RecommendationsResponse {
 }
 
 export interface LocalRecommendation {
+  id: string;
   provider: api.Provider;
   service: string;
   resource_type: string;
@@ -60,7 +66,16 @@ export interface LocalRecommendation {
   term: number;
   savings: number;
   upfront_cost: number;
+  monthly_cost?: number;
   cloud_account_id?: string;
+  // Populated by the scheduler when any active purchase_suppression
+  // matches this rec's 6-tuple. The three fields drive the "recently
+  // purchased N/M — Xd remaining" badge. Absent / 0 means no active
+  // suppression (badge hidden). Added in Commit 2 of the bulk-purchase-
+  // with-grace feature.
+  suppressed_count?: number;
+  suppression_expires_at?: string;
+  primary_suppression_execution_id?: string;
 }
 
 export interface RecommendationsSummary {

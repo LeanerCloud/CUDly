@@ -25,7 +25,7 @@ jest.mock('../api', () => ({
 // Mock state module
 jest.mock('../state', () => ({
   getRecommendations: jest.fn().mockReturnValue([]),
-  getSelectedRecommendations: jest.fn().mockReturnValue(new Set())
+  getSelectedRecommendationIDs: jest.fn().mockReturnValue(new Set())
 }));
 
 // Mock history module
@@ -804,7 +804,7 @@ describe('Plans Module', () => {
     });
 
     test('includes selected recommendations', async () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0, 1]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0, 1]));
       (state.getRecommendations as jest.Mock).mockReturnValue([
         { id: 'rec-1', service: 'ec2' },
         { id: 'rec-2', service: 'rds' }
@@ -897,7 +897,7 @@ describe('Plans Module', () => {
 
   describe('openCreatePlanModal', () => {
     test('shows alert when no recommendations selected', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set());
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
 
       openCreatePlanModal();
 
@@ -905,7 +905,7 @@ describe('Plans Module', () => {
     });
 
     test('opens modal when recommendations are selected', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
 
       openCreatePlanModal();
 
@@ -914,7 +914,7 @@ describe('Plans Module', () => {
     });
 
     test('sets correct title', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
 
       openCreatePlanModal();
 
@@ -923,7 +923,7 @@ describe('Plans Module', () => {
     });
 
     test('clears plan ID for new plan', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       (document.getElementById('plan-id') as HTMLInputElement).value = 'existing-plan';
 
       openCreatePlanModal();
@@ -934,7 +934,7 @@ describe('Plans Module', () => {
 
   describe('openNewPlanModal', () => {
     test('opens modal without requiring selected recommendations', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set());
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
 
       openNewPlanModal();
 
@@ -1563,7 +1563,7 @@ describe('Plans Module', () => {
 
   describe('ramp schedule form handlers', () => {
     test('generates plan name based on immediate schedule', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       const planNameInput = document.getElementById('plan-name') as HTMLInputElement;
@@ -1571,7 +1571,7 @@ describe('Plans Module', () => {
     });
 
     test('generates plan name based on weekly-25pct schedule', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       const weeklyRadio = document.querySelector('input[value="weekly-25pct"]') as HTMLInputElement;
@@ -1583,7 +1583,7 @@ describe('Plans Module', () => {
     });
 
     test('generates plan name based on monthly-10pct schedule', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       const monthlyRadio = document.querySelector('input[value="monthly-10pct"]') as HTMLInputElement;
@@ -1595,7 +1595,7 @@ describe('Plans Module', () => {
     });
 
     test('generates plan name based on custom schedule', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       const customRadio = document.querySelector('input[value="custom"]') as HTMLInputElement;
@@ -1607,7 +1607,7 @@ describe('Plans Module', () => {
     });
 
     test('custom schedule fields update plan name', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       const customRadio = document.querySelector('input[value="custom"]') as HTMLInputElement;
@@ -1623,7 +1623,7 @@ describe('Plans Module', () => {
     });
 
     test('does not update plan name when editing existing plan', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       // Set a plan ID to simulate editing
@@ -1640,7 +1640,7 @@ describe('Plans Module', () => {
     });
 
     test('updates custom config fields from preset', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       // Select weekly-25pct
@@ -1656,7 +1656,7 @@ describe('Plans Module', () => {
     });
 
     test('updates custom config for monthly preset', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       const monthlyRadio = document.querySelector('input[value="monthly-10pct"]') as HTMLInputElement;
@@ -1671,7 +1671,7 @@ describe('Plans Module', () => {
     });
 
     test('updates custom config for immediate preset', () => {
-      (state.getSelectedRecommendations as jest.Mock).mockReturnValue(new Set([0]));
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
       openCreatePlanModal();
 
       // First switch to custom
