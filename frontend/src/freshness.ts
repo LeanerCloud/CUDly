@@ -14,6 +14,7 @@ import {
   refreshRecommendations as refreshAPI,
 } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
+import { showToast } from './toast';
 import { formatDate, formatRelativeTime } from './utils';
 
 /**
@@ -179,17 +180,45 @@ export async function renderFreshness(
   const bar = buildFreshnessBar(relTime, absTime, containerID, band);
   container.appendChild(bar);
 
-  const btn = document.getElementById(`${containerID}-refresh-btn`);
+  const btn = document.getElementById(`${containerID}-refresh-btn`) as HTMLButtonElement | null;
   btn?.addEventListener('click', () => {
     void (async () => {
-      btn.setAttribute('disabled', 'true');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Refreshing...';
+      const inFlight = showToast({
+        message: 'Refreshing recommendations…',
+        kind: 'info',
+        timeout: null,
+      });
       try {
         await refreshAPI();
         await onRefresh();
         await renderFreshness(containerID, onRefresh);
+        inFlight.dismiss();
+        showToast({
+          message: 'Recommendations refreshed',
+          kind: 'success',
+          timeout: 5_000,
+        });
       } catch (err) {
+        // Guard against non-Error throws: `(err as Error).message` would
+        // raise a TypeError if `err` were null/undefined, masking the real
+        // failure with a crash inside the error handler itself.
+        const message =
+          err instanceof Error
+            ? err.message
+            : err !== null && err !== undefined
+              ? String(err)
+              : 'unknown error';
         console.error('Refresh failed:', err);
-        btn.removeAttribute('disabled');
+        inFlight.dismiss();
+        showToast({
+          message: `Refresh failed: ${message}`,
+          kind: 'error',
+        });
+        btn.disabled = false;
+        btn.textContent = originalText;
       }
     })();
   });
