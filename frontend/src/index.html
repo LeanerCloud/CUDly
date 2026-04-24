@@ -1046,6 +1046,7 @@
                         <!-- client_secret mode -->
                         <div id="account-azure-secret-fields" class="hidden">
                             <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
+                            <small>Long-lived credential stored in CUDly. Prefer Workload Identity Federation (above) when possible &mdash; it uses CUDly's OIDC issuer so no secret is stored. If you keep this mode, rotate the client secret before its Azure expiry date to avoid authentication failures.</small>
                         </div>
                     </div>
 

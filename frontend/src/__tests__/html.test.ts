@@ -597,5 +597,17 @@ describe('HTML Structure', () => {
       const password = document.getElementById('user-password') as HTMLInputElement | null;
       expect(password?.getAttribute('minlength')).toBe('12');
     });
+
+    test('azure client-secret input carries a guidance hint (issue #15)', () => {
+      const secretFields = document.getElementById('account-azure-secret-fields');
+      expect(secretFields).not.toBeNull();
+      const small = secretFields?.querySelector('small');
+      expect(small).not.toBeNull();
+      // Confirm the copy steers operators away from storing a long-lived
+      // credential without spelling out a specific expiry policy the
+      // hint might drift from.
+      expect(small?.textContent).toMatch(/Workload Identity Federation/i);
+      expect(small?.textContent).toMatch(/rotate/i);
+    });
   });
 });
