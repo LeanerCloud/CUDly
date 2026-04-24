@@ -21,6 +21,7 @@ import {
   getRecommendationsFreshness,
   refreshRecommendations,
 } from '../api/recommendations';
+import type { RefreshRecommendationsResult } from '../api/recommendations';
 
 const mockedGet = getRecommendationsFreshness as jest.MockedFunction<typeof getRecommendationsFreshness>;
 const mockedRefresh = refreshRecommendations as jest.MockedFunction<typeof refreshRecommendations>;
@@ -118,6 +119,74 @@ test('refresh button triggers POST /recommendations/refresh + onRefresh callback
 
   expect(mockedRefresh).toHaveBeenCalledTimes(1);
   expect(onRefresh).toHaveBeenCalledTimes(1);
+});
+
+test('refresh button renames to "Refreshing..." while in flight, then emits a success toast', async () => {
+  const initial = new Date(Date.now() - 60 * 60_000).toISOString();
+  const refreshed = new Date().toISOString();
+  mockedGet
+    .mockResolvedValueOnce({ last_collected_at: initial, last_collection_error: null })
+    .mockResolvedValueOnce({ last_collected_at: refreshed, last_collection_error: null });
+
+  // Hold the refresh API open so we can observe the in-flight state
+  // before resolving.
+  let resolveRefresh: ((v: RefreshRecommendationsResult) => void) | null = null;
+  mockedRefresh.mockImplementation(
+    () => new Promise((r) => { resolveRefresh = r; }),
+  );
+  const onRefresh = jest.fn().mockResolvedValue(undefined);
+
+  await renderFreshness('fresh', onRefresh);
+
+  const btn = document.querySelector('#fresh-refresh-btn') as HTMLButtonElement;
+  btn.click();
+  // let the click handler run up to the awaited refreshAPI() call
+  await new Promise((r) => setTimeout(r, 0));
+
+  expect(btn.textContent).toBe('Refreshing...');
+  expect(btn.getAttribute('disabled')).toBe('true');
+
+  const inFlightToast = document.querySelector('#toast-container .toast-message');
+  expect(inFlightToast?.textContent).toBe('Refreshing recommendations…');
+
+  resolveRefresh!({ recommendations: 0, total_savings: 0 });
+  // drain the rest of the handler: refreshAPI → onRefresh → renderFreshness → toasts
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+
+  const toastMessages = Array.from(
+    document.querySelectorAll('#toast-container .toast-message'),
+  ).map((n) => n.textContent);
+  expect(toastMessages).toContain('Recommendations refreshed');
+
+  // Bar was re-rendered with the newer timestamp.
+  expect(document.querySelector('#fresh')!.textContent).toContain('Data from');
+});
+
+test('refresh button restores original text and surfaces an error toast on failure', async () => {
+  mockedGet.mockResolvedValue({
+    last_collected_at: new Date().toISOString(),
+    last_collection_error: null,
+  });
+  mockedRefresh.mockRejectedValue(new Error('boom'));
+  const onRefresh = jest.fn();
+
+  await renderFreshness('fresh', onRefresh);
+  const btn = document.querySelector('#fresh-refresh-btn') as HTMLButtonElement;
+  // Swallow the expected console.error from the handler so the test output stays clean.
+  const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  btn.click();
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+
+  expect(btn.textContent).toBe('Refresh');
+  expect(btn.hasAttribute('disabled')).toBe(false);
+  const toastMessages = Array.from(
+    document.querySelectorAll('#toast-container .toast-message'),
+  ).map((n) => n.textContent);
+  expect(toastMessages.some((m) => m?.includes('Refresh failed'))).toBe(true);
+  expect(onRefresh).not.toHaveBeenCalled();
+
+  spy.mockRestore();
 });
 
 test('silently no-ops when the container element is missing', async () => {
