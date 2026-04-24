@@ -1019,7 +1019,13 @@
                         </div>
                         <div id="account-aws-role-fields" class="hidden">
                             <label>Role ARN: <input type="text" id="account-aws-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
-                            <label>External ID (optional): <input type="text" id="account-aws-external-id" placeholder="Optional external ID"></label>
+                            <label>External ID:
+                                <span class="input-with-copy">
+                                    <input type="text" id="account-aws-external-id" readonly>
+                                    <button type="button" id="account-aws-external-id-copy" class="copy-btn" aria-label="Copy External ID to clipboard"><span class="copy-icon">Copy</span></button>
+                                </span>
+                            </label>
+                            <small>CUDly auto-generates this value per account. Copy it into the <code>sts:ExternalId</code> condition of your IAM role's trust policy so only CUDly with this account registered can assume the role.</small>
                         </div>
                         <div id="account-aws-bastion-fields" class="hidden">
                             <label>Bastion Account: <select id="account-aws-bastion-id"><option value="">Select bastion account...</option></select></label>

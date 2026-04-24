@@ -626,5 +626,19 @@ describe('HTML Structure', () => {
       expect(paySel?.querySelector('option[value="all-upfront"]')).not.toBeNull();
       expect(paySel?.querySelector('option[value="no-upfront"]')).not.toBeNull();
     });
+
+    test('aws external-id input is readonly with a copy button + trust-policy hint (issue #18)', () => {
+      const input = document.getElementById('account-aws-external-id') as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      expect(input?.hasAttribute('readonly')).toBe(true);
+      const copyBtn = document.getElementById('account-aws-external-id-copy');
+      expect(copyBtn).not.toBeNull();
+      expect(copyBtn?.classList.contains('copy-btn')).toBe(true);
+      // The hint must point operators at sts:ExternalId so they don't
+      // paste the wrong value into the trust policy.
+      const roleFields = document.getElementById('account-aws-role-fields');
+      const small = roleFields?.querySelector('small');
+      expect(small?.textContent).toMatch(/sts:ExternalId/);
+    });
   });
 });

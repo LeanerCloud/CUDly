@@ -337,6 +337,17 @@ describe('Account modal via setupSettingsHandlers', () => {
     expect(document.getElementById('account-aws-keys-fields')!.classList.contains('hidden')).toBe(false);
     expect(document.getElementById('account-aws-role-fields')!.classList.contains('hidden')).toBe(true);
   });
+
+  test('add-aws-account-btn auto-generates the External ID (issue #18)', () => {
+    document.getElementById('add-aws-account-btn')!.click();
+
+    const extID = document.getElementById('account-aws-external-id') as HTMLInputElement;
+    // UUIDs are 36 chars with dashes (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx);
+    // the test fixture doesn't set a readonly attribute (the production
+    // index.html does), so we only assert on the generated value here.
+    expect(extID.value).not.toBe('');
+    expect(extID.value.length).toBeGreaterThanOrEqual(16);
+  });
 });
 
 // ---------------------------------------------------------------------------
