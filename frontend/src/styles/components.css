@@ -1197,6 +1197,14 @@ tr.recommendation-row:hover {
     margin-top: 0.75rem;
 }
 
+/* Deep-link button to the AWS IAM console (issue #21). Sits below the
+   trust-policy snippet so the visual order matches the operator flow:
+   copy policy → open IAM → paste. */
+.trust-policy-section #account-aws-iam-console-link {
+    display: inline-block;
+    margin-top: 0.5rem;
+}
+
 /* CLI command display */
 .cli-command {
     display: flex;
