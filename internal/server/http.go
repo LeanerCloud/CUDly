@@ -53,6 +53,15 @@ func StartHTTPServer(app *Application, port int) error {
 	return server.ListenAndServe()
 }
 
+// htmlCSP is the Content-Security-Policy delivered with every HTML
+// response from either the container (securityHeaders middleware) or the
+// Lambda Function URL (lambdaSecurityHeaders). frame-ancestors 'none' is
+// the effective clickjacking gate — browsers ignore that directive in
+// <meta>, so it must come from the header. Shared between the two
+// delivery paths so they can't drift (issue #8 was partly caused by
+// exactly that kind of drift).
+const htmlCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
 // securityHeaders wraps a handler to add standard security headers to every response.
 // These headers were previously set by CDN (CloudFront/Front Door/GLB) but now need
 // to come from the server since static files are served directly from the container.
@@ -63,7 +72,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", htmlCSP)
 		next.ServeHTTP(w, r)
 	})
 }

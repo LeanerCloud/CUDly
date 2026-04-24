@@ -380,6 +380,18 @@ describe('HTML Structure', () => {
       expect(csp?.getAttribute('content')).toContain("default-src 'self'");
     });
 
+    // Regression guard for issue #8 — these three directives must NOT creep
+    // back into the meta tag. frame-ancestors is header-only (browsers ignore
+    // it in <meta>), and the two execute-api / lambda-url patterns are
+    // invalid mid-hostname wildcards that browsers silently drop.
+    test('meta CSP omits frame-ancestors and invalid wildcard hosts', () => {
+      const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+      const content = csp?.getAttribute('content') ?? '';
+      expect(content).not.toContain('frame-ancestors');
+      expect(content).not.toContain('*.execute-api.*.amazonaws.com');
+      expect(content).not.toContain('*.lambda-url.*.on.aws');
+    });
+
     test('has referrer policy meta tag', () => {
       const referrer = document.querySelector('meta[name="referrer"]');
       expect(referrer).toBeTruthy();

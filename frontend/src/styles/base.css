@@ -93,11 +93,6 @@ body {
     display: none;
 }
 
-/* Hidden utility class */
-.hidden {
-    display: none;
-}
-
 /* Margin utilities */
 .mt-2 {
     margin-top: 0.5rem;

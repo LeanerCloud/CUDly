@@ -137,7 +137,7 @@ func lambdaSecurityHeaders() map[string]string {
 		"X-Frame-Options":           "DENY",
 		"Referrer-Policy":           "strict-origin-when-cross-origin",
 		"Permissions-Policy":        "camera=(), microphone=(), geolocation=()",
-		"Content-Security-Policy":   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+		"Content-Security-Policy":   htmlCSP,
 	}
 }
 
