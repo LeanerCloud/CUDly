@@ -669,11 +669,7 @@ export async function loadAutomationSettings(): Promise<void> {
 
 function buildAutoWarningBanner(): HTMLDivElement {
   const banner = document.createElement('div');
-  banner.className = 'error-message';
-  banner.style.background = '#fff3e0';
-  banner.style.borderColor = '#fbbc04';
-  banner.style.color = '#e65100';
-  banner.style.marginBottom = '1rem';
+  banner.className = 'warning-message';
   const strong = document.createElement('strong');
   strong.textContent = 'Warning:';
   banner.appendChild(strong);

@@ -568,7 +568,7 @@ export function updateUserUI(): void {
     if (userEmailEl) {
       userEmailEl.textContent = currentUser.email;
       userEmailEl.title = 'Click to edit your profile';
-      userEmailEl.style.cursor = 'pointer';
+      userEmailEl.classList.add('cursor-pointer');
       // Replace element to avoid duplicate listeners on repeated calls
       const freshEmailEl = userEmailEl.cloneNode(true) as HTMLElement;
       userEmailEl.parentNode?.replaceChild(freshEmailEl, userEmailEl);
@@ -581,15 +581,15 @@ export function updateUserUI(): void {
     if (roleEl) {
       if (currentUser.role === 'admin') {
         roleEl.textContent = 'admin';
-        roleEl.style.display = '';
+        roleEl.classList.remove('hidden');
       } else {
         roleEl.textContent = '';
-        roleEl.style.display = 'none';
+        roleEl.classList.add('hidden');
       }
     }
     // Show the user info section
     if (userInfoEl) {
-      userInfoEl.style.display = 'flex';
+      userInfoEl.classList.remove('hidden');
     }
 
     const adminOnly = currentUser.role === 'admin';
@@ -599,10 +599,10 @@ export function updateUserUI(): void {
   } else {
     // Hide user info when not logged in
     if (userInfoEl) {
-      userInfoEl.style.display = 'none';
+      userInfoEl.classList.add('hidden');
     }
     if (roleEl) {
-      roleEl.style.display = 'none';
+      roleEl.classList.add('hidden');
     }
   }
 

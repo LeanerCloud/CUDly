@@ -92,14 +92,8 @@ function updateServiceFilterVisibility(provider: string): void {
   const optgroups = serviceFilter.querySelectorAll('optgroup');
   optgroups.forEach(optgroup => {
     const providerLabel = optgroup.label.toLowerCase();
-    if (provider === '') {
-      // Show all optgroups when "All Providers" is selected
-      (optgroup as HTMLOptGroupElement).style.display = '';
-    } else if (providerLabel.includes(provider)) {
-      (optgroup as HTMLOptGroupElement).style.display = '';
-    } else {
-      (optgroup as HTMLOptGroupElement).style.display = 'none';
-    }
+    const shouldShow = provider === '' || providerLabel.includes(provider);
+    optgroup.classList.toggle('hidden', !shouldShow);
   });
 
   // Reset selection to "All Services" when switching providers

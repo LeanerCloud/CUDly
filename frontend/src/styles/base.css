@@ -6,8 +6,9 @@ body {
     background: #f5f5f5;
 }
 
-/* Generic utilities — prefer these over inline `style="..."` attributes so
- * the CSP `style-src 'self'` directive doesn't block them at parse time. */
+/* Generic utilities — prefer these over inline `style="..."` attributes
+ * (parsed by HTML, blocked by CSP `style-src 'self'`) and over JS
+ * `element.style.*` mutations (not blocked by CSP but harder to restyle). */
 .hidden {
     display: none !important;
 }
@@ -15,6 +16,14 @@ body {
 .text-muted {
     color: #999;
     font-size: 0.85rem;
+}
+
+.cursor-pointer {
+    cursor: pointer;
+}
+
+.ml-xs {
+    margin-left: 4px;
 }
 
 .savings {
@@ -90,6 +99,22 @@ body {
 }
 
 .success-message.hidden {
+    display: none;
+}
+
+/* Warning message — visually distinct from .error-message so irreversible
+ * / automation warnings read as warnings, not failures. */
+.warning-message {
+    padding: 1rem;
+    background: #fff3e0;
+    border: 1px solid #fbbc04;
+    border-radius: 4px;
+    color: #e65100;
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+}
+
+.warning-message.hidden {
     display: none;
 }
 

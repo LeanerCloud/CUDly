@@ -29,7 +29,7 @@ export function openCreateUserModal(): void {
   // Show password field for new user
   const passwordFields = document.getElementById('password-fields');
   if (passwordFields) {
-    passwordFields.style.display = 'block';
+    passwordFields.classList.remove('hidden');
     (document.getElementById('user-password') as HTMLInputElement).required = true;
   }
 
@@ -61,7 +61,7 @@ export async function openEditUserModal(userId: string): Promise<void> {
     // Hide password field for editing
     const passwordFields = document.getElementById('password-fields');
     if (passwordFields) {
-      passwordFields.style.display = 'none';
+      passwordFields.classList.add('hidden');
       (document.getElementById('user-password') as HTMLInputElement).required = false;
     }
 

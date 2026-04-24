@@ -133,7 +133,7 @@ function renderSavingsChart(byService: Record<string, ServiceSavings>): void {
   const section = ctx.parentElement;
   let emptyState = section?.querySelector<HTMLParagraphElement>('.chart-empty');
   if (labels.length === 0) {
-    ctx.style.display = 'none';
+    ctx.classList.add('hidden');
     if (section && !emptyState) {
       emptyState = document.createElement('p');
       emptyState.className = 'chart-empty empty';
@@ -143,7 +143,7 @@ function renderSavingsChart(byService: Record<string, ServiceSavings>): void {
     return;
   }
   // Data is back — restore the canvas and remove any stale empty state.
-  ctx.style.display = '';
+  ctx.classList.remove('hidden');
   emptyState?.remove();
 
   const chart = new Chart(ctx, {
@@ -365,11 +365,11 @@ export async function loadSavingsTrendChart(): Promise<void> {
     });
     if (!data.data_points || data.data_points.length === 0) {
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
-      canvas.style.display = 'none';
+      canvas.classList.add('hidden');
       empty?.classList.remove('hidden');
       return;
     }
-    canvas.style.display = '';
+    canvas.classList.remove('hidden');
     empty?.classList.add('hidden');
 
     if (savingsTrendChart) savingsTrendChart.destroy();
@@ -420,7 +420,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
-    canvas.style.display = 'none';
+    canvas.classList.add('hidden');
     if (empty) {
       empty.textContent = 'Savings history is not available yet.';
       empty.classList.remove('hidden');

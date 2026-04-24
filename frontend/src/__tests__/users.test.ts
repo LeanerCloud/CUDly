@@ -1454,7 +1454,7 @@ describe('users/userModals', () => {
       userModals.openCreateUserModal();
 
       const passwordFields = document.getElementById('password-fields');
-      expect(passwordFields?.style.display).toBe('block');
+      expect(passwordFields?.classList.contains('hidden')).toBe(false);
     });
 
     it('should make password required', () => {
@@ -1518,7 +1518,7 @@ describe('users/userModals', () => {
       await userModals.openEditUserModal('1');
 
       const passwordFields = document.getElementById('password-fields');
-      expect(passwordFields?.style.display).toBe('none');
+      expect(passwordFields?.classList.contains('hidden')).toBe(true);
     });
 
     it('should make password not required when editing', async () => {
