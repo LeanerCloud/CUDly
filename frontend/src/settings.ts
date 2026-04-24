@@ -601,6 +601,17 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
 /**
  * Populate AWS-specific fields in the account modal
  */
+function generateExternalID(): string {
+  // crypto.randomUUID is available in all supported browsers (Chrome
+  // 92+, Firefox 95+, Safari 15.4+). Fall back to a timestamp-plus-
+  // random string only if it's somehow missing (test environments,
+  // odd webviews) so we never hand the user an empty field.
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `cudly-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function populateAwsAccountFields(account?: api.CloudAccount): void {
   const authMode = (account?.aws_auth_mode ?? 'workload_identity_federation') as string;
   const authModeSelect = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
@@ -616,7 +627,13 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   // pre-fill all three with the same stored value so switching modes mid-edit
   // doesn't blank the input that just became visible.
   setInputValue('account-aws-role-arn', account?.aws_role_arn ?? '');
-  setInputValue('account-aws-external-id', account?.aws_external_id ?? '');
+  // External ID is a CUDly-managed shared secret for cross-account role
+  // assumption (issue #18). On edit, keep whatever was stored before; on
+  // create, auto-generate a UUID so every new account has a distinct
+  // secret the operator can paste into the IAM trust policy. The field
+  // itself is marked readonly in index.html so users can't hand-craft
+  // values that would defeat the purpose.
+  setInputValue('account-aws-external-id', account?.aws_external_id ?? generateExternalID());
   setInputValue('account-aws-bastion-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-token-file', account?.aws_web_identity_token_file ?? '');
@@ -927,6 +944,13 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   // AWS auth mode change handler
   const awsAuthMode = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
   awsAuthMode?.addEventListener('change', () => updateAwsAuthModeFields(awsAuthMode.value), { signal });
+
+  // Copy the auto-generated AWS External ID to the clipboard (issue #18).
+  document.getElementById('account-aws-external-id-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-external-id'),
+    { signal },
+  );
 
   // Azure auth mode change handler
   const azureAuthMode = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
@@ -1412,19 +1436,34 @@ export function copyToClipboard(elementId: string): void {
   const element = document.getElementById(elementId);
   if (!element) return;
 
-  const text = element.textContent || '';
+  // Prefer .value for form controls (the AWS External ID uses an
+  // <input readonly>) and fall back to textContent for code/span
+  // elements.
+  const text = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+    ? element.value
+    : element.textContent ?? '';
   navigator.clipboard.writeText(text).then(() => {
-    // Show feedback
-    const btn = element.nextElementSibling as HTMLButtonElement;
-    if (btn) {
-      const originalContent = btn.innerHTML;
-      btn.innerHTML = '<span class="copy-icon">&#10003;</span>';
-      btn.classList.add('copied');
-      setTimeout(() => {
-        btn.innerHTML = originalContent;
-        btn.classList.remove('copied');
-      }, 2000);
-    }
+    // Show feedback on the first .copy-btn following the source in DOM
+    // order — handles both the adjacent-sibling layout (code + btn) and
+    // the .input-with-copy layout (input + btn nested under a wrapper).
+    const btn = element.nextElementSibling instanceof HTMLButtonElement
+      ? element.nextElementSibling
+      : element.parentElement?.querySelector<HTMLButtonElement>('.copy-btn') ?? null;
+    if (!btn) return;
+    const previousChildren = Array.from(btn.childNodes);
+    // Swap for a single "copied" checkmark without touching innerHTML —
+    // the content is static but XSS-scanner-friendly code avoids the
+    // pattern entirely so we don't need to re-prove safety at each edit.
+    btn.replaceChildren();
+    const tick = document.createElement('span');
+    tick.className = 'copy-icon';
+    tick.textContent = '✓'; // ✓
+    btn.appendChild(tick);
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.replaceChildren(...previousChildren);
+      btn.classList.remove('copied');
+    }, 2000);
   }).catch(err => {
     console.error('Failed to copy:', err);
   });

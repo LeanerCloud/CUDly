@@ -1158,6 +1158,22 @@ tr.recommendation-row:hover {
     color: #4caf50;
 }
 
+/* Input + inline copy button (e.g. auto-generated AWS External ID). The
+   button sits flush with the input's right edge so the pair reads as a
+   single control. */
+.input-with-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    width: 100%;
+}
+
+.input-with-copy input[type="text"] {
+    flex: 1;
+    background: #f5f5f5;
+    color: #333;
+}
+
 /* CLI command display */
 .cli-command {
     display: flex;
