@@ -53,33 +53,17 @@ describe('commitmentOptions', () => {
         expect(config.invalidCombinations![0]).toEqual({ term: 3, payment: 'no-upfront' });
       });
 
-      it('should return ElastiCache config with invalid 3yr no-upfront combination', () => {
-        const config = getCommitmentConfig('aws', 'elasticache');
-
-        expect(config.invalidCombinations).toBeDefined();
-        expect(config.invalidCombinations![0]).toEqual({ term: 3, payment: 'no-upfront' });
-      });
-
-      it('should return OpenSearch config with invalid 3yr no-upfront combination', () => {
-        const config = getCommitmentConfig('aws', 'opensearch');
-
-        expect(config.invalidCombinations).toBeDefined();
-        expect(config.invalidCombinations![0]).toEqual({ term: 3, payment: 'no-upfront' });
-      });
-
-      it('should return Redshift config with invalid 3yr no-upfront combination', () => {
-        const config = getCommitmentConfig('aws', 'redshift');
-
-        expect(config.invalidCombinations).toBeDefined();
-        expect(config.invalidCombinations![0]).toEqual({ term: 3, payment: 'no-upfront' });
-      });
-
-      it('should return MemoryDB config with invalid 3yr no-upfront combination', () => {
-        const config = getCommitmentConfig('aws', 'memorydb');
-
-        expect(config.invalidCombinations).toBeDefined();
-        expect(config.invalidCombinations![0]).toEqual({ term: 3, payment: 'no-upfront' });
-      });
+      it.each(['elasticache', 'opensearch', 'redshift', 'memorydb'])(
+        'should return %s config with no invalidCombinations (AWS restricts only RDS 3yr no-upfront)',
+        (service) => {
+          const config = getCommitmentConfig('aws', service);
+          // These services were previously listed as also rejecting 3yr
+          // no-upfront, but that was over-cautious — AWS does offer it.
+          // The backend agrees: cmd/validators.go:warnRDS3YearNoUpfront
+          // warns only on RDS. They fall through to the AWS _default.
+          expect(config.invalidCombinations).toBeUndefined();
+        },
+      );
 
       it('should return default AWS config for unknown service', () => {
         const config = getCommitmentConfig('aws', 'unknown-service');
@@ -205,23 +189,31 @@ describe('commitmentOptions', () => {
     });
 
     describe('AWS services with 3yr no-upfront restriction', () => {
-      const restrictedServices = ['rds', 'elasticache', 'opensearch', 'redshift', 'memorydb'];
-
-      it.each(restrictedServices)('should return false for %s 3yr no-upfront', (service) => {
-        expect(isValidCombination('aws', service, 3, 'no-upfront')).toBe(false);
+      // Only RDS has this restriction. ElastiCache / OpenSearch /
+      // Redshift / MemoryDB were previously listed too but AWS does
+      // offer 3yr no-upfront for those.
+      it('should return false for rds 3yr no-upfront', () => {
+        expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
       });
 
-      it.each(restrictedServices)('should return true for %s 1yr no-upfront', (service) => {
-        expect(isValidCombination('aws', service, 1, 'no-upfront')).toBe(true);
+      it('should return true for rds 1yr no-upfront', () => {
+        expect(isValidCombination('aws', 'rds', 1, 'no-upfront')).toBe(true);
       });
 
-      it.each(restrictedServices)('should return true for %s 3yr partial-upfront', (service) => {
-        expect(isValidCombination('aws', service, 3, 'partial-upfront')).toBe(true);
+      it('should return true for rds 3yr partial-upfront', () => {
+        expect(isValidCombination('aws', 'rds', 3, 'partial-upfront')).toBe(true);
       });
 
-      it.each(restrictedServices)('should return true for %s 3yr all-upfront', (service) => {
-        expect(isValidCombination('aws', service, 3, 'all-upfront')).toBe(true);
+      it('should return true for rds 3yr all-upfront', () => {
+        expect(isValidCombination('aws', 'rds', 3, 'all-upfront')).toBe(true);
       });
+
+      it.each(['elasticache', 'opensearch', 'redshift', 'memorydb'])(
+        'should return true for %s 3yr no-upfront (not restricted)',
+        (service) => {
+          expect(isValidCombination('aws', service, 3, 'no-upfront')).toBe(true);
+        },
+      );
     });
 
     describe('Azure and GCP', () => {
@@ -288,19 +280,15 @@ describe('commitmentOptions', () => {
         expect(options.map(o => o.value)).toContain('no-upfront');
       });
 
-      it('should exclude no-upfront for ElastiCache 3-year term', () => {
-        const options = getValidPaymentOptions('aws', 'elasticache', 3);
+      it.each(['elasticache', 'opensearch', 'redshift', 'memorydb'])(
+        'should keep no-upfront for %s 3-year term (AWS offers it)',
+        (service) => {
+          const options = getValidPaymentOptions('aws', service, 3);
 
-        expect(options).toHaveLength(2);
-        expect(options.map(o => o.value)).not.toContain('no-upfront');
-      });
-
-      it('should exclude no-upfront for OpenSearch 3-year term', () => {
-        const options = getValidPaymentOptions('aws', 'opensearch', 3);
-
-        expect(options).toHaveLength(2);
-        expect(options.map(o => o.value)).not.toContain('no-upfront');
-      });
+          expect(options).toHaveLength(3);
+          expect(options.map(o => o.value)).toContain('no-upfront');
+        },
+      );
     });
 
     describe('Azure', () => {
@@ -367,19 +355,15 @@ describe('commitmentOptions', () => {
         expect(options).toHaveLength(2);
       });
 
-      it('should exclude 3-year for ElastiCache with no-upfront', () => {
-        const options = getValidTermOptions('aws', 'elasticache', 'no-upfront');
+      it.each(['elasticache', 'opensearch', 'redshift', 'memorydb'])(
+        'should keep 3-year for %s with no-upfront (AWS offers it)',
+        (service) => {
+          const options = getValidTermOptions('aws', service, 'no-upfront');
 
-        expect(options).toHaveLength(1);
-        expect(options[0]!.value).toBe(1);
-      });
-
-      it('should exclude 3-year for OpenSearch with no-upfront', () => {
-        const options = getValidTermOptions('aws', 'opensearch', 'no-upfront');
-
-        expect(options).toHaveLength(1);
-        expect(options[0]!.value).toBe(1);
-      });
+          expect(options).toHaveLength(2);
+          expect(options.map(o => o.value)).toEqual([1, 3]);
+        },
+      );
     });
 
     describe('Azure', () => {

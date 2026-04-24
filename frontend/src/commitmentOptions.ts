@@ -59,40 +59,14 @@ const commitmentConfigs: Record<string, Record<string, CommitmentConfig>> = {
       terms: STANDARD_TERMS,
       payments: AWS_PAYMENTS
     },
-    // RDS - no 3-year no-upfront option
+    // RDS - no 3-year no-upfront option. This is the only AWS service
+    // with a hard restriction; the backend validator in
+    // cmd/validators.go:warnRDS3YearNoUpfront agrees, and the newer
+    // lib/purchase-compatibility.ts calls it out as "the one hard rule".
+    // ElastiCache / OpenSearch / Redshift / MemoryDB were previously
+    // listed here too, but that was over-cautious copy-paste — AWS does
+    // offer 3yr no-upfront on those services.
     rds: {
-      terms: STANDARD_TERMS,
-      payments: AWS_PAYMENTS,
-      invalidCombinations: [
-        { term: 3, payment: 'no-upfront' }
-      ]
-    },
-    // ElastiCache - no 3-year no-upfront option
-    elasticache: {
-      terms: STANDARD_TERMS,
-      payments: AWS_PAYMENTS,
-      invalidCombinations: [
-        { term: 3, payment: 'no-upfront' }
-      ]
-    },
-    // OpenSearch - no 3-year no-upfront option
-    opensearch: {
-      terms: STANDARD_TERMS,
-      payments: AWS_PAYMENTS,
-      invalidCombinations: [
-        { term: 3, payment: 'no-upfront' }
-      ]
-    },
-    // Redshift - no 3-year no-upfront option
-    redshift: {
-      terms: STANDARD_TERMS,
-      payments: AWS_PAYMENTS,
-      invalidCombinations: [
-        { term: 3, payment: 'no-upfront' }
-      ]
-    },
-    // MemoryDB - no 3-year no-upfront option
-    memorydb: {
       terms: STANDARD_TERMS,
       payments: AWS_PAYMENTS,
       invalidCombinations: [
