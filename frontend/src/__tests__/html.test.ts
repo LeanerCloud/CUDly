@@ -654,5 +654,18 @@ describe('HTML Structure', () => {
       const hint = document.getElementById('account-aws-trust-policy-hint');
       expect(hint).not.toBeNull();
     });
+
+    test('aws IAM console deep link opens the role-creation wizard in a new tab (issue #21)', () => {
+      const link = document.getElementById('account-aws-iam-console-link') as HTMLAnchorElement | null;
+      expect(link).not.toBeNull();
+      expect(link?.tagName.toLowerCase()).toBe('a');
+      // Must open in a new tab so operators don't lose the modal
+      // state they just configured. rel="noopener" is mandatory for
+      // target="_blank" to avoid reverse-tabnabbing.
+      expect(link?.getAttribute('target')).toBe('_blank');
+      expect(link?.getAttribute('rel') ?? '').toMatch(/noopener/);
+      // Link target must be the AWS console role-creation wizard.
+      expect(link?.getAttribute('href')).toBe('https://console.aws.amazon.com/iam/home#/roles$new');
+    });
   });
 });
