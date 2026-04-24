@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/commitmentopts"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
@@ -68,6 +69,18 @@ type HandlerConfig struct {
 	// publish in the Discovery document. Must match what Azure AD
 	// federated credentials are registered with.
 	OIDCIssuerURL string
+	// CommitmentOpts discovers which (term, payment) combinations each
+	// AWS service actually sells and validates saves against that data.
+	// Nil disables both the /api/commitment-options endpoint (returns
+	// unavailable) and save-side validation in updateServiceConfig.
+	CommitmentOpts CommitmentOptsInterface
+}
+
+// CommitmentOptsInterface lets us swap the real *commitmentopts.Service for
+// a stub in handler tests without pulling in the probe+store machinery.
+type CommitmentOptsInterface interface {
+	Get(ctx context.Context) (commitmentopts.Options, error)
+	Validate(ctx context.Context, provider, service string, term int, payment string) (bool, error)
 }
 
 // AnalyticsClientInterface defines the interface for analytics queries

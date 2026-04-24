@@ -202,6 +202,86 @@ func TestHandler_updateServiceConfig_InvalidBody(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid request body")
 }
 
+func TestHandler_updateServiceConfig_CommitmentOptsReject(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
+
+	// Probe data says RDS 3yr no-upfront doesn't exist. Save must 400.
+	// SaveServiceConfig is NOT set up — asserting it's never called.
+	handler := &Handler{
+		config: mockStore,
+		auth:   mockAuth,
+		commitmentOpts: &stubCommitmentOpts{
+			validateFn: func(_ context.Context, provider, service string, term int, payment string) (bool, error) {
+				assert.Equal(t, "aws", provider)
+				assert.Equal(t, "rds", service)
+				assert.Equal(t, 3, term)
+				assert.Equal(t, "no-upfront", payment)
+				return false, nil
+			},
+		},
+	}
+
+	body := `{"enabled": true, "term": 3, "payment": "no-upfront", "coverage": 80}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    body,
+	}
+	result, err := handler.updateServiceConfig(ctx, req, "aws/rds")
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.message, "3yr no-upfront")
+	mockStore.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
+}
+
+func TestHandler_updateServiceConfig_CommitmentOptsAccept(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
+	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
+
+	handler := &Handler{
+		config: mockStore,
+		auth:   mockAuth,
+		commitmentOpts: &stubCommitmentOpts{
+			validateFn: func(context.Context, string, string, int, string) (bool, error) {
+				return true, nil
+			},
+		},
+	}
+
+	body := `{"enabled": true, "term": 1, "payment": "all-upfront", "coverage": 80}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    body,
+	}
+	result, err := handler.updateServiceConfig(ctx, req, "aws/rds")
+
+	require.NoError(t, err)
+	assert.Equal(t, "updated", result.Status)
+}
+
 func TestHandler_updateServiceConfig_NoSlash(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

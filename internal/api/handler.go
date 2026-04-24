@@ -69,6 +69,12 @@ type Handler struct {
 	// fields stay nil.
 	reshapeEC2Factory  func(aws.Config) reshapeEC2Client
 	reshapeRecsFactory func(aws.Config) reshapeRecsClient
+
+	// commitmentOpts discovers which AWS (term, payment) combinations
+	// each service actually sells and validates saves against that data.
+	// Nil is valid: the endpoint returns unavailable and save-side
+	// validation no-ops, deferring to the frontend's hardcoded rules.
+	commitmentOpts CommitmentOptsInterface
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
@@ -111,6 +117,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		analyticsCollector: cfg.AnalyticsCollector,
 		signer:             cfg.OIDCSigner,
 		issuerURL:          cfg.OIDCIssuerURL,
+		commitmentOpts:     cfg.CommitmentOpts,
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)
