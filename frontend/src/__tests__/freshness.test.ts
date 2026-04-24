@@ -144,7 +144,7 @@ test('refresh button renames to "Refreshing..." while in flight, then emits a su
   await new Promise((r) => setTimeout(r, 0));
 
   expect(btn.textContent).toBe('Refreshing...');
-  expect(btn.getAttribute('disabled')).toBe('true');
+  expect(btn.disabled).toBe(true);
 
   const inFlightToast = document.querySelector('#toast-container .toast-message');
   expect(inFlightToast?.textContent).toBe('Refreshing recommendations…');
@@ -179,7 +179,7 @@ test('refresh button restores original text and surfaces an error toast on failu
   for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 
   expect(btn.textContent).toBe('Refresh');
-  expect(btn.hasAttribute('disabled')).toBe(false);
+  expect(btn.disabled).toBe(false);
   const toastMessages = Array.from(
     document.querySelectorAll('#toast-container .toast-message'),
   ).map((n) => n.textContent);

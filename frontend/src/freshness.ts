@@ -183,8 +183,8 @@ export async function renderFreshness(
   const btn = document.getElementById(`${containerID}-refresh-btn`) as HTMLButtonElement | null;
   btn?.addEventListener('click', () => {
     void (async () => {
-      const originalText = btn.textContent ?? 'Refresh';
-      btn.setAttribute('disabled', 'true');
+      const originalText = btn.textContent;
+      btn.disabled = true;
       btn.textContent = 'Refreshing...';
       const inFlight = showToast({
         message: 'Refreshing recommendations…',
@@ -202,13 +202,22 @@ export async function renderFreshness(
           timeout: 5_000,
         });
       } catch (err) {
+        // Guard against non-Error throws: `(err as Error).message` would
+        // raise a TypeError if `err` were null/undefined, masking the real
+        // failure with a crash inside the error handler itself.
+        const message =
+          err instanceof Error
+            ? err.message
+            : err !== null && err !== undefined
+              ? String(err)
+              : 'unknown error';
         console.error('Refresh failed:', err);
         inFlight.dismiss();
         showToast({
-          message: `Refresh failed: ${(err as Error).message ?? 'unknown error'}`,
+          message: `Refresh failed: ${message}`,
           kind: 'error',
         });
-        btn.removeAttribute('disabled');
+        btn.disabled = false;
         btn.textContent = originalText;
       }
     })();
