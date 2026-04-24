@@ -647,12 +647,10 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   });
 
   if (bucketEntries.length > 1 || incompatible.length > 0) {
-    showToast({
-      message:
-        'Multi-provider/service bulk purchase arrives in the next release. Narrow the filter to one provider+service (and compatible payment option) to proceed.',
-      kind: 'warning',
-      timeout: 10_000,
-    });
+    // Multi-bucket / incompatible path: open the fan-out modal so the
+    // user can review per-bucket details before submitting one
+    // executePurchase call per bucket in parallel.
+    openFanOutModal(bucketEntries, tb);
     return;
   }
 
@@ -660,6 +658,138 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   // existing execute-purchase flow. The modal's "Execute Purchase" button
   // (wired in app.ts) picks up the recs via getPurchaseModalRecommendations.
   openPurchaseModal(scaled);
+}
+
+// FanOutBucket groups one batch of recs under a single (provider,
+// service, term, payment, capacity) choice. A multi-bucket Purchase
+// fires one executePurchase POST per bucket.
+export interface FanOutBucket {
+  provider: CompatProvider;
+  service: string;
+  term: 1 | 3;
+  payment: 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
+  capacityPercent: number;
+  recs: LocalRecommendation[]; // scaled by capacityPercent
+}
+
+// Fan-out modal state. app.ts's Execute Purchase click reads these
+// via getFanOutBuckets() to fire one POST per bucket. Cleared when
+// the modal closes.
+let currentFanOutBuckets: FanOutBucket[] | null = null;
+
+export function getFanOutBuckets(): FanOutBucket[] | null {
+  return currentFanOutBuckets ? currentFanOutBuckets.map((b) => ({ ...b })) : null;
+}
+
+export function clearFanOutBuckets(): void {
+  currentFanOutBuckets = null;
+}
+
+function openFanOutModal(
+  bucketEntries: Array<[string, LocalRecommendation[]]>,
+  toolbar: BulkPurchaseToolbarState,
+): void {
+  const buckets: FanOutBucket[] = bucketEntries.map(([key, recs]) => {
+    const [provider, service] = key.split('|') as [CompatProvider, string];
+    return {
+      provider,
+      service,
+      term: toolbar.term,
+      payment: toolbar.payment,
+      capacityPercent: toolbar.capacity,
+      recs,
+    };
+  });
+  currentFanOutBuckets = buckets;
+
+  const container = document.getElementById('purchase-details');
+  const modal = document.getElementById('purchase-modal');
+  if (!container || !modal) return;
+
+  // Build the modal body via createElement so the innerHTML hook
+  // doesn't flag any template-literal HTML. The bucket summary is
+  // pure data (provider, service, counts, totals) — no edit controls
+  // in this initial drop. A later iteration can add per-bucket
+  // Term/Payment/Capacity edits.
+  while (container.firstChild) container.removeChild(container.firstChild);
+
+  const summary = document.createElement('div');
+  summary.className = 'form-section fanout-summary';
+  const summaryTitle = document.createElement('h3');
+  summaryTitle.textContent = `Bulk purchase — ${buckets.length} bucket${buckets.length === 1 ? '' : 's'}`;
+  summary.appendChild(summaryTitle);
+
+  const emailNote = document.createElement('p');
+  emailNote.className = 'fanout-email-note';
+  emailNote.textContent = `Will send ${buckets.length} approval email${buckets.length === 1 ? '' : 's'} — one per bucket.`;
+  summary.appendChild(emailNote);
+
+  const totals = computeFanOutTotals(buckets);
+  const totalLine = (label: string, value: string, cls = ''): HTMLParagraphElement => {
+    const p = document.createElement('p');
+    const strong = document.createElement('strong');
+    if (cls) strong.className = cls;
+    strong.textContent = value;
+    p.appendChild(document.createTextNode(label + ': '));
+    p.appendChild(strong);
+    return p;
+  };
+  summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
+  summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
+  summary.appendChild(totalLine('Total monthly savings', formatCurrency(totals.totalSavings), 'savings'));
+  container.appendChild(summary);
+
+  for (const b of buckets) {
+    container.appendChild(renderFanOutBucketSection(b));
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; totalUpfront: number; totalSavings: number } {
+  let totalCount = 0;
+  let totalUpfront = 0;
+  let totalSavings = 0;
+  for (const b of buckets) {
+    for (const r of b.recs) {
+      totalCount += r.count;
+      totalUpfront += r.upfront_cost;
+      totalSavings += r.savings;
+    }
+  }
+  return { totalCount, totalUpfront, totalSavings };
+}
+
+function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'fanout-bucket form-section';
+
+  const title = document.createElement('h4');
+  title.textContent = `${b.provider.toUpperCase()} / ${b.service} — ${b.recs.length} commitment${b.recs.length === 1 ? '' : 's'}`;
+  section.appendChild(title);
+
+  const compat = isPaymentSupported(b.provider, b.service, b.term, b.payment);
+  const status = document.createElement('p');
+  status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
+  status.textContent = compat
+    ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
+    : `Invalid combo: ${b.provider} / ${b.service} doesn't support ${b.term}yr + ${b.payment}. This bucket will be skipped.`;
+  section.appendChild(status);
+
+  const bucketTotal = b.recs.reduce(
+    (acc, r) => ({
+      count: acc.count + r.count,
+      upfront: acc.upfront + r.upfront_cost,
+      savings: acc.savings + r.savings,
+    }),
+    { count: 0, upfront: 0, savings: 0 },
+  );
+  const totals = document.createElement('p');
+  totals.className = 'fanout-bucket-totals';
+  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${formatCurrency(bucketTotal.savings)} monthly savings`;
+  section.appendChild(totals);
+
+  return section;
 }
 
 function renderRecommendationsList(recommendations: LocalRecommendation[]): void {

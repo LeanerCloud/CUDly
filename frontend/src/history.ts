@@ -21,6 +21,41 @@ function normalizeStatus(p: HistoryPurchase): string {
   return p.status || 'completed';
 }
 
+// readDeepLinkExecutionID returns the value of the ?execution=<id>
+// query parameter inside the current location hash, or '' when
+// absent. The app uses hash routing ("#history"), so the "query" piece
+// sits inside `window.location.hash` — `window.location.search` is
+// empty. Parse it manually:
+//   #history?execution=abc123 → 'abc123'
+// Exported for unit-test coverage.
+export function readDeepLinkExecutionID(): string {
+  const hash = window.location.hash || '';
+  const q = hash.split('?')[1];
+  if (!q) return '';
+  return new URLSearchParams(q).get('execution') || '';
+}
+
+// applyExecutionDeepLink scrolls the history table to the row matching
+// the ?execution=<id> hash query, if any, and flashes a highlight
+// class on it. Called after each loadHistory render so the link from
+// the Recommendations badge lands on the right row. Returns true when
+// a match was found + highlighted.
+function applyExecutionDeepLink(): boolean {
+  const execID = readDeepLinkExecutionID();
+  if (!execID) return false;
+  const row = document.querySelector<HTMLTableRowElement>(
+    `tr[data-execution-id="${CSS.escape(execID)}"]`,
+  );
+  if (!row) return false;
+  row.classList.add('history-row-highlight');
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Fade the highlight after a few seconds so the row goes back to
+  // normal styling — otherwise it stays yellow forever and a future
+  // user click on a different row looks inconsistent.
+  window.setTimeout(() => row.classList.remove('history-row-highlight'), 4000);
+  return true;
+}
+
 function populateHistoryAccountFilter(provider?: string): Promise<void> {
   return populateAccountFilter('history-account-filter', api.listAccounts, provider);
 }
@@ -251,8 +286,9 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       }
       return badge;
     })();
+    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
     return `
-      <tr>
+      <tr${execIdAttr}>
         <td>${statusCell}</td>
         <td>${formatDate(p.timestamp)}</td>
         <td>${providerCell(p)}</td>
@@ -301,4 +337,10 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       renderHistoryList(lastPurchases);
     });
   });
+
+  // Scroll + flash the deep-link target if the URL hash carries a
+  // ?execution=<id>. The suppression badge on the Recommendations
+  // view links here so the user lands on the relevant row without
+  // scrolling through the whole list.
+  applyExecutionDeepLink();
 }

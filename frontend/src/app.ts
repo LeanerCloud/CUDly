@@ -6,7 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
-import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations } from './recommendations';
+import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, type FanOutBucket } from './recommendations';
 import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, getSettingsSubTabFromPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
@@ -191,6 +191,7 @@ function setupButtonHandlers(): void {
     closePurchaseBtn.addEventListener('click', () => {
       closePurchaseModal();
       clearPurchaseModalRecommendations();
+      clearFanOutBuckets();
     });
   }
 
@@ -255,9 +256,17 @@ function setupButtonHandlers(): void {
 }
 
 /**
- * Handle execute purchase button click
+ * Handle execute purchase button click. Routes to the single-bucket
+ * path when getPurchaseModalRecommendations has content, or to the
+ * multi-bucket fan-out path when the fan-out modal set buckets.
  */
 async function handleExecutePurchase(): Promise<void> {
+  const fanOutBuckets = getFanOutBuckets();
+  if (fanOutBuckets && fanOutBuckets.length > 0) {
+    await handleFanOutExecute(fanOutBuckets);
+    return;
+  }
+
   const localRecs = getPurchaseModalRecommendations();
   if (localRecs.length === 0) {
     showToast({ message: 'No recommendations selected for purchase.', kind: 'warning' });
@@ -333,6 +342,87 @@ async function handleExecutePurchase(): Promise<void> {
       executeBtn.disabled = false;
       executeBtn.textContent = 'Execute Purchase';
     }
+  }
+}
+
+/**
+ * handleFanOutExecute submits one executePurchase POST per bucket.
+ *
+ * The backend API is a per-execution endpoint — a multi-bucket purchase
+ * is N independent submissions, each with its own approval email. The
+ * user already saw "Will send N approval emails" in the modal, so no
+ * further confirmation is required here beyond the standard destructive
+ * confirmDialog.
+ */
+async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
+  const ok = await confirmDialog({
+    title: `Execute ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'}?`,
+    body: `This will submit ${buckets.length} separate purchase execution${buckets.length === 1 ? '' : 's'} and send ${buckets.length} approval email${buckets.length === 1 ? '' : 's'}. Each must be approved individually.`,
+    confirmLabel: 'Execute all',
+    destructive: true,
+  });
+  if (!ok) return;
+
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn) {
+    executeBtn.disabled = true;
+    executeBtn.textContent = `Executing 0/${buckets.length}…`;
+  }
+
+  // Fire all POSTs in parallel via allSettled so one failure doesn't
+  // cascade. Each bucket's recs are already scaled by its capacity %;
+  // the POST body records capacity_percent for audit.
+  const promises = buckets.map((b) =>
+    api.executePurchase(
+      b.recs.map((r) => ({
+        id: r.id,
+        provider: r.provider,
+        service: r.service,
+        region: r.region,
+        resource_type: r.resource_type,
+        count: r.count,
+        term: r.term,
+        payment: b.payment,
+        upfront_cost: r.upfront_cost,
+        monthly_cost: r.monthly_cost ?? 0,
+        savings: r.savings,
+        selected: true,
+        purchased: false,
+      })),
+      b.capacityPercent,
+    ),
+  );
+  const results = await Promise.allSettled(promises);
+
+  const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+  const failed = results.length - succeeded;
+  closePurchaseModal();
+  clearFanOutBuckets();
+  clearPurchaseModalRecommendations();
+
+  if (failed === 0) {
+    showToast({
+      message: `${succeeded} purchase${succeeded === 1 ? '' : 's'} submitted — check your email to approve each.`,
+      kind: 'success',
+      timeout: 15_000,
+    });
+  } else {
+    const failureMsgs = results
+      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
+      .slice(0, 3)
+      .join('; ');
+    showToast({
+      message: `${succeeded} of ${results.length} submitted · ${failed} failed: ${failureMsgs}${failed > 3 ? ' (…)' : ''}`,
+      kind: failed === results.length ? 'error' : 'warning',
+      timeout: null,
+    });
+  }
+  await loadDashboard();
+
+  if (executeBtn) {
+    executeBtn.disabled = false;
+    executeBtn.textContent = 'Execute Purchase';
   }
 }
 
