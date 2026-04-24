@@ -6,6 +6,17 @@ body {
     background: #f5f5f5;
 }
 
+/* Generic utilities — prefer these over inline `style="..."` attributes so
+ * the CSP `style-src 'self'` directive doesn't block them at parse time. */
+.hidden {
+    display: none !important;
+}
+
+.text-muted {
+    color: #999;
+    font-size: 0.85rem;
+}
+
 .savings {
     color: #34a853;
 }

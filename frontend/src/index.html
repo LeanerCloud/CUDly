@@ -3,9 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Content Security Policy: Restrict resource loading to prevent XSS -->
-    <!-- Note: connect-src uses wildcards for cloud provider API URLs which are dynamically generated per region/account -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.execute-api.*.amazonaws.com https://*.lambda-url.*.on.aws https://*.azurecontainerapps.io https://*.run.app; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">
+    <!-- Content Security Policy: Restrict resource loading to prevent XSS.
+         frame-ancestors is intentionally omitted here because browsers ignore
+         it in <meta>; it is delivered via the response header from
+         internal/server/http.go (container) and internal/server/lambda.go
+         (Lambda Function URL). Invalid mid-hostname wildcards like
+         *.execute-api.*.amazonaws.com are silently dropped by browsers, so
+         connect-src lists only valid single-level wildcard hosts the
+         frontend may contact cross-origin (Azure Container Apps, Cloud Run)
+         in addition to 'self'. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.azurecontainerapps.io https://*.run.app; base-uri 'self'; form-action 'self'">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <title>CUDly - Cloud Commitment Optimizer</title>
@@ -369,7 +376,7 @@
                 </section>
 
                 <!-- Purchasing Section -->
-                <section id="purchasing-panel" class="card" style="display:none">
+                <section id="purchasing-panel" class="card hidden">
                     <h2>Purchasing Settings</h2>
                     <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
 
@@ -542,7 +549,7 @@
                 </section>
 
                 <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->
-                <section id="accounts-section" class="admin-only card" style="display:none">
+                <section id="accounts-section" class="admin-only card hidden">
                     <h2>Accounts</h2>
                     <p class="settings-description">Onboard new cloud accounts via federation IaC, review account registrations, and manage per-provider accounts.</p>
 
@@ -610,7 +617,7 @@
                 </section>
 
                 <!-- User Management Section (Admin Only) -->
-                <section id="users-section" class="admin-only card" style="display:none">
+                <section id="users-section" class="admin-only card hidden">
                     <h2>User Management</h2>
                     <p class="settings-description">Manage users and their permissions.</p>
 
@@ -637,7 +644,7 @@
                 </section>
 
                 <!-- API Keys Section (Admin Only) -->
-                <section id="apikeys-section" class="admin-only card" style="display:none">
+                <section id="apikeys-section" class="admin-only card hidden">
                     <fieldset class="settings-category">
                         <legend>API Keys</legend>
                         <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>

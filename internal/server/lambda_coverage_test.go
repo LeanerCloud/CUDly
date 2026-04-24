@@ -51,6 +51,19 @@ func TestServeLambdaStatic_Found(t *testing.T) {
 	testutil.AssertContains(t, resp.Body, "<html>")
 }
 
+// TestLambdaSecurityHeaders_IncludesCSP locks in that Lambda HTML responses
+// carry a Content-Security-Policy header with frame-ancestors 'none'.
+// Without it, the meta-tag CSP in index.html can't enforce frame-ancestors
+// (browsers ignore that directive in <meta>), leaving the Lambda deploy
+// unprotected against clickjacking. See issues/8.
+func TestLambdaSecurityHeaders_IncludesCSP(t *testing.T) {
+	h := lambdaSecurityHeaders()
+	csp, ok := h["Content-Security-Policy"]
+	testutil.AssertTrue(t, ok, "lambdaSecurityHeaders must set Content-Security-Policy")
+	testutil.AssertContains(t, csp, "frame-ancestors 'none'")
+	testutil.AssertContains(t, csp, "default-src 'self'")
+}
+
 func TestServeLambdaStatic_BinaryFile(t *testing.T) {
 	dir := makeStaticDir(t, map[string]string{
 		"index.html": "<html/>",

@@ -193,24 +193,30 @@ describe('Navigation Module', () => {
   });
 
   describe('switchSettingsSubTab', () => {
+    // Sections are hidden via the `.hidden` utility class (not inline
+    // style.display), so CSP's `style-src 'self'` doesn't block initial
+    // parse of index.html. See issues/8.
+    const isHidden = (id: string) =>
+      document.getElementById(id)?.classList.contains('hidden') ?? null;
+
     test('shows general sections and hides others', () => {
       switchSettingsSubTab('general');
 
-      expect(document.getElementById('settings-section')?.style.display).toBe('');
-      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
-      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
-      expect(document.getElementById('users-section')?.style.display).toBe('none');
-      expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
+      expect(isHidden('settings-section')).toBe(false);
+      expect(isHidden('purchasing-panel')).toBe(true);
+      expect(isHidden('accounts-section')).toBe(true);
+      expect(isHidden('users-section')).toBe(true);
+      expect(isHidden('apikeys-section')).toBe(true);
     });
 
     test('shows purchasing panel and hides others', () => {
       switchSettingsSubTab('purchasing');
 
-      expect(document.getElementById('purchasing-panel')?.style.display).toBe('');
-      expect(document.getElementById('settings-section')?.style.display).toBe('none');
-      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
-      expect(document.getElementById('users-section')?.style.display).toBe('none');
-      expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
+      expect(isHidden('purchasing-panel')).toBe(false);
+      expect(isHidden('settings-section')).toBe(true);
+      expect(isHidden('accounts-section')).toBe(true);
+      expect(isHidden('users-section')).toBe(true);
+      expect(isHidden('apikeys-section')).toBe(true);
     });
 
     test('purchasing sub-tab loads settings and automation', () => {
@@ -223,29 +229,29 @@ describe('Navigation Module', () => {
     test('shows accounts section and hides others', () => {
       switchSettingsSubTab('accounts');
 
-      expect(document.getElementById('settings-section')?.style.display).toBe('none');
-      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
-      expect(document.getElementById('accounts-section')?.style.display).toBe('');
-      expect(document.getElementById('users-section')?.style.display).toBe('none');
-      expect(document.getElementById('apikeys-section')?.style.display).toBe('none');
+      expect(isHidden('settings-section')).toBe(true);
+      expect(isHidden('purchasing-panel')).toBe(true);
+      expect(isHidden('accounts-section')).toBe(false);
+      expect(isHidden('users-section')).toBe(true);
+      expect(isHidden('apikeys-section')).toBe(true);
     });
 
     test('shows users and apikeys sections for users sub-tab', () => {
       switchSettingsSubTab('users');
 
-      expect(document.getElementById('settings-section')?.style.display).toBe('none');
-      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
-      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
-      expect(document.getElementById('users-section')?.style.display).toBe('');
-      expect(document.getElementById('apikeys-section')?.style.display).toBe('');
+      expect(isHidden('settings-section')).toBe(true);
+      expect(isHidden('purchasing-panel')).toBe(true);
+      expect(isHidden('accounts-section')).toBe(true);
+      expect(isHidden('users-section')).toBe(false);
+      expect(isHidden('apikeys-section')).toBe(false);
     });
 
     test('falls back to general for unknown sub-tab', () => {
       switchSettingsSubTab('foobar');
 
-      expect(document.getElementById('settings-section')?.style.display).toBe('');
-      expect(document.getElementById('purchasing-panel')?.style.display).toBe('none');
-      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
+      expect(isHidden('settings-section')).toBe(false);
+      expect(isHidden('purchasing-panel')).toBe(true);
+      expect(isHidden('accounts-section')).toBe(true);
     });
 
     test('toggles active class on sub-tab buttons', () => {

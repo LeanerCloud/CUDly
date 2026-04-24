@@ -47,7 +47,7 @@ export function renderGroups(groups: APIGroup[]): void {
 
     const memberPills = members.length > 0
       ? members.map(m => `<span class="member-pill">${escapeHtml(m.email)}</span>`).join('')
-      : '<span style="color:#999;font-size:0.85rem;">No members</span>';
+      : '<span class="text-muted">No members</span>';
 
     const description = group.description
       ? `<p class="group-description">${escapeHtml(group.description)}</p>`
@@ -68,7 +68,7 @@ export function renderGroups(groups: APIGroup[]): void {
           </div>
         </div>
         <div class="group-card-body">
-          ${permissionBadges || '<span style="color:#999;font-size:0.85rem;">No permissions</span>'}
+          ${permissionBadges || '<span class="text-muted">No permissions</span>'}
         </div>
         <div class="group-members">
           ${memberPills}

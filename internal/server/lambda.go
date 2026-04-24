@@ -125,7 +125,11 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 }
 
 // lambdaSecurityHeaders returns the standard security headers for Lambda responses.
-// These match the securityHeaders() middleware used in HTTP mode.
+// These match the securityHeaders() middleware used in HTTP mode. The
+// Content-Security-Policy is what actually enforces frame-ancestors 'none'
+// against clickjacking — browsers ignore frame-ancestors in a <meta> tag,
+// so relying on the frontend's meta CSP alone would leave Lambda deploys
+// unprotected.
 func lambdaSecurityHeaders() map[string]string {
 	return map[string]string{
 		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
@@ -133,6 +137,7 @@ func lambdaSecurityHeaders() map[string]string {
 		"X-Frame-Options":           "DENY",
 		"Referrer-Policy":           "strict-origin-when-cross-origin",
 		"Permissions-Policy":        "camera=(), microphone=(), geolocation=()",
+		"Content-Security-Policy":   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 	}
 }
 

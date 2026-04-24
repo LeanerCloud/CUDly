@@ -154,7 +154,7 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
   for (const [tab, ids] of Object.entries(SECTION_MAP)) {
     for (const id of ids) {
       const el = document.getElementById(id);
-      if (el) el.style.display = (tab === subTab) ? '' : 'none';
+      if (el) el.classList.toggle('hidden', tab !== subTab);
     }
   }
 
