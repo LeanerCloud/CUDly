@@ -36,9 +36,14 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	// Check if analytics client is configured
+	// Analytics requires an S3/Athena backend. When the deployment
+	// hasn't wired one up, return 503 Service Unavailable with a
+	// structured reason rather than a generic 500 — the frontend
+	// treats 503 as "feature intentionally unavailable" and renders
+	// the "Configure analytics (S3/Athena) to see the trend"
+	// empty-state instead of a generic "savings trend failed" error.
 	if h.analyticsClient == nil {
-		return nil, fmt.Errorf("analytics not configured - S3/Athena backend required")
+		return nil, NewClientError(503, "analytics not configured — S3/Athena backend required")
 	}
 
 	// Parse parameters
@@ -84,7 +89,8 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 	}
 
 	if h.analyticsClient == nil {
-		return nil, fmt.Errorf("analytics not configured - S3/Athena backend required")
+		// See getHistoryAnalytics for the 503 rationale.
+		return nil, NewClientError(503, "analytics not configured — S3/Athena backend required")
 	}
 
 	accountID := params["account_id"]
