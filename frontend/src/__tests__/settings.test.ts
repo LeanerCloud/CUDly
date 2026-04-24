@@ -641,4 +641,82 @@ describe('Settings Module', () => {
       jest.useRealTimers();
     });
   });
+
+  describe('Azure payment defaults (issue #12)', () => {
+    // Shared fixture covers term selects only; inject the four Azure payment
+    // selects this issue introduces so loadGlobalSettings / saveGlobalSettings
+    // have DOM nodes to read / write.
+    const injectAzurePaymentSelects = () => {
+      const form = document.getElementById('global-settings-form');
+      if (!form) throw new Error('global-settings-form fixture missing');
+      for (const svc of ['vm', 'sql', 'cosmosdb', 'redis']) {
+        if (document.getElementById(`azure-${svc}-payment`)) continue;
+        const select = document.createElement('select');
+        select.id = `azure-${svc}-payment`;
+        for (const [value, label] of [['all-upfront', 'Upfront'], ['no-upfront', 'Monthly']] as const) {
+          const opt = document.createElement('option');
+          opt.value = value;
+          opt.textContent = label;
+          if (value === 'all-upfront') opt.selected = true;
+          select.appendChild(opt);
+        }
+        form.appendChild(select);
+      }
+    };
+
+    test('loadGlobalSettings applies persisted azure-vm payment', async () => {
+      injectAzurePaymentSelects();
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: {
+          enabled_providers: ['aws', 'azure'],
+          default_term: 3,
+          default_payment: 'all-upfront',
+          default_coverage: 80,
+        },
+        services: [
+          { provider: 'azure', service: 'vm', term: 3, payment: 'no-upfront', enabled: true, coverage: 80 },
+        ],
+      });
+
+      await loadGlobalSettings();
+
+      const vmPayment = document.getElementById('azure-vm-payment') as HTMLSelectElement;
+      expect(vmPayment.value).toBe('no-upfront');
+    });
+
+    test('saveGlobalSettings sends the per-service Azure payment, not the global default', async () => {
+      injectAzurePaymentSelects();
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws', 'azure'], default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+        services: [],
+      });
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
+
+      await loadGlobalSettings();
+      // User flips Azure VM to Monthly while global default stays all-upfront.
+      (document.getElementById('azure-vm-payment') as HTMLSelectElement).value = 'no-upfront';
+      (document.getElementById('setting-default-payment') as HTMLSelectElement).value = 'all-upfront';
+
+      await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
+
+      const azureVmCall = (api.updateServiceConfig as jest.Mock).mock.calls.find(
+        ([provider, service]) => provider === 'azure' && service === 'vm',
+      );
+      expect(azureVmCall).toBeDefined();
+      const cfg = azureVmCall![2];
+      expect(cfg.payment).toBe('no-upfront');
+    });
+
+    test('help text describes the correct per-provider payment semantics', () => {
+      // The help copy lives in index.html (loaded into the test fixture
+      // verbatim at test startup). Guard against regressions in the
+      // wording — the old copy falsely claimed Azure was always upfront.
+      const fs = require('fs') as typeof import('fs');
+      const path = require('path') as typeof import('path');
+      const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf-8');
+      expect(html).toMatch(/Azure reservations support upfront or monthly/);
+      expect(html).not.toMatch(/Azure and GCP reservations are always paid upfront/);
+    });
+  });
 });
