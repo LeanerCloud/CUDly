@@ -320,7 +320,10 @@ export interface CreateAPIKeyRequest {
 export interface CreateAPIKeyResponse {
   api_key: string;  // Full key shown only once
   key_id: string;
-  key: APIKeyInfo;
+  // Backend wire field is `info` (see internal/auth/service_apikeys_api.go
+  // APICreateAPIKeyResponse). Was previously typed as `key` which never
+  // matched the response — same bug class as issue #9 above.
+  info: APIKeyInfo;
 }
 
 export interface GetAPIKeysResponse {

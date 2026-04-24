@@ -21,10 +21,28 @@ export async function getRecommendations(filters: RecommendationFilters = {}): P
 }
 
 /**
- * Refresh recommendations
+ * Refresh recommendations.
+ *
+ * Backend returns `scheduler.CollectResult`:
+ *   { recommendations: int, total_savings: float64,
+ *     successful_providers: string[], failed_providers: {[k]: string} }
+ *
+ * The previous `{ message: string }` declaration had no overlap with
+ * the actual response — same bug class as issue #9. The current sole
+ * caller (`recommendations.ts:refreshRecommendations`) only awaits
+ * the promise without dereferencing fields, so the wrong type was
+ * benign in practice; tightening it now so a future caller doesn't
+ * read `response.message` and see undefined.
  */
-export async function refreshRecommendations(): Promise<{ message: string }> {
-  return apiRequest<{ message: string }>('/recommendations/refresh', { method: 'POST' });
+export interface RefreshRecommendationsResult {
+  recommendations: number;
+  total_savings: number;
+  successful_providers?: string[];
+  failed_providers?: Record<string, string>;
+}
+
+export async function refreshRecommendations(): Promise<RefreshRecommendationsResult> {
+  return apiRequest<RefreshRecommendationsResult>('/recommendations/refresh', { method: 'POST' });
 }
 
 /**
