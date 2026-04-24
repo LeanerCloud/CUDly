@@ -148,6 +148,16 @@ export function base64Encode(str: string): string {
 }
 
 /**
+ * Default request timeout in milliseconds. Generous enough for legit
+ * long-running endpoints (AWS Cost Explorer / RI utilization can take
+ * 20–40s during cold starts), tight enough that a hung backend
+ * surfaces as an error in the UI instead of spinning forever (issue
+ * #20). Callers can override via `options.timeoutMs` or by passing
+ * their own `signal`.
+ */
+const DEFAULT_API_TIMEOUT_MS = 90_000;
+
+/**
  * Make an authenticated API request
  */
 export async function apiRequest<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
@@ -161,10 +171,39 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
     await addContentHashHeader(headers, body);
   }
 
-  const response = await fetch(url, {
-    ...options,
-    headers
-  });
+  // Layer a timeout-driven AbortController on top of any caller-
+  // provided signal so both paths can cancel the request. If the
+  // caller passes their own signal we still add a timeout (unless
+  // they opt out by passing timeoutMs: 0) — the UI doesn't want an
+  // indefinite hang regardless of who owns cancellation.
+  const timeoutMs = options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+  const timeoutController = new AbortController();
+  const timeoutHandle = timeoutMs > 0
+    ? setTimeout(() => timeoutController.abort(), timeoutMs)
+    : undefined;
+  const signal = options.signal
+    ? anySignal([options.signal, timeoutController.signal])
+    : timeoutController.signal;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      signal,
+    });
+  } catch (err) {
+    if (timeoutController.signal.aborted) {
+      const error: ApiError = new Error(
+        `Request to ${endpoint} timed out after ${timeoutMs}ms`,
+      );
+      error.status = 0;
+      throw error;
+    }
+    throw err;
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
 
   if (!response.ok) {
     const error: ApiError = new Error(`HTTP ${response.status}`);
@@ -189,6 +228,29 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
   } catch {
     return null as T;
   }
+}
+
+/**
+ * Combine multiple AbortSignals into one. AbortSignal.any is available
+ * in modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+); fall
+ * back to a manual listener for older targets.
+ */
+function anySignal(signals: AbortSignal[]): AbortSignal {
+  const AnyFn = (AbortSignal as unknown as {
+    any?: (s: AbortSignal[]) => AbortSignal;
+  }).any;
+  if (typeof AnyFn === 'function') {
+    return AnyFn.call(AbortSignal, signals);
+  }
+  const controller = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) {
+      controller.abort(s.reason);
+      return controller.signal;
+    }
+    s.addEventListener('abort', () => controller.abort(s.reason), { once: true });
+  }
+  return controller.signal;
 }
 
 /**
