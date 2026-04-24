@@ -611,8 +611,8 @@ describe('Recommendations Module', () => {
       providerFilter.value = 'aws';
       providerFilter.dispatchEvent(new Event('change'));
 
-      expect(awsGroup.style.display).toBe('');
-      expect(azureGroup.style.display).toBe('none');
+      expect(awsGroup.classList.contains('hidden')).toBe(false);
+      expect(azureGroup.classList.contains('hidden')).toBe(true);
     });
 
     test('shows all service groups when "all" selected', () => {
@@ -626,8 +626,8 @@ describe('Recommendations Module', () => {
       providerFilter.value = '';
       providerFilter.dispatchEvent(new Event('change'));
 
-      expect(awsGroup.style.display).toBe('');
-      expect(azureGroup.style.display).toBe('');
+      expect(awsGroup.classList.contains('hidden')).toBe(false);
+      expect(azureGroup.classList.contains('hidden')).toBe(false);
     });
 
     test('resets service filter when changing provider', () => {

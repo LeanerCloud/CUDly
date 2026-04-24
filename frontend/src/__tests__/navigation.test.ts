@@ -59,10 +59,10 @@ describe('Navigation Module', () => {
           <button class="sub-tab-btn" data-settings-tab="users">Users</button>
         </div>
         <section id="settings-section"></section>
-        <section id="purchasing-panel" style="display:none"></section>
-        <section id="accounts-section" style="display:none"></section>
-        <section id="users-section" style="display:none"></section>
-        <section id="apikeys-section" style="display:none"></section>
+        <section id="purchasing-panel" class="hidden"></section>
+        <section id="accounts-section" class="hidden"></section>
+        <section id="users-section" class="hidden"></section>
+        <section id="apikeys-section" class="hidden"></section>
       </div>
     `;
 
@@ -269,8 +269,8 @@ describe('Navigation Module', () => {
 
       switchSettingsSubTab('accounts');
 
-      expect(document.getElementById('settings-section')?.style.display).toBe('');
-      expect(document.getElementById('accounts-section')?.style.display).toBe('none');
+      expect(document.getElementById('settings-section')?.classList.contains('hidden')).toBe(false);
+      expect(document.getElementById('accounts-section')?.classList.contains('hidden')).toBe(true);
     });
   });
 

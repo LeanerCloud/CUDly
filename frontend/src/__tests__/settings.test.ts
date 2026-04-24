@@ -58,7 +58,7 @@ describe('Settings Module', () => {
         <div id="gcp-settings" class="hidden"></div>
         <input type="email" id="setting-notification-email">
         <input type="checkbox" id="setting-auto-collect">
-        <div id="collection-schedule-row" style="display: none;">
+        <div id="collection-schedule-row" class="hidden">
           <select id="setting-collection-schedule">
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
@@ -172,12 +172,12 @@ describe('Settings Module', () => {
       autoCollect.checked = true;
       autoCollect.dispatchEvent(new Event('change'));
 
-      expect(scheduleRow?.style.display).toBe('flex');
+      expect(scheduleRow?.classList.contains('hidden')).toBe(false);
 
       autoCollect.checked = false;
       autoCollect.dispatchEvent(new Event('change'));
 
-      expect(scheduleRow?.style.display).toBe('none');
+      expect(scheduleRow?.classList.contains('hidden')).toBe(true);
     });
 
     test('sets up default term to propagate to services (after confirm)', async () => {

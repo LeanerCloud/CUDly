@@ -131,10 +131,9 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
     statusTd.appendChild(createStatusBadge(reg.status));
     if (reg.has_credentials) {
       const credBadge = document.createElement('span');
-      credBadge.className = 'status-badge badge-info';
+      credBadge.className = 'status-badge badge-info ml-xs';
       credBadge.textContent = 'creds';
       credBadge.title = 'Credentials included — will be auto-stored on approval';
-      credBadge.style.marginLeft = '4px';
       statusTd.appendChild(credBadge);
     }
     row.appendChild(statusTd);
@@ -148,9 +147,8 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
       actionsTd.appendChild(approveBtn);
 
       const rejectBtn = document.createElement('button');
-      rejectBtn.className = 'btn btn-small btn-danger';
+      rejectBtn.className = 'btn btn-small btn-danger ml-xs';
       rejectBtn.textContent = 'Reject';
-      rejectBtn.style.marginLeft = '4px';
       rejectBtn.addEventListener('click', () => void handleReject(reg));
       actionsTd.appendChild(rejectBtn);
     } else if (reg.status === 'approved') {
@@ -170,9 +168,8 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
     }
     // Delete button (available for any status)
     const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn btn-small';
+    deleteBtn.className = 'btn btn-small ml-xs';
     deleteBtn.textContent = 'Delete';
-    deleteBtn.style.marginLeft = '4px';
     deleteBtn.addEventListener('click', () => void handleDelete(reg));
     actionsTd.appendChild(deleteBtn);
 

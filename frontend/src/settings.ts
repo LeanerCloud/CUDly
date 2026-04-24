@@ -216,9 +216,6 @@ async function renderSelfAccountBanner(container: HTMLElement, accounts: api.Clo
 
     const banner = document.createElement('div');
     banner.className = 'account-row self-account-banner';
-    banner.style.borderLeft = '3px solid var(--accent, #4a9eff)';
-    banner.style.padding = '8px 12px';
-    banner.style.marginBottom = '8px';
 
     const info = document.createElement('span');
     info.className = 'account-info';
@@ -984,7 +981,7 @@ function updateCollectionScheduleVisibility(): void {
   const scheduleRow = document.getElementById('collection-schedule-row');
 
   if (scheduleRow) {
-    scheduleRow.style.display = autoCollect?.checked ? 'flex' : 'none';
+    scheduleRow.classList.toggle('hidden', !autoCollect?.checked);
   }
 }
 

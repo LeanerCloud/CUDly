@@ -240,11 +240,11 @@ describe('Auth Module', () => {
   describe('updateUserUI', () => {
     beforeEach(() => {
       document.body.innerHTML = `
-        <div id="user-info" style="display: none;">
+        <div id="user-info" class="hidden">
           <span id="user-email-display"></span>
           <button id="logout-btn">Logout</button>
         </div>
-        <div class="admin-only" style="display: none;">Admin content</div>
+        <div class="admin-only hidden">Admin content</div>
       `;
     });
 
@@ -271,7 +271,7 @@ describe('Auth Module', () => {
       updateUserUI();
 
       const userInfo = document.getElementById('user-info');
-      expect((userInfo as HTMLElement).style.display).toBe('flex');
+      expect((userInfo as HTMLElement).classList.contains('hidden')).toBe(false);
     });
 
     test('hides user info when not logged in', () => {
@@ -280,7 +280,7 @@ describe('Auth Module', () => {
       updateUserUI();
 
       const userInfo = document.getElementById('user-info');
-      expect((userInfo as HTMLElement).style.display).toBe('none');
+      expect((userInfo as HTMLElement).classList.contains('hidden')).toBe(true);
     });
 
     test('shows admin-only elements for admin users', () => {
@@ -323,7 +323,7 @@ describe('Auth Module', () => {
       updateUserUI();
 
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
-      expect(userEmail.style.cursor).toBe('pointer');
+      expect(userEmail.classList.contains('cursor-pointer')).toBe(true);
       expect(userEmail.title).toBe('Click to edit your profile');
     });
 

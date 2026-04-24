@@ -342,6 +342,15 @@ select.dirty {
     border-radius: 6px;
 }
 
+/* CUDly host self-account banner (shown when source cloud lacks its own
+ * registered account). Uses the accent border to pull the eye without
+ * reading as an error. */
+.self-account-banner {
+    border-left: 3px solid var(--accent, #4a9eff);
+    padding: 8px 12px;
+    margin-bottom: 8px;
+}
+
 .federation-account-info {
     display: flex;
     align-items: baseline;
