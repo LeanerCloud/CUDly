@@ -312,12 +312,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 // ambient instance credentials (role assumption, managed identity,
 // Application Default Credentials) or via CUDly's KMS-backed OIDC
 // federated path. These accounts should auto-enable on approval
-// because there's no follow-up "upload the PEM/JSON" step.
-//
-// Cert-based legacy Azure WIF is NOT included here — it needs a
-// stored azure_wif_private_key blob that the operator uploads
-// separately after approval, so those accounts keep the old
-// opt-in-via-manual-PUT behaviour.
+// because there's no follow-up "upload the JSON" step.
 func accountHasCredentialFreePath(acct *config.CloudAccount) bool {
 	switch acct.Provider {
 	case "aws":
@@ -325,10 +320,10 @@ func accountHasCredentialFreePath(acct *config.CloudAccount) bool {
 		// workload_identity_federation mints its own token file.
 		return acct.AWSAuthMode == "role_arn" || acct.AWSAuthMode == "workload_identity_federation"
 	case "azure":
-		// managed_identity: ambient. workload_identity_federation:
-		// federated via the KMS-backed path when no PEM is stored —
-		// the /test handler falls back to the cert path when one is
-		// present, so auto-enabling the account either way is fine.
+		// managed_identity is ambient; workload_identity_federation
+		// uses the KMS-backed OIDC signer to mint a client assertion
+		// on every call — nothing is stored in CUDly per-account, so
+		// auto-enable is always safe for either mode.
 		return acct.AzureAuthMode == "managed_identity" || acct.AzureAuthMode == "workload_identity_federation"
 	case "gcp":
 		// application_default: ambient (Cloud Run / GKE). WIF:

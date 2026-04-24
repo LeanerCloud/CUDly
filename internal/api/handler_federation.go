@@ -647,11 +647,9 @@ func buildBundleReadme(data federationIaCData, target, source string) string {
 		sb.WriteString("  cd cloudformation && bash deploy-cfn.sh --region <region>\n\n")
 		sb.WriteString("After apply, set aws_auth_mode=workload_identity_federation and aws_role_arn in CUDly.\n")
 	case target == "azure":
-		sb.WriteString("Contents:\n  terraform/           - Azure App Registration + cert WIF Terraform module\n")
+		sb.WriteString("Contents:\n  terraform/           - Azure App Registration + federated-identity-credential Terraform module\n")
 		sb.WriteString("  terraform/*.auto.tfvars - Pre-filled variable values (auto-loaded by Terraform)\n\n")
-		sb.WriteString("Prerequisites:\n  1. Generate an RSA key and self-signed certificate (see tfvars comments).\n")
-		sb.WriteString("  2. Paste the certificate PEM into the tfvars file.\n")
-		sb.WriteString("  3. Store the private key PEM in CUDly as azure_wif_private_key.\n\n")
+		sb.WriteString("This uses true Workload Identity Federation — no certificate, no private key,\nno client secret is created or stored. CUDly's OIDC issuer signs a short-lived\nJWT on each Azure API call and Azure AD verifies it against the federated\ncredential provisioned here.\n\n")
 		sb.WriteString("Deploy (Terraform):\n")
 		sb.WriteString("  cd terraform && terraform init && terraform apply\n\n")
 		sb.WriteString("After apply, set azure_auth_mode=workload_identity_federation in CUDly.\n")

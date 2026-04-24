@@ -76,7 +76,6 @@ type AccountServiceOverrideRequest struct {
 var validCredentialTypes = map[string]bool{
 	"aws_access_keys":              true,
 	"azure_client_secret":          true,
-	"azure_wif_private_key":        true,
 	"gcp_service_account":          true,
 	"gcp_workload_identity_config": true,
 }
@@ -454,7 +453,7 @@ func (h *Handler) parseAndValidateCredentialsRequest(ctx context.Context, httpRe
 		return nil, nil, NewClientError(400, "invalid request body")
 	}
 	if !validCredentialTypes[req.CredentialType] {
-		return nil, nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, azure_wif_private_key, gcp_service_account, gcp_workload_identity_config")
+		return nil, nil, NewClientError(400, "credential_type must be one of: aws_access_keys, azure_client_secret, gcp_service_account, gcp_workload_identity_config")
 	}
 	if err := validateCredentialPayload(req.CredentialType, req.Payload); err != nil {
 		return nil, nil, err
@@ -694,11 +693,11 @@ type tokenResult struct {
 
 // azureFederatedCredResult exercises the secret-free Azure federated
 // credential path end-to-end for accounts in workload_identity_federation
-// mode whose CUDly deployment has an OIDC signer + issuer configured and
-// no legacy PEM stored. It mints a client_assertion JWT via the KMS
-// signer, exchanges it at Azure AD's token endpoint, and reports the
-// result. Returns (result, true) when this path applies; (_, false)
-// means the caller should fall back to the presence check.
+// mode whose CUDly deployment has an OIDC signer + issuer configured.
+// It mints a client_assertion JWT via the KMS signer, exchanges it at
+// Azure AD's token endpoint, and reports the result. Returns
+// (result, true) when this path applies; (_, false) means the caller
+// should fall back to the presence check (client_secret mode only).
 func (h *Handler) azureFederatedCredResult(ctx context.Context, acct *config.CloudAccount) (AccountTestResult, bool) {
 	if acct.Provider != "azure" || acct.AzureAuthMode != "workload_identity_federation" {
 		return AccountTestResult{}, false
@@ -709,13 +708,6 @@ func (h *Handler) azureFederatedCredResult(ctx context.Context, acct *config.Clo
 	issuer := oidc.IssuerURL()
 	if issuer == "" {
 		return AccountTestResult{}, false
-	}
-	// If a legacy PEM is stored, let the presence-check path handle it
-	// so cert-based accounts keep reporting the same shape.
-	if h.credStore != nil {
-		if has, _ := h.credStore.HasCredential(ctx, acct.ID, credentials.CredTypeAzureWIF); has {
-			return AccountTestResult{}, false
-		}
 	}
 
 	cred, err := credentials.BuildAzureFederatedCredential(h.signer, issuer, acct.AzureTenantID, acct.AzureClientID)
@@ -744,6 +736,15 @@ func (h *Handler) azureFederatedCredResult(ctx context.Context, acct *config.Clo
 func (h *Handler) checkCredentialPresence(ctx context.Context, acct *config.CloudAccount) (AccountTestResult, error) {
 	if h.credStore != nil {
 		credType := credTypeForAccount(acct)
+		// Empty credType means this auth mode isn't backed by a stored
+		// credential — e.g. Azure workload_identity_federation on a
+		// deployment where the OIDC signer wasn't wired (so
+		// azureFederatedCredResult returned ok=false and we fell
+		// through to here). Report an operator-facing message instead
+		// of querying for "no  credential stored".
+		if credType == "" {
+			return AccountTestResult{OK: false, Message: "this account's auth mode is not backed by a stored credential — check the deployment's OIDC issuer wiring"}, nil
+		}
 		has, err := h.credStore.HasCredential(ctx, acct.ID, credType)
 		if err != nil {
 			return AccountTestResult{}, fmt.Errorf("accounts: check credential: %w", err)
@@ -766,12 +767,15 @@ func (h *Handler) checkCredentialPresence(ctx context.Context, acct *config.Clou
 }
 
 // credTypeForAccount returns the expected credential_type for an account
-// based on its provider and auth mode.
+// based on its provider and auth mode. Returns "" for auth modes that
+// aren't backed by a stored credential (e.g. Azure
+// workload_identity_federation, which uses the deployment's OIDC signer
+// at request time and stores nothing per-account).
 func credTypeForAccount(acct *config.CloudAccount) string {
 	switch acct.Provider {
 	case "azure":
 		if acct.AzureAuthMode == "workload_identity_federation" {
-			return "azure_wif_private_key"
+			return ""
 		}
 		return "azure_client_secret"
 	case "gcp":

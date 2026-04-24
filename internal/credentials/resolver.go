@@ -2,22 +2,14 @@ package credentials
 
 import (
 	"context"
-	"crypto/rsa"
-	"crypto/sha1" //nolint:gosec // SHA-1 required by RFC 7517 x5t thumbprint spec
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
@@ -33,7 +25,6 @@ import (
 const (
 	CredTypeAWSAccessKeys     = "aws_access_keys"
 	CredTypeAzureClientSecret = "azure_client_secret"
-	CredTypeAzureWIF          = "azure_wif_private_key"
 	CredTypeGCPServiceAccount = "gcp_service_account"
 	CredTypeGCPWIFConfig      = "gcp_workload_identity_config"
 )
@@ -291,11 +282,11 @@ func ResolveGCPCredentials(ctx context.Context, account *config.CloudAccount, st
 	return raw, nil
 }
 
-// ResolveAzureTokenCredential returns an azcore.TokenCredential for the
-// account using the legacy (cert-based or client-secret) path. Callers
-// that have access to an OIDC Signer should use
-// ResolveAzureTokenCredentialWithOpts instead so the secret-free
-// federated path is preferred.
+// ResolveAzureTokenCredential is a convenience wrapper that passes
+// zero-valued options to ResolveAzureTokenCredentialWithOpts. Since
+// the legacy cert-based WIF path has been removed, this entry point
+// can only resolve client_secret and managed_identity accounts — WIF
+// accounts require opts.Signer + IssuerURL via the With-opts variant.
 func ResolveAzureTokenCredential(
 	ctx context.Context,
 	account *config.CloudAccount,
@@ -305,15 +296,14 @@ func ResolveAzureTokenCredential(
 }
 
 // ResolveAzureTokenCredentialWithOpts is like ResolveAzureTokenCredential
-// but accepts per-deployment options. When AzureResolveOptions.Signer
-// and .IssuerURL are both set, accounts in workload_identity_federation
-// mode with no stored PEM are routed through BuildAzureFederatedCredential
-// (the secret-free path). Existing cert-based accounts keep working.
+// but accepts per-deployment options. For workload_identity_federation
+// accounts, AzureResolveOptions.Signer and .IssuerURL must both be set
+// so BuildAzureFederatedCredential can mint the KMS-signed client
+// assertion Azure AD expects — there is no fallback path.
 //
 // Routes by AzureAuthMode:
 //   - managed_identity  → ManagedIdentityCredential (no stored cred needed)
-//   - workload_identity_federation → federated (if no stored PEM and
-//     opts.Signer is set) or legacy cert client-assertion.
+//   - workload_identity_federation → federated credential via opts.Signer
 //   - client_secret (default) → loads stored secret and returns ClientSecretCredential
 func ResolveAzureTokenCredentialWithOpts(
 	ctx context.Context,
@@ -339,123 +329,6 @@ func ResolveAzureTokenCredentialWithOpts(
 		}
 		return azidentity.NewClientSecretCredential(account.AzureTenantID, account.AzureClientID, creds.ClientSecret, nil)
 	}
-}
-
-// parseRSAKeyBlock parses a single PEM block into an RSA private key.
-// Supports both PKCS1 ("RSA PRIVATE KEY") and PKCS8 ("PRIVATE KEY") formats.
-func parseRSAKeyBlock(accountID string, block *pem.Block) (*rsa.PrivateKey, error) {
-	if block.Type == "RSA PRIVATE KEY" {
-		k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("credentials: parse PKCS1 rsa key for account %s: %w", accountID, err)
-		}
-		return k, nil
-	}
-	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("credentials: parse PKCS8 key for account %s: %w", accountID, err)
-	}
-	rk, ok := k.(*rsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("credentials: expected RSA key for account %s", accountID)
-	}
-	return rk, nil
-}
-
-// parsePEMBlob extracts an RSA private key and X.509 certificate from a concatenated
-// PEM blob. Both blocks must be present — the certificate is required to compute the
-// x5t thumbprint for Azure AD client assertions.
-func parsePEMBlob(accountID string, pemBlob []byte) (*rsa.PrivateKey, *x509.Certificate, error) {
-	var rsaKey *rsa.PrivateKey
-	var cert *x509.Certificate
-	rest := pemBlob
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		var err error
-		rsaKey, cert, err = processPEMBlock(accountID, block, rsaKey, cert)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	if rsaKey == nil {
-		return nil, nil, fmt.Errorf("credentials: no private key found in PEM blob for account %s", accountID)
-	}
-	if cert == nil {
-		return nil, nil, fmt.Errorf("credentials: no certificate found in PEM blob for account %s — store key+cert together", accountID)
-	}
-	return rsaKey, cert, nil
-}
-
-func processPEMBlock(accountID string, block *pem.Block, existingKey *rsa.PrivateKey, existingCert *x509.Certificate) (*rsa.PrivateKey, *x509.Certificate, error) {
-	switch block.Type {
-	case "RSA PRIVATE KEY", "PRIVATE KEY":
-		if existingKey != nil {
-			return nil, nil, fmt.Errorf("credentials: multiple private key blocks in PEM blob for account %s", accountID)
-		}
-		k, err := parseRSAKeyBlock(accountID, block)
-		if err != nil {
-			return nil, nil, err
-		}
-		return k, existingCert, nil
-	case "CERTIFICATE":
-		if existingCert != nil {
-			return nil, nil, fmt.Errorf("credentials: multiple certificate blocks in PEM blob for account %s", accountID)
-		}
-		c, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, nil, fmt.Errorf("credentials: parse certificate for account %s: %w", accountID, err)
-		}
-		return existingKey, c, nil
-	default:
-		return existingKey, existingCert, nil
-	}
-}
-
-// buildAzureWIFCredential creates a client-assertion credential using a stored PEM blob
-// that must contain both a PRIVATE KEY and a CERTIFICATE block (concatenated).
-// The certificate is registered with the Azure AD App Registration; the x5t thumbprint
-// (SHA-1 of the certificate's DER encoding) must be present in the JWT header per
-// RFC 7517 / AAD documentation, otherwise Azure AD returns AADSTS700027.
-//
-// Store format: key PEM block followed by certificate PEM block, e.g.:
-//
-//	-----BEGIN RSA PRIVATE KEY-----
-//	...
-//	-----END RSA PRIVATE KEY-----
-//	-----BEGIN CERTIFICATE-----
-//	...
-//	-----END CERTIFICATE-----
-func buildAzureWIFCredential(account *config.CloudAccount, pemBlob []byte) (azcore.TokenCredential, error) {
-	rsaKey, cert, err := parsePEMBlob(account.ID, pemBlob)
-	if err != nil {
-		return nil, err
-	}
-
-	// Compute x5t: base64url(SHA-1(cert.Raw)) as required by AAD client assertion.
-	thumbprint := sha1.Sum(cert.Raw) // #nosec G401 -- SHA-1 mandated by RFC 7517 x5t, not used for security
-	x5t := base64.RawURLEncoding.EncodeToString(thumbprint[:])
-
-	tenantID := account.AzureTenantID
-	clientID := account.AzureClientID
-	assertionFunc := func(_ context.Context) (string, error) {
-		now := time.Now()
-		token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
-			"aud": fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID),
-			"iss": clientID,
-			"sub": clientID,
-			"jti": uuid.NewString(),
-			"nbf": now.Unix(),
-			"iat": now.Unix(),
-			"exp": now.Add(5 * time.Minute).Unix(),
-		})
-		token.Header["x5t"] = x5t
-		return token.SignedString(rsaKey)
-	}
-	return azidentity.NewClientAssertionCredential(tenantID, clientID, assertionFunc, nil)
 }
 
 // ResolveGCPTokenSource is the legacy entry point — calls

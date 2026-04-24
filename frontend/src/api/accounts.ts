@@ -65,7 +65,7 @@ export interface AccountListFilters {
 }
 
 export interface AccountCredentialsRequest {
-  credential_type: 'aws_access_keys' | 'azure_client_secret' | 'azure_wif_private_key' | 'gcp_service_account' | 'gcp_workload_identity_config';
+  credential_type: 'aws_access_keys' | 'azure_client_secret' | 'gcp_service_account' | 'gcp_workload_identity_config';
   payload: Record<string, unknown>;
 }
 

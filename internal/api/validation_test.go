@@ -232,13 +232,6 @@ func TestValidateCredentialPayload(t *testing.T) {
 		{"azure secret unknown key", "azure_client_secret",
 			map[string]interface{}{"some_other": "abc"}, "unknown key \"some_other\""},
 
-		// azure_wif_private_key
-		{"azure wif happy", "azure_wif_private_key",
-			map[string]interface{}{"private_key_pem": "-----BEGIN..."}, ""},
-		{"azure wif unknown key", "azure_wif_private_key",
-			map[string]interface{}{"private_key_pem": "x", "thumbprint": "abc"},
-			"unknown key \"thumbprint\""},
-
 		// gcp_service_account
 		{"gcp svc happy", "gcp_service_account",
 			map[string]interface{}{
