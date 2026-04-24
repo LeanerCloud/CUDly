@@ -24,13 +24,17 @@
 
     .tabs {
         padding: 0 1rem;
-        overflow-x: auto;
     }
 
     .tab-btn {
         padding: 0.75rem 1rem;
         font-size: 0.9rem;
         white-space: nowrap;
+    }
+
+    #user-info {
+        flex-wrap: wrap;
+        justify-content: center;
     }
 
     .form-row {
@@ -62,5 +66,22 @@
     .planned-purchases-table {
         display: block;
         overflow-x: auto;
+    }
+}
+
+/* Main nav: wrap tabs onto multiple rows on narrow viewports instead of
+   overflowing. Cascade: default (tabs.css) → this 1100px rule → the
+   768px rule above. Wrapping keeps every tab reachable without a
+   horizontal scroll on tablet / small-laptop widths. */
+@media (max-width: 1100px) {
+    .tabs {
+        flex-wrap: wrap;
+        row-gap: 0.25rem;
+    }
+
+    .tab-btn {
+        padding: 0.875rem 1.25rem;
+        font-size: 0.95rem;
+        white-space: nowrap;
     }
 }
