@@ -896,12 +896,19 @@ describe('Plans Module', () => {
   });
 
   describe('openCreatePlanModal', () => {
-    test('shows alert when no recommendations selected', () => {
+    test('opens modal with "New Purchase Plan" title when selection is empty (issue #17)', () => {
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
 
       openCreatePlanModal();
 
-      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Please select at least one recommendation' }));
+      const modal = document.getElementById('plan-modal');
+      expect(modal?.classList.contains('hidden')).toBe(false);
+      const title = document.getElementById('plan-modal-title');
+      expect(title?.textContent).toBe('New Purchase Plan');
+      // Previously we early-returned behind a toast that users missed
+      // (e.g. after a provider-filter switch). Falling through to the
+      // new-plan flow never silently noop-s.
+      expect(mockShowToast).not.toHaveBeenCalled();
     });
 
     test('opens modal when recommendations are selected', () => {
@@ -913,7 +920,7 @@ describe('Plans Module', () => {
       expect(modal?.classList.contains('hidden')).toBe(false);
     });
 
-    test('sets correct title', () => {
+    test('sets "Create Purchase Plan" title when a selection exists', () => {
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
 
       openCreatePlanModal();

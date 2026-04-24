@@ -667,16 +667,20 @@ async function setupPlanAccountsSection(planId?: string): Promise<void> {
 }
 
 /**
- * Open create plan modal with selected recommendations
+ * Open create plan modal with selected recommendations.
+ *
+ * When the user has no selection (issue #17 reproducer: filter
+ * active, no checkboxes ticked), fall through to the plain new-plan
+ * flow instead of silently noop-ing behind a toast the user may
+ * miss. Same UX as the dedicated "New Plan" button — the modal
+ * always opens, and the user fills in provider/service from scratch.
  */
 export function openCreatePlanModal(): void {
-  const selectedIDs = state.getSelectedRecommendationIDs();
-  if (selectedIDs.size === 0) {
-    showToast({ message: 'Please select at least one recommendation', kind: 'warning' });
-    return;
-  }
   const titleEl = document.getElementById('plan-modal-title');
-  if (titleEl) titleEl.textContent = 'Create Purchase Plan';
+  const hasSelection = state.getSelectedRecommendationIDs().size > 0;
+  if (titleEl) {
+    titleEl.textContent = hasSelection ? 'Create Purchase Plan' : 'New Purchase Plan';
+  }
   (document.getElementById('plan-id') as HTMLInputElement).value = '';
   (document.getElementById('plan-form') as HTMLFormElement | null)?.reset();
 
