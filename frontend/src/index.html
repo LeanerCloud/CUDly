@@ -382,7 +382,7 @@
 
                     <fieldset class="settings-category" id="purchasing-global-defaults">
                         <legend>Global Purchase Defaults</legend>
-                        <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options only apply to AWS services; Azure and GCP reservations are always paid upfront.</p>
+                        <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options map differently per provider: AWS uses no/partial/all upfront; Azure reservations support upfront or monthly; GCP commitments are billed monthly only.</p>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label for="setting-default-term">Default Term</label>
@@ -499,18 +499,22 @@
                             <div class="service-default-card">
                                 <h5>Virtual Machine Reservations</h5>
                                 <label>Term: <select id="azure-vm-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-vm-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
                             </div>
                             <div class="service-default-card">
                                 <h5>SQL Database Reservations</h5>
                                 <label>Term: <select id="azure-sql-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-sql-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
                             </div>
                             <div class="service-default-card">
                                 <h5>CosmosDB Reservations</h5>
                                 <label>Term: <select id="azure-cosmosdb-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-cosmosdb-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
                             </div>
                             <div class="service-default-card">
                                 <h5>Redis Cache Reservations</h5>
                                 <label>Term: <select id="azure-redis-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-redis-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
                             </div>
                         </div>
                     </fieldset>
