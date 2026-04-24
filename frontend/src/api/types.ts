@@ -324,7 +324,12 @@ export interface CreateAPIKeyResponse {
 }
 
 export interface GetAPIKeysResponse {
-  keys: APIKeyInfo[];
+  // Backend wire field is `api_keys` (see internal/auth/service_apikeys_api.go
+  // APIListAPIKeysResponse). The previous `keys` declaration didn't match
+  // any backend field, so `response.keys` was always undefined and
+  // crashed renderApiKeysList() with "Cannot read properties of undefined
+  // (reading 'length')" — see GitHub issue #9.
+  api_keys: APIKeyInfo[];
 }
 
 // Savings Analytics Types
