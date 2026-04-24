@@ -35,8 +35,8 @@ describe('commitmentOptions', () => {
         expect(config.invalidCombinations).toBeUndefined();
       });
 
-      it('should return savings-plans config with all options', () => {
-        const config = getCommitmentConfig('aws', 'savings-plans');
+      it('should return savingsplans config with all options', () => {
+        const config = getCommitmentConfig('aws', 'savingsplans');
 
         expect(config.terms).toHaveLength(2);
         expect(config.payments).toHaveLength(3);
@@ -198,9 +198,9 @@ describe('commitmentOptions', () => {
         expect(isValidCombination('aws', 'ec2', 3, 'all-upfront')).toBe(true);
       });
 
-      it('should return true for all savings-plans combinations', () => {
-        expect(isValidCombination('aws', 'savings-plans', 1, 'no-upfront')).toBe(true);
-        expect(isValidCombination('aws', 'savings-plans', 3, 'no-upfront')).toBe(true);
+      it('should return true for all savingsplans combinations', () => {
+        expect(isValidCombination('aws', 'savingsplans', 1, 'no-upfront')).toBe(true);
+        expect(isValidCombination('aws', 'savingsplans', 3, 'no-upfront')).toBe(true);
       });
     });
 

@@ -55,7 +55,7 @@ const commitmentConfigs: Record<string, Record<string, CommitmentConfig>> = {
       payments: AWS_PAYMENTS
     },
     // Savings Plans - all options available
-    'savings-plans': {
+    savingsplans: {
       terms: STANDARD_TERMS,
       payments: AWS_PAYMENTS
     },
