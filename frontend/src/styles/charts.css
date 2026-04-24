@@ -10,6 +10,18 @@
 
 .chart-section canvas {
     max-height: 300px;
+    min-height: 280px;
+}
+
+/* Empty state for chart sections stays centred and occupies roughly
+ * the same vertical space as the canvas so the widget doesn't collapse
+ * when Chart.js is destroyed during provider-filter transitions
+ * (issue #13). */
+.chart-section .empty {
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 /* Chart container */
