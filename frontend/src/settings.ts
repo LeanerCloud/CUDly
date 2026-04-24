@@ -640,6 +640,69 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   setInputChecked('account-aws-is-org-root', account?.aws_is_org_root ?? false);
 
   updateAwsAuthModeFields(authMode, account?.aws_bastion_id);
+
+  // Render the trust-policy snippet asynchronously — we need the CUDly
+  // host account ID from getConfig.source_identity (issue #19). Kept
+  // void so the modal doesn't block waiting for the network.
+  void renderAwsTrustPolicy();
+}
+
+/**
+ * Render the IAM trust-policy JSON snippet into the AWS role-mode
+ * section. The snippet interpolates the CUDly host AWS account ID and
+ * the per-account External ID so operators can copy it straight into
+ * the role's trust relationship (issue #19).
+ */
+async function renderAwsTrustPolicy(): Promise<void> {
+  const block = document.getElementById('account-aws-trust-policy');
+  const hint = document.getElementById('account-aws-trust-policy-hint');
+  if (!block) return;
+  const externalID = (document.getElementById('account-aws-external-id') as HTMLInputElement | null)?.value ?? '';
+
+  let sourceAccountID = '';
+  try {
+    const cfg = await api.getConfig();
+    if (cfg.source_identity?.provider === 'aws') {
+      sourceAccountID = cfg.source_identity.account_id ?? '';
+    }
+  } catch {
+    // Non-critical — fall through to the placeholder text below.
+  }
+
+  if (!sourceAccountID) {
+    block.textContent = '';
+    if (hint) {
+      hint.textContent =
+        "CUDly can't determine its host AWS account ID from this deployment " +
+        "(either CUDly isn't running on AWS, or the Lambda/Container role " +
+        "lacks sts:GetCallerIdentity). Ask a CUDly admin for the account ID, " +
+        "then build the trust policy manually with Principal=arn:aws:iam::" +
+        "<CUDly account ID>:root, Action=sts:AssumeRole, and a StringEquals " +
+        "sts:ExternalId condition on the value above.";
+    }
+    return;
+  }
+
+  const policy = {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Principal: { AWS: `arn:aws:iam::${sourceAccountID}:root` },
+        Action: 'sts:AssumeRole',
+        Condition: {
+          StringEquals: { 'sts:ExternalId': externalID },
+        },
+      },
+    ],
+  };
+  block.textContent = JSON.stringify(policy, null, 2);
+  if (hint) {
+    hint.textContent =
+      "Attach this policy to the IAM role's trust relationship so CUDly can " +
+      "assume it. The sts:ExternalId condition locks the role to this " +
+      "specific CUDly registration.";
+  }
 }
 
 /**
@@ -949,6 +1012,13 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   document.getElementById('account-aws-external-id-copy')?.addEventListener(
     'click',
     () => copyToClipboard('account-aws-external-id'),
+    { signal },
+  );
+
+  // Copy the rendered AWS IAM trust policy snippet (issue #19).
+  document.getElementById('account-aws-trust-policy-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-trust-policy'),
     { signal },
   );
 

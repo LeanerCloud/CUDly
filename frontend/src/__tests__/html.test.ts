@@ -640,5 +640,19 @@ describe('HTML Structure', () => {
       const small = roleFields?.querySelector('small');
       expect(small?.textContent).toMatch(/sts:ExternalId/);
     });
+
+    test('aws trust-policy snippet block + copy button exist in role-fields (issue #19)', () => {
+      const roleFields = document.getElementById('account-aws-role-fields');
+      expect(roleFields).not.toBeNull();
+      const pre = document.getElementById('account-aws-trust-policy');
+      expect(pre?.tagName.toLowerCase()).toBe('pre');
+      const copyBtn = document.getElementById('account-aws-trust-policy-copy');
+      expect(copyBtn).not.toBeNull();
+      expect(copyBtn?.classList.contains('copy-btn')).toBe(true);
+      // Hint is rendered dynamically by settings.ts; confirm the
+      // placeholder element exists so the render target is stable.
+      const hint = document.getElementById('account-aws-trust-policy-hint');
+      expect(hint).not.toBeNull();
+    });
   });
 });

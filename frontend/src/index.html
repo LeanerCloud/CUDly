@@ -1026,6 +1026,14 @@
                                 </span>
                             </label>
                             <small>CUDly auto-generates this value per account. Copy it into the <code>sts:ExternalId</code> condition of your IAM role's trust policy so only CUDly with this account registered can assume the role.</small>
+                            <div class="trust-policy-section">
+                                <label for="account-aws-trust-policy">IAM Trust Policy (paste into the role's trust relationship):</label>
+                                <div class="input-with-copy">
+                                    <pre id="account-aws-trust-policy" class="code-block"></pre>
+                                    <button type="button" id="account-aws-trust-policy-copy" class="copy-btn" aria-label="Copy trust policy JSON to clipboard"><span class="copy-icon">Copy</span></button>
+                                </div>
+                                <small id="account-aws-trust-policy-hint">Attach this policy to the IAM role's trust relationship so CUDly can assume it. The <code>sts:ExternalId</code> condition locks the role to this specific CUDly registration.</small>
+                            </div>
                         </div>
                         <div id="account-aws-bastion-fields" class="hidden">
                             <label>Bastion Account: <select id="account-aws-bastion-id"><option value="">Select bastion account...</option></select></label>
