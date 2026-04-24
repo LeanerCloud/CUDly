@@ -988,10 +988,16 @@ describe('Plans Module', () => {
       providerSelect.value = 'azure';
       providerSelect.dispatchEvent(new Event('change'));
 
-      // Should hide AWS services optgroup
+      // Should hide + disable the AWS services optgroup. Previously this
+      // test asserted on inline style.display — that was indicator-only
+      // and missed the real bug (issue #11: the hidden class stayed
+      // baked in, so switching away from AWS never re-showed the target
+      // provider's services). The class + disabled state is the new
+      // source of truth.
       const serviceSelect = document.getElementById('plan-service') as HTMLSelectElement;
       const awsOptgroup = serviceSelect.querySelector('optgroup[label="AWS Services"]') as HTMLOptGroupElement;
-      expect(awsOptgroup.style.display).toBe('none');
+      expect(awsOptgroup.classList.contains('hidden')).toBe(true);
+      expect(awsOptgroup.disabled).toBe(true);
     });
 
     test('handles missing elements gracefully', () => {
@@ -1741,6 +1747,78 @@ describe('Plans Module', () => {
 
       // Should call populatePaymentSelect to fix invalid combination
       expect(populatePaymentSelect).toHaveBeenCalled();
+    });
+  });
+
+  describe('provider scopes service dropdown (issue #11)', () => {
+    // Match optgroups by label-prefix so both the real HTML labels
+    // ("AWS"/"Azure"/"GCP") and the test fixture's labels
+    // ("AWS Services"/"Azure Services"/"GCP Services") work.
+    const byProvider = (prefix: string) =>
+      document.querySelector(
+        `#plan-service > optgroup[label^="${prefix}"]`,
+      ) as HTMLOptGroupElement | null;
+
+    beforeEach(() => {
+      setupPlanHandlers();
+    });
+
+    test('initial state (provider=aws): only AWS optgroup enabled', () => {
+      const aws = byProvider('AWS')!;
+      const azure = byProvider('Azure')!;
+      const gcp = byProvider('GCP')!;
+
+      expect(aws.classList.contains('hidden')).toBe(false);
+      expect(aws.disabled).toBe(false);
+      expect(azure.classList.contains('hidden')).toBe(true);
+      expect(azure.disabled).toBe(true);
+      expect(gcp.classList.contains('hidden')).toBe(true);
+      expect(gcp.disabled).toBe(true);
+    });
+
+    test('switching to azure enables only the Azure optgroup', () => {
+      const provider = document.getElementById('plan-provider') as HTMLSelectElement;
+      provider.value = 'azure';
+      provider.dispatchEvent(new Event('change'));
+
+      expect(byProvider('AWS')!.classList.contains('hidden')).toBe(true);
+      expect(byProvider('AWS')!.disabled).toBe(true);
+      expect(byProvider('Azure')!.classList.contains('hidden')).toBe(false);
+      expect(byProvider('Azure')!.disabled).toBe(false);
+      expect(byProvider('GCP')!.classList.contains('hidden')).toBe(true);
+      expect(byProvider('GCP')!.disabled).toBe(true);
+    });
+
+    test('switching to gcp enables only the GCP optgroup', () => {
+      const provider = document.getElementById('plan-provider') as HTMLSelectElement;
+      provider.value = 'gcp';
+      provider.dispatchEvent(new Event('change'));
+
+      expect(byProvider('AWS')!.disabled).toBe(true);
+      expect(byProvider('Azure')!.disabled).toBe(true);
+      expect(byProvider('GCP')!.disabled).toBe(false);
+      expect(byProvider('GCP')!.classList.contains('hidden')).toBe(false);
+    });
+
+    test('resets service to first visible option when AWS-only selection becomes hidden', () => {
+      const provider = document.getElementById('plan-provider') as HTMLSelectElement;
+      const service = document.getElementById('plan-service') as HTMLSelectElement;
+
+      // User picks an AWS-only service, then switches provider to azure.
+      service.value = 'ec2';
+      provider.value = 'azure';
+      provider.dispatchEvent(new Event('change'));
+
+      // Implementation picks the first option in the first visible
+      // optgroup. Assert the chosen value lives inside an optgroup
+      // labelled with the selected provider — decoupling the test
+      // from the specific service name in the fixture.
+      const selected = service.options[service.selectedIndex];
+      expect(selected).toBeDefined();
+      const parent = selected?.parentElement;
+      expect(parent).toBeInstanceOf(HTMLOptGroupElement);
+      expect((parent as HTMLOptGroupElement).label.toLowerCase()).toMatch(/^azure/);
+      expect(service.value).not.toBe('ec2');
     });
   });
 });

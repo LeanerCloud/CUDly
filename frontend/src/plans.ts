@@ -1065,14 +1065,25 @@ function updateServiceDropdownForProvider(provider: string): void {
   const serviceSelect = document.getElementById('plan-service') as HTMLSelectElement | null;
   if (!serviceSelect) return;
 
-  // Show/hide optgroups based on selected provider
+  // Show/hide optgroups based on selected provider.
+  //
+  // Toggle the `hidden` class (same class the HTML starts with) so the
+  // DOM state tracks a single source of truth — previously we flipped
+  // `style.display`, which doesn't clear the pre-existing `hidden`
+  // class, so Azure/GCP stayed hidden forever even when selected.
+  //
+  // Also flip `optgroup.disabled`: Chrome has a long-standing quirk
+  // where a `display: none` <optgroup> still renders its <option>s as
+  // selectable, so users could end up with provider=Azure + ec2. The
+  // `disabled` attribute disables selection in every browser.
   const optgroups = serviceSelect.querySelectorAll('optgroup');
   let firstVisibleOptionValue = '';
 
   optgroups.forEach(optgroup => {
     const optgroupLabel = optgroup.label.toLowerCase();
     const shouldShow = optgroupLabel.includes(provider.toLowerCase());
-    (optgroup as HTMLOptGroupElement).style.display = shouldShow ? '' : 'none';
+    optgroup.classList.toggle('hidden', !shouldShow);
+    optgroup.disabled = !shouldShow;
 
     // Track first visible option value to auto-select
     if (shouldShow && !firstVisibleOptionValue) {
@@ -1086,7 +1097,7 @@ function updateServiceDropdownForProvider(provider: string): void {
   // If current selection is hidden, select first visible option
   const currentOption = serviceSelect.options[serviceSelect.selectedIndex];
   const parentOptgroup = currentOption?.parentElement;
-  const isHidden = parentOptgroup instanceof HTMLOptGroupElement && parentOptgroup.style.display === 'none';
+  const isHidden = parentOptgroup instanceof HTMLOptGroupElement && parentOptgroup.classList.contains('hidden');
   if (isHidden && firstVisibleOptionValue) {
     serviceSelect.value = firstVisibleOptionValue;
     // Trigger change event to update term/payment options
