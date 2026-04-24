@@ -34,6 +34,7 @@ const SERVICE_FIELDS = [
   { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
   { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
   { provider: 'azure', service: 'redis',      termId: 'azure-redis-term',      paymentId: 'azure-redis-payment' },
+  { provider: 'azure', service: 'search',     termId: 'azure-search-term',     paymentId: 'azure-search-payment' },
   { provider: 'gcp',   service: 'compute',    termId: 'gcp-compute-term',      paymentId: null },
   { provider: 'gcp',   service: 'sql',        termId: 'gcp-sql-term',          paymentId: null },
   { provider: 'gcp',   service: 'memorystore',termId: 'gcp-memorystore-term',  paymentId: null },

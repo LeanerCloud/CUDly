@@ -597,5 +597,22 @@ describe('HTML Structure', () => {
       const password = document.getElementById('user-password') as HTMLInputElement | null;
       expect(password?.getAttribute('minlength')).toBe('12');
     });
+
+    test('azure cognitive search has service-default term + payment selectors (issue #16)', () => {
+      // The recommendation filter offered "search" as an Azure service,
+      // but the purchasing settings panel lacked a matching card.
+      // providers/azure/services/search supports Cognitive Search
+      // reservations, so the right fix is to expose the defaults.
+      const termSel = document.getElementById('azure-search-term') as HTMLSelectElement | null;
+      const paySel = document.getElementById('azure-search-payment') as HTMLSelectElement | null;
+      expect(termSel).not.toBeNull();
+      expect(paySel).not.toBeNull();
+      expect(termSel?.querySelector('option[value="1"]')).not.toBeNull();
+      expect(termSel?.querySelector('option[value="3"]')).not.toBeNull();
+      // Azure payment values round-trip through the backend's AWS-style
+      // vocabulary — "all-upfront" for Upfront, "no-upfront" for Monthly.
+      expect(paySel?.querySelector('option[value="all-upfront"]')).not.toBeNull();
+      expect(paySel?.querySelector('option[value="no-upfront"]')).not.toBeNull();
+    });
   });
 });

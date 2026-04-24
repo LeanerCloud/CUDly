@@ -499,7 +499,7 @@ describe('Settings Module', () => {
       expect(api.updateConfig).toHaveBeenCalled();
     });
 
-    test('calls updateServiceConfig once per service field (14 calls)', async () => {
+    test('calls updateServiceConfig once per service field (15 calls)', async () => {
       (api.updateConfig as jest.Mock).mockResolvedValue({});
       (api.updateServiceConfig as jest.Mock).mockResolvedValue(undefined);
       window.alert = jest.fn();
@@ -507,7 +507,8 @@ describe('Settings Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await saveGlobalSettings(event);
 
-      expect(api.updateServiceConfig).toHaveBeenCalledTimes(14);
+      // 6 AWS + 5 Azure (vm, sql, cosmosdb, redis, search) + 4 GCP.
+      expect(api.updateServiceConfig).toHaveBeenCalledTimes(15);
     });
   }); // end saveGlobalSettings
 
