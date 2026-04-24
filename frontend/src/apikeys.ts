@@ -12,12 +12,23 @@ import { showToast } from './toast';
 let currentApiKeys: APIKeyInfo[] = [];
 
 /**
- * Load and display API keys
+ * Load and display API keys.
+ *
+ * Defensive parsing (issue #9): the previous implementation read
+ * `response.keys` while the backend returns `{api_keys: [...]}`,
+ * leaving `currentApiKeys` set to undefined and crashing the next
+ * render with "Cannot read properties of undefined (reading 'length')".
+ * Read the documented `api_keys` field, then fall back to a bare array
+ * (some other deployments/proxies might unwrap) and finally to `[]` so
+ * a contract drift can never crash the page.
  */
 export async function loadApiKeys(): Promise<void> {
   try {
     const response = await api.getApiKeys();
-    currentApiKeys = response.keys;
+    const list = (response as { api_keys?: APIKeyInfo[] } | undefined)?.api_keys
+      ?? (Array.isArray(response) ? response as APIKeyInfo[] : undefined)
+      ?? [];
+    currentApiKeys = Array.isArray(list) ? list : [];
     renderApiKeysList();
   } catch (error) {
     console.error('Failed to load API keys:', error);
@@ -32,7 +43,7 @@ export function renderApiKeysList(): void {
   const container = document.getElementById('apikeys-list');
   if (!container) return;
 
-  if (currentApiKeys.length === 0) {
+  if (!Array.isArray(currentApiKeys) || currentApiKeys.length === 0) {
     // DOM construction rather than template literal so the security hook
     // doesn't flag the innerHTML write — and all copy is static anyway.
     container.replaceChildren();

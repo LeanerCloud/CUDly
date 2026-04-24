@@ -98,7 +98,12 @@ test('refresh button triggers POST /recommendations/refresh + onRefresh callback
     last_collected_at: new Date().toISOString(),
     last_collection_error: null,
   });
-  mockedRefresh.mockResolvedValue({ message: 'ok' });
+  mockedRefresh.mockResolvedValue({
+    recommendations: 0,
+    total_savings: 0,
+    successful_providers: [],
+    failed_providers: {},
+  });
   const onRefresh = jest.fn().mockResolvedValue(undefined);
 
   await renderFreshness('fresh', onRefresh);

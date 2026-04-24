@@ -82,7 +82,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
 
       await loadApiKeys();
 
@@ -107,12 +107,63 @@ describe('API Keys Module', () => {
       expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to load API keys');
       consoleError.mockRestore();
     });
+
+    // Regression: GitHub issue #9. Backend returns `{api_keys: [...]}`
+    // (auth.APIListAPIKeysResponse with `json:"api_keys"`); the previous
+    // frontend read `response.keys`, leaving currentApiKeys = undefined
+    // and crashing renderApiKeysList with TypeError. Lock in the
+    // contract so a future field rename has to update tests too.
+    test('issue #9: parses api_keys field from backend response', async () => {
+      const mockKeys = [{
+        id: 'key-1', name: 'Test', key_prefix: 'abc',
+        is_active: true, created_at: '2024-01-15T10:00:00Z',
+      }];
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
+
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await loadApiKeys();
+
+      expect(document.getElementById('apikeys-list')?.innerHTML).toContain('Test');
+      expect(consoleError).not.toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
+
+    test('issue #9: tolerates legacy bare-array response without crashing', async () => {
+      // Defence-in-depth — if a proxy or alternate handler returns the
+      // bare array (no envelope), we should still render the rows
+      // rather than crashing on currentApiKeys.length.
+      const mockKeys = [{
+        id: 'key-2', name: 'Bare', key_prefix: 'def',
+        is_active: true, created_at: '2024-01-15T10:00:00Z',
+      }];
+      (api.getApiKeys as jest.Mock).mockResolvedValue(mockKeys);
+
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(loadApiKeys()).resolves.toBeUndefined();
+      expect(document.getElementById('apikeys-list')?.innerHTML).toContain('Bare');
+      expect(consoleError).not.toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
+
+    test('issue #9: renders empty state on unexpected response shape', async () => {
+      // The exact failure mode from the bug report: response has
+      // neither `api_keys` nor is an array. Old code crashed with
+      // TypeError; new code should render the empty state and not log
+      // an error.
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ unexpected: 'shape' });
+
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(loadApiKeys()).resolves.toBeUndefined();
+      expect(document.getElementById('apikeys-list')?.textContent).toContain('No API keys yet');
+      expect(consoleError).not.toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
   });
 
   describe('renderApiKeysList', () => {
     test('shows empty message when no keys', () => {
       // First load empty keys
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: [] });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: [] });
 
       // Call renderApiKeysList (it uses internal state, so we need to load first)
       loadApiKeys().then(() => {
@@ -139,7 +190,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
 
       await loadApiKeys();
 
@@ -159,7 +210,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
 
       await loadApiKeys();
 
@@ -182,7 +233,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
 
       await loadApiKeys();
 
@@ -203,7 +254,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
 
       await loadApiKeys();
 
@@ -222,7 +273,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
       (api.revokeApiKey as jest.Mock).mockResolvedValue({});
 
       await loadApiKeys();
@@ -249,7 +300,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
       (api.deleteApiKey as jest.Mock).mockResolvedValue({});
 
       await loadApiKeys();
@@ -395,7 +446,7 @@ describe('API Keys Module', () => {
         key_id: 'key-1',
         key: { id: 'key-1', name: 'Test', key_prefix: 'abc' }
       });
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: [] });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: [] });
 
       (document.getElementById('apikey-name') as HTMLInputElement).value = 'Test Key';
 
@@ -436,7 +487,7 @@ describe('API Keys Module', () => {
       };
 
       (api.createApiKey as jest.Mock).mockResolvedValue(mockResponse);
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: [] });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: [] });
 
       (document.getElementById('apikey-name') as HTMLInputElement).value = 'Test Key';
 
@@ -459,7 +510,7 @@ describe('API Keys Module', () => {
       };
 
       (api.createApiKey as jest.Mock).mockResolvedValue(mockResponse);
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: [] });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: [] });
 
       (document.getElementById('apikey-name') as HTMLInputElement).value = 'Test Key';
       (document.getElementById('apikey-expires') as HTMLInputElement).checked = true;
@@ -608,7 +659,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
       await loadApiKeys();
     });
 
@@ -662,7 +713,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
       await loadApiKeys();
     });
 
@@ -735,7 +786,7 @@ describe('API Keys Module', () => {
         key_id: 'key-1',
         key: { id: 'key-1', name: 'Test', key_prefix: 'abc' }
       });
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: [] });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: [] });
 
       initApiKeys();
 
@@ -837,7 +888,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
 
       await loadApiKeys();
 
@@ -868,7 +919,7 @@ describe('API Keys Module', () => {
         }
       ];
 
-      (api.getApiKeys as jest.Mock).mockResolvedValue({ keys: mockKeys });
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
 
       await loadApiKeys();
 
