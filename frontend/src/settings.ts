@@ -7,6 +7,7 @@ import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
+import { isValidCombination } from './commitmentOptions';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -987,6 +988,16 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
     }, { signal });
   }
 
+  // Wire per-service term changes to the commitment-constraint sync so the
+  // payment dropdown narrows to supported combinations as the user picks a
+  // term. The initial sync runs after loadGlobalSettings populates the
+  // form with persisted values.
+  SERVICE_FIELDS.forEach(field => {
+    if (field.provider !== 'aws' || !field.paymentId) return;
+    const termEl = document.getElementById(field.termId) as HTMLSelectElement | null;
+    termEl?.addEventListener('change', () => syncPaymentConstraintsForService(field), { signal });
+  });
+
   // Set up dirty-field tracking
   setupDirtyTracking(signal);
 
@@ -1085,6 +1096,10 @@ function propagateTermToServices(term: string): void {
       select.value = term;
     }
   });
+  // Propagation changes term, which may invalidate each service's current
+  // payment (e.g., RDS jumping from 1yr to 3yr while "No Upfront" was set).
+  // Re-apply per-service constraints to keep the UI honest.
+  syncAllServiceCommitmentConstraints();
 }
 
 /**
@@ -1100,6 +1115,57 @@ function propagatePaymentToServices(payment: string): void {
         select.value = payment;
       }
     });
+  // If the propagated payment is invalid for any service's current term
+  // (e.g., "No Upfront" against RDS 3yr), clamp to the first valid option
+  // on that service instead of silently persisting a combo the provider
+  // will reject.
+  syncAllServiceCommitmentConstraints();
+}
+
+/**
+ * Apply per-service commitment restrictions to a single service's payment
+ * dropdown. AWS services like RDS/ElastiCache/OpenSearch/Redshift don't
+ * accept 3-year No-Upfront — commitmentOptions.ts encodes which (term,
+ * payment) pairs each service rejects. We hide + disable the invalid
+ * option rows so the Settings UI can't save a combination the backend
+ * would reject. If the currently-selected payment becomes invalid after
+ * a term change, it auto-clamps to the first valid option so the form
+ * never holds an unsavable value.
+ *
+ * Azure and GCP service-default cards are out of scope here — Azure has
+ * only two payment options (neither restricted by term) and GCP has no
+ * payment selector at all.
+ */
+function syncPaymentConstraintsForService(field: typeof SERVICE_FIELDS[number]): void {
+  if (field.provider !== 'aws' || !field.paymentId) return;
+  const termEl = document.getElementById(field.termId) as HTMLSelectElement | null;
+  const paymentEl = document.getElementById(field.paymentId) as HTMLSelectElement | null;
+  if (!termEl || !paymentEl) return;
+
+  const term = parseInt(termEl.value || '3', 10);
+  let firstValidOption: HTMLOptionElement | null = null;
+  for (const opt of Array.from(paymentEl.options)) {
+    const valid = isValidCombination(field.provider, field.service, term, opt.value);
+    // Belt-and-suspenders: `hidden` removes the option from the rendered
+    // dropdown, `disabled` prevents keyboard / programmatic selection in
+    // the rare browsers where a hidden <option> can still receive focus.
+    opt.hidden = !valid;
+    opt.disabled = !valid;
+    if (valid && !firstValidOption) firstValidOption = opt;
+  }
+  const currentOpt = paymentEl.options[paymentEl.selectedIndex];
+  if (currentOpt?.disabled && firstValidOption) {
+    paymentEl.value = firstValidOption.value;
+  }
+}
+
+/**
+ * Re-apply commitment constraints across every service. Cheap (O(services
+ * × payments)), called on settings load and after any bulk write that
+ * touches term/payment values (reset, propagation).
+ */
+function syncAllServiceCommitmentConstraints(): void {
+  SERVICE_FIELDS.forEach(syncPaymentConstraintsForService);
 }
 
 function termLabel(value: string): string {
@@ -1262,6 +1328,15 @@ export async function loadGlobalSettings(): Promise<void> {
         if (paymentEl) paymentEl.value = svc.payment;
       }
     }
+
+    // After loading persisted values, apply per-service commitment
+    // restrictions (e.g., hide "No Upfront" on RDS 3yr). Runs even when
+    // `data.services` is absent so fresh installs start with the invalid
+    // options already suppressed. Any legacy-persisted invalid combo
+    // (RDS 3yr + no-upfront, possible on databases loaded from before
+    // this fix) gets clamped here to the first valid payment option,
+    // which will then be re-persisted on the user's next save.
+    syncAllServiceCommitmentConstraints();
 
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');

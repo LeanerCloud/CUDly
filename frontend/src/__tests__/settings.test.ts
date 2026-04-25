@@ -82,12 +82,12 @@ describe('Settings Module', () => {
         <select id="aws-opensearch-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-redshift-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-savingsplans-term"><option value="1">1</option><option value="3">3</option></select>
-        <select id="aws-ec2-payment"><option value="all-upfront">All</option><option value="no-upfront">No</option></select>
-        <select id="aws-rds-payment"><option value="all-upfront">All</option><option value="no-upfront">No</option></select>
-        <select id="aws-elasticache-payment"><option value="all-upfront">All</option><option value="no-upfront">No</option></select>
-        <select id="aws-opensearch-payment"><option value="all-upfront">All</option><option value="no-upfront">No</option></select>
-        <select id="aws-redshift-payment"><option value="all-upfront">All</option><option value="no-upfront">No</option></select>
-        <select id="aws-savingsplans-payment"><option value="all-upfront">All</option><option value="no-upfront">No</option></select>
+        <select id="aws-ec2-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-rds-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-elasticache-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-opensearch-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-redshift-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-savingsplans-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <!-- Azure term selects -->
         <select id="azure-vm-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="azure-sql-term"><option value="1">1</option><option value="3">3</option></select>
@@ -198,7 +198,7 @@ describe('Settings Module', () => {
       expect((document.getElementById('gcp-compute-term') as HTMLSelectElement).value).toBe('1');
     });
 
-    test('sets up default payment to propagate to AWS services (after confirm)', async () => {
+    test('sets up default payment to propagate to AWS services (after confirm), clamping where per-service constraints reject the value', async () => {
       setupSettingsHandlers();
       mockConfirmDialog.mockResolvedValueOnce(true);
 
@@ -208,8 +208,15 @@ describe('Settings Module', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+      // EC2 accepts no-upfront at both terms — propagation lands as-is.
       expect((document.getElementById('aws-ec2-payment') as HTMLSelectElement).value).toBe('no-upfront');
-      expect((document.getElementById('aws-rds-payment') as HTMLSelectElement).value).toBe('no-upfront');
+      // RDS 3yr rejects no-upfront (parent beforeEach seeds all service
+      // terms at "3"), so the constraint sync clamps RDS back to the
+      // first valid payment option instead of persisting an invalid
+      // combination the provider will refuse.
+      const rdsPayment = (document.getElementById('aws-rds-payment') as HTMLSelectElement).value;
+      expect(rdsPayment).not.toBe('no-upfront');
+      expect(['partial-upfront', 'all-upfront']).toContain(rdsPayment);
     });
 
     test('cancelling the cascade restores the default term to its prior value', async () => {
@@ -718,6 +725,144 @@ describe('Settings Module', () => {
       const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf-8');
       expect(html).toMatch(/Azure reservations support upfront or monthly/);
       expect(html).not.toMatch(/Azure and GCP reservations are always paid upfront/);
+    });
+  });
+
+  // Guard against the RDS 3yr + no-upfront regression from follow-up to
+  // issue #12. The backend rejects that combination (and EC/OpenSearch/
+  // Redshift 3yr no-upfront), so the Settings form must not allow it.
+  // Rules live in commitmentOptions.ts; these tests exercise the wiring
+  // that applies them to the per-service dropdowns.
+  describe('per-service term/payment combination constraints', () => {
+    const optVisible = (sel: HTMLSelectElement, value: string): boolean => {
+      const opt = Array.from(sel.options).find(o => o.value === value);
+      if (!opt) return false;
+      return !opt.hidden && !opt.disabled;
+    };
+
+    test('RDS 3yr hides "no-upfront" and keeps partial/all upfront selectable', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+        services: [{ provider: 'aws', service: 'rds', term: 3, payment: 'all-upfront' }],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      const rdsPayment = document.getElementById('aws-rds-payment') as HTMLSelectElement;
+      expect(optVisible(rdsPayment, 'no-upfront')).toBe(false);
+      expect(optVisible(rdsPayment, 'partial-upfront')).toBe(true);
+      expect(optVisible(rdsPayment, 'all-upfront')).toBe(true);
+    });
+
+    test('RDS 1yr keeps all three payment options visible', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 1, default_payment: 'no-upfront', default_coverage: 80 },
+        services: [{ provider: 'aws', service: 'rds', term: 1, payment: 'no-upfront' }],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      const rdsPayment = document.getElementById('aws-rds-payment') as HTMLSelectElement;
+      expect(optVisible(rdsPayment, 'no-upfront')).toBe(true);
+      expect(optVisible(rdsPayment, 'partial-upfront')).toBe(true);
+      expect(optVisible(rdsPayment, 'all-upfront')).toBe(true);
+    });
+
+    test('switching RDS term 1yr → 3yr while "no-upfront" is selected auto-clamps payment', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 1, default_payment: 'no-upfront', default_coverage: 80 },
+        services: [{ provider: 'aws', service: 'rds', term: 1, payment: 'no-upfront' }],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      const rdsTerm = document.getElementById('aws-rds-term') as HTMLSelectElement;
+      const rdsPayment = document.getElementById('aws-rds-payment') as HTMLSelectElement;
+      expect(rdsPayment.value).toBe('no-upfront');
+
+      rdsTerm.value = '3';
+      rdsTerm.dispatchEvent(new Event('change'));
+
+      // no-upfront is now invalid; payment should snap to first valid option
+      expect(rdsPayment.value).not.toBe('no-upfront');
+      expect(['partial-upfront', 'all-upfront']).toContain(rdsPayment.value);
+      expect(optVisible(rdsPayment, 'no-upfront')).toBe(false);
+    });
+
+    test('legacy-persisted invalid combo (RDS 3yr + no-upfront) is clamped on load', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+        // Simulate a config stored before this guardrail existed.
+        services: [{ provider: 'aws', service: 'rds', term: 3, payment: 'no-upfront' }],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      const rdsPayment = document.getElementById('aws-rds-payment') as HTMLSelectElement;
+      expect(rdsPayment.value).not.toBe('no-upfront');
+    });
+
+    test('EC2 3yr keeps all three payment options visible (no service-level restriction)', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'no-upfront', default_coverage: 80 },
+        services: [{ provider: 'aws', service: 'ec2', term: 3, payment: 'no-upfront' }],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      const ec2Payment = document.getElementById('aws-ec2-payment') as HTMLSelectElement;
+      expect(optVisible(ec2Payment, 'no-upfront')).toBe(true);
+      expect(optVisible(ec2Payment, 'partial-upfront')).toBe(true);
+      expect(optVisible(ec2Payment, 'all-upfront')).toBe(true);
+      expect(ec2Payment.value).toBe('no-upfront');
+    });
+
+    test.each(['elasticache', 'opensearch', 'redshift'])(
+      '%s 3yr keeps "no-upfront" visible (AWS only restricts RDS)',
+      async (service) => {
+        (api.getConfig as jest.Mock).mockResolvedValue({
+          global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'no-upfront', default_coverage: 80 },
+          services: [{ provider: 'aws', service, term: 3, payment: 'no-upfront' }],
+        });
+        setupSettingsHandlers();
+        await loadGlobalSettings();
+
+        const payment = document.getElementById(`aws-${service}-payment`) as HTMLSelectElement;
+        expect(optVisible(payment, 'no-upfront')).toBe(true);
+        // And the selected value round-trips cleanly — the backend persists
+        // this service with no-upfront, and the UI should not clamp it.
+        expect(payment.value).toBe('no-upfront');
+      },
+    );
+
+    test('propagating global "no-upfront" to all services while term=3 clamps restricted services', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+        services: [
+          { provider: 'aws', service: 'ec2', term: 3, payment: 'all-upfront' },
+          { provider: 'aws', service: 'rds', term: 3, payment: 'all-upfront' },
+        ],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      // User changes the global default to no-upfront and confirms the propagation.
+      mockConfirmDialog.mockResolvedValue(true);
+      const defaultPayment = document.getElementById('setting-default-payment') as HTMLSelectElement;
+      defaultPayment.dataset['previous'] = 'all-upfront';
+      defaultPayment.value = 'no-upfront';
+      defaultPayment.dispatchEvent(new Event('change'));
+
+      // Allow the async confirmDialog promise to resolve.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const ec2Payment = document.getElementById('aws-ec2-payment') as HTMLSelectElement;
+      const rdsPayment = document.getElementById('aws-rds-payment') as HTMLSelectElement;
+      // EC2 accepts the propagated no-upfront (no restriction).
+      expect(ec2Payment.value).toBe('no-upfront');
+      // RDS 3yr rejects no-upfront, so it clamps back to the first valid option.
+      expect(rdsPayment.value).not.toBe('no-upfront');
     });
   });
 });
