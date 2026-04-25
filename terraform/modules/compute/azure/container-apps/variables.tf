@@ -205,7 +205,7 @@ variable "enable_scheduled_tasks" {
 }
 
 variable "scheduled_task_secret_name" {
-  description = "Key Vault secret name (NOT the value) holding the shared secret for authenticating scheduled task HTTP calls. The Logic App workflows fetch this secret at runtime via their managed identity, so the plaintext never lands in the workflow definition or Terraform state."
+  description = "Key Vault secret name (NOT the value) holding the shared secret for authenticating scheduled task HTTP calls. The Logic App workflows fetch this secret at runtime via their managed identity, so the plaintext never lands in the workflow definition or Terraform state. Must be non-empty when enable_scheduled_tasks or enable_ri_exchange_schedule is true (enforced by a precondition in scheduled-tasks.tf)."
   type        = string
   default     = ""
 }

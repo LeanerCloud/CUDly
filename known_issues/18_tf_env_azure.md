@@ -1,6 +1,6 @@
 # Known Issues: Terraform Azure Environment
 
-> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 1 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-25):** `0 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: `nonsensitive()` strips sensitivity from `additional_secrets` before merge~~ — RESOLVED
 

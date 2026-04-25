@@ -29,6 +29,27 @@ locals {
   ) ? "${var.key_vault_uri}secrets/${var.scheduled_task_secret_name}?api-version=7.4" : ""
 }
 
+# Plan-time guard: if any scheduled-task workflow is enabled, the secret name
+# and key vault URI must be set correctly. Without these checks, an empty
+# scheduled_task_secret_name silently produces `<vault>/secrets/?api-version=...`
+# (the list-secrets endpoint), and a key_vault_uri without a trailing slash
+# breaks the URL. Both surface late as runtime 401/403; the precondition
+# fails them at plan/apply instead.
+resource "terraform_data" "scheduled_task_secret_preconditions" {
+  count = (var.enable_scheduled_tasks || var.enable_ri_exchange_schedule) ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = length(var.scheduled_task_secret_name) > 0
+      error_message = "scheduled_task_secret_name must be set when enable_scheduled_tasks or enable_ri_exchange_schedule is true."
+    }
+    precondition {
+      condition     = endswith(var.key_vault_uri, "/")
+      error_message = "key_vault_uri must end with '/' (e.g. https://<vault>.vault.azure.net/)."
+    }
+  }
+}
+
 # ==============================================
 # Logic App workflow for recommendations refresh
 # ==============================================
@@ -87,6 +108,12 @@ resource "azurerm_logic_app_action_custom" "recommendations_get_secret" {
       }
     }
   })
+
+  # Ensure the role assignment exists before this action so the very first
+  # post-apply manual run doesn't 403 while RBAC propagation completes.
+  # Scheduled runs (next 02:00 UTC) almost certainly fall after propagation,
+  # but this keeps `terraform apply && trigger now` deterministic.
+  depends_on = [azurerm_role_assignment.recommendations_kv_secrets_user]
 }
 
 # Step 2: Call the Container App scheduled-recommendations endpoint, using
@@ -191,6 +218,9 @@ resource "azurerm_logic_app_action_custom" "ri_exchange_get_secret" {
       }
     }
   })
+
+  # See recommendations_get_secret.depends_on rationale.
+  depends_on = [azurerm_role_assignment.ri_exchange_kv_secrets_user]
 }
 
 resource "azurerm_logic_app_action_custom" "call_ri_exchange" {
@@ -281,6 +311,9 @@ resource "azurerm_logic_app_action_custom" "cleanup_get_secret" {
       }
     }
   })
+
+  # See recommendations_get_secret.depends_on rationale.
+  depends_on = [azurerm_role_assignment.cleanup_kv_secrets_user]
 }
 
 resource "azurerm_logic_app_action_custom" "call_cleanup" {
