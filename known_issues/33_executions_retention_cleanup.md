@@ -2,7 +2,7 @@
 
 **Surfaced during:** 2026-04-23 follow-up audit — Failed + Expired rows now persist and surface in History
 **Related commits:** `32f9e4ffc` (pending-in-history), `b44283746` (failed + expired states)
-**Status:** ops unknown — need to confirm cleanup cadence before failed/expired rows pile up.
+**Status:** ✔️ Resolved — `internal/server/handler.go::handleCleanupExpiredRecords` (line 153) calls `CleanupOldExecutions(ctx, 30)` with a 30-day retention. Wired as the `TaskCleanupExpiredRecords` scheduled task type and triggered by the EventBridge rule `cleanup_schedule` in `terraform/modules/compute/aws/cleanup-lambda/main.tf:98` (plus Azure cleanup-function and Container Apps scheduled task). Verified 2026-04-25.
 
 ## Problem
 
