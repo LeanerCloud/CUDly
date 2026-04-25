@@ -485,9 +485,21 @@
                             </div>
                             <div class="service-default-card">
                                 <h5>Savings Plans</h5>
-                                <p class="service-default-hint">Compute (EC2, Fargate, Lambda), EC2 Instance, SageMaker, and Database (RDS) plans share these defaults.</p>
+                                <p class="service-default-hint">Compute (EC2, Fargate, Lambda), EC2 Instance, SageMaker, and Database (RDS) plans share these defaults unless overridden by the per-service cards below.</p>
                                 <label>Term: <select id="aws-savingsplans-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savingsplans-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>SageMaker Savings Plans</h5>
+                                <p class="service-default-hint">Defaults for SageMaker Savings Plan recommendations. Falls back to the Savings Plans card above when unset.</p>
+                                <label>Term: <select id="aws-sagemaker-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-sagemaker-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Lambda Savings Plans</h5>
+                                <p class="service-default-hint">Lambda usage is covered by Compute Savings Plans. These defaults narrow Lambda recommendations independently of the umbrella Savings Plans card.</p>
+                                <label>Term: <select id="aws-lambda-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-lambda-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
                             </div>
                         </div>
                     </fieldset>
