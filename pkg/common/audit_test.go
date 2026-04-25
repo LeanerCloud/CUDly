@@ -13,6 +13,7 @@ import (
 )
 
 func TestWriteAuditRecord_Append(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 
@@ -37,6 +38,7 @@ func TestWriteAuditRecord_Append(t *testing.T) {
 }
 
 func TestWriteAuditRecord_EmptyRunID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 
@@ -46,11 +48,13 @@ func TestWriteAuditRecord_EmptyRunID(t *testing.T) {
 }
 
 func TestWriteAuditRecord_NonwritablePath(t *testing.T) {
+	t.Parallel()
 	err := WriteAuditRecord(AuditRecord{RunID: "x"}, "/nonexistent/dir/audit.jsonl")
 	assert.Error(t, err)
 }
 
 func TestAuditRecord_JSONRoundtrip(t *testing.T) {
+	t.Parallel()
 	raw := json.RawMessage(`{"foo":"bar"}`)
 	ts := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
 	record := AuditRecord{
@@ -96,6 +100,7 @@ func TestAuditRecord_JSONRoundtrip(t *testing.T) {
 }
 
 func TestRawRecommendation_Omitempty(t *testing.T) {
+	t.Parallel()
 	record := AuditRecord{RunID: "run-x", Status: "skipped"}
 	data, err := json.Marshal(record)
 	require.NoError(t, err)
@@ -103,6 +108,7 @@ func TestRawRecommendation_Omitempty(t *testing.T) {
 }
 
 func TestNewAuditRecord_Fields(t *testing.T) {
+	t.Parallel()
 	rec := Recommendation{
 		Provider:         ProviderAWS,
 		Account:          "111",
@@ -136,6 +142,7 @@ func TestNewAuditRecord_Fields(t *testing.T) {
 }
 
 func TestTermMonths(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		input    string
 		expected int
@@ -146,7 +153,9 @@ func TestTermMonths(t *testing.T) {
 		{"unknown", 0},
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.expected, termMonths(tc.input))
 		})
 	}

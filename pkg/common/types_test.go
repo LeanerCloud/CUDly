@@ -7,6 +7,7 @@ import (
 )
 
 func TestProviderType_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		provider ProviderType
 		expected string
@@ -17,13 +18,16 @@ func TestProviderType_String(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(string(tt.provider), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.provider.String())
 		})
 	}
 }
 
 func TestServiceType_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		service  ServiceType
 		expected string
@@ -47,13 +51,16 @@ func TestServiceType_String(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(string(tt.service), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.service.String())
 		})
 	}
 }
 
 func TestCommitmentType_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		commitment CommitmentType
 		expected   string
@@ -65,13 +72,16 @@ func TestCommitmentType_String(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(string(tt.commitment), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.commitment.String())
 		})
 	}
 }
 
 func TestComputeDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := ComputeDetails{
 		InstanceType: "m5.large",
 		Platform:     "linux",
@@ -83,6 +93,7 @@ func TestComputeDetails_GetServiceType(t *testing.T) {
 }
 
 func TestComputeDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		details  ComputeDetails
@@ -107,13 +118,16 @@ func TestComputeDetails_GetDetailDescription(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.details.GetDetailDescription())
 		})
 	}
 }
 
 func TestDatabaseDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := DatabaseDetails{
 		Engine:   "mysql",
 		AZConfig: "multi-az",
@@ -123,6 +137,7 @@ func TestDatabaseDetails_GetServiceType(t *testing.T) {
 }
 
 func TestDatabaseDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		details  DatabaseDetails
@@ -147,13 +162,16 @@ func TestDatabaseDetails_GetDetailDescription(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.details.GetDetailDescription())
 		})
 	}
 }
 
 func TestCacheDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := CacheDetails{
 		Engine:   "redis",
 		NodeType: "cache.r6g.large",
@@ -163,6 +181,7 @@ func TestCacheDetails_GetServiceType(t *testing.T) {
 }
 
 func TestCacheDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := CacheDetails{
 		Engine:   "redis",
 		NodeType: "cache.r6g.large",
@@ -172,6 +191,7 @@ func TestCacheDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestSearchDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := SearchDetails{
 		InstanceType: "r5.large.search",
 	}
@@ -180,6 +200,7 @@ func TestSearchDetails_GetServiceType(t *testing.T) {
 }
 
 func TestSearchDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := SearchDetails{
 		InstanceType: "r5.large.search",
 	}
@@ -188,6 +209,7 @@ func TestSearchDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestDataWarehouseDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := DataWarehouseDetails{
 		NodeType:      "dc2.large",
 		NumberOfNodes: 3,
@@ -197,6 +219,7 @@ func TestDataWarehouseDetails_GetServiceType(t *testing.T) {
 }
 
 func TestDataWarehouseDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := DataWarehouseDetails{
 		NodeType:      "dc2.large",
 		NumberOfNodes: 3,
@@ -206,6 +229,7 @@ func TestDataWarehouseDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestSavingsPlanDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := SavingsPlanDetails{
 		PlanType:         "Compute",
 		HourlyCommitment: 10.50,
@@ -215,6 +239,7 @@ func TestSavingsPlanDetails_GetServiceType(t *testing.T) {
 }
 
 func TestSavingsPlanDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := SavingsPlanDetails{
 		PlanType: "Compute",
 	}
@@ -223,6 +248,7 @@ func TestSavingsPlanDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestRecommendation_Struct(t *testing.T) {
+	t.Parallel()
 	rec := Recommendation{
 		Provider:          ProviderAWS,
 		Account:           "123456789012",
@@ -248,6 +274,7 @@ func TestRecommendation_Struct(t *testing.T) {
 }
 
 func TestPurchaseResult_Struct(t *testing.T) {
+	t.Parallel()
 	result := PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
@@ -262,6 +289,7 @@ func TestPurchaseResult_Struct(t *testing.T) {
 }
 
 func TestCommitment_Struct(t *testing.T) {
+	t.Parallel()
 	commitment := Commitment{
 		Provider:       ProviderAWS,
 		Account:        "123456789012",
@@ -280,6 +308,7 @@ func TestCommitment_Struct(t *testing.T) {
 }
 
 func TestOfferingDetails_Struct(t *testing.T) {
+	t.Parallel()
 	offering := OfferingDetails{
 		OfferingID:          "offering-123",
 		ResourceType:        "db.t3.medium",
@@ -298,6 +327,7 @@ func TestOfferingDetails_Struct(t *testing.T) {
 }
 
 func TestRecommendationParams_Struct(t *testing.T) {
+	t.Parallel()
 	params := RecommendationParams{
 		Service:        ServiceRDS,
 		Region:         "us-east-1",
@@ -315,6 +345,7 @@ func TestRecommendationParams_Struct(t *testing.T) {
 }
 
 func TestAccount_Struct(t *testing.T) {
+	t.Parallel()
 	account := Account{
 		Provider:    ProviderAWS,
 		ID:          "123456789012",
@@ -329,6 +360,7 @@ func TestAccount_Struct(t *testing.T) {
 }
 
 func TestRegion_Struct(t *testing.T) {
+	t.Parallel()
 	region := Region{
 		Provider:    ProviderAWS,
 		ID:          "us-east-1",
@@ -342,6 +374,7 @@ func TestRegion_Struct(t *testing.T) {
 }
 
 func TestNormalizeSource(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		in      string
@@ -359,7 +392,9 @@ func TestNormalizeSource(t *testing.T) {
 		{"injection attempt", "cudly-cli; DROP TABLE", "", true},
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := NormalizeSource(tc.in)
 			if tc.wantErr {
 				assert.Error(t, err)
