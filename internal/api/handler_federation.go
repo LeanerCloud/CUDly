@@ -135,9 +135,19 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
+	// Reject impossible target/source combinations early — before bundle
+	// construction — so the caller gets a clear 400 instead of a downloadable
+	// bundle that fails at terraform apply with a cryptic IAM error. See #42.
+	if err = validateFederationTargetSource(target, source); err != nil {
+		return nil, err
+	}
+
 	apiURL := deriveFederationAPIURL(h.dashboardURL, req.RequestContext.DomainName)
 	data := buildGenericIaCData(target, source, apiURL)
 	if err = h.populateSourceAccountID(ctx, source, &data); err != nil {
+		return nil, err
+	}
+	if err = h.validateSourceIdentity(ctx); err != nil {
 		return nil, err
 	}
 	// ContactEmail is always the email of the authenticated user who requested
@@ -180,6 +190,62 @@ func (h *Handler) populateSourceAccountID(ctx context.Context, source string, da
 		// the execution role has sts:GetCallerIdentity and AWS_REGION is set.
 		return fmt.Errorf("federation iac: CUDly failed to resolve its own AWS account ID; " +
 			"check that the execution role has sts:GetCallerIdentity and AWS_REGION is set")
+	}
+	return nil
+}
+
+// validateSourceIdentity asserts that CUDly's own source-cloud identity is
+// fully populated before rendering an IaC bundle. The Azure and GCP paths
+// read identity from environment variables (AZURE_SUBSCRIPTION_ID,
+// AZURE_TENANT_ID, GCP_PROJECT_ID) — when any of those are unset on the
+// Lambda/Function App, empty strings flow into the rendered tfvars and the
+// customer's `terraform apply` later fails with a blank client_id or missing
+// project. Fail loud here with a 500-class error naming the missing env var
+// so the operator knows exactly what to fix. See #41.
+//
+// AWS source-cloud is intentionally NOT covered here — populateSourceAccountID
+// already enforces the equivalent fail-loud guard for AWS deployments via STS
+// GetCallerIdentity, with a more specific error message naming the IAM
+// permission the execution role needs.
+func (h *Handler) validateSourceIdentity(ctx context.Context) error {
+	cloud := sourceCloud()
+	if cloud != "azure" && cloud != "gcp" {
+		return nil
+	}
+	id := h.resolveSourceIdentity(ctx)
+	switch cloud {
+	case "azure":
+		if id.SubscriptionID == "" {
+			return fmt.Errorf("federation iac: AZURE_SUBSCRIPTION_ID is not set; " +
+				"check the Lambda/Function App environment variables")
+		}
+		if id.TenantID == "" {
+			return fmt.Errorf("federation iac: AZURE_TENANT_ID is not set; " +
+				"check the Lambda/Function App environment variables")
+		}
+	case "gcp":
+		if id.ProjectID == "" {
+			return fmt.Errorf("federation iac: GCP_PROJECT_ID is not set; " +
+				"check the Cloud Run / Cloud Functions environment variables")
+		}
+	}
+	return nil
+}
+
+// validateFederationTargetSource rejects impossible target/source combinations
+// for the current CUDly deployment. It runs before bundle construction so the
+// caller gets a clear 400 instead of a downloadable bundle that fails at
+// `terraform apply` with a cryptic provider error. See #42.
+//
+// Today the only impossible-by-construction combination is target=aws-cross-account
+// (target == "aws" && source == "aws") from a non-AWS CUDly deployment: the
+// rendered trust policy needs CUDly's AWS account ID in the principal ARN,
+// which a CUDly running on Azure/GCP cannot supply.
+func validateFederationTargetSource(target, source string) error {
+	if target == "aws" && source == "aws" && sourceCloud() != "aws" {
+		return NewClientError(400, fmt.Sprintf(
+			"target=aws-cross-account requires CUDly to be deployed on AWS; "+
+				"this deployment is on %s", sourceCloud()))
 	}
 	return nil
 }
