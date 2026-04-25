@@ -672,11 +672,15 @@ func extractVMPricing(items []AzureRetailPriceItem, termYears int) (onDemand, re
 // providers/azure/internal/recommendations so the four Azure service
 // converters share the same type-assertion + nil-guard ladder.
 //
-// Details populated from the reservation recommendation payload only —
-// Platform / Tenancy / Scope (and the vCPU / memory counts a UI would
-// want) require an ARM SKU-catalogue lookup; populating them here would
-// trigger an N+1 armcompute.ResourceSKUsClient.ListByLocation per
-// recommendation. That batched-enrichment is tracked as a follow-up in
+// Compute is NOT yet wired to the batched-SKU-catalogue lookup landed
+// for cache/cosmosdb/database. Reason: common.ComputeDetails (in
+// pkg/common/types.go) currently only exposes InstanceType, Platform,
+// Tenancy, Scope. The two enrichments the SKU catalogue would supply
+// for compute are vCPU and MemoryGB — neither of which has a field on
+// ComputeDetails to write into. Adding new fields to a shared struct
+// touches every cloud provider + every consumer (frontend, common
+// matchers, three other providers' converters), which is well outside
+// the scope of this perf change. Tracked as a follow-up — see
 // known_issues/10_azure_provider.md.
 func (c *ComputeClient) convertAzureVMRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
@@ -699,7 +703,7 @@ func (c *ComputeClient) convertAzureVMRecommendation(_ context.Context, azureRec
 		Timestamp:        time.Now(),
 		// Only InstanceType is safely derivable from the payload. Platform,
 		// Tenancy, Scope are armcompute.ResourceSKUsClient territory and
-		// are deferred to the batched-enrichment follow-up.
+		// are deferred — see the function godoc for the scope decision.
 		Details: common.ComputeDetails{
 			InstanceType: f.ResourceType,
 		},

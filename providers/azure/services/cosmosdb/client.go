@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
@@ -57,6 +59,16 @@ type CosmosDBClient struct {
 	recommendationsPager RecommendationsPager
 	reservationsPager    ReservationsDetailsPager
 	cosmosAccountsPager  CosmosAccountsPager
+
+	// Lazy account-API-type cache. Cosmos DB has no per-SKU APIType (the
+	// API type lives on the account, not the reservation SKU which is
+	// just a throughput tier like "100RU"). The cache fetches the
+	// subscription's Cosmos accounts ONCE and reduces them to a single
+	// dominant APIType the converter can apply to recommendations.
+	// "Dominant" = the only API type observed if there's exactly one,
+	// else empty (meaning: subscription is multi-API, can't infer).
+	apiTypeOnce sync.Once
+	apiType     string
 }
 
 // NewClient creates a new Azure Cosmos DB client
@@ -573,16 +585,20 @@ func calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPri
 // See providers/azure/internal/recommendations.Extract for the shared
 // SDK-to-struct ladder. Returns nil when the SDK payload is unusable.
 //
-// Details populated with Engine="cosmos" and ThroughputUnits parsed from
-// the SKU string (f.ResourceType) when it encodes a throughput tier.
-// APIType (sql / mongodb / cassandra / gremlin / table) requires an
-// armcosmos.DatabaseAccountsClient lookup and is deferred to the same
-// batched-enrichment follow-up that covers compute/database/cache SDK
-// fields — tracked in known_issues/10_azure_provider.md.
-func (c *CosmosDBClient) convertAzureCosmosRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+// Details populated with Engine="cosmos", ThroughputUnits parsed from
+// the SKU string, and APIType resolved via cachedAPIType — a single
+// armcosmos.DatabaseAccountsClient.NewListPager call cached for the
+// client lifetime, gated by a sync.Once. APIType is left empty when the
+// subscription has zero Cosmos accounts, multiple Cosmos accounts with
+// different API types (ambiguous), or the listing fails.
+func (c *CosmosDBClient) convertAzureCosmosRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
 		return nil
+	}
+	details := detailsFromCosmosSKU(f.ResourceType)
+	if api := c.cachedAPIType(ctx); api != "" {
+		details.APIType = api
 	}
 	return &common.Recommendation{
 		Provider:         common.ProviderAzure,
@@ -598,8 +614,117 @@ func (c *CosmosDBClient) convertAzureCosmosRecommendation(_ context.Context, azu
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
-		Details:          detailsFromCosmosSKU(f.ResourceType),
+		Details:          details,
 	}
+}
+
+// cachedAPIType returns the single dominant Cosmos APIType observed
+// across the subscription's Cosmos accounts, or "" when the answer is
+// ambiguous (multi-API subscription) or unavailable (zero accounts /
+// fetch failure). The accounts list is fetched ONCE per client lifetime
+// via armcosmos.DatabaseAccountsClient.NewListPager — subsequent
+// converter calls in the same GetRecommendations run hit the cached
+// string. Failure is logged WARN once; the converter falls back to the
+// previous empty-APIType behaviour.
+//
+// Why dominant-only: a Cosmos reservation SKU like "100RU" doesn't
+// reference an account, so we can't pick "the right" APIType per rec.
+// Returning the only observed APIType is correct for the common
+// single-API-type subscription; returning "" for multi-API subscriptions
+// is honest about the ambiguity rather than guessing wrong.
+func (c *CosmosDBClient) cachedAPIType(ctx context.Context) string {
+	c.apiTypeOnce.Do(func() {
+		c.apiType = c.fetchDominantAPIType(ctx)
+	})
+	return c.apiType
+}
+
+// fetchDominantAPIType walks the accounts pager once, collects the
+// distinct APIType per account (mongodb / cassandra / gremlin / table /
+// sql), and returns the single dominant value or "".
+func (c *CosmosDBClient) fetchDominantAPIType(ctx context.Context) string {
+	pager, err := c.createCosmosAccountsPager()
+	if err != nil {
+		logging.Warnf("azure cosmosdb: account listing pager create failed for region %s: %v — Details.APIType left empty", c.region, err)
+		return ""
+	}
+	observed := make(map[string]struct{})
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			logging.Warnf("azure cosmosdb: account listing page fetch failed for region %s: %v — Details.APIType left empty", c.region, err)
+			return ""
+		}
+		for _, account := range page.Value {
+			if api := apiTypeFromAccount(account); api != "" {
+				observed[api] = struct{}{}
+			}
+		}
+	}
+	if len(observed) != 1 {
+		// Zero accounts → no signal. Multiple distinct API types →
+		// ambiguous (don't lie to the UI). Either way, leave APIType
+		// empty so the existing "unknown" rendering kicks in.
+		return ""
+	}
+	for api := range observed {
+		return api
+	}
+	return ""
+}
+
+// apiTypeFromAccount maps a Cosmos account's Kind + Capabilities to the
+// canonical APIType string used in NoSQLDetails.APIType. Mapping:
+//
+//   - Kind == "MongoDB"          → "mongodb"
+//   - Kind == "Parse"            → "" (legacy, no rec target)
+//   - Kind == "GlobalDocumentDB" + Capabilities contains:
+//     "EnableCassandra"        → "cassandra"
+//     "EnableGremlin"          → "gremlin"
+//     "EnableTable"            → "table"
+//     otherwise                  → "sql"   (the SQL/Core API default)
+//
+// Returns "" when account or Kind is nil.
+func apiTypeFromAccount(account *armcosmos.DatabaseAccountGetResults) string {
+	if account == nil || account.Kind == nil {
+		return ""
+	}
+	switch *account.Kind {
+	case armcosmos.DatabaseAccountKindMongoDB:
+		return "mongodb"
+	case armcosmos.DatabaseAccountKindParse:
+		return ""
+	case armcosmos.DatabaseAccountKindGlobalDocumentDB:
+		return apiTypeFromGlobalDocumentDB(account.Properties)
+	default:
+		return ""
+	}
+}
+
+// apiTypeFromGlobalDocumentDB disambiguates the GlobalDocumentDB account
+// kind via its capability hints. Cosmos accounts of kind GlobalDocumentDB
+// can be the SQL/Core API (default) or, when a specific capability is
+// enabled, Cassandra / Gremlin / Table. Extracted out of
+// apiTypeFromAccount to keep that function under the
+// cyclomatic-complexity threshold enforced by the pre-commit hook.
+func apiTypeFromGlobalDocumentDB(props *armcosmos.DatabaseAccountGetProperties) string {
+	if props == nil {
+		return "sql"
+	}
+	for _, capability := range props.Capabilities {
+		if capability == nil || capability.Name == nil {
+			continue
+		}
+		switch *capability.Name {
+		case "EnableCassandra":
+			return "cassandra"
+		case "EnableGremlin":
+			return "gremlin"
+		case "EnableTable":
+			return "table"
+		}
+	}
+	return "sql"
 }
 
 // detailsFromCosmosSKU parses an Azure Cosmos DB reservation SKU string
