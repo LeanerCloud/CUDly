@@ -10,11 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Federation IaC bundles downloaded before 2026-04-22 need to be
   re-downloaded** to get zero-touch registration. Older bundles silently
   skip auto-registration unless manually edited (Terraform `registration.tf`
-  gated `do_register` on `contact_email`; CLI shell scripts gated the
-  registration call on `CUDLY_CONTACT_EMAIL`; CloudFormation deploy scripts
-  had no registration call at all). Re-download the bundle from the CUDly
-  UI and the new copy will register your account automatically with no
-  manual edits required.
+  gated `do_register` on `cudly_api_url`; CLI shell scripts included the
+  registration call only when `CUDlyAPIURL` was present at render time;
+  CloudFormation deploy scripts had no registration call at all).
+  Re-download the bundle from the CUDly UI and the new copy will register
+  your account automatically with no manual edits required.
 
 ### Fixed
 
