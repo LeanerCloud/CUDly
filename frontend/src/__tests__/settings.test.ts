@@ -82,9 +82,9 @@ describe('Settings Module', () => {
         <select id="aws-opensearch-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-redshift-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-savingsplans-term"><option value="1">1</option><option value="3">3</option></select>
-        <!-- Issue #22: SageMaker + Lambda per-service cards. -->
+        <!-- Issue #22: SageMaker per-service card (its own SP type). Lambda
+             intentionally omitted — it has no standalone SP, only Compute SP. -->
         <select id="aws-sagemaker-term"><option value="1">1</option><option value="3">3</option></select>
-        <select id="aws-lambda-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-ec2-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-rds-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-elasticache-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
@@ -92,7 +92,6 @@ describe('Settings Module', () => {
         <select id="aws-redshift-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-savingsplans-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-sagemaker-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
-        <select id="aws-lambda-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <!-- Azure term selects -->
         <select id="azure-vm-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="azure-sql-term"><option value="1">1</option><option value="3">3</option></select>
@@ -113,11 +112,11 @@ describe('Settings Module', () => {
     (document.getElementById('setting-default-payment') as HTMLSelectElement).value = 'all-upfront';
     // Mirror the same baseline onto every per-service select so the cascade
     // diff only reports genuinely-changed rows.
-    ['aws-ec2-term','aws-rds-term','aws-elasticache-term','aws-opensearch-term','aws-redshift-term','aws-savingsplans-term','aws-sagemaker-term','aws-lambda-term','azure-vm-term','azure-sql-term','azure-cosmos-term','gcp-compute-term','gcp-sql-term'].forEach(id => {
+    ['aws-ec2-term','aws-rds-term','aws-elasticache-term','aws-opensearch-term','aws-redshift-term','aws-savingsplans-term','aws-sagemaker-term','azure-vm-term','azure-sql-term','azure-cosmos-term','gcp-compute-term','gcp-sql-term'].forEach(id => {
       const el = document.getElementById(id) as HTMLSelectElement | null;
       if (el) el.value = '3';
     });
-    ['aws-ec2-payment','aws-rds-payment','aws-elasticache-payment','aws-opensearch-payment','aws-redshift-payment','aws-savingsplans-payment','aws-sagemaker-payment','aws-lambda-payment'].forEach(id => {
+    ['aws-ec2-payment','aws-rds-payment','aws-elasticache-payment','aws-opensearch-payment','aws-redshift-payment','aws-savingsplans-payment','aws-sagemaker-payment'].forEach(id => {
       const el = document.getElementById(id) as HTMLSelectElement | null;
       if (el) el.value = 'all-upfront';
     });
@@ -511,10 +510,11 @@ describe('Settings Module', () => {
       expect(api.updateConfig).toHaveBeenCalled();
     });
 
-    // Issue #22: SageMaker and Lambda need their own purchasing-defaults
-    // cards alongside EC2/RDS/etc. Verify the cards exist in the canonical
-    // index.html (so the deployed UI actually renders them) and that the
+    // Issue #22: SageMaker has its own SP type, so it gets a dedicated
+    // purchasing-defaults card. Verify the card exists in the canonical
+    // index.html (so the deployed UI actually renders it) and that the
     // save flow round-trips edits to the per-service config endpoint.
+    // Lambda is intentionally absent — it has no standalone SP product.
     test('SageMaker card present in index.html with term and payment selects (issue #22)', () => {
       const fs = require('fs') as typeof import('fs');
       const path = require('path') as typeof import('path');
@@ -524,13 +524,14 @@ describe('Settings Module', () => {
       expect(html).toMatch(/id="aws-sagemaker-payment"/);
     });
 
-    test('Lambda card present in index.html with term and payment selects (issue #22)', () => {
+    test('no Lambda card in index.html — Lambda has no standalone SP, only Compute SP (issue #22)', () => {
       const fs = require('fs') as typeof import('fs');
       const path = require('path') as typeof import('path');
       const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf-8');
-      expect(html).toMatch(/<h5>\s*Lambda Savings Plans\s*<\/h5>/);
-      expect(html).toMatch(/id="aws-lambda-term"/);
-      expect(html).toMatch(/id="aws-lambda-payment"/);
+      // Guard against accidental re-introduction of a Lambda-specific card.
+      expect(html).not.toMatch(/<h5>\s*Lambda Savings Plans\s*<\/h5>/);
+      expect(html).not.toMatch(/id="aws-lambda-term"/);
+      expect(html).not.toMatch(/id="aws-lambda-payment"/);
     });
 
     test('saveGlobalSettings sends per-service SageMaker term and payment (issue #22)', async () => {
@@ -555,29 +556,7 @@ describe('Settings Module', () => {
       expect(cfg.payment).toBe('no-upfront');
     });
 
-    test('saveGlobalSettings sends per-service Lambda term and payment (issue #22)', async () => {
-      (api.updateConfig as jest.Mock).mockResolvedValue({});
-      (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
-      window.alert = jest.fn();
-
-      // User pins Lambda to 1yr / partial-upfront, distinct from the
-      // umbrella Savings Plans card and the global default.
-      (document.getElementById('aws-lambda-term') as HTMLSelectElement).value = '1';
-      (document.getElementById('aws-lambda-payment') as HTMLSelectElement).value = 'partial-upfront';
-
-      const event = { preventDefault: jest.fn() } as unknown as Event;
-      await saveGlobalSettings(event);
-
-      const call = (api.updateServiceConfig as jest.Mock).mock.calls.find(
-        ([provider, service]) => provider === 'aws' && service === 'lambda',
-      );
-      expect(call).toBeDefined();
-      const cfg = call![2];
-      expect(cfg.term).toBe(1);
-      expect(cfg.payment).toBe('partial-upfront');
-    });
-
-    test('calls updateServiceConfig once per service field (17 calls)', async () => {
+    test('calls updateServiceConfig once per service field (16 calls)', async () => {
       (api.updateConfig as jest.Mock).mockResolvedValue({});
       (api.updateServiceConfig as jest.Mock).mockResolvedValue(undefined);
       window.alert = jest.fn();
@@ -585,10 +564,10 @@ describe('Settings Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await saveGlobalSettings(event);
 
-      // 8 AWS (ec2, rds, elasticache, opensearch, redshift, savingsplans,
-      // sagemaker, lambda — last two added per issue #22) + 5 Azure
+      // 7 AWS (ec2, rds, elasticache, opensearch, redshift, savingsplans,
+      // sagemaker — last one added per issue #22) + 5 Azure
       // (vm, sql, cosmosdb, redis, search) + 4 GCP.
-      expect(api.updateServiceConfig).toHaveBeenCalledTimes(17);
+      expect(api.updateServiceConfig).toHaveBeenCalledTimes(16);
     });
   }); // end saveGlobalSettings
 
@@ -917,21 +896,6 @@ describe('Settings Module', () => {
       await loadGlobalSettings();
 
       const payment = document.getElementById('aws-sagemaker-payment') as HTMLSelectElement;
-      expect(optVisible(payment, 'no-upfront')).toBe(true);
-      expect(optVisible(payment, 'partial-upfront')).toBe(true);
-      expect(optVisible(payment, 'all-upfront')).toBe(true);
-      expect(payment.value).toBe('no-upfront');
-    });
-
-    test('Lambda 3yr keeps "no-upfront" visible (issue #22 — covered by Compute SP)', async () => {
-      (api.getConfig as jest.Mock).mockResolvedValue({
-        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'no-upfront', default_coverage: 80 },
-        services: [{ provider: 'aws', service: 'lambda', term: 3, payment: 'no-upfront' }],
-      });
-      setupSettingsHandlers();
-      await loadGlobalSettings();
-
-      const payment = document.getElementById('aws-lambda-payment') as HTMLSelectElement;
       expect(optVisible(payment, 'no-upfront')).toBe(true);
       expect(optVisible(payment, 'partial-upfront')).toBe(true);
       expect(optVisible(payment, 'all-upfront')).toBe(true);

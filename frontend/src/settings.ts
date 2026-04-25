@@ -32,12 +32,13 @@ const SERVICE_FIELDS = [
   { provider: 'aws', service: 'opensearch',   termId: 'aws-opensearch-term',   paymentId: 'aws-opensearch-payment' },
   { provider: 'aws', service: 'redshift',     termId: 'aws-redshift-term',     paymentId: 'aws-redshift-payment' },
   { provider: 'aws', service: 'savingsplans', termId: 'aws-savingsplans-term', paymentId: 'aws-savingsplans-payment' },
-  // Issue #22: SageMaker (its own SP type) and Lambda (covered by Compute SP)
-  // get dedicated cards so users can pin term/payment per workload instead
-  // of sharing the umbrella Savings Plans defaults. Both use AWS_PAYMENTS
-  // (1y/3y, NoUpfront / Partial / AllUpfront) — same shape as EC2/SP.
+  // Issue #22: SageMaker has its own SP type (SageMaker Savings Plans),
+  // so it gets a dedicated card and users can pin term/payment per workload
+  // instead of sharing the umbrella Savings Plans defaults. Lambda is
+  // intentionally NOT here — Lambda has no standalone SP product; its
+  // commitments roll up into Compute Savings Plans, already covered by
+  // the umbrella card above.
   { provider: 'aws', service: 'sagemaker',    termId: 'aws-sagemaker-term',    paymentId: 'aws-sagemaker-payment' },
-  { provider: 'aws', service: 'lambda',       termId: 'aws-lambda-term',       paymentId: 'aws-lambda-payment' },
   { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
   { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
   { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
