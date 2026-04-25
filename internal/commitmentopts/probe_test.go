@@ -95,8 +95,11 @@ func TestRDSProber_ErrorPropagates(t *testing.T) {
 }
 
 func TestRDSProber_PageCap(t *testing.T) {
-	// Every page returns a non-empty marker; the probe must stop after
-	// maxPages to bound API spend.
+	// Integration-level check that the RDS prober honours the page cap
+	// when wired through walkPaginated. The cap itself is exercised in
+	// detail by TestWalkPaginated_StopsAtPageCap; this test guards the
+	// wiring (RDS uses Marker rather than NextToken) so a refactor that
+	// stops threading the marker can't silently break only RDS.
 	calls := 0
 	fake := &fakeRDS{fn: func(*rds.DescribeReservedDBInstancesOfferingsInput) (*rds.DescribeReservedDBInstancesOfferingsOutput, error) {
 		calls++
@@ -343,4 +346,102 @@ func TestDefaultProbers(t *testing.T) {
 	}
 	sort.Strings(services)
 	assert.Equal(t, []string{"ec2", "elasticache", "memorydb", "opensearch", "rds", "redshift"}, services)
+}
+
+// ---------------------------------------------------------------------------
+// walkPaginated — the shared pagination helper every prober runs through.
+// Testing the helper once covers the page-cap behaviour for all six
+// services in lieu of six near-identical Test{Service}Prober_PageCap tests.
+// The per-prober Probe tests above still exercise the wiring (which token
+// field each AWS API uses, per-item conversion, optional client-side
+// filtering) end-to-end.
+// ---------------------------------------------------------------------------
+
+func TestWalkPaginated_StopsAtPageCap(t *testing.T) {
+	// Every page returns a non-empty token; walkPaginated must stop after
+	// maxPages calls to bound worst-case API spend if pagination
+	// detection is ever broken (SDK regression, malformed AWS response).
+	calls := 0
+	_, err := walkPaginated(context.Background(), "test", func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+		calls++
+		return nil, aws.String("more"), nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, maxPages, calls)
+}
+
+func TestWalkPaginated_StopsOnNilToken(t *testing.T) {
+	// AWS signals "no more pages" with a nil token — the helper must
+	// stop on the first page that returns one rather than keep looping.
+	calls := 0
+	got, err := walkPaginated(context.Background(), "test", func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+		calls++
+		return []rawOffer{{durationSeconds: 31536000, payment: "All Upfront"}}, nil, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+	assert.Len(t, got, 1)
+}
+
+func TestWalkPaginated_StopsOnEmptyToken(t *testing.T) {
+	// Some AWS APIs return an empty (non-nil) string instead of nil to
+	// signal "done" — the helper must treat both as equivalent.
+	calls := 0
+	_, err := walkPaginated(context.Background(), "test", func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+		calls++
+		return nil, aws.String(""), nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+}
+
+func TestWalkPaginated_ThreadsTokenAcrossPages(t *testing.T) {
+	// The helper must pass each page's returned token back as the next
+	// page's input token so the AWS SDK can resume from the right cursor.
+	tokens := []string{"", "page1", "page2"}
+	got := []string{}
+	calls := 0
+	_, err := walkPaginated(context.Background(), "test", func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+		got = append(got, aws.ToString(token))
+		calls++
+		if calls >= len(tokens) {
+			return nil, nil, nil
+		}
+		return nil, aws.String(tokens[calls]), nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"", "page1", "page2"}, got)
+}
+
+func TestWalkPaginated_WrapsErrorWithService(t *testing.T) {
+	// Errors from fetchPage must be wrapped as "<service>: <err>" so
+	// callers see which prober failed without each one repeating the
+	// wrap. errors.Is must still find the underlying error.
+	boom := errors.New("boom")
+	_, err := walkPaginated(context.Background(), "memorydb", func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+		return nil, nil, boom
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "memorydb:")
+}
+
+func TestWalkPaginated_AccumulatesAcrossPages(t *testing.T) {
+	// Items from each page should accumulate into a single slice in
+	// page order — collect() does the dedupe, walkPaginated does not.
+	calls := 0
+	got, err := walkPaginated(context.Background(), "test", func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+		calls++
+		offers := []rawOffer{{durationSeconds: int64(calls), payment: "All Upfront"}}
+		if calls >= 3 {
+			return offers, nil, nil
+		}
+		return offers, aws.String("more"), nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, calls)
+	require.Len(t, got, 3)
+	assert.Equal(t, int64(1), got[0].durationSeconds)
+	assert.Equal(t, int64(2), got[1].durationSeconds)
+	assert.Equal(t, int64(3), got[2].durationSeconds)
 }
