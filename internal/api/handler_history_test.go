@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -168,6 +169,163 @@ func TestHandler_getHistory_CustomLimit(t *testing.T) {
 
 	_, err := handler.getHistory(ctx, req, params)
 	require.NoError(t, err)
+}
+
+// TestHandler_getHistory_ExpireIfStale exercises the lazy approval-window
+// transition in expireIfStale. The History render seeds two non-completed
+// executions: one fresh (left untouched) and one with ScheduledDate older than
+// the 7-day approvalExpiryWindow. The stale row must be transitioned to
+// "expired" via a single TransitionExecutionStatus call against its ID, and
+// the rendered row must reflect the new status + the canonical
+// "approval link expired …" StatusDescription. The fresh row stays pending
+// and proves expireIfStale's age guard short-circuits before touching the
+// store for non-stale rows. A second sub-test covers the error fallback:
+// when TransitionExecutionStatus returns an error the original pending row
+// must still render (no panic, no row dropped, status stays pending).
+//
+// Closes the gap flagged in known_issues/32_history_lazy_expire_test.md.
+func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
+	freshID := "fresh-exec"
+	staleID := "stale-exec"
+	approverEmail := "ops@example.com"
+
+	// Fresh: ScheduledDate = now → must NOT trigger TransitionExecutionStatus.
+	freshExec := func() config.PurchaseExecution {
+		return config.PurchaseExecution{
+			ExecutionID:      freshID,
+			Status:           "pending",
+			ScheduledDate:    time.Now(),
+			TotalUpfrontCost: 100.0,
+			EstimatedSavings: 10.0,
+			Recommendations: []config.RecommendationRecord{
+				{Provider: "aws", Service: "ec2", Region: "us-east-1"},
+			},
+		}
+	}
+
+	// Stale: ScheduledDate older than approvalExpiryWindow (7 days) → must
+	// trigger TransitionExecutionStatus once with the row's ID.
+	staleExec := func(status string) config.PurchaseExecution {
+		return config.PurchaseExecution{
+			ExecutionID:      staleID,
+			Status:           status,
+			ScheduledDate:    time.Now().Add(-8 * 24 * time.Hour),
+			TotalUpfrontCost: 200.0,
+			EstimatedSavings: 20.0,
+			Recommendations: []config.RecommendationRecord{
+				{Provider: "aws", Service: "rds", Region: "us-east-1"},
+			},
+		}
+	}
+
+	t.Run("transitions stale pending row to expired", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+
+		expired := staleExec("pending")
+		expired.Status = "expired"
+
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+			Return([]config.PurchaseExecution{freshExec(), staleExec("pending")}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+		mockStore.On("TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired").
+			Return(&expired, nil).Once()
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+
+		// Single Transition call, only for the stale row.
+		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
+		mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired")
+
+		historyResp := result.(HistoryResponse)
+		require.Len(t, historyResp.Purchases, 2, "both executions must render as history rows")
+
+		var staleRow, freshRow *config.PurchaseHistoryRecord
+		for i := range historyResp.Purchases {
+			switch historyResp.Purchases[i].PurchaseID {
+			case staleID:
+				staleRow = &historyResp.Purchases[i]
+			case freshID:
+				freshRow = &historyResp.Purchases[i]
+			}
+		}
+		require.NotNil(t, staleRow, "stale execution must render as a history row")
+		require.NotNil(t, freshRow, "fresh execution must render as a history row")
+
+		assert.Equal(t, "expired", staleRow.Status, "stale row must reflect the expired transition")
+		assert.NotEmpty(t, staleRow.StatusDescription, "expired row must carry an explanatory description")
+		assert.Contains(t, staleRow.StatusDescription, "approval link expired",
+			"expired description must use the canonical user-facing wording")
+
+		assert.Equal(t, "pending", freshRow.Status, "fresh row must stay pending — age guard short-circuits the transition")
+	})
+
+	t.Run("transitions stale notified row to expired", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+
+		expired := staleExec("notified")
+		expired.Status = "expired"
+
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+			Return([]config.PurchaseExecution{staleExec("notified")}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+		mockStore.On("TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired").
+			Return(&expired, nil).Once()
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+
+		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
+
+		historyResp := result.(HistoryResponse)
+		require.Len(t, historyResp.Purchases, 1)
+		assert.Equal(t, "expired", historyResp.Purchases[0].Status,
+			"stale notified rows must transition the same as stale pending rows")
+		assert.Equal(t, 1, historyResp.Summary.TotalExpired,
+			"expired transition must be reflected in the summary bucket")
+		assert.Equal(t, 0, historyResp.Summary.TotalPending)
+	})
+
+	t.Run("transition error falls back to pending row without panic", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+			Return([]config.PurchaseExecution{staleExec("pending")}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+		mockStore.On("TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired").
+			Return(nil, errors.New("simulated store failure")).Once()
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		// The whole point: a Transition error is non-fatal. No panic, no
+		// dropped row, status stays pending so the user still sees the
+		// approval in the history view.
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+
+		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
+
+		historyResp := result.(HistoryResponse)
+		require.Len(t, historyResp.Purchases, 1, "fallback must render the original row, not drop it")
+		assert.Equal(t, staleID, historyResp.Purchases[0].PurchaseID)
+		assert.Equal(t, "pending", historyResp.Purchases[0].Status,
+			"transition failure must leave the row in its original status")
+		assert.Equal(t, 1, historyResp.Summary.TotalPending, "summary must reflect the un-transitioned status")
+		assert.Equal(t, 0, historyResp.Summary.TotalExpired)
+	})
 }
 
 // TestHandler_getHistory_PermissionDenied asserts that a non-admin user without
