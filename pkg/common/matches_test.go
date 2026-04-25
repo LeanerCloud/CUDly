@@ -7,6 +7,7 @@ import (
 )
 
 func TestMatches(t *testing.T) {
+	t.Parallel()
 	base := Recommendation{
 		Provider:     ProviderAWS,
 		Region:       "us-east-1",
@@ -39,7 +40,9 @@ func TestMatches(t *testing.T) {
 	}
 
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			c := matching // copy
 			tc.mutate(&c)
 			assert.Equal(t, tc.wantMatch, Matches(base, c))
@@ -48,6 +51,7 @@ func TestMatches(t *testing.T) {
 }
 
 func TestMatches_NormalizedEngine(t *testing.T) {
+	t.Parallel()
 	// "Aurora PostgreSQL" (CE format) on the recommendation should match "aurora-postgresql" on commitment
 	rec := Recommendation{
 		Provider:     ProviderAWS,
@@ -67,6 +71,7 @@ func TestMatches_NormalizedEngine(t *testing.T) {
 }
 
 func TestMatches_NoDetails(t *testing.T) {
+	t.Parallel()
 	// Compute recommendations have no engine — both sides normalize to ""
 	rec := Recommendation{
 		Provider:     ProviderAWS,
