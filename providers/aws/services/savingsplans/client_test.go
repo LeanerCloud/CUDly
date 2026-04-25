@@ -56,16 +56,30 @@ func TestNewClient(t *testing.T) {
 		Region: "us-east-1",
 	}
 
-	client := NewClient(cfg)
+	client := NewClient(cfg, types.SavingsPlanTypeCompute)
 
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.client)
 	assert.Equal(t, "us-east-1", client.region)
+	assert.Equal(t, types.SavingsPlanTypeCompute, client.planType)
 }
 
 func TestClient_GetServiceType(t *testing.T) {
-	client := &Client{region: "us-east-1"}
-	assert.Equal(t, common.ServiceSavingsPlans, client.GetServiceType())
+	cases := []struct {
+		planType    types.SavingsPlanType
+		wantService common.ServiceType
+	}{
+		{types.SavingsPlanTypeCompute, common.ServiceSavingsPlansCompute},
+		{types.SavingsPlanTypeEc2Instance, common.ServiceSavingsPlansEC2Instance},
+		{types.SavingsPlanTypeSagemaker, common.ServiceSavingsPlansSageMaker},
+		{types.SavingsPlanTypeDatabase, common.ServiceSavingsPlansDatabase},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.planType), func(t *testing.T) {
+			client := &Client{region: "us-east-1", planType: tc.planType}
+			assert.Equal(t, tc.wantService, client.GetServiceType())
+		})
+	}
 }
 
 func TestClient_GetRegion(t *testing.T) {
@@ -86,12 +100,17 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 
 	tests := []struct {
 		name        string
+		clientType  types.SavingsPlanType
 		setupMocks  func(*MockSavingsPlansClient)
 		expectedLen int
 		expectError bool
 	}{
 		{
-			name: "successful retrieval with active plans",
+			// DescribeSavingsPlans returns commitments of every plan type at
+			// once; this Compute-scoped client must filter the EC2Instance row
+			// out of the two-plan fixture.
+			name:       "filters non-matching plan types",
+			clientType: types.SavingsPlanTypeCompute,
 			setupMocks: func(m *MockSavingsPlansClient) {
 				m.On("DescribeSavingsPlans", mock.Anything, mock.Anything).
 					Return(&savingsplans.DescribeSavingsPlansOutput{
@@ -115,11 +134,12 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 						},
 					}, nil).Once()
 			},
-			expectedLen: 2,
+			expectedLen: 1,
 			expectError: false,
 		},
 		{
-			name: "skips plans without ID",
+			name:       "skips plans without ID",
+			clientType: types.SavingsPlanTypeCompute,
 			setupMocks: func(m *MockSavingsPlansClient) {
 				m.On("DescribeSavingsPlans", mock.Anything, mock.Anything).
 					Return(&savingsplans.DescribeSavingsPlansOutput{
@@ -131,7 +151,7 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 							},
 							{
 								// No SavingsPlanId - should be skipped
-								SavingsPlanType: types.SavingsPlanTypeEc2Instance,
+								SavingsPlanType: types.SavingsPlanTypeCompute,
 								State:           types.SavingsPlanStateActive,
 							},
 						},
@@ -141,7 +161,8 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "handles invalid date formats gracefully",
+			name:       "handles invalid date formats gracefully",
+			clientType: types.SavingsPlanTypeCompute,
 			setupMocks: func(m *MockSavingsPlansClient) {
 				m.On("DescribeSavingsPlans", mock.Anything, mock.Anything).
 					Return(&savingsplans.DescribeSavingsPlansOutput{
@@ -160,7 +181,8 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "API error",
+			name:       "API error",
+			clientType: types.SavingsPlanTypeCompute,
 			setupMocks: func(m *MockSavingsPlansClient) {
 				m.On("DescribeSavingsPlans", mock.Anything, mock.Anything).
 					Return(nil, fmt.Errorf("API error")).Once()
@@ -176,8 +198,9 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 			tt.setupMocks(mockClient)
 
 			client := &Client{
-				client: mockClient,
-				region: "us-east-1",
+				client:   mockClient,
+				region:   "us-east-1",
+				planType: tt.clientType,
 			}
 
 			result, err := client.GetExistingCommitments(context.Background())

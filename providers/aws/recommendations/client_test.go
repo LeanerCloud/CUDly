@@ -236,7 +236,9 @@ func TestGetRecommendations_SavingsPlans_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
-	assert.Equal(t, common.ServiceSavingsPlans, recs[0].Service)
+	// Recommendation is tagged with the per-plan-type slug, derived from the
+	// IncludeSPTypes filter (here: Compute → ServiceSavingsPlansCompute).
+	assert.Equal(t, common.ServiceSavingsPlansCompute, recs[0].Service)
 	assert.Equal(t, common.CommitmentSavingsPlan, recs[0].CommitmentType)
 	assert.Equal(t, 150.00, recs[0].EstimatedSavings)
 

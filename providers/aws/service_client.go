@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	sptypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
@@ -49,9 +50,12 @@ func NewMemoryDBClient(cfg aws.Config) provider.ServiceClient {
 	return memorydb.NewClient(cfg)
 }
 
-// NewSavingsPlansClient creates a new Savings Plans service client
-func NewSavingsPlansClient(cfg aws.Config) provider.ServiceClient {
-	return savingsplans.NewClient(cfg)
+// NewSavingsPlansClient creates a Savings Plans service client scoped to one
+// AWS plan type. The four per-plan-type slugs (Compute, EC2Instance,
+// SageMaker, Database) each get their own client instance via the AWS
+// provider's GetServiceClient dispatch — see provider.go.
+func NewSavingsPlansClient(cfg aws.Config, planType sptypes.SavingsPlanType) provider.ServiceClient {
+	return savingsplans.NewClient(cfg, planType)
 }
 
 // RecommendationsClientAdapter adapts the recommendations client to the provider interface

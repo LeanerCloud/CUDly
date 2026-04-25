@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
+	sptypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -86,10 +87,23 @@ func TestNewMemoryDBClient(t *testing.T) {
 
 func TestNewSavingsPlansClient(t *testing.T) {
 	cfg := aws.Config{Region: "us-east-1"}
-	client := NewSavingsPlansClient(cfg)
-	require.NotNil(t, client)
-	assert.Equal(t, common.ServiceSavingsPlans, client.GetServiceType())
-	assert.Equal(t, "us-east-1", client.GetRegion())
+	cases := []struct {
+		planType    sptypes.SavingsPlanType
+		wantService common.ServiceType
+	}{
+		{sptypes.SavingsPlanTypeCompute, common.ServiceSavingsPlansCompute},
+		{sptypes.SavingsPlanTypeEc2Instance, common.ServiceSavingsPlansEC2Instance},
+		{sptypes.SavingsPlanTypeSagemaker, common.ServiceSavingsPlansSageMaker},
+		{sptypes.SavingsPlanTypeDatabase, common.ServiceSavingsPlansDatabase},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.planType), func(t *testing.T) {
+			client := NewSavingsPlansClient(cfg, tc.planType)
+			require.NotNil(t, client)
+			assert.Equal(t, tc.wantService, client.GetServiceType())
+			assert.Equal(t, "us-east-1", client.GetRegion())
+		})
+	}
 }
 
 func TestNewRecommendationsClient(t *testing.T) {

@@ -15,10 +15,19 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// getSavingsPlansRecommendations fetches Savings Plans recommendations
+// getSavingsPlansRecommendations fetches Savings Plans recommendations.
+//
+// Resolution order for which plan types to query, in order of precedence:
+//  1. params.Service is one of the four per-plan-type slugs
+//     (e.g. ServiceSavingsPlansSageMaker) — query just that plan type. This
+//     is the path the AWS provider's GetServiceClient dispatch takes after
+//     the per-plan-type split: each registered SP service makes its own
+//     Cost Explorer call with its own term/payment defaults.
+//  2. Otherwise, fall back to the legacy IncludeSPTypes/ExcludeSPTypes
+//     filter mechanism (for callers passing the umbrella ServiceSavingsPlans
+//     slug or for direct CLI invocations that haven't been migrated yet).
 func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	// Build list of plan types to query based on filters
-	planTypes := c.getFilteredPlanTypes(params.IncludeSPTypes, params.ExcludeSPTypes)
+	planTypes := planTypesForParams(params)
 
 	if len(planTypes) == 0 {
 		return []common.Recommendation{}, nil
@@ -126,7 +135,7 @@ func (c *Client) parseSavingsPlanDetail(
 
 	return &common.Recommendation{
 		Provider:          common.ProviderAWS,
-		Service:           common.ServiceSavingsPlans,
+		Service:           serviceSlugForPlanType(planType),
 		PaymentOption:     params.PaymentOption,
 		Term:              params.Term,
 		CommitmentType:    common.CommitmentSavingsPlan,
@@ -144,8 +153,57 @@ func (c *Client) parseSavingsPlanDetail(
 	}
 }
 
+// planTypesForParams resolves which AWS Cost Explorer plan types to query
+// for a given RecommendationParams. When params.Service is one of the four
+// per-plan-type slugs the result is a single-element slice for that type;
+// otherwise it falls back to the legacy IncludeSPTypes/ExcludeSPTypes filter.
+// See the getSavingsPlansRecommendations docstring for the full resolution
+// order.
+func planTypesForParams(params common.RecommendationParams) []types.SupportedSavingsPlansType {
+	if pt, ok := planTypeForServiceSlug(params.Service); ok {
+		return []types.SupportedSavingsPlansType{pt}
+	}
+	return getFilteredPlanTypes(params.IncludeSPTypes, params.ExcludeSPTypes)
+}
+
+// planTypeForServiceSlug maps a per-plan-type SP service slug to its
+// Cost Explorer plan-type enum. Returns false for non-SP slugs and for the
+// legacy umbrella ServiceSavingsPlans (which still triggers the iterate-all
+// fallback inside planTypesForParams).
+func planTypeForServiceSlug(s common.ServiceType) (types.SupportedSavingsPlansType, bool) {
+	switch s {
+	case common.ServiceSavingsPlansCompute:
+		return types.SupportedSavingsPlansTypeComputeSp, true
+	case common.ServiceSavingsPlansEC2Instance:
+		return types.SupportedSavingsPlansTypeEc2InstanceSp, true
+	case common.ServiceSavingsPlansSageMaker:
+		return types.SupportedSavingsPlansTypeSagemakerSp, true
+	case common.ServiceSavingsPlansDatabase:
+		return types.SupportedSavingsPlansTypeDatabaseSp, true
+	}
+	return "", false
+}
+
+// serviceSlugForPlanType is the inverse of planTypeForServiceSlug. Used by
+// parseSavingsPlanDetail to tag each Recommendation with the per-plan-type
+// slug rather than the legacy umbrella, so downstream stats/filters can
+// distinguish Compute SP from SageMaker SP recommendations.
+func serviceSlugForPlanType(pt types.SupportedSavingsPlansType) common.ServiceType {
+	switch pt {
+	case types.SupportedSavingsPlansTypeComputeSp:
+		return common.ServiceSavingsPlansCompute
+	case types.SupportedSavingsPlansTypeEc2InstanceSp:
+		return common.ServiceSavingsPlansEC2Instance
+	case types.SupportedSavingsPlansTypeSagemakerSp:
+		return common.ServiceSavingsPlansSageMaker
+	case types.SupportedSavingsPlansTypeDatabaseSp:
+		return common.ServiceSavingsPlansDatabase
+	}
+	return common.ServiceSavingsPlans
+}
+
 // getFilteredPlanTypes returns the list of Savings Plan types to query based on include/exclude filters
-func (c *Client) getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.SupportedSavingsPlansType {
+func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.SupportedSavingsPlansType {
 	// All available plan types
 	allPlanTypes := map[string]types.SupportedSavingsPlansType{
 		"compute":     types.SupportedSavingsPlansTypeComputeSp,

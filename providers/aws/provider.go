@@ -17,6 +17,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/LeanerCloud/CUDly/providers/aws/services/savingsplans"
 )
 
 // AWS SDK v2 credential source identifiers.
@@ -388,7 +389,9 @@ func (p *AWSProvider) GetDefaultRegion() string {
 	return "us-east-1"
 }
 
-// GetSupportedServices returns the list of services supported by AWS provider
+// GetSupportedServices returns the list of services supported by AWS provider.
+// Savings Plans are exposed as four distinct services (one per AWS plan type)
+// so users can configure term/payment defaults per plan type via ServiceConfig.
 func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 	return []common.ServiceType{
 		common.ServiceCompute,
@@ -396,7 +399,10 @@ func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceCache,
 		common.ServiceSearch,
 		common.ServiceDataWarehouse,
-		common.ServiceSavingsPlans,
+		common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase,
 		// Legacy service types for backward compatibility
 		common.ServiceEC2,
 		common.ServiceRDS,
@@ -430,8 +436,12 @@ func (p *AWSProvider) GetServiceClient(ctx context.Context, service common.Servi
 		return NewRedshiftClient(regionalCfg), nil
 	case common.ServiceMemoryDB:
 		return NewMemoryDBClient(regionalCfg), nil
-	case common.ServiceSavingsPlans:
-		return NewSavingsPlansClient(regionalCfg), nil
+	case common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase:
+		pt, _ := savingsplans.PlanTypeForServiceType(service)
+		return NewSavingsPlansClient(regionalCfg, pt), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}

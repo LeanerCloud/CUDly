@@ -132,23 +132,44 @@ var toolCfg = Config{}
 
 // validateFlags is now defined in validators.go
 
-// parseServices converts service names to ServiceType
+// parseServices converts service names to ServiceType. The legacy
+// "savingsplans" / "sp" aliases fan out to all four per-plan-type SP slugs so
+// existing CLI scripts that pass --services savingsplans keep covering every
+// plan type. Specific slugs (savingsplans-compute, etc.) are also accepted for
+// targeted runs.
 func parseServices(serviceNames []string) []common.ServiceType {
 	var result []common.ServiceType
+	allSPSlugs := []common.ServiceType{
+		common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase,
+	}
 	serviceMap := map[string]common.ServiceType{
-		"rds":           common.ServiceRDS,
-		"elasticache":   common.ServiceElastiCache,
-		"ec2":           common.ServiceEC2,
-		"opensearch":    common.ServiceOpenSearch,
-		"elasticsearch": common.ServiceOpenSearch, // Legacy alias maps to OpenSearch
-		"redshift":      common.ServiceRedshift,
-		"memorydb":      common.ServiceMemoryDB,
-		"savingsplans":  common.ServiceSavingsPlans,
-		"sp":            common.ServiceSavingsPlans, // Short alias
+		"rds":                       common.ServiceRDS,
+		"elasticache":               common.ServiceElastiCache,
+		"ec2":                       common.ServiceEC2,
+		"opensearch":                common.ServiceOpenSearch,
+		"elasticsearch":             common.ServiceOpenSearch, // Legacy alias maps to OpenSearch
+		"redshift":                  common.ServiceRedshift,
+		"memorydb":                  common.ServiceMemoryDB,
+		"savingsplans-compute":      common.ServiceSavingsPlansCompute,
+		"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
+		"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
+		"savingsplans-database":     common.ServiceSavingsPlansDatabase,
+		"savings-plans-compute":     common.ServiceSavingsPlansCompute,
+		"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
+		"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
+		"savings-plans-database":    common.ServiceSavingsPlansDatabase,
 	}
 
 	for _, name := range serviceNames {
-		if service, ok := serviceMap[strings.ToLower(name)]; ok {
+		key := strings.ToLower(name)
+		if key == "savingsplans" || key == "savings-plans" || key == "sp" {
+			result = append(result, allSPSlugs...)
+			continue
+		}
+		if service, ok := serviceMap[key]; ok {
 			result = append(result, service)
 		} else {
 			log.Printf("Warning: Unknown service '%s', skipping", name)
@@ -167,7 +188,10 @@ func getAllServices() []common.ServiceType {
 		common.ServiceOpenSearch,
 		common.ServiceRedshift,
 		common.ServiceMemoryDB,
-		common.ServiceSavingsPlans,
+		common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase,
 	}
 }
 
@@ -186,8 +210,15 @@ func createServiceClient(service common.ServiceType, cfg aws.Config) provider.Se
 		return redshift.NewClient(cfg)
 	case common.ServiceMemoryDB:
 		return memorydb.NewClient(cfg)
-	case common.ServiceSavingsPlans:
-		return savingsplans.NewClient(cfg)
+	case common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase:
+		pt, ok := savingsplans.PlanTypeForServiceType(service)
+		if !ok {
+			return nil
+		}
+		return savingsplans.NewClient(cfg, pt)
 	default:
 		return nil
 	}

@@ -22,17 +22,26 @@ type SavingsPlansAPI interface {
 	DescribeSavingsPlansOfferingRates(ctx context.Context, params *savingsplans.DescribeSavingsPlansOfferingRatesInput, optFns ...func(*savingsplans.Options)) (*savingsplans.DescribeSavingsPlansOfferingRatesOutput, error)
 }
 
-// Client handles AWS Savings Plans
+// Client handles AWS Savings Plans, scoped to one plan type. Each plan type
+// (Compute, EC2Instance, SageMaker, Database) has its own term/payment defaults
+// in ServiceConfig, so the client is constructed once per plan type and tags
+// the recommendations and existing commitments it returns with the matching
+// per-plan-type ServiceType slug.
 type Client struct {
-	client SavingsPlansAPI
-	region string
+	client   SavingsPlansAPI
+	region   string
+	planType types.SavingsPlanType
 }
 
-// NewClient creates a new Savings Plans client
-func NewClient(cfg aws.Config) *Client {
+// NewClient creates a new Savings Plans client scoped to one plan type.
+// The plan type determines which slug GetServiceType returns and which
+// commitments GetExistingCommitments includes — both critical for the
+// per-plan-type ServiceConfig dispatch added in the AWS provider.
+func NewClient(cfg aws.Config, planType types.SavingsPlanType) *Client {
 	return &Client{
-		client: savingsplans.NewFromConfig(cfg),
-		region: cfg.Region,
+		client:   savingsplans.NewFromConfig(cfg),
+		region:   cfg.Region,
+		planType: planType,
 	}
 }
 
@@ -41,9 +50,46 @@ func (c *Client) SetSavingsPlansAPI(api SavingsPlansAPI) {
 	c.client = api
 }
 
-// GetServiceType returns the service type
+// GetServiceType returns the per-plan-type service slug (e.g.
+// ServiceSavingsPlansCompute for a client constructed with
+// SavingsPlanTypeCompute). Falls back to the legacy umbrella constant if the
+// plan type is unrecognised — that branch should be unreachable in practice.
 func (c *Client) GetServiceType() common.ServiceType {
+	return ServiceTypeForPlanType(c.planType)
+}
+
+// ServiceTypeForPlanType maps an AWS Savings Plans API plan type to the
+// matching common.ServiceType slug. Exported so the AWS provider's
+// GetServiceClient dispatch can derive the slug for each registered service.
+func ServiceTypeForPlanType(pt types.SavingsPlanType) common.ServiceType {
+	switch pt {
+	case types.SavingsPlanTypeCompute:
+		return common.ServiceSavingsPlansCompute
+	case types.SavingsPlanTypeEc2Instance:
+		return common.ServiceSavingsPlansEC2Instance
+	case types.SavingsPlanTypeSagemaker:
+		return common.ServiceSavingsPlansSageMaker
+	case types.SavingsPlanTypeDatabase:
+		return common.ServiceSavingsPlansDatabase
+	}
 	return common.ServiceSavingsPlans
+}
+
+// PlanTypeForServiceType is the inverse mapping: a common.ServiceType slug to
+// the AWS Savings Plans API plan type. Returns false for slugs that aren't
+// per-plan-type SP services.
+func PlanTypeForServiceType(s common.ServiceType) (types.SavingsPlanType, bool) {
+	switch s {
+	case common.ServiceSavingsPlansCompute:
+		return types.SavingsPlanTypeCompute, true
+	case common.ServiceSavingsPlansEC2Instance:
+		return types.SavingsPlanTypeEc2Instance, true
+	case common.ServiceSavingsPlansSageMaker:
+		return types.SavingsPlanTypeSagemaker, true
+	case common.ServiceSavingsPlansDatabase:
+		return types.SavingsPlanTypeDatabase, true
+	}
+	return "", false
 }
 
 // GetRegion returns the region
@@ -71,10 +117,18 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 		return nil, fmt.Errorf("failed to describe Savings Plans: %w", err)
 	}
 
+	// Each client is scoped to one plan type, so partition the API result by
+	// SavingsPlanType and only return commitments matching this client's type.
+	// The provider registers four SP services and calls GetExistingCommitments
+	// on each; without filtering, every SP commitment would surface four times.
 	commitments := make([]common.Commitment, 0, len(result.SavingsPlans))
+	service := c.GetServiceType()
 
 	for _, sp := range result.SavingsPlans {
 		if sp.SavingsPlanId == nil {
+			continue
+		}
+		if sp.SavingsPlanType != c.planType {
 			continue
 		}
 
@@ -82,7 +136,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 			Provider:       common.ProviderAWS,
 			CommitmentID:   *sp.SavingsPlanId,
 			CommitmentType: common.CommitmentSavingsPlan,
-			Service:        common.ServiceSavingsPlans,
+			Service:        service,
 			Region:         aws.ToString(sp.Region),
 			ResourceType:   string(sp.SavingsPlanType),
 			Count:          1, // Savings Plans don't have a count

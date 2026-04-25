@@ -102,7 +102,7 @@ func separateAndAggregateStats(serviceStats map[common.ServiceType]ServiceProces
 	aggregates := riAggregateStats{}
 
 	for service, stats := range serviceStats {
-		if service == common.ServiceSavingsPlans {
+		if common.IsSavingsPlan(service) {
 			spStats = stats
 		} else {
 			riStats[service] = stats

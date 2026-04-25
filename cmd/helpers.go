@@ -127,7 +127,7 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 		adjusted := rec
 
 		// For Savings Plans, reduce the hourly commitment instead of count
-		if rec.Service == common.ServiceSavingsPlans {
+		if common.IsSavingsPlan(rec.Service) {
 			if details, ok := rec.Details.(*common.SavingsPlanDetails); ok {
 				newDetails := *details // Copy the struct
 				newDetails.HourlyCommitment = newDetails.HourlyCommitment * coverage / 100

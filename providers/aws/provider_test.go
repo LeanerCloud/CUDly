@@ -207,7 +207,10 @@ func TestAWSProvider_GetSupportedServices(t *testing.T) {
 	assert.Contains(t, services, common.ServiceCache)
 	assert.Contains(t, services, common.ServiceSearch)
 	assert.Contains(t, services, common.ServiceDataWarehouse)
-	assert.Contains(t, services, common.ServiceSavingsPlans)
+	assert.Contains(t, services, common.ServiceSavingsPlansCompute)
+	assert.Contains(t, services, common.ServiceSavingsPlansEC2Instance)
+	assert.Contains(t, services, common.ServiceSavingsPlansSageMaker)
+	assert.Contains(t, services, common.ServiceSavingsPlansDatabase)
 	// Legacy types
 	assert.Contains(t, services, common.ServiceEC2)
 	assert.Contains(t, services, common.ServiceRDS)
@@ -274,7 +277,10 @@ func TestAWSProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 		{common.ServiceDataWarehouse, common.ServiceDataWarehouse},
 		{common.ServiceRedshift, common.ServiceDataWarehouse},
 		{common.ServiceMemoryDB, common.ServiceCache},
-		{common.ServiceSavingsPlans, common.ServiceSavingsPlans},
+		{common.ServiceSavingsPlansCompute, common.ServiceSavingsPlansCompute},
+		{common.ServiceSavingsPlansEC2Instance, common.ServiceSavingsPlansEC2Instance},
+		{common.ServiceSavingsPlansSageMaker, common.ServiceSavingsPlansSageMaker},
+		{common.ServiceSavingsPlansDatabase, common.ServiceSavingsPlansDatabase},
 	}
 
 	for _, tc := range testCases {
