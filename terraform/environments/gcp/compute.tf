@@ -25,6 +25,7 @@ module "compute_cloud_run" {
 
   # Access
   allow_unauthenticated = var.cloud_run_allow_unauthenticated
+  ingress               = var.cloud_run_ingress
 
   # Database connection
   database_host               = module.database.private_ip_address

@@ -24,6 +24,9 @@ cloud_run_min_instances         = 0
 cloud_run_max_instances         = 10
 cloud_run_request_timeout       = 300
 cloud_run_allow_unauthenticated = true
+# github-dev runs without the external HTTPS LB (`enable_cdn = false`), so
+# the *.run.app URL must accept direct traffic — override the secure default.
+cloud_run_ingress = "INGRESS_TRAFFIC_ALL"
 
 # ==============================================
 # Database (Cloud SQL PostgreSQL)

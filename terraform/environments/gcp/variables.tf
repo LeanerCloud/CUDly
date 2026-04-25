@@ -238,15 +238,52 @@ variable "cloud_run_allow_unauthenticated" {
     bundled frontend hitting the Cloud Run URL directly without an HTTPS
     load balancer in front.
 
-    NOTE: For production, prefer `false` plus an external HTTPS load
-    balancer with Cloud Armor (see `cloud_run_ingress` semantics in the
-    cloud-run module). The current default does not flip the module's
-    `ingress` default to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` because
-    the supporting LB is not provisioned by this environment yet — when
-    that lands, this default and the ingress default should move together.
+    For production, prefer `false` plus the external HTTPS load balancer
+    with Cloud Armor in front (see `cloud_run_ingress` and `enable_cdn`).
+    The two defences are complementary: `allow_unauthenticated = false`
+    closes the IAM door, `cloud_run_ingress = "..._INTERNAL_LOAD_BALANCER"`
+    closes the network door so a misconfigured `roles/run.invoker` binding
+    on `allUsers` can't blow it open.
   EOT
   type        = bool
   default     = false
+}
+
+variable "cloud_run_ingress" {
+  description = <<-EOT
+    Cloud Run ingress traffic restriction. Controls which network paths
+    can reach the *.run.app URL. Accepted values:
+
+    - `INGRESS_TRAFFIC_ALL` — public internet can hit the *.run.app URL
+      directly. Use only when no HTTPS load balancer fronts the service
+      (typically dev / preview environments with `enable_cdn = false`).
+    - `INGRESS_TRAFFIC_INTERNAL_ONLY` — only VPC-internal traffic; the
+      *.run.app URL is unreachable from outside the project. Useful for
+      service-to-service back-ends with no external consumers.
+    - `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` — VPC-internal traffic
+      AND the external HTTPS load balancer (i.e. `enable_cdn = true`,
+      which provisions the Serverless NEG + Cloud Armor backend). The
+      *.run.app URL returns 403 to direct callers; only requests that
+      come through the LB (and therefore Cloud Armor's WAF rules) reach
+      the service.
+
+    The default is `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` (defence-in-
+    depth) — pair it with `allow_unauthenticated = false` so neither the
+    network nor the IAM door is open by accident. Environments that
+    don't yet provision the LB (`enable_cdn = false`) MUST override to
+    `INGRESS_TRAFFIC_ALL` or the service becomes unreachable.
+  EOT
+  type        = string
+  default     = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+
+  validation {
+    condition = contains([
+      "INGRESS_TRAFFIC_ALL",
+      "INGRESS_TRAFFIC_INTERNAL_ONLY",
+      "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+    ], var.cloud_run_ingress)
+    error_message = "cloud_run_ingress must be one of INGRESS_TRAFFIC_ALL, INGRESS_TRAFFIC_INTERNAL_ONLY, INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER."
+  }
 }
 
 # ==============================================

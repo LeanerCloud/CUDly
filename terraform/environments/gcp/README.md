@@ -144,12 +144,41 @@ The GCP deployment creates:
 - **Cloud Scheduler** job for periodic recommendation collection
 - **GCR** container image (built from project Dockerfile)
 
+## Security: Cloud Run ingress
+
+Two variables control how external callers reach the Cloud Run service:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `cloud_run_allow_unauthenticated` | `false` | IAM gate. `false` = only callers with `roles/run.invoker` can hit the URL. |
+| `cloud_run_ingress` | `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` | Network gate. Restricts the `*.run.app` URL to VPC + LB traffic only. |
+
+The defaults are **defence-in-depth**: even if a bad IAM binding ever grants `roles/run.invoker` to `allUsers`, the network gate keeps direct internet callers out of the `*.run.app` URL — only requests that come through the external HTTPS load balancer (and therefore Cloud Armor's WAF) can reach the service.
+
+### When to override
+
+`cloud_run_ingress` MUST be overridden to `INGRESS_TRAFFIC_ALL` whenever the supporting LB stack is not provisioned (`enable_cdn = false`), or the service becomes unreachable. All shipped tfvars (`dev.tfvars.example`, `github-dev.tfvars`, `github-staging.tfvars`, `github-prod.tfvars`) currently set `enable_cdn = false` and override `cloud_run_ingress` accordingly. When an environment flips `enable_cdn = true` (and provisions the LB + Cloud Armor + DNS), drop the `cloud_run_ingress` override so the service falls back to the secure default.
+
+### Verify
+
+```bash
+# Inspect the live ingress setting (after apply):
+gcloud run services describe <svc> --region <region> \
+  --format='value(spec.template.metadata.annotations[run.googleapis.com/ingress])'
+# Expected with the secure default:                  "internal-and-cloud-load-balancing"
+# Expected with the dev/staging/prod overrides today: "all"
+
+# Direct call to the *.run.app URL (when ingress is INTERNAL_LOAD_BALANCER):
+curl -I https://<service>-<hash>-<region>.a.run.app/health
+# Expected: HTTP/2 403  (request is rejected at the network layer)
+```
+
 ## Cost Notes (Dev Environment)
 
 The dev configuration uses minimal resources:
 
 | Resource | Size | Estimated Monthly Cost |
-|----------|------|----------------------|
+| --- | --- | --- |
 | Cloud SQL PostgreSQL | db-f1-micro, 10GB | ~$8 |
 | Cloud Run | 1 vCPU, 512Mi, scale-to-zero | ~$0 (pay per request) |
 | VPC Connector | f1-micro (2 instances) | ~$7 |
