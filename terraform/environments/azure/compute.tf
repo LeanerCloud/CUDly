@@ -57,17 +57,14 @@ module "compute_container_apps" {
 
   # Scheduled tasks (Logic Apps)
   #
-  # scheduled_task_secret still passes the plaintext value here because the
-  # Logic App workflow definition embeds it in its outgoing "Authorization:
-  # Bearer ..." header (see scheduled-tasks.tf). Azure Logic Apps DO support
-  # Key Vault references via @parameters() + a Key Vault connection, but
-  # that's a larger refactor. This value is stored in Terraform state and
-  # in the Logic App resource, but is no longer exposed in the Container
-  # App's env vars — `az containerapp show` now reveals only the secret
-  # name, not the value.
-  enable_scheduled_tasks  = var.enable_scheduled_tasks
-  scheduled_task_secret   = module.secrets.scheduled_task_secret_value
-  recommendation_schedule = var.recommendation_schedule
+  # Each Logic App workflow has a system-assigned managed identity that holds
+  # "Key Vault Secrets User" on the same Key Vault as the Container App. The
+  # workflow's first action GETs scheduled-task-secret from KV via that
+  # identity at runtime; the value never lands in the workflow definition or
+  # Terraform state. We only pass the *name* of the secret, not the value.
+  enable_scheduled_tasks     = var.enable_scheduled_tasks
+  scheduled_task_secret_name = module.secrets.scheduled_task_secret_name
+  recommendation_schedule    = var.recommendation_schedule
 
   # RI exchange automation
   enable_ri_exchange_schedule = var.enable_ri_exchange_schedule

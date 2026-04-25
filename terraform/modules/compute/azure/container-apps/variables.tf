@@ -204,11 +204,10 @@ variable "enable_scheduled_tasks" {
   default     = true
 }
 
-variable "scheduled_task_secret" {
-  description = "Shared secret for authenticating scheduled task HTTP calls"
+variable "scheduled_task_secret_name" {
+  description = "Key Vault secret name (NOT the value) holding the shared secret for authenticating scheduled task HTTP calls. The Logic App workflows fetch this secret at runtime via their managed identity, so the plaintext never lands in the workflow definition or Terraform state."
   type        = string
   default     = ""
-  sensitive   = true
 }
 
 variable "recommendation_schedule" {
