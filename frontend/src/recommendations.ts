@@ -4,9 +4,9 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatTerm, escapeHtml, populateAccountFilter, formatRelativeTime } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, populateAccountFilter } from './utils';
 import { renderFreshness } from './freshness';
-import { getRecommendationsFreshness } from './api/recommendations';
+import { getRecommendationDetail, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
 import { isPaymentSupported, type Provider as CompatProvider } from './lib/purchase-compatibility';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
@@ -302,76 +302,170 @@ function openDetailDrawer(rec: LocalRecommendation): void {
   });
   drawer.appendChild(dl);
 
-  // Confidence bucket — computed client-side from the savings magnitude
-  // + instance count. A proper per-recommendation confidence score that
-  // accounts for historical usage variance needs a backend endpoint
-  // (tracked in known_issues/28_recommendations_detail_endpoint.md);
-  // this client-side heuristic gives users a directional signal in the
-  // meantime.
-  const bucket = confidenceBucketFor(rec);
+  // Confidence + provenance + usage history are sourced from the
+  // per-id detail endpoint (issue #44). The drawer renders a loading
+  // placeholder for each block immediately, then fills them in once
+  // the fetch resolves. The fetch is memoised per id for the drawer
+  // lifetime so re-opening the same row never re-hits the network
+  // within a single session (cache cleared on drawer close).
   const confidenceRow = document.createElement('dl');
   confidenceRow.className = 'detail-drawer-fields';
   const confDt = document.createElement('dt');
   confDt.textContent = 'Confidence';
   const confDd = document.createElement('dd');
   const badge = document.createElement('span');
-  badge.className = `confidence-badge confidence-${bucket}`;
-  badge.textContent = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+  badge.className = 'confidence-badge confidence-loading';
+  badge.textContent = '…';
   confDd.appendChild(badge);
   confidenceRow.appendChild(confDt);
   confidenceRow.appendChild(confDd);
   drawer.appendChild(confidenceRow);
 
-  // Provenance — render immediately with a placeholder, then fill in
-  // asynchronously from /api/recommendations/freshness (the endpoint is
-  // already hit by the freshness pill so its response is cached on the
-  // network side; this fetch is fast and non-blocking to the drawer
-  // opening).
   const provenance = document.createElement('p');
   provenance.className = 'detail-drawer-note';
-  provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs. Last collection timing loading\u2026`;
+  provenance.textContent = 'Loading recommendation details\u2026';
   drawer.appendChild(provenance);
-  void getRecommendationsFreshness()
-    .then((f) => {
-      const rel = f.last_collected_at ? formatRelativeTime(f.last_collected_at) : 'never';
-      provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs. Last collected ${rel}.`;
+
+  // Usage history container \u2014 replaced once the detail fetch resolves
+  // with either an inline SVG sparkline (when usage_history is
+  // non-empty) or a "not yet available" note (the documented default
+  // until the collector starts persisting time-series usage \u2014
+  // known_issues/28).
+  const usageContainer = document.createElement('div');
+  usageContainer.className = 'detail-drawer-usage';
+  const usagePlaceholder = document.createElement('p');
+  usagePlaceholder.className = 'detail-drawer-note detail-drawer-note-muted';
+  usagePlaceholder.textContent = 'Loading usage history\u2026';
+  usageContainer.appendChild(usagePlaceholder);
+  drawer.appendChild(usageContainer);
+
+  const renderUsageEmptyNote = (): HTMLParagraphElement => {
+    const note = document.createElement('p');
+    note.className = 'detail-drawer-note detail-drawer-note-muted';
+    note.textContent = 'Usage history not yet available.';
+    return note;
+  };
+
+  void fetchRecommendationDetail(rec.id)
+    .then((detail) => {
+      // Confidence: server-supplied bucket replaces the previous
+      // client-side heuristic so the label tracks the collector's
+      // view of the rec rather than a frontend approximation.
+      const bucket = detail.confidence_bucket;
+      badge.className = `confidence-badge confidence-${bucket}`;
+      badge.textContent = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+
+      // Provenance: rendered verbatim \u2014 the backend already names
+      // the collector + last-collected timestamp.
+      provenance.textContent = detail.provenance_note;
+
+      // Usage history: render the sparkline when we have points,
+      // else a one-line note. The empty case is the documented
+      // default until the collector wiring follow-up lands.
+      const next = (detail.usage_history && detail.usage_history.length > 0)
+        ? renderUsageSparkline(detail.usage_history)
+        : renderUsageEmptyNote();
+      usageContainer.replaceChildren(next);
     })
     .catch(() => {
-      provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs.`;
+      // Detail-endpoint failure shouldn't blank the drawer \u2014 fall
+      // back to a minimal "details unavailable" state. Confidence
+      // badge is reset to an explicit Unknown rather than mis-claiming
+      // a bucket on a failed fetch.
+      badge.className = 'confidence-badge confidence-unknown';
+      badge.textContent = 'Unknown';
+      provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs. (Details temporarily unavailable.)`;
+      usageContainer.replaceChildren(renderUsageEmptyNote());
     });
-
-  // Usage-history drill-down still requires backend work — see
-  // known_issues/28_recommendations_detail_endpoint.md for the endpoint
-  // contract (GET /api/recommendations/:id/detail returning a usage
-  // series).
-  const usageNote = document.createElement('p');
-  usageNote.className = 'detail-drawer-note detail-drawer-note-muted';
-  usageNote.textContent = 'Usage history over the collection window is not yet available; the detail endpoint is tracked separately.';
-  drawer.appendChild(usageNote);
 
   document.body.appendChild(backdrop);
   document.body.appendChild(drawer);
   closeBtn.focus();
 }
 
-type ConfidenceBucket = 'low' | 'medium' | 'high';
+// detailFetchCache memoises in-flight + resolved detail fetches per id
+// so re-opening the same row never re-hits the network within a single
+// session. Cleared via clearRecommendationDetailCache() so a long-lived
+// dashboard tab doesn't pin stale details indefinitely (the values
+// evolve on every collector cycle).
+const detailFetchCache = new Map<string, Promise<RecommendationDetail>>();
+
+function fetchRecommendationDetail(id: string): Promise<RecommendationDetail> {
+  const existing = detailFetchCache.get(id);
+  if (existing) return existing;
+  const inflight = getRecommendationDetail(id);
+  detailFetchCache.set(id, inflight);
+  // On rejection, drop the cached promise so the next open retries.
+  inflight.catch(() => detailFetchCache.delete(id));
+  return inflight;
+}
 
 /**
- * Client-side confidence heuristic. A real confidence score needs
- * historical usage variance from the backend (tracked in known_issues
- * #28); this directional bucket surfaces "probably a solid pick" vs
- * "marginal" to users immediately based on savings magnitude + size
- * of the target footprint.
+ * Clear the per-id detail-fetch cache. Exposed for tests + for any
+ * future explicit "refresh details" affordance.
  */
-function confidenceBucketFor(rec: LocalRecommendation): ConfidenceBucket {
-  const savings = rec.savings || 0;
-  const count = rec.count || 1;
-  // High: material monthly savings AND a non-trivial fleet — a single
-  // $1000/mo rec from one tiny instance is likely an outlier, so we
-  // require both signals.
-  if (savings >= 200 && count >= 3) return 'high';
-  if (savings >= 50) return 'medium';
-  return 'low';
+export function clearRecommendationDetailCache(): void {
+  detailFetchCache.clear();
+}
+
+/**
+ * Render a tiny inline SVG sparkline of the per-recommendation usage
+ * history. Two polylines (CPU + memory) over a shared time axis, no
+ * axes/legend — just enough to give a directional sense of utilisation
+ * over the collection window without pulling in a chart library.
+ */
+function renderUsageSparkline(points: ReadonlyArray<{ timestamp: string; cpu_pct: number; mem_pct: number }>): SVGSVGElement {
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const width = 280;
+  const height = 60;
+  const padX = 4;
+  const padY = 4;
+  const usableW = width - padX * 2;
+  const usableH = height - padY * 2;
+
+  // Y axis is fixed to 0..100 since CPU/mem percentages have a known
+  // range — keeps the visual comparison stable across recs.
+  const yMax = 100;
+  const xStep = points.length > 1 ? usableW / (points.length - 1) : 0;
+  const project = (val: number, idx: number): [number, number] => {
+    const clamped = Math.max(0, Math.min(yMax, val));
+    const x = padX + xStep * idx;
+    const y = padY + usableH * (1 - clamped / yMax);
+    return [x, y];
+  };
+
+  const buildPath = (selector: (p: { cpu_pct: number; mem_pct: number }) => number): string =>
+    points.map((p, i) => {
+      const [x, y] = project(selector(p), i);
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class', 'detail-drawer-sparkline');
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('width', String(width));
+  svg.setAttribute('height', String(height));
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', `Usage history: ${points.length} samples, CPU and memory percent over time`);
+
+  const cpu = document.createElementNS(svgNS, 'path');
+  cpu.setAttribute('d', buildPath((p) => p.cpu_pct));
+  cpu.setAttribute('fill', 'none');
+  cpu.setAttribute('stroke', 'currentColor');
+  cpu.setAttribute('stroke-width', '1.5');
+  cpu.setAttribute('class', 'sparkline-cpu');
+  svg.appendChild(cpu);
+
+  const mem = document.createElementNS(svgNS, 'path');
+  mem.setAttribute('d', buildPath((p) => p.mem_pct));
+  mem.setAttribute('fill', 'none');
+  mem.setAttribute('stroke', 'currentColor');
+  mem.setAttribute('stroke-width', '1.5');
+  mem.setAttribute('stroke-dasharray', '3,2');
+  mem.setAttribute('class', 'sparkline-mem');
+  svg.appendChild(mem);
+
+  return svg;
 }
 
 function providerDisplayName(provider: string): string {
