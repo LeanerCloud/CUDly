@@ -185,6 +185,37 @@ input:checked + .slider:before {
     font-size: 0.9rem;
 }
 
+/* Date-range preset chips (issue #55) — used inside the unified
+ * Purchase History date-range picker to give one-click access to the
+ * common 7d / 30d / 90d windows. Lives next to the From/To inputs in
+ * #history-range-picker and shares the row with them. */
+.range-presets {
+    display: inline-flex;
+    gap: 0.25rem;
+}
+
+.range-preset {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    color: #333;
+    cursor: pointer;
+}
+
+.range-preset:hover {
+    border-color: #1a73e8;
+    color: #1a73e8;
+}
+
+.range-preset.active,
+.range-preset[aria-selected="true"] {
+    background: #1a73e8;
+    border-color: #1a73e8;
+    color: #fff;
+}
+
 /* Ramp schedule options */
 .ramp-options {
     display: grid;

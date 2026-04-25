@@ -62,34 +62,82 @@ function populateHistoryAccountFilter(provider?: string): Promise<void> {
 
 /**
  * Setup history filter event handlers
+ *
+ * Wires the Provider filter to repopulate the Account dropdown and
+ * (issue #55) re-fetch the Purchase events table — previously the
+ * user had to click `Load History`, but that button is gone now so a
+ * change is itself the trigger. The Account filter likewise refetches
+ * on change. setupHistoryHandlers is invoked once at app init from
+ * app.ts.
  */
 export function setupHistoryHandlers(): void {
   const providerFilter = document.getElementById('history-provider-filter') as HTMLSelectElement | null;
   if (providerFilter) {
     providerFilter.addEventListener('change', () => {
-      void populateHistoryAccountFilter(providerFilter.value);
+      void populateHistoryAccountFilter(providerFilter.value).then(() => {
+        void loadHistory();
+      });
+    });
+  }
+  const accountFilter = document.getElementById('history-account-filter') as HTMLSelectElement | null;
+  if (accountFilter) {
+    accountFilter.addEventListener('change', () => {
+      void loadHistory();
     });
   }
   void populateHistoryAccountFilter();
 }
 
+export type HistoryRangePreset = '7d' | '30d' | '90d';
+
+// Default range when the History tab opens for the first time. Matches
+// the most-common preset (7d) on the unified date-range picker so the
+// initial Savings History KPIs and the Purchase events table stay in
+// sync. Was 3 months before #55; the unified picker collapsed both
+// controls under one default and the savings KPIs were the louder
+// signal, so 7d won.
+const DEFAULT_RANGE_PRESET: HistoryRangePreset = '7d';
+
 /**
- * Initialize history date range
+ * Compute the start/end date pair for a preset, normalised to YYYY-MM-DD
+ * (UTC) so it can be written straight into a `<input type="date">`.
  */
-export function initHistoryDateRange(): void {
+export function presetToRange(preset: HistoryRangePreset): { start: string; end: string } {
   const end = new Date();
   const start = new Date();
-  start.setMonth(start.getMonth() - 3);
+  const days = preset === '7d' ? 7 : preset === '30d' ? 30 : 90;
+  start.setDate(start.getDate() - days);
+  return {
+    start: start.toISOString().split('T')[0] || '',
+    end: end.toISOString().split('T')[0] || '',
+  };
+}
 
+/**
+ * Initialize history date range to the default preset (7d).
+ * Idempotent — preserves any value the user has already set.
+ */
+export function initHistoryDateRange(): void {
   const startInput = document.getElementById('history-start') as HTMLInputElement | null;
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
+  const { start, end } = presetToRange(DEFAULT_RANGE_PRESET);
 
-  if (startInput && !startInput.value) {
-    startInput.value = start.toISOString().split('T')[0] || '';
-  }
-  if (endInput && !endInput.value) {
-    endInput.value = end.toISOString().split('T')[0] || '';
-  }
+  if (startInput && !startInput.value) startInput.value = start;
+  if (endInput && !endInput.value) endInput.value = end;
+}
+
+/**
+ * Apply a preset to the shared date inputs. Visual chip-active state
+ * is owned by setupHistoryRangeHandlers — applyHistoryPreset only
+ * mutates the input values so headless callers (tests, deep-links)
+ * can drive the same code path without a DOM dependency on the chips.
+ */
+export function applyHistoryPreset(preset: HistoryRangePreset): void {
+  const startInput = document.getElementById('history-start') as HTMLInputElement | null;
+  const endInput = document.getElementById('history-end') as HTMLInputElement | null;
+  const { start, end } = presetToRange(preset);
+  if (startInput) startInput.value = start;
+  if (endInput) endInput.value = end;
 }
 
 /**

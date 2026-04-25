@@ -191,13 +191,42 @@ describe('HTML Structure', () => {
       expect(controls).toBeTruthy();
     });
 
-    test('has date range inputs', () => {
+    test('has unified date range picker (issue #55)', () => {
+      // The unified picker lives at the top of the History tab and
+      // drives BOTH the savings KPIs and the purchase events table.
+      // Must contain the From/To inputs + the preset chips.
+      const picker = document.getElementById('history-range-picker');
+      expect(picker).toBeTruthy();
+
       const startDate = document.getElementById('history-start') as HTMLInputElement | null;
       const endDate = document.getElementById('history-end') as HTMLInputElement | null;
       expect(startDate).toBeTruthy();
       expect(endDate).toBeTruthy();
       expect(startDate?.getAttribute('type')).toBe('date');
       expect(endDate?.getAttribute('type')).toBe('date');
+
+      // Both inputs must live INSIDE the unified picker, not in a
+      // separate purchase-history-only row (the bug from #55).
+      expect(picker?.contains(startDate)).toBe(true);
+      expect(picker?.contains(endDate)).toBe(true);
+
+      const presets = picker?.querySelectorAll('[data-history-preset]');
+      const presetValues = Array.from(presets ?? []).map(el =>
+        (el as HTMLElement).dataset['historyPreset']
+      );
+      expect(presetValues).toEqual(expect.arrayContaining(['7d', '30d', '90d']));
+    });
+
+    test('purchase history section no longer hosts its own date inputs (issue #55)', () => {
+      // Regression guard: the duplicate From/To row inside
+      // #purchase-history-section was removed when the date controls
+      // were unified at the top of the tab.
+      const section = document.getElementById('purchase-history-section');
+      expect(section).toBeTruthy();
+      expect(section?.querySelectorAll('input[type="date"]').length).toBe(0);
+      // The Load-History button is also gone — the table reloads on
+      // range change instead of waiting for an explicit click.
+      expect(document.getElementById('load-history-btn')).toBeNull();
     });
 
     test('has provider filter', () => {
@@ -512,14 +541,12 @@ describe('HTML Structure', () => {
       expect(section).toBeTruthy();
     });
 
-    test('has savings period selector', () => {
-      const select = document.getElementById('savings-period') as HTMLSelectElement | null;
-      expect(select).toBeTruthy();
-      const options = Array.from(select?.querySelectorAll('option') ?? []).map(o => o.value);
-      expect(options).toContain('24h');
-      expect(options).toContain('7d');
-      expect(options).toContain('30d');
-      expect(options).toContain('90d');
+    test('savings-period dropdown was removed in favour of the unified picker (issue #55)', () => {
+      // Issue #55: the standalone Period dropdown was retired —
+      // the unified date-range picker (asserted under "History Tab"
+      // above) now drives the Savings History card too.
+      const select = document.getElementById('savings-period');
+      expect(select).toBeNull();
     });
 
     test('has savings stats cards', () => {

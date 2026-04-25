@@ -12,18 +12,18 @@ Chart.register(...registerables);
 let savingsChart: Chart | null = null;
 
 /**
- * Load savings history data based on selected period
+ * Load savings history data based on the unified date-range picker
+ * (#history-start / #history-end inputs — see issue #55). Falls back
+ * to a 7-day window if the inputs are missing or empty so callers
+ * that mount the section before the controls (e.g. plan-history
+ * deep-link) still get sensible data.
  */
 export async function loadSavingsHistory(): Promise<void> {
-    const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
     const chartContainer = document.getElementById('savings-history-chart')?.parentElement;
     const emptyEl = document.getElementById('savings-history-empty');
     const statsEl = document.getElementById('savings-stats');
 
-    if (!periodSelect) return;
-
-    const period = periodSelect.value;
-    const { start, end, interval } = getPeriodDates(period);
+    const { start, end, interval } = getRangeFromInputs();
 
     try {
         const data = await getSavingsAnalytics({
@@ -70,36 +70,57 @@ function showEmptyState(
 }
 
 /**
- * Get start/end dates and interval based on period selection
+ * Read the shared date-range picker (`#history-start` / `#history-end`
+ * — populated by initHistoryDateRange + applyHistoryPreset in
+ * history.ts) and derive the (start, end, interval) tuple.
+ *
+ * Interval picks `hourly` for spans up to 7 days and `daily` beyond,
+ * matching the previous Period-dropdown behaviour:
+ *   - 7d preset  → 7-day span  → hourly
+ *   - 30d preset → 30-day span → daily
+ *   - 90d preset → 90-day span → daily
+ *
+ * Falls back to a 7-day window if inputs are missing/empty so callers
+ * that fire before initHistoryDateRange still get a sensible default.
  */
-function getPeriodDates(period: string): { start: Date; end: Date; interval: 'hourly' | 'daily' | 'weekly' | 'monthly' } {
-    const end = new Date();
-    const start = new Date();
-    let interval: 'hourly' | 'daily' | 'weekly' | 'monthly' = 'hourly';
+function getRangeFromInputs(): { start: Date; end: Date; interval: 'hourly' | 'daily' | 'weekly' | 'monthly' } {
+    const startInput = document.getElementById('history-start') as HTMLInputElement | null;
+    const endInput = document.getElementById('history-end') as HTMLInputElement | null;
 
-    switch (period) {
-        case '24h':
-            start.setHours(start.getHours() - 24);
-            interval = 'hourly';
-            break;
-        case '7d':
-            start.setDate(start.getDate() - 7);
-            interval = 'hourly';
-            break;
-        case '30d':
-            start.setDate(start.getDate() - 30);
-            interval = 'daily';
-            break;
-        case '90d':
-            start.setDate(start.getDate() - 90);
-            interval = 'daily';
-            break;
-        default:
-            start.setDate(start.getDate() - 7);
-            interval = 'hourly';
+    const end = parseDateOrNow(endInput?.value);
+    let start: Date;
+    if (startInput?.value) {
+        start = new Date(startInput.value);
+        if (Number.isNaN(start.getTime())) {
+            start = defaultStart(end);
+        }
+    } else {
+        start = defaultStart(end);
     }
 
+    // Guard against an inverted range (start > end) — clamp start back
+    // 7 days from end so the API call stays well-formed.
+    if (start.getTime() > end.getTime()) {
+        start = defaultStart(end);
+    }
+
+    const spanMs = end.getTime() - start.getTime();
+    const spanDays = spanMs / (1000 * 60 * 60 * 24);
+    const interval: 'hourly' | 'daily' = spanDays <= 7 ? 'hourly' : 'daily';
+
     return { start, end, interval };
+}
+
+function parseDateOrNow(value: string | undefined): Date {
+    if (!value) return new Date();
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
+function defaultStart(end: Date): Date {
+    const start = new Date(end);
+    start.setDate(start.getDate() - 7);
+    return start;
 }
 
 /**
@@ -301,15 +322,16 @@ function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string): v
 }
 
 /**
- * Initialize savings history event listeners
+ * Initialize savings history event listeners.
+ *
+ * The standalone Period dropdown was removed in #55 — the unified
+ * date-range picker (handled in app.ts) now drives loadSavingsHistory
+ * alongside the Purchase events table. The Refresh button is still
+ * wired here because it's local to the savings card and the chart
+ * recreation lives in this module.
  */
 export function initSavingsHistory(): void {
-    const periodSelect = document.getElementById('savings-period');
     const refreshBtn = document.getElementById('refresh-savings-btn');
-
-    if (periodSelect) {
-        periodSelect.addEventListener('change', loadSavingsHistory);
-    }
 
     if (refreshBtn) {
         refreshBtn.addEventListener('click', loadSavingsHistory);

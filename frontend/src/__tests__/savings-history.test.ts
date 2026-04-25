@@ -29,16 +29,30 @@ import { loadSavingsHistory, initSavingsHistory, savingsChart } from '../modules
 import { getSavingsAnalytics } from '../api';
 import { Chart } from 'chart.js';
 
+/**
+ * Helper: write a YYYY-MM-DD date string `n` whole days before today
+ * into the shared #history-start input. Mirrors what
+ * applyHistoryPreset(...) does at runtime for the unified date-range
+ * picker (issue #55) — tests pre-#55 used the now-deleted
+ * #savings-period dropdown to control span; this helper gives the
+ * same single-knob ergonomics.
+ */
+function setRangeDays(days: number): void {
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  const end = new Date();
+  const startInput = document.getElementById('history-start') as HTMLInputElement;
+  const endInput = document.getElementById('history-end') as HTMLInputElement;
+  if (startInput) startInput.value = start.toISOString().split('T')[0] || '';
+  if (endInput) endInput.value = end.toISOString().split('T')[0] || '';
+}
+
 describe('Savings History Module', () => {
   beforeEach(() => {
     // Reset DOM
     document.body.innerHTML = `
-      <select id="savings-period">
-        <option value="24h">Last 24 Hours</option>
-        <option value="7d" selected>Last 7 Days</option>
-        <option value="30d">Last 30 Days</option>
-        <option value="90d">Last 90 Days</option>
-      </select>
+      <input type="date" id="history-start">
+      <input type="date" id="history-end">
       <button id="refresh-savings-btn">Refresh</button>
       <div id="savings-history-container">
         <canvas id="savings-history-chart"></canvas>
@@ -50,6 +64,9 @@ describe('Savings History Module', () => {
         <span id="peak-savings">$0/hr</span>
       </div>
     `;
+    // Default to a 7-day window so behaviour matches the previous
+    // `selected="7d"` default on #savings-period.
+    setRangeDays(7);
 
     jest.clearAllMocks();
     (Chart as unknown as jest.Mock).mockClear();
@@ -137,11 +154,12 @@ describe('Savings History Module', () => {
       expect(statsEl?.classList.contains('hidden')).toBe(true);
     });
 
-    test('uses 24h period with hourly interval', async () => {
+    test('uses hourly interval for ranges <= 7 days', async () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
 
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      periodSelect.value = '24h';
+      // Already 7d via beforeEach; explicitly re-set to make the test
+      // self-contained.
+      setRangeDays(7);
 
       await loadSavingsHistory();
 
@@ -150,11 +168,10 @@ describe('Savings History Module', () => {
       }));
     });
 
-    test('uses 30d period with daily interval', async () => {
+    test('uses daily interval for a 30-day range', async () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
 
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      periodSelect.value = '30d';
+      setRangeDays(30);
 
       await loadSavingsHistory();
 
@@ -163,11 +180,10 @@ describe('Savings History Module', () => {
       }));
     });
 
-    test('uses 90d period with daily interval', async () => {
+    test('uses daily interval for a 90-day range', async () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
 
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      periodSelect.value = '90d';
+      setRangeDays(90);
 
       await loadSavingsHistory();
 
@@ -176,11 +192,13 @@ describe('Savings History Module', () => {
       }));
     });
 
-    test('defaults to 7d period with hourly interval for unknown value', async () => {
+    test('defaults to a 7-day hourly window when inputs are missing', async () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
 
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      periodSelect.value = 'unknown';
+      // Remove the inputs entirely — the savings module should still
+      // produce a sensible default (7d / hourly) rather than throw.
+      document.getElementById('history-start')?.remove();
+      document.getElementById('history-end')?.remove();
 
       await loadSavingsHistory();
 
@@ -229,11 +247,12 @@ describe('Savings History Module', () => {
       expect(periodSavingsEl?.textContent).toContain('$300.00');
     });
 
-    test('handles missing period select gracefully', async () => {
-      document.getElementById('savings-period')?.remove();
+    test('handles missing date inputs gracefully', async () => {
+      document.getElementById('history-start')?.remove();
+      document.getElementById('history-end')?.remove();
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
 
-      // Should not throw
+      // Should not throw — falls back to a 7-day window.
       await expect(loadSavingsHistory()).resolves.not.toThrow();
     });
 
@@ -423,14 +442,9 @@ describe('Savings History Module', () => {
   });
 
   describe('initSavingsHistory', () => {
-    test('adds change listener to period select', () => {
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      const addEventListenerSpy = jest.spyOn(periodSelect, 'addEventListener');
-
-      initSavingsHistory();
-
-      expect(addEventListenerSpy).toHaveBeenCalledWith('change', expect.any(Function));
-    });
+    // The standalone Period dropdown was removed in #55, so the only
+    // listener initSavingsHistory still owns is the Refresh button —
+    // the unified date-range picker is wired in app.ts instead.
 
     test('adds click listener to refresh button', () => {
       const refreshBtn = document.getElementById('refresh-savings-btn') as HTMLButtonElement;
@@ -441,30 +455,10 @@ describe('Savings History Module', () => {
       expect(addEventListenerSpy).toHaveBeenCalledWith('click', expect.any(Function));
     });
 
-    test('handles missing period select gracefully', () => {
-      document.getElementById('savings-period')?.remove();
-
-      expect(() => initSavingsHistory()).not.toThrow();
-    });
-
     test('handles missing refresh button gracefully', () => {
       document.getElementById('refresh-savings-btn')?.remove();
 
       expect(() => initSavingsHistory()).not.toThrow();
-    });
-
-    test('period change triggers loadSavingsHistory', async () => {
-      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
-
-      initSavingsHistory();
-
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      periodSelect.value = '30d';
-      periodSelect.dispatchEvent(new Event('change'));
-
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      expect(getSavingsAnalytics).toHaveBeenCalled();
     });
 
     test('refresh button click triggers loadSavingsHistory', async () => {
@@ -490,8 +484,8 @@ describe('Savings History Module', () => {
       };
       (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
 
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      periodSelect.value = '30d';
+      // 30-day span → daily interval → date labels.
+      setRangeDays(30);
 
       await loadSavingsHistory();
 
@@ -509,8 +503,8 @@ describe('Savings History Module', () => {
       };
       (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
 
-      const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
-      periodSelect.value = '7d';
+      // 7-day span → hourly interval → datetime labels.
+      setRangeDays(7);
 
       await loadSavingsHistory();
 

@@ -188,21 +188,34 @@
 
             <!-- History Tab -->
             <div id="history-tab" class="tab-content" role="tabpanel" aria-labelledby="history-tab-btn">
+                <!-- Unified Date Range Picker -->
+                <!--
+                  Single source of truth for the date range across BOTH the
+                  Savings History KPI cards/chart and the Purchase events
+                  table below. Replaces the previous Period dropdown and
+                  the duplicate From/To + Load-History controls (issue #55).
+                -->
+                <section id="history-range-section" class="card">
+                    <div class="section-header">
+                        <h2>Date Range</h2>
+                        <div id="history-range-picker" class="controls-bar" role="group" aria-label="Date range for savings and purchase history">
+                            <div class="range-presets" role="tablist" aria-label="Date range presets">
+                                <button type="button" class="range-preset active" data-history-preset="7d" role="tab" aria-selected="true">Last 7 Days</button>
+                                <button type="button" class="range-preset" data-history-preset="30d" role="tab" aria-selected="false">Last 30 Days</button>
+                                <button type="button" class="range-preset" data-history-preset="90d" role="tab" aria-selected="false">Last 90 Days</button>
+                            </div>
+                            <label>From: <input type="date" id="history-start"></label>
+                            <label>To: <input type="date" id="history-end"></label>
+                            <button id="refresh-savings-btn" class="btn-small">Refresh</button>
+                        </div>
+                    </div>
+                    <p class="help-text">Applies to both Savings History (below) and the Purchase events table.</p>
+                </section>
+
                 <!-- Savings History Chart Section -->
                 <section id="savings-history-section" class="card">
                     <div class="section-header">
                         <h2>Savings History</h2>
-                        <div class="controls-bar">
-                            <label>Period:
-                                <select id="savings-period">
-                                    <option value="24h">Last 24 Hours</option>
-                                    <option value="7d" selected>Last 7 Days</option>
-                                    <option value="30d">Last 30 Days</option>
-                                    <option value="90d">Last 90 Days</option>
-                                </select>
-                            </label>
-                            <button id="refresh-savings-btn" class="btn-small">Refresh</button>
-                        </div>
                     </div>
 
                     <!-- Savings Stats Cards -->
@@ -235,11 +248,10 @@
 
                 <!-- Purchase History Section -->
                 <section id="purchase-history-section" class="card">
-                    <h2>Purchase History</h2>
+                    <h2>Purchase events</h2>
+                    <p class="help-text">Individual purchase events recorded in the date range above. Filter further by provider or account:</p>
                     <section id="history-controls">
                         <div class="date-range-picker">
-                            <label>From: <input type="date" id="history-start"></label>
-                            <label>To: <input type="date" id="history-end"></label>
                             <label>Provider:
                                 <select id="history-provider-filter">
                                     <option value="">All Providers</option>
@@ -253,7 +265,6 @@
                                     <option value="">All Accounts</option>
                                 </select>
                             </label>
-                            <button id="load-history-btn">Load History</button>
                         </div>
                     </section>
                     <section id="history-summary"></section>

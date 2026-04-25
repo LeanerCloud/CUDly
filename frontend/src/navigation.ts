@@ -5,7 +5,7 @@
 import { loadDashboard } from './dashboard';
 import { loadRecommendations } from './recommendations';
 import { loadPlans } from './plans';
-import { initHistoryDateRange } from './history';
+import { initHistoryDateRange, loadHistory } from './history';
 import { loadGlobalSettings, isUnsavedChanges, loadAccountsTab } from './settings';
 import { renderSubNav } from './settings-subnav';
 import { loadUsers } from './users';
@@ -88,8 +88,13 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
       void loadPlans();
       break;
     case 'history':
+      // Issue #55: the unified date-range picker drives BOTH the
+      // savings KPIs/chart AND the purchase events table, so kick
+      // off both loaders when the tab opens. The Load-History button
+      // that previously gated the table fetch is gone.
       initHistoryDateRange();
       void loadSavingsHistory();
+      void loadHistory();
       break;
     case 'settings':
       switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });

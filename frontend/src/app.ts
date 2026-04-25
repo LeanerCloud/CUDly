@@ -12,8 +12,8 @@ import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openN
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
 import { initApiKeys } from './apikeys';
-import { loadHistory } from './history';
-import { initSavingsHistory } from './modules/savings-history';
+import { loadHistory, applyHistoryPreset, setupHistoryHandlers, type HistoryRangePreset } from './history';
+import { initSavingsHistory, loadSavingsHistory } from './modules/savings-history';
 import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
@@ -142,6 +142,11 @@ export function setupEventListeners(): void {
   // Setup savings history charts
   initSavingsHistory();
 
+  // Setup purchase-history filter handlers (provider/account dropdowns
+  // re-fetch the table on change — see issue #55, where the explicit
+  // Load-History button was removed in favour of live updates).
+  setupHistoryHandlers();
+
   // Setup feedback link
   setupFeedbackLink();
 
@@ -247,10 +252,56 @@ function setupButtonHandlers(): void {
     });
   }
 
-  // History button
-  const loadHistoryBtn = document.getElementById('load-history-btn');
-  if (loadHistoryBtn) {
-    loadHistoryBtn.addEventListener('click', () => void loadHistory());
+  // Unified date-range picker (issue #55) — preset chips + From/To
+  // inputs. Each change refetches BOTH the Savings History KPIs/chart
+  // AND the Purchase events table so the two views stay scoped to the
+  // same window. The Refresh button (#refresh-savings-btn) is wired by
+  // initSavingsHistory; we extend it here to also reload the table so
+  // a manual refresh covers both data sources.
+  const fireRangeReload = (): void => {
+    void loadSavingsHistory();
+    void loadHistory();
+  };
+  const presetButtons = document.querySelectorAll<HTMLButtonElement>(
+    '#history-range-picker .range-preset[data-history-preset]',
+  );
+  presetButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const preset = btn.dataset['historyPreset'] as HistoryRangePreset | undefined;
+      if (!preset) return;
+      // Visual selection state — single-active-tab semantics.
+      presetButtons.forEach(b => {
+        const isActive = b === btn;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', String(isActive));
+      });
+      applyHistoryPreset(preset);
+      fireRangeReload();
+    });
+  });
+
+  // Custom range edits (typing or picking a date in the From/To
+  // inputs) deselect any active preset chip — the user is overriding
+  // the preset — and re-fire both loaders.
+  const dateInputs = ['history-start', 'history-end']
+    .map(id => document.getElementById(id) as HTMLInputElement | null)
+    .filter((el): el is HTMLInputElement => el !== null);
+  dateInputs.forEach(input => {
+    input.addEventListener('change', () => {
+      presetButtons.forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
+      fireRangeReload();
+    });
+  });
+
+  // Refresh button — initSavingsHistory wires it to reload the chart;
+  // mirror that to also reload the Purchase events table so both
+  // panes refresh together.
+  const refreshBtn = document.getElementById('refresh-savings-btn');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => void loadHistory());
   }
 
 }

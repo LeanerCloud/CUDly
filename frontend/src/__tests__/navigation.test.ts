@@ -14,7 +14,11 @@ jest.mock('../plans', () => ({
   loadPlans: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../history', () => ({
-  initHistoryDateRange: jest.fn()
+  initHistoryDateRange: jest.fn(),
+  // Issue #55: navigation now also kicks off the purchase events
+  // table fetch when the History tab opens (the unified date-range
+  // picker drives both data sources, so both must load up front).
+  loadHistory: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../settings', () => ({
   loadGlobalSettings: jest.fn().mockResolvedValue(undefined),
