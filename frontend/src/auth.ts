@@ -5,6 +5,7 @@
 import * as api from './api';
 import * as state from './state';
 import { escapeHtml } from './utils';
+import { openModal, closeModal } from './modal';
 
 // Login rate limiting
 let lastLoginAttempt = 0;
@@ -693,14 +694,15 @@ async function openProfileModal(): Promise<void> {
   (document.getElementById('profile-confirm-password') as HTMLInputElement).value = '';
 
   // Show modal
-  modal.classList.remove('hidden');
+  openModal(modal);
 }
 
 /**
  * Close profile modal
  */
 function closeProfileModal(): void {
-  document.getElementById('profile-modal')?.classList.add('hidden');
+  const modal = document.getElementById('profile-modal');
+  if (modal) closeModal(modal);
 }
 
 /**

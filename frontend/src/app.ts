@@ -18,6 +18,7 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
+import { closeModal } from './modal';
 
 /**
  * Initialize app
@@ -205,7 +206,7 @@ function setupButtonHandlers(): void {
   if (closeSelectRecsBtn) {
     closeSelectRecsBtn.addEventListener('click', () => {
       const modal = document.getElementById('select-recommendations-modal');
-      if (modal) modal.classList.add('hidden');
+      if (modal) closeModal(modal);
     });
   }
 

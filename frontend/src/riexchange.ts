@@ -16,6 +16,7 @@ import type {
   RIExchangeHistoryRecord,
   OfferingOption,
 } from './api';
+import { openModal, closeModal } from './modal';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -476,10 +477,10 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   content.appendChild(btnRow);
 
   // Show modal
-  modal.classList.remove('hidden');
+  openModal(modal);
 
   cancelBtn.addEventListener('click', () => {
-    modal.classList.add('hidden');
+    closeModal(modal);
   });
 
   quoteBtn.addEventListener('click', () => {
@@ -571,7 +572,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
       modalQuoteReq = null;
 
       setTimeout(() => {
-        modal.classList.add('hidden');
+        closeModal(modal);
         void loadConvertibleRIs();
         void loadExchangeHistory();
       }, 2000);
