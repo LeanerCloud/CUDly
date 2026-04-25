@@ -41,8 +41,8 @@ type UtilizationInfo struct {
 // reshape layer: the AWS offering ID, the instance type it provisions,
 // and the effective monthly cost (amortised fixed price + recurring
 // hourly charges × 730 hours). Used both as the return shape of
-// OfferingLookup (what an AWS-provider closure returns) and as the
-// element type of ReshapeRecommendation.AlternativeTargets (what
+// PurchaseRecLookup (what the recommendations-store closure returns) and
+// as the element type of ReshapeRecommendation.AlternativeTargets (what
 // reshape emits to the HTTP handler). Kept in pkg/exchange so
 // pkg/exchange stays AWS-free and providers/aws/services/ec2 imports
 // the type rather than defining its own.
@@ -53,9 +53,9 @@ type OfferingOption struct {
 	// NormalizationFactor is the AWS normalization factor for the
 	// offering's instance size — needed by the local
 	// passesDollarUnitsCheck pre-filter that gates which cross-family
-	// alternatives surface in the UI. Populated by FindConvertibleOfferings;
-	// zero on missing means the alternative cannot be safely compared
-	// and the pre-filter excludes it.
+	// alternatives surface in the UI. Zero on missing means the
+	// alternative cannot be safely compared and the pre-filter
+	// excludes it.
 	NormalizationFactor float64 `json:"normalization_factor,omitempty"`
 	// CurrencyCode is the ISO-4217 currency the EffectiveMonthlyCost is
 	// denominated in (typically "USD"). The pre-filter requires source
@@ -64,23 +64,31 @@ type OfferingOption struct {
 	CurrencyCode string `json:"currency_code,omitempty"`
 }
 
-// OfferingLookup is the signature of the closure that resolves
-// candidate instance types into concrete offerings with pricing. Used
-// by AnalyzeReshapingWithOfferings. Implementations batch the request
-// into a single DescribeReservedInstancesOfferings call per peer-family
-// group so the N instance-types → N API calls fan-out is avoided.
-type OfferingLookup func(ctx context.Context, instanceTypes []string) ([]OfferingOption, error)
+// PurchaseRecLookup is the signature of the closure that resolves a
+// region + currency to the cached AWS Cost Explorer purchase
+// recommendations available there. Used by AnalyzeReshapingWithRecs to
+// generate cross-family alternatives without per-recommendation AWS API
+// calls — the recommendations table is already populated by the
+// scheduler tick. Implementations read from store.ListStoredRecommendations
+// and map each RecommendationRecord to an OfferingOption (effective
+// monthly cost amortised from the upfront and monthly fields).
+//
+// region is the AWS region the reshape page is viewing; currencyCode is
+// the source RIs' currency, propagated onto each returned
+// OfferingOption.CurrencyCode so the dollar-units pre-filter can refuse
+// cross-currency comparisons cleanly.
+type PurchaseRecLookup func(ctx context.Context, region, currencyCode string) ([]OfferingOption, error)
 
 // ReshapeRecommendation describes a suggested exchange for an underutilized RI.
 //
-// AlternativeTargets lists cross-family options within the same
-// use-case group (general-purpose / compute / memory / burstable) at
-// the same target size, enriched with real offering IDs and monthly
-// cost when a pricing lookup is available. This is advisory data for
-// the UI to surface alongside the primary target; the auto-exchange
+// AlternativeTargets lists cross-family options enriched with real
+// offering IDs and monthly cost from cached AWS Cost Explorer purchase
+// recommendations (see AnalyzeReshapingWithRecs). This is advisory data
+// for the UI to surface alongside the primary target; the auto-exchange
 // pipeline still acts on TargetInstanceType only so existing automated
-// behaviour is unchanged. Emitted when the primary target's family
-// belongs to a known peer group; empty otherwise.
+// behaviour is unchanged. Empty when the base AnalyzeReshaping is used
+// directly (auto.go) or when no cached recommendations exist for the
+// region.
 type ReshapeRecommendation struct {
 	SourceRIID          string           `json:"source_ri_id"`
 	SourceInstanceType  string           `json:"source_instance_type"`
@@ -92,63 +100,6 @@ type ReshapeRecommendation struct {
 	NormalizedUsed      float64          `json:"normalized_used"`
 	NormalizedPurchased float64          `json:"normalized_purchased"`
 	Reason              string           `json:"reason"`
-}
-
-// peerFamilyGroups maps each family in the allowlist to the full set
-// of peer families within its use-case group. AWS Convertible RIs can
-// cross families when the target's $-value units (from
-// DescribeReservedInstancesOfferings) match — and the most common
-// viable cross-family moves are between same-generation same-use-case
-// siblings (e.g. m5 ↔ m6i, c5 ↔ c7g). Suggesting these to the user
-// broadens their options without pushing them into shapes that will
-// fail the AWS exchange-units check at quote time.
-//
-// Specialty (GPU / HPC) and legacy-generation families are now also
-// included; the new local passesDollarUnitsCheck pre-filter (applied
-// in fillAlternativesFromOfferings) drops any alternative whose
-// (NormalizationFactor × EffectiveMonthlyCost) wouldn't survive AWS's
-// runtime exchange-validity rule, so suggestions stay actionable
-// without a per-pair GetReservedInstancesExchangeQuote API call.
-// False positives still go through the existing auto.go IsValidExchange
-// skip path at execution time.
-var peerFamilyGroups = map[string][]string{
-	// general-purpose
-	"m5":  {"m5", "m6i", "m7g"},
-	"m6i": {"m5", "m6i", "m7g"},
-	"m7g": {"m5", "m6i", "m7g"},
-	// compute-optimised
-	"c5":  {"c5", "c6i", "c7g"},
-	"c6i": {"c5", "c6i", "c7g"},
-	"c7g": {"c5", "c6i", "c7g"},
-	// memory-optimised
-	"r5":  {"r5", "r6i", "r7g"},
-	"r6i": {"r5", "r6i", "r7g"},
-	"r7g": {"r5", "r6i", "r7g"},
-	// burstable (maps to itself — generation variants are
-	// typically distinct enough that AWS won't let you exchange
-	// across them; listed to keep the helper returning a sensible
-	// result rather than nil for t-family RIs).
-	"t3":  {"t3", "t3a", "t4g"},
-	"t3a": {"t3", "t3a", "t4g"},
-	"t4g": {"t3", "t3a", "t4g"},
-	// Specialty: GPU / inference / HPC. Cross-family within each
-	// group; the $-units check below filters unviable pairs.
-	"p3":     {"p3", "p4d", "p5"},
-	"p4d":    {"p3", "p4d", "p5"},
-	"p5":     {"p3", "p4d", "p5"},
-	"g4dn":   {"g4dn", "g5"},
-	"g5":     {"g4dn", "g5"},
-	"hpc6a":  {"hpc6a", "hpc6id", "hpc7g"},
-	"hpc6id": {"hpc6a", "hpc6id", "hpc7g"},
-	"hpc7g":  {"hpc6a", "hpc6id", "hpc7g"},
-	// Legacy generations — useful when operators want to migrate
-	// off a legacy family to the current generation without
-	// changing shape entirely. The $-units check makes most legacy
-	// → current moves viable for the same size.
-	"m4": {"m4", "m5"},
-	"c4": {"c4", "c5"},
-	"r3": {"r3", "r4", "r5"},
-	"r4": {"r3", "r4", "r5"},
 }
 
 // passesDollarUnitsCheck approximates AWS's exchange-validity rule
@@ -177,14 +128,6 @@ func passesDollarUnitsCheck(srcNF, srcMonthlyCost float64, srcCurrency string, t
 		return false
 	}
 	return target.NormalizationFactor*target.EffectiveMonthlyCost >= srcNF*srcMonthlyCost
-}
-
-// candidateFamilies returns the peer families (including sourceFamily
-// itself) within the same use-case group, or nil when the family is
-// not in the allowlist. Callers surface the returned families to users
-// as cross-family alternatives.
-func candidateFamilies(sourceFamily string) []string {
-	return peerFamilyGroups[strings.ToLower(sourceFamily)]
 }
 
 // normalizationFactors maps EC2 instance sizes to their AWS normalization factors.
@@ -239,6 +182,10 @@ func NormalizationFactorForSize(size string) float64 {
 //
 // threshold is a percentage (0–100) below which an RI is considered underutilized.
 // For example, threshold=95 means RIs with <95% utilization get recommendations.
+//
+// Recommendations are emitted with empty AlternativeTargets — alternatives
+// are populated only by AnalyzeReshapingWithRecs, which pairs each rec
+// against the cached AWS Cost Explorer recommendations.
 func AnalyzeReshaping(ris []RIInfo, utilization []UtilizationInfo, threshold float64) []ReshapeRecommendation {
 	utilMap := make(map[string]float64, len(utilization))
 	for _, u := range utilization {
@@ -316,12 +263,14 @@ func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *Reshap
 	}
 
 	return &ReshapeRecommendation{
-		SourceRIID:          ri.ID,
-		SourceInstanceType:  ri.InstanceType,
-		SourceCount:         ri.InstanceCount,
-		TargetInstanceType:  targetInstanceType,
-		TargetCount:         targetCount,
-		AlternativeTargets:  alternativesForTarget(family, targetSize),
+		SourceRIID:         ri.ID,
+		SourceInstanceType: ri.InstanceType,
+		SourceCount:        ri.InstanceCount,
+		TargetInstanceType: targetInstanceType,
+		TargetCount:        targetCount,
+		// AlternativeTargets stays nil here; AnalyzeReshapingWithRecs
+		// fills it from the cached AWS Cost Explorer recommendations.
+		AlternativeTargets:  nil,
 		UtilizationPercent:  util,
 		NormalizedUsed:      normalizedUsed,
 		NormalizedPurchased: normalizedPurchased,
@@ -334,68 +283,48 @@ func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *Reshap
 	}
 }
 
-// alternativesForTarget returns cross-family equivalents at the same
-// target size for the families in sourceFamily's peer group. The
-// source family itself is excluded (that's the primary
-// TargetInstanceType already). Returns nil when sourceFamily isn't in
-// the allowlist or has no peers.
+// AnalyzeReshapingWithRecs is AnalyzeReshaping plus cross-family
+// alternatives sourced from the cached AWS Cost Explorer purchase
+// recommendations table. It calls the base analyzer, then makes a
+// SINGLE region-scoped lookup and pairs each rec against the returned
+// offerings — no per-recommendation AWS API call, no hand-curated
+// peer-family allowlist.
 //
-// Pricing fields (OfferingID, EffectiveMonthlyCost) are left empty
-// here. AnalyzeReshapingWithOfferings backfills them via an injected
-// lookup; callers without a lookup (auto.go, no-pricing tests) see
-// name-only entries.
-func alternativesForTarget(sourceFamily, targetSize string) []OfferingOption {
-	peers := candidateFamilies(sourceFamily)
-	if len(peers) <= 1 {
-		return nil
-	}
-	out := make([]OfferingOption, 0, len(peers)-1)
-	for _, p := range peers {
-		if strings.EqualFold(p, sourceFamily) {
-			continue
-		}
-		out = append(out, OfferingOption{InstanceType: p + "." + targetSize})
-	}
-	return out
-}
-
-// AnalyzeReshapingWithOfferings is AnalyzeReshaping + offering
-// enrichment: it calls the base analyzer, batches the distinct target
-// instance types (primary + alternatives) into ONE lookup call, and
-// fills each rec's AlternativeTargets with real OfferingID +
-// EffectiveMonthlyCost.
+// Filtering rules per rec:
+//   - The source family (parsed from rec.SourceInstanceType) is excluded
+//     so the alternatives slice carries only cross-family options.
+//   - The primary target (rec.TargetInstanceType) is also excluded — it
+//     is already surfaced as the primary suggestion.
+//   - passesDollarUnitsCheck gates each surviving offering against the
+//     source RI's NF / MonthlyCost / CurrencyCode so the UI doesn't
+//     show options that would be rejected at AWS exchange time. When
+//     the source RI lacks pricing (MonthlyCost == 0) the gate is
+//     skipped for that rec to preserve today's behaviour for callers
+//     that don't supply pricing.
 //
-// Missing-offering behaviour: if the lookup returns no entry for a
-// candidate instance type, that alternative is silently dropped from
-// the rec's slice — the rec still ships with its primary target and
-// the alternatives that DID resolve. If the lookup itself errors, the
-// base recs are returned with empty AlternativeTargets across the
-// board; the dashboard's primary reshape suggestions stay intact.
-//
-// auto.go keeps calling the existing AnalyzeReshaping (no pricing
-// needed); only the HTTP handlers that surface recommendations to
-// users call the enriched version.
-func AnalyzeReshapingWithOfferings(
+// Missing cache, lookup error, or empty-region response: rec ships with
+// empty AlternativeTargets — the dashboard's primary reshape suggestion
+// stays intact and the UX matches "AWS hasn't recommended anything for
+// this region yet". auto.go keeps calling AnalyzeReshaping (no
+// alternatives needed); only the HTTP reshape handler calls this enriched
+// version.
+func AnalyzeReshapingWithRecs(
 	ctx context.Context,
 	ris []RIInfo,
 	utilization []UtilizationInfo,
 	threshold float64,
-	lookup OfferingLookup,
+	region, currencyCode string,
+	lookup PurchaseRecLookup,
 ) []ReshapeRecommendation {
 	recs := AnalyzeReshaping(ris, utilization, threshold)
 	if lookup == nil || len(recs) == 0 {
 		return recs
 	}
 
-	types := distinctCandidateTypes(recs)
-	if len(types) == 0 {
-		return recs
-	}
-
-	offerings, err := lookup(ctx, types)
-	if err != nil {
-		// Fall back to name-only alternatives — losing pricing is
-		// strictly less bad than losing the whole reshape page.
+	offerings, err := lookup(ctx, region, currencyCode)
+	if err != nil || len(offerings) == 0 {
+		// Fall through to base recs — losing alternatives is strictly
+		// less bad than losing the whole reshape page.
 		return recs
 	}
 
@@ -406,74 +335,44 @@ func AnalyzeReshapingWithOfferings(
 	for _, r := range ris {
 		risByID[r.ID] = r
 	}
-	fillAlternativesFromOfferings(recs, offerings, risByID)
+	fillAlternativesFromRecs(recs, offerings, risByID)
 	return recs
 }
 
-// distinctCandidateTypes collects de-duplicated instance types from all
-// recs' primary + alternative targets, sorted for deterministic
-// lookups in tests.
-func distinctCandidateTypes(recs []ReshapeRecommendation) []string {
-	want := make(map[string]struct{})
-	for _, r := range recs {
-		if r.TargetInstanceType != "" {
-			want[r.TargetInstanceType] = struct{}{}
-		}
-		for _, alt := range r.AlternativeTargets {
-			if alt.InstanceType != "" {
-				want[alt.InstanceType] = struct{}{}
-			}
-		}
-	}
-	types := make([]string, 0, len(want))
-	for t := range want {
-		types = append(types, t)
-	}
-	sort.Strings(types)
-	return types
-}
-
-// fillAlternativesFromOfferings replaces each rec's AlternativeTargets
-// with the matching OfferingOption from the lookup result. Missing
-// instance types are silently dropped (per the doc on
-// AnalyzeReshapingWithOfferings).
-//
-// risByID lets the helper apply the local passesDollarUnitsCheck per
-// rec — alternatives that wouldn't survive AWS's runtime exchange-
-// validity rule are dropped here so the UI doesn't show options that
-// would fail at quote time. When the source RI isn't in the map (or
-// has zero NF / MonthlyCost), the check is skipped for that rec to
-// preserve today's behaviour for callers that don't supply pricing.
-//
-// The output is sorted ascending by EffectiveMonthlyCost so the UI
-// shows cheapest alternatives first — this matches user intent (the
-// primary advisory signal of this list is "is there a cheaper option
-// than the primary target?") even though it differs from the peer-
-// family allowlist order that the base AnalyzeReshaping emits.
-func fillAlternativesFromOfferings(recs []ReshapeRecommendation, offerings []OfferingOption, risByID map[string]RIInfo) {
-	offByType := make(map[string]OfferingOption, len(offerings))
-	for _, o := range offerings {
-		if _, exists := offByType[o.InstanceType]; !exists {
-			offByType[o.InstanceType] = o
-		}
-	}
+// fillAlternativesFromRecs is the per-rec body of
+// AnalyzeReshapingWithRecs: for each rec it filters the offerings list
+// to cross-family options that pass the dollar-units gate, then sorts
+// them ascending by EffectiveMonthlyCost so the cheapest lands first
+// in the UI list. The source family and the primary target are excluded
+// so the alternatives slice is meaningfully different from the primary
+// suggestion. When source pricing is missing the gate is skipped for
+// that rec (NF/MonthlyCost==0 case).
+func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []OfferingOption, risByID map[string]RIInfo) {
 	for i := range recs {
 		src, hasSrc := risByID[recs[i].SourceRIID]
-		filled := make([]OfferingOption, 0, len(recs[i].AlternativeTargets))
-		for _, alt := range recs[i].AlternativeTargets {
-			found, ok := offByType[alt.InstanceType]
-			if !ok {
+		srcFamily, _ := parseInstanceType(recs[i].SourceInstanceType)
+		filled := make([]OfferingOption, 0, len(offerings))
+		for _, off := range offerings {
+			// Skip same-family offerings — those collapse onto the
+			// primary same-family TargetInstanceType already surfaced.
+			offFamily, _ := parseInstanceType(off.InstanceType)
+			if offFamily == "" || strings.EqualFold(offFamily, srcFamily) {
+				continue
+			}
+			// Skip the primary target — it's not an "alternative" to
+			// itself.
+			if off.InstanceType == recs[i].TargetInstanceType {
 				continue
 			}
 			// Apply the pre-filter only when source pricing info is
-			// available; otherwise keep today's behaviour and pass
-			// the alternative through untouched.
+			// available; otherwise keep today's behaviour and pass the
+			// alternative through untouched.
 			if hasSrc && src.MonthlyCost > 0 {
-				if !passesDollarUnitsCheck(src.NormalizationFactor, src.MonthlyCost, src.CurrencyCode, found) {
+				if !passesDollarUnitsCheck(src.NormalizationFactor, src.MonthlyCost, src.CurrencyCode, off) {
 					continue
 				}
 			}
-			filled = append(filled, found)
+			filled = append(filled, off)
 		}
 		sort.Slice(filled, func(a, b int) bool {
 			return filled[a].EffectiveMonthlyCost < filled[b].EffectiveMonthlyCost

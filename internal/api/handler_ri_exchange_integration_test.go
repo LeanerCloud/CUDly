@@ -6,9 +6,9 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -16,33 +16,22 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/testhelpers"
-	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 	"github.com/stretchr/testify/require"
 )
 
 // fakeReshapeEC2 is a stub implementation of reshapeEC2Client for the
-// integration test. Returns fixed RIs + fixed offerings (or an error
-// when errOnOfferings is set). Lets the test assert on what the
-// reshape handler does with the AWS-returned shapes without hitting
-// real AWS.
+// integration test. Returns fixed convertible RIs without hitting real
+// AWS. Cross-family alternatives now flow through the recommendations
+// store (see purchaseRecLookupFromStore), so this fake no longer needs
+// to mock FindConvertibleOfferings.
 type fakeReshapeEC2 struct {
-	instances       []ec2svc.ConvertibleRI
-	offerings       []exchange.OfferingOption
-	offeringsErr    error
-	offeringsCalled atomic.Int32
+	instances []ec2svc.ConvertibleRI
 }
 
 func (f *fakeReshapeEC2) ListConvertibleReservedInstances(_ context.Context) ([]ec2svc.ConvertibleRI, error) {
 	return f.instances, nil
-}
-func (f *fakeReshapeEC2) FindConvertibleOfferings(_ context.Context, _ []string) ([]exchange.OfferingOption, error) {
-	f.offeringsCalled.Add(1)
-	if f.offeringsErr != nil {
-		return nil, f.offeringsErr
-	}
-	return f.offerings, nil
 }
 
 // fakeReshapeRecs is a stub for reshapeRecsClient. Counts calls so the
@@ -100,23 +89,39 @@ func reshapeRequest() *events.LambdaFunctionURLRequest {
 	}
 }
 
+// seedRecsForRegion writes a snapshot of cached Cost Explorer purchase
+// recommendations directly into the store so the reshape lookup has
+// something to read. Bypasses the scheduler so the test only exercises
+// the read-side mapping logic.
+func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.PostgresStore, region string, recs []config.RecommendationRecord) {
+	t.Helper()
+	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), recs),
+		"seeding recommendations into the test container failed")
+}
+
 // TestReshapeRecommendations_Integration_EndToEnd exercises the full
-// path: auth → cache cold-fetch → AnalyzeReshapingWithOfferings
-// pricing enrichment → JSON response. Asserts the response carries
-// alternative_targets sorted ascending by effective_monthly_cost.
+// path: auth → cache cold-fetch → AnalyzeReshapingWithRecs (recs-driven
+// alternatives) → JSON response. Asserts the response carries
+// alternative_targets sorted ascending by effective_monthly_cost,
+// sourced from the recommendations table rather than per-rec AWS API
+// calls.
 func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	ctx := context.Background()
 	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
 	defer cleanup()
 
+	// Seed cross-family recs in us-east-1: m5 (same family, must be
+	// excluded), c5, r5. The handler should surface c5 + r5 as
+	// cross-family alternatives ordered by EffectiveMonthlyCost.
+	seedRecsForRegion(ctx, t, store, "us-east-1", []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Term: 1, MonthlyCost: 40},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: 50},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "r5.large", Term: 1, MonthlyCost: 60},
+	})
+
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
 			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
-		},
-		offerings: []exchange.OfferingOption{
-			{InstanceType: "m5.large", OfferingID: "off-m5", EffectiveMonthlyCost: 40.0},
-			{InstanceType: "m6i.large", OfferingID: "off-m6i", EffectiveMonthlyCost: 35.0},
-			{InstanceType: "m7g.large", OfferingID: "off-m7g", EffectiveMonthlyCost: 30.0},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -135,17 +140,13 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	require.Equal(t, "ri-1", rec.SourceRIID)
 	require.Equal(t, "m5.large", rec.TargetInstanceType)
 
-	// AnalyzeReshapingWithOfferings drops the source family (m5) from
-	// the alternatives, so we expect m6i.large + m7g.large only.
-	// Alternatives are sorted ascending by EffectiveMonthlyCost —
-	// cheapest first — so m7g ($30) comes before m6i ($35).
-	require.Len(t, rec.AlternativeTargets, 2)
-	require.Equal(t, "m7g.large", rec.AlternativeTargets[0].InstanceType)
-	require.Equal(t, "off-m7g", rec.AlternativeTargets[0].OfferingID)
-	require.InDelta(t, 30.0, rec.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
-	require.Equal(t, "m6i.large", rec.AlternativeTargets[1].InstanceType)
-	require.Equal(t, "off-m6i", rec.AlternativeTargets[1].OfferingID)
-	require.InDelta(t, 35.0, rec.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
+	// Same-family m5 stripped; c5 + r5 surface ascending by cost.
+	require.Len(t, rec.AlternativeTargets, 2,
+		"cross-family alternatives must come from the cached recs (m5 same-family excluded)")
+	require.Equal(t, "c5.large", rec.AlternativeTargets[0].InstanceType)
+	require.InDelta(t, 50.0, rec.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
+	require.Equal(t, "r5.large", rec.AlternativeTargets[1].InstanceType)
+	require.InDelta(t, 60.0, rec.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
 
 	// Verify the RI utilization cache row landed in Postgres.
 	entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
@@ -156,25 +157,27 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	require.Len(t, cached, 1)
 	require.Equal(t, "ri-1", cached[0].ReservedInstanceID)
 
-	// Fetcher + offerings each called exactly once on the cold path.
+	// Utilization fetcher called exactly once on the cold path.
 	require.Equal(t, int32(1), recsFake.calls.Load())
-	require.Equal(t, int32(1), ec2Fake.offeringsCalled.Load())
 }
 
 // TestReshapeRecommendations_Integration_SecondCallHitsCache verifies
 // the cache short-circuits the RI utilization fetcher on a second
-// request within TTL.
+// request within TTL. The recs lookup is a Postgres read on every
+// request (no separate cache layer); only the Cost Explorer
+// utilization fetcher is TTL-cached.
 func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 	ctx := context.Background()
 	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
 	defer cleanup()
 
+	seedRecsForRegion(ctx, t, store, "us-east-1", []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: 40},
+	})
+
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
 			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
-		},
-		offerings: []exchange.OfferingOption{
-			{InstanceType: "m5.large", OfferingID: "off-m5", EffectiveMonthlyCost: 40.0},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -194,26 +197,24 @@ func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(1), recsFake.calls.Load(),
 		"fresh read within soft TTL must not re-invoke the utilization fetcher")
-
-	// Offerings lookup is NOT cached (distinct concern) — expected to
-	// be called on each request.
-	require.Equal(t, int32(2), ec2Fake.offeringsCalled.Load())
 }
 
-// TestReshapeRecommendations_Integration_OfferingsLookupErrorKeepsNameOnlyAlternatives
-// verifies the graceful-degradation contract: when FindConvertibleOfferings
-// returns an error, the base recs still ship with name-only
-// alternatives (no OfferingID, zero cost).
-func TestReshapeRecommendations_Integration_OfferingsLookupErrorKeepsNameOnlyAlternatives(t *testing.T) {
+// TestReshapeRecommendations_Integration_NoCachedRecsReturnsPrimaryOnly
+// — when the recommendations table is empty for the region, the rec
+// still ships with its primary same-family target but with no
+// alternatives. UX matches "AWS hasn't recommended anything for this
+// region yet" rather than blanking the page.
+func TestReshapeRecommendations_Integration_NoCachedRecsReturnsPrimaryOnly(t *testing.T) {
 	ctx := context.Background()
 	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
 	defer cleanup()
+
+	// Note: NO seedRecsForRegion call — table starts empty.
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
 			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
 		},
-		offeringsErr: fmt.Errorf("simulated cost-explorer 5xx"),
 	}
 	recsFake := &fakeReshapeRecs{
 		utilization: []recommendations.RIUtilization{
@@ -223,20 +224,11 @@ func TestReshapeRecommendations_Integration_OfferingsLookupErrorKeepsNameOnlyAlt
 	h := buildReshapeHandler(store, ec2Fake, recsFake)
 
 	resp, err := h.getReshapeRecommendations(ctx, reshapeRequest())
-	require.NoError(t, err, "handler must not fail when the offerings lookup errors — graceful degradation")
+	require.NoError(t, err, "handler must not fail when the recommendations cache is empty")
 	body := resp.(*ReshapeRecommendationsResponse)
 	require.Len(t, body.Recommendations, 1)
 	rec := body.Recommendations[0]
 	require.Equal(t, "m5.large", rec.TargetInstanceType, "primary target stays intact")
-
-	// AnalyzeReshapingWithOfferings returns the base recs on lookup
-	// error, which means AlternativeTargets keeps its name-only
-	// entries from AnalyzeReshaping (instance_type set, offering_id
-	// empty, cost zero).
-	require.NotEmpty(t, rec.AlternativeTargets, "base recs still ship with name-only alternatives")
-	for _, alt := range rec.AlternativeTargets {
-		require.NotEmpty(t, alt.InstanceType)
-		require.Empty(t, alt.OfferingID, "lookup error leaves offering_id blank")
-		require.Zero(t, alt.EffectiveMonthlyCost, "lookup error leaves cost zero")
-	}
+	require.Empty(t, rec.AlternativeTargets,
+		"empty cache → no alternatives, primary target still surfaced")
 }

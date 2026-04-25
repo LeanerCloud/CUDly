@@ -29,9 +29,13 @@ import (
 // awsprovider.NewEC2ClientDirect already implements these methods
 // (Go structural typing), so the nil-factory fallback path casts it
 // directly.
+//
+// Cross-family alternatives no longer flow through here — they're
+// sourced from the cached AWS Cost Explorer purchase recommendations
+// in Postgres via purchaseRecLookupFromStore (see exchange_lookup.go),
+// so the EC2 client only needs to enumerate convertible RIs.
 type reshapeEC2Client interface {
 	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
-	FindConvertibleOfferings(ctx context.Context, instanceTypes []string) ([]exchange.OfferingOption, error)
 }
 
 // reshapeRecsClient is the narrow slice of the recommendations
@@ -239,17 +243,35 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	riInfos, utilInfos := convertToExchangeTypes(instances, utilData)
-	// Offering lookup closure uses the already-configured ec2Client,
-	// so no extra AWS config plumbing is needed. Errors from the
-	// lookup are swallowed inside AnalyzeReshapingWithOfferings —
-	// losing pricing chips is strictly less bad than losing the whole
-	// reshape page.
-	lookup := func(ctx context.Context, instanceTypes []string) ([]exchange.OfferingOption, error) {
-		return ec2Client.FindConvertibleOfferings(ctx, instanceTypes)
-	}
-	recs := exchange.AnalyzeReshapingWithOfferings(ctx, riInfos, utilInfos, threshold, lookup)
+	// Cross-family alternatives are sourced from the cached AWS Cost
+	// Explorer purchase recommendations table in Postgres — no per-rec
+	// DescribeReservedInstancesOfferings fan-out, no hand-curated
+	// peer-family allowlist. The lookup is scoped to the running AWS
+	// account (when registered) so a multi-tenant deployment can't
+	// surface another tenant's recs. Empty resolved account ID means
+	// "no scope filter" for ambient-credentials deployments where
+	// CloudAccount registration hasn't happened yet.
+	cloudAccountID := h.resolveAWSCloudAccountID(ctx)
+	currencyCode := firstNonEmptyCurrency(instances)
+	lookup := purchaseRecLookupFromStore(h.config, cloudAccountID)
+	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, threshold, region, currencyCode, lookup)
 
 	return &ReshapeRecommendationsResponse{Recommendations: recs}, nil
+}
+
+// firstNonEmptyCurrency returns the CurrencyCode of the first RI that
+// has one set, defaulting to "USD" for legacy fixtures and the common
+// case. The reshape page operates on a single AWS account at a time so
+// all RIs share the same currency in practice; picking the first
+// populated value is sufficient and avoids a noisy mismatch panic when
+// some entries are missing the field.
+func firstNonEmptyCurrency(instances []ec2svc.ConvertibleRI) string {
+	for _, inst := range instances {
+		if inst.CurrencyCode != "" {
+			return inst.CurrencyCode
+		}
+	}
+	return "USD"
 }
 
 // getExchangeQuote gets a quote for an RI exchange.
