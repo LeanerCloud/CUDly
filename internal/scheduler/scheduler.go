@@ -381,7 +381,17 @@ func fanOutPerAccount(
 		g.Go(func() error {
 			recs, err := fn(gctx, acct)
 			if err != nil {
-				logging.Errorf("%s account %s (%s): %v", providerLabel, acct.Name, acct.ExternalID, err)
+				if isAccountPermissionError(providerLabel, err) {
+					// Operator-fixable misconfiguration (missing IAM role
+					// on the deploy SA): log at WARN so a single
+					// misconfigured account doesn't drown out other log
+					// signals. The collection still counts as a per-account
+					// failure — provider-success semantics are unchanged.
+					logging.Warnf("%s account %s (%s) permission gap (operator action needed: grant required IAM role): %v",
+						providerLabel, acct.Name, acct.ExternalID, err)
+				} else {
+					logging.Errorf("%s account %s (%s): %v", providerLabel, acct.Name, acct.ExternalID, err)
+				}
 				mu.Lock()
 				outcome.FailedCount++
 				outcome.LastErr = fmt.Sprintf("account %s (%s): %v", acct.Name, acct.ExternalID, err)
@@ -398,6 +408,29 @@ func fanOutPerAccount(
 	}
 	_ = g.Wait() // errs are always nil (swallowed above)
 	return all, outcome
+}
+
+// isAccountPermissionError reports whether err from a per-account
+// collection call represents an operator-fixable IAM permission gap
+// (rather than a genuine collector error). Used by fanOutPerAccount to
+// downgrade the log severity from ERROR to WARN — see issue #57: a
+// single misconfigured GCP account otherwise emits an [ERROR] line on
+// every scheduler tick (~15 min) and drowns out other log signals.
+//
+// Currently dispatches per provider:
+//   - "GCP": gcpprovider.IsPermissionError (HTTP 403 / gRPC PermissionDenied)
+//   - other providers: false (existing ERROR behaviour preserved until
+//     analogous predicates are added for AWS/Azure)
+func isAccountPermissionError(providerLabel string, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch providerLabel {
+	case "GCP":
+		return gcpprovider.IsPermissionError(err)
+	default:
+		return false
+	}
 }
 
 // errAllAccountsFailed wraps an accountOutcome's LastErr so callers
