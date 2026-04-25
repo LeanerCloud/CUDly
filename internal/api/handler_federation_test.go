@@ -25,6 +25,11 @@ import (
 // that need CUDLY_SOURCE_CLOUD=aws must call t.Setenv("CUDLY_SOURCE_CLOUD","aws")
 // BEFORE calling federationHandler (the check below will see the already-set
 // value and skip the override).
+//
+// Also pre-warms h.sourceID with a fully-populated identity matching the
+// active source cloud so the validateSourceIdentity guard (see #41) is
+// satisfied by default. Tests that specifically exercise the missing-env-var
+// failure modes call mockSourceIdentity afterwards to override.
 func federationHandler() *Handler {
 	if os.Getenv("CUDLY_SOURCE_CLOUD") == "" {
 		_ = os.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
@@ -35,7 +40,37 @@ func federationHandler() *Handler {
 		Email:  "admin@example.com",
 		Role:   "admin",
 	}, nil)
-	return NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
+	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
+	mockSourceIdentity(h, defaultTestSourceIdentity())
+	return h
+}
+
+// defaultTestSourceIdentity returns a fully-populated sourceIdentity matching
+// the active CUDLY_SOURCE_CLOUD env var. Used by federationHandler to satisfy
+// validateSourceIdentity and the AWS-cross-account fail-loud guard by default.
+func defaultTestSourceIdentity() *sourceIdentity {
+	switch sourceCloud() {
+	case "aws":
+		return &sourceIdentity{Provider: "aws", AccountID: "123456789012"}
+	case "azure":
+		return &sourceIdentity{
+			Provider:       "azure",
+			SubscriptionID: "00000000-0000-0000-0000-000000000001",
+			TenantID:       "00000000-0000-0000-0000-000000000002",
+			ClientID:       "00000000-0000-0000-0000-000000000003",
+		}
+	case "gcp":
+		return &sourceIdentity{Provider: "gcp", ProjectID: "cudly-test-project"}
+	}
+	return &sourceIdentity{}
+}
+
+// mockSourceIdentity overrides the cached source identity on a Handler and
+// trips the sync.Once so subsequent calls to resolveSourceIdentity return the
+// supplied value. Same-package access — only intended for tests.
+func mockSourceIdentity(h *Handler, id *sourceIdentity) {
+	h.sourceID = id
+	h.sourceIdentityOnce.Do(func() {})
 }
 
 func federationReq(params map[string]string) *events.LambdaFunctionURLRequest {
@@ -173,6 +208,9 @@ func TestGetFederationIaC_AWSWIF_CFNZip(t *testing.T) {
 }
 
 func TestGetFederationIaC_CFN_AWSCrossAccount(t *testing.T) {
+	// aws-cross-account requires CUDly itself to be running on AWS — the new
+	// validateFederationTargetSource guard (#42) rejects this combo otherwise.
+	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
 	h := federationHandler()
 	ctx := context.Background()
 
@@ -222,6 +260,9 @@ func TestGetFederationIaC_CFN_AWSCrossAccount(t *testing.T) {
 }
 
 func TestGetFederationIaC_Bundle_AWSCrossAccount(t *testing.T) {
+	// aws-cross-account requires CUDly itself to be running on AWS — the new
+	// validateFederationTargetSource guard (#42) rejects this combo otherwise.
+	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
 	h := federationHandler()
 	ctx := context.Background()
 
@@ -363,6 +404,9 @@ func TestSingleFileSpec_CLI_AllScenarios(t *testing.T) {
 }
 
 func TestGetFederationIaC_CLI_AWSCrossAccount(t *testing.T) {
+	// aws-cross-account requires CUDly itself to be running on AWS — the new
+	// validateFederationTargetSource guard (#42) rejects this combo otherwise.
+	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
 	h := federationHandler()
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": "aws", "format": "cli",
@@ -528,26 +572,11 @@ func TestGetFederationIaC_Bicep_RejectsNonAzure(t *testing.T) {
 // handler returns a non-nil error instead of shipping a broken bundle with an
 // empty source_account_id.
 func TestGetFederationIaC_FailsLoudOnEmptySourceAccountID(t *testing.T) {
-	// sourceCloud() returns "aws" by default (and we explicitly set it here for
-	// clarity). resolveAWSAccountID must return "" to trigger the fail-loud
-	// path — actively clear every AWS credential env var a developer (or
-	// pre-commit hook inheriting the shell env) might have set, otherwise the
-	// SDK default chain picks them up, STS succeeds, and the assertion flips.
 	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
-	for _, k := range []string{
-		"AWS_ACCESS_KEY_ID",
-		"AWS_SECRET_ACCESS_KEY",
-		"AWS_SESSION_TOKEN",
-		"AWS_PROFILE",
-		"AWS_DEFAULT_PROFILE",
-		"AWS_SHARED_CREDENTIALS_FILE",
-		"AWS_CONFIG_FILE",
-		"AWS_WEB_IDENTITY_TOKEN_FILE",
-		"AWS_ROLE_ARN",
-	} {
-		t.Setenv(k, "")
-	}
 	h := federationHandler()
+	// Override the federationHandler default ({Provider:"aws", AccountID:"…"}) with
+	// an empty AccountID to simulate the STS GetCallerIdentity failure path.
+	mockSourceIdentity(h, &sourceIdentity{Provider: "aws", AccountID: ""})
 
 	_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": "aws", "format": "cli",
@@ -655,6 +684,8 @@ func TestGetFederationIaC_PreservesPlusInSessionEmail(t *testing.T) {
 		Role:   "admin",
 	}, nil)
 	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
+	// Pre-warm the source identity to satisfy validateSourceIdentity (#41).
+	mockSourceIdentity(h, defaultTestSourceIdentity())
 
 	// Use federationReqWithDomain so the {{if .CUDlyAPIURL}} block renders and
 	// the CONTACT_EMAIL line (with the pre-filled email) appears in the output.
@@ -680,6 +711,8 @@ func TestGetFederationIaC_NoSessionEmail_ShipsBundleWithEmptyContact(t *testing.
 		Role:   "admin",
 	}, nil)
 	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
+	// Pre-warm the source identity to satisfy validateSourceIdentity (#41).
+	mockSourceIdentity(h, defaultTestSourceIdentity())
 
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "gcp", "source": "aws", "format": "bundle",
@@ -727,6 +760,11 @@ func TestRenderedCLIShellScript_RegistrationAlwaysRuns(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.target+"/"+tc.source, func(t *testing.T) {
+			// aws-cross-account requires CUDLY_SOURCE_CLOUD=aws — the
+			// validateFederationTargetSource guard (#42) rejects it otherwise.
+			if tc.target == "aws" && tc.source == "aws" {
+				t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
+			}
 			h := federationHandler()
 			// Use federationReqWithDomain so CUDlyAPIURL is populated and the
 			// {{if .CUDlyAPIURL}} registration block is rendered.
@@ -763,6 +801,11 @@ func TestRenderedCFNDeployScript_HasRegistrationBlock(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.target+"/"+tc.source, func(t *testing.T) {
+			// aws-cross-account requires CUDLY_SOURCE_CLOUD=aws — the
+			// validateFederationTargetSource guard (#42) rejects it otherwise.
+			if tc.target == "aws" && tc.source == "aws" {
+				t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
+			}
 			h := federationHandler()
 			// Use federationReqWithDomain so CUDlyAPIURL is populated and the
 			// {{if .CUDlyAPIURL}} registration block is rendered in the deploy script.
@@ -883,6 +926,155 @@ func TestRenderedTerraformRegistrationTF_GateOnURLOnly(t *testing.T) {
 				"do_register must gate on cudly_api_url being non-empty")
 			assert.NotContains(t, src, `&& var.contact_email != ""`,
 				"do_register must NOT gate on contact_email")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pre-flight validation: source identity (issue #41) + target/source consistency (issue #42)
+// ---------------------------------------------------------------------------
+
+// TestGetFederationIaC_FailsLoudOnEmptyAzureSourceIdentity covers issue #41 for
+// the Azure source-cloud path: when CUDly runs on Azure but AZURE_SUBSCRIPTION_ID
+// or AZURE_TENANT_ID is missing, the bundle MUST fail with a 500-class error
+// naming the missing env var instead of shipping a broken tfvars with empty
+// client_id/tenant_id that fails at terraform apply.
+func TestGetFederationIaC_FailsLoudOnEmptyAzureSourceIdentity(t *testing.T) {
+	cases := []struct {
+		name           string
+		identity       *sourceIdentity
+		wantInErrorMsg string
+	}{
+		{
+			name: "missing-subscription-id",
+			identity: &sourceIdentity{
+				Provider:       "azure",
+				SubscriptionID: "",
+				TenantID:       "00000000-0000-0000-0000-000000000002",
+				ClientID:       "00000000-0000-0000-0000-000000000003",
+			},
+			wantInErrorMsg: "AZURE_SUBSCRIPTION_ID",
+		},
+		{
+			name: "missing-tenant-id",
+			identity: &sourceIdentity{
+				Provider:       "azure",
+				SubscriptionID: "00000000-0000-0000-0000-000000000001",
+				TenantID:       "",
+				ClientID:       "00000000-0000-0000-0000-000000000003",
+			},
+			wantInErrorMsg: "AZURE_TENANT_ID",
+		},
+		{
+			name: "all-populated-positive-control",
+			identity: &sourceIdentity{
+				Provider:       "azure",
+				SubscriptionID: "00000000-0000-0000-0000-000000000001",
+				TenantID:       "00000000-0000-0000-0000-000000000002",
+				ClientID:       "00000000-0000-0000-0000-000000000003",
+			},
+			wantInErrorMsg: "",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CUDLY_SOURCE_CLOUD", "azure")
+			h := federationHandler()
+			mockSourceIdentity(h, tc.identity)
+
+			_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+				"target": "azure", "source": "azure", "format": "cli",
+			}))
+			if tc.wantInErrorMsg == "" {
+				require.NoError(t, err, "fully-populated identity must succeed")
+				return
+			}
+			require.Error(t, err, "expected error when %s is empty", tc.wantInErrorMsg)
+			// Operator misconfiguration → 500-class, not a client error.
+			_, isClientErr := IsClientError(err)
+			assert.False(t, isClientErr,
+				"missing source-identity env var should produce a 500-class error, not a client error")
+			assert.Contains(t, err.Error(), tc.wantInErrorMsg,
+				"error must name the missing env var so operators know what to fix")
+			assert.Contains(t, err.Error(), "federation iac")
+		})
+	}
+}
+
+// TestGetFederationIaC_FailsLoudOnEmptyGCPSourceIdentity covers issue #41 for
+// the GCP source-cloud path: when CUDly runs on GCP but GCP_PROJECT_ID is
+// unset, the bundle MUST fail with a 500-class error naming the missing env
+// var instead of shipping a broken tfvars with an empty project that fails at
+// terraform apply.
+func TestGetFederationIaC_FailsLoudOnEmptyGCPSourceIdentity(t *testing.T) {
+	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	h := federationHandler()
+	mockSourceIdentity(h, &sourceIdentity{Provider: "gcp", ProjectID: ""})
+
+	_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "gcp", "source": "gcp", "format": "cli",
+	}))
+	require.Error(t, err, "expected error when GCP_PROJECT_ID is empty")
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr,
+		"missing GCP_PROJECT_ID should produce a 500-class error, not a client error")
+	assert.Contains(t, err.Error(), "GCP_PROJECT_ID",
+		"error must name GCP_PROJECT_ID so operators know what to fix")
+	assert.Contains(t, err.Error(), "federation iac")
+}
+
+// TestGetFederationIaC_RejectsImpossibleTargetSourceCombo covers issue #42:
+// requesting target=aws-cross-account (target=aws + source=aws) from a CUDly
+// not running on AWS must return HTTP 400 — the rendered trust policy needs
+// CUDly's AWS account ID, which a non-AWS deployment cannot supply.
+func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
+	cases := []struct {
+		name        string
+		sourceCloud string
+		wantStatus  int
+		wantErrSub  string
+	}{
+		{
+			name:        "cudly-on-azure-rejects-aws-cross-account",
+			sourceCloud: "azure",
+			wantStatus:  400,
+			wantErrSub:  "deployment is on azure",
+		},
+		{
+			name:        "cudly-on-gcp-rejects-aws-cross-account",
+			sourceCloud: "gcp",
+			wantStatus:  400,
+			wantErrSub:  "deployment is on gcp",
+		},
+		{
+			name:        "cudly-on-aws-allows-aws-cross-account",
+			sourceCloud: "aws",
+			wantStatus:  0, // success
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CUDLY_SOURCE_CLOUD", tc.sourceCloud)
+			h := federationHandler()
+
+			_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+				"target": "aws", "source": "aws", "format": "cli",
+			}))
+			if tc.wantStatus == 0 {
+				require.NoError(t, err, "CUDly-on-AWS aws-cross-account regression guard")
+				return
+			}
+			require.Error(t, err, "expected client error for impossible combo")
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "must be a client error (400), got %T: %v", err, err)
+			assert.Equal(t, tc.wantStatus, ce.code,
+				"target/source consistency rejection must be a 400")
+			assert.Contains(t, err.Error(), "target=aws-cross-account requires CUDly to be deployed on AWS",
+				"error must explain the constraint")
+			assert.Contains(t, err.Error(), tc.wantErrSub,
+				"error must name the actual deployment cloud")
 		})
 	}
 }
