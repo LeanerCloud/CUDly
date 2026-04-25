@@ -269,11 +269,14 @@ function setupButtonHandlers(): void {
     btn.addEventListener('click', () => {
       const preset = btn.dataset['historyPreset'] as HistoryRangePreset | undefined;
       if (!preset) return;
-      // Visual selection state — single-active-tab semantics.
+      // Visual selection state — single-active-toggle semantics.
+      // The chips are toggle buttons (a filter, not a tabset), so
+      // aria-pressed is the correct attribute — aria-selected is
+      // reserved for tab/option/grid widgets.
       presetButtons.forEach(b => {
         const isActive = b === btn;
         b.classList.toggle('active', isActive);
-        b.setAttribute('aria-selected', String(isActive));
+        b.setAttribute('aria-pressed', String(isActive));
       });
       applyHistoryPreset(preset);
       fireRangeReload();
@@ -290,7 +293,7 @@ function setupButtonHandlers(): void {
     input.addEventListener('change', () => {
       presetButtons.forEach(b => {
         b.classList.remove('active');
-        b.setAttribute('aria-selected', 'false');
+        b.setAttribute('aria-pressed', 'false');
       });
       fireRangeReload();
     });

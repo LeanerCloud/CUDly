@@ -210,7 +210,7 @@ input:checked + .slider:before {
 }
 
 .range-preset.active,
-.range-preset[aria-selected="true"] {
+.range-preset[aria-pressed="true"] {
     background: #1a73e8;
     border-color: #1a73e8;
     color: #fff;
