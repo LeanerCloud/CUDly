@@ -70,6 +70,11 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/config/service/", Method: "GET", Handler: r.getServiceConfigHandler},
 		{PathPrefix: "/api/config/service/", Method: "PUT", Handler: r.updateServiceConfigHandler},
 
+		// Dynamically-probed AWS commitment-option combos. Non-admin reads
+		// (AuthUser) — data is public-ish (hardcoded in the frontend today)
+		// but we don't expose it unauthenticated.
+		{ExactPath: "/api/commitment-options", Method: "GET", Handler: r.commitmentOptionsHandler, Auth: AuthUser},
+
 		// Recommendations endpoints
 		{ExactPath: "/api/recommendations", Method: "GET", Handler: r.getRecommendationsHandler},
 		{ExactPath: "/api/recommendations/freshness", Method: "GET", Handler: r.getRecommendationsFreshnessHandler},
@@ -291,6 +296,10 @@ func (r *Router) getServiceConfigHandler(ctx context.Context, req *events.Lambda
 
 func (r *Router) updateServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.updateServiceConfig(ctx, req, params["id"])
+}
+
+func (r *Router) commitmentOptionsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getCommitmentOptions(ctx)
 }
 
 func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

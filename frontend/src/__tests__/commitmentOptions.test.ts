@@ -2,6 +2,7 @@
  * Tests for commitmentOptions module
  */
 import {
+  fetchAndPopulateCommitmentOptions,
   getCommitmentConfig,
   isValidCombination,
   getValidPaymentOptions,
@@ -689,6 +690,111 @@ describe('commitmentOptions', () => {
 
       expect(configWithoutInvalid.invalidCombinations).toBeUndefined();
       expect(configWithInvalid.invalidCombinations).toHaveLength(1);
+    });
+  });
+
+  describe('fetchAndPopulateCommitmentOptions', () => {
+    // These tests mutate the shared commitmentConfigs module state via the
+    // function under test. Restore a known-good overlay at the end of each
+    // test by re-populating with the hardcoded fallback shape (no supported
+    // combos → full invalidCombinations → close enough to the starting
+    // state for subsequent tests to see consistent results).
+    const mockOk = (aws: Record<string, Array<{ term: number; payment: string }>>) =>
+      jest.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok', aws })
+      } as Response);
+
+    afterEach(() => {
+      // Reset RDS back to hardcoded — other tests in this file assert RDS
+      // retains `{term:3, payment:'no-upfront'}` as invalid.
+      return fetchAndPopulateCommitmentOptions(
+        mockOk({ rds: [
+          { term: 1, payment: 'all-upfront' },
+          { term: 1, payment: 'partial-upfront' },
+          { term: 1, payment: 'no-upfront' },
+          { term: 3, payment: 'all-upfront' },
+          { term: 3, payment: 'partial-upfront' },
+        ]})
+      );
+    });
+
+    it('overlays server-supplied combos onto AWS services', async () => {
+      // Server says RDS supports ONLY 1yr all-upfront — everything else is
+      // invalid. Overlay should reflect that exactly.
+      const fetchMock = mockOk({
+        rds: [{ term: 1, payment: 'all-upfront' }],
+      });
+
+      await fetchAndPopulateCommitmentOptions(fetchMock);
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/commitment-options');
+      expect(isValidCombination('aws', 'rds', 1, 'all-upfront')).toBe(true);
+      expect(isValidCombination('aws', 'rds', 1, 'partial-upfront')).toBe(false);
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
+    });
+
+    it('leaves hardcoded rules intact on status:unavailable', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ status: 'unavailable' })
+      } as Response);
+
+      await fetchAndPopulateCommitmentOptions(fetchMock);
+
+      // RDS hardcoded rule: 3yr no-upfront invalid, others valid.
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
+      expect(isValidCombination('aws', 'rds', 1, 'all-upfront')).toBe(true);
+    });
+
+    it('leaves hardcoded rules intact on HTTP error', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: false } as Response);
+
+      await fetchAndPopulateCommitmentOptions(fetchMock);
+
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
+      expect(isValidCombination('aws', 'rds', 1, 'all-upfront')).toBe(true);
+    });
+
+    it('leaves hardcoded rules intact on network error', async () => {
+      const fetchMock = jest.fn().mockRejectedValue(new Error('network down'));
+
+      await fetchAndPopulateCommitmentOptions(fetchMock);
+
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
+    });
+
+    it('clears invalidCombinations when server reports full support', async () => {
+      const allCombos = [1, 3].flatMap(term =>
+        ['all-upfront', 'partial-upfront', 'no-upfront'].map(payment => ({ term, payment }))
+      );
+      const fetchMock = mockOk({ rds: allCombos });
+
+      await fetchAndPopulateCommitmentOptions(fetchMock);
+
+      // Every combo now valid — previously 3yr no-upfront was blocked.
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(true);
+      expect(isValidCombination('aws', 'rds', 1, 'partial-upfront')).toBe(true);
+    });
+
+    it('re-widens after a subsequent overlay reports broader support', async () => {
+      // Settings tab is re-entered after the server probe completes with
+      // a fuller combo set. The overlay must diff against the canonical
+      // STANDARD_TERMS × AWS_PAYMENTS product, not against the narrow
+      // result of the first call, or the UI stays stuck on the
+      // intersection and never widens.
+      const narrow = mockOk({ rds: [{ term: 1, payment: 'all-upfront' }] });
+      await fetchAndPopulateCommitmentOptions(narrow);
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
+
+      const allCombos = [1, 3].flatMap(term =>
+        ['all-upfront', 'partial-upfront', 'no-upfront'].map(payment => ({ term, payment }))
+      );
+      const wide = mockOk({ rds: allCombos });
+      await fetchAndPopulateCommitmentOptions(wide);
+
+      expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(true);
+      expect(isValidCombination('aws', 'rds', 1, 'partial-upfront')).toBe(true);
     });
   });
 });

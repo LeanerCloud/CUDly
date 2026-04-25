@@ -15,6 +15,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/analytics"
 	"github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/auth"
+	"github.com/LeanerCloud/CUDly/internal/commitmentopts"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/database"
@@ -26,6 +27,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -583,6 +585,36 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		IsLambda:        app.appConfig.IsLambda,
 	})
 
+	// Build the commitment-options probe/cache service. It lazily probes
+	// AWS reserved-offerings APIs through the first enabled AWS account and
+	// persists the result so subsequent calls come from the DB. Failures
+	// anywhere along the chain (no account connected, probe denied) collapse
+	// to ErrNoData; the API handler and save-side validator both degrade
+	// gracefully, so this is wired unconditionally.
+	commitmentOpts := commitmentopts.New(
+		commitmentopts.NewPostgresStore(dbConn),
+		app.Config,
+		func(ctx context.Context, acct *config.CloudAccount) (aws.Config, error) {
+			stsClient := sts.NewFromConfig(awsCfg)
+			prov, err := credentials.ResolveAWSCredentialProvider(ctx, acct, credStore, stsClient)
+			if err != nil {
+				return aws.Config{}, err
+			}
+			// us-east-1 hardcoded because reserved offerings are global
+			// facts (not AZ-scoped), and us-east-1 has the widest
+			// instance-type coverage. This fails silently for GovCloud
+			// / China-partition accounts — those return ErrNoData from
+			// the probe and the frontend falls back to hardcoded rules,
+			// which is acceptable since those partitions rarely need
+			// dynamic commitment detection.
+			return awsconfig.LoadDefaultConfig(ctx,
+				awsconfig.WithCredentialsProvider(prov),
+				awsconfig.WithRegion("us-east-1"),
+			)
+		},
+		commitmentopts.DefaultProbers(),
+	)
+
 	// Update API handler with new config store, scheduler, and rate limiter.
 	// AnalyticsClient is Postgres-backed (see api.NewPostgresAnalyticsClient) —
 	// it aggregates purchase_history on demand so the History UI charts work
@@ -603,6 +635,7 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 		AnalyticsClient:   api.NewPostgresAnalyticsClient(dbConn),
 		OIDCSigner:        app.signer,
 		OIDCIssuerURL:     resolveOIDCIssuerURL(app.appConfig),
+		CommitmentOpts:    commitmentOpts,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")

@@ -82,6 +82,31 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	return &StatusResponse{Status: "updated"}, nil
 }
 
+// checkCommitmentOptionCombo rejects saves that carry a (term, payment)
+// combination we've dynamically confirmed the cloud doesn't sell. Returns
+// nil when: no probe service is wired, the service hasn't persisted data
+// yet (absent data → fall through to the frontend's hardcoded rules),
+// the save isn't AWS, or the combo is valid. Errors from Validate are
+// logged and swallowed (permissive) so a transient DB blip never blocks
+// a settings save.
+func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.ServiceConfig) error {
+	if h.commitmentOpts == nil || cfg.Provider != "aws" || cfg.Term <= 0 || cfg.Payment == "" {
+		return nil
+	}
+	ok, err := h.commitmentOpts.Validate(ctx, cfg.Provider, cfg.Service, cfg.Term, cfg.Payment)
+	if err != nil {
+		logging.Warnf("commitment-option validation error (allowing save): %v", err)
+		return nil
+	}
+	if !ok {
+		return NewClientError(400, fmt.Sprintf(
+			"%s does not support %dyr %s commitments",
+			cfg.Service, cfg.Term, cfg.Payment,
+		))
+	}
+	return nil
+}
+
 // mergeServiceConfig loads any existing service config and overlays the four
 // UI-editable fields (Enabled, Term, Payment, Coverage) from cfg onto it, so
 // that filter fields set outside the UI (RampSchedule, IncludeEngines, etc.)
@@ -170,6 +195,10 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 	// Validate the configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	}
+
+	if err := h.checkCommitmentOptionCombo(ctx, cfg); err != nil {
+		return nil, err
 	}
 
 	if err := h.config.SaveServiceConfig(ctx, &cfg); err != nil {

@@ -3,6 +3,7 @@
  */
 
 import * as api from './api';
+import { fetchAndPopulateCommitmentOptions } from './commitmentOptions';
 import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
@@ -1269,6 +1270,11 @@ export async function loadGlobalSettings(): Promise<void> {
   if (loadingEl) loadingEl.classList.remove('hidden');
   if (formEl) formEl.classList.add('hidden');
   if (errorEl) errorEl.classList.add('hidden');
+
+  // Overlay dynamically-probed AWS commitment rules before we render the
+  // form, so the first paint already respects server data. Failures fall
+  // back to hardcoded rules silently — we never block Settings on this.
+  await fetchAndPopulateCommitmentOptions();
 
   try {
     const data = await api.getConfig();

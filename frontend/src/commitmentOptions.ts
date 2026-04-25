@@ -228,6 +228,69 @@ export function getPaymentLabel(value: string): string {
   return payment?.label ?? value;
 }
 
+interface ServerCommitmentOptions {
+  status: 'ok' | 'unavailable';
+  aws?: Record<string, Array<{ term: number; payment: string }>>;
+}
+
+// FetchLike is a subset of fetch's signature that tests can stub without
+// touching the global. Defaults to `fetch` when the caller passes nothing.
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Fetch the dynamically-probed AWS commitment options from the backend and
+ * overlay them onto `commitmentConfigs.aws`. Server-side data always wins —
+ * we trust live AWS offerings over our hardcoded list. On any failure
+ * (network error, non-200, {status:"unavailable"}) the hardcoded rules stay
+ * intact so the UI still gates correctly.
+ *
+ * Idempotent: calling twice with the same data is a no-op. The Settings
+ * page awaits this before syncing per-service constraints so the first
+ * render reflects the server's rules, not the fallback's.
+ */
+export async function fetchAndPopulateCommitmentOptions(fetchFn?: FetchLike): Promise<void> {
+  const f: FetchLike = fetchFn ?? ((input, init) => fetch(input, init));
+
+  let body: ServerCommitmentOptions;
+  try {
+    const resp = await f('/api/commitment-options');
+    if (!resp.ok) return;
+    body = (await resp.json()) as ServerCommitmentOptions;
+  } catch {
+    // Network/parse errors: silently fall back to hardcoded rules. The
+    // frontend still works; we just miss the dynamic overlay.
+    return;
+  }
+
+  if (body.status !== 'ok' || !body.aws) return;
+
+  const awsConfigs = commitmentConfigs.aws ?? (commitmentConfigs.aws = {});
+  for (const [service, supportedCombos] of Object.entries(body.aws)) {
+    // Always diff against the canonical STANDARD_TERMS × AWS_PAYMENTS
+    // product, not against the existing (possibly-narrowed-from-a-prior-
+    // overlay) entry. Otherwise, when the server widens its supported set
+    // on a later fetch, we'd be computing the intersection against a
+    // stale narrow base and the UI would stay restrictive.
+    const supportedKeys = new Set(
+      supportedCombos.map(c => `${c.term}:${c.payment}`)
+    );
+    const invalid: Array<{ term: number; payment: string }> = [];
+    for (const term of STANDARD_TERMS) {
+      for (const payment of AWS_PAYMENTS) {
+        if (!supportedKeys.has(`${term.value}:${payment.value}`)) {
+          invalid.push({ term: term.value, payment: payment.value });
+        }
+      }
+    }
+
+    awsConfigs[service] = {
+      terms: STANDARD_TERMS,
+      payments: AWS_PAYMENTS,
+      invalidCombinations: invalid.length > 0 ? invalid : undefined,
+    };
+  }
+}
+
 /**
  * Map legacy AWS payment values to display labels
  */
