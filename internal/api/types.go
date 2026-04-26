@@ -74,6 +74,11 @@ type HandlerConfig struct {
 	// Nil disables both the /api/commitment-options endpoint (returns
 	// unavailable) and save-side validation in updateServiceConfig.
 	CommitmentOpts CommitmentOptsInterface
+	// EncryptionKeySource is the env var name that resolved the credential
+	// encryption key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Empty
+	// when no credStore is configured. Used by the /health endpoint to
+	// surface which key source is in use and detect dev-key state.
+	EncryptionKeySource string
 }
 
 // CommitmentOptsInterface lets us swap the real *commitmentopts.Service for

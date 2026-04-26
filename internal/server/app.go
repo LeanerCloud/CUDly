@@ -59,6 +59,11 @@ type Application struct {
 	dbErr          error
 	appConfig      ApplicationConfig
 
+	// encKeySource is the env var name that resolved the credential encryption
+	// key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Set during
+	// reinitializeAfterConnect; surfaced via /health.
+	encKeySource string
+
 	// State from the most recent migration attempt. Surfaced by /health so
 	// ops can see failures. Protected by its OWN dedicated mutex — NOT
 	// dbMu, because ensureDB holds dbMu for its full duration. If /health
@@ -505,20 +510,21 @@ func (app *Application) resolveAdminPassword(ctx context.Context) (string, error
 // loadAndGuardEncryptionKey loads the credential-encryption key via the
 // shared secrets.Resolver and refuses to return the all-zero dev key unless
 // CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY=1 is explicitly set. Logs which env
-// var resolved the key (name only — never the key value).
-func loadAndGuardEncryptionKey(ctx context.Context, resolver secrets.Resolver) ([]byte, error) {
-	encKey, keySource, err := credentials.LoadKey(ctx, resolver)
+// var resolved the key (name only — never the key value). The returned
+// keySource is propagated to the API handler so /health can surface it.
+func loadAndGuardEncryptionKey(ctx context.Context, resolver secrets.Resolver) (key []byte, keySource string, err error) {
+	encKey, source, err := credentials.LoadKey(ctx, resolver)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load credential encryption key: %w", err)
+		return nil, "", fmt.Errorf("failed to load credential encryption key: %w", err)
 	}
 	// Defense in depth: LoadKey already gates this, but a guard here protects
 	// against a future regression where LoadKey is changed to silently fall
 	// back again.
 	if bytes.Equal(encKey, credentials.DevKey()) && os.Getenv(credentials.EnvAllowDev) != "1" {
-		return nil, fmt.Errorf("credentials: refusing to start with all-zero dev key (set %s=1 for local dev only)", credentials.EnvAllowDev)
+		return nil, "", fmt.Errorf("credentials: refusing to start with all-zero dev key (set %s=1 for local dev only)", credentials.EnvAllowDev)
 	}
-	log.Printf("credentials: loaded encryption key via %s", keySource)
-	return encKey, nil
+	log.Printf("credentials: loaded encryption key via %s", source)
+	return encKey, source, nil
 }
 
 // reinitializeAfterConnect re-creates all stores and services that depend on the
@@ -562,11 +568,12 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	log.Println("Initialized PostgreSQL analytics store")
 
 	// Initialize credential store (AES-256-GCM encrypted credential blobs).
-	encKey, err := loadAndGuardEncryptionKey(ctx, app.secretResolver)
+	encKey, encKeySource, err := loadAndGuardEncryptionKey(ctx, app.secretResolver)
 	if err != nil {
 		return err
 	}
 	credStore := credentials.NewCredentialStore(dbConn.Pool(), encKey)
+	app.encKeySource = encKeySource
 	log.Println("Initialized encrypted credential store")
 
 	// Re-initialize purchase manager with multi-account deps now that credStore is available.
@@ -640,22 +647,23 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	// it aggregates purchase_history on demand so the History UI charts work
 	// without requiring a separate S3/Athena deployment.
 	app.API = api.NewHandler(api.HandlerConfig{
-		ConfigStore:       app.Config,
-		CredentialStore:   credStore,
-		PurchaseManager:   app.Purchase,
-		Scheduler:         app.Scheduler,
-		AuthService:       newAuthServiceAdapter(app.Auth),
-		APIKeySecretARN:   app.appConfig.APIKeySecretARN,
-		EnableDashboard:   app.appConfig.EnableDashboard,
-		DashboardBucket:   app.appConfig.DashboardBucket,
-		CORSAllowedOrigin: app.appConfig.CORSAllowedOrigin,
-		RateLimiter:       app.RateLimiter,
-		EmailNotifier:     app.Email,
-		DashboardURL:      app.appConfig.DashboardURL,
-		AnalyticsClient:   api.NewPostgresAnalyticsClient(dbConn),
-		OIDCSigner:        app.signer,
-		OIDCIssuerURL:     resolveOIDCIssuerURL(app.appConfig),
-		CommitmentOpts:    commitmentOpts,
+		ConfigStore:         app.Config,
+		CredentialStore:     credStore,
+		PurchaseManager:     app.Purchase,
+		Scheduler:           app.Scheduler,
+		AuthService:         newAuthServiceAdapter(app.Auth),
+		APIKeySecretARN:     app.appConfig.APIKeySecretARN,
+		EnableDashboard:     app.appConfig.EnableDashboard,
+		DashboardBucket:     app.appConfig.DashboardBucket,
+		CORSAllowedOrigin:   app.appConfig.CORSAllowedOrigin,
+		RateLimiter:         app.RateLimiter,
+		EmailNotifier:       app.Email,
+		DashboardURL:        app.appConfig.DashboardURL,
+		AnalyticsClient:     api.NewPostgresAnalyticsClient(dbConn),
+		OIDCSigner:          app.signer,
+		OIDCIssuerURL:       resolveOIDCIssuerURL(app.appConfig),
+		CommitmentOpts:      commitmentOpts,
+		EncryptionKeySource: app.encKeySource,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")
