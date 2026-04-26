@@ -46,8 +46,14 @@ const (
 	ServiceStorage ServiceType = "storage" // S3, Blob Storage, Cloud Storage
 
 	// Savings/Commitments
-	ServiceSavingsPlans ServiceType = "savings-plans" // AWS Savings Plans
-	ServiceCommitments  ServiceType = "commitments"   // Generic commitments
+	// ServiceSavingsPlans is the canonical identifier for AWS Savings Plans.
+	// The string value matches the frontend's identifier ("savingsplans") and the
+	// value persisted in service_configs.service / purchase_history.service so
+	// that direct comparisons (rec.Service == ServiceSavingsPlans) work without
+	// a normaliser. See issue #85 for the rationale (frontend chosen as
+	// canonical to avoid a SQL data migration).
+	ServiceSavingsPlans ServiceType = "savingsplans" // AWS Savings Plans
+	ServiceCommitments  ServiceType = "commitments"  // Generic commitments
 
 	// Other
 	ServiceOther ServiceType = "other" // Catch-all for unclassified services

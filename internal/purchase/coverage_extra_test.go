@@ -32,8 +32,14 @@ func TestMapServiceType_AllBranches(t *testing.T) {
 		{"redshift", common.ServiceRedshift},
 		{"data-warehouse", common.ServiceRedshift},
 		{"memorydb", common.ServiceMemoryDB},
-		{"savings-plans", common.ServiceSavingsPlans},
 		{"savingsplans", common.ServiceSavingsPlans},
+		// Issue #85: the legacy hyphenated form is still accepted as a
+		// backwards-compat alias so Lambda-scheduled purchase executions
+		// persisted before the normalisation (rec.Service == "savings-plans"
+		// in purchase_executions.recommendations JSONB) still map correctly
+		// when re-executed. Once historical rows have aged out, the alias
+		// arm can be dropped and this case should flip to ServiceType("savings-plans").
+		{"savings-plans", common.ServiceSavingsPlans},
 		{"unknown-service", common.ServiceType("unknown-service")},
 		{"", common.ServiceType("")},
 	}

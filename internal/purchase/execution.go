@@ -381,7 +381,16 @@ func (m *Manager) mapServiceType(service string) common.ServiceType {
 		return common.ServiceRedshift
 	case "memorydb":
 		return common.ServiceMemoryDB
-	case "savings-plans", "savingsplans":
+	// Backwards-compat: "savings-plans" was the value of
+	// common.ServiceSavingsPlans before issue #85 normalised the constant to
+	// match the frontend ("savingsplans"). Lambda-scheduled purchase
+	// executions persisted before that change carry rec.Service ==
+	// "savings-plans" in the purchase_executions.recommendations JSONB blob
+	// and are re-fed through this mapper on retry / approval. Keep the
+	// legacy alias accepted here so historical rows still execute correctly.
+	// TODO(#85): drop the "savings-plans" alias once no purchase_executions
+	// rows older than the #85 cutoff remain (~6 months retention).
+	case "savingsplans", "savings-plans":
 		return common.ServiceSavingsPlans
 	default:
 		return common.ServiceType(service)
