@@ -1138,6 +1138,40 @@ describe('Bundle B: column header filter triggers', () => {
     expect(values.sort()).toEqual(['aws', 'azure']);
   });
 
+  test('service popover includes SageMaker when the loaded rec set has it', async () => {
+    const sagemakerRecs = [
+      ...sampleRecs,
+      {
+        id: 'rec-sm-1',
+        provider: 'aws',
+        cloud_account_id: 'a3',
+        service: 'sagemaker',
+        resource_type: 'ml.m5.xlarge',
+        region: 'us-east-1',
+        count: 1,
+        term: 1,
+        savings: 300,
+        upfront_cost: 1200,
+      },
+    ];
+
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: sagemakerRecs,
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue(sagemakerRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(sagemakerRecs);
+
+    await loadRecommendations();
+    const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+    serviceBtn?.click();
+    const values = Array.from(
+      document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+    ).map((cb) => cb.dataset['value']);
+    expect(values).toContain('sagemaker');
+  });
+
   test('Term popover labels show formatted terms; ticking commits string filter values', async () => {
     await loadRecommendations();
     const termBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="term"]');
