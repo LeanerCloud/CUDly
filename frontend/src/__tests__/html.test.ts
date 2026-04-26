@@ -371,6 +371,20 @@ describe('HTML Structure', () => {
       expect(labels).toContain('Azure');
       expect(labels).toContain('GCP');
     });
+
+    // Regression guard for issue #77 — SageMaker emits its own service value
+    // from the AWS recommendations parser (`providers/aws/recommendations/
+    // parser_sp.go`), so it must be filterable from the Recommendations page.
+    // It belongs under the AWS optgroup so `updateServiceFilterVisibility`
+    // shows/hides it in lockstep with the AWS provider selection.
+    test('service filter exposes sagemaker under the AWS optgroup', () => {
+      const selector = document.getElementById('service-filter');
+      const awsGroup = selector?.querySelector('optgroup[label="AWS"]') as HTMLOptGroupElement | null;
+      const awsValues = Array.from(awsGroup?.querySelectorAll('option') ?? []).map(o => o.value);
+
+      expect(awsGroup).not.toBeNull();
+      expect(awsValues).toContain('sagemaker');
+    });
   });
 
   describe('Security Headers', () => {
