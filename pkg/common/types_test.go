@@ -39,7 +39,11 @@ func TestServiceType_String(t *testing.T) {
 		{ServiceSearch, "search"},
 		{ServiceDataWarehouse, "data-warehouse"},
 		{ServiceStorage, "storage"},
-		{ServiceSavingsPlans, "savings-plans"},
+		// Regression guard for issue #85: the frontend persists "savingsplans"
+		// (no hyphen) and the Go constant must match so direct comparisons of
+		// rec.Service == ServiceSavingsPlans don't silently miss rows. If you
+		// flip this back to "savings-plans" you also need a SQL migration.
+		{ServiceSavingsPlans, "savingsplans"},
 		{ServiceCommitments, "commitments"},
 		{ServiceOther, "other"},
 		{ServiceEC2, "ec2"},
