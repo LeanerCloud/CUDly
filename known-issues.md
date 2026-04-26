@@ -240,6 +240,25 @@ outstanding so future work has a clear starting point.
     the underlying service distinction intact for the per-card save
     path. Out of scope for the issue #22 follow-up PR.
 
+- **GCP memorystore + cloudsql mock-service tests fail on HEAD**:
+  `providers/gcp/services/memorystore/client_test.go::TestMemorystoreClient_GetExistingCommitments_WithMockService`
+  (3 sub-tests) and `providers/gcp/services/cloudsql/client_test.go::TestCloudSQLClient_ValidateOffering_NoCredentials`
+  fail consistently. The failures predate the April 2026 purchase-automation
+  work (reproducible at `022ea3be5^`, the commit before
+  `refactor(purchase): widen PurchaseCommitment with PurchaseOptions`),
+  so they are pre-existing infrastructure issues from the GCP mock
+  service introduced in `51db1b9b0` (2025-11-29). Symptoms: memorystore
+  asserts `mockService.closeCalled == true` but Close() is never called by
+  the production code path under test; cloudsql expects an error from
+  `ValidateOffering` when no credentials are present but the call returns
+  nil. CI tolerates the failures because the pre-commit hook runs
+  `-short` and these tests are reachable (so they're being skipped or
+  the CI runner is not running the GCP module tests). Fix needs a
+  small audit of the GCP mock harness wiring vs the production
+  `GetExistingCommitments` / `ValidateOffering` code paths — likely
+  the mock's `Close()` was renamed or the production code was
+  refactored to use a different client lifecycle.
+
 - **OpenSearch RI tagging: best-effort, may be rejected by AWS**:
   Implemented in `providers/aws/services/opensearch/client.go`. The
   client now resolves the caller's AWS account ID via STS (cached on
