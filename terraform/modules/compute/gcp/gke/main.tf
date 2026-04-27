@@ -672,10 +672,13 @@ resource "google_cloud_scheduler_job" "recommendations" {
     http_method = "POST"
     uri         = "${var.app_url}/api/scheduled/recommendations"
 
-    headers = {
-      "Authorization" = "Bearer ${var.scheduled_task_secret}"
-    }
-
+    # Auth: oidc_token below is signed by the scheduler's service account
+    # at invocation time. The previous static `Authorization: Bearer
+    # ${var.scheduled_task_secret}` header leaked the shared secret into
+    # the scheduler resource definition + Terraform state — closes #159.
+    # OIDC supersedes the application-level bearer check on GCP. (The
+    # GKE-side var was also defaulting to "" in practice — the static
+    # header was sending an empty Bearer header anyway.)
     oidc_token {
       service_account_email = google_service_account.scheduler[0].email
     }

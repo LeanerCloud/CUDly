@@ -269,10 +269,13 @@ resource "google_cloud_scheduler_job" "recommendations" {
     http_method = "POST"
     uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/recommendations"
 
-    headers = {
-      "Authorization" = "Bearer ${var.scheduled_task_secret}"
-    }
-
+    # Auth: oidc_token below is signed by the scheduler's service
+    # account at invocation time and validated by Cloud Run's IAM gate
+    # (roles/run.invoker grants this SA access; cloud_run_allow_unauthenticated
+    # defaults to false). The previous static `Authorization: Bearer
+    # ${var.scheduled_task_secret}` header leaked the shared secret into
+    # the scheduler resource definition + Terraform state — closes #159.
+    # OIDC supersedes the application-level bearer check on GCP.
     oidc_token {
       service_account_email = google_service_account.scheduler[0].email
     }
@@ -322,10 +325,8 @@ resource "google_cloud_scheduler_job" "ri_exchange" {
     http_method = "POST"
     uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/ri-exchange"
 
-    headers = {
-      "Authorization" = "Bearer ${var.scheduled_task_secret}"
-    }
-
+    # Same OIDC-only model as the recommendations scheduler above —
+    # see #159 for the rationale.
     oidc_token {
       service_account_email = google_service_account.scheduler_ri_exchange[0].email
     }

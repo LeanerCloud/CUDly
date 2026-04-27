@@ -49,10 +49,14 @@ module "compute_cloud_run" {
   # VPC Access (for Cloud SQL)
   vpc_connector_id = module.networking.vpc_connector_id
 
-  # Scheduled tasks
+  # Scheduled tasks. Per #159 the cloud-run module no longer takes a
+  # plaintext scheduled_task_secret — Cloud Scheduler authenticates to
+  # Cloud Run via OIDC token + roles/run.invoker. Application-level
+  # bearer auth is dropped on GCP (Cloud Run's IAM gate is the
+  # primary defence; on Azure the bearer check stays because Container
+  # Apps does not have Cloud Run's built-in OIDC validation).
   enable_scheduled_tasks  = var.enable_scheduled_tasks
   recommendation_schedule = var.recommendation_schedule
-  scheduled_task_secret   = module.secrets.scheduled_task_secret_value
 
   # RI exchange automation
   enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
@@ -73,7 +77,6 @@ module "compute_cloud_run" {
       FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
       CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                  = "gcp"
     },
@@ -147,7 +150,6 @@ module "compute_gke" {
       FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
       CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                  = "gcp"
     },

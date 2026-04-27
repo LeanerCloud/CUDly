@@ -261,13 +261,6 @@ variable "recommendation_schedule" {
   default     = "0 2 * * *"
 }
 
-variable "scheduled_task_secret" {
-  description = "Shared secret for authenticating scheduled task HTTP calls"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
 variable "app_url" {
   description = "Application URL for scheduled task HTTP triggers (e.g., https://app.example.com). Required when enable_scheduled_tasks is true."
   type        = string
