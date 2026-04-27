@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -294,9 +295,6 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
-	if token == "" {
-		return nil, NewClientError(400, "cancellation token is required")
-	}
 
 	execution, err := h.config.GetExecutionByID(ctx, execID)
 	if err != nil {
@@ -305,16 +303,137 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	if execution == nil {
 		return nil, NewClientError(404, "execution not found")
 	}
-	actor, err := h.authorizeApprovalAction(ctx, req, execution)
+
+	// Two-mode dispatch (issue #46):
+	//   * token != ""  → legacy email-link flow. Token possession proves
+	//     intent; the handler still requires the session email (when one
+	//     exists) to be on the authorised-approver list, then delegates
+	//     to the purchase service which validates the token itself.
+	//   * token == ""  → session-authed dashboard Cancel button. The
+	//     session must carry a permission allowing the cancel:
+	//       - cancel-any:purchases (admin) → any pending execution; or
+	//       - cancel-own:purchases (default user) AND the execution's
+	//         created_by_user_id matches the session UserID.
+	//     Legacy rows with NULL created_by_user_id are reachable only
+	//     via cancel-any (admin) or via the email token already in the
+	//     inbox — they do not become orphaned by this change.
+	if token != "" {
+		actor, err := h.authorizeApprovalAction(ctx, req, execution)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
+			return nil, err
+		}
+		return map[string]string{"status": "cancelled"}, nil
+	}
+
+	return h.cancelPurchaseViaSession(ctx, req, execution)
+}
+
+// cancelPurchaseViaSession is the session-authed branch of cancelPurchase.
+// Enforces the cancel-any/cancel-own RBAC matrix, validates the execution
+// is in a cancellable state (pending|notified), atomically flips the row
+// to "cancelled" AND drops its purchase_suppressions in the same
+// transaction, and stamps session.Email onto CancelledBy. The History
+// UI's annotateCancelled() helper renders CancelledBy as
+// "cancelled by <email>" at read time — see handler_history.go.
+//
+// The atomic suppression cleanup mirrors purchase.Manager.CancelExecution
+// on the email-token path: an executePurchase upfront writes
+// purchase_suppressions to hide the just-bought capacity from the
+// recommendations list during the grace window, and cancel must drop
+// those rows in the same commit so a crash between the two writes can't
+// leave the rec list hiding capacity the user already cancelled.
+func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
+	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
+	if execution.Status != "pending" && execution.Status != "notified" {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled (status=%s)", execution.ExecutionID, execution.Status))
+	}
+
+	if err := h.authorizeSessionCancel(ctx, session, execution); err != nil {
 		return nil, err
 	}
 
+	// Flip status + clear suppressions + stamp CancelledBy in one tx.
+	// An optimistic-locking guard inside the tx (status IN
+	// ('pending','notified')) prevents a concurrent approval from
+	// landing on top of us — if the status drifted, the UPDATE 0-rows
+	// the row count and we 409 cleanly without rolling back the entire
+	// flow into an inconsistent state.
+	execution.Status = "cancelled"
+	if session.Email != "" {
+		actor := session.Email
+		execution.CancelledBy = &actor
+	}
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
+			return err
+		}
+		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
+	}); err != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", execution.ExecutionID, err))
+	}
+
 	return map[string]string{"status": "cancelled"}, nil
+}
+
+// authorizeSessionCancel returns nil when the session is permitted to cancel
+// the given execution under the cancel-any / cancel-own RBAC rules added in
+// issue #46. Returns a 403 ClientError otherwise.
+func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	if session.Role == "admin" {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+
+	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelOwn, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if !hasOwn {
+		return NewClientError(403, "permission denied: requires cancel-any or cancel-own on purchases")
+	}
+
+	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		return NewClientError(403, "permission denied: cannot cancel another user's pending purchase")
+	}
+	return nil
+}
+
+// requireSession validates the request's session token and returns the
+// session, or a 401 ClientError when no/invalid session is present. Unlike
+// requirePermission, it does NOT consult the admin-API-key shortcut — the
+// session-authed cancel path needs an actual user UUID for the
+// cancel-own check; falling through to the API-key admin role would let
+// a key impersonate ownership we cannot verify.
+func (h *Handler) requireSession(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil, NewClientError(401, "no authorization token provided")
+	}
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil || session == nil {
+		return nil, NewClientError(401, "invalid session")
+	}
+	return session, nil
 }
 
 // tryResolveActorEmail returns the email of the session-authenticated user
@@ -489,6 +608,27 @@ func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfron
 	return upfront, savings, nil
 }
 
+// resolveCreatorUserID returns a pointer to the session user's UUID for
+// stamping onto purchase_executions.created_by_user_id, or nil for
+// non-user sessions whose UserID isn't a real UUID. This keeps the
+// cancel-own RBAC check (issue #46) honest:
+//   - Real human session → pointer to UUID; future cancel-own match works.
+//   - Admin-API-key session → UserID is the literal "admin-api-key"
+//     sentinel, which fails validateUUID; store NULL so the FK to users
+//     stays valid and the row is reachable only via cancel-any/email-token.
+//   - nil session (defensive — current callers gate on requirePermission
+//     so this shouldn't happen) → NULL.
+func resolveCreatorUserID(session *Session) *string {
+	if session == nil {
+		return nil
+	}
+	if validateUUID(session.UserID) != nil {
+		return nil
+	}
+	uid := session.UserID
+	return &uid
+}
+
 // executePurchase handles direct purchase execution from recommendations
 func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	execReq, session, err := h.validateExecutePurchaseRequest(ctx, req)
@@ -500,7 +640,6 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	if err != nil {
 		return nil, err
 	}
-	_ = session
 
 	executionID := uuid.New().String()
 	execution := &config.PurchaseExecution{
@@ -513,6 +652,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		ApprovalToken:    uuid.New().String(),
 		Source:           common.PurchaseSourceWeb,
 		CapacityPercent:  execReq.CapacityPercent,
+		CreatedByUserID:  resolveCreatorUserID(session),
 	}
 
 	// Load the grace-period config once before entering the tx so a

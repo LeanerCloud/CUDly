@@ -255,7 +255,8 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		assert.Len(t, permissions, 6) // 5 default user permissions
+		// 7 = 6 read/plan-author + cancel-own:purchases (issue #46).
+		assert.Len(t, permissions, 7)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -312,8 +313,8 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 6 user + 1 from group1 + 1 from group2 = 8
-		assert.Len(t, permissions, 8)
+		// 7 user (incl. cancel-own:purchases from issue #46) + 1 group1 + 1 group2
+		assert.Len(t, permissions, 9)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -349,8 +350,9 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// Should have only user permissions, missing group is skipped
-		assert.Len(t, permissions, 6)
+		// Should have only user permissions, missing group is skipped.
+		// 7 = 6 read/plan-author + cancel-own:purchases (issue #46).
+		assert.Len(t, permissions, 7)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -427,8 +429,8 @@ func TestService_BuildAuthContext(t *testing.T) {
 		assert.Contains(t, authCtx.AllowedAccounts, "111111111111")
 		assert.Contains(t, authCtx.AllowedAccounts, "222222222222")
 		assert.Contains(t, authCtx.AllowedAccounts, "333333333333")
-		// 6 user perms + 1 from group1 + 1 from group2
-		assert.Len(t, authCtx.Permissions, 8)
+		// 7 user perms (incl. cancel-own:purchases from issue #46) + 1 from group1 + 1 from group2
+		assert.Len(t, authCtx.Permissions, 9)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -450,7 +452,8 @@ func TestService_BuildAuthContext(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, authCtx)
 		assert.Empty(t, authCtx.AllowedAccounts)
-		assert.Len(t, authCtx.Permissions, 6) // Only role-based permissions
+		// 6 read/plan-author + cancel-own:purchases (issue #46) = 7. Only role-based permissions.
+		assert.Len(t, authCtx.Permissions, 7)
 
 		mockStore.AssertExpectations(t)
 	})

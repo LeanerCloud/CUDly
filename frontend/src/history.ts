@@ -6,6 +6,9 @@ import * as api from './api';
 import { formatCurrency, formatDate, formatTerm, escapeHtml, populateAccountFilter } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
+import { confirmDialog } from './confirmDialog';
+import { showToast } from './toast';
+import { getCurrentUser } from './state';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
@@ -285,6 +288,39 @@ function providerCell(p: HistoryPurchase): string {
   return `<span class="provider-badge ${p.provider}">${p.provider.toUpperCase()}</span>`;
 }
 
+// canCancelPendingRow returns true when the current session is permitted
+// to cancel the given pending/notified history row via the session-authed
+// Cancel button (issue #46). UX gate only — the backend
+// authorizeSessionCancel in internal/api/handler_purchases.go remains the
+// security boundary; if this helper is wrong-positive the API surfaces
+// 403 and the click handler turns that into a "Failed to cancel" toast.
+//
+// Heuristic:
+//   * admin → always yes;
+//   * non-admin matching the row's created_by_user_id → yes (cancel-own);
+//   * anyone else → no.
+//
+// Caveat: a non-admin role explicitly granted cancel-any:purchases (no
+// such role exists by default; the verb is reserved for future operator
+// roles) WILL be allowed by the backend but hidden by this helper. We
+// don't surface that case because the frontend doesn't currently fetch
+// the user's permission list, and adding a /me/permissions round-trip
+// just to enable a button for a role nobody has is wasteful. If/when an
+// operator role lands, extend User to carry permissions and broaden this
+// check accordingly.
+function canCancelPendingRow(p: HistoryPurchase): boolean {
+  const status = (p.status || '').toLowerCase();
+  if (status !== 'pending' && status !== 'notified') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  // Non-admin: only the original creator. Legacy rows with no
+  // created_by_user_id can't be cancelled via this UI; the email-token
+  // path remains the escape hatch.
+  if (!p.created_by_user_id) return false;
+  return p.created_by_user_id === user.id;
+}
+
 function renderHistoryList(purchases: HistoryPurchase[]): void {
   const container = document.getElementById('history-list');
   if (!container) return;
@@ -328,6 +364,13 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       return badge;
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
+    // Inline Cancel button on pending/notified rows the current user is
+    // permitted to cancel. Renders in the Plan column so the table
+    // width stays the same; pending rows show their plan in
+    // StatusDescription, not the Plan column, so this is non-conflicting.
+    const planCellContent = canCancelPendingRow(p) && p.purchase_id
+      ? `<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`
+      : escapeHtml(p.plan_name || '-');
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
@@ -340,7 +383,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         <td>${formatTerm(p.term)}</td>
         <td>${formatCurrency(p.upfront_cost)}</td>
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
-        <td>${escapeHtml(p.plan_name || '-')}</td>
+        <td>${planCellContent}</td>
       </tr>
     `;
   }).join('');
@@ -376,6 +419,54 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       if (!next || next === activeStatusFilter) return;
       activeStatusFilter = next;
       renderHistoryList(lastPurchases);
+    });
+  });
+
+  // Wire the inline Cancel button on pending/notified rows the current
+  // session may cancel (issue #46). confirmDialog → POST → reload. The
+  // backend remains the security boundary; the canCancelPendingRow
+  // helper above is a UX gate that hides the button when the call would
+  // 403, but a stale cache could still surface a 403 — handle it the
+  // same way as any other failure.
+  //
+  // The cancel POST and the follow-up reload are split into separate
+  // try/catch blocks: a successful cancel + failed reload must not show
+  // a "Failed to cancel" toast (the purchase IS cancelled), and the
+  // user should see success-toast first so they don't think their
+  // click was lost while we re-fetch the table.
+  container.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['cancelId'];
+      if (!id) return;
+      const ok = await confirmDialog({
+        title: 'Cancel this pending purchase?',
+        body: 'This will permanently abort the approval flow. The pending email approval link will stop working. This action cannot be undone.',
+        confirmLabel: 'Cancel purchase',
+        destructive: true,
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await api.cancelPurchase(id);
+      } catch (cancelError) {
+        console.error('Failed to cancel pending purchase:', cancelError);
+        const err = cancelError as Error;
+        showToast({ message: `Failed to cancel: ${err.message || 'unknown error'}`, kind: 'error' });
+        btn.disabled = false;
+        return;
+      }
+      // Cancel succeeded — surface success regardless of whether the
+      // refresh works. A reload failure leaves the row in its previous
+      // pending state on screen (stale-but-correct: the next manual
+      // reload corrects it).
+      showToast({ message: 'Purchase cancelled', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after cancel:', reloadError);
+        // Don't downgrade the success toast; loadHistory's own catch
+        // already paints an error message into the list area.
+      }
     });
   });
 
