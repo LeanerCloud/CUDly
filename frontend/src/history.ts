@@ -597,8 +597,22 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         await api.retryPurchase(id, overThreshold ? { force: true } : undefined);
       } catch (retryError) {
         console.error('Failed to retry purchase:', retryError);
-        const err = retryError as Error;
-        showToast({ message: `Failed to retry: ${err.message || 'unknown error'}`, kind: 'error' });
+        // Surface structured retry hints from the backend (issue #47):
+        //   * ops_hint — operator-actionable reason; takes priority
+        //   * retry_attempt_n + threshold — soft-block message
+        //   * else — fall back to the raw error message
+        const err = retryError as Error & { details?: Record<string, unknown> };
+        const opsHint = typeof err.details?.['ops_hint'] === 'string' ? err.details['ops_hint'] : '';
+        const retryAttemptN = typeof err.details?.['retry_attempt_n'] === 'number' ? err.details['retry_attempt_n'] : undefined;
+        const threshold = typeof err.details?.['threshold'] === 'number' ? err.details['threshold'] : undefined;
+        let detailMessage = '';
+        if (opsHint) {
+          detailMessage = opsHint;
+        } else if (retryAttemptN != null && threshold != null) {
+          detailMessage = `already retried ${retryAttemptN} times (threshold ${threshold}) — confirm the override prompt to force`;
+        }
+        const finalMessage = detailMessage || err.message || 'unknown error';
+        showToast({ message: `Failed to retry: ${finalMessage}`, kind: 'error' });
         btn.disabled = false;
         return;
       }

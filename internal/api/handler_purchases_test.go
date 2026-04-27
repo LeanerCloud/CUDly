@@ -1658,6 +1658,60 @@ func TestHandler_retryPurchase_RejectsMissingSession(t *testing.T) {
 	assert.Contains(t, err.Error(), "no authorization token provided")
 }
 
+// TestHandler_retryPurchase_PreservesPlanMetadata verifies that retry
+// successors inherit PlanID + StepNumber from the predecessor (CR #168
+// review — without this, a retried planned execution would drop out of
+// plan-scoped history and lose its ramp-step attribution).
+func TestHandler_retryPurchase_PreservesPlanMetadata(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		PlanID:          "plan-abc",
+		StepNumber:      3,
+		Status:          "failed",
+		Error:           "send failed: transient SES throttle",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	assert.Equal(t, "plan-abc", newExec.PlanID, "successor must inherit predecessor PlanID")
+	assert.Equal(t, 3, newExec.StepNumber, "successor must inherit predecessor StepNumber")
+}
+
+// TestHandler_retryPurchase_AlreadyRetried_RBACBeforeLeak verifies the
+// fix to a CR #168 finding: the already-retried 409 must NOT fire for
+// an unauthorized session, because doing so would leak the descendant
+// execution UUID to anyone who can guess a failed-row ID. The
+// authorization gate must run first and surface a 403 instead.
+func TestHandler_retryPurchase_AlreadyRetried_RBACBeforeLeak(t *testing.T) {
+	creator := retryOtherID // someone else owns the failed row
+	successor := "11111111-2222-3333-4444-555555555555"
+	failed := &config.PurchaseExecution{
+		ExecutionID:      retryExecID,
+		Status:           "failed",
+		CreatedByUserID:  &creator,
+		RetryExecutionID: &successor, // already retried
+		Recommendations:  []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	// Caller is a non-admin holding NEITHER retry-any nor retry-own —
+	// must hit the 403 from authorizeSessionRetry, NOT the 409 with
+	// successor exposure.
+	session := &Session{UserID: retryCallerID, Role: "user"}
+	handler, _, _ := buildSessionRetryHandler(failed, session, false, false)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code, "must fail with 403 (RBAC) not 409 (already-retried)")
+	assert.NotContains(t, err.Error(), "already retried")
+	// Most importantly: details must NOT leak the descendant UUID.
+	if d := ce.Details(); d != nil {
+		_, leaked := d["retry_execution_id"]
+		assert.False(t, leaked, "403 must not surface retry_execution_id")
+	}
+}
+
 func TestResolveOpsHint(t *testing.T) {
 	tests := []struct {
 		name     string

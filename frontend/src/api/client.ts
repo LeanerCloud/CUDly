@@ -209,8 +209,21 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
     const error: ApiError = new Error(`HTTP ${response.status}`);
     error.status = response.status;
     try {
-      const data = await response.json() as { error?: string };
-      error.message = data.error || error.message;
+      const data = await response.json() as Record<string, unknown>;
+      const message = typeof data['error'] === 'string' ? data['error'] : '';
+      if (message) error.message = message;
+      // Strip the `error` key and surface the rest as structured
+      // details so callers can branch on ops_hint / retry_attempt_n /
+      // threshold / retry_execution_id without substring-matching the
+      // human message (see PurchaseHistory Retry button — issue #47).
+      const details: Record<string, unknown> = {};
+      for (const k of Object.keys(data)) {
+        if (k === 'error') continue;
+        details[k] = data[k];
+      }
+      if (Object.keys(details).length > 0) {
+        error.details = details;
+      }
     } catch {
       // Ignore JSON parse errors
     }

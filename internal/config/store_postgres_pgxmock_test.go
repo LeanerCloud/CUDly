@@ -385,6 +385,13 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "exec-1", exec.ExecutionID)
 	assert.Equal(t, "tok-123", exec.ApprovalToken)
+	// Retry-linkage scan-order regression guard (CR #168 nit). NULL FK +
+	// default 0 attempt count are the legacy-row case after migration
+	// 000042 — a column reorder upstream would surface as a wrong-type
+	// scan into the wrong field, which assertions on these specific
+	// columns will catch.
+	assert.Nil(t, exec.RetryExecutionID)
+	assert.Equal(t, 0, exec.RetryAttemptN)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -403,13 +410,16 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 	}
+	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-2", "completed", 1, now,
 		sql.NullTime{Valid: true, Time: now}, "tok", recsJSON,
 		100.0, 200.0, sql.NullTime{Valid: true, Time: now}, "some error",
 		sql.NullTime{Valid: true, Time: future},
 		nil, "cudly-web", nil, nil, 100,
-		nil, nil, 0,
+		// Populated retry-linkage fields (CR #168 nit) — NON-zero
+		// values exercise the scan path for both new columns.
+		nil, &successorID, 2,
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -418,6 +428,14 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 	require.NotNil(t, exec.NotificationSent)
 	require.NotNil(t, exec.CompletedAt)
 	assert.True(t, exec.TTL > 0)
+	// Retry-linkage scan-order regression guard (CR #168 nit). The
+	// populated case — non-NULL successor pointer + non-zero attempt
+	// count — exercises the scan path for both new columns; a column
+	// reorder upstream would scan into the wrong destination and the
+	// assertions below would fail.
+	require.NotNil(t, exec.RetryExecutionID)
+	assert.Equal(t, "exec-3", *exec.RetryExecutionID)
+	assert.Equal(t, 2, exec.RetryAttemptN)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

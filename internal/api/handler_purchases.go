@@ -578,18 +578,24 @@ func (h *Handler) loadAndValidateRetryRequest(ctx context.Context, req *events.L
 		return nil, nil, NewClientError(409, fmt.Sprintf("execution %s cannot be retried (status=%s)", failedExec.ExecutionID, failedExec.Status))
 	}
 
+	// Authorize BEFORE the already-retried guard so an unauthorized
+	// caller can't enumerate descendant execution IDs by probing
+	// failed-row UUIDs (CR #168 review). The status check above is
+	// allowed pre-RBAC because non-admins can already see the row's
+	// status via the History endpoint they're entitled to read.
+	if err := h.authorizeSessionRetry(ctx, session, failedExec); err != nil {
+		return nil, nil, err
+	}
+
 	// Already-retried guard: a row with retry_execution_id set was
 	// already retried into a successor. Retrying it AGAIN would
 	// silently overwrite the linkage pointer and orphan the previous
-	// chain, breaking History attribution.
+	// chain, breaking History attribution. Surfaced only after RBAC
+	// so the descendant ID isn't a cross-user info leak.
 	if failedExec.RetryExecutionID != nil && *failedExec.RetryExecutionID != "" {
 		return nil, nil, NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
 			map[string]any{"retry_execution_id": *failedExec.RetryExecutionID})
-	}
-
-	if err := h.authorizeSessionRetry(ctx, session, failedExec); err != nil {
-		return nil, nil, err
 	}
 
 	if err := checkRetryRateGates(failedExec, req); err != nil {
@@ -648,8 +654,14 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 	copiedRecs := append([]config.RecommendationRecord(nil), failedExec.Recommendations...)
 
 	newExecutionID := uuid.New().String()
+	// PlanID + StepNumber propagate from the predecessor so a retried
+	// planned execution stays attributed to its plan + ramp step (CR
+	// #168 review). For ad-hoc executions PlanID is "" and StepNumber
+	// is 0, so propagation is a no-op for the non-plan case.
 	newExecution := &config.PurchaseExecution{
 		ExecutionID:      newExecutionID,
+		PlanID:           failedExec.PlanID,
+		StepNumber:       failedExec.StepNumber,
 		Status:           "pending",
 		ScheduledDate:    time.Now(),
 		Recommendations:  copiedRecs,
