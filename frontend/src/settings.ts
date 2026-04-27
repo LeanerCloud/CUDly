@@ -31,14 +31,18 @@ const SERVICE_FIELDS = [
   { provider: 'aws', service: 'elasticache',  termId: 'aws-elasticache-term',  paymentId: 'aws-elasticache-payment' },
   { provider: 'aws', service: 'opensearch',   termId: 'aws-opensearch-term',   paymentId: 'aws-opensearch-payment' },
   { provider: 'aws', service: 'redshift',     termId: 'aws-redshift-term',     paymentId: 'aws-redshift-payment' },
-  { provider: 'aws', service: 'savingsplans', termId: 'aws-savingsplans-term', paymentId: 'aws-savingsplans-payment' },
-  // Issue #22: SageMaker has its own SP type (SageMaker Savings Plans),
-  // so it gets a dedicated card and users can pin term/payment per workload
-  // instead of sharing the umbrella Savings Plans defaults. Lambda is
-  // intentionally NOT here — Lambda has no standalone SP product; its
-  // commitments roll up into Compute Savings Plans, already covered by
-  // the umbrella card above.
-  { provider: 'aws', service: 'sagemaker',    termId: 'aws-sagemaker-term',    paymentId: 'aws-sagemaker-payment' },
+  // Issue #22 follow-up: AWS Savings Plans split into four per-plan-type
+  // cards (Compute / EC2 Instance / SageMaker / Database). The earlier
+  // umbrella `savingsplans` and PR #71 `sagemaker` SERVICE_FIELDS entries
+  // are replaced by these four. Migration 000040_split_savingsplans
+  // copies the umbrella row's term/payment into all four new rows and
+  // (when present) overrides the SageMaker slot from PR #71's sagemaker
+  // row. Lambda is intentionally NOT a separate card — Lambda has no
+  // standalone SP product; its commitments roll up into Compute SP.
+  { provider: 'aws', service: 'savings-plans-compute',     termId: 'aws-savings-plans-compute-term',     paymentId: 'aws-savings-plans-compute-payment' },
+  { provider: 'aws', service: 'savings-plans-ec2instance', termId: 'aws-savings-plans-ec2instance-term', paymentId: 'aws-savings-plans-ec2instance-payment' },
+  { provider: 'aws', service: 'savings-plans-sagemaker',   termId: 'aws-savings-plans-sagemaker-term',   paymentId: 'aws-savings-plans-sagemaker-payment' },
+  { provider: 'aws', service: 'savings-plans-database',    termId: 'aws-savings-plans-database-term',    paymentId: 'aws-savings-plans-database-payment' },
   { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
   { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
   { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
