@@ -209,12 +209,12 @@ variable "scheduled_task_secret_name" {
   type        = string
   default     = ""
 
-  # Validation runs unconditionally on the variable, so we can't predicate it
-  # on enable_scheduled_tasks / enable_ri_exchange_schedule (variables can't
-  # see other variables here). The "is non-empty when needed" rule lives in
-  # scheduled-tasks.tf as a resource precondition. This block only checks the
-  # character set: if a value is supplied, it must be a bare Key Vault secret
-  # name and not a path/query/fragment fragment that would let it escape the
+  # Validation runs unconditionally and can't reference sibling variables, so
+  # the "non-empty when scheduled tasks are enabled" rule lives in the
+  # `terraform_data.scheduled_task_secret_preconditions` resource in
+  # scheduled-tasks.tf. This block handles only the character-set half: if a
+  # value is supplied, it must be a bare Key Vault secret name — no `/`, `?`,
+  # `#`, or whitespace — so it can't escape the
   # `${key_vault_uri}secrets/${name}?api-version=…` URL template.
   validation {
     condition     = var.scheduled_task_secret_name == "" || !can(regex("[/?# ]", var.scheduled_task_secret_name))

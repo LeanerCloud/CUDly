@@ -35,6 +35,13 @@ locals {
 # (the list-secrets endpoint), and a key_vault_uri without a trailing slash
 # breaks the URL. Both surface late as runtime 401/403; the precondition
 # fails them at plan/apply instead.
+#
+# Why a precondition rather than `validation` blocks on the variables: variable
+# validation can only reference its own `var.<self>` and runs unconditionally,
+# so it can't say "non-empty WHEN the schedule is enabled" without breaking
+# legitimate disabled-by-default callers. The character-set half of the rule
+# (no `/?# ` in the secret name) does live on the variable itself — see the
+# `validation` block on `scheduled_task_secret_name` in variables.tf.
 resource "terraform_data" "scheduled_task_secret_preconditions" {
   count = (var.enable_scheduled_tasks || var.enable_ri_exchange_schedule) ? 1 : 0
 
