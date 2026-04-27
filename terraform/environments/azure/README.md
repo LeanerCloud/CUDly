@@ -4,7 +4,7 @@ This directory contains the Terraform configuration for CUDly on Azure with envi
 
 ## Structure
 
-```
+```text
 azure/
 ├── main.tf                 # Main infrastructure configuration
 ├── variables.tf            # Variable declarations

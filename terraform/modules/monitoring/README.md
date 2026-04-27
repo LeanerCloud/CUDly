@@ -109,7 +109,7 @@ output "alarm_arns" {
 
 **Errors by Type:**
 
-```
+```text
 fields @timestamp, @message
 | filter @message like /ERROR/
 | parse @message /ERROR: (?<error_type>.*?):/
@@ -119,7 +119,7 @@ fields @timestamp, @message
 
 **Slow Requests:**
 
-```
+```text
 fields @timestamp, @message, @duration
 | filter @type = "REPORT"
 | filter @duration > 5000
@@ -129,7 +129,7 @@ fields @timestamp, @message, @duration
 
 **Request Volume:**
 
-```
+```text
 fields @timestamp
 | filter @type = "REPORT"
 | stats count() as request_count by bin(5m)

@@ -415,7 +415,7 @@ terraform apply
 
 ## Architecture Diagram
 
-```
+```text
 Terraform Apply
     ↓
 ┌─────────────────────────────────────────┐
