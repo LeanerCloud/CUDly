@@ -21,6 +21,7 @@ func rec(service common.ServiceType, region, resourceType string, savingsPct, sa
 }
 
 func TestScore_NoFilters(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 30.0, 1000.0, 3000.0, 5, 0),
 		rec(common.ServiceRDS, "eu-west-1", "db.r5.large", 20.0, 500.0, 2500.0, 2, 0),
@@ -31,6 +32,7 @@ func TestScore_NoFilters(t *testing.T) {
 }
 
 func TestScore_MinSavingsPct(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 3.2, 100.0, 3000.0, 1, 0),
 		rec(common.ServiceRDS, "us-east-1", "db.r5.large", 20.0, 500.0, 2500.0, 1, 0),
@@ -44,6 +46,7 @@ func TestScore_MinSavingsPct(t *testing.T) {
 }
 
 func TestScore_MaxBreakEvenMonths(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 10.0, 500.0, 5000.0, 1, 18.0),
 		rec(common.ServiceEC2, "us-east-1", "c5.large", 15.0, 750.0, 5000.0, 1, 6.0),
@@ -56,6 +59,7 @@ func TestScore_MaxBreakEvenMonths(t *testing.T) {
 }
 
 func TestScore_MinCount(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 10.0, 100.0, 1000.0, 2, 0),
 		rec(common.ServiceEC2, "us-east-1", "c5.large", 10.0, 200.0, 2000.0, 5, 0),
@@ -67,6 +71,7 @@ func TestScore_MinCount(t *testing.T) {
 }
 
 func TestScore_EnabledServices(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 10.0, 500.0, 5000.0, 1, 0),
 		rec(common.ServiceRDS, "us-east-1", "db.r5.large", 20.0, 300.0, 1500.0, 1, 0),
@@ -79,6 +84,7 @@ func TestScore_EnabledServices(t *testing.T) {
 }
 
 func TestScore_ZeroThresholds_NoFilter(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 0.1, 1.0, 1000.0, 1, 100.0),
 	}
@@ -88,6 +94,7 @@ func TestScore_ZeroThresholds_NoFilter(t *testing.T) {
 }
 
 func TestScore_Sorted(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 10.0, 500.0, 5000.0, 1, 0),
 		rec(common.ServiceRDS, "us-east-1", "db.r5.large", 30.0, 300.0, 1000.0, 1, 0),
@@ -100,6 +107,7 @@ func TestScore_Sorted(t *testing.T) {
 }
 
 func TestScore_SortedTieBreak(t *testing.T) {
+	t.Parallel()
 	// Equal SavingsPercentage: sort by EstimatedSavings desc
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 20.0, 500.0, 2500.0, 1, 0),
@@ -110,6 +118,7 @@ func TestScore_SortedTieBreak(t *testing.T) {
 }
 
 func TestScore_SortedDeterministicTieBreak(t *testing.T) {
+	t.Parallel()
 	// Equal SavingsPercentage and EstimatedSavings: sort by Service+Region+ResourceType asc
 	recs := []common.Recommendation{
 		rec(common.ServiceRDS, "us-east-1", "db.z", 20.0, 500.0, 2500.0, 1, 0),
@@ -120,6 +129,7 @@ func TestScore_SortedDeterministicTieBreak(t *testing.T) {
 }
 
 func TestScore_CombinedFilters(t *testing.T) {
+	t.Parallel()
 	recs := []common.Recommendation{
 		rec(common.ServiceEC2, "us-east-1", "m5.large", 3.0, 100.0, 3000.0, 1, 0),     // fails MinSavingsPct
 		rec(common.ServiceEC2, "us-east-1", "c5.large", 20.0, 500.0, 2500.0, 1, 0),    // passes all
