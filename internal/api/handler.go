@@ -401,20 +401,26 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 }
 
 // loadAPIKey retrieves the API key from Secrets Manager.
-// It caches the base AWS config via awsCfgOnce to avoid redundant config loads.
+//
+// Uses a local AWS config load — does NOT share the request-path
+// awsCfgOnce/awsCfgErr cache. Reason: NewHandler runs loadAPIKey at
+// cold-start with a 5-second deadline. If that deadline fires, the
+// shared sync.Once would seal awsCfgErr = "context deadline exceeded"
+// for the entire Lambda lifetime, permanently breaking the request-path
+// resolveAWSCallerIdentity call (and the multi-tenant scope filter that
+// depends on it). Loading config locally keeps the cold-start timeout
+// scoped to this one call.
 func (h *Handler) loadAPIKey(ctx context.Context) (string, error) {
 	if h.secretsARN == "" {
 		return "", nil
 	}
 
-	h.awsCfgOnce.Do(func() {
-		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
-	})
-	if h.awsCfgErr != nil {
-		return "", h.awsCfgErr
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return "", err
 	}
 
-	client := secretsmanager.NewFromConfig(h.awsCfg)
+	client := secretsmanager.NewFromConfig(cfg)
 	result, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
 		SecretId: &h.secretsARN,
 	})
