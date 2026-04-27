@@ -88,72 +88,14 @@
 
             <!-- Recommendations Tab -->
             <div id="recommendations-tab" class="tab-content" role="tabpanel" aria-labelledby="recommendations-tab-btn">
-                <section id="recommendations-controls">
-                    <div class="controls-bar">
-                        <div class="filter-group">
-                            <label>Provider:
-                                <select id="recommendations-provider-filter">
-                                    <option value="">All Providers</option>
-                                    <option value="aws">AWS</option>
-                                    <option value="azure">Azure</option>
-                                    <option value="gcp">GCP</option>
-                                </select>
-                            </label>
-                            <label>Service:
-                                <select id="service-filter">
-                                    <option value="">All Services</option>
-                                    <optgroup label="AWS">
-                                        <option value="ec2">EC2</option>
-                                        <option value="rds">RDS</option>
-                                        <option value="elasticache">ElastiCache</option>
-                                        <option value="opensearch">OpenSearch</option>
-                                        <option value="memorydb">MemoryDB</option>
-                                        <option value="redshift">Redshift</option>
-                                    </optgroup>
-                                    <optgroup label="Savings Plans">
-                                        <option value="savings-plans-compute">Compute SP</option>
-                                        <option value="savings-plans-ec2instance">EC2 Instance SP</option>
-                                        <option value="savings-plans-sagemaker">SageMaker SP</option>
-                                        <option value="savings-plans-database">Database SP</option>
-                                    </optgroup>
-                                    <optgroup label="Azure">
-                                        <option value="vm">Virtual Machines</option>
-                                        <option value="sql">SQL Database</option>
-                                        <option value="cosmosdb">Cosmos DB</option>
-                                        <option value="redis">Azure Cache</option>
-                                        <option value="search">Cognitive Search</option>
-                                    </optgroup>
-                                    <optgroup label="GCP">
-                                        <option value="compute">Compute Engine</option>
-                                        <option value="cloudsql">Cloud SQL</option>
-                                        <option value="memorystore">Memorystore</option>
-                                        <option value="cloudstorage">Cloud Storage</option>
-                                    </optgroup>
-                                </select>
-                            </label>
-                            <label>Region:
-                                <select id="region-filter">
-                                    <option value="">All Regions</option>
-                                </select>
-                            </label>
-                            <label>Min Savings:
-                                <input type="number" id="min-savings-filter" placeholder="$0" min="0">
-                            </label>
-                        </div>
-                        <div class="filter-group">
-                            <label>Account:
-                                <select id="recommendations-account-filter">
-                                    <option value="">All Accounts</option>
-                                </select>
-                            </label>
-                        </div>
-                        <div class="action-group">
-                            <button id="create-plan-btn" class="primary">Create Purchase Plan</button>
-                        </div>
-                    </div>
-                </section>
                 <section id="recommendations-freshness" class="freshness-indicator" aria-live="polite"></section>
                 <section id="recommendations-summary"></section>
+                <!-- Per-column header filters replace the old top filter bar.
+                     The Clear-filters badge + aria-live count are injected
+                     by recommendations.ts:renderFilterStatusBar above the
+                     list. Bottom action box (Payment / Capacity % / Purchase /
+                     Create Plan) is rendered after the table by
+                     mountBottomActionBox. -->
                 <section id="recommendations-list"></section>
             </div>
 

@@ -25,7 +25,13 @@ jest.mock('../api', () => ({
 // Mock state module
 jest.mock('../state', () => ({
   getRecommendations: jest.fn().mockReturnValue([]),
-  getSelectedRecommendationIDs: jest.fn().mockReturnValue(new Set())
+  getSelectedRecommendationIDs: jest.fn().mockReturnValue(new Set()),
+  // Bundle B (column-filter UX overhaul): savePlan now reads the
+  // post-filter visible set so plans never include filtered-out rows.
+  // Default to empty so tests that don't seed a target keep their old
+  // behaviour (no recommendations attached to plan).
+  getVisibleRecommendations: jest.fn().mockReturnValue([]),
+  setVisibleRecommendations: jest.fn(),
 }));
 
 // Mock history module
@@ -876,9 +882,12 @@ describe('Plans Module', () => {
       }));
     });
 
-    test('includes selected recommendations', async () => {
-      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0, 1]));
-      (state.getRecommendations as jest.Mock).mockReturnValue([
+    test('includes selected ∩ visible recommendations (Bundle B)', async () => {
+      // Bundle B: savePlan reads getVisibleRecommendations (post-filter set)
+      // so plans never include filtered-out rows. Selection is intersected
+      // with that visible list.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rec-1', 'rec-2']));
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
         { id: 'rec-1', service: 'ec2' },
         { id: 'rec-2', service: 'rds' }
       ]);
@@ -889,9 +898,44 @@ describe('Plans Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await savePlan(event);
 
-      expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({
-        recommendations: expect.any(Array)
-      }));
+      const sentRecs = (api.createPlan as jest.Mock).mock.calls[0][0].recommendations;
+      expect(sentRecs.map((r: { id: string }) => r.id).sort()).toEqual(['rec-1', 'rec-2']);
+    });
+
+    test('falls back to all visible when no selection (Bundle B)', async () => {
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
+        { id: 'rec-1', service: 'ec2' },
+        { id: 'rec-2', service: 'rds' }
+      ]);
+      (api.createPlan as jest.Mock).mockResolvedValue({});
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await savePlan(event);
+
+      const sentRecs = (api.createPlan as jest.Mock).mock.calls[0][0].recommendations;
+      expect(sentRecs.map((r: { id: string }) => r.id).sort()).toEqual(['rec-1', 'rec-2']);
+    });
+
+    test('plan does not include filtered-out recs (Bundle B)', async () => {
+      // Selection points at IDs that aren't in the visible set — they're
+      // filtered out, so the plan should silently ignore them.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['stale-1']));
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
+        { id: 'rec-1', service: 'ec2' }
+      ]);
+      (api.createPlan as jest.Mock).mockResolvedValue({});
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await savePlan(event);
+
+      const sentRecs = (api.createPlan as jest.Mock).mock.calls[0][0].recommendations;
+      // selection had no intersection with visible → recommendations field empty/undefined.
+      expect(sentRecs == null || sentRecs.length === 0).toBe(true);
     });
 
     test('closes modal after successful save', async () => {

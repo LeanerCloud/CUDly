@@ -8,7 +8,7 @@ import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUser
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, type FanOutBucket } from './recommendations';
 import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, getSettingsSubTabFromPath } from './navigation';
-import { savePlan, setupPlanHandlers, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
+import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
 import { initApiKeys } from './apikeys';
@@ -170,10 +170,11 @@ function setupButtonHandlers(): void {
   // Refresh button was removed because it duplicated the freshness-
   // indicator Refresh with strictly worse UX (alert() popup + 5s delay
   // vs. the freshness button's inline disable + re-render).
-  const createPlanBtn = document.getElementById('create-plan-btn');
-  if (createPlanBtn) {
-    createPlanBtn.addEventListener('click', () => openCreatePlanModal());
-  }
+  //
+  // Bundle B note (column-filter UX overhaul): #create-plan-btn was relocated
+  // from the old top filter bar into the sticky bottom action box. The
+  // button is now created and wired by recommendations.ts:mountBottomActionBox,
+  // which calls openCreatePlanModal directly. The wiring used to live here.
 
   // Plans buttons
   const newPlanBtn = document.getElementById('new-plan-btn');

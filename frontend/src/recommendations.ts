@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatTerm, escapeHtml, populateAccountFilter } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, formatRelativeTime } from './utils';
 import { renderFreshness } from './freshness';
 import { getRecommendationDetail, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
@@ -17,9 +17,11 @@ let currentPurchaseRecommendations: LocalRecommendation[] = [];
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
 
-function populateRecommendationsAccountFilter(provider?: string): Promise<void> {
-  return populateAccountFilter('recommendations-account-filter', api.listAccounts, provider);
-}
+// populateRecommendationsAccountFilter / populateRegionFilter / the legacy
+// service-filter helpers were removed in Bundle B — those DOM elements are
+// gone from index.html. Provider / Account values now drive an API re-fetch
+// via the column-header popovers (see openColumnPopover wiring); Service /
+// Region filtering is purely client-side via applyColumnFilters.
 
 /**
  * Get the recommendations currently loaded in the purchase modal
@@ -39,66 +41,14 @@ export function clearPurchaseModalRecommendations(): void {
  * Setup recommendations event handlers
  */
 export function setupRecommendationsHandlers(): void {
-  const providerFilter = document.getElementById('recommendations-provider-filter') as HTMLSelectElement | null;
-  if (providerFilter) {
-    // Set initial value from state
-    providerFilter.value = state.getCurrentProvider();
-
-    providerFilter.addEventListener('change', () => {
-      state.setCurrentProvider(providerFilter.value as '' | 'aws' | 'azure' | 'gcp');
-      updateServiceFilterVisibility(providerFilter.value);
-      void populateRecommendationsAccountFilter(providerFilter.value);
-      void loadRecommendations();
-    });
-  }
-
-  const accountFilter = document.getElementById('recommendations-account-filter') as HTMLSelectElement | null;
-  if (accountFilter) {
-    accountFilter.addEventListener('change', () => {
-      const val = accountFilter.value;
-      state.setCurrentAccountIDs(val ? [val] : []);
-      void loadRecommendations();
-    });
-  }
-
-  void populateRecommendationsAccountFilter(state.getCurrentProvider());
-
-  // Setup service filter handler
-  const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement | null;
-  if (serviceFilter) {
-    serviceFilter.addEventListener('change', () => void loadRecommendations());
-  }
-
-  // Setup region filter handler
-  const regionFilter = document.getElementById('region-filter') as HTMLSelectElement | null;
-  if (regionFilter) {
-    regionFilter.addEventListener('change', () => void loadRecommendations());
-  }
-
-  // Setup min savings filter handler
-  const minSavingsFilter = document.getElementById('min-savings-filter') as HTMLInputElement | null;
-  if (minSavingsFilter) {
-    minSavingsFilter.addEventListener('change', () => void loadRecommendations());
-  }
-}
-
-/**
- * Update service filter visibility based on selected provider
- */
-function updateServiceFilterVisibility(provider: string): void {
-  const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement | null;
-  if (!serviceFilter) return;
-
-  // Show/hide optgroups based on selected provider
-  const optgroups = serviceFilter.querySelectorAll('optgroup');
-  optgroups.forEach(optgroup => {
-    const providerLabel = optgroup.label.toLowerCase();
-    const shouldShow = provider === '' || providerLabel.includes(provider);
-    optgroup.classList.toggle('hidden', !shouldShow);
-  });
-
-  // Reset selection to "All Services" when switching providers
-  serviceFilter.value = '';
+  // The legacy top filter bar (#recommendations-provider-filter,
+  // #recommendations-account-filter, #service-filter, #region-filter,
+  // #min-savings-filter) is gone — Bundle B replaced those with per-column
+  // header-mounted popovers driven by state.RecommendationsColumnFilters.
+  // No DOM listeners need wiring here anymore; the column-filter trigger
+  // listeners are attached per-render inside renderRecommendationsList,
+  // and Provider/Account-driven API re-fetch is handled by their popover
+  // commit hooks (see Bundle B follow-up).
 }
 
 /**
@@ -106,17 +56,13 @@ function updateServiceFilterVisibility(provider: string): void {
  */
 export async function loadRecommendations(): Promise<void> {
   try {
-    const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement | null;
-    const regionFilter = document.getElementById('region-filter') as HTMLSelectElement | null;
-    const minSavingsFilter = document.getElementById('min-savings-filter') as HTMLInputElement | null;
-
+    // Provider + account_ids are still sent to the API as hints so the
+    // backend stays bounded for big multi-cloud tenants. Service / Region /
+    // numeric filters are pure client-side via applyColumnFilters.
     const accountIDs = state.getCurrentAccountIDs();
     const filters: api.RecommendationFilters = {
       provider: state.getCurrentProvider(),
-      service: serviceFilter?.value,
-      region: regionFilter?.value,
-      minSavings: minSavingsFilter?.value ? parseInt(minSavingsFilter.value, 10) : undefined,
-      account_ids: accountIDs.length > 0 ? accountIDs : undefined
+      account_ids: accountIDs.length > 0 ? accountIDs : undefined,
     };
 
     const [data, accounts] = await Promise.all([
@@ -129,7 +75,6 @@ export async function loadRecommendations(): Promise<void> {
 
     renderRecommendationsSummary(data.summary || {});
     renderRecommendationsList(data.recommendations || []);
-    populateRegionFilter(data.regions || []);
 
     // Freshness indicator reflects the last collection timestamp; refreshed
     // on every load so provider/account switches + manual refreshes stay
@@ -169,18 +114,35 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
   `;
 }
 
-const SORTABLE_COLUMNS: Record<string, (r: LocalRecommendation) => number> = {
+// Comparator extractors per column. Numeric columns return numbers
+// (subtraction-based sort); string columns return strings (localeCompare-based
+// sort). Bundle B extended this with the string columns so every visible data
+// column is sortable.
+const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => number> = {
   savings: (r) => r.savings,
   upfront_cost: (r) => r.upfront_cost,
   count: (r) => r.count,
   term: (r) => r.term,
 };
 
+const SORTABLE_STRING_COLUMNS: Record<string, (r: LocalRecommendation) => string> = {
+  provider: (r) => r.provider ?? '',
+  account: (r) => accountNamesCache.get(r.cloud_account_id ?? '') ?? r.cloud_account_id ?? '',
+  service: (r) => r.service ?? '',
+  resource_type: (r) => r.resource_type ?? '',
+  region: (r) => r.region ?? '',
+};
+
 const SORT_HEADER_LABELS: Record<string, string> = {
-  savings: 'Monthly Savings',
-  upfront_cost: 'Upfront Cost',
+  provider: 'Provider',
+  account: 'Account',
+  service: 'Service',
+  resource_type: 'Resource Type',
+  region: 'Region',
   count: 'Count',
   term: 'Term',
+  savings: 'Monthly Savings',
+  upfront_cost: 'Upfront Cost',
 };
 
 function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
@@ -192,11 +154,17 @@ function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'
 
 function sortedRecommendations(recs: LocalRecommendation[]): LocalRecommendation[] {
   const sort = state.getRecommendationsSort();
-  const key = SORTABLE_COLUMNS[sort.column];
-  if (!key) return recs;
   const direction = sort.direction === 'asc' ? 1 : -1;
-  // slice() clones so we don't mutate the caller's array.
-  return recs.slice().sort((a, b) => (key(a) - key(b)) * direction);
+  const numericKey = SORTABLE_NUMERIC_COLUMNS[sort.column];
+  if (numericKey) {
+    // slice() clones so we don't mutate the caller's array.
+    return recs.slice().sort((a, b) => (numericKey(a) - numericKey(b)) * direction);
+  }
+  const stringKey = SORTABLE_STRING_COLUMNS[sort.column];
+  if (stringKey) {
+    return recs.slice().sort((a, b) => stringKey(a).localeCompare(stringKey(b)) * direction);
+  }
+  return recs;
 }
 
 // Numeric filter expression parser. Grammar:
@@ -322,51 +290,508 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
   }
 }
 
-function renderBulkToolbar(container: HTMLElement, recommendations: LocalRecommendation[], selectedCount: number): void {
-  const existing = container.querySelector('.recommendations-bulk-toolbar');
-  if (existing) existing.remove();
-  if (selectedCount === 0) return;
-  const toolbar = document.createElement('div');
-  toolbar.className = 'recommendations-bulk-toolbar';
-  toolbar.setAttribute('role', 'toolbar');
-  toolbar.setAttribute('aria-label', 'Bulk actions for selected recommendations');
+// ---------------------------------------------------------------------------
+// Column-filter popover (portal pattern)
+//
+// The popover element lives appended to document.body so it survives
+// renderRecommendationsList's table re-render (which does container.innerHTML
+// = buildListMarkup, destroying anything inside <th>). Module-scope state
+// tracks which column id is currently open; the trigger DOM node is re-found
+// by `[data-column="..."]` on every render (anchor re-bind).
+//
+// The popover STRUCTURE is built once on open; STATE (.checked / .value) is
+// re-synced on every anchor re-bind from the latest column-filter state, EXCEPT
+// when the input is document.activeElement (mid-typing protection).
+// ---------------------------------------------------------------------------
 
-  const count = document.createElement('span');
-  count.className = 'bulk-count';
-  count.textContent = `${selectedCount} selected`;
-  toolbar.appendChild(count);
+const NUMERIC_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set([
+  'count', 'savings', 'upfront_cost',
+]);
 
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.className = 'btn btn-small btn-primary';
-  addBtn.textContent = 'Add to plan';
-  addBtn.addEventListener('click', () => {
-    const picks = selectedRecsFromVisible(recommendations);
-    if (picks.length > 0) openPurchaseModal(picks);
+interface PopoverState {
+  column: state.RecommendationsColumnId;
+  el: HTMLDivElement;
+  // The categorical-popover checkboxes are keyed by their underlying filter
+  // value (cloud_account_id for Account, "1"/"3" for Term, raw string
+  // otherwise). Saved here so anchor re-bind can resync .checked from state.
+  checkboxes: Map<string, HTMLInputElement>;
+  // Numeric-popover input + error span for re-sync.
+  input: HTMLInputElement | null;
+  errorEl: HTMLElement | null;
+  // Trigger lives in the table; rebound by `[data-column="..."]` on each
+  // render so we don't hold a stale reference.
+  triggerColumn: state.RecommendationsColumnId;
+}
+
+let openPopover: PopoverState | null = null;
+// Document-level click-outside listener; attached once on first open and
+// torn down on close.
+let outsideClickHandler: ((e: MouseEvent) => void) | null = null;
+let escKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+let scrollCloseHandler: (() => void) | null = null;
+let resizeHandler: (() => void) | null = null;
+
+function getColumnTriggerButton(column: state.RecommendationsColumnId): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
+    `th .column-filter-btn[data-column="${column}"]`,
+  );
+}
+
+function positionPopover(popover: HTMLElement, anchor: HTMLElement): void {
+  const rect = anchor.getBoundingClientRect();
+  // Show, then measure (popover may be display:none initially).
+  popover.style.display = 'block';
+  const popRect = popover.getBoundingClientRect();
+  const margin = 8;
+
+  // Vertical: prefer below, flip above on overflow.
+  let top = rect.bottom + 4;
+  if (top + popRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, rect.top - popRect.height - 4);
+  }
+
+  // Horizontal: clamp right edge.
+  let left = rect.left;
+  if (left + popRect.width > window.innerWidth - margin) {
+    left = Math.max(margin, window.innerWidth - margin - popRect.width);
+  }
+
+  popover.style.position = 'absolute';
+  popover.style.top = `${top + window.scrollY}px`;
+  popover.style.left = `${left + window.scrollX}px`;
+}
+
+function distinctValuesForColumn(
+  recs: readonly LocalRecommendation[],
+  column: state.RecommendationsColumnId,
+): string[] {
+  // Numeric columns don't get a checkbox list, but we still call this for
+  // categorical columns only.
+  const seen = new Set<string>();
+  for (const r of recs) {
+    seen.add(categoricalCellValue(r, column));
+  }
+  return Array.from(seen).sort((a, b) => {
+    if (a === '' && b !== '') return -1; // (empty) first
+    if (a !== '' && b === '') return 1;
+    return a.localeCompare(b);
   });
-  toolbar.appendChild(addBtn);
+}
 
+function categoricalDisplayLabel(
+  column: state.RecommendationsColumnId,
+  value: string,
+): string {
+  if (value === '') return '(empty)';
+  if (column === 'account') {
+    return accountNamesCache.get(value) || value;
+  }
+  if (column === 'term') {
+    const n = Number(value);
+    return Number.isFinite(n) ? formatTerm(n) : value;
+  }
+  if (column === 'provider') {
+    return providerDisplayName(value);
+  }
+  return value;
+}
+
+// Build the popover DOM for a given column. Categorical: checkbox list with
+// (All) tri-state + Clear footer. Numeric: free-text expression input with
+// inline error and Clear footer.
+function buildPopoverContent(
+  column: state.RecommendationsColumnId,
+  recs: readonly LocalRecommendation[],
+): { el: HTMLDivElement; checkboxes: Map<string, HTMLInputElement>; input: HTMLInputElement | null; errorEl: HTMLElement | null } {
+  const popover = document.createElement('div');
+  popover.className = 'column-filter-popover';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-modal', 'false');
+
+  const headingId = `column-filter-heading-${column}`;
+  popover.setAttribute('aria-labelledby', headingId);
+
+  const heading = document.createElement('h3');
+  heading.id = headingId;
+  heading.className = 'column-filter-heading';
+  heading.textContent = `Filter ${SORT_HEADER_LABELS[column]}`;
+  popover.appendChild(heading);
+
+  const checkboxes = new Map<string, HTMLInputElement>();
+  let input: HTMLInputElement | null = null;
+  let errorEl: HTMLElement | null = null;
+
+  if (NUMERIC_COLUMNS.has(column)) {
+    const label = document.createElement('label');
+    label.className = 'column-filter-numeric-label';
+    label.textContent = 'Expression';
+    input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'column-filter-numeric-input';
+    input.placeholder = 'e.g. >100, 50..200, 5';
+    input.setAttribute('aria-describedby', `column-filter-error-${column}`);
+    label.appendChild(input);
+    popover.appendChild(label);
+
+    errorEl = document.createElement('div');
+    errorEl.id = `column-filter-error-${column}`;
+    errorEl.className = 'column-filter-error';
+    errorEl.setAttribute('role', 'status');
+    popover.appendChild(errorEl);
+
+    const commit = (): void => {
+      const expr = input!.value.trim();
+      if (expr === '') {
+        state.setRecommendationsColumnFilter(column, null);
+        errorEl!.textContent = '';
+        rerenderRecommendations();
+        return;
+      }
+      const parsed = parseNumericFilter(expr);
+      if (!parsed.ok) {
+        errorEl!.textContent = parsed.error;
+        return;
+      }
+      errorEl!.textContent = '';
+      state.setRecommendationsColumnFilter(column, { kind: 'expr', expr });
+      rerenderRecommendations();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit();
+      }
+    });
+  } else {
+    const distinct = distinctValuesForColumn(recs, column);
+
+    // (All) tri-state checkbox at the top.
+    const allLabel = document.createElement('label');
+    allLabel.className = 'column-filter-all';
+    const allBox = document.createElement('input');
+    allBox.type = 'checkbox';
+    allBox.dataset['role'] = 'all';
+    allLabel.appendChild(allBox);
+    const allText = document.createElement('span');
+    allText.textContent = '(All)';
+    allLabel.appendChild(allText);
+    popover.appendChild(allLabel);
+
+    const list = document.createElement('div');
+    list.className = 'column-filter-list';
+    for (const value of distinct) {
+      const itemLabel = document.createElement('label');
+      itemLabel.className = 'column-filter-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset['value'] = value;
+      itemLabel.appendChild(cb);
+      const text = document.createElement('span');
+      text.textContent = categoricalDisplayLabel(column, value);
+      itemLabel.appendChild(text);
+      list.appendChild(itemLabel);
+      checkboxes.set(value, cb);
+    }
+    popover.appendChild(list);
+
+    const updateAllTriState = (): void => {
+      const total = checkboxes.size;
+      let checked = 0;
+      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
+      allBox.indeterminate = checked > 0 && checked < total;
+      allBox.checked = checked === total && total > 0;
+    };
+
+    const commit = (): void => {
+      const selected: string[] = [];
+      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
+      // No selections OR all selections == "no narrowing", clear the filter.
+      if (selected.length === 0 || selected.length === checkboxes.size) {
+        state.setRecommendationsColumnFilter(column, null);
+      } else {
+        state.setRecommendationsColumnFilter(column, { kind: 'set', values: selected });
+      }
+      updateAllTriState();
+      rerenderRecommendations();
+    };
+
+    checkboxes.forEach((cb) => {
+      cb.addEventListener('change', commit);
+    });
+    allBox.addEventListener('change', () => {
+      const target = allBox.checked;
+      checkboxes.forEach((cb) => { cb.checked = target; });
+      // After (All) flips, update underlying filter once.
+      commit();
+    });
+  }
+
+  // Footer with Clear button.
+  const footer = document.createElement('div');
+  footer.className = 'column-filter-footer';
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
-  clearBtn.className = 'btn btn-small btn-secondary';
+  clearBtn.className = 'column-filter-clear';
   clearBtn.textContent = 'Clear';
   clearBtn.addEventListener('click', () => {
-    state.clearSelectedRecommendations();
-    renderRecommendationsList(recommendations);
+    state.setRecommendationsColumnFilter(column, null);
+    if (input) {
+      input.value = '';
+      if (errorEl) errorEl.textContent = '';
+    } else {
+      checkboxes.forEach((cb) => { cb.checked = false; });
+    }
+    rerenderRecommendations();
   });
-  toolbar.appendChild(clearBtn);
+  footer.appendChild(clearBtn);
+  popover.appendChild(footer);
 
-  container.insertBefore(toolbar, container.firstChild);
+  return { el: popover, checkboxes, input, errorEl };
 }
 
-// selectedRecsFromVisible returns the intersection of state-selected
-// IDs with the currently-visible list. Out-of-view selection is
-// silently discarded — the user filtered it out, so it shouldn't
-// affect the bulk action.
-function selectedRecsFromVisible(recommendations: LocalRecommendation[]): LocalRecommendation[] {
-  const selected = state.getSelectedRecommendationIDs();
-  return recommendations.filter((r) => selected.has(r.id));
+// Re-sync popover .checked / .value from current filter state, except when
+// the active element is the numeric input (mid-typing protection).
+function resyncOpenPopover(): void {
+  if (!openPopover) return;
+  const f = state.getRecommendationsColumnFilters()[openPopover.column];
+  if (openPopover.input) {
+    if (document.activeElement !== openPopover.input) {
+      const expr = f && f.kind === 'expr' ? f.expr : '';
+      openPopover.input.value = expr;
+      if (openPopover.errorEl) openPopover.errorEl.textContent = '';
+    }
+    return;
+  }
+  // Categorical: tick checkboxes whose value is in the active filter.
+  const values: ReadonlySet<string> = f && f.kind === 'set' ? new Set(f.values) : new Set();
+  // Special case: if no filter is set, every checkbox should be unchecked
+  // (the (All) tri-state checkbox follows from this).
+  openPopover.checkboxes.forEach((cb, value) => {
+    cb.checked = f != null && values.has(value);
+  });
+  // Update (All) tri-state.
+  const allBox = openPopover.el.querySelector<HTMLInputElement>('input[data-role="all"]');
+  if (allBox) {
+    const total = openPopover.checkboxes.size;
+    let checked = 0;
+    openPopover.checkboxes.forEach((cb) => { if (cb.checked) checked++; });
+    allBox.indeterminate = checked > 0 && checked < total;
+    allBox.checked = checked === total && total > 0;
+  }
 }
+
+function attachPopoverGlobalListeners(): void {
+  if (outsideClickHandler) return;
+  outsideClickHandler = (e: MouseEvent): void => {
+    if (!openPopover) return;
+    const target = e.target as Node | null;
+    if (!target) return;
+    if (openPopover.el.contains(target)) return;
+    // Any column-filter trigger button click is handled by the trigger's own
+    // handler; don't double-close.
+    if (target instanceof Element && target.closest('.column-filter-btn')) return;
+    closePopover();
+  };
+  escKeyHandler = (e: KeyboardEvent): void => {
+    if (!openPopover) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closePopover(true);
+    }
+  };
+  scrollCloseHandler = (): void => {
+    if (openPopover) closePopover();
+  };
+  resizeHandler = (): void => {
+    if (!openPopover) return;
+    const trigger = getColumnTriggerButton(openPopover.column);
+    if (!trigger) {
+      closePopover();
+      return;
+    }
+    positionPopover(openPopover.el, trigger);
+  };
+  document.addEventListener('mousedown', outsideClickHandler);
+  document.addEventListener('keydown', escKeyHandler);
+  // Use capture for scroll so we catch all scroll containers; passive for perf.
+  window.addEventListener('scroll', scrollCloseHandler, { capture: true, passive: true });
+  window.addEventListener('resize', resizeHandler);
+}
+
+function detachPopoverGlobalListeners(): void {
+  if (outsideClickHandler) document.removeEventListener('mousedown', outsideClickHandler);
+  if (escKeyHandler) document.removeEventListener('keydown', escKeyHandler);
+  if (scrollCloseHandler) window.removeEventListener('scroll', scrollCloseHandler, { capture: true } as EventListenerOptions);
+  if (resizeHandler) window.removeEventListener('resize', resizeHandler);
+  outsideClickHandler = null;
+  escKeyHandler = null;
+  scrollCloseHandler = null;
+  resizeHandler = null;
+}
+
+function openColumnPopover(column: state.RecommendationsColumnId, anchor: HTMLElement): void {
+  // Defensive: if the popover element is no longer in the document (jest
+  // DOM reset between tests, or an external script removed it), drop the
+  // stale ref before applying the toggle/swap logic below.
+  if (openPopover && !openPopover.el.isConnected) {
+    detachPopoverGlobalListeners();
+    openPopover = null;
+  }
+  // Toggle: clicking same trigger closes.
+  if (openPopover && openPopover.column === column) {
+    closePopover(true);
+    return;
+  }
+  if (openPopover) closePopover();
+
+  const recs = state.getRecommendations() as unknown as LocalRecommendation[];
+  const built = buildPopoverContent(column, recs);
+  document.body.appendChild(built.el);
+  openPopover = {
+    column,
+    el: built.el,
+    checkboxes: built.checkboxes,
+    input: built.input,
+    errorEl: built.errorEl,
+    triggerColumn: column,
+  };
+  resyncOpenPopover();
+  positionPopover(built.el, anchor);
+
+  // ARIA wiring on the trigger.
+  anchor.setAttribute('aria-expanded', 'true');
+
+  attachPopoverGlobalListeners();
+
+  // Move focus into the popover for keyboard users.
+  const firstFocusable = built.input
+    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  firstFocusable?.focus();
+}
+
+function closePopover(restoreFocus = false): void {
+  if (!openPopover) return;
+  const { column, el } = openPopover;
+  el.remove();
+  openPopover = null;
+  detachPopoverGlobalListeners();
+  // ARIA cleanup on the trigger (if it still exists in the DOM).
+  const trigger = getColumnTriggerButton(column);
+  if (trigger) {
+    trigger.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) trigger.focus();
+  }
+}
+
+// Called by renderRecommendationsList after the table is rebuilt to re-anchor
+// any open popover to the freshly-rendered trigger button. If the column was
+// removed from the table somehow, close gracefully.
+function rebindOpenPopoverAnchor(): void {
+  if (!openPopover) return;
+  const trigger = getColumnTriggerButton(openPopover.column);
+  if (!trigger) {
+    closePopover();
+    return;
+  }
+  trigger.setAttribute('aria-expanded', 'true');
+  positionPopover(openPopover.el, trigger);
+  resyncOpenPopover();
+}
+
+// rerenderRecommendations triggers a full re-render from the latest loaded
+// state. Used by popover commits and the Clear-filters badge so the table
+// reflects new column-filter state immediately.
+function rerenderRecommendations(): void {
+  const loaded = state.getRecommendations() as unknown as LocalRecommendation[];
+  renderRecommendationsList(loaded);
+}
+
+// Close the popover when the Recommendations tab loses .active, so the
+// detached popover doesn't float over other tabs' content. Wired via a
+// MutationObserver on the recommendations-tab element.
+let recommendationsTabObserver: MutationObserver | null = null;
+function ensureRecommendationsTabObserver(): void {
+  if (recommendationsTabObserver) return;
+  const tab = document.getElementById('recommendations-tab');
+  if (!tab) return;
+  recommendationsTabObserver = new MutationObserver(() => {
+    if (!tab.classList.contains('active') && openPopover) {
+      closePopover();
+    }
+  });
+  recommendationsTabObserver.observe(tab, { attributes: true, attributeFilter: ['class'] });
+}
+
+// ---------------------------------------------------------------------------
+
+// Render (or update) the filter-status bar: a "Clear filters (N)" button
+// when at least one column filter is active, plus an aria-live region
+// announcing visible vs loaded counts. Mounted above the table; survives
+// container.innerHTML rewrites because it lives outside #recommendations-list.
+function renderFilterStatusBar(loadedCount: number, visibleCount: number): void {
+  const recsTab = document.getElementById('recommendations-tab');
+  const list = document.getElementById('recommendations-list');
+  if (!recsTab || !list) return;
+
+  let bar = document.getElementById('recommendations-filter-status');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'recommendations-filter-status';
+    bar.className = 'recommendations-filter-status';
+    list.parentNode?.insertBefore(bar, list);
+  }
+
+  // Build content fresh on every call. We set textContent on the live
+  // region directly so screen readers fire announcements on actual changes.
+  let badge = bar.querySelector<HTMLButtonElement>('.clear-filters');
+  let live = bar.querySelector<HTMLElement>('.recommendations-filter-live');
+
+  if (!live) {
+    live = document.createElement('span');
+    live.className = 'recommendations-filter-live';
+    live.setAttribute('aria-live', 'polite');
+    live.setAttribute('aria-atomic', 'true');
+    bar.appendChild(live);
+  }
+  // Always update the live region (even when no filters active) so the
+  // spoken count reflects state after every render.
+  live.textContent = `Showing ${visibleCount} of ${loadedCount} recommendations`;
+
+  const filters = state.getRecommendationsColumnFilters();
+  const activeCount = Object.keys(filters).length;
+  if (activeCount === 0) {
+    if (badge) badge.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('button');
+    badge.type = 'button';
+    badge.className = 'clear-filters';
+    badge.addEventListener('click', () => {
+      state.clearAllRecommendationsColumnFilters();
+      rerenderRecommendations();
+    });
+    bar.insertBefore(badge, live);
+  }
+  badge.textContent = `Clear filters (${activeCount})`;
+}
+
+// renderBulkToolbar was the old "N selected / Add to plan / Clear" pill that
+// rendered above the table whenever any rows were selected. Bundle B folded
+// that surface into the sticky bottom action box: the selection-summary text
+// is in updateBottomActionBox, and the Create-Plan button in the bottom box
+// supersedes the old "Add to plan". Function removed; tests for its DOM
+// (bulk-count etc.) are gone too.
+//
+// For "Clear selection" affordance, see the bottom box's selection-summary
+// text — when a selection exists the summary is followed by the row-checkbox
+// columns (per-row deselect) and the all-selectAll checkbox in the table
+// header (selectAll's third state clears).
+
+// (Bundle B) selectedRecsFromVisible was inlined into resolvePurchaseTarget
+// inside the bottom action box. The old helper had only one caller; folding
+// keeps the action-target logic centralised in one place.
 
 function openDetailDrawer(rec: LocalRecommendation): void {
   // Remove any previous drawer so repeat clicks don't stack.
@@ -601,11 +1026,25 @@ function providerDisplayName(provider: string): string {
   }
 }
 
+// Columns that get the per-column header filter button. Order matches the
+// table column order (excluding the leading checkbox column, which is
+// neither sortable nor filterable).
+const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
+  'provider', 'account', 'service', 'resource_type', 'region',
+  'count', 'term', 'savings', 'upfront_cost',
+];
+
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
   const sorted = sortedRecommendations(recommendations);
-  const sortHeader = (column: string): string =>
-    `<th class="sortable" data-sort="${column}" tabindex="0" role="button" aria-label="Sort by ${SORT_HEADER_LABELS[column]}"><span>${SORT_HEADER_LABELS[column]}</span>${sortIndicator(column, sort.column, sort.direction)}</th>`;
+  const filters = state.getRecommendationsColumnFilters();
+  const filterBtn = (column: state.RecommendationsColumnId): string => {
+    const active = filters[column] ? ' active' : '';
+    const label = filters[column] ? `Filter ${SORT_HEADER_LABELS[column]} — currently active` : `Filter ${SORT_HEADER_LABELS[column]}`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">⛛</button>`;
+  };
+  const sortHeader = (column: state.RecommendationsColumnId): string =>
+    `<th class="sortable" data-sort="${column}" tabindex="0" role="button" aria-label="Sort by ${SORT_HEADER_LABELS[column]}"><span>${SORT_HEADER_LABELS[column]}</span>${sortIndicator(column, sort.column, sort.direction)}${filterBtn(column)}</th>`;
 
   return `
     <table>
@@ -614,15 +1053,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
           <th class="checkbox-col">
             <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations">
           </th>
-          <th>Provider</th>
-          <th>Account</th>
-          <th>Service</th>
-          <th>Resource Type</th>
-          <th>Region</th>
-          ${sortHeader('count')}
-          ${sortHeader('term')}
-          ${sortHeader('savings')}
-          ${sortHeader('upfront_cost')}
+          ${FILTERABLE_COLUMNS.map(sortHeader).join('')}
         </tr>
       </thead>
       <tbody>
@@ -685,28 +1116,30 @@ function renderSuppressionBadge(rec: LocalRecommendation): string {
 // a stale cached blob.
 const BULK_PURCHASE_LS_KEY = 'cudly.recommendations.bulkPurchase.v1';
 
+// BulkPurchaseToolbarState used to carry a `term` field that overrode each
+// row's recommended term at API-call time. Bundle B drops it: each rec is
+// purchased with its own per-row term (see term-aware bucketing in
+// handleBulkPurchaseClick). loadBulkPurchaseState explicitly picks known
+// fields so any legacy `term` from older localStorage values is silently
+// ignored on read — no migration shim needed.
 interface BulkPurchaseToolbarState {
-  term: 1 | 3;
   payment: 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
   capacity: number; // 1..100
 }
 
 const defaultBulkPurchaseState: BulkPurchaseToolbarState = {
-  term: 3,
   payment: 'all-upfront',
   capacity: 100,
 };
 
-// loadBulkPurchaseState reads the toolbar state from localStorage with
-// a try/catch around JSON.parse — a garbage value shouldn't blow up the
-// page render; defaults take over and the next Save overwrites.
 function loadBulkPurchaseState(): BulkPurchaseToolbarState {
   try {
     const raw = localStorage.getItem(BULK_PURCHASE_LS_KEY);
     if (!raw) return { ...defaultBulkPurchaseState };
-    const parsed = JSON.parse(raw) as Partial<BulkPurchaseToolbarState>;
+    const parsed = JSON.parse(raw) as Partial<BulkPurchaseToolbarState> & { term?: unknown };
+    // Explicit field-pick rather than spread-and-omit — avoids leaking a
+    // legacy `term` value into the returned object even at runtime.
     return {
-      term: parsed.term === 1 ? 1 : 3,
       payment: parsed.payment || 'all-upfront',
       capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
     };
@@ -720,42 +1153,46 @@ function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
     localStorage.setItem(BULK_PURCHASE_LS_KEY, JSON.stringify(s));
   } catch {
     // Private-browsing / quota-exceeded — non-fatal, just lose the
-    // sticky choice. The toolbar still works in-session.
+    // sticky choice. The bottom box still works in-session.
   }
 }
 
-// renderTopBulkPurchaseToolbar renders the always-visible toolbar above
-// the recs list with Term / Payment / Capacity % controls and the
-// Purchase button. Wired via ID-based selection: when no rows are
-// selected the Purchase action targets the full visible list; with
-// any selection, only the selected-and-visible subset.
-function renderTopBulkPurchaseToolbar(container: HTMLElement, recommendations: LocalRecommendation[]): void {
-  const existing = container.querySelector('.recommendations-top-toolbar');
-  if (existing) existing.remove();
+// Mount-once-then-update lifecycle for the sticky bottom action box.
+// mountBottomActionBox builds the DOM (input/select/button identities) and
+// wires listeners exactly once. updateBottomActionBox refreshes only the
+// mutable surface — button labels, .disabled, the selection-summary text —
+// leaving the input/select elements (and their in-progress values) alone.
+//
+// IDs preserved for backward compatibility:
+//   #bulk-purchase-payment  (Payment dropdown)
+//   #bulk-purchase-capacity (Capacity % input — read by app.ts:307)
+//   #bulk-purchase-btn      (Purchase one-off button)
+//   #create-plan-btn        (Create Purchase Plan button — relocated from
+//                            the old top filter bar)
+function mountBottomActionBox(): HTMLElement | null {
+  const recsTab = document.getElementById('recommendations-tab');
+  if (!recsTab) return null;
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'recommendations-top-toolbar';
-  toolbar.setAttribute('role', 'toolbar');
-  toolbar.setAttribute('aria-label', 'Bulk purchase controls');
+  let box = document.getElementById('recommendations-action-box');
+  if (box) return box;
+
+  box = document.createElement('div');
+  box.id = 'recommendations-action-box';
+  box.className = 'recommendations-action-box';
+  box.setAttribute('role', 'toolbar');
+  box.setAttribute('aria-label', 'Recommendations actions');
 
   const tbState = loadBulkPurchaseState();
 
-  const termLabel = document.createElement('label');
-  termLabel.innerHTML = 'Term: ';
-  const termSelect = document.createElement('select');
-  termSelect.id = 'bulk-purchase-term';
-  [['1', '1 Year'], ['3', '3 Years']].forEach(([v, t]) => {
-    const opt = document.createElement('option');
-    opt.value = v as string;
-    opt.textContent = t as string;
-    if (Number(v) === tbState.term) opt.selected = true;
-    termSelect.appendChild(opt);
-  });
-  termLabel.appendChild(termSelect);
-  toolbar.appendChild(termLabel);
+  // Selection summary text (e.g. "(3 selected of 19 visible)" or "(All 19 visible)")
+  const summary = document.createElement('span');
+  summary.id = 'recommendations-action-summary';
+  summary.className = 'recommendations-action-summary';
+  box.appendChild(summary);
 
+  // Payment dropdown — preserved ID
   const paymentLabel = document.createElement('label');
-  paymentLabel.innerHTML = 'Payment: ';
+  paymentLabel.textContent = 'Payment ';
   const paymentSelect = document.createElement('select');
   paymentSelect.id = 'bulk-purchase-payment';
   [['all-upfront', 'All Upfront'], ['partial-upfront', 'Partial Upfront'], ['no-upfront', 'No Upfront'], ['monthly', 'Monthly']].forEach(([v, t]) => {
@@ -766,10 +1203,11 @@ function renderTopBulkPurchaseToolbar(container: HTMLElement, recommendations: L
     paymentSelect.appendChild(opt);
   });
   paymentLabel.appendChild(paymentSelect);
-  toolbar.appendChild(paymentLabel);
+  box.appendChild(paymentLabel);
 
+  // Capacity % input — preserved ID (app.ts:307 reads this)
   const capacityLabel = document.createElement('label');
-  capacityLabel.innerHTML = 'Capacity %: ';
+  capacityLabel.textContent = 'Capacity % ';
   const capacityInput = document.createElement('input');
   capacityInput.id = 'bulk-purchase-capacity';
   capacityInput.type = 'number';
@@ -778,47 +1216,145 @@ function renderTopBulkPurchaseToolbar(container: HTMLElement, recommendations: L
   capacityInput.step = '1';
   capacityInput.value = String(tbState.capacity);
   capacityLabel.appendChild(capacityInput);
-  toolbar.appendChild(capacityLabel);
+  box.appendChild(capacityLabel);
 
+  // Purchase one-off — preserved ID
   const purchaseBtn = document.createElement('button');
   purchaseBtn.type = 'button';
   purchaseBtn.className = 'btn btn-primary';
   purchaseBtn.id = 'bulk-purchase-btn';
-  purchaseBtn.textContent = 'Purchase…';
-  purchaseBtn.disabled = recommendations.length === 0;
-  if (purchaseBtn.disabled) purchaseBtn.title = 'No recommendations to purchase';
-  toolbar.appendChild(purchaseBtn);
+  purchaseBtn.textContent = 'Purchase';
+  purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
+  box.appendChild(purchaseBtn);
+
+  // Create Purchase Plan — relocated from old top bar
+  const planBtn = document.createElement('button');
+  planBtn.type = 'button';
+  planBtn.className = 'btn btn-secondary';
+  planBtn.id = 'create-plan-btn';
+  planBtn.textContent = 'Create Plan';
+  planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
+  box.appendChild(planBtn);
 
   const persist = (): void => {
     saveBulkPurchaseState({
-      term: (Number(termSelect.value) === 1 ? 1 : 3) as 1 | 3,
       payment: paymentSelect.value as BulkPurchaseToolbarState['payment'],
       capacity: Math.max(1, Math.min(100, parseInt(capacityInput.value, 10) || 100)),
     });
   };
-  termSelect.addEventListener('change', persist);
   paymentSelect.addEventListener('change', persist);
   capacityInput.addEventListener('change', persist);
 
   purchaseBtn.addEventListener('click', () => {
-    handleBulkPurchaseClick(recommendations);
+    const target = resolvePurchaseTarget();
+    if (target.length === 0) return;
+    handleBulkPurchaseClick(target);
   });
 
-  container.insertBefore(toolbar, container.firstChild);
+  planBtn.addEventListener('click', () => {
+    const target = resolvePurchaseTarget();
+    if (target.length === 0) return;
+    // Plans-side savePlan reads state.getVisibleRecommendations() and
+    // intersects with state.getSelectedRecommendationIDs() — it'll see
+    // the same target as the Purchase button uses.
+    void openCreatePlanFromBottomBox();
+  });
+
+  recsTab.appendChild(box);
+  return box;
+}
+
+// Resolve the action target: selected ∩ visible if a selection exists,
+// else all visible. "Visible" is the post-filter set tracked in module
+// state via setVisibleRecommendations.
+function resolvePurchaseTarget(): LocalRecommendation[] {
+  const visible = state.getVisibleRecommendations() as unknown as LocalRecommendation[];
+  const selected = state.getSelectedRecommendationIDs();
+  const intersection = visible.filter((r) => selected.has(r.id));
+  return intersection.length > 0 ? intersection : visible;
+}
+
+// updateBottomActionBox refreshes labels and disabled state on every
+// renderRecommendationsList call without rebuilding the input/select DOM,
+// preserving any in-progress typing in the Capacity input.
+function updateBottomActionBox(visibleCount: number, loadedCount: number): void {
+  const box = document.getElementById('recommendations-action-box');
+  if (!box) return;
+
+  const selected = state.getSelectedRecommendationIDs();
+  // Count only selections that are currently visible.
+  const visible = state.getVisibleRecommendations() as unknown as LocalRecommendation[];
+  const selectedVisibleCount = visible.reduce(
+    (n, r) => n + (selected.has(r.id) ? 1 : 0),
+    0,
+  );
+
+  const summary = document.getElementById('recommendations-action-summary');
+  if (summary) {
+    if (loadedCount === 0) {
+      summary.textContent = '(No recommendations loaded)';
+    } else if (visibleCount === 0) {
+      summary.textContent = '(0 visible — adjust filters)';
+    } else if (selectedVisibleCount > 0) {
+      summary.textContent = `(${selectedVisibleCount} selected of ${visibleCount} visible)`;
+    } else {
+      summary.textContent = `(All ${visibleCount} visible — no selection)`;
+    }
+  }
+
+  const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement | null;
+  const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement | null;
+  const targetCount = selectedVisibleCount > 0 ? selectedVisibleCount : visibleCount;
+  const empty = targetCount === 0;
+  const targetIsSelection = selectedVisibleCount > 0;
+
+  if (purchaseBtn) {
+    purchaseBtn.disabled = empty;
+    purchaseBtn.textContent = empty
+      ? 'Purchase'
+      : targetIsSelection
+        ? `Purchase ${targetCount} selected`
+        : `Purchase ${targetCount} visible`;
+    purchaseBtn.title = empty
+      ? (loadedCount === 0
+          ? 'No recommendations loaded'
+          : 'No rows visible — adjust filters')
+      : 'Buy these reservations now (one-off, processed immediately)';
+  }
+  if (planBtn) {
+    planBtn.disabled = empty;
+    planBtn.textContent = empty
+      ? 'Create Plan'
+      : targetIsSelection
+        ? `Plan from ${targetCount} selected`
+        : `Plan from ${targetCount} visible`;
+    planBtn.title = empty
+      ? (loadedCount === 0
+          ? 'No recommendations loaded'
+          : 'No rows visible — adjust filters')
+      : 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
+  }
+}
+
+// openCreatePlanFromBottomBox opens the plan-creation modal. plans.ts'
+// savePlan reads state.getVisibleRecommendations() (Bundle B's plumbing
+// addition in Step 8c) so the plan only includes selected ∩ visible (or
+// all visible if no selection).
+async function openCreatePlanFromBottomBox(): Promise<void> {
+  const { openCreatePlanModal } = await import('./plans');
+  openCreatePlanModal();
 }
 
 function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   const tb = loadBulkPurchaseState();
-  const selected = selectedRecsFromVisible(recommendations);
-  const target = selected.length > 0 ? selected : recommendations;
-  if (target.length === 0) {
+  if (recommendations.length === 0) {
     showToast({ message: 'No recommendations to purchase.', kind: 'warning' });
     return;
   }
 
   // Scale by capacity %; drop rows whose scaled count floors to 0.
   const scaled: LocalRecommendation[] = [];
-  for (const r of target) {
+  for (const r of recommendations) {
     const newCount = Math.floor((r.count * tb.capacity) / 100);
     if (newCount <= 0) continue;
     const ratio = r.count > 0 ? newCount / r.count : 1;
@@ -838,24 +1374,24 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
     return;
   }
 
-  // Bucket by (provider, service) — the compatibility check runs per
-  // bucket since e.g. AWS EC2 accepts no-upfront but AWS RDS doesn't
-  // for 3yr.
+  // Bucket by (provider, service, term). Bundle B added `term` to the key:
+  // each rec is purchased with its OWN per-row term (the toolbar Term
+  // selector is gone). Multi-term selections legitimately fan out into
+  // multiple buckets, e.g. AWS EC2 1y + AWS EC2 3y → 2 buckets.
   const buckets = new Map<string, LocalRecommendation[]>();
   for (const r of scaled) {
-    const key = `${r.provider}|${r.service}`;
+    const key = `${r.provider}|${r.service}|${r.term}`;
     const existing = buckets.get(key);
     if (existing) existing.push(r);
     else buckets.set(key, [r]);
   }
   const bucketEntries = Array.from(buckets.entries());
 
-  // Check compatibility per bucket. A bucket with an unsupported
-  // (term, payment) combo is just as problematic as having multiple
-  // providers — neither case can proceed with a single POST.
-  const incompatible = bucketEntries.filter(([key]) => {
-    const [provider, service] = key.split('|') as [CompatProvider, string];
-    return !isPaymentSupported(provider, service, tb.term as 1 | 3, tb.payment);
+  // Per-bucket compatibility check using the bucket's own term.
+  const incompatible = bucketEntries.filter(([_key, recs]) => {
+    const r = recs[0];
+    if (!r) return false;
+    return !isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, tb.payment);
   });
 
   if (bucketEntries.length > 1 || incompatible.length > 0) {
@@ -901,17 +1437,22 @@ function openFanOutModal(
   bucketEntries: Array<[string, LocalRecommendation[]]>,
   toolbar: BulkPurchaseToolbarState,
 ): void {
-  const buckets: FanOutBucket[] = bucketEntries.map(([key, recs]) => {
-    const [provider, service] = key.split('|') as [CompatProvider, string];
-    return {
-      provider,
-      service,
-      term: toolbar.term,
-      payment: toolbar.payment,
-      capacityPercent: toolbar.capacity,
-      recs,
-    };
-  });
+  const buckets: FanOutBucket[] = bucketEntries
+    .filter(([_key, recs]) => recs.length > 0)
+    .map(([_key, recs]) => {
+      const r = recs[0]!;
+      return {
+        provider: r.provider as CompatProvider,
+        service: r.service,
+        // Each bucket is now term-uniform (key includes term), so we read
+        // the term from the bucket itself rather than from the dropped
+        // toolbar override.
+        term: r.term as 1 | 3,
+        payment: toolbar.payment,
+        capacityPercent: toolbar.capacity,
+        recs,
+      };
+    });
   currentFanOutBuckets = buckets;
 
   const container = document.getElementById('purchase-details');
@@ -1008,21 +1549,28 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   const container = document.getElementById('recommendations-list');
   if (!container) return;
 
-  // Pipeline (Bundle A — no-op when no column filters are set):
+  // Pipeline:
   //   loaded -> applyColumnFilters -> visible
   //   state.setVisibleRecommendations(visible)   (read by plans.ts:savePlan)
   // When the column-filters record is empty, applyColumnFilters returns a
-  // clone of the input, so every existing test stays green. Bundle B will
-  // populate filters from the per-column popovers.
+  // clone of the input.
   const recommendations = applyColumnFilters(
     loadedRecs ?? [],
     state.getRecommendationsColumnFilters(),
   );
   state.setVisibleRecommendations(recommendations as unknown as readonly api.Recommendation[]);
 
+  // Filter status: Clear-filters badge + aria-live count. Mounted as a
+  // sibling above the table so it survives the container's innerHTML
+  // rewrite without losing aria-live announcements.
+  renderFilterStatusBar(loadedRecs?.length ?? 0, recommendations.length);
+
+  // Mount once; update is per-render below.
+  mountBottomActionBox();
+
   if (!recommendations || recommendations.length === 0) {
-    container.innerHTML = '<p class="empty">No recommendations found. Try adjusting filters or refreshing.</p>';
-    renderTopBulkPurchaseToolbar(container, []);
+    container.innerHTML = '<p class="empty">No recommendations match these filters. Try clearing filters or refreshing.</p>';
+    updateBottomActionBox(0, loadedRecs?.length ?? 0);
     return;
   }
 
@@ -1031,15 +1579,27 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // escapeHtml or is a number. The string is built in buildListMarkup.
   container.innerHTML = buildListMarkup(recommendations, selectedIDs);
 
-  // Count only the intersection with currently-visible recs so the
-  // selection toolbar's "N selected" doesn't include stale selections
-  // that live outside the current filter.
-  const visibleSelectedCount = recommendations.reduce(
-    (n, r) => n + (selectedIDs.has(r.id) ? 1 : 0),
-    0,
-  );
-  renderBulkToolbar(container, recommendations, visibleSelectedCount);
-  renderTopBulkPurchaseToolbar(container, recommendations);
+  updateBottomActionBox(recommendations.length, loadedRecs?.length ?? recommendations.length);
+
+  // Per-column filter button: trigger opens the popover anchored to the
+  // button. e.stopPropagation prevents the surrounding <th>'s sort handler
+  // from also firing.
+  container.querySelectorAll<HTMLButtonElement>('.column-filter-btn').forEach((btn) => {
+    const column = btn.dataset['column'] as state.RecommendationsColumnId | undefined;
+    if (!column) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openColumnPopover(column, btn);
+    });
+  });
+
+  // After the table is rebuilt, re-anchor any open popover to the new
+  // trigger DOM node and re-sync .checked / .value from current state.
+  rebindOpenPopoverAnchor();
+
+  // Watch the recommendations tab's class so we can close the popover if
+  // the user switches away to another tab.
+  ensureRecommendationsTabObserver();
 
   // Sortable column headers. Toggle ascending/descending on repeat click.
   container.querySelectorAll<HTMLTableCellElement>('th.sortable').forEach((th) => {
@@ -1106,15 +1666,6 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       if (rec) openDetailDrawer(rec);
     });
   });
-}
-
-function populateRegionFilter(regions: string[]): void {
-  const select = document.getElementById('region-filter') as HTMLSelectElement | null;
-  if (!select) return;
-
-  const currentValue = select.value;
-  select.innerHTML = '<option value="">All Regions</option>' +
-    regions.map(r => `<option value="${escapeHtml(r)}" ${r === currentValue ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('');
 }
 
 /**
