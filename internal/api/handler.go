@@ -430,6 +430,11 @@ type sourceIdentity struct {
 	TenantID       string `json:"tenant_id,omitempty"`       // Azure tenant
 	ClientID       string `json:"client_id,omitempty"`       // Azure app client ID
 	ProjectID      string `json:"project_id,omitempty"`      // GCP project
+	// Partition is the AWS partition name (`aws`, `aws-cn`, `aws-us-gov`).
+	// Populated only when Provider == "aws" and STS GetCallerIdentity
+	// returned a parseable ARN; left empty on any failure path so the
+	// frontend can default to the standard `aws` partition (issue #130c).
+	Partition string `json:"partition,omitempty"`
 }
 
 // ExternalID returns the canonical external identifier for the source cloud.
@@ -453,7 +458,7 @@ func (h *Handler) resolveSourceIdentity(ctx context.Context) *sourceIdentity {
 		id := &sourceIdentity{Provider: cloud}
 		switch cloud {
 		case "aws":
-			id.AccountID = h.resolveAWSAccountID(ctx)
+			id.AccountID, id.Partition = h.resolveAWSCallerIdentity(ctx)
 		case "azure":
 			id.ClientID = os.Getenv("AZURE_CLIENT_ID")
 			id.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
@@ -481,20 +486,68 @@ func (h *Handler) resolveSourceAccountID(ctx context.Context) string {
 // account ID into a bundle — a bundle with an empty source_account_id
 // produces a broken trust policy that silently fails at apply time.
 func (h *Handler) resolveAWSAccountID(ctx context.Context) string {
+	id, _ := h.resolveAWSCallerIdentity(ctx)
+	return id
+}
+
+// resolveAWSCallerIdentity returns (accountID, partition) parsed from STS
+// GetCallerIdentity. The partition is taken from the returned ARN's second
+// segment (e.g., `arn:aws-us-gov:iam::...` → "aws-us-gov") and is used by
+// the trust-policy snippet renderer to emit the correct ARN prefix in
+// AWS China and GovCloud deployments (issue #130c). Both fields are best-
+// effort: a STS failure returns ("", "") and a malformed ARN returns
+// (accountID, "") — the frontend defaults to the `aws` partition when
+// the value is empty.
+func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string) {
 	h.awsCfgOnce.Do(func() {
 		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
 	})
 	if h.awsCfgErr != nil {
-		return ""
+		return "", ""
 	}
 	client := sts.NewFromConfig(h.awsCfg)
 	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		logging.Warnf("Failed to resolve source account ID via STS: %v", err)
+		return "", ""
+	}
+	var accountID, partition string
+	if identity.Account != nil {
+		accountID = *identity.Account
+	}
+	if identity.Arn != nil {
+		partition = parseArnPartition(*identity.Arn)
+	}
+	return accountID, partition
+}
+
+// parseArnPartition extracts the partition segment from an AWS ARN.
+// ARN format: arn:<partition>:<service>:<region>:<account>:<resource>.
+// Returns "" for inputs that aren't recognisable ARNs so the caller can
+// fall back to a default. Only the three known AWS partitions are
+// accepted — anything else is treated as malformed to avoid forwarding
+// attacker-controlled tokens into a JSON snippet the operator copy-
+// pastes into IAM.
+func parseArnPartition(arn string) string {
+	const prefix = "arn:"
+	if len(arn) <= len(prefix) || arn[:len(prefix)] != prefix {
 		return ""
 	}
-	if identity.Account != nil {
-		return *identity.Account
+	rest := arn[len(prefix):]
+	end := -1
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == ':' {
+			end = i
+			break
+		}
 	}
-	return ""
+	if end <= 0 {
+		return ""
+	}
+	switch rest[:end] {
+	case "aws", "aws-cn", "aws-us-gov":
+		return rest[:end]
+	default:
+		return ""
+	}
 }

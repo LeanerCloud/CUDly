@@ -219,6 +219,12 @@ export interface SourceIdentity {
   tenant_id?: string;
   client_id?: string;
   project_id?: string;
+  // AWS partition (`aws`, `aws-cn`, `aws-us-gov`) — populated only when
+  // provider === "aws" and STS GetCallerIdentity returned an ARN we
+  // could parse. Used to render partition-aware ARN prefixes in the
+  // trust-policy snippet (issue #130c). Absent on non-AWS providers
+  // and on best-effort STS failures (treated as "aws" downstream).
+  partition?: string;
 }
 
 export interface ConfigResponse {

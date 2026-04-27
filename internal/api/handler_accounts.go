@@ -307,9 +307,7 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 func validateAuthMode(req CloudAccountRequest) error {
 	switch req.Provider {
 	case "aws":
-		if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
-			return NewClientError(400, "invalid aws_auth_mode")
-		}
+		return validateAWSAuthMode(req)
 	case "azure":
 		if req.AzureAuthMode != "" && !validAzureAuthModes[req.AzureAuthMode] {
 			return NewClientError(400, "invalid azure_auth_mode")
@@ -320,6 +318,88 @@ func validateAuthMode(req CloudAccountRequest) error {
 		}
 	}
 	return nil
+}
+
+// validateAWSAuthMode checks the AWS-specific auth-mode invariants:
+// the mode is one of the known values (when set) and, for cross-account
+// role_arn, the External ID satisfies the AWS sts:ExternalId rules
+// (issue #128). The split from validateAuthMode keeps the parent
+// function's cyclomatic complexity inside the project's gocyclo budget.
+//
+// Self-account onboarding uses role_arn with an empty role ARN to mean
+// "use ambient Lambda/container credentials" (see awsAmbientCredResult).
+// That path never calls sts:AssumeRole, so the ExternalId requirement
+// doesn't apply — only enforce the validation when an actual cross-
+// account role ARN is set.
+func validateAWSAuthMode(req CloudAccountRequest) error {
+	if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
+		return NewClientError(400, "invalid aws_auth_mode")
+	}
+	if req.AWSAuthMode == "role_arn" && strings.TrimSpace(req.AWSRoleARN) != "" {
+		return validateAWSExternalID(req.AWSExternalID)
+	}
+	return nil
+}
+
+// AWS sts:ExternalId per
+// https://docs.aws.amazon.com/IAM/UserGuides/id_roles_create_for-user_externalid.html:
+// 2..1224 chars, charset [A-Za-z0-9_+=,.@:/-]. CUDly tightens the lower
+// bound to 16 because (a) every value the frontend generates is at least
+// 32 chars (UUID or 16-byte hex), and (b) anything shorter is too weak
+// to be useful as a confused-deputy guard. Validation runs on both
+// create and update via validateCloudAccountRequest.
+const (
+	awsExternalIDMinLen = 16
+	awsExternalIDMaxLen = 1224
+)
+
+// validateAWSExternalID enforces the issue #128 backend invariants:
+//   - non-empty (defence-in-depth: the frontend always populates this,
+//     but a hostile or buggy client posting "" would make AssumeRole
+//     bypass the sts:ExternalId condition entirely if the customer's
+//     trust policy lacks the StringEquals constraint).
+//   - 16..1224 characters (lower bound is CUDly-internal, upper bound
+//     is the AWS hard limit).
+//   - charset restricted to AWS-accepted characters.
+func validateAWSExternalID(s string) error {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return NewClientError(400, "aws_external_id is required for role_arn auth mode")
+	}
+	if len(trimmed) < awsExternalIDMinLen || len(trimmed) > awsExternalIDMaxLen {
+		return NewClientError(400, fmt.Sprintf(
+			"aws_external_id must be %d-%d characters (AWS sts:ExternalId limit)",
+			awsExternalIDMinLen, awsExternalIDMaxLen,
+		))
+	}
+	if !isValidAWSExternalIDCharset(trimmed) {
+		return NewClientError(400,
+			"aws_external_id contains characters AWS sts:ExternalId does not "+
+				"accept (allowed: letters, digits, +=,.@:/-_)")
+	}
+	return nil
+}
+
+// isValidAWSExternalIDCharset matches AWS's documented sts:ExternalId regex
+// `[\w+=,.@:/-]` — letters, digits, underscore, and the seven punctuation
+// marks listed. Implemented byte-wise (single-byte ASCII only) instead of
+// regexp to keep this allocation-free on the hot path.
+func isValidAWSExternalIDCharset(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z',
+			c >= 'A' && c <= 'Z',
+			c >= '0' && c <= '9':
+			continue
+		}
+		switch c {
+		case '_', '+', '=', ',', '.', '@', ':', '/', '-':
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // cloudAccountFromRequest maps a CloudAccountRequest to a config.CloudAccount.

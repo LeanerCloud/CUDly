@@ -3,6 +3,7 @@
  */
 
 import * as api from './api';
+import type { ConfigResponse } from './types';
 import { fetchAndPopulateCommitmentOptions } from './commitmentOptions';
 import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
@@ -14,6 +15,36 @@ import { openModal, closeModal } from './modal';
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
 let cachedSourceCloud: string | undefined;
+
+// In-flight cache for /api/config so each modal open does not refetch (issue
+// #130d). The promise is captured the first time getConfig() is requested
+// and reused for the lifetime of the page; resetConfigCache() lets tests
+// (and future "force reload" UI) clear it explicitly.
+let cachedConfigPromise: Promise<ConfigResponse> | undefined;
+
+function getCachedConfig(): Promise<ConfigResponse> {
+  if (!cachedConfigPromise) {
+    cachedConfigPromise = api.getConfig().catch(err => {
+      // Don't poison the cache on a transient failure — let the next caller
+      // retry. (If we cached the rejection forever, a single early flake
+      // would break the AWS modal for the rest of the session.)
+      cachedConfigPromise = undefined;
+      throw err;
+    });
+  }
+  return cachedConfigPromise;
+}
+
+/** Reset the cached /api/config response. Test-only / future "reload" hook. */
+export function resetConfigCache(): void {
+  cachedConfigPromise = undefined;
+}
+
+// sessionStorage key for the in-progress (unsaved) AWS External ID. Persists
+// across modal close/reopen cycles within the same session so the operator
+// can copy the value into AWS, close the modal, and come back to the same
+// value (issue #126). Cleared on successful save.
+const AWS_DRAFT_EXTERNAL_ID_KEY = 'cudly:aws-account-modal:draft-external-id';
 
 /** Options for the account modal (used by the registrations approval flow). */
 export interface AccountModalOptions {
@@ -970,13 +1001,74 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
  */
 function generateExternalID(): string {
   // crypto.randomUUID is available in all supported browsers (Chrome
-  // 92+, Firefox 95+, Safari 15.4+). Fall back to a timestamp-plus-
-  // random string only if it's somehow missing (test environments,
-  // odd webviews) so we never hand the user an empty field.
+  // 92+, Firefox 95+, Safari 15.4+). Fall back to crypto.getRandomValues
+  // (a strict superset of randomUUID's availability) for older runtimes.
+  // The External ID is a security primitive that protects against the
+  // confused-deputy problem on cross-account sts:AssumeRole, so the
+  // fallback MUST also be a CSPRNG — never Math.random() (issue #127).
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-  return `cudly-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Last-resort fallback: a runtime with no Web Crypto at all (jsdom
+  // without polyfill, very old webviews). Not security-secret-quality,
+  // but "never empty" matters for the form to submit and the backend
+  // length/charset validator (issue #128) will then catch obviously-
+  // weak inputs. Math.random is intentionally NOT used here — see #127.
+  return `cudly-fallback-${Date.now().toString(36)}`;
+}
+
+/**
+ * Return the AWS External ID for the current modal session.
+ *
+ * - When editing an existing account: always use the persisted value.
+ * - When creating a new account: reuse the same draft value across modal
+ *   close/reopen cycles so an operator who copied the ID into their IAM
+ *   trust policy and then reopens the modal sees the same value (issue
+ *   #126). The draft is keyed in sessionStorage (cleared on tab close)
+ *   and is reset on a successful save.
+ *
+ * Falls back to in-memory generation if sessionStorage is unavailable
+ * (e.g., privacy-mode browsers, tests with no Storage shim) — that path
+ * preserves the legacy regenerate-on-reopen behaviour but never breaks.
+ */
+function resolveAwsExternalIdForModal(account?: api.CloudAccount): string {
+  if (account?.aws_external_id) return account.aws_external_id;
+
+  let storage: Storage | undefined;
+  try {
+    storage = typeof sessionStorage !== 'undefined' ? sessionStorage : undefined;
+  } catch {
+    storage = undefined;
+  }
+
+  if (storage) {
+    try {
+      const existing = storage.getItem(AWS_DRAFT_EXTERNAL_ID_KEY);
+      if (existing) return existing;
+      const fresh = generateExternalID();
+      storage.setItem(AWS_DRAFT_EXTERNAL_ID_KEY, fresh);
+      return fresh;
+    } catch {
+      // Quota / permission errors — fall through to in-memory generation.
+    }
+  }
+  return generateExternalID();
+}
+
+/** Clear the in-progress AWS External ID draft. Called after successful save. */
+function clearAwsExternalIdDraft(): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(AWS_DRAFT_EXTERNAL_ID_KEY);
+    }
+  } catch {
+    // sessionStorage unavailable — nothing to clear.
+  }
 }
 
 function populateAwsAccountFields(account?: api.CloudAccount): void {
@@ -996,11 +1088,11 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   setInputValue('account-aws-role-arn', account?.aws_role_arn ?? '');
   // External ID is a CUDly-managed shared secret for cross-account role
   // assumption (issue #18). On edit, keep whatever was stored before; on
-  // create, auto-generate a UUID so every new account has a distinct
-  // secret the operator can paste into the IAM trust policy. The field
+  // create, generate a value once and persist it in sessionStorage so a
+  // close/reopen cycle returns the same value (issue #126). The field
   // itself is marked readonly in index.html so users can't hand-craft
   // values that would defeat the purpose.
-  setInputValue('account-aws-external-id', account?.aws_external_id ?? generateExternalID());
+  setInputValue('account-aws-external-id', resolveAwsExternalIdForModal(account));
   setInputValue('account-aws-bastion-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-token-file', account?.aws_web_identity_token_file ?? '');
@@ -1015,10 +1107,39 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
 }
 
 /**
+ * Map an AWS partition identifier (`aws`, `aws-cn`, `aws-us-gov`) to the
+ * ARN prefix used in IAM trust policies. Defaults to `aws` for an empty
+ * or unknown value so the rendered snippet always parses (issue #130c).
+ */
+function awsPartitionForArn(partition: string | undefined): string {
+  switch (partition) {
+    case 'aws-cn':
+    case 'aws-us-gov':
+      return partition;
+    default:
+      return 'aws';
+  }
+}
+
+/**
  * Render the IAM trust-policy JSON snippet into the AWS role-mode
  * section. The snippet interpolates the CUDly host AWS account ID and
  * the per-account External ID so operators can copy it straight into
  * the role's trust relationship (issue #19).
+ *
+ * Partition awareness (issue #130c): the ARN prefix is taken from the
+ * backend-reported partition so AWS China (`aws-cn`) and GovCloud
+ * (`aws-us-gov`) deployments render a usable snippet instead of a
+ * silently-wrong `arn:aws:` ARN.
+ *
+ * Race short-circuit (issue #130a): the auth-mode select is sampled
+ * before the awaited getConfig() call and rechecked after. If the user
+ * switched away from `role_arn` while the config was loading we abort
+ * the write so we never paint into a hidden field.
+ *
+ * Config caching (issue #130d): /api/config is fetched at most once per
+ * page load via getCachedConfig(); each modal open reuses the cached
+ * promise instead of re-firing the GET.
  */
 async function renderAwsTrustPolicy(): Promise<void> {
   const block = document.getElementById('account-aws-trust-policy');
@@ -1026,14 +1147,30 @@ async function renderAwsTrustPolicy(): Promise<void> {
   if (!block) return;
   const externalID = (document.getElementById('account-aws-external-id') as HTMLInputElement | null)?.value ?? '';
 
+  // Snapshot the auth mode at call time — we'll recheck after the await
+  // to detect a race where the user switched to bastion / WIF / keys
+  // mid-fetch (issue #130a).
+  const authModeSnapshot = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+
   let sourceAccountID = '';
+  let partition = 'aws';
   try {
-    const cfg = await api.getConfig();
+    const cfg = await getCachedConfig();
     if (cfg.source_identity?.provider === 'aws') {
       sourceAccountID = cfg.source_identity.account_id ?? '';
+      partition = awsPartitionForArn(cfg.source_identity.partition);
     }
   } catch {
     // Non-critical — fall through to the placeholder text below.
+  }
+
+  // If the user switched auth modes while we were waiting on the API,
+  // bail out: the role_arn fields are now hidden and writing into them
+  // would either be a wasted DOM mutation or (worse) flash stale data
+  // if they switch back later (issue #130a).
+  const authModeNow = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+  if (authModeSnapshot !== undefined && authModeSnapshot !== authModeNow) {
+    return;
   }
 
   if (!sourceAccountID) {
@@ -1043,9 +1180,9 @@ async function renderAwsTrustPolicy(): Promise<void> {
         "CUDly can't determine its host AWS account ID from this deployment " +
         "(either CUDly isn't running on AWS, or the Lambda/Container role " +
         "lacks sts:GetCallerIdentity). Ask a CUDly admin for the account ID, " +
-        "then build the trust policy manually with Principal=arn:aws:iam::" +
-        "<CUDly account ID>:root, Action=sts:AssumeRole, and a StringEquals " +
-        "sts:ExternalId condition on the value above.";
+        "then build the trust policy manually with Principal=arn:" + partition +
+        ":iam::<CUDly account ID>:root, Action=sts:AssumeRole, and a " +
+        "StringEquals sts:ExternalId condition on the value above.";
     }
     return;
   }
@@ -1055,7 +1192,7 @@ async function renderAwsTrustPolicy(): Promise<void> {
     Statement: [
       {
         Effect: 'Allow',
-        Principal: { AWS: `arn:aws:iam::${sourceAccountID}:root` },
+        Principal: { AWS: `arn:${partition}:iam::${sourceAccountID}:root` },
         Action: 'sts:AssumeRole',
         Condition: {
           StringEquals: { 'sts:ExternalId': externalID },
@@ -1065,10 +1202,19 @@ async function renderAwsTrustPolicy(): Promise<void> {
   };
   block.textContent = JSON.stringify(policy, null, 2);
   if (hint) {
+    // The :root principal trusts every IAM principal in the CUDly host
+    // account — the AWS-documented SaaS baseline (issue #130b). It
+    // relies on the host account being well-secured and on the
+    // sts:ExternalId condition for confused-deputy protection. A
+    // tighter "lock to CUDly's compute role only" toggle is tracked
+    // upstream; until it ships, customers who need least-privilege
+    // can replace `:root` with the specific Lambda execution role ARN
+    // out-of-band.
     hint.textContent =
       "Attach this policy to the IAM role's trust relationship so CUDly can " +
-      "assume it. The sts:ExternalId condition locks the role to this " +
-      "specific CUDly registration.";
+      "assume it. The Principal is the CUDly host AWS account root — every " +
+      "IAM principal in that account is trusted, so the sts:ExternalId " +
+      "condition is what locks this role to your specific CUDly registration.";
   }
 }
 
@@ -1275,6 +1421,12 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
     } else {
       const created = await api.createAccount(req);
       savedId = created.id;
+    }
+
+    // Account persisted — drop the in-progress AWS External ID draft so
+    // the next "Add AWS Account" flow generates a fresh value (issue #126).
+    if (provider === 'aws') {
+      clearAwsExternalIdDraft();
     }
 
     // Credential save is best-effort: if it fails we still close the modal
