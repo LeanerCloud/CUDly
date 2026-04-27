@@ -29,6 +29,9 @@ cloud_run_min_instances         = 0
 cloud_run_max_instances         = 10
 cloud_run_request_timeout       = 300
 cloud_run_allow_unauthenticated = true
+# Dev runs without the external HTTPS LB (`enable_cdn = false` below), so
+# the *.run.app URL must accept direct traffic — override the secure default.
+cloud_run_ingress = "INGRESS_TRAFFIC_ALL"
 
 # GKE settings (when compute_platform = "gke")
 # gke_node_count        = 1

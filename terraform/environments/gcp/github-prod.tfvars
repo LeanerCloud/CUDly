@@ -24,6 +24,12 @@ cloud_run_min_instances         = 2
 cloud_run_max_instances         = 50
 cloud_run_request_timeout       = 300
 cloud_run_allow_unauthenticated = true
+# Prod still has `enable_cdn = false` — the LB stack lands separately.
+# Until then, override the secure default so the *.run.app URL stays reachable.
+# When `enable_cdn` flips to `true`, drop this override (or set
+# `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` explicitly) to lock direct access
+# out and force all traffic through Cloud Armor's WAF.
+cloud_run_ingress = "INGRESS_TRAFFIC_ALL"
 
 # ==============================================
 # Database (Cloud SQL PostgreSQL)
