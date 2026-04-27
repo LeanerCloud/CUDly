@@ -100,16 +100,30 @@ export function initHistoryDateRange(): void {
 }
 
 /**
- * View plan history
+ * View plan history.
+ *
+ * The plan-history endpoint returns the plan's *full* history regardless
+ * of date range — `api.getHistory({ planId })` ignores `start`/`end`.
+ * Don't seed the From/To inputs with the generic 7-day default here:
+ * they would visibly disagree with the table contents (the tab-level
+ * default would suggest the table only covers the last week, while in
+ * fact every purchase the plan ever recorded is shown). Instead, after
+ * the fetch lands, snap the inputs to the actual min/max purchase
+ * timestamps so the date pickers reflect what the user is looking at.
+ *
+ * If the plan has no purchases yet, leave the inputs untouched — there's
+ * no meaningful range to display, and clobbering them with `today`
+ * would be misleading.
  */
 export async function viewPlanHistory(planId: string): Promise<void> {
   switchTab('history');
-  initHistoryDateRange();
 
   try {
     const data = await api.getHistory({ planId }) as unknown as HistoryResponse;
     renderHistorySummary(data.summary || {});
-    renderHistoryList(data.purchases || []);
+    const purchases = data.purchases || [];
+    renderHistoryList(purchases);
+    snapDateInputsToPurchases(purchases);
   } catch (error) {
     console.error('Failed to load plan history:', error);
     const list = document.getElementById('history-list');
@@ -118,6 +132,26 @@ export async function viewPlanHistory(planId: string): Promise<void> {
       list.innerHTML = `<p class="error">Failed to load plan history: ${escapeHtml(err.message)}</p>`;
     }
   }
+}
+
+/**
+ * Set the From/To inputs to bracket the purchases that just rendered.
+ * No-op when the list is empty — keeping the previous values is more
+ * honest than seeding a fake "today" range. Timestamps are normalised
+ * to UTC YYYY-MM-DD so they slot directly into `<input type="date">`.
+ */
+function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
+  if (purchases.length === 0) return;
+  const epochs = purchases
+    .map(p => Date.parse(p.timestamp))
+    .filter(n => !Number.isNaN(n));
+  if (epochs.length === 0) return;
+  const startInput = document.getElementById('history-start') as HTMLInputElement | null;
+  const endInput = document.getElementById('history-end') as HTMLInputElement | null;
+  const minDate = new Date(Math.min(...epochs)).toISOString().split('T')[0] || '';
+  const maxDate = new Date(Math.max(...epochs)).toISOString().split('T')[0] || '';
+  if (startInput) startInput.value = minDate;
+  if (endInput) endInput.value = maxDate;
 }
 
 /**

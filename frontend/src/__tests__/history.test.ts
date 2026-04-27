@@ -136,6 +136,51 @@ describe('History Module', () => {
 
       expect(console.error).toHaveBeenCalledWith('Failed to load plan history:', expect.any(Error));
     });
+
+    test('snaps From/To inputs to min/max purchase timestamps after fetch', async () => {
+      // Reproduces the scenario from PR #139's CodeRabbit nitpick: the
+      // plan-history endpoint returns the full history regardless of
+      // date range, so the inputs should reflect the rendered data, not
+      // the tab's generic 7-day default.
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          { timestamp: '2025-12-15T10:00:00Z' },
+          { timestamp: '2026-02-04T10:00:00Z' },
+          { timestamp: '2026-01-20T10:00:00Z' },
+        ],
+      });
+
+      const startInput = document.getElementById('history-start') as HTMLInputElement;
+      const endInput = document.getElementById('history-end') as HTMLInputElement;
+      // Pre-seed with the tab default so we can prove the snap overwrites.
+      startInput.value = '2026-04-20';
+      endInput.value = '2026-04-27';
+
+      await viewPlanHistory('plan-123');
+
+      expect(startInput.value).toBe('2025-12-15');
+      expect(endInput.value).toBe('2026-02-04');
+    });
+
+    test('leaves From/To inputs untouched when the plan has no purchases', async () => {
+      // No data → no honest range to display. Clobbering the inputs with
+      // `today` would lie to the user; preserve whatever was there.
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [],
+      });
+
+      const startInput = document.getElementById('history-start') as HTMLInputElement;
+      const endInput = document.getElementById('history-end') as HTMLInputElement;
+      startInput.value = '2026-04-20';
+      endInput.value = '2026-04-27';
+
+      await viewPlanHistory('plan-123');
+
+      expect(startInput.value).toBe('2026-04-20');
+      expect(endInput.value).toBe('2026-04-27');
+    });
   });
 
   describe('loadHistory', () => {
