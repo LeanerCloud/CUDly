@@ -991,6 +991,46 @@
         </div>
 
         <!-- Cloud Account Modal -->
+        <div id="override-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="override-modal-title">
+            <div class="modal-content">
+                <h2 id="override-modal-title">Add service override</h2>
+                <p class="help-text">Per-account override that takes precedence over the global service defaults. Only AWS services are supported today.</p>
+                <form id="override-form">
+                    <input type="hidden" id="override-account-id">
+                    <input type="hidden" id="override-provider" value="aws">
+
+                    <label>Service:
+                        <select id="override-service" required></select>
+                    </label>
+                    <label>Term:
+                        <select id="override-term">
+                            <option value="">Inherit (use global default)</option>
+                            <option value="1">1 Year</option>
+                            <option value="3">3 Years</option>
+                        </select>
+                    </label>
+                    <label>Payment:
+                        <select id="override-payment">
+                            <option value="">Inherit (use global default)</option>
+                            <option value="no-upfront">No Upfront</option>
+                            <option value="partial-upfront">Partial Upfront</option>
+                            <option value="all-upfront">All Upfront</option>
+                        </select>
+                    </label>
+                    <label>Coverage (%):
+                        <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)">
+                    </label>
+
+                    <p class="help-text" id="override-form-error" role="alert"></p>
+
+                    <div class="modal-buttons">
+                        <button type="button" id="close-override-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Save override</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div id="account-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="account-modal-title">Add Account</h2>

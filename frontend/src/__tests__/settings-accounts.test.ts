@@ -146,6 +146,24 @@ function buildAccountsDOM(): void {
   modal.appendChild(form);
   modal.appendChild(btn('close-account-modal-btn'));
   document.body.appendChild(modal);
+
+  // ── Override modal (issue #104) ────────────────────────────
+  const overrideModal = div('override-modal', 'modal hidden');
+  const overrideForm = el('form', {}, 'override-form');
+  overrideForm.appendChild(input('override-account-id', 'hidden'));
+  overrideForm.appendChild(input('override-provider', 'hidden'));
+  overrideForm.appendChild(select('override-service', []));
+  overrideForm.appendChild(select('override-term', ['', '1', '3']));
+  overrideForm.appendChild(select('override-payment', ['', 'no-upfront', 'partial-upfront', 'all-upfront']));
+  overrideForm.appendChild(input('override-coverage', 'number'));
+  const overrideErr = el('p', {}, 'override-form-error');
+  overrideForm.appendChild(overrideErr);
+  const overrideSubmit = el('button', { type: 'submit' }) as HTMLButtonElement;
+  overrideSubmit.textContent = 'Save override';
+  overrideForm.appendChild(overrideSubmit);
+  overrideModal.appendChild(overrideForm);
+  overrideModal.appendChild(btn('close-override-modal-btn'));
+  document.body.appendChild(overrideModal);
 }
 
 // ---------------------------------------------------------------------------
@@ -563,5 +581,226 @@ describe('Overrides panel — AWS payment selector', () => {
     const panel = await openOverridesPanel('acc-1');
     expect(panel.querySelector('select.override-payment-select')).toBeNull();
     expect(panel.textContent).toContain('all-upfront');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Override creation modal — issue #104
+// ---------------------------------------------------------------------------
+
+describe('Create-override modal', () => {
+  /**
+   * Click the "Service overrides" expander button on an AWS account row to
+   * trigger loadOverridesPanel, then return the panel + override-modal DOM
+   * for further interaction.
+   */
+  async function expandOverridesPanel(accountId = 'acc-1'): Promise<{ panel: HTMLElement; modal: HTMLElement }> {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: accountId, name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+    ]);
+    await loadAccountsForProvider('aws');
+    const overridesBtn = document.querySelector(
+      `button[aria-label="Service overrides for Prod (111)"]`,
+    ) as HTMLButtonElement | null;
+    expect(overridesBtn).not.toBeNull();
+    overridesBtn!.click();
+    await new Promise(r => setTimeout(r, 0));
+    const panel = document.querySelector('.account-overrides-panel') as HTMLElement | null;
+    expect(panel).not.toBeNull();
+    const modal = document.getElementById('override-modal') as HTMLElement | null;
+    expect(modal).not.toBeNull();
+    return { panel: panel!, modal: modal! };
+  }
+
+  beforeEach(() => {
+    buildAccountsDOM();
+    setupSettingsHandlers();
+    jest.clearAllMocks();
+  });
+
+  test('empty-state auto-opens the override modal', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    const { modal } = await expandOverridesPanel('acc-1');
+
+    expect(modal.classList.contains('hidden')).toBe(false);
+    // Service dropdown should be populated with all 7 AWS service options.
+    const svcSelect = document.getElementById('override-service') as HTMLSelectElement;
+    const values = Array.from(svcSelect.options).map(o => o.value);
+    expect(values).toEqual(['ec2', 'rds', 'elasticache', 'opensearch', 'redshift', 'savingsplans', 'sagemaker']);
+  });
+
+  test('populated panel shows an Add override button that opens the modal', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', term: 1 },
+    ]);
+
+    const { panel, modal } = await expandOverridesPanel('acc-1');
+    // The auto-open path must NOT fire when overrides already exist.
+    expect(modal.classList.contains('hidden')).toBe(true);
+
+    const addBtn = Array.from(panel.querySelectorAll('button')).find(b => b.textContent === 'Add override');
+    expect(addBtn).toBeDefined();
+    addBtn!.click();
+    expect(modal.classList.contains('hidden')).toBe(false);
+
+    // ec2 already has an override; the dropdown excludes it.
+    const svcSelect = document.getElementById('override-service') as HTMLSelectElement;
+    const values = Array.from(svcSelect.options).map(o => o.value);
+    expect(values).not.toContain('ec2');
+    expect(values).toContain('rds');
+  });
+
+  test('submit sends only the fields the user filled in (sparse PUT)', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o-new', account_id: 'acc-1', provider: 'aws', service: 'rds', payment: 'no-upfront',
+    });
+
+    await expandOverridesPanel('acc-1');
+
+    (document.getElementById('override-service') as HTMLSelectElement).value = 'rds';
+    (document.getElementById('override-payment') as HTMLSelectElement).value = 'no-upfront';
+    // term + coverage left blank → omitted from the request
+
+    const form = document.getElementById('override-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+      'acc-1', 'aws', 'rds', { payment: 'no-upfront' },
+    );
+  });
+
+  test('coercion: term parses to int, coverage parses to number', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({});
+
+    await expandOverridesPanel('acc-1');
+    (document.getElementById('override-service') as HTMLSelectElement).value = 'ec2';
+    (document.getElementById('override-term') as HTMLSelectElement).value = '3';
+    (document.getElementById('override-payment') as HTMLSelectElement).value = 'all-upfront';
+    (document.getElementById('override-coverage') as HTMLInputElement).value = '85';
+
+    (document.getElementById('override-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { cancelable: true }),
+    );
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+      'acc-1', 'aws', 'ec2',
+      { term: 3, payment: 'all-upfront', coverage: 85 },
+    );
+  });
+
+  test('blocks submit when no field is set (would be a no-op override)', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await expandOverridesPanel('acc-1');
+    (document.getElementById('override-service') as HTMLSelectElement).value = 'ec2';
+    // All three override fields left blank.
+
+    (document.getElementById('override-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { cancelable: true }),
+    );
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+    const errEl = document.getElementById('override-form-error');
+    expect(errEl?.textContent).toContain('Set at least one');
+  });
+
+  test('blocks submit when coverage is out of range', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await expandOverridesPanel('acc-1');
+    (document.getElementById('override-service') as HTMLSelectElement).value = 'ec2';
+    (document.getElementById('override-coverage') as HTMLInputElement).value = '150';
+
+    (document.getElementById('override-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { cancelable: true }),
+    );
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+    const errEl = document.getElementById('override-form-error');
+    expect(errEl?.textContent).toContain('Coverage must be between 0 and 100');
+  });
+
+  test('save success closes the modal and reloads the panel', async () => {
+    (api.listAccountServiceOverrides as jest.Mock)
+      .mockResolvedValueOnce([])  // initial empty
+      .mockResolvedValueOnce([    // after save reload
+        { id: 'o-new', account_id: 'acc-1', provider: 'aws', service: 'rds', payment: 'all-upfront' },
+      ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({});
+
+    const { modal } = await expandOverridesPanel('acc-1');
+    (document.getElementById('override-service') as HTMLSelectElement).value = 'rds';
+    (document.getElementById('override-payment') as HTMLSelectElement).value = 'all-upfront';
+
+    (document.getElementById('override-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { cancelable: true }),
+    );
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(modal.classList.contains('hidden')).toBe(true);
+    expect(api.listAccountServiceOverrides).toHaveBeenCalledTimes(2);
+  });
+
+  test('cancel button closes the modal without calling the API', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    const { modal } = await expandOverridesPanel('acc-1');
+    expect(modal.classList.contains('hidden')).toBe(false);
+
+    (document.getElementById('close-override-modal-btn') as HTMLButtonElement).click();
+    expect(modal.classList.contains('hidden')).toBe(true);
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+  });
+
+  test('non-AWS account: empty state shows passive text, no modal auto-open, no Add button', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'az-1', name: 'AzureProd', provider: 'azure', external_id: 'sub-x', enabled: true },
+    ]);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadAccountsForProvider('azure');
+    const overridesBtn = document.querySelector(
+      `button[aria-label="Service overrides for AzureProd (sub-x)"]`,
+    ) as HTMLButtonElement;
+    overridesBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+
+    const panel = document.querySelector('.account-overrides-panel') as HTMLElement;
+    const modal = document.getElementById('override-modal') as HTMLElement;
+
+    // Modal must NOT have auto-opened for a non-AWS account.
+    expect(modal.classList.contains('hidden')).toBe(true);
+
+    // No Add override button on non-AWS for now (issue #104 follow-up).
+    const addBtn = Array.from(panel.querySelectorAll('button')).find(b => b.textContent === 'Add override');
+    expect(addBtn).toBeUndefined();
+
+    // Passive empty-state copy is what they see.
+    expect(panel.textContent).toContain('No service overrides set');
+  });
+
+  test('all services already overridden disables submit', async () => {
+    const all = ['ec2', 'rds', 'elasticache', 'opensearch', 'redshift', 'savingsplans', 'sagemaker'];
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue(
+      all.map((service, i) => ({
+        id: `o-${i}`, account_id: 'acc-1', provider: 'aws', service, term: 1,
+      })),
+    );
+
+    const { panel, modal } = await expandOverridesPanel('acc-1');
+    const addBtn = Array.from(panel.querySelectorAll('button')).find(b => b.textContent === 'Add override');
+    addBtn!.click();
+    expect(modal.classList.contains('hidden')).toBe(false);
+
+    const submitBtn = modal.querySelector('button[type="submit"]') as HTMLButtonElement;
+    expect(submitBtn.disabled).toBe(true);
   });
 });
