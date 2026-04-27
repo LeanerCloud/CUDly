@@ -33,6 +33,21 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Set up Terraform
+        # Required by the terraform_fmt + terraform_validate pre-commit hooks.
+        # terraform_validate calls `terraform init` per module, which the
+        # action wraps with HTTP-cached provider downloads.
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Install tflint
+        # Required by the terraform_tflint pre-commit hook (separate binary
+        # from the terraform CLI).
+        run: |
+          curl -sSL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
