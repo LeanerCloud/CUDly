@@ -446,11 +446,24 @@ func termMatchesIfKnown(src RIInfo, off OfferingOption, hasSrc bool) bool {
 // is available. Without source pricing the gate is skipped to preserve
 // backwards compatibility for callers that only need the primary-target
 // analysis.
+//
+// Defensive NF fallback: callers occasionally populate MonthlyCost but
+// leave NormalizationFactor at zero (e.g. tests, partial RIInfo
+// constructions). A zero NF here would reject every alternative even
+// when InstanceType is parseable. Derive NF from the instance size when
+// it's missing; if the size doesn't match the AWS canonical table,
+// NormalizationFactorForSize returns 1.0 — degrades to "no NF
+// adjustment" rather than a hard reject.
 func pricingGatePasses(src RIInfo, off OfferingOption, hasSrc bool) bool {
 	if !hasSrc || src.MonthlyCost <= 0 {
 		return true
 	}
-	return passesDollarUnitsCheck(src.NormalizationFactor, src.MonthlyCost, src.CurrencyCode, off)
+	srcNF := src.NormalizationFactor
+	if srcNF <= 0 {
+		_, size := parseInstanceType(src.InstanceType)
+		srcNF = NormalizationFactorForSize(size)
+	}
+	return passesDollarUnitsCheck(srcNF, src.MonthlyCost, src.CurrencyCode, off)
 }
 
 // findBestFit finds the instance size and count that best fits normalizedUsed units.

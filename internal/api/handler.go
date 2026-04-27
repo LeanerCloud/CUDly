@@ -458,7 +458,15 @@ func (h *Handler) resolveSourceIdentity(ctx context.Context) *sourceIdentity {
 		id := &sourceIdentity{Provider: cloud}
 		switch cloud {
 		case "aws":
-			id.AccountID, id.Partition = h.resolveAWSCallerIdentity(ctx)
+			// resolveSourceIdentity is best-effort and is consumed by
+			// populateSourceAccountID, which fails loud on an empty
+			// AccountID for the AWS-source case. STS errors are already
+			// logged WARN inside resolveAWSCallerIdentity, so we drop
+			// the error here explicitly — the consumer's empty-string
+			// check is the security gate for federation rendering.
+			// (Reshape uses resolveAWSAccountID directly which DOES
+			// propagate the error for fail-closed multi-tenant safety.)
+			id.AccountID, id.Partition, _ = h.resolveAWSCallerIdentity(ctx)
 		case "azure":
 			id.ClientID = os.Getenv("AZURE_CLIENT_ID")
 			id.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
@@ -478,38 +486,60 @@ func (h *Handler) resolveSourceAccountID(ctx context.Context) string {
 }
 
 // resolveAWSAccountID returns the AWS account ID where CUDly runs by calling
-// STS GetCallerIdentity. Returns "" on AWS SDK config load failure or STS
-// error (logs WARN in either case).
+// STS GetCallerIdentity. Convenience wrapper around resolveAWSCallerIdentity
+// for callers that only need the account ID (and the security-paths-aware
+// error propagation).
 //
-// WARNING: empty string is the silent-failure path. Callers in user-facing
-// flows MUST check the result and fail loud rather than rendering an empty
-// account ID into a bundle — a bundle with an empty source_account_id
-// produces a broken trust policy that silently fails at apply time.
-func (h *Handler) resolveAWSAccountID(ctx context.Context) string {
-	id, _ := h.resolveAWSCallerIdentity(ctx)
-	return id
+// Return shape distinguishes three cases:
+//
+//   - ("", nil)        — AWS SDK config could not load (deployment runs
+//     without AWS context: e.g. Azure / GCP host).
+//     This is the legitimate "no AWS account configured"
+//     signal; callers may treat it as such.
+//   - ("", err)        — AWS SDK config loaded but STS GetCallerIdentity
+//     failed (transient API error, missing IAM permission,
+//     token expiry). Callers in security-sensitive paths
+//     (e.g. multi-tenant scope filters) MUST fail closed
+//     on this — treating it like the legitimate empty
+//     case can leak data across tenants.
+//   - (accountID, nil) — success.
+//
+// WARNING: callers in user-facing flows must check the result and fail loud
+// rather than rendering an empty account ID into a bundle — a bundle with
+// an empty source_account_id produces a broken trust policy that silently
+// fails at apply time.
+func (h *Handler) resolveAWSAccountID(ctx context.Context) (string, error) {
+	id, _, err := h.resolveAWSCallerIdentity(ctx)
+	return id, err
 }
 
 // resolveAWSCallerIdentity returns (accountID, partition) parsed from STS
 // GetCallerIdentity. The partition is taken from the returned ARN's second
 // segment (e.g., `arn:aws-us-gov:iam::...` → "aws-us-gov") and is used by
 // the trust-policy snippet renderer to emit the correct ARN prefix in
-// AWS China and GovCloud deployments (issue #130c). Both fields are best-
-// effort: a STS failure returns ("", "") and a malformed ARN returns
-// (accountID, "") — the frontend defaults to the `aws` partition when
-// the value is empty.
-func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string) {
+// AWS China and GovCloud deployments (issue #130c).
+//
+// Return shape distinguishes the same three cases as resolveAWSAccountID:
+//
+//   - ("", "", nil)               — AWS SDK config could not load (Azure/GCP host).
+//   - ("", "", err)               — config loaded but STS failed; security-
+//     sensitive callers MUST fail closed on this.
+//   - (accountID, partition, nil) — success. partition may still be "" if the
+//     ARN was malformed (frontend defaults to "aws").
+func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string, error) {
 	h.awsCfgOnce.Do(func() {
 		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
 	})
 	if h.awsCfgErr != nil {
-		return "", ""
+		// AWS context genuinely unavailable — not an error from this
+		// caller's perspective (Azure/GCP host runs land here).
+		return "", "", nil
 	}
 	client := sts.NewFromConfig(h.awsCfg)
 	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		logging.Warnf("Failed to resolve source account ID via STS: %v", err)
-		return "", ""
+		return "", "", fmt.Errorf("sts get-caller-identity: %w", err)
 	}
 	var accountID, partition string
 	if identity.Account != nil {
@@ -518,7 +548,7 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string)
 	if identity.Arn != nil {
 		partition = parseArnPartition(*identity.Arn)
 	}
-	return accountID, partition
+	return accountID, partition, nil
 }
 
 // parseArnPartition extracts the partition segment from an AWS ARN.

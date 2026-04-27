@@ -119,8 +119,9 @@ func splitInstanceType(instanceType string) (family, size string) {
 // scope its query against the correct row in the recommendations
 // table. Returns ("", nil) for the intentionally-unregistered cases:
 //
-//   - no AWS account ID could be resolved (STS denied / ambient creds
-//     not available);
+//   - AWS SDK config could not load (deployment is running on an
+//     Azure / GCP host with no AWS context at all — resolveAWSAccountID
+//     returns ("", nil) for this case);
 //   - ListCloudAccounts returned no rows (no CloudAccounts registered
 //     at all);
 //   - no CloudAccount row matches the running ExternalID (the operator
@@ -132,13 +133,23 @@ func splitInstanceType(instanceType string) (family, size string) {
 // alternatives, not a permanently empty list. Once the operator
 // registers the account the filter engages automatically.
 //
-// A real ListCloudAccounts error (DB outage, permissions failure) is
-// returned verbatim so the caller can abort the lookup rather than
-// silently fall through to an unscoped query that might match the
-// wrong tenant's recs.
+// FAIL CLOSED on real failures:
+//   - resolveAWSAccountID returns a non-nil error (STS GetCallerIdentity
+//     denied, transient AWS API failure, token expiry) — propagated so
+//     the caller aborts the lookup rather than silently falling through
+//     to an unscoped query that could leak another tenant's recs.
+//   - ListCloudAccounts returns an error (DB outage, permissions) —
+//     same treatment.
 func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) (string, error) {
-	awsAccountID := h.resolveAWSAccountID(ctx)
+	awsAccountID, err := h.resolveAWSAccountID(ctx)
+	if err != nil {
+		// STS reachable-but-failed: must NOT fall through to an
+		// unscoped read. A transient STS error in a multi-tenant
+		// deployment would otherwise surface another tenant's recs.
+		return "", fmt.Errorf("resolve source aws account for reshape scope: %w", err)
+	}
 	if awsAccountID == "" {
+		// Genuine "no AWS context" (Azure/GCP host, or unregistered).
 		return "", nil
 	}
 	provider := "aws"
