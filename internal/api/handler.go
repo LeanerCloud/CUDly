@@ -545,23 +545,24 @@ func (h *Handler) resolveAWSAccountID(ctx context.Context) (string, error) {
 //   - (accountID, partition, nil) — success. partition may still be "" if the
 //     ARN was malformed (frontend defaults to "aws").
 //
-// The sourceCloud() check on the config-load path prevents an
-// AWS-hosted deployment from being silently treated as "no AWS context"
-// when its own SDK config breaks — that would degrade the multi-tenant
-// scope filter in resolveAWSCloudAccountID into an unscoped read.
+// Non-AWS hosts (Azure/GCP) short-circuit before any AWS SDK work —
+// no point burning a LoadDefaultConfig attempt + STS client on every
+// reshape request from a host that genuinely has no AWS context. AWS
+// hosts with a broken SDK config surface the load error so the
+// multi-tenant scope filter in resolveAWSCloudAccountID fails closed
+// instead of degrading into an unscoped read.
 func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string, error) {
+	if sourceCloud() != "aws" {
+		// Azure/GCP host: short-circuit before any AWS SDK work.
+		return "", "", nil
+	}
 	h.awsCfgOnce.Do(func() {
 		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
 	})
 	if h.awsCfgErr != nil {
-		if sourceCloud() == "aws" {
-			// AWS host but SDK config broken: real failure. Surface
-			// the error so security-sensitive callers fail closed.
-			return "", "", fmt.Errorf("aws sdk config load: %w", h.awsCfgErr)
-		}
-		// Azure/GCP host: AWS context is legitimately absent, not an
-		// error from this caller's perspective.
-		return "", "", nil
+		// AWS host but SDK config broken: real failure. Surface the
+		// error so security-sensitive callers fail closed.
+		return "", "", fmt.Errorf("aws sdk config load: %w", h.awsCfgErr)
 	}
 	client := sts.NewFromConfig(h.awsCfg)
 	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
