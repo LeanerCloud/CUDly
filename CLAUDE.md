@@ -254,15 +254,15 @@ Rules, in priority order:
 2. **If `graphify-out/` is missing**: build it FIRST before doing any non-trivial exploration. Command (from the repo root):
 
    ```bash
-   /Users/cristi/Dropbox_Maestral/devel/graphify/.venv/bin/python3 \
+   "${GRAPHIFY_PYTHON:-python3}" \
      -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"
    ```
 
-   Runs for ~1–3 minutes on this repo; run it in the background (`run_in_background: true`) so you can start reading other things while it finishes.
+   Set `GRAPHIFY_PYTHON` to your graphify venv's Python interpreter (`<graphify-checkout>/.venv/bin/python3`); falls back to `python3` if the package is installed system-wide. Runs for ~1–3 minutes on this repo; run it in the background (`run_in_background: true`) so you can start reading other things while it finishes.
 3. **After modifying code files in a session**: re-run the same command to keep the graph current. The installed `PreToolUse` hook in `.claude/settings.json` handles this automatically for Write/Edit/MultiEdit, but the hook has a 5-second timeout — on a large edit batch the rebuild may be skipped; run the command manually in that case.
 4. **Never edit code you haven't mapped** when the graph is available. Prefer graph-assisted navigation over raw grep for cross-cutting questions ("who calls X", "where is Y implemented", "what would break if I rename Z").
 
-If `graphify` is not on PATH, the binary is at `/Users/cristi/bin/graphify`. The `graphify claude install` subcommand re-registers the PreToolUse hook if it's been removed.
+If `graphify` is not on PATH, locate your local install (typically `~/bin/graphify` or your venv's `bin/`). The `graphify claude install` subcommand re-registers the PreToolUse hook if it's been removed.
 
 ## Support
 
