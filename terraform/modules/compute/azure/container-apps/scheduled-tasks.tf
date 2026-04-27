@@ -58,6 +58,53 @@ resource "terraform_data" "scheduled_task_secret_preconditions" {
 }
 
 # ==============================================
+# User-assigned managed identities for the Logic App workflows
+# ==============================================
+#
+# We use user-assigned identities (one per workflow) instead of the
+# system-assigned identity originally introduced in #74 because azurerm's
+# `azurerm_logic_app_workflow` exposes the system-assigned `identity[0].
+# principal_id` attribute as null at plan time when the resource is being
+# created from scratch — Terraform's role-assignment validator then fails
+# with "principal_id is required, but no definition was found", blocking
+# every Azure deploy. UA identities are first-class resources whose
+# `principal_id` is populated at plan time, so the role assignment can
+# resolve cleanly. The same module already uses an UA identity for the
+# Container App itself (`azurerm_user_assigned_identity.container_app`),
+# so the pattern is consistent.
+#
+# Each workflow gets its own UA identity rather than sharing one so the
+# count gating on enable_scheduled_tasks vs enable_ri_exchange_schedule
+# stays per-workflow.
+
+resource "azurerm_user_assigned_identity" "recommendations" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name                = "${var.app_name}-recommendations-uami"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+resource "azurerm_user_assigned_identity" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name                = "${var.app_name}-ri-exchange-uami"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+resource "azurerm_user_assigned_identity" "cleanup" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name                = "${var.app_name}-cleanup-uami"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+# ==============================================
 # Logic App workflow for recommendations refresh
 # ==============================================
 
@@ -68,10 +115,11 @@ resource "azurerm_logic_app_workflow" "recommendations" {
   location            = var.location
   resource_group_name = var.resource_group_name
 
-  # System-assigned managed identity used to read the shared secret from
-  # Key Vault at workflow runtime. See header comment.
+  # User-assigned managed identity used to read the shared secret from
+  # Key Vault at workflow runtime. See the UA-identity rationale block above.
   identity {
-    type = "SystemAssigned"
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.recommendations[0].id]
   }
 
   tags = var.tags
@@ -106,6 +154,12 @@ resource "azurerm_logic_app_action_custom" "recommendations_get_secret" {
       authentication = {
         type     = "ManagedServiceIdentity"
         audience = "https://vault.azure.net"
+        # Pin to the UA identity attached above. With multiple UA identities
+        # (we attach exactly one per workflow today, but the Logic Apps
+        # runtime can in principle accept multiple), the action MUST specify
+        # which to use; with system-assigned the runtime would default to
+        # the SA identity, but we don't have one anymore.
+        identity = azurerm_user_assigned_identity.recommendations[0].id
       }
     }
     runAfter = {}
@@ -185,7 +239,8 @@ resource "azurerm_logic_app_workflow" "ri_exchange" {
   resource_group_name = var.resource_group_name
 
   identity {
-    type = "SystemAssigned"
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.ri_exchange[0].id]
   }
 
   tags = var.tags
@@ -216,6 +271,7 @@ resource "azurerm_logic_app_action_custom" "ri_exchange_get_secret" {
       authentication = {
         type     = "ManagedServiceIdentity"
         audience = "https://vault.azure.net"
+        identity = azurerm_user_assigned_identity.ri_exchange[0].id
       }
     }
     runAfter = {}
@@ -277,7 +333,8 @@ resource "azurerm_logic_app_workflow" "cleanup" {
   resource_group_name = var.resource_group_name
 
   identity {
-    type = "SystemAssigned"
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.cleanup[0].id]
   }
 
   tags = var.tags
@@ -309,6 +366,7 @@ resource "azurerm_logic_app_action_custom" "cleanup_get_secret" {
       authentication = {
         type     = "ManagedServiceIdentity"
         audience = "https://vault.azure.net"
+        identity = azurerm_user_assigned_identity.cleanup[0].id
       }
     }
     runAfter = {}
@@ -376,7 +434,7 @@ resource "azurerm_role_assignment" "recommendations_kv_secrets_user" {
 
   scope                = var.key_vault_id
   role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_logic_app_workflow.recommendations[0].identity[0].principal_id
+  principal_id         = azurerm_user_assigned_identity.recommendations[0].principal_id
 }
 
 resource "azurerm_role_assignment" "ri_exchange_kv_secrets_user" {
@@ -384,7 +442,7 @@ resource "azurerm_role_assignment" "ri_exchange_kv_secrets_user" {
 
   scope                = var.key_vault_id
   role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_logic_app_workflow.ri_exchange[0].identity[0].principal_id
+  principal_id         = azurerm_user_assigned_identity.ri_exchange[0].principal_id
 }
 
 resource "azurerm_role_assignment" "cleanup_kv_secrets_user" {
@@ -392,5 +450,5 @@ resource "azurerm_role_assignment" "cleanup_kv_secrets_user" {
 
   scope                = var.key_vault_id
   role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_logic_app_workflow.cleanup[0].identity[0].principal_id
+  principal_id         = azurerm_user_assigned_identity.cleanup[0].principal_id
 }
