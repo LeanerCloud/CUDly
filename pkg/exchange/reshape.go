@@ -29,6 +29,16 @@ type RIInfo struct {
 	// comparisons across currencies. Empty matches the same "skip"
 	// semantics as MonthlyCost == 0.
 	CurrencyCode string
+	// TermSeconds is the RI commitment term in seconds (31_536_000 for
+	// 1y, 94_608_000 for 3y) — the same unit the AWS SDK uses on the
+	// ReservedInstance.Duration field and the unit ec2.ConvertibleRI.Duration
+	// already carries. Used by the cross-family alternatives pass to
+	// reject term-mismatched offerings (e.g. surfacing a 3y RI as an
+	// alternative to a 1y commitment is wrong because the customer's
+	// existing exchange anchor is the 1y term). Zero means "unknown" —
+	// the term filter is skipped for that rec to preserve today's
+	// behaviour for older callers that don't populate it.
+	TermSeconds int64
 }
 
 // UtilizationInfo provides utilization data for a specific RI.
@@ -62,6 +72,15 @@ type OfferingOption struct {
 	// and target currencies to match; empty on either side falls back to
 	// "skip the currency guard" so today's USD-only fixtures stay green.
 	CurrencyCode string `json:"currency_code,omitempty"`
+	// TermSeconds is the offering's commitment term in seconds
+	// (31_536_000 for 1y, 94_608_000 for 3y) — same unit as
+	// RIInfo.TermSeconds and the AWS SDK's ReservedInstance.Duration.
+	// AnalyzeReshapingWithRecs rejects term-mismatched alternatives
+	// before building AlternativeTargets so a 3y RI never surfaces as
+	// an alternative to a 1y source commitment (and vice versa). Zero
+	// on either side falls back to "skip the term guard" for callers
+	// or fixtures that don't populate it.
+	TermSeconds int64 `json:"term_seconds,omitempty"`
 }
 
 // PurchaseRecLookup is the signature of the closure that resolves a
@@ -341,36 +360,21 @@ func AnalyzeReshapingWithRecs(
 
 // fillAlternativesFromRecs is the per-rec body of
 // AnalyzeReshapingWithRecs: for each rec it filters the offerings list
-// to cross-family options that pass the dollar-units gate, then sorts
-// them ascending by EffectiveMonthlyCost so the cheapest lands first
-// in the UI list. The source family and the primary target are excluded
-// so the alternatives slice is meaningfully different from the primary
-// suggestion. When source pricing is missing the gate is skipped for
-// that rec (NF/MonthlyCost==0 case).
+// to cross-family options that match the source RI's term and pass the
+// dollar-units gate, then sorts them ascending by EffectiveMonthlyCost
+// so the cheapest lands first in the UI list. The source family and
+// the primary target are excluded so the alternatives slice is
+// meaningfully different from the primary suggestion. When source
+// pricing or the source/offering term is missing the relevant gate is
+// skipped for that rec (NF/MonthlyCost==0 / TermSeconds==0 cases).
 func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []OfferingOption, risByID map[string]RIInfo) {
 	for i := range recs {
 		src, hasSrc := risByID[recs[i].SourceRIID]
 		srcFamily, _ := parseInstanceType(recs[i].SourceInstanceType)
 		filled := make([]OfferingOption, 0, len(offerings))
 		for _, off := range offerings {
-			// Skip same-family offerings — those collapse onto the
-			// primary same-family TargetInstanceType already surfaced.
-			offFamily, _ := parseInstanceType(off.InstanceType)
-			if offFamily == "" || strings.EqualFold(offFamily, srcFamily) {
+			if !alternativeIsEligible(recs[i], off, src, hasSrc, srcFamily) {
 				continue
-			}
-			// Skip the primary target — it's not an "alternative" to
-			// itself.
-			if off.InstanceType == recs[i].TargetInstanceType {
-				continue
-			}
-			// Apply the pre-filter only when source pricing info is
-			// available; otherwise keep today's behaviour and pass the
-			// alternative through untouched.
-			if hasSrc && src.MonthlyCost > 0 {
-				if !passesDollarUnitsCheck(src.NormalizationFactor, src.MonthlyCost, src.CurrencyCode, off) {
-					continue
-				}
 			}
 			filled = append(filled, off)
 		}
@@ -379,6 +383,74 @@ func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []Offering
 		})
 		recs[i].AlternativeTargets = filled
 	}
+}
+
+// alternativeIsEligible decides whether a single offering should appear
+// in the AlternativeTargets slice for the given rec. Pulled out of
+// fillAlternativesFromRecs so the per-offering guards stay readable
+// (and below the 10-cyclomatic-complexity gate). Returns true only when
+// every gate passes:
+//
+//   - Cross-family: the offering must be a different family from the
+//     source RI; same-family offerings collapse onto the primary
+//     TargetInstanceType already surfaced.
+//   - Not the primary target: an "alternative to itself" is no
+//     alternative.
+//   - Term match: when both sides report TermSeconds, they must match
+//     because AWS only allows exchanges within the same term. Either
+//     side at zero falls back to "skip the gate" so legacy callers
+//     stay green.
+//   - $-units: when source pricing is available, the local
+//     passesDollarUnitsCheck approximation must hold; otherwise the
+//     gate is skipped.
+func alternativeIsEligible(rec ReshapeRecommendation, off OfferingOption, src RIInfo, hasSrc bool, srcFamily string) bool {
+	if !isCrossFamilyAlternative(off, srcFamily, rec.TargetInstanceType) {
+		return false
+	}
+	if !termMatchesIfKnown(src, off, hasSrc) {
+		return false
+	}
+	if !pricingGatePasses(src, off, hasSrc) {
+		return false
+	}
+	return true
+}
+
+// isCrossFamilyAlternative returns true when the offering is a valid
+// cross-family alternative slot — i.e. its family parses, differs from
+// the source family, and the offering isn't the same as the primary
+// target the rec already surfaces.
+func isCrossFamilyAlternative(off OfferingOption, srcFamily, primaryTarget string) bool {
+	offFamily, _ := parseInstanceType(off.InstanceType)
+	if offFamily == "" || strings.EqualFold(offFamily, srcFamily) {
+		return false
+	}
+	if off.InstanceType == primaryTarget {
+		return false
+	}
+	return true
+}
+
+// termMatchesIfKnown enforces the term-match guard when both sides
+// report TermSeconds. Either side at zero (or no source RI at all)
+// returns true so legacy fixtures and older callers keep today's
+// behaviour.
+func termMatchesIfKnown(src RIInfo, off OfferingOption, hasSrc bool) bool {
+	if !hasSrc || src.TermSeconds <= 0 || off.TermSeconds <= 0 {
+		return true
+	}
+	return src.TermSeconds == off.TermSeconds
+}
+
+// pricingGatePasses runs the $-units pre-filter when source pricing
+// is available. Without source pricing the gate is skipped to preserve
+// backwards compatibility for callers that only need the primary-target
+// analysis.
+func pricingGatePasses(src RIInfo, off OfferingOption, hasSrc bool) bool {
+	if !hasSrc || src.MonthlyCost <= 0 {
+		return true
+	}
+	return passesDollarUnitsCheck(src.NormalizationFactor, src.MonthlyCost, src.CurrencyCode, off)
 }
 
 // findBestFit finds the instance size and count that best fits normalizedUsed units.

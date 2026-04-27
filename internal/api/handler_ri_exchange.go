@@ -193,6 +193,11 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 			NormalizationFactor: inst.NormalizationFactor,
 			MonthlyCost:         monthlyCostFromConvertibleRI(inst),
 			CurrencyCode:        inst.CurrencyCode,
+			// Plumb the AWS-reported RI duration straight through —
+			// reshape's term-match guard rejects alternatives whose
+			// TermSeconds differs from the source so a 3y RI never
+			// surfaces as an alternative to a 1y commitment.
+			TermSeconds: inst.Duration,
 		}
 	}
 

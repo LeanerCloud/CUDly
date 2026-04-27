@@ -290,6 +290,77 @@ func TestAnalyzeReshapingWithRecs_LegacyFamilyM4GeneratesAlternatives(t *testing
 	assert.Equal(t, "c5.large", got.AlternativeTargets[1].InstanceType)
 }
 
+// TestAnalyzeReshapingWithRecs_TermMismatchedAlternativesFiltered pins
+// the term-match guard: a 1y source RI must not see 3y alternatives in
+// AlternativeTargets (and vice versa) because AWS only allows exchanges
+// within the same term. Both sides populate TermSeconds — the guard
+// rejects the mismatched offering before AlternativeTargets is built.
+const oneYearSeconds = int64(365 * 24 * 60 * 60)
+const threeYearSeconds = 3 * oneYearSeconds
+
+func TestAnalyzeReshapingWithRecs_TermMismatchedAlternativesFiltered(t *testing.T) {
+	t.Parallel()
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// 1y c5.large — same term as the source, must surface.
+			{InstanceType: "c5.large", OfferingID: "off-c5-1y", EffectiveMonthlyCost: 50, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: oneYearSeconds},
+			// 3y r5.large — term mismatch, must be filtered out even
+			// though it would otherwise pass the $-units check.
+			{InstanceType: "r5.large", OfferingID: "off-r5-3y", EffectiveMonthlyCost: 60, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: threeYearSeconds},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD",
+			TermSeconds: oneYearSeconds, // 1y source
+		}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	require.Len(t, recs[0].AlternativeTargets, 1,
+		"only the 1y alternative survives; the 3y r5.large must be filtered as term-mismatched")
+	assert.Equal(t, "c5.large", recs[0].AlternativeTargets[0].InstanceType)
+	assert.Equal(t, oneYearSeconds, recs[0].AlternativeTargets[0].TermSeconds,
+		"surviving alternative must carry the source's term so the UI can label it")
+}
+
+// TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard pins the
+// backwards-compat path: when either the source or the offering omits
+// TermSeconds, the guard does not fire and the alternative passes
+// through (subject to the other gates). Mirrors the existing
+// MonthlyCost==0 / CurrencyCode=="" skip semantics.
+func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
+	t.Parallel()
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// 3y offering, but the source has no term info — the term
+			// gate stays disabled so the offering surfaces.
+			{InstanceType: "r5.large", OfferingID: "off-r5-3y", EffectiveMonthlyCost: 60, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: threeYearSeconds},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD",
+			// TermSeconds intentionally zero — older callers / fixtures.
+		}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	require.Len(t, recs[0].AlternativeTargets, 1,
+		"source TermSeconds==0 must skip the term gate so today's behaviour is preserved")
+	assert.Equal(t, "r5.large", recs[0].AlternativeTargets[0].InstanceType)
+}
+
 // TestPassesDollarUnitsCheck pins the local pre-filter rule that gates
 // cross-family alternatives. The rule is conservative: when source NF
 // or any side's price is zero, the check returns false (skip). When

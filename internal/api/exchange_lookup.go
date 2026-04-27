@@ -64,6 +64,12 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 // recommendation to the OfferingOption shape the reshape layer
 // consumes. Pulled out so the mapping can be unit-tested in isolation
 // (no DB / no ctx required).
+//
+// TermSeconds is derived from rec.Term (years) using the canonical
+// AWS RI duration constant 31_536_000s/year — the same value the AWS
+// SDK reports on ec2.ReservedInstance.Duration so the term-match guard
+// in pkg/exchange.fillAlternativesFromRecs can compare apples-to-apples
+// against RIInfo.TermSeconds populated from ec2.ConvertibleRI.Duration.
 func recommendationToOffering(rec config.RecommendationRecord, currencyCode string) exchange.OfferingOption {
 	monthly := rec.MonthlyCost
 	if rec.Term > 0 {
@@ -75,14 +81,26 @@ func recommendationToOffering(rec config.RecommendationRecord, currencyCode stri
 		}
 	}
 	_, size := splitInstanceType(rec.ResourceType)
+	var termSeconds int64
+	if rec.Term > 0 {
+		termSeconds = int64(rec.Term) * secondsPerYear
+	}
 	return exchange.OfferingOption{
 		InstanceType:         rec.ResourceType,
 		OfferingID:           rec.ID,
 		EffectiveMonthlyCost: monthly,
 		NormalizationFactor:  exchange.NormalizationFactorForSize(size),
 		CurrencyCode:         currencyCode,
+		TermSeconds:          termSeconds,
 	}
 }
+
+// secondsPerYear is the AWS-canonical RI duration constant for a 1-year
+// term (365 × 86400). Matches the value the AWS SDK reports on
+// ec2.ReservedInstance.Duration and the value
+// ec2.ConvertibleRI.Duration carries — used so OfferingOption.TermSeconds
+// can be compared directly against RIInfo.TermSeconds.
+const secondsPerYear int64 = 365 * 24 * 60 * 60
 
 // splitInstanceType splits "m5.xlarge" into ("m5", "xlarge"). Returns
 // empty strings if the format is unrecognized. Mirrors the helper in
