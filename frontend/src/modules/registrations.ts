@@ -186,8 +186,13 @@ export async function loadRegistrations(): Promise<void> {
   if (!container) return;
 
   const filterEl = document.getElementById('registrations-status-filter') as HTMLSelectElement | null;
-  // Empty value = "All" (default). Don't coerce to "pending" — that would hide
-  // approved/rejected registrations after the user approves them.
+  // The select's default `selected` option is "pending" (see index.html), so on
+  // first load `filterEl.value === 'pending'` and only pending registrations
+  // are fetched. This is intentional (refs #45): admins almost always come to
+  // this panel to action the pending queue, and surfacing approved/rejected
+  // rows by default added noise. Operators who need other states can pick
+  // them from the dropdown — picking "All" yields an empty string, which the
+  // `status || undefined` coercion below turns into "no status filter".
   const status = filterEl?.value ?? '';
 
   try {
