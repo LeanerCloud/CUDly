@@ -40,7 +40,7 @@ func TestParseSavingsPlanDetail(t *testing.T) {
 			planType: types.SupportedSavingsPlansTypeComputeSp,
 			validate: func(t *testing.T, rec *common.Recommendation) {
 				assert.Equal(t, common.ProviderAWS, rec.Provider)
-				assert.Equal(t, common.ServiceSavingsPlans, rec.Service)
+				assert.Equal(t, common.ServiceSavingsPlansCompute, rec.Service)
 				assert.Equal(t, common.CommitmentSavingsPlan, rec.CommitmentType)
 				assert.Equal(t, "partial-upfront", rec.PaymentOption)
 				assert.Equal(t, "1yr", rec.Term)

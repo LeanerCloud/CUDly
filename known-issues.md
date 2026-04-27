@@ -208,6 +208,38 @@ outstanding so future work has a clear starting point.
   GCP provider is reported as successful even when this account fails,
   so the operator only sees the issue if they tail logs.
 
+- **Per-plan-type SP split: caveats exposed in plans/recommendations
+  views**: The migration to four per-plan-type Savings Plans cards
+  (Compute / EC2 Instance / SageMaker / Database) replaces the umbrella
+  `(aws, savings-plans)` ServiceConfig row with four per-plan-type
+  rows and rewrites `purchase_plans.services` JSONB keys atomically
+  (migration 000040). Two pre-existing UX limitations are now visible
+  with the split and are tracked here as follow-ups, not blockers:
+
+  - **Multi-SP purchase-plan summary shows only one plan type.**
+    `frontend/src/plans.ts:231` renders a plan summary by reading the
+    FIRST entry from `plan.services` (a JSONB-derived map). A purchase
+    plan that targets multiple SP plan types (e.g., Compute +
+    SageMaker) will list only one — whichever sorts first — in its
+    summary card. Pre-split this was hidden because the single
+    `aws:savings-plans` key always rendered as "Savings Plans"; post-
+    split the same plan now has four keys and only one displays. Fix
+    is plans.ts-only: render a comma-separated list or a count badge
+    when multiple SP plan types are present in the same plan. Out of
+    scope for the issue #22 follow-up PR.
+
+  - **Bulk-buy-from-Recommendations no longer sees "all SP types" rows.**
+    The bulk-buy modal in recommendations.ts groups recommendations by
+    `(provider, service)`. Pre-split, every SP recommendation shared
+    `service: "savings-plans"`, so a Compute SP rec and a SageMaker SP
+    rec landed in the same bucket and could be bought in one click.
+    Post-split, each plan type is its own service, so an operator who
+    used to bulk-buy SP must now bulk-buy four times (once per plan
+    type). Fix is a UI-side aggregator that groups by
+    `IsSavingsPlan(rec.service)` for the bulk-buy view only, leaving
+    the underlying service distinction intact for the per-card save
+    path. Out of scope for the issue #22 follow-up PR.
+
 - **OpenSearch RI tagging: best-effort, may be rejected by AWS**:
   Implemented in `providers/aws/services/opensearch/client.go`. The
   client now resolves the caller's AWS account ID via STS (cached on

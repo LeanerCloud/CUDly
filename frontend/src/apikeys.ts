@@ -7,6 +7,7 @@ import type { APIKeyInfo, CreateAPIKeyResponse } from './types';
 import { formatDateTime } from './utils';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
+import { openModal, closeModal } from './modal';
 
 // State for modal management
 let currentApiKeys: APIKeyInfo[] = [];
@@ -133,7 +134,7 @@ export function showCreateKeyModal(): void {
   if (expiresCheckbox) expiresCheckbox.checked = false;
   if (expiresAtField) expiresAtField.classList.add('hidden');
 
-  modal.classList.remove('hidden');
+  openModal(modal);
 }
 
 /**
@@ -141,7 +142,7 @@ export function showCreateKeyModal(): void {
  */
 export function closeCreateKeyModal(): void {
   const modal = document.getElementById('create-apikey-modal');
-  if (modal) modal.classList.add('hidden');
+  if (modal) closeModal(modal);
 }
 
 /**
@@ -240,7 +241,7 @@ export function showKeyCreatedModal(apiKey: string): void {
   `;
 
   document.body.appendChild(modal);
-  modal.classList.remove('hidden');
+  openModal(modal);
 
   // Setup copy button
   const copyBtn = document.getElementById('copy-apikey-btn');
@@ -260,10 +261,13 @@ export function showKeyCreatedModal(apiKey: string): void {
     });
   }
 
-  // Setup close button
+  // Setup close button. closeModal first so the focus trap is torn
+  // down and focus is restored to the original trigger; then remove
+  // the dynamically-injected element from the DOM.
   const closeBtn = document.getElementById('close-apikey-created-btn');
   if (closeBtn) {
     closeBtn.addEventListener('click', () => {
+      closeModal(modal);
       modal.remove();
     });
   }

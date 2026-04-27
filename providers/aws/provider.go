@@ -17,6 +17,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/LeanerCloud/CUDly/providers/aws/services/savingsplans"
 )
 
 // AWS SDK v2 credential source identifiers.
@@ -377,10 +378,31 @@ func (p *AWSProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
 	return regions, nil
 }
 
-// GetDefaultRegion returns the default AWS region
+// GetDefaultRegion returns the default AWS region.
+//
+// Priority order:
+//
+//  1. p.region if explicitly set on the provider.
+//  2. p.cfg.Region if the caller pre-populated cfg (e.g. tests with a
+//     synthetic config) — checked BEFORE IsConfigured to avoid the SDK's
+//     credentials/config chain overwriting a caller-supplied region with
+//     the ambient AWS_REGION / ~/.aws/config default.
+//  3. The SDK-loaded region (via IsConfigured → loadConfig).
+//  4. "us-east-1" as a last-resort default.
+//
+// Step 2 is what fixes #96: previously this function called
+// IsConfigured() unconditionally, which triggers cfgOnce.Do(loadConfig)
+// and lets the SDK's credentials/config chain populate p.cfg.Region from
+// the developer's ambient environment, masking a region the test had set
+// explicitly. Reading the already-set p.cfg.Region first keeps test
+// fixtures honest while still falling through to the SDK chain when no
+// caller has touched cfg.
 func (p *AWSProvider) GetDefaultRegion() string {
 	if p.region != "" {
 		return p.region
+	}
+	if p.cfg.Region != "" {
+		return p.cfg.Region
 	}
 	if p.IsConfigured() && p.cfg.Region != "" {
 		return p.cfg.Region
@@ -388,7 +410,9 @@ func (p *AWSProvider) GetDefaultRegion() string {
 	return "us-east-1"
 }
 
-// GetSupportedServices returns the list of services supported by AWS provider
+// GetSupportedServices returns the list of services supported by AWS provider.
+// Savings Plans are exposed as four distinct services (one per AWS plan type)
+// so users can configure term/payment defaults per plan type via ServiceConfig.
 func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 	return []common.ServiceType{
 		common.ServiceCompute,
@@ -396,6 +420,12 @@ func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceCache,
 		common.ServiceSearch,
 		common.ServiceDataWarehouse,
+		common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase,
+		// Legacy umbrella for backward compat with persisted records;
+		// see the GetServiceClient case below for rationale.
 		common.ServiceSavingsPlans,
 		// Legacy service types for backward compatibility
 		common.ServiceEC2,
@@ -430,8 +460,23 @@ func (p *AWSProvider) GetServiceClient(ctx context.Context, service common.Servi
 		return NewRedshiftClient(regionalCfg), nil
 	case common.ServiceMemoryDB:
 		return NewMemoryDBClient(regionalCfg), nil
+	case common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase:
+		pt, _ := savingsplans.PlanTypeForServiceType(service)
+		return NewSavingsPlansClient(regionalCfg, pt), nil
 	case common.ServiceSavingsPlans:
-		return NewSavingsPlansClient(regionalCfg), nil
+		// Legacy umbrella path for any persisted RecommendationRecord
+		// (or scheduled purchase) still tagged with the pre-split slug.
+		// The constructor's empty plan type signals "umbrella mode" to
+		// the SP client: GetExistingCommitments returns every plan type
+		// unfiltered, and findOfferingID falls back to the
+		// recommendation's Details.PlanType (matching pre-split
+		// behaviour). New code paths use the four per-plan-type cases
+		// above; this case exists so legacy data doesn't 503 the
+		// purchase pipeline.
+		return NewSavingsPlansClient(regionalCfg, ""), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}

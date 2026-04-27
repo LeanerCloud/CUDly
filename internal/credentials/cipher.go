@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,68 +17,122 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/LeanerCloud/CUDly/internal/secrets"
 )
 
-// devKey is a fixed 32-byte key used only in local development when no
-// CREDENTIAL_ENCRYPTION_KEY or CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN is set.
-// It is intentionally NOT secret — it exists solely to allow local dev
-// without a Secrets Manager dependency.
+// devKeyHex is the all-zero 32-byte AES-256 dev key, used ONLY when
+// CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY=1 is explicitly set. It is intentionally
+// not secret — it exists for local dev without a Secrets Manager dependency.
 const devKeyHex = "0000000000000000000000000000000000000000000000000000000000000000"
 
-var (
-	cachedKey     []byte
-	cachedKeyOnce sync.Once
-	cachedKeyErr  error
+// ErrNoKey is returned by LoadKey when no encryption key is configured and
+// CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY is not set.
+var ErrNoKey = errors.New("credentials: no credential encryption key configured")
+
+// Env var names used by LoadKey, in priority order.
+const (
+	EnvSecretARN  = "CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN"  // AWS Secrets Manager ARN
+	EnvSecretName = "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME" // Azure Key Vault secret name
+	EnvSecretID   = "CREDENTIAL_ENCRYPTION_KEY_SECRET_ID"   // GCP Secret Manager secret ID
+	EnvRawKey     = "CREDENTIAL_ENCRYPTION_KEY"             // Raw 64-char hex (ops/dev)
+	EnvAllowDev   = "CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY"   // 1 = permit zero-key fallback
 )
 
-// KeyFromEnv loads the 32-byte AES-256 key using the following priority order:
-//  1. CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN set → retrieve secret value from AWS Secrets
-//     Manager and decode as 64-char hex string; result is cached for Lambda lifetime.
-//  2. CREDENTIAL_ENCRYPTION_KEY set → decode as 64-char hex string directly.
-//  3. Neither set → use the hardcoded dev key; logs a warning.
-func KeyFromEnv() ([]byte, error) {
+var (
+	cachedKey       []byte
+	cachedKeySource string
+	cachedKeyOnce   sync.Once
+	cachedKeyErr    error
+)
+
+// LoadKey loads the 32-byte AES-256 key for tenant credential encryption.
+// First non-empty wins, in this order:
+//
+//  1. CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN  → resolver.GetSecret(arn)   (AWS)
+//  2. CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME → resolver.GetSecret(name)  (Azure)
+//  3. CREDENTIAL_ENCRYPTION_KEY_SECRET_ID   → resolver.GetSecret(id)    (GCP)
+//  4. CREDENTIAL_ENCRYPTION_KEY              → raw 64-char hex
+//
+// If none are set, returns ErrNoKey unless CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY=1
+// is set (in which case the all-zero dev key is returned with a loud warning).
+//
+// The returned source string is the env var name that resolved (for logging).
+// Callers MUST NOT log the key value.
+//
+// Result is memoized via sync.Once for the process lifetime; tests reset the
+// cache via resetKeyCacheForTest() in this package's test files.
+func LoadKey(ctx context.Context, resolver secrets.Resolver) (key []byte, source string, err error) {
 	cachedKeyOnce.Do(func() {
-		cachedKey, cachedKeyErr = loadKey()
+		cachedKey, cachedKeySource, cachedKeyErr = loadKey(ctx, resolver)
 	})
-	return cachedKey, cachedKeyErr
+	return cachedKey, cachedKeySource, cachedKeyErr
 }
 
-func loadKey() ([]byte, error) {
-	if arn := os.Getenv("CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN"); arn != "" {
-		return loadKeyFromSecretsManager(arn)
-	}
-	if hexKey := os.Getenv("CREDENTIAL_ENCRYPTION_KEY"); hexKey != "" {
-		return decodeHexKey(hexKey)
-	}
-	log.Println("WARN: CREDENTIAL_ENCRYPTION_KEY not set — using insecure dev credential key")
-	return decodeHexKey(devKeyHex)
+// DevKey returns the all-zero 32-byte dev key. Exposed for the rekey
+// migration command (cmd/rekey) which needs to detect rows encrypted under
+// it without going through the LoadKey env-var path.
+func DevKey() []byte {
+	k, _ := decodeHexKey(devKeyHex)
+	return k
 }
 
-func loadKeyFromSecretsManager(arn string) ([]byte, error) {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+func loadKey(ctx context.Context, resolver secrets.Resolver) ([]byte, string, error) {
+	// Detect multiple-set misconfiguration upfront.
+	var set []string
+	for _, name := range []string{EnvSecretARN, EnvSecretName, EnvSecretID, EnvRawKey} {
+		if os.Getenv(name) != "" {
+			set = append(set, name)
+		}
+	}
+	if len(set) > 1 {
+		log.Printf("WARN: credentials: multiple encryption-key env vars set (%s); using first in priority order",
+			strings.Join(set, ", "))
+	}
+
+	if arn := os.Getenv(EnvSecretARN); arn != "" {
+		k, err := loadFromResolver(ctx, resolver, arn, EnvSecretARN)
+		return k, EnvSecretARN, err
+	}
+	if name := os.Getenv(EnvSecretName); name != "" {
+		k, err := loadFromResolver(ctx, resolver, name, EnvSecretName)
+		return k, EnvSecretName, err
+	}
+	if id := os.Getenv(EnvSecretID); id != "" {
+		k, err := loadFromResolver(ctx, resolver, id, EnvSecretID)
+		return k, EnvSecretID, err
+	}
+	if hexKey := os.Getenv(EnvRawKey); hexKey != "" {
+		k, err := decodeHexKey(hexKey)
+		return k, EnvRawKey, err
+	}
+
+	if os.Getenv(EnvAllowDev) == "1" {
+		log.Printf("WARN: credentials: %s=1 — using insecure all-zero dev key. NEVER use in production.", EnvAllowDev)
+		k, err := decodeHexKey(devKeyHex)
+		return k, EnvAllowDev, err
+	}
+
+	return nil, "", fmt.Errorf("%w (set one of %s, %s, %s, %s, or %s=1 for local dev)",
+		ErrNoKey, EnvSecretARN, EnvSecretName, EnvSecretID, EnvRawKey, EnvAllowDev)
+}
+
+func loadFromResolver(ctx context.Context, resolver secrets.Resolver, secretID, sourceVar string) ([]byte, error) {
+	if resolver == nil {
+		return nil, fmt.Errorf("credentials: %s set but no secret resolver provided", sourceVar)
+	}
+	raw, err := resolver.GetSecret(ctx, secretID)
 	if err != nil {
-		return nil, fmt.Errorf("credentials: load AWS config for Secrets Manager: %w", err)
+		return nil, fmt.Errorf("credentials: fetch secret via %s: %w", sourceVar, err)
 	}
-	client := secretsmanager.NewFromConfig(cfg)
-	out, err := client.GetSecretValue(context.Background(), &secretsmanager.GetSecretValueInput{
-		SecretId: &arn,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("credentials: GetSecretValue(%s): %w", arn, err)
-	}
-	if out.SecretString == nil {
-		return nil, fmt.Errorf("credentials: secret %s has no string value", arn)
-	}
-	return decodeHexKey(*out.SecretString)
+	return decodeHexKey(raw)
 }
 
 func decodeHexKey(hexKey string) ([]byte, error) {
 	hexKey = strings.TrimSpace(hexKey)
 	key, err := hex.DecodeString(hexKey)
 	if err != nil {
-		return nil, fmt.Errorf("credentials: invalid hex key: %w", err)
+		// Don't leak the offending byte from hex.InvalidByteError into logs.
+		return nil, fmt.Errorf("credentials: invalid hex key (length=%d)", len(hexKey))
 	}
 	if len(key) != 32 {
 		return nil, fmt.Errorf("credentials: key must be 32 bytes (64 hex chars), got %d bytes", len(key))

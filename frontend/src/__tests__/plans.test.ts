@@ -166,6 +166,79 @@ describe('Plans Module', () => {
       expect(list?.innerHTML).toContain('ec2');
     });
 
+    test('multi-SP plan summary lists every plan-type covered (issue #131)', async () => {
+      // Pre-fix: extractPlanInfo took serviceValues[0], so a plan
+      // covering both Compute SP and SageMaker SP rendered only
+      // "Compute Savings Plans" — the SageMaker side was hidden.
+      // Post-fix: every entry is rendered, comma-joined, with the
+      // SP slugs abbreviated so 4 plan-types still fit in the card.
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-multi-sp',
+            name: 'Multi SP plan',
+            enabled: true,
+            auto_purchase: true,
+            services: {
+              'aws:savings-plans-compute': {
+                provider: 'aws',
+                service: 'savings-plans-compute',
+                enabled: true,
+                term: 3,
+                payment: 'no-upfront',
+                coverage: 80,
+              },
+              'aws:savings-plans-sagemaker': {
+                provider: 'aws',
+                service: 'savings-plans-sagemaker',
+                enabled: true,
+                term: 3,
+                payment: 'no-upfront',
+                coverage: 80,
+              },
+            },
+            ramp_schedule: {
+              type: 'immediate',
+              percent_per_step: 100,
+              step_interval_days: 0,
+              current_step: 0,
+              total_steps: 1,
+            },
+          },
+        ],
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Compute SP');
+      expect(list?.innerHTML).toContain('SageMaker SP');
+      // The pre-fix "Multiple" placeholder must be gone.
+      expect(list?.innerHTML).not.toContain('Multiple');
+    });
+
+    test('single-service plan still renders one label (no regression)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-ec2',
+            name: 'EC2 only',
+            enabled: true,
+            services: { ec2: { provider: 'aws', service: 'ec2', term: 3, coverage: 80 } },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+          },
+        ],
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // The Service field shows "ec2" — the slug pass-through case.
+      expect(list?.innerHTML).toContain('ec2');
+    });
+
     test('shows empty message when no plans', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: []

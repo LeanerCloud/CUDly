@@ -371,6 +371,40 @@ describe('HTML Structure', () => {
       expect(labels).toContain('Azure');
       expect(labels).toContain('GCP');
     });
+
+    // Refs #45 — admins land on the Accounts page primarily to action the
+    // pending registration queue, so the filter must default to "pending".
+    test('registrations status filter defaults to "pending"', () => {
+      const selector = document.getElementById('registrations-status-filter') as HTMLSelectElement | null;
+      expect(selector).toBeTruthy();
+      // value reflects the initial `selected` option in static HTML.
+      expect(selector?.value).toBe('pending');
+      const selected = selector?.querySelector('option[selected]') as HTMLOptionElement | null;
+      expect(selected?.value).toBe('pending');
+    });
+  });
+
+  describe('Accounts Section Layout', () => {
+    // Refs #45 — Account Registrations must render above all per-provider
+    // account tables so pending registrations across providers stay visible
+    // at the top of the Accounts page.
+    test('registrations fieldset precedes per-provider account fieldsets in DOM order', () => {
+      const registrations = document.getElementById('accounts-registrations');
+      const awsBlock = document.getElementById('accounts-aws-block');
+      const azureBlock = document.getElementById('accounts-azure-block');
+      const gcpBlock = document.getElementById('accounts-gcp-block');
+
+      expect(registrations).toBeTruthy();
+      expect(awsBlock).toBeTruthy();
+      expect(azureBlock).toBeTruthy();
+      expect(gcpBlock).toBeTruthy();
+
+      // DOCUMENT_POSITION_FOLLOWING (0x04) means the argument follows `node`.
+      const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING;
+      expect(registrations!.compareDocumentPosition(awsBlock!) & FOLLOWING).toBeTruthy();
+      expect(registrations!.compareDocumentPosition(azureBlock!) & FOLLOWING).toBeTruthy();
+      expect(registrations!.compareDocumentPosition(gcpBlock!) & FOLLOWING).toBeTruthy();
+    });
   });
 
   describe('Security Headers', () => {

@@ -1,6 +1,6 @@
 # Known Issues: Terraform Azure Environment
 
-> **Audit status (2026-04-20):** `0 still valid · 7 resolved · 1 partially fixed · 0 moved · 0 needs triage`
+> **Audit status (2026-04-25):** `0 still valid · 8 resolved · 0 partially fixed · 0 moved · 0 needs triage`
 
 ## ~~CRITICAL: `nonsensitive()` strips sensitivity from `additional_secrets` before merge~~ — RESOLVED
 
@@ -95,18 +95,17 @@
 
 **Effort:** `small` (contingent on triage)
 
-## ~~HIGH: `SCHEDULED_TASK_SECRET` injected as plain-text environment variable~~ — PARTIALLY RESOLVED
+## ~~HIGH: `SCHEDULED_TASK_SECRET` injected as plain-text environment variable~~ — RESOLVED
 
 **File**: `terraform/environments/azure/compute.tf:42`
 **Description**: The scheduled-task shared secret was injected into the Container App as a plaintext env var, visible via `az containerapp show`, the Azure Portal, and exported ARM templates.
-**Status:** ✔️ Partially resolved — runtime env-var leak closed; Logic App path deferred.
+**Status:** ✔️ Fully resolved — runtime env-var leak closed AND Logic App path migrated to Key Vault references (issue #50).
 
 **Resolved by:**
 
 - Container App env var switched from `SCHEDULED_TASK_SECRET = <value>` to `SCHEDULED_TASK_SECRET_NAME = <kv-secret-name>`. `az containerapp show` now reveals only the secret name.
 - `ApplicationConfig.ScheduledTaskSecretName` added. `NewApplicationFromDeps` resolves it via the existing `SecretResolver` (Azure Key Vault / AWS Secrets Manager) at startup and populates `ScheduledTaskSecret` in memory. Falls back to the plaintext `SCHEDULED_TASK_SECRET` env var if the lookup fails or the resolver isn't configured, so dev/local runs still work.
-
-**Deferred:** The Logic App workflow (`scheduled-tasks.tf:48,106`) still interpolates `var.scheduled_task_secret` into its outgoing `Authorization: Bearer …` header. This value is stored inside the Logic App resource + Terraform state; removing it requires migrating to Azure Logic Apps Key Vault connections (`@parameters('kv-secret')`), a larger refactor. The container-app side — which is what was actually flagged in the audit — no longer leaks.
+- Logic App workflows now have a system-assigned managed identity granted "Key Vault Secrets User" on the vault; each workflow's first action GETs the secret from KV at runtime via that identity, and the call-endpoint action references `@body('get-secret')['value']` in its outgoing Authorization header. The plaintext value no longer lives in the workflow definition or Terraform state. See `terraform/modules/compute/azure/container-apps/scheduled-tasks.tf` and PR resolving #50.
 
 ### Original implementation plan
 

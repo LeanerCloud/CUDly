@@ -80,6 +80,13 @@ func TestValidateServiceName(t *testing.T) {
 		{"valid service name", "rds", false},
 		{"valid service with hyphen", "elastic-cache", false},
 		{"valid service with numbers", "ec2", false},
+		// Issue #22 follow-up: the four per-plan-type SP slugs all match
+		// the regex. Locked in here so a future regex tightening can't
+		// silently break SP saves at the API layer.
+		{"valid SP slug compute", "savings-plans-compute", false},
+		{"valid SP slug ec2instance", "savings-plans-ec2instance", false},
+		{"valid SP slug sagemaker", "savings-plans-sagemaker", false},
+		{"valid SP slug database", "savings-plans-database", false},
 		{"uppercase service is invalid", "RDS", true},
 		{"invalid with underscore", "elastic_cache", true},
 		{"invalid with special chars", "rds!", true},

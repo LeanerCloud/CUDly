@@ -368,6 +368,9 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 
 // mapServiceType maps a service string to common.ServiceType
 func (m *Manager) mapServiceType(service string) common.ServiceType {
+	if svc, ok := mapSavingsPlansSlug(service); ok {
+		return svc
+	}
 	switch service {
 	case "ec2", "compute":
 		return common.ServiceEC2
@@ -381,11 +384,31 @@ func (m *Manager) mapServiceType(service string) common.ServiceType {
 		return common.ServiceRedshift
 	case "memorydb":
 		return common.ServiceMemoryDB
-	case "savings-plans", "savingsplans":
-		return common.ServiceSavingsPlans
 	default:
 		return common.ServiceType(service)
 	}
+}
+
+// mapSavingsPlansSlug normalises both the canonical hyphenated SP slugs and
+// the dash-free spellings the frontend has historically sent into the
+// matching common.ServiceType. The map covers the legacy umbrella plus the
+// four per-plan-type slugs in both spellings — pulled out of mapServiceType
+// to keep that switch under the gocyclo budget.
+func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
+	slugs := map[string]common.ServiceType{
+		"savings-plans":             common.ServiceSavingsPlans,
+		"savingsplans":              common.ServiceSavingsPlans,
+		"savings-plans-compute":     common.ServiceSavingsPlansCompute,
+		"savingsplans-compute":      common.ServiceSavingsPlansCompute,
+		"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
+		"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
+		"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
+		"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
+		"savings-plans-database":    common.ServiceSavingsPlansDatabase,
+		"savingsplans-database":     common.ServiceSavingsPlansDatabase,
+	}
+	svc, ok := slugs[service]
+	return svc, ok
 }
 
 // updatePlanProgress advances the ramp schedule after a purchase

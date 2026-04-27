@@ -35,9 +35,9 @@ describe('Savings History Module', () => {
     document.body.innerHTML = `
       <select id="savings-period">
         <option value="24h">Last 24 Hours</option>
-        <option value="7d" selected>Last 7 Days</option>
+        <option value="7d">Last 7 Days</option>
         <option value="30d">Last 30 Days</option>
-        <option value="90d">Last 90 Days</option>
+        <option value="90d" selected>Last 90 Days</option>
       </select>
       <button id="refresh-savings-btn">Refresh</button>
       <div id="savings-history-container">
@@ -56,11 +56,11 @@ describe('Savings History Module', () => {
   });
 
   describe('loadSavingsHistory', () => {
-    test('loads and renders savings data for default 7d period', async () => {
+    test('loads and renders savings data for default 90d period', async () => {
       const mockData = {
         start: '2024-01-01T00:00:00Z',
-        end: '2024-01-08T00:00:00Z',
-        interval: 'hourly',
+        end: '2024-04-01T00:00:00Z',
+        interval: 'daily',
         summary: {
           total_period_savings: 500,
           total_upfront_spent: 1000,
@@ -77,8 +77,10 @@ describe('Savings History Module', () => {
 
       await loadSavingsHistory();
 
+      // 90d is the new default (multi-month trend signal); switch case in
+      // savings-history.ts maps it to the 'daily' interval.
       expect(getSavingsAnalytics).toHaveBeenCalledWith(expect.objectContaining({
-        interval: 'hourly'
+        interval: 'daily'
       }));
       expect(Chart).toHaveBeenCalled();
     });

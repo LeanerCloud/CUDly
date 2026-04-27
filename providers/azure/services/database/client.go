@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -19,10 +20,20 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
+
+// sqlSKUEntry holds the SKU-catalogue-derived fields the converter
+// wants for each Azure SQL SKU. Sourced from the
+// armsql.CapabilitiesClient.ListByLocation response which embeds the
+// SQL Server version in the ServerVersionCapability.Name (e.g. "12.0")
+// while traversing down to ServiceLevelObjective SKUs.
+type sqlSKUEntry struct {
+	engineVersion string
+}
 
 // HTTPClient interface for HTTP operations (enables mocking)
 type HTTPClient interface {
@@ -55,6 +66,14 @@ type DatabaseClient struct {
 	recommendationsPager RecommendationsPager
 	reservationsPager    ReservationsDetailsPager
 	capabilitiesClient   CapabilitiesClient
+
+	// Lazy SKU catalogue cache. Populated once on the first
+	// recommendation conversion in this client's GetRecommendations
+	// call — single ListByLocation per region instead of N+1 per rec.
+	// A failed fetch leaves skuCacheMap nil; converters then fall back
+	// to empty EngineVersion with a one-time WARN log.
+	skuCacheOnce sync.Once
+	skuCacheMap  map[string]sqlSKUEntry
 }
 
 // NewClient creates a new Azure Database client
@@ -564,15 +583,20 @@ func extractSQLPricing(items []DatabaseRetailPriceItem, termYears int) (onDemand
 // SDK-to-struct ladder. Returns nil when the SDK payload is unusable so
 // the caller can filter it out.
 //
-// Details populated by parsing the SKU string (f.ResourceType) — the
-// reservation recommendation payload doesn't carry a separate
-// engine/edition/vcores field. armsql SKU catalogue calls (for deep
-// engine version + az-config data) are deferred to a batched-enrichment
-// follow-up tracked in known_issues/10_azure_provider.md.
-func (c *DatabaseClient) convertAzureSQLRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+// Details: Engine="sqlserver" + InstanceClass=ResourceType (always
+// populated). EngineVersion enriched from the lazily-cached
+// armsql.CapabilitiesClient catalogue when the recommendation's SKU
+// string matches a ServiceLevelObjective in the location capabilities;
+// otherwise stays empty. AZConfig/Deployment still need additional
+// signals (per-server config) and remain deferred.
+func (c *DatabaseClient) convertAzureSQLRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
 		return nil
+	}
+	details := detailsFromSQLSKU(f.ResourceType)
+	if entry, ok := c.cachedSKULookup(ctx, f.ResourceType); ok && entry.engineVersion != "" {
+		details.EngineVersion = entry.engineVersion
 	}
 	return &common.Recommendation{
 		Provider:         common.ProviderAzure,
@@ -588,7 +612,74 @@ func (c *DatabaseClient) convertAzureSQLRecommendation(_ context.Context, azureR
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
-		Details:          detailsFromSQLSKU(f.ResourceType),
+		Details:          details,
+	}
+}
+
+// cachedSKULookup returns the SKU catalogue entry for skuName, fetching
+// the catalogue lazily on first call. The catalogue is fetched ONCE per
+// client lifetime via armsql.CapabilitiesClient.ListByLocation;
+// subsequent calls are O(1) map lookups. ok=false on cache miss OR
+// catalogue-fetch failure — the caller falls back to empty
+// EngineVersion rather than failing the whole conversion.
+func (c *DatabaseClient) cachedSKULookup(ctx context.Context, skuName string) (sqlSKUEntry, bool) {
+	c.skuCacheOnce.Do(func() {
+		c.skuCacheMap = c.fetchSKUCatalogue(ctx)
+	})
+	if c.skuCacheMap == nil {
+		return sqlSKUEntry{}, false
+	}
+	entry, ok := c.skuCacheMap[skuName]
+	return entry, ok
+}
+
+// fetchSKUCatalogue performs the single ListByLocation call and reduces
+// the response into a name->sqlSKUEntry map keyed by ServiceLevelObjective
+// SKU.Name (matches the recommendation engine's ResourceType). Returns
+// nil on error so the sync.Once-gated cache field stays nil.
+func (c *DatabaseClient) fetchSKUCatalogue(ctx context.Context) map[string]sqlSKUEntry {
+	capClient, err := c.getOrCreateCapabilitiesClient()
+	if err != nil {
+		logging.Warnf("azure database: SKU catalogue capabilities client create failed for region %s: %v — Details.EngineVersion left empty", c.region, err)
+		return nil
+	}
+	resp, err := capClient.ListByLocation(ctx, c.region, &armsql.CapabilitiesClientListByLocationOptions{Include: nil})
+	if err != nil {
+		logging.Warnf("azure database: SKU catalogue ListByLocation failed for region %s: %v — Details.EngineVersion left empty", c.region, err)
+		return nil
+	}
+	out := make(map[string]sqlSKUEntry)
+	for _, version := range resp.LocationCapabilities.SupportedServerVersions {
+		if version == nil || version.Name == nil {
+			continue
+		}
+		populateSQLSKUMapFromVersion(out, *version.Name, version.SupportedEditions)
+	}
+	return out
+}
+
+// populateSQLSKUMapFromVersion writes one sqlSKUEntry per ServiceLevelObjective
+// SKU.Name found under the given server version's editions. Extracted out of
+// fetchSKUCatalogue to keep that function under the cyclomatic-complexity
+// threshold enforced by the pre-commit hook. First-write-wins semantics: if
+// the same SKU name appears under multiple server versions (rare in
+// practice), the first one wins. Order is deterministic per ListByLocation
+// response; downstream consumers don't switch behaviour on the
+// engine-version delta within a single region.
+func populateSQLSKUMapFromVersion(out map[string]sqlSKUEntry, engineVersion string, editions []*armsql.EditionCapability) {
+	for _, edition := range editions {
+		if edition == nil {
+			continue
+		}
+		for _, slo := range edition.SupportedServiceLevelObjectives {
+			if slo == nil || slo.SKU == nil || slo.SKU.Name == nil {
+				continue
+			}
+			skuName := *slo.SKU.Name
+			if _, exists := out[skuName]; !exists {
+				out[skuName] = sqlSKUEntry{engineVersion: engineVersion}
+			}
+		}
 	}
 }
 

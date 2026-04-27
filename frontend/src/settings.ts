@@ -3,16 +3,48 @@
  */
 
 import * as api from './api';
+import type { ConfigResponse } from './types';
 import { fetchAndPopulateCommitmentOptions } from './commitmentOptions';
 import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
 import { isValidCombination } from './commitmentOptions';
+import { openModal, closeModal } from './modal';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
 let cachedSourceCloud: string | undefined;
+
+// In-flight cache for /api/config so each modal open does not refetch (issue
+// #130d). The promise is captured the first time getConfig() is requested
+// and reused for the lifetime of the page; resetConfigCache() lets tests
+// (and future "force reload" UI) clear it explicitly.
+let cachedConfigPromise: Promise<ConfigResponse> | undefined;
+
+function getCachedConfig(): Promise<ConfigResponse> {
+  if (!cachedConfigPromise) {
+    cachedConfigPromise = api.getConfig().catch(err => {
+      // Don't poison the cache on a transient failure — let the next caller
+      // retry. (If we cached the rejection forever, a single early flake
+      // would break the AWS modal for the rest of the session.)
+      cachedConfigPromise = undefined;
+      throw err;
+    });
+  }
+  return cachedConfigPromise;
+}
+
+/** Reset the cached /api/config response. Test-only / future "reload" hook. */
+export function resetConfigCache(): void {
+  cachedConfigPromise = undefined;
+}
+
+// sessionStorage key for the in-progress (unsaved) AWS External ID. Persists
+// across modal close/reopen cycles within the same session so the operator
+// can copy the value into AWS, close the modal, and come back to the same
+// value (issue #126). Cleared on successful save.
+const AWS_DRAFT_EXTERNAL_ID_KEY = 'cudly:aws-account-modal:draft-external-id';
 
 /** Options for the account modal (used by the registrations approval flow). */
 export interface AccountModalOptions {
@@ -31,7 +63,18 @@ const SERVICE_FIELDS = [
   { provider: 'aws', service: 'elasticache',  termId: 'aws-elasticache-term',  paymentId: 'aws-elasticache-payment' },
   { provider: 'aws', service: 'opensearch',   termId: 'aws-opensearch-term',   paymentId: 'aws-opensearch-payment' },
   { provider: 'aws', service: 'redshift',     termId: 'aws-redshift-term',     paymentId: 'aws-redshift-payment' },
-  { provider: 'aws', service: 'savingsplans', termId: 'aws-savingsplans-term', paymentId: 'aws-savingsplans-payment' },
+  // Issue #22 follow-up: AWS Savings Plans split into four per-plan-type
+  // cards (Compute / EC2 Instance / SageMaker / Database). The earlier
+  // umbrella `savingsplans` and PR #71 `sagemaker` SERVICE_FIELDS entries
+  // are replaced by these four. Migration 000040_split_savingsplans
+  // copies the umbrella row's term/payment into all four new rows and
+  // (when present) overrides the SageMaker slot from PR #71's sagemaker
+  // row. Lambda is intentionally NOT a separate card — Lambda has no
+  // standalone SP product; its commitments roll up into Compute SP.
+  { provider: 'aws', service: 'savings-plans-compute',     termId: 'aws-savings-plans-compute-term',     paymentId: 'aws-savings-plans-compute-payment' },
+  { provider: 'aws', service: 'savings-plans-ec2instance', termId: 'aws-savings-plans-ec2instance-term', paymentId: 'aws-savings-plans-ec2instance-payment' },
+  { provider: 'aws', service: 'savings-plans-sagemaker',   termId: 'aws-savings-plans-sagemaker-term',   paymentId: 'aws-savings-plans-sagemaker-payment' },
+  { provider: 'aws', service: 'savings-plans-database',    termId: 'aws-savings-plans-database-term',    paymentId: 'aws-savings-plans-database-payment' },
   { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
   { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
   { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
@@ -268,10 +311,13 @@ function renderAccountsList(
   provider: AccountProvider,
   filter: AccountStatusFilter = 'all'
 ): void {
-  // Remove prior rendered rows (Overrides panels are sibling elements,
-  // banner lives in a separate className managed by renderSelfAccountBanner).
+  // Remove prior rendered rows (banner lives in a separate className
+  // managed by renderSelfAccountBanner). `.account-overrides-panel` used
+  // to be cleaned up here too — it was the inline expandable panel each
+  // account carried before #122/#124 moved overrides into a per-account
+  // modal. No such elements exist anymore.
   container.querySelectorAll(
-    '.accounts-table, .account-overrides-panel, .accounts-empty, .status-chip-row'
+    '.accounts-table, .accounts-empty, .status-chip-row'
   ).forEach(el => el.remove());
 
   if (!accounts || accounts.length === 0) {
@@ -331,7 +377,6 @@ function renderAccountsList(
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  const panels: HTMLDivElement[] = [];
 
   visible.forEach((account) => {
     const accountLabel = `${account.name} (${account.external_id})`;
@@ -386,12 +431,7 @@ function renderAccountsList(
     overridesBtn.className = 'btn btn-small';
     overridesBtn.textContent = 'Overrides';
     overridesBtn.setAttribute('aria-label', `Service overrides for ${accountLabel}`);
-    const overridesPanel = document.createElement('div');
-    overridesPanel.className = 'account-overrides-panel hidden';
-    overridesBtn.addEventListener('click', () => {
-      const hidden = overridesPanel.classList.toggle('hidden');
-      if (!hidden) void loadOverridesPanel(account.id, overridesPanel);
-    });
+    overridesBtn.addEventListener('click', () => openAccountOverridesModal(account));
     actionsTd.appendChild(overridesBtn);
 
     // Destructive Delete lives in its own subgroup to isolate it from the
@@ -412,30 +452,238 @@ function renderAccountsList(
 
     tr.appendChild(actionsTd);
     tbody.appendChild(tr);
-    panels.push(overridesPanel);
   });
   table.appendChild(tbody);
   container.appendChild(table);
-  // Append overrides panels after the table so "show overrides" expands
-  // below the row rather than inside it.
-  panels.forEach((p) => container.appendChild(p));
+  // Per-account overrides used to render in inline panels appended below
+  // the table; they now live in the account-overrides-modal (issue #122)
+  // so the accounts table stays compact and per-account scoping is
+  // unambiguous.
+}
+
+// AWS payment-option choices, kept in sync with the per-service Purchasing
+// selectors in frontend/src/index.html (e.g. #aws-ec2-payment). Centralised
+// here so the override editor and the global selectors can't drift.
+const AWS_PAYMENT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'no-upfront',      label: 'No Upfront' },
+  { value: 'partial-upfront', label: 'Partial Upfront' },
+  { value: 'all-upfront',     label: 'All Upfront' },
+];
+
+// AWS services that can carry a per-account override. Mirrors the AWS-only
+// entries in SERVICE_FIELDS \u2014 Azure/GCP override creation is a follow-up
+// (issue #104) since the backend payment/term semantics differ per provider.
+const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'ec2',                       label: 'EC2 (Reserved Instances)' },
+  { value: 'rds',                       label: 'RDS' },
+  { value: 'elasticache',               label: 'ElastiCache' },
+  { value: 'opensearch',                label: 'OpenSearch' },
+  { value: 'redshift',                  label: 'Redshift' },
+  // Issue #22 follow-up: per-plan-type SP slugs aligned with
+  // SERVICE_FIELDS so per-account overrides target the same rows the
+  // global Settings cards write to. The legacy `savingsplans` and PR
+  // #71 `sagemaker` values were removed because they no longer
+  // correspond to live ServiceConfig rows after migration 000040.
+  { value: 'savings-plans-compute',     label: 'Compute Savings Plans' },
+  { value: 'savings-plans-ec2instance', label: 'EC2 Instance Savings Plans' },
+  { value: 'savings-plans-sagemaker',   label: 'SageMaker Savings Plans' },
+  { value: 'savings-plans-database',    label: 'Database Savings Plans' },
+];
+
+
+/**
+ * Build the per-row Payment <select> for the overrides panel. Issue #23.
+ *
+ * - "Inherit (default)" keeps the override silent on payment so the global
+ *   default applies. We only emit it as the chosen value when the override
+ *   currently has no payment set; once a payment is set, switching back
+ *   would require deleting/recreating the override (out of scope for #23).
+ * - The change handler PUTs only `{ payment }` — the backend's
+ *   applyOverrideScalars (handler_accounts.go) treats unset request fields
+ *   as "leave alone", so other override fields (term, coverage, etc.) are
+ *   preserved.
+ */
+function buildPaymentOverrideSelect(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+): HTMLSelectElement {
+  const select = document.createElement('select');
+  select.className = 'override-payment-select';
+  select.setAttribute(
+    'aria-label',
+    `Payment option for ${override.provider}/${override.service} override`,
+  );
+
+  const inheritOpt = document.createElement('option');
+  inheritOpt.value = '';
+  inheritOpt.textContent = 'Inherit (default)';
+  select.appendChild(inheritOpt);
+
+  for (const { value, label } of AWS_PAYMENT_OPTIONS) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
+
+  const initial = override.payment ?? '';
+  select.value = initial;
+  select.dataset['previous'] = initial;
+
+  // If a payment is already set, "Inherit" is not a clean transition (the
+  // backend has no clear-field channel — it would require resetting the
+  // whole override). Disable the option so the user can still pick another
+  // payment value but can't accidentally pick a no-op state.
+  if (initial !== '') {
+    inheritOpt.disabled = true;
+    inheritOpt.title = 'Use Reset to clear all override fields including payment';
+  }
+
+  select.addEventListener('change', () => {
+    void handlePaymentOverrideChange(accountId, override, select, panel);
+  });
+
+  return select;
+}
+
+async function handlePaymentOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  select: HTMLSelectElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const previous = select.dataset['previous'] ?? '';
+  const next = select.value;
+  if (next === previous) return;
+  if (next === '') {
+    // Reverting to Inherit while a payment is set is blocked above; defensive
+    // no-op here keeps types narrow if the option becomes selectable later.
+    select.value = previous;
+    return;
+  }
+  select.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      payment: next,
+    });
+    select.dataset['previous'] = next;
+    showToast({
+      message: `Payment override updated for ${override.provider}/${override.service}.`,
+      kind: 'success',
+    });
+    // The inline payment selector only renders for AWS rows (per the
+    // o.provider === 'aws' guard in loadOverridesPanel's row loop), so
+    // override.provider is always 'aws' at this call site — cast is safe.
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+  } catch (err) {
+    select.value = previous;
+    showToast({
+      message: `Failed to update payment override: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    select.disabled = false;
+  }
 }
 
 /**
- * Load and render the service overrides panel for an account
+ * Load and render the service overrides panel for an account.
+ *
+ * Empty state (no overrides yet for this account) auto-opens the create
+ * modal \u2014 the previous "No service overrides set." text was a dead-end
+ * because there was no UI affordance to create one. See issue #104.
+ *
+ * Populated state: render the existing table + an "Add override" button at
+ * the top so users can add another override for a different service.
+ *
+ * The Add Override flow is AWS-only for now; Azure/GCP keep the read-only
+ * empty-state text since their per-product term/payment semantics differ
+ * (issue #104 follow-up tracks Azure/GCP modal support).
  */
-async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promise<void> {
+/**
+ * Open the per-account overrides modal (issue #122). Replaces the inline
+ * expandable panel that used to render below the accounts table — the
+ * panels stacked without per-row attachment, so two open panels gave the
+ * user no way to tell which override row belonged to which account.
+ *
+ * The modal title binds explicitly to the account; the body uses the same
+ * `loadOverridesPanel` rendering function as before, so all CRUD wiring
+ * (Reset button, inline payment select, Add override button, empty-state
+ * auto-open of the create modal) carries forward unchanged.
+ */
+function openAccountOverridesModal(account: api.CloudAccount): void {
+  const modal = document.getElementById('account-overrides-modal');
+  if (!modal) return;
+  const titleEl = document.getElementById('account-overrides-modal-title');
+  if (titleEl) {
+    titleEl.textContent = `Service overrides for ${account.name} (${account.external_id})`;
+  }
+  const body = document.getElementById('account-overrides-modal-body');
+  if (!body) return;
+  modal.classList.remove('hidden');
+  void loadOverridesPanel(account.id, body, account.provider);
+}
+
+function closeAccountOverridesModal(): void {
+  const modal = document.getElementById('account-overrides-modal');
+  modal?.classList.add('hidden');
+  // Drop the body content so the next open doesn't briefly flash stale
+  // data from a previous account before loadOverridesPanel populates it.
+  const body = document.getElementById('account-overrides-modal-body');
+  if (body) body.replaceChildren();
+  // Close the inner create modal too if it's still open. The user can't
+  // visually reach the outer's close affordances while the inner is up
+  // (inner backdrop covers them), but a programmatic close — or a future
+  // ESC-to-close from issue #115 — should leave a clean slate, not an
+  // orphaned inner modal whose Save would target a hidden parent.
+  closeOverrideModal();
+}
+
+async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
   panel.textContent = 'Loading\u2026';
   try {
     const overrides = await api.listAccountServiceOverrides(accountId);
     panel.textContent = '';
+
+    const canCreate = provider === 'aws';
+
     if (!overrides || overrides.length === 0) {
       const msg = document.createElement('p');
       msg.className = 'help-text';
-      msg.textContent = 'No service overrides set. All services use global defaults.';
+      msg.textContent = canCreate
+        ? 'No service overrides yet for this account.'
+        : 'No service overrides set. All services use global defaults.';
       panel.appendChild(msg);
+      if (canCreate) {
+        // No overrides yet \u2014 auto-open the modal so the user lands directly
+        // on the create flow instead of staring at empty-state text. The
+        // button stays in the panel as a fallback if the user cancels and
+        // wants to retry without re-expanding the row.
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'btn btn-small';
+        addBtn.textContent = 'Add override';
+        addBtn.addEventListener('click', () => {
+          openOverrideModal(accountId, provider, overrides ?? [], panel);
+        });
+        panel.appendChild(addBtn);
+        openOverrideModal(accountId, provider, [], panel);
+      }
       return;
     }
+
+    if (canCreate) {
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'btn btn-small';
+      addBtn.textContent = 'Add override';
+      addBtn.addEventListener('click', () => {
+        openOverrideModal(accountId, provider, overrides, panel);
+      });
+      panel.appendChild(addBtn);
+    }
+
     const table = document.createElement('table');
     table.className = 'overrides-table';
     const thead = table.createTHead();
@@ -451,12 +699,24 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promis
       [
         `${o.provider}/${o.service}`,
         o.term !== undefined ? `${o.term}yr` : '\u2014',
-        o.payment ?? '\u2014',
-        o.coverage !== undefined ? `${o.coverage}%` : '\u2014',
       ].forEach(text => {
         const td = tr.insertCell();
         td.textContent = text;
       });
+
+      // Payment cell: editable <select> for AWS (the only provider whose
+      // reservations support distinct payment options); read-only text for
+      // Azure/GCP. Issue #23.
+      const paymentTd = tr.insertCell();
+      if (o.provider === 'aws') {
+        paymentTd.appendChild(buildPaymentOverrideSelect(accountId, o, panel));
+      } else {
+        paymentTd.textContent = o.payment ?? '\u2014';
+      }
+
+      const coverageTd = tr.insertCell();
+      coverageTd.textContent = o.coverage !== undefined ? `${o.coverage}%` : '\u2014';
+
       const actionTd = tr.insertCell();
       const resetBtn = document.createElement('button');
       resetBtn.type = 'button';
@@ -472,7 +732,7 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promis
         if (!ok) return;
         try {
           await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
-          await loadOverridesPanel(accountId, panel);
+          await loadOverridesPanel(accountId, panel, provider);
         } catch (err) {
           showToast({ message: `Failed to reset override: ${(err as Error).message}`, kind: 'error' });
         }
@@ -546,6 +806,142 @@ async function testAccount(accountId: string, accountLabel: string, btn: HTMLBut
   }
 }
 
+// State carried from openOverrideModal → submitOverrideForm so the form
+// handler knows which account/provider/panel it belongs to without
+// inspecting the DOM. Cleared on close so it can't leak across opens.
+let overrideModalContext: { accountId: string; provider: string; panel: HTMLElement } | null = null;
+
+/**
+ * Open the create-override modal for a specific account.
+ *
+ * `existingOverrides` is used to filter the service dropdown so users
+ * can't pick a service that already has an override for this account
+ * (the backend would UPSERT, silently overwriting the existing values —
+ * users should use the panel's Reset + re-create flow for that, not the
+ * Add flow).
+ *
+ * Issue #104.
+ */
+function openOverrideModal(
+  accountId: string,
+  provider: string,
+  existingOverrides: api.AccountServiceOverride[],
+  panel: HTMLElement,
+): void {
+  const modal = document.getElementById('override-modal');
+  if (!modal) return;
+
+  overrideModalContext = { accountId, provider, panel };
+
+  setInputValue('override-account-id', accountId);
+  setInputValue('override-provider', provider);
+
+  // Reset form fields to defaults each open so a previous cancelled
+  // session doesn't bleed values forward.
+  setInputValue('override-term', '');
+  setInputValue('override-payment', '');
+  setInputValue('override-coverage', '');
+  const errEl = document.getElementById('override-form-error');
+  if (errEl) errEl.textContent = '';
+
+  // Populate the service dropdown, excluding services this account already
+  // has an override for. AWS-only for now (issue #104 follow-up tracks
+  // Azure/GCP).
+  const used = new Set(
+    existingOverrides
+      .filter(o => o.provider === provider)
+      .map(o => o.service),
+  );
+  const select = document.getElementById('override-service') as HTMLSelectElement | null;
+  if (select) {
+    select.replaceChildren();
+    const available = AWS_OVERRIDE_SERVICES.filter(s => !used.has(s.value));
+    if (available.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'All services already have overrides';
+      opt.disabled = true;
+      select.appendChild(opt);
+      const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
+    } else {
+      for (const { value, label } of available) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        select.appendChild(opt);
+      }
+      const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeOverrideModal(): void {
+  const modal = document.getElementById('override-modal');
+  modal?.classList.add('hidden');
+  overrideModalContext = null;
+}
+
+/**
+ * Submit the create-override form. Sends a sparse PUT — fields left blank
+ * (term/payment/coverage = "Inherit") are omitted so the backend's
+ * applyOverrideScalars treats them as "unset → inherit global default".
+ */
+async function submitOverrideForm(e: Event): Promise<void> {
+  e.preventDefault();
+  const ctx = overrideModalContext;
+  if (!ctx) return;
+
+  const service = (byId<HTMLSelectElement>('override-service')?.value ?? '').trim();
+  if (!service) return;
+
+  const termRaw = (byId<HTMLSelectElement>('override-term')?.value ?? '').trim();
+  const paymentRaw = (byId<HTMLSelectElement>('override-payment')?.value ?? '').trim();
+  const coverageRaw = (byId<HTMLInputElement>('override-coverage')?.value ?? '').trim();
+
+  const req: api.AccountServiceOverrideRequest = {};
+  if (termRaw !== '') req.term = parseInt(termRaw, 10);
+  if (paymentRaw !== '') req.payment = paymentRaw;
+  if (coverageRaw !== '') {
+    const n = Number(coverageRaw);
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      const errEl = document.getElementById('override-form-error');
+      if (errEl) errEl.textContent = 'Coverage must be between 0 and 100.';
+      return;
+    }
+    req.coverage = n;
+  }
+
+  if (Object.keys(req).length === 0) {
+    // The backend would happily store an all-null override row, but it'd
+    // be a no-op semantically — no field overrides anything. Block at the
+    // UI to avoid silent confusion.
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Coverage.';
+    return;
+  }
+
+  const submitBtn = document.querySelector<HTMLButtonElement>('#override-form button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(ctx.accountId, ctx.provider, service, req);
+    showToast({
+      message: `Override created for ${ctx.provider}/${service}.`,
+      kind: 'success',
+    });
+    closeOverrideModal();
+    await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+  } catch (err) {
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = `Failed to create override: ${(err as Error).message}`;
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
 /**
  * Open account modal for add or edit
  */
@@ -597,7 +993,7 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
     updateGCPAuthModeFields(gcpMode);
   }
 
-  modal.classList.remove('hidden');
+  openModal(modal);
 }
 
 /**
@@ -605,13 +1001,74 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
  */
 function generateExternalID(): string {
   // crypto.randomUUID is available in all supported browsers (Chrome
-  // 92+, Firefox 95+, Safari 15.4+). Fall back to a timestamp-plus-
-  // random string only if it's somehow missing (test environments,
-  // odd webviews) so we never hand the user an empty field.
+  // 92+, Firefox 95+, Safari 15.4+). Fall back to crypto.getRandomValues
+  // (a strict superset of randomUUID's availability) for older runtimes.
+  // The External ID is a security primitive that protects against the
+  // confused-deputy problem on cross-account sts:AssumeRole, so the
+  // fallback MUST also be a CSPRNG — never Math.random() (issue #127).
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-  return `cudly-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Last-resort fallback: a runtime with no Web Crypto at all (jsdom
+  // without polyfill, very old webviews). Not security-secret-quality,
+  // but "never empty" matters for the form to submit and the backend
+  // length/charset validator (issue #128) will then catch obviously-
+  // weak inputs. Math.random is intentionally NOT used here — see #127.
+  return `cudly-fallback-${Date.now().toString(36)}`;
+}
+
+/**
+ * Return the AWS External ID for the current modal session.
+ *
+ * - When editing an existing account: always use the persisted value.
+ * - When creating a new account: reuse the same draft value across modal
+ *   close/reopen cycles so an operator who copied the ID into their IAM
+ *   trust policy and then reopens the modal sees the same value (issue
+ *   #126). The draft is keyed in sessionStorage (cleared on tab close)
+ *   and is reset on a successful save.
+ *
+ * Falls back to in-memory generation if sessionStorage is unavailable
+ * (e.g., privacy-mode browsers, tests with no Storage shim) — that path
+ * preserves the legacy regenerate-on-reopen behaviour but never breaks.
+ */
+function resolveAwsExternalIdForModal(account?: api.CloudAccount): string {
+  if (account?.aws_external_id) return account.aws_external_id;
+
+  let storage: Storage | undefined;
+  try {
+    storage = typeof sessionStorage !== 'undefined' ? sessionStorage : undefined;
+  } catch {
+    storage = undefined;
+  }
+
+  if (storage) {
+    try {
+      const existing = storage.getItem(AWS_DRAFT_EXTERNAL_ID_KEY);
+      if (existing) return existing;
+      const fresh = generateExternalID();
+      storage.setItem(AWS_DRAFT_EXTERNAL_ID_KEY, fresh);
+      return fresh;
+    } catch {
+      // Quota / permission errors — fall through to in-memory generation.
+    }
+  }
+  return generateExternalID();
+}
+
+/** Clear the in-progress AWS External ID draft. Called after successful save. */
+function clearAwsExternalIdDraft(): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(AWS_DRAFT_EXTERNAL_ID_KEY);
+    }
+  } catch {
+    // sessionStorage unavailable — nothing to clear.
+  }
 }
 
 function populateAwsAccountFields(account?: api.CloudAccount): void {
@@ -631,11 +1088,11 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   setInputValue('account-aws-role-arn', account?.aws_role_arn ?? '');
   // External ID is a CUDly-managed shared secret for cross-account role
   // assumption (issue #18). On edit, keep whatever was stored before; on
-  // create, auto-generate a UUID so every new account has a distinct
-  // secret the operator can paste into the IAM trust policy. The field
+  // create, generate a value once and persist it in sessionStorage so a
+  // close/reopen cycle returns the same value (issue #126). The field
   // itself is marked readonly in index.html so users can't hand-craft
   // values that would defeat the purpose.
-  setInputValue('account-aws-external-id', account?.aws_external_id ?? generateExternalID());
+  setInputValue('account-aws-external-id', resolveAwsExternalIdForModal(account));
   setInputValue('account-aws-bastion-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-token-file', account?.aws_web_identity_token_file ?? '');
@@ -650,10 +1107,39 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
 }
 
 /**
+ * Map an AWS partition identifier (`aws`, `aws-cn`, `aws-us-gov`) to the
+ * ARN prefix used in IAM trust policies. Defaults to `aws` for an empty
+ * or unknown value so the rendered snippet always parses (issue #130c).
+ */
+function awsPartitionForArn(partition: string | undefined): string {
+  switch (partition) {
+    case 'aws-cn':
+    case 'aws-us-gov':
+      return partition;
+    default:
+      return 'aws';
+  }
+}
+
+/**
  * Render the IAM trust-policy JSON snippet into the AWS role-mode
  * section. The snippet interpolates the CUDly host AWS account ID and
  * the per-account External ID so operators can copy it straight into
  * the role's trust relationship (issue #19).
+ *
+ * Partition awareness (issue #130c): the ARN prefix is taken from the
+ * backend-reported partition so AWS China (`aws-cn`) and GovCloud
+ * (`aws-us-gov`) deployments render a usable snippet instead of a
+ * silently-wrong `arn:aws:` ARN.
+ *
+ * Race short-circuit (issue #130a): the auth-mode select is sampled
+ * before the awaited getConfig() call and rechecked after. If the user
+ * switched away from `role_arn` while the config was loading we abort
+ * the write so we never paint into a hidden field.
+ *
+ * Config caching (issue #130d): /api/config is fetched at most once per
+ * page load via getCachedConfig(); each modal open reuses the cached
+ * promise instead of re-firing the GET.
  */
 async function renderAwsTrustPolicy(): Promise<void> {
   const block = document.getElementById('account-aws-trust-policy');
@@ -661,14 +1147,30 @@ async function renderAwsTrustPolicy(): Promise<void> {
   if (!block) return;
   const externalID = (document.getElementById('account-aws-external-id') as HTMLInputElement | null)?.value ?? '';
 
+  // Snapshot the auth mode at call time — we'll recheck after the await
+  // to detect a race where the user switched to bastion / WIF / keys
+  // mid-fetch (issue #130a).
+  const authModeSnapshot = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+
   let sourceAccountID = '';
+  let partition = 'aws';
   try {
-    const cfg = await api.getConfig();
+    const cfg = await getCachedConfig();
     if (cfg.source_identity?.provider === 'aws') {
       sourceAccountID = cfg.source_identity.account_id ?? '';
+      partition = awsPartitionForArn(cfg.source_identity.partition);
     }
   } catch {
     // Non-critical — fall through to the placeholder text below.
+  }
+
+  // If the user switched auth modes while we were waiting on the API,
+  // bail out: the role_arn fields are now hidden and writing into them
+  // would either be a wasted DOM mutation or (worse) flash stale data
+  // if they switch back later (issue #130a).
+  const authModeNow = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+  if (authModeSnapshot !== undefined && authModeSnapshot !== authModeNow) {
+    return;
   }
 
   if (!sourceAccountID) {
@@ -678,9 +1180,9 @@ async function renderAwsTrustPolicy(): Promise<void> {
         "CUDly can't determine its host AWS account ID from this deployment " +
         "(either CUDly isn't running on AWS, or the Lambda/Container role " +
         "lacks sts:GetCallerIdentity). Ask a CUDly admin for the account ID, " +
-        "then build the trust policy manually with Principal=arn:aws:iam::" +
-        "<CUDly account ID>:root, Action=sts:AssumeRole, and a StringEquals " +
-        "sts:ExternalId condition on the value above.";
+        "then build the trust policy manually with Principal=arn:" + partition +
+        ":iam::<CUDly account ID>:root, Action=sts:AssumeRole, and a " +
+        "StringEquals sts:ExternalId condition on the value above.";
     }
     return;
   }
@@ -690,7 +1192,7 @@ async function renderAwsTrustPolicy(): Promise<void> {
     Statement: [
       {
         Effect: 'Allow',
-        Principal: { AWS: `arn:aws:iam::${sourceAccountID}:root` },
+        Principal: { AWS: `arn:${partition}:iam::${sourceAccountID}:root` },
         Action: 'sts:AssumeRole',
         Condition: {
           StringEquals: { 'sts:ExternalId': externalID },
@@ -700,10 +1202,19 @@ async function renderAwsTrustPolicy(): Promise<void> {
   };
   block.textContent = JSON.stringify(policy, null, 2);
   if (hint) {
+    // The :root principal trusts every IAM principal in the CUDly host
+    // account — the AWS-documented SaaS baseline (issue #130b). It
+    // relies on the host account being well-secured and on the
+    // sts:ExternalId condition for confused-deputy protection. A
+    // tighter "lock to CUDly's compute role only" toggle is tracked
+    // upstream; until it ships, customers who need least-privilege
+    // can replace `:root` with the specific Lambda execution role ARN
+    // out-of-band.
     hint.textContent =
       "Attach this policy to the IAM role's trust relationship so CUDly can " +
-      "assume it. The sts:ExternalId condition locks the role to this " +
-      "specific CUDly registration.";
+      "assume it. The Principal is the CUDly host AWS account root — every " +
+      "IAM principal in that account is trusted, so the sts:ExternalId " +
+      "condition is what locks this role to your specific CUDly registration.";
   }
 }
 
@@ -774,7 +1285,7 @@ async function populateBastionAccountDropdown(selectedId?: string): Promise<void
  */
 function closeAccountModal(): void {
   const modal = document.getElementById('account-modal');
-  modal?.classList.add('hidden');
+  if (modal) closeModal(modal);
   accountModalOnSave = undefined;
 }
 
@@ -912,6 +1423,12 @@ async function handleAccountFormSubmit(e: Event): Promise<void> {
       savedId = created.id;
     }
 
+    // Account persisted — drop the in-progress AWS External ID draft so
+    // the next "Add AWS Account" flow generates a fresh value (issue #126).
+    if (provider === 'aws') {
+      clearAwsExternalIdDraft();
+    }
+
     // Credential save is best-effort: if it fails we still close the modal
     // (the account was already persisted) and show a targeted warning so the
     // user knows to retry just the credential step.
@@ -1046,6 +1563,33 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   const accountModal = document.getElementById('account-modal');
   accountModal?.addEventListener('click', (e) => {
     if (e.target === accountModal) closeAccountModal();
+  }, { signal });
+
+  // Override modal — submit, cancel, click-outside-to-dismiss (issue #104).
+  document.getElementById('override-form')?.addEventListener(
+    'submit',
+    (e) => void submitOverrideForm(e),
+    { signal },
+  );
+  document.getElementById('close-override-modal-btn')?.addEventListener(
+    'click',
+    closeOverrideModal,
+    { signal },
+  );
+  const overrideModal = document.getElementById('override-modal');
+  overrideModal?.addEventListener('click', (e) => {
+    if (e.target === overrideModal) closeOverrideModal();
+  }, { signal });
+
+  // Per-account overrides modal — close + click-outside-to-dismiss (issue #122).
+  document.getElementById('close-account-overrides-modal-btn')?.addEventListener(
+    'click',
+    closeAccountOverridesModal,
+    { signal },
+  );
+  const accountOverridesModal = document.getElementById('account-overrides-modal');
+  accountOverridesModal?.addEventListener('click', (e) => {
+    if (e.target === accountOverridesModal) closeAccountOverridesModal();
   }, { signal });
 }
 

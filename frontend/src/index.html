@@ -109,7 +109,12 @@
                                         <option value="opensearch">OpenSearch</option>
                                         <option value="memorydb">MemoryDB</option>
                                         <option value="redshift">Redshift</option>
-                                        <option value="savingsplans">Savings Plans</option>
+                                    </optgroup>
+                                    <optgroup label="Savings Plans">
+                                        <option value="savings-plans-compute">Compute SP</option>
+                                        <option value="savings-plans-ec2instance">EC2 Instance SP</option>
+                                        <option value="savings-plans-sagemaker">SageMaker SP</option>
+                                        <option value="savings-plans-database">Database SP</option>
                                     </optgroup>
                                     <optgroup label="Azure">
                                         <option value="vm">Virtual Machines</option>
@@ -196,9 +201,9 @@
                             <label>Period:
                                 <select id="savings-period">
                                     <option value="24h">Last 24 Hours</option>
-                                    <option value="7d" selected>Last 7 Days</option>
+                                    <option value="7d">Last 7 Days</option>
                                     <option value="30d">Last 30 Days</option>
-                                    <option value="90d">Last 90 Days</option>
+                                    <option value="90d" selected>Last 90 Days</option>
                                 </select>
                             </label>
                             <button id="refresh-savings-btn" class="btn-small">Refresh</button>
@@ -484,10 +489,28 @@
                                 <label>Payment: <select id="aws-redshift-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
                             </div>
                             <div class="service-default-card">
-                                <h5>Savings Plans</h5>
-                                <p class="service-default-hint">Compute (EC2, Fargate, Lambda), EC2 Instance, SageMaker, and Database (RDS) plans share these defaults.</p>
-                                <label>Term: <select id="aws-savingsplans-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
-                                <label>Payment: <select id="aws-savingsplans-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                                <h5>Compute Savings Plans</h5>
+                                <p class="service-default-hint">EC2, Fargate, Lambda — most flexible</p>
+                                <label>Term: <select id="aws-savings-plans-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-compute-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>EC2 Instance Savings Plans</h5>
+                                <p class="service-default-hint">EC2 only, region-locked — deepest discount</p>
+                                <label>Term: <select id="aws-savings-plans-ec2instance-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-ec2instance-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>SageMaker Savings Plans</h5>
+                                <p class="service-default-hint">SageMaker training/inference</p>
+                                <label>Term: <select id="aws-savings-plans-sagemaker-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-sagemaker-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Database Savings Plans</h5>
+                                <p class="service-default-hint">Reserved for future AWS Database Savings Plans (currently not GA; defaults stored for forward-compatibility)</p>
+                                <label>Term: <select id="aws-savings-plans-database-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-database-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
                             </div>
                         </div>
                     </fieldset>
@@ -587,8 +610,8 @@
                         <div class="controls-bar">
                             <label>Status:
                                 <select id="registrations-status-filter">
-                                    <option value="" selected>All</option>
-                                    <option value="pending">Pending</option>
+                                    <option value="">All</option>
+                                    <option value="pending" selected>Pending</option>
                                     <option value="approved">Approved</option>
                                     <option value="rejected">Rejected</option>
                                 </select>
@@ -701,7 +724,12 @@
                                         <option value="opensearch">OpenSearch</option>
                                         <option value="memorydb">MemoryDB</option>
                                         <option value="redshift">Redshift</option>
-                                        <option value="savingsplans">Savings Plans</option>
+                                    </optgroup>
+                                    <optgroup label="Savings Plans" id="plan-service-aws-sp">
+                                        <option value="savings-plans-compute">Compute SP</option>
+                                        <option value="savings-plans-ec2instance">EC2 Instance SP</option>
+                                        <option value="savings-plans-sagemaker">SageMaker SP</option>
+                                        <option value="savings-plans-database">Database SP</option>
                                     </optgroup>
                                     <optgroup label="Azure" id="plan-service-azure" class="hidden">
                                         <option value="vm">Virtual Machines</option>
@@ -984,7 +1012,63 @@
             </div>
         </div>
 
+        <!-- Per-account overrides modal (issue #122) — replaces the inline
+             expandable panel that stacked all accounts' panels below the
+             accounts table without per-row attachment. Title binds the
+             modal to one specific account; body holds the overrides table
+             rendered dynamically. -->
+        <div id="account-overrides-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-overrides-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="account-overrides-modal-title">Service overrides</h2>
+                <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Settings → Purchasing.</p>
+                <div id="account-overrides-modal-body"></div>
+                <div class="modal-buttons">
+                    <button type="button" id="close-account-overrides-modal-btn">Close</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Cloud Account Modal -->
+        <div id="override-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="override-modal-title">
+            <div class="modal-content">
+                <h2 id="override-modal-title">Add service override</h2>
+                <p class="help-text">Per-account override that takes precedence over the global service defaults. Only AWS services are supported today.</p>
+                <form id="override-form">
+                    <input type="hidden" id="override-account-id">
+                    <input type="hidden" id="override-provider" value="aws">
+
+                    <label>Service:
+                        <select id="override-service" required></select>
+                    </label>
+                    <label>Term:
+                        <select id="override-term">
+                            <option value="">Inherit (use global default)</option>
+                            <option value="1">1 Year</option>
+                            <option value="3">3 Years</option>
+                        </select>
+                    </label>
+                    <label>Payment:
+                        <select id="override-payment">
+                            <option value="">Inherit (use global default)</option>
+                            <option value="no-upfront">No Upfront</option>
+                            <option value="partial-upfront">Partial Upfront</option>
+                            <option value="all-upfront">All Upfront</option>
+                        </select>
+                    </label>
+                    <label>Coverage (%):
+                        <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)">
+                    </label>
+
+                    <p class="help-text" id="override-form-error" role="alert"></p>
+
+                    <div class="modal-buttons">
+                        <button type="button" id="close-override-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Save override</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div id="account-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="account-modal-title">Add Account</h2>

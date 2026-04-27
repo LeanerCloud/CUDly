@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -97,9 +98,11 @@ func TestHandler_HandleRequest_Health(t *testing.T) {
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 
 	handler := &Handler{
-		corsAllowedOrigin: "*",
-		config:            mockStore,
-		auth:              mockAuth,
+		corsAllowedOrigin:   "*",
+		config:              mockStore,
+		auth:                mockAuth,
+		credStore:           &stubCredStore{},
+		encryptionKeySource: credentials.EnvSecretARN,
 	}
 
 	req := &events.LambdaFunctionURLRequest{

@@ -30,24 +30,26 @@ const pageSize int32 = 100
 // a purchase so their cost is irrelevant; what matters is that AWS
 // actually has offerings to return for them.
 //
-// probeTargetMemoryDB carries an empirical risk: MemoryDB reserved-node
-// coverage has historically skewed to db.r6g.* tiers, and db.t4g.small may
-// return an empty offerings list in some regions. If that happens the
-// orchestrating Service still persists the run (so we don't re-probe in a
-// hot loop) and the frontend silently falls back to hardcoded MemoryDB
-// rules. Switching to db.r6g.large would be the safe alternative once a
-// human with AWS creds confirms via:
+// probeTargetMemoryDB is db.r6g.large because db.t4g.small returns an
+// empty offerings list — verified 2026-04-25 in us-east-1:
 //
-//	aws memorydb describe-reserved-nodes-offerings \
+//	$ aws memorydb describe-reserved-nodes-offerings \
 //	    --region us-east-1 --node-type db.t4g.small
+//	{ "ReservedNodesOfferings": [] }
 //
-// Tracked in github.com/LeanerCloud/CUDly#61.
+//	$ aws memorydb describe-reserved-nodes-offerings \
+//	    --region us-east-1 --node-type db.r6g.large
+//	# 6 offerings: 1yr/3yr × all/partial/no-upfront
+//
+// MemoryDB's reserved-node coverage is skewed to db.r6g.* tiers, so
+// picking the smallest one in that family gives us the full term ×
+// payment matrix while keeping the probe target stable.
 const (
 	probeTargetRDS         = "db.t3.micro"
 	probeTargetElastiCache = "cache.t3.micro"
 	probeTargetOpenSearch  = "t3.small.search"
 	probeTargetRedshift    = "dc2.large"
-	probeTargetMemoryDB    = "db.t4g.small"
+	probeTargetMemoryDB    = "db.r6g.large"
 	probeTargetEC2         = "t3.micro"
 )
 
@@ -371,7 +373,7 @@ type MemoryDBProber struct {
 // Service returns "memorydb".
 func (p *MemoryDBProber) Service() string { return "memorydb" }
 
-// Probe returns the combos for db.t4g.small.
+// Probe returns the combos for db.r6g.large.
 func (p *MemoryDBProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
 	client := p.client(cfg)
 	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {

@@ -1,5 +1,18 @@
 # Azure Logic Apps for scheduled tasks on Container Apps
 # This is the Azure equivalent of AWS EventBridge + Lambda or GCP Cloud Scheduler + Cloud Run
+#
+# SECURITY: The shared scheduled-task secret is NEVER interpolated into the
+# workflow definition or Terraform state. Each Logic App workflow is attached
+# to a per-workflow user-assigned managed identity (see the UA-identity
+# resources defined just below) that holds "Key Vault Secrets User" on the
+# vault storing `scheduled-task-secret`. At workflow runtime the first action
+# (`get-secret`) calls the Key Vault data-plane REST API authenticated by that
+# user-assigned identity, and the call-endpoint action references
+# `@body('get-secret')['value']` in the outgoing Authorization header.
+#
+# Effect: `terraform show` / `az logicapp show` only ever reveal the Key Vault
+# URL the workflow is going to call — the actual secret value is fetched
+# in-process by the Logic Apps engine and never lands in any persisted artifact.
 
 # Parse cron schedule into Logic Apps recurrence format
 # Azure Logic Apps uses a different format than cron
@@ -8,15 +21,107 @@ locals {
   # For simplicity, support daily schedules at a specific hour
   # Full cron parsing would require more complex logic
   schedule_hour = var.enable_scheduled_tasks ? split(" ", var.recommendation_schedule)[1] : "2"
+
+  # Data-plane URL of the scheduled-task secret in Key Vault. The Logic App
+  # workflows fetch this at runtime via managed identity. `key_vault_uri`
+  # already includes the trailing slash (e.g. https://<vault>.vault.azure.net/).
+  scheduled_task_secret_url = (
+    var.enable_scheduled_tasks || var.enable_ri_exchange_schedule
+  ) ? "${var.key_vault_uri}secrets/${var.scheduled_task_secret_name}?api-version=7.4" : ""
 }
 
+# Plan-time guard: if any scheduled-task workflow is enabled, the secret name
+# and key vault URI must be set correctly. Without these checks, an empty
+# scheduled_task_secret_name silently produces `<vault>/secrets/?api-version=...`
+# (the list-secrets endpoint), and a key_vault_uri without a trailing slash
+# breaks the URL. Both surface late as runtime 401/403; the precondition
+# fails them at plan/apply instead.
+#
+# Why a precondition rather than `validation` blocks on the variables: variable
+# validation can only reference its own `var.<self>` and runs unconditionally,
+# so it can't say "non-empty WHEN the schedule is enabled" without breaking
+# legitimate disabled-by-default callers. The character-set half of the rule
+# (no `/?# ` in the secret name) does live on the variable itself — see the
+# `validation` block on `scheduled_task_secret_name` in variables.tf.
+resource "terraform_data" "scheduled_task_secret_preconditions" {
+  count = (var.enable_scheduled_tasks || var.enable_ri_exchange_schedule) ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = length(var.scheduled_task_secret_name) > 0
+      error_message = "scheduled_task_secret_name must be set when enable_scheduled_tasks or enable_ri_exchange_schedule is true."
+    }
+    precondition {
+      condition     = endswith(var.key_vault_uri, "/")
+      error_message = "key_vault_uri must end with '/' (e.g. https://<vault>.vault.azure.net/)."
+    }
+  }
+}
+
+# ==============================================
+# User-assigned managed identities for the Logic App workflows
+# ==============================================
+#
+# We use user-assigned identities (one per workflow) instead of the
+# system-assigned identity originally introduced in #74 because azurerm's
+# `azurerm_logic_app_workflow` exposes the system-assigned `identity[0].
+# principal_id` attribute as null at plan time when the resource is being
+# created from scratch — Terraform's role-assignment validator then fails
+# with "principal_id is required, but no definition was found", blocking
+# every Azure deploy. UA identities are first-class resources whose
+# `principal_id` is populated at plan time, so the role assignment can
+# resolve cleanly. The same module already uses an UA identity for the
+# Container App itself (`azurerm_user_assigned_identity.container_app`),
+# so the pattern is consistent.
+#
+# Each workflow gets its own UA identity rather than sharing one so the
+# count gating on enable_scheduled_tasks vs enable_ri_exchange_schedule
+# stays per-workflow.
+
+resource "azurerm_user_assigned_identity" "recommendations" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name                = "${var.app_name}-recommendations-uami"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+resource "azurerm_user_assigned_identity" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name                = "${var.app_name}-ri-exchange-uami"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+resource "azurerm_user_assigned_identity" "cleanup" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name                = "${var.app_name}-cleanup-uami"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+# ==============================================
 # Logic App workflow for recommendations refresh
+# ==============================================
+
 resource "azurerm_logic_app_workflow" "recommendations" {
   count = var.enable_scheduled_tasks ? 1 : 0
 
   name                = "${var.app_name}-recommendations"
   location            = var.location
   resource_group_name = var.resource_group_name
+
+  # User-assigned managed identity used to read the shared secret from
+  # Key Vault at workflow runtime. See the UA-identity rationale block above.
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.recommendations[0].id]
+  }
 
   tags = var.tags
 }
@@ -33,27 +138,83 @@ resource "azurerm_logic_app_trigger_recurrence" "daily" {
   time_zone    = "UTC"
 }
 
-# HTTP action to call Container App endpoint
-resource "azurerm_logic_app_action_http" "call_recommendations" {
+# Step 1: Fetch the shared secret from Key Vault using the workflow's
+# user-assigned managed identity. The secret value lives in the workflow
+# run's transient state only — never in the workflow definition or TF state.
+resource "azurerm_logic_app_action_custom" "recommendations_get_secret" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name         = "get-secret"
+  logic_app_id = azurerm_logic_app_workflow.recommendations[0].id
+
+  body = jsonencode({
+    type = "Http"
+    inputs = {
+      method = "GET"
+      uri    = local.scheduled_task_secret_url
+      authentication = {
+        type     = "ManagedServiceIdentity"
+        audience = "https://vault.azure.net"
+        # Pin to the UA identity attached above. With multiple UA identities
+        # (we attach exactly one per workflow today, but the Logic Apps
+        # runtime can in principle accept multiple), the action MUST specify
+        # which to use; with system-assigned the runtime would default to
+        # the SA identity, but we don't have one anymore.
+        identity = azurerm_user_assigned_identity.recommendations[0].id
+      }
+    }
+    runAfter = {}
+    runtimeConfiguration = {
+      secureData = {
+        properties = ["outputs"]
+      }
+    }
+  })
+
+  # Ensure the role assignment exists before this action so the very first
+  # post-apply manual run doesn't 403 while RBAC propagation completes.
+  # Scheduled runs (next 02:00 UTC) almost certainly fall after propagation,
+  # but this keeps `terraform apply && trigger now` deterministic.
+  depends_on = [azurerm_role_assignment.recommendations_kv_secrets_user]
+}
+
+# Step 2: Call the Container App scheduled-recommendations endpoint, using
+# the secret pulled by the previous action. `@body('get-secret')['value']` is
+# evaluated by the Logic Apps engine at runtime; it is never expanded into
+# the persisted workflow definition.
+resource "azurerm_logic_app_action_custom" "call_recommendations" {
   count = var.enable_scheduled_tasks ? 1 : 0
 
   name         = "call-recommendations-endpoint"
   logic_app_id = azurerm_logic_app_workflow.recommendations[0].id
 
-  method = "POST"
-  uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/recommendations"
-
-  headers = {
-    "Content-Type"  = "application/json"
-    "Authorization" = "Bearer ${var.scheduled_task_secret}"
-    "X-Trigger"     = "scheduled"
-    "X-Source"      = "azure-logic-apps"
-  }
-
   body = jsonencode({
-    source    = "azure-logic-apps"
-    timestamp = "@{utcNow()}"
+    type = "Http"
+    inputs = {
+      method = "POST"
+      uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/recommendations"
+      headers = {
+        "Content-Type"  = "application/json"
+        "Authorization" = "Bearer @{body('get-secret')['value']}"
+        "X-Trigger"     = "scheduled"
+        "X-Source"      = "azure-logic-apps"
+      }
+      body = {
+        source    = "azure-logic-apps"
+        timestamp = "@{utcNow()}"
+      }
+    }
+    runAfter = {
+      "get-secret" = ["Succeeded"]
+    }
+    runtimeConfiguration = {
+      secureData = {
+        properties = ["inputs"]
+      }
+    }
   })
+
+  depends_on = [azurerm_logic_app_action_custom.recommendations_get_secret]
 }
 
 # ==============================================
@@ -78,6 +239,11 @@ resource "azurerm_logic_app_workflow" "ri_exchange" {
   location            = var.location
   resource_group_name = var.resource_group_name
 
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.ri_exchange[0].id]
+  }
+
   tags = var.tags
 }
 
@@ -92,35 +258,85 @@ resource "azurerm_logic_app_trigger_recurrence" "ri_exchange" {
   time_zone    = "UTC"
 }
 
-resource "azurerm_logic_app_action_http" "call_ri_exchange" {
+resource "azurerm_logic_app_action_custom" "ri_exchange_get_secret" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name         = "get-secret"
+  logic_app_id = azurerm_logic_app_workflow.ri_exchange[0].id
+
+  body = jsonencode({
+    type = "Http"
+    inputs = {
+      method = "GET"
+      uri    = local.scheduled_task_secret_url
+      authentication = {
+        type     = "ManagedServiceIdentity"
+        audience = "https://vault.azure.net"
+        identity = azurerm_user_assigned_identity.ri_exchange[0].id
+      }
+    }
+    runAfter = {}
+    runtimeConfiguration = {
+      secureData = {
+        properties = ["outputs"]
+      }
+    }
+  })
+
+  # See recommendations_get_secret.depends_on rationale.
+  depends_on = [azurerm_role_assignment.ri_exchange_kv_secrets_user]
+}
+
+resource "azurerm_logic_app_action_custom" "call_ri_exchange" {
   count = var.enable_ri_exchange_schedule ? 1 : 0
 
   name         = "call-ri-exchange-endpoint"
   logic_app_id = azurerm_logic_app_workflow.ri_exchange[0].id
 
-  method = "POST"
-  uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/ri-exchange"
-
-  headers = {
-    "Content-Type"  = "application/json"
-    "Authorization" = "Bearer ${var.scheduled_task_secret}"
-    "X-Trigger"     = "scheduled"
-    "X-Source"      = "azure-logic-apps"
-  }
-
   body = jsonencode({
-    source    = "azure-logic-apps"
-    timestamp = "@{utcNow()}"
+    type = "Http"
+    inputs = {
+      method = "POST"
+      uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/ri-exchange"
+      headers = {
+        "Content-Type"  = "application/json"
+        "Authorization" = "Bearer @{body('get-secret')['value']}"
+        "X-Trigger"     = "scheduled"
+        "X-Source"      = "azure-logic-apps"
+      }
+      body = {
+        source    = "azure-logic-apps"
+        timestamp = "@{utcNow()}"
+      }
+    }
+    runAfter = {
+      "get-secret" = ["Succeeded"]
+    }
+    runtimeConfiguration = {
+      secureData = {
+        properties = ["inputs"]
+      }
+    }
   })
+
+  depends_on = [azurerm_logic_app_action_custom.ri_exchange_get_secret]
 }
 
+# ==============================================
 # Logic App workflow for cleanup (sessions and executions)
+# ==============================================
+
 resource "azurerm_logic_app_workflow" "cleanup" {
   count = var.enable_scheduled_tasks ? 1 : 0
 
   name                = "${var.app_name}-cleanup"
   location            = var.location
   resource_group_name = var.resource_group_name
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.cleanup[0].id]
+  }
 
   tags = var.tags
 }
@@ -137,25 +353,103 @@ resource "azurerm_logic_app_trigger_recurrence" "cleanup_daily" {
   time_zone    = "UTC"
 }
 
-# HTTP action to call cleanup endpoint
-resource "azurerm_logic_app_action_http" "call_cleanup" {
+resource "azurerm_logic_app_action_custom" "cleanup_get_secret" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name         = "get-secret"
+  logic_app_id = azurerm_logic_app_workflow.cleanup[0].id
+
+  body = jsonencode({
+    type = "Http"
+    inputs = {
+      method = "GET"
+      uri    = local.scheduled_task_secret_url
+      authentication = {
+        type     = "ManagedServiceIdentity"
+        audience = "https://vault.azure.net"
+        identity = azurerm_user_assigned_identity.cleanup[0].id
+      }
+    }
+    runAfter = {}
+    runtimeConfiguration = {
+      secureData = {
+        properties = ["outputs"]
+      }
+    }
+  })
+
+  # See recommendations_get_secret.depends_on rationale.
+  depends_on = [azurerm_role_assignment.cleanup_kv_secrets_user]
+}
+
+resource "azurerm_logic_app_action_custom" "call_cleanup" {
   count = var.enable_scheduled_tasks ? 1 : 0
 
   name         = "call-cleanup-endpoint"
   logic_app_id = azurerm_logic_app_workflow.cleanup[0].id
 
-  method = "POST"
-  uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/cleanup"
-
-  headers = {
-    "Content-Type"  = "application/json"
-    "Authorization" = "Bearer ${var.scheduled_task_secret}"
-    "X-Trigger"     = "scheduled"
-    "X-Source"      = "azure-logic-apps"
-  }
-
   body = jsonencode({
-    dryRun = false
-    source = "azure-logic-apps"
+    type = "Http"
+    inputs = {
+      method = "POST"
+      uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/cleanup"
+      headers = {
+        "Content-Type"  = "application/json"
+        "Authorization" = "Bearer @{body('get-secret')['value']}"
+        "X-Trigger"     = "scheduled"
+        "X-Source"      = "azure-logic-apps"
+      }
+      body = {
+        dryRun = false
+        source = "azure-logic-apps"
+      }
+    }
+    runAfter = {
+      "get-secret" = ["Succeeded"]
+    }
+    runtimeConfiguration = {
+      secureData = {
+        properties = ["inputs"]
+      }
+    }
   })
+
+  depends_on = [azurerm_logic_app_action_custom.cleanup_get_secret]
+}
+
+# ==============================================
+# RBAC: grant each Logic App's managed identity read access to the
+# scheduled-task secret in Key Vault.
+# ==============================================
+
+# Use a single role assignment per workflow rather than per secret. The grant
+# is "Key Vault Secrets User" (read-only) scoped to the whole vault, matching
+# the same pattern used by the container app's runtime identity. Vault-scoped
+# read access is acceptable here because each workflow only ever reads one
+# specific secret URL embedded in its definition; adding a per-secret RBAC
+# scope would require splitting the vault, which is out of scope for this
+# change.
+
+resource "azurerm_role_assignment" "recommendations_kv_secrets_user" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  scope                = var.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.recommendations[0].principal_id
+}
+
+resource "azurerm_role_assignment" "ri_exchange_kv_secrets_user" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  scope                = var.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.ri_exchange[0].principal_id
+}
+
+resource "azurerm_role_assignment" "cleanup_kv_secrets_user" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  scope                = var.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.cleanup[0].principal_id
 }

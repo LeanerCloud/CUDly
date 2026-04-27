@@ -52,8 +52,12 @@ func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 
 // GetRecommendations fetches Reserved Instance recommendations for any service
 func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	// Handle Savings Plans separately as they use a different API
-	if params.Service == common.ServiceSavingsPlans {
+	// Handle Savings Plans separately — they use a different Cost Explorer API
+	// (GetSavingsPlansPurchaseRecommendation, not GetReservationPurchaseRecommendation).
+	// Match any SP slug — the legacy umbrella plus the four per-plan-type slugs —
+	// via the IsSavingsPlan family predicate so the dispatch keeps working as
+	// callers migrate.
+	if common.IsSavingsPlan(params.Service) {
 		return c.getSavingsPlansRecommendations(ctx, params)
 	}
 

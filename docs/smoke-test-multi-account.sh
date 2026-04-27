@@ -83,10 +83,14 @@ fi
 # ---------------------------------------------------------------------------
 # Step 4: Set a service override
 # ---------------------------------------------------------------------------
-step "4. Set service override (aws/savingsplans: disable auto-collect)"
+step "4. Set service override (aws/savings-plans-compute: disable auto-collect)"
 
+# Note: with the per-plan-type SP split (issue #22 follow-up), Savings
+# Plans are addressed per plan type. We disable auto-collect on the
+# Compute SP card here; replace with savings-plans-{ec2instance,
+# sagemaker,database} to target other plan types.
 curl -sf -X PUT \
-  "${BASE_URL}/api/accounts/${ACCOUNT_ID}/service-overrides/aws/savingsplans" \
+  "${BASE_URL}/api/accounts/${ACCOUNT_ID}/service-overrides/aws/savings-plans-compute" \
   "${HDR[@]}" -d '{
     "auto_collect": false,
     "notification_days_before": 14
@@ -105,7 +109,7 @@ step "5. Create a plan and associate account"
 
 PLAN_JSON=$(curl -sf "${BASE_URL}/api/plans" "${HDR[@]}" -d '{
   "name": "smoke-test-plan",
-  "services": {"aws:savingsplans": {"term": "1yr", "payment": "all_upfront"}},
+  "services": {"aws:savings-plans-compute": {"term": "1yr", "payment": "all_upfront"}},
   "enabled": true
 }')
 PLAN_ID=$(echo "${PLAN_JSON}" | jq -r '.id')

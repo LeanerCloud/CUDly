@@ -81,13 +81,23 @@ describe('Settings Module', () => {
         <select id="aws-elasticache-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-opensearch-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-redshift-term"><option value="1">1</option><option value="3">3</option></select>
-        <select id="aws-savingsplans-term"><option value="1">1</option><option value="3">3</option></select>
+        <!-- Issue #22 follow-up: per-plan-type Savings Plans cards
+             (Compute / EC2 Instance / SageMaker / Database). The earlier
+             umbrella savingsplans and PR #71 sagemaker cards have
+             been replaced. -->
+        <select id="aws-savings-plans-compute-term"><option value="1">1</option><option value="3">3</option></select>
+        <select id="aws-savings-plans-ec2instance-term"><option value="1">1</option><option value="3">3</option></select>
+        <select id="aws-savings-plans-sagemaker-term"><option value="1">1</option><option value="3">3</option></select>
+        <select id="aws-savings-plans-database-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-ec2-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-rds-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-elasticache-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-opensearch-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-redshift-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
-        <select id="aws-savingsplans-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-savings-plans-compute-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-savings-plans-ec2instance-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-savings-plans-sagemaker-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
+        <select id="aws-savings-plans-database-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <!-- Azure term selects -->
         <select id="azure-vm-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="azure-sql-term"><option value="1">1</option><option value="3">3</option></select>
@@ -108,11 +118,11 @@ describe('Settings Module', () => {
     (document.getElementById('setting-default-payment') as HTMLSelectElement).value = 'all-upfront';
     // Mirror the same baseline onto every per-service select so the cascade
     // diff only reports genuinely-changed rows.
-    ['aws-ec2-term','aws-rds-term','aws-elasticache-term','aws-opensearch-term','aws-redshift-term','aws-savingsplans-term','azure-vm-term','azure-sql-term','azure-cosmos-term','gcp-compute-term','gcp-sql-term'].forEach(id => {
+    ['aws-ec2-term','aws-rds-term','aws-elasticache-term','aws-opensearch-term','aws-redshift-term','aws-savings-plans-compute-term','aws-savings-plans-ec2instance-term','aws-savings-plans-sagemaker-term','aws-savings-plans-database-term','azure-vm-term','azure-sql-term','azure-cosmos-term','gcp-compute-term','gcp-sql-term'].forEach(id => {
       const el = document.getElementById(id) as HTMLSelectElement | null;
       if (el) el.value = '3';
     });
-    ['aws-ec2-payment','aws-rds-payment','aws-elasticache-payment','aws-opensearch-payment','aws-redshift-payment','aws-savingsplans-payment'].forEach(id => {
+    ['aws-ec2-payment','aws-rds-payment','aws-elasticache-payment','aws-opensearch-payment','aws-redshift-payment','aws-savings-plans-compute-payment','aws-savings-plans-ec2instance-payment','aws-savings-plans-sagemaker-payment','aws-savings-plans-database-payment'].forEach(id => {
       const el = document.getElementById(id) as HTMLSelectElement | null;
       if (el) el.value = 'all-upfront';
     });
@@ -506,7 +516,59 @@ describe('Settings Module', () => {
       expect(api.updateConfig).toHaveBeenCalled();
     });
 
-    test('calls updateServiceConfig once per service field (15 calls)', async () => {
+    // Issue #22 follow-up: AWS Savings Plans split into four per-plan-type
+    // cards (Compute / EC2 Instance / SageMaker / Database). Each gets
+    // a dedicated card in index.html so users can pin term/payment per
+    // workload independently. Lambda is intentionally absent — it has no
+    // standalone SP product (Lambda commitments roll into Compute SP).
+    test('four per-plan-type SP cards present in index.html (issue #22)', () => {
+      const fs = require('fs') as typeof import('fs');
+      const path = require('path') as typeof import('path');
+      const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf-8');
+      expect(html).toMatch(/<h5>\s*Compute Savings Plans\s*<\/h5>/);
+      expect(html).toMatch(/<h5>\s*EC2 Instance Savings Plans\s*<\/h5>/);
+      expect(html).toMatch(/<h5>\s*SageMaker Savings Plans\s*<\/h5>/);
+      expect(html).toMatch(/<h5>\s*Database Savings Plans\s*<\/h5>/);
+      for (const planType of ['compute', 'ec2instance', 'sagemaker', 'database']) {
+        expect(html).toMatch(new RegExp(`id="aws-savings-plans-${planType}-term"`));
+        expect(html).toMatch(new RegExp(`id="aws-savings-plans-${planType}-payment"`));
+      }
+    });
+
+    test('no Lambda card in index.html — Lambda has no standalone SP, only Compute SP (issue #22)', () => {
+      const fs = require('fs') as typeof import('fs');
+      const path = require('path') as typeof import('path');
+      const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf-8');
+      // Guard against accidental re-introduction of a Lambda-specific card.
+      expect(html).not.toMatch(/<h5>\s*Lambda Savings Plans\s*<\/h5>/);
+      expect(html).not.toMatch(/id="aws-lambda-term"/);
+      expect(html).not.toMatch(/id="aws-lambda-payment"/);
+    });
+
+    test('saveGlobalSettings sends per-plan-type SP term and payment (issue #22)', async () => {
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
+      window.alert = jest.fn();
+
+      // User pins SageMaker SP to 1yr / no-upfront while leaving Compute
+      // SP at the global default (3yr / all-upfront, matching the seeded
+      // baseline from beforeEach).
+      (document.getElementById('aws-savings-plans-sagemaker-term') as HTMLSelectElement).value = '1';
+      (document.getElementById('aws-savings-plans-sagemaker-payment') as HTMLSelectElement).value = 'no-upfront';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      const call = (api.updateServiceConfig as jest.Mock).mock.calls.find(
+        ([provider, service]) => provider === 'aws' && service === 'savings-plans-sagemaker',
+      );
+      expect(call).toBeDefined();
+      const cfg = call![2];
+      expect(cfg.term).toBe(1);
+      expect(cfg.payment).toBe('no-upfront');
+    });
+
+    test('calls updateServiceConfig once per service field (18 calls)', async () => {
       (api.updateConfig as jest.Mock).mockResolvedValue({});
       (api.updateServiceConfig as jest.Mock).mockResolvedValue(undefined);
       window.alert = jest.fn();
@@ -514,8 +576,13 @@ describe('Settings Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await saveGlobalSettings(event);
 
-      // 6 AWS + 5 Azure (vm, sql, cosmosdb, redis, search) + 4 GCP.
-      expect(api.updateServiceConfig).toHaveBeenCalledTimes(15);
+      // 5 AWS RIs (ec2, rds, elasticache, opensearch, redshift) + 4 AWS
+      // SP (compute, ec2instance, sagemaker, database) + 5 Azure (vm,
+      // sql, cosmosdb, redis, search) + 4 GCP (compute, sql, memorystore,
+      // storage). Pre-rev-2 was 16 (1 umbrella SP + 1 sagemaker, plus 5
+      // RIs); the SP split replaced those two with four per-plan-type
+      // entries, net +2.
+      expect(api.updateServiceConfig).toHaveBeenCalledTimes(18);
     });
   }); // end saveGlobalSettings
 
@@ -834,6 +901,56 @@ describe('Settings Module', () => {
         expect(payment.value).toBe('no-upfront');
       },
     );
+
+    // Empty-state regression: on a fresh install where no per-product
+    // service_configs rows exist (e.g., right after migration 000040 ran
+    // but before any user save), loadGlobalSettings must not blow up,
+    // and the four SP card selects must remain present + interactable.
+    // This protects against a regression where the load path tried to
+    // touch a missing service entry and threw, leaving the cards in a
+    // broken state. The selects keep their HTML-default values (3 /
+    // all-upfront) per the existing per-service load semantics — the
+    // wider "apply globalCfg.default_term / default_payment to empty
+    // selects" cascade is OUT OF SCOPE for this PR (see plan §6.5).
+    test('per-plan-type SP cards remain interactable when no service rows exist (issue #22 follow-up)', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 1, default_payment: 'no-upfront', default_coverage: 80 },
+        services: [], // no per-service overrides
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      for (const planType of ['compute', 'ec2instance', 'sagemaker', 'database']) {
+        const term = document.getElementById(`aws-savings-plans-${planType}-term`) as HTMLSelectElement;
+        const payment = document.getElementById(`aws-savings-plans-${planType}-payment`) as HTMLSelectElement;
+        expect(term).not.toBeNull();
+        expect(payment).not.toBeNull();
+        // Cards keep the HTML-default 3yr/all-upfront baseline (matching
+        // the existing umbrella card's pre-rev-2 behaviour).
+        expect(term.value).toBe('3');
+        expect(payment.value).toBe('all-upfront');
+        // All 6 (term × payment) combos remain selectable on the new
+        // SP keys via the _default fallback in commitmentOptions.
+        expect(optVisible(payment, 'no-upfront')).toBe(true);
+        expect(optVisible(payment, 'partial-upfront')).toBe(true);
+        expect(optVisible(payment, 'all-upfront')).toBe(true);
+      }
+    });
+
+    test('SageMaker 3yr keeps "no-upfront" visible (issue #22 — no service-level restriction)', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'no-upfront', default_coverage: 80 },
+        services: [{ provider: 'aws', service: 'savings-plans-sagemaker', term: 3, payment: 'no-upfront' }],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      const payment = document.getElementById('aws-savings-plans-sagemaker-payment') as HTMLSelectElement;
+      expect(optVisible(payment, 'no-upfront')).toBe(true);
+      expect(optVisible(payment, 'partial-upfront')).toBe(true);
+      expect(optVisible(payment, 'all-upfront')).toBe(true);
+      expect(payment.value).toBe('no-upfront');
+    });
 
     test('propagating global "no-upfront" to all services while term=3 clamps restricted services', async () => {
       (api.getConfig as jest.Mock).mockResolvedValue({

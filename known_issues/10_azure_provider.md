@@ -1,6 +1,6 @@
 # Known Issues: Azure Provider
 
-> **Audit status (2026-04-21):** `2 follow-ups from CRITICAL rewrite · 12 resolved · 0 partially fixed · 0 moved · 1 new follow-up surfaced (batched SKU enrichment — deferred N+1 avoidance)`
+> **Audit status (2026-04-25):** `2 follow-ups from CRITICAL rewrite · 13 resolved · 0 partially fixed · 0 moved · 1 narrower follow-up surfaced (compute Details fields require pkg/common type extension)`
 
 ## ~~CRITICAL: Recommendation converters ignore the API response entirely~~ — RESOLVED
 
@@ -300,13 +300,33 @@ Each converter's godoc now explicitly documents which fields are payload-derivab
 
 ### New follow-ups surfaced during this resolution
 
-#### MEDIUM: Azure converters leave SKU-lookup Details fields empty (deferred N+1 avoidance)
+#### ~~MEDIUM: Azure converters leave SKU-lookup Details fields empty (deferred N+1 avoidance)~~ — RESOLVED for 3 of 4 services
 
-**File:** `providers/azure/services/{compute,database,cache,cosmosdb}/client.go::convertAzure*Recommendation`
+**File:** `providers/azure/services/{database,cache,cosmosdb}/client.go::convertAzure*Recommendation`
 
-**Description:** All four converters populate the subset of `Details` derivable from the reservation recommendation payload only. Fields that require an SDK catalogue lookup — compute Platform/Tenancy/Scope + memory/vCPU, database EngineVersion/AZConfig, cache Shards, cosmos APIType — are deliberately left empty because populating them inline would produce an N+1 API call per recommendation.
+**Status:** ✔️ Resolved for cache/cosmos/database; compute scoped back (see follow-up below)
 
-**Proposed fix:** single-shot batched SKU lookup per region per service (`armcompute.ResourceSKUsClient.ListByLocation(region)`, `armsql.SKUsClient.ListByServer`, `armredis.SKUsClient.ListByLocation`, `armcosmos.DatabaseAccountsClient.ListByResourceGroup`), called ONCE at the start of `GetRecommendations` for each region appearing in the response, cached in a `map[skuName]SKUCatalogueEntry`, then consulted as the converter builds each rec's Details. No N+1 storm, full Details population.
+**Resolution:** Each of the three database/cache/cosmosdb service clients gained a lazy SKU catalogue cache (`sync.Once`-gated `map[string]<svcSKUEntry>`). The catalogue is fetched ONCE per client lifetime via the existing per-service pager interface — `armredis.Client.NewListBySubscriptionPager` for cache, `armsql.CapabilitiesClient.ListByLocation` for database, `armcosmos.DatabaseAccountsClient.NewListPager` for cosmos. Subsequent converter calls in the same `GetRecommendations` run hit the in-memory map (O(1) lookup), eliminating the N+1 storm. A failed catalogue fetch leaves the cache map nil; converters fall back to the previous empty-Details behaviour with a one-time WARN log — the conversion itself never fails.
+
+Fields now populated from the catalogue:
+
+- **Cache:** `CacheDetails.Shards` from `armredis.Properties.ShardCount` (clustered Premium-tier caches; non-clustered caches keep Shards at zero, which signals "unknown").
+- **Database:** `DatabaseDetails.EngineVersion` from the SQL Server version traversed in `armsql.LocationCapabilities.SupportedServerVersions` → `SupportedEditions` → `SupportedServiceLevelObjectives` → `SKU.Name`. AZConfig/Deployment require per-server lookups and remain deferred.
+- **Cosmos:** `NoSQLDetails.APIType` (sql / mongodb / cassandra / gremlin / table) resolved by mapping `account.Kind` + `account.Properties.Capabilities` for the single dominant APIType across the subscription's Cosmos accounts. Multi-API-type subscriptions leave APIType empty rather than guessing.
+
+Tests in each service's `client_test.go` cover three new contracts per service:
+
+- `_PopulatesShardsFromSKUCache` / `_PopulatesAPIType` / `_PopulatesEngineVersion` — cache hit populates the previously-deferred field.
+- `_PagerErrorFallsBack` / `_CapabilitiesErrorFallsBack` — catalogue-fetch error leaves the field empty + the conversion still succeeds.
+- `_FetchedOnce` — many converter calls share a single catalogue fetch (the N+1 invariant).
+
+#### MEDIUM: Azure compute Details vCPU/MemoryGB require ComputeDetails type extension
+
+**File:** `providers/azure/services/compute/client.go::convertAzureVMRecommendation`, `pkg/common/types.go::ComputeDetails`
+
+**Description:** The cache/cosmos/database batched-SKU-catalogue lookup intentionally skipped compute. Reason: `common.ComputeDetails` currently exposes only `InstanceType`, `Platform`, `Tenancy`, `Scope`. The SKU-catalogue enrichments compute would supply (vCPU + MemoryGB from `armcompute.ResourceSKU.Capabilities`) have no struct field to write into. Adding fields to a shared `pkg/common` type touches every cloud provider's converter, the frontend rendering layer, the matchers, and existing snapshot/golden tests across all 3 cloud providers — well outside the scope of a perf change to the Azure converters.
+
+**Proposed fix:** (1) add `VCPU int` + `MemoryGB float64` fields to `common.ComputeDetails`; (2) update AWS + GCP converters to populate them where the SDK already exposes the data; (3) port the same lazy `cachedSKULookup` pattern from cache/cosmos/database into compute and wire the new fields through.
 
 **Status:** ❓ Needs triage
 

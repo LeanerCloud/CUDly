@@ -158,6 +158,13 @@ func TestAWSProvider_DisplayName(t *testing.T) {
 }
 
 func TestAWSProvider_GetDefaultRegion(t *testing.T) {
+	// Isolate from ambient AWS env on the developer machine — without this,
+	// the SDK's credentials/config chain (loadConfig via IsConfigured) would
+	// overwrite p.cfg.Region with whatever the developer's ~/.aws/config or
+	// AWS_REGION env var says, masking the values these test cases set
+	// explicitly. See #96.
+	clearAWSAmbientEnv(t)
+
 	tests := []struct {
 		name           string
 		provider       *AWSProvider
@@ -197,6 +204,39 @@ func TestAWSProvider_GetDefaultRegion(t *testing.T) {
 	}
 }
 
+// TestAWSProvider_GetDefaultRegion_NoLeakViaIsConfigured is the regression
+// guard for #96: GetDefaultRegion must NOT trigger the SDK's
+// credentials/config chain when the caller has already populated
+// p.cfg.Region. This prevents ambient AWS_REGION / ~/.aws/config from
+// leaking in and silently overwriting test-supplied regions.
+//
+// We force a non-default ambient region and confirm GetDefaultRegion
+// returns the test-supplied region, not the ambient one.
+func TestAWSProvider_GetDefaultRegion_NoLeakViaIsConfigured(t *testing.T) {
+	t.Setenv("AWS_REGION", "ap-south-1")
+	t.Setenv("AWS_DEFAULT_REGION", "ap-south-1")
+	// Don't clear AWS_CONFIG_FILE here — the test still works if one exists,
+	// because our fix consults p.cfg.Region BEFORE IsConfigured.
+
+	p := &AWSProvider{
+		cfg: aws.Config{Region: "ap-southeast-1"},
+	}
+	got := p.GetDefaultRegion()
+	assert.Equal(t, "ap-southeast-1", got, "test-supplied cfg.Region must not be overwritten by ambient AWS_REGION")
+}
+
+// clearAWSAmbientEnv zeroes the ambient AWS env vars + redirects the
+// SDK's config/credentials file lookups to /dev/null, isolating tests
+// that exercise loadConfig from developer machine state.
+func clearAWSAmbientEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", "/dev/null")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+}
+
 func TestAWSProvider_GetSupportedServices(t *testing.T) {
 	p := &AWSProvider{}
 	services := p.GetSupportedServices()
@@ -207,6 +247,11 @@ func TestAWSProvider_GetSupportedServices(t *testing.T) {
 	assert.Contains(t, services, common.ServiceCache)
 	assert.Contains(t, services, common.ServiceSearch)
 	assert.Contains(t, services, common.ServiceDataWarehouse)
+	assert.Contains(t, services, common.ServiceSavingsPlansCompute)
+	assert.Contains(t, services, common.ServiceSavingsPlansEC2Instance)
+	assert.Contains(t, services, common.ServiceSavingsPlansSageMaker)
+	assert.Contains(t, services, common.ServiceSavingsPlansDatabase)
+	// Legacy umbrella SP slug for backward compat with persisted records.
 	assert.Contains(t, services, common.ServiceSavingsPlans)
 	// Legacy types
 	assert.Contains(t, services, common.ServiceEC2)
@@ -274,6 +319,13 @@ func TestAWSProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 		{common.ServiceDataWarehouse, common.ServiceDataWarehouse},
 		{common.ServiceRedshift, common.ServiceDataWarehouse},
 		{common.ServiceMemoryDB, common.ServiceCache},
+		{common.ServiceSavingsPlansCompute, common.ServiceSavingsPlansCompute},
+		{common.ServiceSavingsPlansEC2Instance, common.ServiceSavingsPlansEC2Instance},
+		{common.ServiceSavingsPlansSageMaker, common.ServiceSavingsPlansSageMaker},
+		{common.ServiceSavingsPlansDatabase, common.ServiceSavingsPlansDatabase},
+		// Legacy umbrella: GetServiceClient returns an SP client with
+		// an empty plan-type filter (umbrella mode); GetServiceType
+		// reports the umbrella slug, matching pre-split behaviour.
 		{common.ServiceSavingsPlans, common.ServiceSavingsPlans},
 	}
 

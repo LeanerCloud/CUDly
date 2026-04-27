@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -19,10 +20,21 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
+
+// redisSKUEntry holds the SKU-catalogue-derived fields the converter
+// wants for each Redis SKU. Sourced from the cache's Properties:
+//   - shardCount: Properties.ShardCount (Premium-tier clustered caches).
+//
+// Non-clustered caches return shardCount=0; the converter treats 0 as
+// "unknown" and leaves CacheDetails.Shards at its zero value.
+type redisSKUEntry struct {
+	shardCount int
+}
 
 // HTTPClient interface for HTTP operations (enables mocking)
 type HTTPClient interface {
@@ -56,6 +68,16 @@ type CacheClient struct {
 	recommendationsPager RecommendationsPager
 	reservationsPager    ReservationsDetailsPager
 	redisCachesPager     RedisCachesPager
+
+	// Lazy SKU catalogue cache. armredis exposes no per-region "list all
+	// possible SKUs" surface, so we derive shard counts from the existing
+	// caches in the subscription (NewListBySubscriptionPager). Fetched
+	// ONCE per client lifetime; subsequent converter calls in the same
+	// GetRecommendations run hit the in-memory map. A failed fetch leaves
+	// skuCacheMap nil and converters fall back to Shards=0 with a WARN
+	// log — the conversion itself does NOT fail.
+	skuCacheOnce sync.Once
+	skuCacheMap  map[string]redisSKUEntry
 }
 
 // NewClient creates a new Azure Cache client
@@ -557,13 +579,22 @@ func extractRedisPricing(items []CacheRetailPriceItem, termYears int) (onDemand,
 // SDK-to-struct ladder. Returns nil when the SDK payload is unusable.
 //
 // Details populated by parsing the SKU string into Engine ("redis") and
-// NodeType. Shard count requires an armredis SKU catalogue lookup and is
-// deferred to a batched-enrichment follow-up tracked in
-// known_issues/10_azure_provider.md.
-func (c *CacheClient) convertAzureRedisRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+// NodeType, then enriched from the lazily-cached armredis catalogue
+// (cachedSKULookup). Shards is sourced from the catalogue when an
+// existing cache in the subscription matches the recommendation's
+// Premium-tier SKU; otherwise stays 0 (zero means "unknown", not
+// "definitely zero shards" — see the redisSKUEntry godoc).
+func (c *CacheClient) convertAzureRedisRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
 		return nil
+	}
+	details := common.CacheDetails{
+		Engine:   "redis",
+		NodeType: f.ResourceType,
+	}
+	if entry, ok := c.cachedSKULookup(ctx, f.ResourceType); ok && entry.shardCount > 0 {
+		details.Shards = entry.shardCount
 	}
 	return &common.Recommendation{
 		Provider:         common.ProviderAzure,
@@ -579,11 +610,74 @@ func (c *CacheClient) convertAzureRedisRecommendation(_ context.Context, azureRe
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
-		Details: common.CacheDetails{
-			Engine:   "redis",
-			NodeType: f.ResourceType,
-		},
+		Details:          details,
 	}
+}
+
+// cachedSKULookup returns the SKU catalogue entry for skuName, fetching
+// the catalogue lazily on first call. The catalogue is fetched ONCE per
+// client lifetime via armredis.Client.NewListBySubscriptionPager;
+// subsequent calls are O(1) map lookups. ok=false on cache miss OR
+// catalogue-fetch failure — the caller falls back to Shards=0 rather
+// than failing the whole conversion.
+//
+// Why source from existing caches: armredis exposes no "list all
+// possible SKUs" endpoint. The catalogue surface that does exist
+// (existing cache instances in the subscription) gives us authoritative
+// shard counts for the SKUs the customer actually uses, which is the
+// set the recommendation engine recommends from anyway.
+func (c *CacheClient) cachedSKULookup(ctx context.Context, skuName string) (redisSKUEntry, bool) {
+	c.skuCacheOnce.Do(func() {
+		c.skuCacheMap = c.fetchSKUCatalogue(ctx)
+	})
+	if c.skuCacheMap == nil {
+		return redisSKUEntry{}, false
+	}
+	entry, ok := c.skuCacheMap[skuName]
+	return entry, ok
+}
+
+// fetchSKUCatalogue performs the single ListBySubscription walk and
+// reduces the response into a name->redisSKUEntry map keyed by the
+// "<Tier>_<Family><Capacity>" SKU naming convention (e.g. "Premium_P1")
+// that matches the recommendation engine's ResourceType output.
+//
+// Returns nil on error so the sync.Once-gated cache field stays nil and
+// cachedSKULookup falls back to the empty-Details path. The fetch error
+// is logged WARN once.
+func (c *CacheClient) fetchSKUCatalogue(ctx context.Context) map[string]redisSKUEntry {
+	pager, err := c.createRedisCachesPager()
+	if err != nil {
+		logging.Warnf("azure cache: SKU catalogue pager create failed for region %s: %v — Details.Shards left at 0", c.region, err)
+		return nil
+	}
+	out := make(map[string]redisSKUEntry)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			logging.Warnf("azure cache: SKU catalogue page fetch failed for region %s: %v — partial cache (%d entries) discarded, Details.Shards left at 0", c.region, err, len(out))
+			return nil
+		}
+		for _, cache := range page.Value {
+			fullSKU := extractSKUFromCache(cache)
+			if fullSKU == "" {
+				continue
+			}
+			shards := 0
+			if cache.Properties != nil && cache.Properties.ShardCount != nil {
+				shards = int(*cache.Properties.ShardCount)
+			}
+			// First-write-wins: if the same SKU appears on two caches
+			// with different ShardCounts, keep the first. Real Premium
+			// clusters configured to the same SKU typically share the
+			// shard count anyway — this just keeps the cache
+			// deterministic regardless of pager order.
+			if _, exists := out[fullSKU]; !exists {
+				out[fullSKU] = redisSKUEntry{shardCount: shards}
+			}
+		}
+	}
+	return out
 }
 
 // applyPurchaseAutomationTag attaches the purchase-automation tag to an Azure

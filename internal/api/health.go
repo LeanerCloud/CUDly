@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"time"
+
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 )
 
 // HealthResponse represents the health check response
@@ -40,6 +42,13 @@ func (h *Handler) GetHealth(ctx context.Context) (*HealthResponse, error) {
 		response.Status = "degraded"
 	}
 
+	// Check credential store (encryption key validity + dev-key detection)
+	credCheck := h.checkCredentialStore()
+	response.Checks["credential_store"] = credCheck
+	if credCheck.Status != "healthy" {
+		response.Status = "degraded"
+	}
+
 	return response, nil
 }
 
@@ -64,6 +73,34 @@ func (h *Handler) checkConfigStore(ctx context.Context) HealthCheck {
 	return HealthCheck{
 		Status: "healthy",
 	}
+}
+
+// checkCredentialStore reports the state of the credential encryption key.
+// Returns one of three logical states via Status + Message:
+//
+//   - "healthy" / "ok": real key loaded from a Secrets Manager / Vault.
+//   - "degraded" / "dev_key_in_use": CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY=1 was
+//     set, so the all-zero key is in use. Acceptable for local dev only;
+//     monitoring should alert on this state in any deployed environment.
+//   - "unhealthy" / "not configured": no credStore was wired in (config error).
+//
+// NOTE: "ok" only confirms the key is valid (LoadKey succeeded + startup guard
+// passed); it does NOT guarantee that all DB rows have been re-keyed. Detect
+// pre-rekey state by alerting on application-level decrypt-failure ERROR logs.
+func (h *Handler) checkCredentialStore() HealthCheck {
+	if h.credStore == nil {
+		return HealthCheck{
+			Status:  "unhealthy",
+			Message: "Credential store not initialized",
+		}
+	}
+	if h.encryptionKeySource == credentials.EnvAllowDev {
+		return HealthCheck{
+			Status:  "degraded",
+			Message: "dev_key_in_use",
+		}
+	}
+	return HealthCheck{Status: "healthy"}
 }
 
 // checkAuthService checks if the auth service is accessible

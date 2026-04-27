@@ -11,6 +11,7 @@ import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
+import { openModal, closeModal } from './modal';
 
 /**
  * Load plans and planned purchases
@@ -227,17 +228,45 @@ interface BackendPlan {
   next_execution_date?: string;
 }
 
-// Extract provider/service info from plan's services map
+// Pretty label for a service slug used inside the plan card.
+//
+// SP slugs are abbreviated ("Compute SP") rather than spelled out
+// ("Compute Savings Plans") so a multi-SP plan with 3-4 entries still
+// fits in the summary line. Non-SP slugs pass through unchanged so
+// existing single-service plans render exactly as before.
+function planServiceLabel(slug: string): string {
+  switch (slug) {
+    case 'savings-plans-compute':     return 'Compute SP';
+    case 'savings-plans-ec2instance': return 'EC2 Instance SP';
+    case 'savings-plans-sagemaker':   return 'SageMaker SP';
+    case 'savings-plans-database':    return 'Database SP';
+    default:                          return slug;
+  }
+}
+
+// Extract provider/service info from plan's services map.
+//
+// `service` is now a comma-separated list of all services covered by
+// the plan, not just the first map entry. Pre-PR #123 a plan only ever
+// had one service slug; post-split a plan targeting multiple SP plan
+// types has up to four entries (savings-plans-{compute,ec2instance,
+// sagemaker,database}) but the old "first entry wins" rendering hid
+// all but one. See issue #131 for the bug; this fix shows them all.
+//
+// `term` and `coverage` continue to come from the first entry — they
+// are plan-level today, not per-service, so picking any entry is
+// correct. If the model ever differentiates per service, this needs
+// to render the same way.
 function extractPlanInfo(plan: BackendPlan): { provider: string; service: string; term: number; coverage: number } {
   const services = plan.services || {};
   const serviceValues = Object.values(services);
   const firstService = serviceValues[0];
   if (firstService) {
-    // When a plan spans multiple services, show "Multiple" instead of
-    // arbitrarily picking the first one's label.
-    const service = serviceValues.length > 1
-      ? 'Multiple'
-      : (firstService.service || '—');
+    const service = serviceValues.length === 0
+      ? '—'
+      : serviceValues
+          .map(s => planServiceLabel(s.service || '—'))
+          .join(', ');
     return {
       provider: firstService.provider || 'aws',
       service,
@@ -464,7 +493,8 @@ async function editPlan(planId: string): Promise<void> {
     }
 
     void setupPlanAccountsSection(backendPlan.id);
-    document.getElementById('plan-modal')?.classList.remove('hidden');
+    const planModal = document.getElementById('plan-modal');
+    if (planModal) openModal(planModal);
   } catch (error) {
     console.error('Failed to load plan:', error);
     showToast({ message: 'Failed to load plan details', kind: 'error' });
@@ -554,7 +584,8 @@ export async function savePlan(e: Event): Promise<void> {
  * Close plan modal
  */
 export function closePlanModal(): void {
-  document.getElementById('plan-modal')?.classList.add('hidden');
+  const planModal = document.getElementById('plan-modal');
+  if (planModal) closeModal(planModal);
 }
 
 // Selected accounts for the plan modal
@@ -692,7 +723,8 @@ export function openCreatePlanModal(): void {
 
   void setupPlanAccountsSection();
 
-  document.getElementById('plan-modal')?.classList.remove('hidden');
+  const planModal = document.getElementById('plan-modal');
+  if (planModal) openModal(planModal);
 }
 
 /**
@@ -712,7 +744,8 @@ export function openNewPlanModal(): void {
 
   void setupPlanAccountsSection();
 
-  document.getElementById('plan-modal')?.classList.remove('hidden');
+  const planModal = document.getElementById('plan-modal');
+  if (planModal) openModal(planModal);
 }
 
 /**
@@ -937,7 +970,8 @@ function updateCustomConfigFromPreset(rampSchedule: string): void {
  * Close purchase modal
  */
 export function closePurchaseModal(): void {
-  document.getElementById('purchase-modal')?.classList.add('hidden');
+  const purchaseModal = document.getElementById('purchase-modal');
+  if (purchaseModal) closeModal(purchaseModal);
 }
 
 /**
@@ -989,13 +1023,22 @@ async function openAddPurchasesModal(planId: string, planName: string): Promise<
   // Add event listeners
   document.getElementById('add-purchases-cancel')?.addEventListener('click', closeAddPurchasesModal);
   document.getElementById('add-purchases-form')?.addEventListener('submit', (e) => void handleAddPurchases(e));
+
+  // Engage focus trap + Escape handler. The modal element itself is
+  // removed from the DOM on close (see closeAddPurchasesModal) instead
+  // of just toggling .hidden, so the closeModal call there is what
+  // actually triggers focus restoration to the trigger.
+  openModal(modal);
 }
 
 /**
- * Close add purchases modal
+ * Close add purchases modal — restore focus first (closeModal), then
+ * remove the dynamically-injected element from the DOM.
  */
 function closeAddPurchasesModal(): void {
-  document.getElementById('add-purchases-modal')?.remove();
+  const modal = document.getElementById('add-purchases-modal');
+  if (modal) closeModal(modal);
+  modal?.remove();
 }
 
 /**

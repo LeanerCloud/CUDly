@@ -74,6 +74,11 @@ type HandlerConfig struct {
 	// Nil disables both the /api/commitment-options endpoint (returns
 	// unavailable) and save-side validation in updateServiceConfig.
 	CommitmentOpts CommitmentOptsInterface
+	// EncryptionKeySource is the env var name that resolved the credential
+	// encryption key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Empty
+	// when no credStore is configured. Used by the /health endpoint to
+	// surface which key source is in use and detect dev-key state.
+	EncryptionKeySource string
 }
 
 // CommitmentOptsInterface lets us swap the real *commitmentopts.Service for
@@ -326,6 +331,39 @@ type RecommendationsResponse struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	Summary         RecommendationsSummary        `json:"summary"`
 	Regions         []string                      `json:"regions"`
+}
+
+// UsagePoint is a single sample in the per-recommendation usage time
+// series surfaced by GET /api/recommendations/:id/detail. The series is
+// always ordered by Timestamp ascending. CPUPct/MemPct are 0..100.
+//
+// Empty in the current implementation: the collector pipeline does not
+// yet persist time-series utilisation per recommendation. The endpoint
+// returns the empty slice with a non-error status so the frontend can
+// render a "Usage history not yet available" placeholder rather than a
+// broken empty chart. See known_issues/28_recommendations_detail_endpoint.md
+// for the full collector wiring follow-up.
+type UsagePoint struct {
+	Timestamp string  `json:"timestamp"`
+	CPUPct    float64 `json:"cpu_pct"`
+	MemPct    float64 `json:"mem_pct"`
+}
+
+// RecommendationDetailResponse is the per-id payload backing the
+// Recommendations row-click drawer. Contract documented in issue #44.
+//
+// ConfidenceBucket is "low" | "medium" | "high" — server-side mirror of
+// the client-side heuristic that previously lived in
+// frontend/src/recommendations.ts:confidenceBucketFor. Centralising it
+// server-side lets future provider-specific tuning happen in one place.
+//
+// ProvenanceNote is a short human-readable string naming the collector
+// + the freshness window. Rendered verbatim in the drawer.
+type RecommendationDetailResponse struct {
+	ID               string       `json:"id"`
+	UsageHistory     []UsagePoint `json:"usage_history"`
+	ConfidenceBucket string       `json:"confidence_bucket"`
+	ProvenanceNote   string       `json:"provenance_note"`
 }
 
 // PlansResponse holds the purchase plans response

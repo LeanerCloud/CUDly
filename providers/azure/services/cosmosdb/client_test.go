@@ -852,9 +852,14 @@ func TestCosmosDBClient_ConvertAzureCosmosRecommendation_NilGuards(t *testing.T)
 
 // TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields
 // asserts the converter forwards every helper-extracted field + applies
-// the CosmosDB-service-specific constants.
+// the CosmosDB-service-specific constants. An empty accounts list
+// (zero-account subscription) is the "no signal" baseline — APIType
+// stays empty.
 func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
+	// Inject empty mock pager so cachedAPIType doesn't make a real call.
+	client.SetCosmosAccountsPager(&MockCosmosAccountsPager{})
+
 	rec := mocks.BuildLegacyReservationRecommendation(
 		mocks.WithRegion("westus2"),
 		mocks.WithTerm("P1Y"),
@@ -880,12 +885,184 @@ func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields(t *t
 	// Details carries Engine="cosmos". For this fixture the SKU doesn't
 	// start with digits, so ThroughputUnits is 0 — which correctly
 	// signals "unknown from payload" rather than being parsed wrong.
+	// APIType stays empty because no Cosmos accounts exist in the
+	// subscription (no signal).
 	require.NotNil(t, out.Details)
 	details, ok := out.Details.(common.NoSQLDetails)
 	require.True(t, ok, "Details must be a common.NoSQLDetails value")
 	assert.Equal(t, "cosmos", details.Engine)
-	assert.Empty(t, details.APIType, "APIType requires an armcosmos lookup and is deferred")
+	assert.Empty(t, details.APIType, "APIType empty when subscription has no Cosmos accounts")
 }
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAPIType
+// asserts the new batched-account-list lookup populates
+// NoSQLDetails.APIType when the subscription has exactly one Cosmos
+// account, mapping the account.Kind + Capabilities into the canonical
+// API string.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAPIType(t *testing.T) {
+	tests := []struct {
+		name        string
+		account     *armcosmos.DatabaseAccountGetResults
+		wantAPIType string
+	}{
+		{
+			name: "MongoDB kind",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindMongoDB),
+			},
+			wantAPIType: "mongodb",
+		},
+		{
+			name: "GlobalDocumentDB + Cassandra capability",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{
+					Capabilities: []*armcosmos.Capability{
+						{Name: ptrStr("EnableCassandra")},
+					},
+				},
+			},
+			wantAPIType: "cassandra",
+		},
+		{
+			name: "GlobalDocumentDB + Gremlin capability",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{
+					Capabilities: []*armcosmos.Capability{
+						{Name: ptrStr("EnableGremlin")},
+					},
+				},
+			},
+			wantAPIType: "gremlin",
+		},
+		{
+			name: "GlobalDocumentDB + Table capability",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{
+					Capabilities: []*armcosmos.Capability{
+						{Name: ptrStr("EnableTable")},
+					},
+				},
+			},
+			wantAPIType: "table",
+		},
+		{
+			name: "GlobalDocumentDB + no capability hints (SQL/Core API)",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind:       ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{},
+			},
+			wantAPIType: "sql",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(nil, "test-subscription", "eastus")
+			client.SetCosmosAccountsPager(&MockCosmosAccountsPager{
+				pages: []armcosmos.DatabaseAccountsClientListResponse{
+					{
+						DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+							Value: []*armcosmos.DatabaseAccountGetResults{tt.account},
+						},
+					},
+				},
+			})
+
+			rec := mocks.BuildLegacyReservationRecommendation(
+				mocks.WithRegion("eastus"),
+				mocks.WithNormalizedSize("100RU"),
+			)
+			out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+			require.NotNil(t, out)
+			details, ok := out.Details.(common.NoSQLDetails)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantAPIType, details.APIType)
+		})
+	}
+}
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_AmbiguousAPIType
+// asserts that a multi-API-type subscription leaves APIType empty —
+// guessing would produce wrong UI rendering.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_AmbiguousAPIType(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCosmosAccountsPager(&MockCosmosAccountsPager{
+		pages: []armcosmos.DatabaseAccountsClientListResponse{
+			{
+				DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+					Value: []*armcosmos.DatabaseAccountGetResults{
+						{Kind: ptr(armcosmos.DatabaseAccountKindMongoDB)},
+						{Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB)},
+					},
+				},
+			},
+		},
+	})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("100RU"),
+	)
+	out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.NoSQLDetails)
+	require.True(t, ok)
+	assert.Empty(t, details.APIType, "ambiguous (multi-API) subscription leaves APIType empty")
+}
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_PagerErrorFallsBack
+// asserts that an account-listing failure does NOT fail the conversion
+// — APIType just stays empty and the rest of Details is populated as
+// before.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PagerErrorFallsBack(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCosmosAccountsPager(&MockCosmosAccountsPager{
+		err: errors.New("transient Azure API error"),
+	})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("100RU"),
+	)
+	out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+	require.NotNil(t, out, "conversion must NOT fail on accounts-listing error")
+	details, ok := out.Details.(common.NoSQLDetails)
+	require.True(t, ok)
+	assert.Equal(t, "cosmos", details.Engine)
+	assert.Equal(t, 100, details.ThroughputUnits)
+	assert.Empty(t, details.APIType, "APIType empty when accounts listing fails")
+}
+
+// TestCosmosDBClient_CachedAPIType_FetchedOnce pins the perf invariant:
+// many converter calls share a single accounts-listing fetch.
+func TestCosmosDBClient_CachedAPIType_FetchedOnce(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	mockPager := &MockCosmosAccountsPager{
+		pages: []armcosmos.DatabaseAccountsClientListResponse{
+			{
+				DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+					Value: []*armcosmos.DatabaseAccountGetResults{
+						{Kind: ptr(armcosmos.DatabaseAccountKindMongoDB)},
+					},
+				},
+			},
+		},
+	}
+	client.SetCosmosAccountsPager(mockPager)
+
+	for i := 0; i < 10; i++ {
+		_ = client.cachedAPIType(context.Background())
+	}
+	assert.Equal(t, 1, mockPager.index, "accounts list must be fetched ONCE regardless of lookup count")
+}
+
+// ptr / ptrStr are local pointer-builder helpers that keep the table
+// fixtures readable. The mocks package's StringPtr is too generic for
+// the typed Cosmos enums.
+func ptr[T any](v T) *T       { return &v }
+func ptrStr(s string) *string { return &s }
 
 // TestDetailsFromCosmosSKU covers the permissive SKU parser directly.
 // Real SKUs look like "100RU", "1000RUperSecond", or service-emitted
