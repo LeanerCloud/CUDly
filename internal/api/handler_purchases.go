@@ -333,10 +333,18 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 
 // cancelPurchaseViaSession is the session-authed branch of cancelPurchase.
 // Enforces the cancel-any/cancel-own RBAC matrix, validates the execution
-// is in a cancellable state (pending|notified), atomically transitions the
-// row to "cancelled", and stamps the cancelling user's email onto
-// CancelledBy. The History UI's annotateCancelled() helper renders that
-// into "cancelled by <email>" at read time — see handler_history.go.
+// is in a cancellable state (pending|notified), atomically flips the row
+// to "cancelled" AND drops its purchase_suppressions in the same
+// transaction, and stamps session.Email onto CancelledBy. The History
+// UI's annotateCancelled() helper renders CancelledBy as
+// "cancelled by <email>" at read time — see handler_history.go.
+//
+// The atomic suppression cleanup mirrors purchase.Manager.CancelExecution
+// on the email-token path: an executePurchase upfront writes
+// purchase_suppressions to hide the just-bought capacity from the
+// recommendations list during the grace window, and cancel must drop
+// those rows in the same commit so a crash between the two writes can't
+// leave the rec list hiding capacity the user already cancelled.
 func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
@@ -351,21 +359,24 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, err
 	}
 
-	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "cancelled")
-	if err != nil {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", execution.ExecutionID, err))
-	}
-
-	// Persist who cancelled the row so the History view can show
-	// "cancelled by <email>" instead of falling back to the notification
-	// inbox. Best-effort — a write failure does not undo the status
-	// transition; the row is already cancelled.
+	// Flip status + clear suppressions + stamp CancelledBy in one tx.
+	// An optimistic-locking guard inside the tx (status IN
+	// ('pending','notified')) prevents a concurrent approval from
+	// landing on top of us — if the status drifted, the UPDATE 0-rows
+	// the row count and we 409 cleanly without rolling back the entire
+	// flow into an inconsistent state.
+	execution.Status = "cancelled"
 	if session.Email != "" {
 		actor := session.Email
-		updated.CancelledBy = &actor
-		if err := h.config.SavePurchaseExecution(ctx, updated); err != nil {
-			logging.Warnf("cancelPurchaseViaSession: failed to persist cancelled_by for %s: %v", execution.ExecutionID, err)
+		execution.CancelledBy = &actor
+	}
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
+			return err
 		}
+		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
+	}); err != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", execution.ExecutionID, err))
 	}
 
 	return map[string]string{"status": "cancelled"}, nil

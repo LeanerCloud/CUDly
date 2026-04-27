@@ -223,6 +223,40 @@ describe('History inline Cancel button (issue #46)', () => {
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
   });
 
+  test('successful cancel + failed reload still surfaces success toast', async () => {
+    // CR feedback (PR #145): the cancel POST and refresh must not share
+    // a try/catch — a failed reload can't be allowed to override the
+    // success of the cancel itself. The user already gave intent and
+    // the row IS cancelled on the backend; surfacing "Failed to cancel"
+    // would be wrong.
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    (api.cancelPurchase as jest.Mock).mockResolvedValue(undefined);
+    let getCallCount = 0;
+    (api.getHistory as jest.Mock).mockImplementation(() => {
+      getCallCount++;
+      if (getCallCount === 1) {
+        return Promise.resolve({
+          summary: {},
+          purchases: [makeRow({ purchase_id: 'exec-1', created_by_user_id: ADMIN_USER.id })],
+        });
+      }
+      return Promise.reject(new Error('refresh failed'));
+    });
+    console.error = jest.fn();
+
+    await loadHistory();
+    const btn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Success toast lands BEFORE the reload error.
+    const successCalls = (showToast as jest.Mock).mock.calls.filter((c) => c[0].kind === 'success');
+    const errorCalls = (showToast as jest.Mock).mock.calls.filter((c) => c[0].kind === 'error');
+    expect(successCalls.length).toBeGreaterThan(0);
+    expect(errorCalls).toHaveLength(0); // the reload-failure path must NOT toast error
+  });
+
   test('cancel API failure surfaces toast and re-enables the button', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (confirmDialog as jest.Mock).mockResolvedValue(true);

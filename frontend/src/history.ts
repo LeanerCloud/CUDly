@@ -290,11 +290,24 @@ function providerCell(p: HistoryPurchase): string {
 
 // canCancelPendingRow returns true when the current session is permitted
 // to cancel the given pending/notified history row via the session-authed
-// Cancel button (issue #46). Mirror of the backend RBAC matrix in
-// internal/api/handler_purchases.go::authorizeSessionCancel — keep both
-// sides in sync. The backend remains authoritative; this helper is a UX
-// gate (don't show buttons users can't use) and never the security
-// boundary.
+// Cancel button (issue #46). UX gate only — the backend
+// authorizeSessionCancel in internal/api/handler_purchases.go remains the
+// security boundary; if this helper is wrong-positive the API surfaces
+// 403 and the click handler turns that into a "Failed to cancel" toast.
+//
+// Heuristic:
+//   * admin → always yes;
+//   * non-admin matching the row's created_by_user_id → yes (cancel-own);
+//   * anyone else → no.
+//
+// Caveat: a non-admin role explicitly granted cancel-any:purchases (no
+// such role exists by default; the verb is reserved for future operator
+// roles) WILL be allowed by the backend but hidden by this helper. We
+// don't surface that case because the frontend doesn't currently fetch
+// the user's permission list, and adding a /me/permissions round-trip
+// just to enable a button for a role nobody has is wasteful. If/when an
+// operator role lands, extend User to carry permissions and broaden this
+// check accordingly.
 function canCancelPendingRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'pending' && status !== 'notified') return false;
@@ -411,8 +424,16 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
 
   // Wire the inline Cancel button on pending/notified rows the current
   // session may cancel (issue #46). confirmDialog → POST → reload. The
-  // backend remains the security boundary; this UX gate just hides the
-  // button when the call would 403.
+  // backend remains the security boundary; the canCancelPendingRow
+  // helper above is a UX gate that hides the button when the call would
+  // 403, but a stale cache could still surface a 403 — handle it the
+  // same way as any other failure.
+  //
+  // The cancel POST and the follow-up reload are split into separate
+  // try/catch blocks: a successful cancel + failed reload must not show
+  // a "Failed to cancel" toast (the purchase IS cancelled), and the
+  // user should see success-toast first so they don't think their
+  // click was lost while we re-fetch the table.
   container.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset['cancelId'];
@@ -427,13 +448,24 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       btn.disabled = true;
       try {
         await api.cancelPurchase(id);
-        showToast({ message: 'Purchase cancelled', kind: 'success', timeout: 5_000 });
-        await loadHistory();
       } catch (cancelError) {
         console.error('Failed to cancel pending purchase:', cancelError);
         const err = cancelError as Error;
         showToast({ message: `Failed to cancel: ${err.message || 'unknown error'}`, kind: 'error' });
         btn.disabled = false;
+        return;
+      }
+      // Cancel succeeded — surface success regardless of whether the
+      // refresh works. A reload failure leaves the row in its previous
+      // pending state on screen (stale-but-correct: the next manual
+      // reload corrects it).
+      showToast({ message: 'Purchase cancelled', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after cancel:', reloadError);
+        // Don't downgrade the success toast; loadHistory's own catch
+        // already paints an error message into the list area.
       }
     });
   });

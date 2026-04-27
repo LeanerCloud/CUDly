@@ -169,10 +169,19 @@ export interface HistoryPurchase {
   // 7-day-window reminder. Empty on completed / pending rows.
   status_description?: string;
   // CreatedByUserID: UUID of the user who created the underlying execution.
-  // Set only on pending/notified rows (synthesised from purchase_executions);
-  // empty on completed history rows. The History UI uses it to decide
-  // whether the inline Cancel button (issue #46) is visible to the current
-  // session — non-admins only see it on rows they themselves created.
+  // Populated on every synthesised purchase_executions row the History
+  // endpoint returns (pending, notified, failed, expired, cancelled — see
+  // historyExecutionStatuses in the backend). NOT populated on rows from
+  // the purchase_history table (completed purchases) since attribution
+  // there is via the older approver/cancelled_by fields.
+  // Empty when:
+  //   * the row is a completed-purchase row from purchase_history, OR
+  //   * the underlying execution pre-dates migration 000041 (legacy
+  //     NULL creator), OR
+  //   * the execution was scheduler-driven (no human creator).
+  // The History UI uses it to decide whether the inline Cancel button
+  // (issue #46) is visible — non-admins only see it on rows they
+  // themselves created.
   created_by_user_id?: string;
 }
 

@@ -1154,6 +1154,29 @@ func sessionCancelReq() *events.LambdaFunctionURLRequest {
 	}
 }
 
+// runSessionCancelAllowed asserts the success path of the session-authed
+// branch given a permission-matrix cell that should be allowed. The
+// cancel commits in a single tx (SavePurchaseExecutionTx +
+// DeleteSuppressionsByExecutionTx via WithTx); the mock store's WithTx
+// default forwards fn(nil) and SavePurchaseExecutionTx default routes
+// through SavePurchaseExecution, which we wire here. The suppression
+// delete returns nil by default so we don't need to register it.
+func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, session *Session, hasAny, hasOwn bool) {
+	t.Helper()
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, hasAny, hasOwn)
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+
+	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+	// Status flip + suppression cleanup are paired in one tx — the mock
+	// only sees the un-tx variants because of how MockConfigStore wires
+	// SavePurchaseExecutionTx → SavePurchaseExecution. Asserting the
+	// un-tx call ran is enough for the matrix tests; the atomicity
+	// itself is exercised by the live integration tests.
+	mockConfig.AssertCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}
+
 func TestHandler_cancelPurchase_Session_Admin_AllowsAny(t *testing.T) {
 	creator := cancelOtherID
 	exec := &config.PurchaseExecution{
@@ -1161,17 +1184,8 @@ func TestHandler_cancelPurchase_Session_Admin_AllowsAny(t *testing.T) {
 		Status:          "pending",
 		CreatedByUserID: &creator,
 	}
-	transitioned := *exec
-	transitioned.Status = "cancelled"
 	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
-
-	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, false)
-	mockConfig.On("TransitionExecutionStatus", mock.Anything, cancelExecID, []string{"pending", "notified"}, "cancelled").Return(&transitioned, nil)
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
-
-	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
-	require.NoError(t, err)
-	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+	runSessionCancelAllowed(t, exec, session, false, false)
 }
 
 func TestHandler_cancelPurchase_Session_CancelAny_AllowsAny(t *testing.T) {
@@ -1183,17 +1197,8 @@ func TestHandler_cancelPurchase_Session_CancelAny_AllowsAny(t *testing.T) {
 		Status:          "pending",
 		CreatedByUserID: &creator,
 	}
-	transitioned := *exec
-	transitioned.Status = "cancelled"
 	session := &Session{UserID: cancelCallerID, Role: "user", Email: "ops@example.com"}
-
-	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, true, false)
-	mockConfig.On("TransitionExecutionStatus", mock.Anything, cancelExecID, []string{"pending", "notified"}, "cancelled").Return(&transitioned, nil)
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
-
-	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
-	require.NoError(t, err)
-	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+	runSessionCancelAllowed(t, exec, session, true, false)
 }
 
 func TestHandler_cancelPurchase_Session_CancelOwn_AllowsCreator(t *testing.T) {
@@ -1203,17 +1208,8 @@ func TestHandler_cancelPurchase_Session_CancelOwn_AllowsCreator(t *testing.T) {
 		Status:          "notified",
 		CreatedByUserID: &creator,
 	}
-	transitioned := *exec
-	transitioned.Status = "cancelled"
 	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
-
-	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, true)
-	mockConfig.On("TransitionExecutionStatus", mock.Anything, cancelExecID, []string{"pending", "notified"}, "cancelled").Return(&transitioned, nil)
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
-
-	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
-	require.NoError(t, err)
-	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+	runSessionCancelAllowed(t, exec, session, false, true)
 }
 
 func TestHandler_cancelPurchase_Session_CancelOwn_RejectsNonCreator(t *testing.T) {
@@ -1230,7 +1226,8 @@ func TestHandler_cancelPurchase_Session_CancelOwn_RejectsNonCreator(t *testing.T
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "another user's pending purchase")
-	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 }
 
 func TestHandler_cancelPurchase_Session_NoVerb_Rejects(t *testing.T) {
@@ -1247,7 +1244,8 @@ func TestHandler_cancelPurchase_Session_NoVerb_Rejects(t *testing.T) {
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cancel-any or cancel-own")
-	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 }
 
 func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
@@ -1265,7 +1263,8 @@ func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be cancelled")
 	assert.Contains(t, err.Error(), "completed")
-	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 }
 
 func TestHandler_cancelPurchase_Session_LegacyNullCreator_NonAdminRejected(t *testing.T) {
@@ -1285,7 +1284,8 @@ func TestHandler_cancelPurchase_Session_LegacyNullCreator_NonAdminRejected(t *te
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "another user's pending purchase")
-	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 }
 
 func TestHandler_cancelPurchase_Session_RejectsMissingSession(t *testing.T) {

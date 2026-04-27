@@ -277,16 +277,22 @@ const (
 	ActionAdmin   = "admin"
 	// ActionCancelOwn / ActionCancelAny gate the session-authed Cancel
 	// button on pending Purchase History rows (issue #46).
-	//   * cancel-own + purchases — granted to every authenticated user
-	//     role by default; allows cancelling pending executions whose
-	//     created_by_user_id matches the session user. Legacy rows with
-	//     a NULL creator are out of reach for non-admins via this verb;
-	//     admins still cancel them via cancel-any (or implicit admin).
-	//   * cancel-any + purchases — granted via ActionAdmin/ResourceAll
-	//     for admin role; this constant exists so future non-admin
-	//     operator roles can be granted broad cancel rights without
-	//     escalating to admin. Allows cancelling pending executions
-	//     regardless of creator.
+	//
+	// Default grants:
+	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//     both verbs.
+	//   * RoleUser — DefaultUserPermissions() adds cancel-own:purchases.
+	//     Allows cancelling pending executions whose created_by_user_id
+	//     matches the session user. Legacy rows with NULL creator are
+	//     out of reach for non-admins via this verb; admins still cancel
+	//     them via cancel-any.
+	//   * RoleReadOnly — neither verb. Read-only users cannot cancel.
+	//
+	// cancel-any has no default non-admin grant; the constant exists so
+	// future operator roles can be granted broad cancel rights without
+	// escalating to admin. Add it to a custom group's Permissions to
+	// enable that path.
+	//
 	// The legacy email-token cancel path stays unchanged as an escape
 	// hatch and is gated by token possession, not these verbs.
 	ActionCancelOwn = "cancel-own"
