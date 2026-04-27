@@ -208,6 +208,18 @@ variable "scheduled_task_secret_name" {
   description = "Key Vault secret name (NOT the value) holding the shared secret for authenticating scheduled task HTTP calls. The Logic App workflows fetch this secret at runtime via their managed identity, so the plaintext never lands in the workflow definition or Terraform state. Must be non-empty when enable_scheduled_tasks or enable_ri_exchange_schedule is true (enforced by a precondition in scheduled-tasks.tf)."
   type        = string
   default     = ""
+
+  # Validation runs unconditionally on the variable, so we can't predicate it
+  # on enable_scheduled_tasks / enable_ri_exchange_schedule (variables can't
+  # see other variables here). The "is non-empty when needed" rule lives in
+  # scheduled-tasks.tf as a resource precondition. This block only checks the
+  # character set: if a value is supplied, it must be a bare Key Vault secret
+  # name and not a path/query/fragment fragment that would let it escape the
+  # `${key_vault_uri}secrets/${name}?api-version=…` URL template.
+  validation {
+    condition     = var.scheduled_task_secret_name == "" || !can(regex("[/?# ]", var.scheduled_task_secret_name))
+    error_message = "scheduled_task_secret_name must be a bare Key Vault secret name (no '/', '?', '#', or whitespace)."
+  }
 }
 
 variable "recommendation_schedule" {
