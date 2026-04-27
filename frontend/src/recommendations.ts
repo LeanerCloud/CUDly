@@ -10,6 +10,7 @@ import { getRecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
 import { isPaymentSupported, type Provider as CompatProvider } from './lib/purchase-compatibility';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
+import { openModal } from './modal';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
@@ -737,7 +738,7 @@ function openFanOutModal(
     container.appendChild(renderFanOutBucketSection(b));
   }
 
-  modal.classList.remove('hidden');
+  openModal(modal);
 }
 
 function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; totalUpfront: number; totalSavings: number } {
@@ -926,7 +927,8 @@ export function openPurchaseModal(recommendations: LocalRecommendation[]): void 
     </div>
   `;
 
-  document.getElementById('purchase-modal')?.classList.remove('hidden');
+  const purchaseModal = document.getElementById('purchase-modal');
+  if (purchaseModal) openModal(purchaseModal);
 }
 
 /**

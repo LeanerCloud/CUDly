@@ -8,6 +8,7 @@ import { currentEditingGroup, setCurrentEditingGroup } from './state';
 import { availableGroups } from '../users/state';
 import { escapeHtml, showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
+import { openModal, closeModal } from '../modal';
 
 // Module-level state for the duplicate modal — holds the source group so
 // saveDuplicateGroup doesn't need another lookup.
@@ -34,7 +35,7 @@ export function openCreateGroupModal(): void {
     permissionsList.innerHTML = '';
   }
 
-  modal.classList.remove('hidden');
+  openModal(modal);
 }
 
 /**
@@ -59,7 +60,7 @@ export async function openEditGroupModal(groupId: string): Promise<void> {
     // Render existing permissions
     renderPermissions(group.permissions);
 
-    modal.classList.remove('hidden');
+    openModal(modal);
   } catch (error) {
     console.error('Failed to load group:', error);
     showError('Failed to load group details');
@@ -72,7 +73,7 @@ export async function openEditGroupModal(groupId: string): Promise<void> {
 export function closeGroupModal(): void {
   const modal = document.getElementById('group-modal');
   if (modal) {
-    modal.classList.add('hidden');
+    closeModal(modal);
   }
   setCurrentEditingGroup(null);
 }
@@ -395,7 +396,7 @@ export async function openDuplicateGroupModal(groupId: string): Promise<void> {
     if (accountsList) renderDuplicateAccountsList(accountsList, accounts);
     if (providerFilter && accountsList) renderDuplicateProviderPills(providerFilter, accountsList);
 
-    modal.classList.remove('hidden');
+    openModal(modal);
   } catch (error) {
     console.error('Failed to open duplicate group modal:', error);
     showError('Failed to load group details');
@@ -407,7 +408,7 @@ export async function openDuplicateGroupModal(groupId: string): Promise<void> {
  */
 export function closeDuplicateGroupModal(): void {
   const modal = document.getElementById('group-duplicate-modal');
-  if (modal) modal.classList.add('hidden');
+  if (modal) closeModal(modal);
   duplicateSourceGroup = null;
 }
 

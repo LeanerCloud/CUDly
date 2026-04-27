@@ -10,6 +10,7 @@ import {
 } from './state';
 import { escapeHtml, showError, showSuccess } from './utils';
 import { loadUsers } from './userActions';
+import { openModal, closeModal } from '../modal';
 
 /**
  * Open create user modal
@@ -36,7 +37,7 @@ export function openCreateUserModal(): void {
   // Populate groups dropdown
   populateGroupsDropdown();
 
-  modal.classList.remove('hidden');
+  openModal(modal);
 }
 
 /**
@@ -68,7 +69,7 @@ export async function openEditUserModal(userId: string): Promise<void> {
     // Populate and select groups
     populateGroupsDropdown(user.groups);
 
-    modal.classList.remove('hidden');
+    openModal(modal);
   } catch (error) {
     console.error('Failed to load user:', error);
     showError('Failed to load user details');
@@ -81,7 +82,7 @@ export async function openEditUserModal(userId: string): Promise<void> {
 export function closeUserModal(): void {
   const modal = document.getElementById('user-modal');
   if (modal) {
-    modal.classList.add('hidden');
+    closeModal(modal);
   }
   setCurrentEditingUser(null);
 }

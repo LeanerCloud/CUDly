@@ -9,6 +9,7 @@ import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
 import { isValidCombination } from './commitmentOptions';
+import { openModal, closeModal } from './modal';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -961,7 +962,7 @@ export function openAccountModal(provider: AccountProvider, account?: api.CloudA
     updateGCPAuthModeFields(gcpMode);
   }
 
-  modal.classList.remove('hidden');
+  openModal(modal);
 }
 
 /**
@@ -1138,7 +1139,7 @@ async function populateBastionAccountDropdown(selectedId?: string): Promise<void
  */
 function closeAccountModal(): void {
   const modal = document.getElementById('account-modal');
-  modal?.classList.add('hidden');
+  if (modal) closeModal(modal);
   accountModalOnSave = undefined;
 }
 
