@@ -1,0 +1,69 @@
+name: pre-commit
+
+on:
+  pull_request:
+    branches: [main, feat/multicloud-web-frontend]
+  push:
+    branches: [main, feat/multicloud-web-frontend]
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    name: Run pre-commit hooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.4"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Install gocyclo
+        run: go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Install git-secrets
+        run: |
+          git clone --depth 1 https://github.com/awslabs/git-secrets.git /tmp/git-secrets
+          sudo make -C /tmp/git-secrets install
+          git secrets --register-aws --global || true
+
+      - name: Install hadolint
+        run: |
+          curl -sSL -o /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Install frontend deps
+        run: |
+          if [ -f frontend/package-lock.json ]; then
+            cd frontend && npm ci
+          fi
+
+      - name: Run pre-commit
+        run: pre-commit run --all-files

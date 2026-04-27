@@ -10,9 +10,12 @@ ARG TARGETARCH
 ARG TARGETOS=linux
 
 # Build stage
-# TODO: Pin to SHA256 digest for reproducible builds:
-#   docker buildx imagetools inspect golang:1.25.4-alpine3.21
-FROM golang:1.25.4-alpine3.21 AS builder
+# Image pinned to a SHA256 digest for reproducible builds — a registry
+# tag mutation (Docker Hub allows re-tagging) cannot poison this build.
+# To refresh: `docker buildx imagetools inspect golang:1.25.4-alpine3.21`
+# (or use the Docker Hub API tags endpoint) and update the digest below.
+# A Renovate / Dependabot config can automate this if desired.
+FROM golang:1.25.4-alpine3.21@sha256:3289aac2aac769e031d644313d094dbda745f28af81cd7a94137e73eefd58b33 AS builder
 
 # Re-declare args for use in this stage
 ARG TARGETARCH
@@ -74,9 +77,10 @@ RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
 # ==============================================
 # Frontend build stage
 # ==============================================
-# TODO: Pin to SHA256 digest for reproducible builds:
-#   docker buildx imagetools inspect node:20.19-alpine3.21
-FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
+# Image pinned to a SHA256 digest for reproducible builds. Refresh via
+# the Docker Hub API tags endpoint and update the digest below when the
+# `node:24-alpine` tag is bumped.
+FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
@@ -87,9 +91,8 @@ RUN npm run build
 # ==============================================
 # Runtime stage - multi-arch base image
 # ==============================================
-# TODO: Pin to SHA256 digest for reproducible builds:
-#   docker buildx imagetools inspect alpine:3.21.3
-FROM alpine:3.21.3
+# Image pinned to a SHA256 digest for reproducible builds.
+FROM alpine:3.21.3@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
 
 # Re-declare args for use in this stage
 ARG TARGETARCH

@@ -54,7 +54,11 @@ repos:
         name: Check for merge conflicts
       - id: detect-private-key
         name: Detect private keys
-        exclude: '(_test\.go|frontend/src/index\.html|internal/credentials/resolver\.go)$'
+        # Audit (PR5): internal/credentials/resolver.go contains zero
+        # private-key-shaped patterns (verified by grep). The exclusion
+        # was a historical artifact; removing it tightens the gate
+        # without breaking any legitimate code.
+        exclude: '(_test\.go|frontend/src/index\.html)$'
       - id: check-case-conflict
         name: Check for case conflicts
 
@@ -117,7 +121,13 @@ repos:
 
       - id: trivy-config
         name: Trivy config scanner
-        entry: bash -c 'command -v trivy >/dev/null 2>&1 && trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs terraform/environments/aws . || echo "Trivy not installed, skipping..."'
+        # Trivy is a required tool: the previous fallback `|| echo
+        # "skipping"` masked an absent gate, which is worse than no gate.
+        # Install via `brew install trivy` or `apt install trivy`. CI
+        # installs it via the trivy-action step in
+        # .github/workflows/ci.yml, so PRs are always scanned regardless
+        # of a developer's local setup.
+        entry: bash -c 'trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs terraform/environments/aws .'
         language: system
         pass_filenames: false
 
