@@ -1161,10 +1161,22 @@ func sessionCancelReq() *events.LambdaFunctionURLRequest {
 // default forwards fn(nil) and SavePurchaseExecutionTx default routes
 // through SavePurchaseExecution, which we wire here. The suppression
 // delete returns nil by default so we don't need to register it.
+//
+// Captures the saved execution so the caller can assert the audit-stamp
+// invariants — primarily that CancelledBy is set to session.Email when
+// the session has a non-empty email. cancelPurchase relies on this stamp
+// for History UI attribution; if SavePurchaseExecution stops being
+// called with the email-bearing copy the matrix tests would otherwise
+// silently regress.
 func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, session *Session, hasAny, hasOwn bool) {
 	t.Helper()
 	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, hasAny, hasOwn)
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+	var saved *config.PurchaseExecution
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) {
+			saved = args.Get(1).(*config.PurchaseExecution)
+		}).
+		Return(nil)
 
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.NoError(t, err)
@@ -1174,7 +1186,13 @@ func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, sessi
 	// SavePurchaseExecutionTx → SavePurchaseExecution. Asserting the
 	// un-tx call ran is enough for the matrix tests; the atomicity
 	// itself is exercised by the live integration tests.
-	mockConfig.AssertCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+	mockConfig.AssertCalled(t, "SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution"))
+	require.NotNil(t, saved, "SavePurchaseExecution should have captured the execution")
+	assert.Equal(t, "cancelled", saved.Status)
+	if session != nil && session.Email != "" {
+		require.NotNil(t, saved.CancelledBy, "CancelledBy must be stamped when session has an email")
+		assert.Equal(t, session.Email, *saved.CancelledBy, "CancelledBy must equal session.Email for audit attribution")
+	}
 }
 
 func TestHandler_cancelPurchase_Session_Admin_AllowsAny(t *testing.T) {
