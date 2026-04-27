@@ -39,6 +39,12 @@ jest.mock('../state', () => ({
   removeSelectedRecommendation: jest.fn(),
   getRecommendationsSort: jest.fn().mockReturnValue({ column: 'savings', direction: 'desc' }),
   setRecommendationsSort: jest.fn(),
+  // Bundle A column-filter accessors (default empty filters → applyColumnFilters is a no-op).
+  getRecommendationsColumnFilters: jest.fn().mockReturnValue({}),
+  setRecommendationsColumnFilter: jest.fn(),
+  clearAllRecommendationsColumnFilters: jest.fn(),
+  getVisibleRecommendations: jest.fn().mockReturnValue([]),
+  setVisibleRecommendations: jest.fn(),
 }));
 
 // Mock utils
@@ -56,18 +62,10 @@ describe('Recommendations Module', () => {
   beforeEach(() => {
     // Reset DOM
     document.body.innerHTML = `
-      <select id="service-filter">
-        <option value="">All Services</option>
-        <option value="ec2">EC2</option>
-      </select>
-      <select id="region-filter">
-        <option value="">All Regions</option>
-        <option value="us-east-1">us-east-1</option>
-        <option value="us-west-2">us-west-2</option>
-      </select>
-      <input type="number" id="min-savings-filter" value="">
-      <div id="recommendations-summary"></div>
-      <div id="recommendations-list"></div>
+      <div id="recommendations-tab" class="tab-content active">
+        <div id="recommendations-summary"></div>
+        <div id="recommendations-list"></div>
+      </div>
       <div id="purchase-modal" class="hidden">
         <div id="purchase-details"></div>
       </div>
@@ -83,28 +81,21 @@ describe('Recommendations Module', () => {
   });
 
   describe('loadRecommendations', () => {
-    test('fetches recommendations with filters', async () => {
+    test('fetches recommendations with provider/account_ids hints (Bundle B)', async () => {
+      // After Bundle B, only provider + account_ids are sent to the API as
+      // hints; service/region/numeric filters are pure client-side via
+      // applyColumnFilters. The legacy DOM filter inputs are gone.
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
         regions: []
       });
 
-      const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement;
-      const regionFilter = document.getElementById('region-filter') as HTMLSelectElement;
-      const minSavingsFilter = document.getElementById('min-savings-filter') as HTMLInputElement;
-
-      serviceFilter.value = 'ec2';
-      regionFilter.value = 'us-east-1';
-      minSavingsFilter.value = '100';
-
       await loadRecommendations();
 
       expect(api.getRecommendations).toHaveBeenCalledWith({
         provider: 'all',
-        service: 'ec2',
-        region: 'us-east-1',
-        minSavings: 100
+        account_ids: undefined,
       });
     });
 
@@ -155,7 +146,7 @@ describe('Recommendations Module', () => {
       expect(list?.innerHTML).toContain('us-east-1');
     });
 
-    test('shows empty message when no recommendations', async () => {
+    test('shows empty-state message when no recommendations', async () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
@@ -165,20 +156,7 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const list = document.getElementById('recommendations-list');
-      expect(list?.innerHTML).toContain('No recommendations found');
-    });
-
-    test('populates region filter', async () => {
-      (api.getRecommendations as jest.Mock).mockResolvedValue({
-        summary: {},
-        recommendations: [],
-        regions: ['us-east-1', 'us-west-2', 'eu-west-1']
-      });
-
-      await loadRecommendations();
-
-      const regionFilter = document.getElementById('region-filter') as HTMLSelectElement;
-      expect(regionFilter.options.length).toBe(4); // All Regions + 3 regions
+      expect(list?.innerHTML).toContain('No recommendations match');
     });
 
     test('stores recommendations in state', async () => {
@@ -356,9 +334,11 @@ describe('Recommendations Module', () => {
 
       await loadRecommendations();
 
-      // Per-row Purchase button removed in Commit 3 of bulk-purchase-
-      // with-grace. Use the bulk Purchase button on the top toolbar
-      // instead — a single visible rec purchases that one.
+      // Bundle B: per-row Purchase buttons gone; the Purchase action lives
+      // in the sticky bottom action box at #bulk-purchase-btn. The button
+      // resolves its target via state.getVisibleRecommendations(), so the
+      // mock needs to return the loaded recs for the click to fire.
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(mockRecs);
       const purchaseBtn = document.querySelector('#bulk-purchase-btn') as HTMLButtonElement;
       expect(purchaseBtn).not.toBeNull();
       purchaseBtn.click();
@@ -413,12 +393,14 @@ describe('Recommendations Module', () => {
       });
     });
 
-    test('renders sortable column headers with indicators', async () => {
+    test('renders sortable column headers with indicators (Bundle B: 9 columns)', async () => {
       await loadRecommendations();
       const list = document.getElementById('recommendations-list');
-      // Four sortable columns: count, term, savings (default), upfront_cost.
+      // Bundle B: every data column is sortable. 9 sortable data columns:
+      // provider, account, service, resource_type, region, count, term,
+      // savings, upfront_cost. The leading checkbox column is not sortable.
       const sortables = list?.querySelectorAll('th.sortable');
-      expect(sortables?.length).toBe(4);
+      expect(sortables?.length).toBe(9);
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
@@ -431,7 +413,9 @@ describe('Recommendations Module', () => {
       expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'desc' });
     });
 
-    test('bulk toolbar appears when at least one row is selected', async () => {
+    test('bottom action box selection summary reflects current selection (Bundle B)', async () => {
+      // Bundle B replaced the floating .recommendations-bulk-toolbar with
+      // selection-summary text inside the sticky bottom action box.
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [
@@ -440,16 +424,24 @@ describe('Recommendations Module', () => {
         regions: []
       });
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rec-bt']));
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
+        { id: 'rec-bt', provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 }
+      ]);
 
       await loadRecommendations();
 
-      const toolbar = document.querySelector('.recommendations-bulk-toolbar');
-      expect(toolbar).not.toBeNull();
+      const summary = document.getElementById('recommendations-action-summary');
+      expect(summary?.textContent).toContain('1 selected of 1 visible');
+      // Old bulk-toolbar surface is gone.
+      expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
-    test('bulk toolbar is absent when no row is selected', async () => {
+    test('bottom action box shows "All N visible" when no row is selected (Bundle B)', async () => {
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(twoRecs);
       await loadRecommendations();
+      const summary = document.getElementById('recommendations-action-summary');
+      expect(summary?.textContent).toMatch(/All \d+ visible/);
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
@@ -721,78 +713,571 @@ describe('Recommendations Module', () => {
       });
     });
 
-    test('sets up provider filter change handler', () => {
-      setupRecommendationsHandlers();
-
-      const providerFilter = document.getElementById('recommendations-provider-filter') as HTMLSelectElement;
-      providerFilter.value = 'aws';
-      providerFilter.dispatchEvent(new Event('change'));
-
-      expect(state.setCurrentProvider).toHaveBeenCalledWith('aws');
+    // The legacy top filter bar tests (provider-filter / service-filter /
+    // region-filter / min-savings-filter change handlers + service-filter
+    // visibility-toggle) are obsolete: Bundle B replaced those DOM elements
+    // with per-column header-mounted popovers. See the column-filter +
+    // bottom-action-box tests below for their successors.
+    test('setupRecommendationsHandlers is a no-op (Bundle B)', () => {
+      // Should not throw, even with the legacy filter-bar DOM absent.
+      expect(() => setupRecommendationsHandlers()).not.toThrow();
     });
+  });
+});
 
-    test('provider filter updates service filter visibility', () => {
-      setupRecommendationsHandlers();
+// ---------------------------------------------------------------------------
+// Bundle A: numeric expression parser + applyColumnFilters
+// ---------------------------------------------------------------------------
 
-      const providerFilter = document.getElementById('recommendations-provider-filter') as HTMLSelectElement;
-      const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement;
-      const awsGroup = serviceFilter.querySelector('optgroup[label="AWS Services"]') as HTMLOptGroupElement;
-      const azureGroup = serviceFilter.querySelector('optgroup[label="Azure Services"]') as HTMLOptGroupElement;
+import { parseNumericFilter, applyColumnFilters } from '../recommendations';
+import type { LocalRecommendation } from '../types';
 
-      providerFilter.value = 'aws';
-      providerFilter.dispatchEvent(new Event('change'));
+describe('parseNumericFilter', () => {
+  const accept = (expr: string, n: number): boolean => {
+    const r = parseNumericFilter(expr);
+    if (!r.ok) throw new Error(`unexpected parse failure for "${expr}": ${r.error}`);
+    return r.predicate(n);
+  };
 
-      expect(awsGroup.classList.contains('hidden')).toBe(false);
-      expect(azureGroup.classList.contains('hidden')).toBe(true);
+  test('empty / whitespace expression matches everything', () => {
+    expect(accept('', 0)).toBe(true);
+    expect(accept('   ', 42)).toBe(true);
+    expect(accept('\t\n', -7)).toBe(true);
+  });
+
+  test('plain integer matches by equality', () => {
+    expect(accept('42', 42)).toBe(true);
+    expect(accept('42', 41)).toBe(false);
+    expect(accept('-3', -3)).toBe(true);
+  });
+
+  test('plain decimal matches by equality', () => {
+    expect(accept('3.14', 3.14)).toBe(true);
+    expect(accept('3.14', 3.15)).toBe(false);
+  });
+
+  test('comparator > / >= / < / <=', () => {
+    expect(accept('>10', 11)).toBe(true);
+    expect(accept('>10', 10)).toBe(false);
+    expect(accept('>=10', 10)).toBe(true);
+    expect(accept('<5', 4)).toBe(true);
+    expect(accept('<5', 5)).toBe(false);
+    expect(accept('<=5', 5)).toBe(true);
+  });
+
+  test('inclusive range X..Y', () => {
+    expect(accept('10..20', 10)).toBe(true);
+    expect(accept('10..20', 20)).toBe(true);
+    expect(accept('10..20', 15)).toBe(true);
+    expect(accept('10..20', 9)).toBe(false);
+    expect(accept('10..20', 21)).toBe(false);
+  });
+
+  test('reversed range still works (max..min)', () => {
+    expect(accept('20..10', 15)).toBe(true);
+  });
+
+  test('comma-separated terms OR together', () => {
+    // `5, >100, 200..400`
+    expect(accept('5, >100, 200..400', 5)).toBe(true);
+    expect(accept('5, >100, 200..400', 150)).toBe(true);
+    expect(accept('5, >100, 200..400', 250)).toBe(true);
+    expect(accept('5, >100, 200..400', 50)).toBe(false);
+    expect(accept('5, >100, 200..400', 500)).toBe(true); // matches >100
+  });
+
+  test('whitespace inside terms is tolerated', () => {
+    expect(accept('  >  10  ', 11)).toBe(true);
+    expect(accept('10 .. 20', 15)).toBe(true);
+  });
+
+  test('invalid expression returns ok:false with an error message', () => {
+    const r1 = parseNumericFilter('>>5');
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.error).toMatch(/Invalid filter term/);
+
+    const r2 = parseNumericFilter('not a number');
+    expect(r2.ok).toBe(false);
+
+    const r3 = parseNumericFilter('1..');
+    expect(r3.ok).toBe(false);
+  });
+});
+
+describe('applyColumnFilters', () => {
+  const rec = (
+    overrides: Partial<LocalRecommendation> = {},
+  ): LocalRecommendation => ({
+    id: overrides.id ?? 'r1',
+    provider: overrides.provider ?? 'aws',
+    cloud_account_id: overrides.cloud_account_id ?? 'acct-1',
+    service: overrides.service ?? 'ec2',
+    resource_type: overrides.resource_type ?? 't3.medium',
+    region: overrides.region ?? 'us-east-1',
+    count: overrides.count ?? 1,
+    term: overrides.term ?? 1,
+    upfront_cost: overrides.upfront_cost ?? 100,
+    monthly_cost: overrides.monthly_cost ?? 10,
+    savings: overrides.savings ?? 50,
+    engine: overrides.engine,
+  } as unknown as LocalRecommendation);
+
+  test('empty filters returns a clone of the input (no-op)', () => {
+    const recs = [rec({ id: 'a' }), rec({ id: 'b' })];
+    const out = applyColumnFilters(recs, {});
+    expect(out).toEqual(recs);
+    expect(out).not.toBe(recs); // defensive clone
+  });
+
+  test('categorical set filter narrows by membership', () => {
+    const recs = [
+      rec({ id: 'a', provider: 'aws' }),
+      rec({ id: 'b', provider: 'azure' }),
+      rec({ id: 'c', provider: 'gcp' }),
+    ];
+    const out = applyColumnFilters(recs, {
+      provider: { kind: 'set', values: ['aws'] },
     });
+    expect(out.map(r => r.id)).toEqual(['a']);
+  });
 
-    test('shows all service groups when "all" selected', () => {
-      setupRecommendationsHandlers();
-
-      const providerFilter = document.getElementById('recommendations-provider-filter') as HTMLSelectElement;
-      const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement;
-      const awsGroup = serviceFilter.querySelector('optgroup[label="AWS Services"]') as HTMLOptGroupElement;
-      const azureGroup = serviceFilter.querySelector('optgroup[label="Azure Services"]') as HTMLOptGroupElement;
-
-      providerFilter.value = '';
-      providerFilter.dispatchEvent(new Event('change'));
-
-      expect(awsGroup.classList.contains('hidden')).toBe(false);
-      expect(azureGroup.classList.contains('hidden')).toBe(false);
+  test('Account filter matches on cloud_account_id, not display name', () => {
+    const recs = [
+      rec({ id: 'a', cloud_account_id: 'acct-prod' }),
+      rec({ id: 'b', cloud_account_id: 'acct-dev' }),
+    ];
+    const out = applyColumnFilters(recs, {
+      account: { kind: 'set', values: ['acct-prod'] },
     });
+    expect(out.map(r => r.id)).toEqual(['a']);
+  });
 
-    test('resets service filter when changing provider', () => {
-      setupRecommendationsHandlers();
-
-      const providerFilter = document.getElementById('recommendations-provider-filter') as HTMLSelectElement;
-      const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement;
-
-      serviceFilter.value = 'ec2';
-      providerFilter.value = 'azure';
-      providerFilter.dispatchEvent(new Event('change'));
-
-      expect(serviceFilter.value).toBe('');
+  test('Term filter values are strings; row term integer stringifies', () => {
+    const recs = [
+      rec({ id: 'a', term: 1 }),
+      rec({ id: 'b', term: 3 }),
+    ];
+    const out = applyColumnFilters(recs, {
+      term: { kind: 'set', values: ['3'] },
     });
+    expect(out.map(r => r.id)).toEqual(['b']);
+  });
 
-    test('sets up service filter change handler', () => {
-      setupRecommendationsHandlers();
-
-      const serviceFilter = document.getElementById('service-filter') as HTMLSelectElement;
-      expect(serviceFilter).toBeTruthy();
+  test('(empty) sentinel matches null / undefined / "" cloud_account_id', () => {
+    // Build raw objects — bypass the rec() factory because its `??` defaults
+    // would replace null/undefined cloud_account_id with 'acct-1'.
+    const recs: LocalRecommendation[] = [
+      { ...rec({ id: 'a' }), cloud_account_id: '' } as LocalRecommendation,
+      { ...rec({ id: 'b' }), cloud_account_id: undefined } as unknown as LocalRecommendation,
+      rec({ id: 'c', cloud_account_id: 'acct-x' }),
+    ];
+    const out = applyColumnFilters(recs, {
+      account: { kind: 'set', values: [''] },
     });
+    expect(out.map(r => r.id).sort()).toEqual(['a', 'b']);
+  });
 
-    test('sets up region filter change handler', () => {
-      setupRecommendationsHandlers();
-
-      const regionFilter = document.getElementById('region-filter') as HTMLSelectElement;
-      expect(regionFilter).toBeTruthy();
+  test('numeric expr filter narrows by predicate', () => {
+    const recs = [
+      rec({ id: 'a', savings: 25 }),
+      rec({ id: 'b', savings: 150 }),
+      rec({ id: 'c', savings: 1500 }),
+    ];
+    const out = applyColumnFilters(recs, {
+      savings: { kind: 'expr', expr: '>100' },
     });
+    expect(out.map(r => r.id)).toEqual(['b', 'c']);
+  });
 
-    test('sets up min savings filter change handler', () => {
-      setupRecommendationsHandlers();
-
-      const minSavingsFilter = document.getElementById('min-savings-filter') as HTMLInputElement;
-      expect(minSavingsFilter).toBeTruthy();
+  test('invalid numeric expression is ignored (filter not applied)', () => {
+    const recs = [rec({ id: 'a', savings: 1 }), rec({ id: 'b', savings: 100 })];
+    const out = applyColumnFilters(recs, {
+      savings: { kind: 'expr', expr: '>>5' }, // syntax error
     });
+    // All rows pass — broken filter is silently inert.
+    expect(out.map(r => r.id)).toEqual(['a', 'b']);
+  });
+
+  test('multiple column filters AND together', () => {
+    const recs = [
+      rec({ id: 'a', provider: 'aws', savings: 50 }),
+      rec({ id: 'b', provider: 'aws', savings: 500 }),
+      rec({ id: 'c', provider: 'azure', savings: 500 }),
+    ];
+    const out = applyColumnFilters(recs, {
+      provider: { kind: 'set', values: ['aws'] },
+      savings: { kind: 'expr', expr: '>100' },
+    });
+    expect(out.map(r => r.id)).toEqual(['b']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bundle A: state-accessor tests for the new column-filter / visible-recs API.
+// These import the REAL state module (the recommendations.test.ts above mocks
+// it; here we exercise the actual implementation in a separate require scope).
+// ---------------------------------------------------------------------------
+
+describe('state.ts column-filter accessors', () => {
+  // The top-level jest.mock('../state', …) replaces the module for every
+  // import. Use jest.requireActual to bypass it for these state-accessor
+  // tests so we exercise the real implementation. Each test starts from
+  // a clean filter state via clearAllRecommendationsColumnFilters().
+  const realState = jest.requireActual<typeof import('../state')>('../state');
+
+  beforeEach(() => {
+    realState.clearAllRecommendationsColumnFilters();
+    realState.setVisibleRecommendations([]);
+  });
+
+  test('default filters are empty', () => {
+    expect(realState.getRecommendationsColumnFilters()).toEqual({});
+  });
+
+  test('setRecommendationsColumnFilter adds an entry', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    expect(realState.getRecommendationsColumnFilters()).toEqual({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+  });
+
+  test('passing null clears that single column', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    realState.setRecommendationsColumnFilter('savings', { kind: 'expr', expr: '>100' });
+    realState.setRecommendationsColumnFilter('provider', null);
+    expect(realState.getRecommendationsColumnFilters()).toEqual({
+      savings: { kind: 'expr', expr: '>100' },
+    });
+  });
+
+  test('clearAllRecommendationsColumnFilters empties the record', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    realState.setRecommendationsColumnFilter('savings', { kind: 'expr', expr: '>100' });
+    realState.clearAllRecommendationsColumnFilters();
+    expect(realState.getRecommendationsColumnFilters()).toEqual({});
+  });
+
+  test('getRecommendationsColumnFilters returns a defensive shallow copy', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    const a = realState.getRecommendationsColumnFilters();
+    delete a.provider;
+    // mutation of the returned object must not affect module state
+    expect(realState.getRecommendationsColumnFilters()).toEqual({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+  });
+
+  test('setVisibleRecommendations / getVisibleRecommendations round-trip with defensive clone', () => {
+    const recs = [{ id: 'r1' }, { id: 'r2' }] as unknown as Parameters<
+      typeof realState.setVisibleRecommendations
+    >[0];
+    realState.setVisibleRecommendations(recs);
+    const out = realState.getVisibleRecommendations();
+    expect(out.map((r) => (r as unknown as { id: string }).id)).toEqual(['r1', 'r2']);
+    // mutating returned array must not affect module state
+    (out as unknown as Array<unknown>).pop();
+    expect(realState.getVisibleRecommendations()).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bundle B: column-filter popover + sticky bottom action box DOM behaviour.
+// These tests assert the surfaces Bundle B introduced — header filter
+// triggers, the detached popover lifecycle, and the bottom action box's
+// label/disabled-state transitions.
+// ---------------------------------------------------------------------------
+
+describe('Bundle B: column header filter triggers', () => {
+  const sampleRecs = [
+    { id: 'rec-aws-1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+    { id: 'rec-az-1',  provider: 'azure', cloud_account_id: 'a2', service: 'vm',  resource_type: 'D2s',       region: 'eastus',    count: 2, term: 3, savings: 200, upfront_cost: 800 },
+  ];
+
+  beforeEach(() => {
+    // Set up DOM (the top-level beforeEach belongs to a different describe).
+    document.body.replaceChildren();
+    const recsTab = document.createElement('div');
+    recsTab.id = 'recommendations-tab';
+    recsTab.className = 'tab-content active';
+    const summary = document.createElement('div');
+    summary.id = 'recommendations-summary';
+    const list = document.createElement('div');
+    list.id = 'recommendations-list';
+    recsTab.appendChild(summary);
+    recsTab.appendChild(list);
+    document.body.appendChild(recsTab);
+    const purchaseModal = document.createElement('div');
+    purchaseModal.id = 'purchase-modal';
+    purchaseModal.className = 'hidden';
+    const purchaseDetails = document.createElement('div');
+    purchaseDetails.id = 'purchase-details';
+    purchaseModal.appendChild(purchaseDetails);
+    document.body.appendChild(purchaseModal);
+
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: sampleRecs,
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue(sampleRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(sampleRecs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+  });
+
+  test('every data column header has a filter trigger button', async () => {
+    await loadRecommendations();
+    const buttons = document.querySelectorAll<HTMLButtonElement>('th .column-filter-btn[data-column]');
+    const cols = Array.from(buttons).map((b) => b.dataset['column']);
+    expect(cols.sort()).toEqual(
+      ['account', 'count', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
+    );
+  });
+
+  test('filter button gets .active class when its column has a filter', async () => {
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    await loadRecommendations();
+    const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+    expect(providerBtn?.classList.contains('active')).toBe(true);
+    const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+    expect(serviceBtn?.classList.contains('active')).toBe(false);
+  });
+
+  test('clicking a filter trigger opens a popover detached to document.body', async () => {
+    await loadRecommendations();
+    const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+    providerBtn?.click();
+    const popover = document.body.querySelector('.column-filter-popover');
+    expect(popover).not.toBeNull();
+    // Not a descendant of the table.
+    expect(popover?.closest('table')).toBeNull();
+  });
+
+  test('clicking the same trigger toggles the popover closed', async () => {
+    await loadRecommendations();
+    const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+    providerBtn?.click();
+    expect(document.querySelector('.column-filter-popover')).not.toBeNull();
+    providerBtn?.click();
+    expect(document.querySelector('.column-filter-popover')).toBeNull();
+  });
+
+  test('ESC closes the popover and restores focus to the trigger', async () => {
+    await loadRecommendations();
+    const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+    providerBtn?.click();
+    expect(document.querySelector('.column-filter-popover')).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(document.querySelector('.column-filter-popover')).toBeNull();
+  });
+
+  test('categorical popover lists distinct values from the unfiltered rec set', async () => {
+    await loadRecommendations();
+    const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+    providerBtn?.click();
+    const checkboxes = document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]');
+    const values = Array.from(checkboxes).map((cb) => cb.dataset['value']);
+    expect(values.sort()).toEqual(['aws', 'azure']);
+  });
+
+  test('Term popover labels show formatted terms; ticking commits string filter values', async () => {
+    await loadRecommendations();
+    const termBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="term"]');
+    termBtn?.click();
+    const items = Array.from(
+      document.querySelectorAll<HTMLLabelElement>('.column-filter-popover .column-filter-item'),
+    );
+    const labels = items.map((l) => l.querySelector('span')?.textContent);
+    expect(labels.sort()).toEqual(['1 Year', '3 Years']);
+    // Tick the "3 Years" checkbox
+    const threeYearLabel = items.find((l) => l.textContent === '3 Years');
+    const cb = threeYearLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(cb?.dataset['value']).toBe('3');
+    cb!.checked = true;
+    cb!.dispatchEvent(new Event('change'));
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('term', { kind: 'set', values: ['3'] });
+  });
+
+  test('numeric popover input validates expression on blur', async () => {
+    await loadRecommendations();
+    const savingsBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="savings"]');
+    savingsBtn?.click();
+    const input = document.querySelector<HTMLInputElement>('.column-filter-popover .column-filter-numeric-input');
+    expect(input).not.toBeNull();
+    input!.value = '>>5';
+    input!.dispatchEvent(new Event('blur'));
+    const err = document.querySelector('.column-filter-popover .column-filter-error');
+    expect(err?.textContent).toMatch(/Invalid filter term/);
+    // No filter applied for invalid syntax.
+    expect(state.setRecommendationsColumnFilter).not.toHaveBeenCalledWith(
+      'savings',
+      expect.objectContaining({ kind: 'expr' }),
+    );
+  });
+
+  test('numeric popover commits valid expression on Enter', async () => {
+    await loadRecommendations();
+    const savingsBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="savings"]');
+    savingsBtn?.click();
+    const input = document.querySelector<HTMLInputElement>('.column-filter-popover .column-filter-numeric-input');
+    input!.value = '>100';
+    input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('savings', { kind: 'expr', expr: '>100' });
+  });
+
+  test('Clear button drops the filter for that column', async () => {
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    await loadRecommendations();
+    const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+    providerBtn?.click();
+    const clearBtn = document.querySelector<HTMLButtonElement>('.column-filter-popover .column-filter-clear');
+    clearBtn?.click();
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('provider', null);
+  });
+
+  test('Clear-filters badge appears when at least one filter is active', async () => {
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    await loadRecommendations();
+    const badge = document.querySelector<HTMLButtonElement>('.recommendations-filter-status .clear-filters');
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain('Clear filters (1)');
+  });
+
+  test('aria-live region announces visible/loaded count', async () => {
+    await loadRecommendations();
+    const live = document.querySelector('.recommendations-filter-live');
+    expect(live).not.toBeNull();
+    expect(live?.getAttribute('aria-live')).toBe('polite');
+    expect(live?.textContent).toMatch(/Showing \d+ of \d+/);
+  });
+});
+
+describe('Bundle B: sticky bottom action box', () => {
+  const recs = [
+    { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+    { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.large', region: 'us-east-1', count: 2, term: 3, savings: 200, upfront_cost: 800 },
+  ];
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    const recsTab = document.createElement('div');
+    recsTab.id = 'recommendations-tab';
+    recsTab.className = 'tab-content active';
+    const summary = document.createElement('div');
+    summary.id = 'recommendations-summary';
+    const list = document.createElement('div');
+    list.id = 'recommendations-list';
+    recsTab.appendChild(summary);
+    recsTab.appendChild(list);
+    document.body.appendChild(recsTab);
+
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+  });
+
+  test('bottom box exposes Payment / Capacity % / Purchase / Create Plan; no Term selector', async () => {
+    await loadRecommendations();
+    expect(document.getElementById('bulk-purchase-payment')).not.toBeNull();
+    expect(document.getElementById('bulk-purchase-capacity')).not.toBeNull();
+    expect(document.getElementById('bulk-purchase-btn')).not.toBeNull();
+    expect(document.getElementById('create-plan-btn')).not.toBeNull();
+    // Term selector is gone — each rec carries its own term through the API call.
+    expect(document.getElementById('bulk-purchase-term')).toBeNull();
+  });
+
+  test('button labels reflect the action target', async () => {
+    await loadRecommendations();
+    let purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    expect(purchaseBtn.textContent).toBe('Purchase 2 visible');
+
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1']));
+    await loadRecommendations();
+    purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    expect(purchaseBtn.textContent).toBe('Purchase 1 selected');
+  });
+
+  test('buttons disabled when target is empty', async () => {
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: [], regions: [] });
+    await loadRecommendations();
+    const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement;
+    expect(purchaseBtn.disabled).toBe(true);
+    expect(planBtn.disabled).toBe(true);
+  });
+
+  test('Capacity input value persists across re-render (mount-once-then-update)', async () => {
+    await loadRecommendations();
+    const cap = document.getElementById('bulk-purchase-capacity') as HTMLInputElement;
+    cap.value = '50';
+    // Trigger an unrelated re-render via sort
+    const header = document.querySelector<HTMLTableCellElement>('th[data-sort="service"]');
+    header?.click();
+    const cap2 = document.getElementById('bulk-purchase-capacity') as HTMLInputElement;
+    // Same DOM node (mount-once); value preserved (no rebuild).
+    expect(cap2).toBe(cap);
+    expect(cap2.value).toBe('50');
+  });
+});
+
+describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    const recsTab = document.createElement('div');
+    recsTab.id = 'recommendations-tab';
+    recsTab.className = 'tab-content active';
+    const summary = document.createElement('div');
+    summary.id = 'recommendations-summary';
+    const list = document.createElement('div');
+    list.id = 'recommendations-list';
+    recsTab.appendChild(summary);
+    recsTab.appendChild(list);
+    document.body.appendChild(recsTab);
+    const purchaseModal = document.createElement('div');
+    purchaseModal.id = 'purchase-modal';
+    purchaseModal.className = 'hidden';
+    const purchaseDetails = document.createElement('div');
+    purchaseDetails.id = 'purchase-details';
+    purchaseModal.appendChild(purchaseDetails);
+    document.body.appendChild(purchaseModal);
+    jest.clearAllMocks();
+  });
+
+  test('multi-term selection produces multiple fan-out buckets', async () => {
+    const mixed = [
+      { id: 'a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: mixed, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(mixed);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(mixed);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+    await loadRecommendations();
+    const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    purchaseBtn.click();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    expect(buckets!.length).toBe(2);
+    expect(buckets!.map((b) => b.term).sort()).toEqual([1, 3]);
+    // Each bucket carries the rec's own term, not a toolbar override.
+    const b0 = buckets![0]!;
+    const b1 = buckets![1]!;
+    expect(b0.recs.every((r) => r.term === b0.term)).toBe(true);
+    expect(b1.recs.every((r) => r.term === b1.term)).toBe(true);
   });
 });

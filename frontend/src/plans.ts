@@ -549,10 +549,19 @@ export async function savePlan(e: Event): Promise<void> {
     plan.custom_interval_days = parseInt((document.getElementById('ramp-interval-days') as HTMLInputElement).value, 10);
   }
 
+  // Bundle B (column-filter UX overhaul): read from getVisibleRecommendations
+  // — the post-filter, post-sort set tracked by recommendations.ts on every
+  // render — instead of getRecommendations() (raw API-loaded list). This
+  // ensures plans never include recs the user filtered out of view.
+  // When no row is explicitly selected, fall back to the full visible set so
+  // "Create Plan" with filters but no selection plans against everything the
+  // user can see.
   const selectedIDs = state.getSelectedRecommendationIDs();
+  const visibleRecs = state.getVisibleRecommendations();
   if (selectedIDs.size > 0) {
-    const currentRecs = state.getRecommendations();
-    plan.recommendations = currentRecs.filter((r) => selectedIDs.has(r.id)) as api.Recommendation[];
+    plan.recommendations = visibleRecs.filter((r) => selectedIDs.has(r.id)) as api.Recommendation[];
+  } else if (visibleRecs.length > 0) {
+    plan.recommendations = [...visibleRecs] as api.Recommendation[];
   }
 
   try {

@@ -145,26 +145,24 @@ describe('HTML Structure', () => {
   });
 
   describe('Recommendations Tab', () => {
-    test('has recommendations controls', () => {
-      const controls = document.getElementById('recommendations-controls');
-      expect(controls).toBeTruthy();
-    });
-
-    test('has service filter', () => {
-      const filter = document.getElementById('service-filter');
-      expect(filter).toBeTruthy();
-      expect(filter?.tagName.toLowerCase()).toBe('select');
-    });
-
-    test('has region filter', () => {
-      const filter = document.getElementById('region-filter');
-      expect(filter).toBeTruthy();
-    });
-
-    test('has min savings filter', () => {
-      const filter = document.getElementById('min-savings-filter') as HTMLInputElement | null;
-      expect(filter).toBeTruthy();
-      expect(filter?.getAttribute('type')).toBe('number');
+    // Bundle B (column-filter UX overhaul) deleted the legacy top filter bar
+    // and the #recommendations-controls section that hosted it. The
+    // service-filter / region-filter / min-savings-filter / provider-filter /
+    // account-filter <select>s are gone — replaced by per-column header-mounted
+    // popovers driven by recommendations.ts:openColumnPopover. Negative-guard
+    // tests below ensure no regression accidentally re-introduces them.
+    test('legacy top filter bar is absent (Bundle B)', () => {
+      const recsTab = document.getElementById('recommendations-tab');
+      expect(recsTab).toBeTruthy();
+      expect(document.getElementById('recommendations-controls')).toBeNull();
+      // .controls-bar still exists on other tabs (Dashboard, Plans, …).
+      // Only assert the rec tab is clean.
+      expect(recsTab?.querySelector('.controls-bar')).toBeNull();
+      expect(document.getElementById('service-filter')).toBeNull();
+      expect(document.getElementById('region-filter')).toBeNull();
+      expect(document.getElementById('min-savings-filter')).toBeNull();
+      expect(document.getElementById('recommendations-account-filter')).toBeNull();
+      expect(document.getElementById('recommendations-provider-filter')).toBeNull();
     });
 
     test('has recommendations list container', () => {
@@ -333,15 +331,9 @@ describe('HTML Structure', () => {
       expect(values).toContain('gcp');
     });
 
-    test('service filter has correct options', () => {
-      const selector = document.getElementById('service-filter');
-      const options = selector?.querySelectorAll('option') ?? [];
-      const values = Array.from(options).map(o => o.value);
-
-      expect(values).toContain('');
-      expect(values).toContain('ec2');
-      expect(values).toContain('rds');
-    });
+    // Bundle B: #service-filter <select> deleted; service filtering happens
+    // via the per-column header popover. See tests/recommendations.test.ts
+    // for the popover behaviour.
 
     test('term select has 1 and 3 year options', () => {
       const selector = document.getElementById('setting-default-term');
@@ -362,15 +354,10 @@ describe('HTML Structure', () => {
       expect(values).toContain('all-upfront');
     });
 
-    test('service filter has optgroups for each provider', () => {
-      const selector = document.getElementById('service-filter');
-      const optgroups = selector?.querySelectorAll('optgroup') ?? [];
-      const labels = Array.from(optgroups).map(og => og.getAttribute('label'));
-
-      expect(labels).toContain('AWS');
-      expect(labels).toContain('Azure');
-      expect(labels).toContain('GCP');
-    });
+    // Bundle B: legacy service-filter optgroups deleted along with the
+    // <select id="service-filter">. The Service column-header popover lists
+    // distinct service values from the loaded recs at runtime, no static
+    // optgroup tree.
 
     // Refs #45 — admins land on the Accounts page primarily to action the
     // pending registration queue, so the filter must default to "pending".

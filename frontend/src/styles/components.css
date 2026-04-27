@@ -694,25 +694,11 @@ button.danger:hover {
     border: 1px solid #f2b8b5;
 }
 
-/* Recommendations-table affordances: bulk toolbar, sortable headers,
- * row-click detail drawer. See P6 of the UX audit for rationale.
+/* Recommendations-table affordances: sortable headers, per-column filter
+ * popovers, sticky bottom action box. The legacy .recommendations-bulk-
+ * toolbar / .bulk-count rules were removed in Bundle B (column-filter UX
+ * overhaul) — that surface was folded into the bottom action box.
  */
-.recommendations-bulk-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.6rem 1rem;
-    margin-bottom: 0.75rem;
-    background: #e8f0fe;
-    border: 1px solid #a9c7f5;
-    border-radius: 4px;
-}
-
-.recommendations-bulk-toolbar .bulk-count {
-    font-weight: 500;
-    color: #1a73e8;
-    margin-right: auto;
-}
 
 th.sortable {
     cursor: pointer;
@@ -732,6 +718,145 @@ th.sortable .sort-indicator {
 th.sortable .sort-indicator.active {
     color: #1a73e8;
 }
+
+/* Per-column filter trigger button inside <th>. */
+th .column-filter-btn {
+    margin-left: 0.35rem;
+    padding: 0 0.25rem;
+    border: 0;
+    background: transparent;
+    color: #bbb;
+    cursor: pointer;
+    font-size: 0.85em;
+    line-height: 1;
+}
+th .column-filter-btn:hover {
+    color: #1a73e8;
+}
+th .column-filter-btn.active {
+    color: #1a73e8;
+    font-weight: 700;
+}
+
+/* Detached popover (lives in document.body, positioned absolutely). */
+.column-filter-popover {
+    background: #fff;
+    border: 1px solid #d0d7de;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 0.75rem;
+    min-width: 220px;
+    max-width: 320px;
+    max-height: 400px;
+    overflow-y: auto;
+    z-index: 1000;
+}
+.column-filter-popover .column-filter-heading {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+.column-filter-popover .column-filter-all {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid #eee;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+.column-filter-popover .column-filter-list {
+    max-height: 240px;
+    overflow-y: auto;
+}
+.column-filter-popover .column-filter-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+}
+.column-filter-popover .column-filter-numeric-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85em;
+    color: #666;
+}
+.column-filter-popover .column-filter-numeric-input {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #d0d7de;
+    border-radius: 3px;
+    font-size: 0.9rem;
+}
+.column-filter-popover .column-filter-error {
+    color: #d32f2f;
+    font-size: 0.8em;
+    min-height: 1em;
+    margin-top: 0.25rem;
+}
+.column-filter-popover .column-filter-footer {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid #eee;
+    display: flex;
+    justify-content: flex-end;
+}
+.column-filter-popover .column-filter-clear {
+    background: transparent;
+    border: 1px solid #d0d7de;
+    border-radius: 3px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+/* Filter-status bar (Clear-filters badge + aria-live count) above the table. */
+.recommendations-filter-status {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0;
+    font-size: 0.85em;
+    color: #666;
+}
+.recommendations-filter-status .clear-filters {
+    background: #e8f0fe;
+    border: 1px solid #a9c7f5;
+    border-radius: 3px;
+    color: #1a73e8;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+/* Sticky bottom action box — Payment / Capacity % / Purchase / Create Plan. */
+:root { --action-box-height: 80px; }
+.recommendations-action-box {
+    position: sticky;
+    bottom: 0;
+    height: var(--action-box-height);
+    background: #fff;
+    border-top: 1px solid #d0d7de;
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.08);
+    z-index: 10;
+    padding: 0.75rem 1rem;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+.recommendations-action-box .recommendations-action-summary {
+    color: #555;
+    font-size: 0.9em;
+    margin-right: auto;
+}
+.recommendations-action-box label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9em;
+}
+#recommendations-list { padding-bottom: var(--action-box-height); }
 
 tr.recommendation-row {
     cursor: pointer;
