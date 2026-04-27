@@ -83,7 +83,9 @@ func TestCreateAccount_AWSExternalID_RoleArnRequired(t *testing.T) {
 	assert.Contains(t, ce.message, "aws_external_id")
 }
 
-// TestCreateAccount_AWSExternalID_RoleArnTooShort rejects 15-char IDs.
+// TestCreateAccount_AWSExternalID_RoleArnTooShort rejects 15-char IDs
+// — exactly one byte under the 16-char minimum, locking down the
+// boundary at the handler level (the pure helper covers the same case).
 func TestCreateAccount_AWSExternalID_RoleArnTooShort(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
@@ -93,7 +95,7 @@ func TestCreateAccount_AWSExternalID_RoleArnTooShort(t *testing.T) {
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012",` +
 		`"aws_auth_mode":"role_arn","aws_role_arn":"arn:aws:iam::123456789012:role/CUDly",` +
-		`"aws_external_id":"too-short"}`
+		`"aws_external_id":"0123456789abcde"}` // 15 chars = min - 1
 	result, err := handler.createAccount(ctx, adminRequest(body))
 	assert.Nil(t, result)
 	require.Error(t, err)
