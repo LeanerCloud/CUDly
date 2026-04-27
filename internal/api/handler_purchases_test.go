@@ -15,17 +15,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// approvalTestExec builds a purchase execution wired to a single
+// recommendation against an account whose contact_email is `contact`. Used
+// to satisfy the post-hardening approver-set policy (see
+// authorizeApprovalAction): the global notify mailbox is no longer an
+// authorised approver, so tests must wire a per-account contact email.
+func approvalTestExec(execID, contact string, mockConfig *MockConfigStore) *config.PurchaseExecution {
+	accountID := "acct-1"
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contact}, nil
+	}
+	return exec
+}
+
 func TestHandler_approvePurchase(t *testing.T) {
 	ctx := context.Background()
 	execID := "12345678-1234-1234-1234-123456789abc"
 	approver := "admin@example.com"
 
 	mockConfig := new(MockConfigStore)
-	exec := &config.PurchaseExecution{
-		ExecutionID:   execID,
-		ApprovalToken: "valid-token",
-		Status:        "pending",
-	}
+	exec := approvalTestExec(execID, approver, mockConfig)
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &approver,
@@ -55,11 +72,7 @@ func TestHandler_cancelPurchase(t *testing.T) {
 	approver := "admin@example.com"
 
 	mockConfig := new(MockConfigStore)
-	exec := &config.PurchaseExecution{
-		ExecutionID:   execID,
-		ApprovalToken: "valid-token",
-		Status:        "pending",
-	}
+	exec := approvalTestExec(execID, approver, mockConfig)
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &approver,
@@ -89,11 +102,7 @@ func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
 	approver := "approver@example.com"
 
 	mockConfig := new(MockConfigStore)
-	exec := &config.PurchaseExecution{
-		ExecutionID:   execID,
-		ApprovalToken: "valid-token",
-		Status:        "pending",
-	}
+	exec := approvalTestExec(execID, approver, mockConfig)
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &approver,
@@ -117,6 +126,51 @@ func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
 	// asserts nothing by construction; a .On(...) entry above would create
 	// a false positive, so we pin the negative by confirming the error is
 	// the authz error, not an approval-manager error.
+	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+}
+
+// TestHandler_approvePurchase_RejectsMissingContactEmail covers the
+// security-hardened behaviour: when an execution's recommendations do not
+// resolve to ANY per-account contact_email, the approval is rejected even
+// if the session belongs to the global notification mailbox. Closes the
+// loophole where a catch-all inbox could approve purchases on accounts it
+// doesn't own.
+func TestHandler_approvePurchase_RejectsMissingContactEmail(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	globalNotify := "global@cudly.example"
+	accountID := "acct-no-contact"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id /* no ContactEmail */}, nil
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &globalNotify,
+	}, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: globalNotify}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no per-account contact email")
 	mockPurchase.AssertNotCalled(t, "ApproveExecution")
 }
 
@@ -258,7 +312,13 @@ func TestHandler_resolveApprovalRecipients_ContactBecomesTo(t *testing.T) {
 	assert.Equal(t, []string{contactA, contactB}, approvers, "approvers are the contact emails, not global")
 }
 
-func TestHandler_resolveApprovalRecipients_FallbackToGlobal(t *testing.T) {
+// TestHandler_resolveApprovalRecipients_NoContactEmail covers the security-
+// hardened behaviour: when no recommendation has a per-account contact_email,
+// the global notify mailbox receives the email (To) but is NOT added to the
+// approver set. This closes the loophole where a catch-all inbox could
+// authorise spend on accounts it doesn't own; authorizeApprovalAction will
+// reject the approve/cancel because approvers is empty.
+func TestHandler_resolveApprovalRecipients_NoContactEmail(t *testing.T) {
 	ctx := context.Background()
 	globalNotify := "global@cudly.example"
 	accountID := "acct-no-contact"
@@ -275,9 +335,9 @@ func TestHandler_resolveApprovalRecipients_FallbackToGlobal(t *testing.T) {
 	}
 	to, cc, approvers, err := h.resolveApprovalRecipients(ctx, recs, globalNotify)
 	require.NoError(t, err)
-	assert.Equal(t, globalNotify, to)
+	assert.Equal(t, globalNotify, to, "global notify still receives the email as the To addressee")
 	assert.Nil(t, cc)
-	assert.Equal(t, []string{globalNotify}, approvers)
+	assert.Empty(t, approvers, "global notify must NOT be in the approver set — only per-account contact_email can approve")
 }
 
 func TestHandler_getPlannedPurchases(t *testing.T) {

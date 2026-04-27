@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 )
@@ -255,13 +256,17 @@ func (h *Handler) createPurchaseExecutions(ctx context.Context, plan *config.Pur
 	for i := 0; i < count; i++ {
 		scheduledDate := startDate.AddDate(0, 0, i*intervalDays)
 
+		approvalToken, err := common.GenerateApprovalToken()
+		if err != nil {
+			return 0, fmt.Errorf("failed to generate approval token: %w", err)
+		}
 		execution := &config.PurchaseExecution{
 			PlanID:        planID,
 			ExecutionID:   uuid.New().String(),
 			Status:        "pending",
 			StepNumber:    plan.RampSchedule.CurrentStep + i + 1,
 			ScheduledDate: scheduledDate,
-			ApprovalToken: uuid.New().String(),
+			ApprovalToken: approvalToken,
 		}
 
 		if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {

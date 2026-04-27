@@ -6,8 +6,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
-	"github.com/google/uuid"
 )
 
 // ExchangeRecord is a lightweight record type for the auto exchange logic.
@@ -275,7 +275,20 @@ func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec Re
 }
 
 func processManualExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string) ExchangeOutcome {
-	token := uuid.New().String()
+	token, err := common.GenerateApprovalToken()
+	if err != nil {
+		logging.Errorf("failed to generate approval token for %s: %v", rec.SourceRIID, err)
+		return ExchangeOutcome{
+			SourceRIID:         rec.SourceRIID,
+			SourceInstanceType: rec.SourceInstanceType,
+			TargetInstanceType: rec.TargetInstanceType,
+			TargetOfferingID:   offeringID,
+			TargetCount:        rec.TargetCount,
+			PaymentDue:         paymentDueStr,
+			UtilizationPct:     rec.UtilizationPercent,
+			Error:              fmt.Sprintf("failed to generate approval token: %v", err),
+		}
+	}
 	// 24h is a safety net; the email says "approve within 6 hours" because
 	// CancelAllPendingExchanges at the next run start (every 6h) will cancel
 	// this record. The 24h expiry catches edge cases where the scheduled run

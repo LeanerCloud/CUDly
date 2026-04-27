@@ -38,10 +38,17 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 	approver := "approver@example.com"
 
 	mockConfig := new(MockConfigStore)
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "tok",
 		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: approver}, nil
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
@@ -84,10 +91,17 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 	approver := "approver@example.com"
 
 	mockConfig := new(MockConfigStore)
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "tok",
 		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: approver}, nil
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
