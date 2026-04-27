@@ -6,10 +6,15 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// stubCredStore satisfies credentials.CredentialStore for health-check tests
+// that just need the field to be non-nil.
+type stubCredStore struct{ credentials.CredentialStore }
 
 func TestHandler_GetHealth_AllHealthy(t *testing.T) {
 	ctx := context.Background()
@@ -19,8 +24,10 @@ func TestHandler_GetHealth_AllHealthy(t *testing.T) {
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	handler := &Handler{
-		config: mockStore,
-		auth:   mockAuth,
+		config:              mockStore,
+		auth:                mockAuth,
+		credStore:           &stubCredStore{},
+		encryptionKeySource: credentials.EnvSecretARN, // simulate real key path
 	}
 
 	response, err := handler.GetHealth(ctx)
@@ -28,9 +35,37 @@ func TestHandler_GetHealth_AllHealthy(t *testing.T) {
 
 	assert.Equal(t, "healthy", response.Status)
 	assert.NotNil(t, response.Timestamp)
-	assert.Len(t, response.Checks, 2)
+	assert.Len(t, response.Checks, 3)
 	assert.Equal(t, "healthy", response.Checks["config_store"].Status)
 	assert.Equal(t, "healthy", response.Checks["auth_service"].Status)
+	assert.Equal(t, "healthy", response.Checks["credential_store"].Status)
+}
+
+func TestHandler_checkCredentialStore_RealKey(t *testing.T) {
+	h := &Handler{
+		credStore:           &stubCredStore{},
+		encryptionKeySource: credentials.EnvSecretName,
+	}
+	check := h.checkCredentialStore()
+	assert.Equal(t, "healthy", check.Status)
+	assert.Empty(t, check.Message)
+}
+
+func TestHandler_checkCredentialStore_DevKeyInUse(t *testing.T) {
+	h := &Handler{
+		credStore:           &stubCredStore{},
+		encryptionKeySource: credentials.EnvAllowDev,
+	}
+	check := h.checkCredentialStore()
+	assert.Equal(t, "degraded", check.Status)
+	assert.Equal(t, "dev_key_in_use", check.Message)
+}
+
+func TestHandler_checkCredentialStore_NotConfigured(t *testing.T) {
+	h := &Handler{credStore: nil}
+	check := h.checkCredentialStore()
+	assert.Equal(t, "unhealthy", check.Status)
+	assert.Equal(t, "Credential store not initialized", check.Message)
 }
 
 func TestHandler_GetHealth_ConfigStoreUnhealthy(t *testing.T) {

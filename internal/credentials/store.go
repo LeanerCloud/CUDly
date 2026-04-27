@@ -36,7 +36,7 @@ type CredentialStore interface {
 }
 
 // NewCredentialStore creates a CredentialStore backed by PostgreSQL.
-// encKey must be the 32-byte AES-256 key (obtain via KeyFromEnv).
+// encKey must be the 32-byte AES-256 key (obtain via LoadKey).
 func NewCredentialStore(pool *pgxpool.Pool, encKey []byte) CredentialStore {
 	return &pgCredentialStore{pool: pool, key: encKey}
 }

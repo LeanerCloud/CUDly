@@ -75,6 +75,11 @@ type Handler struct {
 	// Nil is valid: the endpoint returns unavailable and save-side
 	// validation no-ops, deferring to the frontend's hardcoded rules.
 	commitmentOpts CommitmentOptsInterface
+
+	// encryptionKeySource is the env var name that resolved the credential
+	// encryption key. Empty when no credStore is configured. Used by the
+	// /health endpoint only — never logged outside that one place.
+	encryptionKeySource string
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
@@ -103,21 +108,22 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	}
 
 	h := &Handler{
-		config:             cfg.ConfigStore,
-		credStore:          cfg.CredentialStore,
-		purchase:           cfg.PurchaseManager,
-		scheduler:          cfg.Scheduler,
-		auth:               cfg.AuthService,
-		secretsARN:         cfg.APIKeySecretARN,
-		corsAllowedOrigin:  corsOrigin,
-		rateLimiter:        cfg.RateLimiter,
-		emailNotifier:      cfg.EmailNotifier,
-		dashboardURL:       cfg.DashboardURL,
-		analyticsClient:    cfg.AnalyticsClient,
-		analyticsCollector: cfg.AnalyticsCollector,
-		signer:             cfg.OIDCSigner,
-		issuerURL:          cfg.OIDCIssuerURL,
-		commitmentOpts:     cfg.CommitmentOpts,
+		config:              cfg.ConfigStore,
+		credStore:           cfg.CredentialStore,
+		purchase:            cfg.PurchaseManager,
+		scheduler:           cfg.Scheduler,
+		auth:                cfg.AuthService,
+		secretsARN:          cfg.APIKeySecretARN,
+		corsAllowedOrigin:   corsOrigin,
+		rateLimiter:         cfg.RateLimiter,
+		emailNotifier:       cfg.EmailNotifier,
+		dashboardURL:        cfg.DashboardURL,
+		analyticsClient:     cfg.AnalyticsClient,
+		analyticsCollector:  cfg.AnalyticsCollector,
+		signer:              cfg.OIDCSigner,
+		issuerURL:           cfg.OIDCIssuerURL,
+		commitmentOpts:      cfg.CommitmentOpts,
+		encryptionKeySource: cfg.EncryptionKeySource,
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)

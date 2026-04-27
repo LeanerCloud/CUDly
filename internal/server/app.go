@@ -3,6 +3,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -57,6 +58,11 @@ type Application struct {
 	dbConnected    bool
 	dbErr          error
 	appConfig      ApplicationConfig
+
+	// encKeySource is the env var name that resolved the credential encryption
+	// key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Set during
+	// reinitializeAfterConnect; surfaced via /health.
+	encKeySource string
 
 	// State from the most recent migration attempt. Surfaced by /health so
 	// ops can see failures. Protected by its OWN dedicated mutex — NOT
@@ -473,7 +479,7 @@ func (app *Application) ensureDB(ctx context.Context) error {
 	}
 
 	// Re-initialize all stores and services with the live DB connection
-	if err := app.reinitializeAfterConnect(dbConn); err != nil {
+	if err := app.reinitializeAfterConnect(ctx, dbConn); err != nil {
 		dbConn.Close()
 		app.DB = nil
 		return fmt.Errorf("failed to reinitialize after DB connect: %w", err)
@@ -501,10 +507,30 @@ func (app *Application) resolveAdminPassword(ctx context.Context) (string, error
 	return resolved, nil
 }
 
+// loadAndGuardEncryptionKey loads the credential-encryption key via the
+// shared secrets.Resolver and refuses to return the all-zero dev key unless
+// CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY=1 is explicitly set. Logs which env
+// var resolved the key (name only — never the key value). The returned
+// keySource is propagated to the API handler so /health can surface it.
+func loadAndGuardEncryptionKey(ctx context.Context, resolver secrets.Resolver) (key []byte, keySource string, err error) {
+	encKey, source, err := credentials.LoadKey(ctx, resolver)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to load credential encryption key: %w", err)
+	}
+	// Defense in depth: LoadKey already gates this, but a guard here protects
+	// against a future regression where LoadKey is changed to silently fall
+	// back again.
+	if bytes.Equal(encKey, credentials.DevKey()) && os.Getenv(credentials.EnvAllowDev) != "1" {
+		return nil, "", fmt.Errorf("credentials: refusing to start with all-zero dev key (set %s=1 for local dev only)", credentials.EnvAllowDev)
+	}
+	log.Printf("credentials: loaded encryption key via %s", source)
+	return encKey, source, nil
+}
+
 // reinitializeAfterConnect re-creates all stores and services that depend on the
 // database connection. This is called after the lazy DB connect succeeds.
 // Returns an error if any store or service initialization fails.
-func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) error {
+func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *database.Connection) error {
 	// Initialize config store with the connection
 	pgStore := config.NewPostgresStore(dbConn)
 	if pgStore == nil {
@@ -541,18 +567,19 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 	app.Analytics = analytics.NewPostgresAnalyticsStore(dbConn)
 	log.Println("Initialized PostgreSQL analytics store")
 
-	// Initialize credential store (AES-256-GCM encrypted credential blobs)
-	encKey, err := credentials.KeyFromEnv()
+	// Initialize credential store (AES-256-GCM encrypted credential blobs).
+	encKey, encKeySource, err := loadAndGuardEncryptionKey(ctx, app.secretResolver)
 	if err != nil {
-		return fmt.Errorf("failed to load credential encryption key: %w", err)
+		return err
 	}
 	credStore := credentials.NewCredentialStore(dbConn.Pool(), encKey)
+	app.encKeySource = encKeySource
 	log.Println("Initialized encrypted credential store")
 
 	// Re-initialize purchase manager with multi-account deps now that credStore is available.
 	// The initial manager (created before DB connect) lacks CredentialStore and AssumeRoleSTS,
 	// so the multi-account fan-out guard (m.credStore != nil) would always be false without this.
-	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background())
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config for cross-account STS: %w", err)
 	}
@@ -620,22 +647,23 @@ func (app *Application) reinitializeAfterConnect(dbConn *database.Connection) er
 	// it aggregates purchase_history on demand so the History UI charts work
 	// without requiring a separate S3/Athena deployment.
 	app.API = api.NewHandler(api.HandlerConfig{
-		ConfigStore:       app.Config,
-		CredentialStore:   credStore,
-		PurchaseManager:   app.Purchase,
-		Scheduler:         app.Scheduler,
-		AuthService:       newAuthServiceAdapter(app.Auth),
-		APIKeySecretARN:   app.appConfig.APIKeySecretARN,
-		EnableDashboard:   app.appConfig.EnableDashboard,
-		DashboardBucket:   app.appConfig.DashboardBucket,
-		CORSAllowedOrigin: app.appConfig.CORSAllowedOrigin,
-		RateLimiter:       app.RateLimiter,
-		EmailNotifier:     app.Email,
-		DashboardURL:      app.appConfig.DashboardURL,
-		AnalyticsClient:   api.NewPostgresAnalyticsClient(dbConn),
-		OIDCSigner:        app.signer,
-		OIDCIssuerURL:     resolveOIDCIssuerURL(app.appConfig),
-		CommitmentOpts:    commitmentOpts,
+		ConfigStore:         app.Config,
+		CredentialStore:     credStore,
+		PurchaseManager:     app.Purchase,
+		Scheduler:           app.Scheduler,
+		AuthService:         newAuthServiceAdapter(app.Auth),
+		APIKeySecretARN:     app.appConfig.APIKeySecretARN,
+		EnableDashboard:     app.appConfig.EnableDashboard,
+		DashboardBucket:     app.appConfig.DashboardBucket,
+		CORSAllowedOrigin:   app.appConfig.CORSAllowedOrigin,
+		RateLimiter:         app.RateLimiter,
+		EmailNotifier:       app.Email,
+		DashboardURL:        app.appConfig.DashboardURL,
+		AnalyticsClient:     api.NewPostgresAnalyticsClient(dbConn),
+		OIDCSigner:          app.signer,
+		OIDCIssuerURL:       resolveOIDCIssuerURL(app.appConfig),
+		CommitmentOpts:      commitmentOpts,
+		EncryptionKeySource: app.encKeySource,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")
