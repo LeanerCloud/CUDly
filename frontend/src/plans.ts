@@ -228,17 +228,45 @@ interface BackendPlan {
   next_execution_date?: string;
 }
 
-// Extract provider/service info from plan's services map
+// Pretty label for a service slug used inside the plan card.
+//
+// SP slugs are abbreviated ("Compute SP") rather than spelled out
+// ("Compute Savings Plans") so a multi-SP plan with 3-4 entries still
+// fits in the summary line. Non-SP slugs pass through unchanged so
+// existing single-service plans render exactly as before.
+function planServiceLabel(slug: string): string {
+  switch (slug) {
+    case 'savings-plans-compute':     return 'Compute SP';
+    case 'savings-plans-ec2instance': return 'EC2 Instance SP';
+    case 'savings-plans-sagemaker':   return 'SageMaker SP';
+    case 'savings-plans-database':    return 'Database SP';
+    default:                          return slug;
+  }
+}
+
+// Extract provider/service info from plan's services map.
+//
+// `service` is now a comma-separated list of all services covered by
+// the plan, not just the first map entry. Pre-PR #123 a plan only ever
+// had one service slug; post-split a plan targeting multiple SP plan
+// types has up to four entries (savings-plans-{compute,ec2instance,
+// sagemaker,database}) but the old "first entry wins" rendering hid
+// all but one. See issue #131 for the bug; this fix shows them all.
+//
+// `term` and `coverage` continue to come from the first entry — they
+// are plan-level today, not per-service, so picking any entry is
+// correct. If the model ever differentiates per service, this needs
+// to render the same way.
 function extractPlanInfo(plan: BackendPlan): { provider: string; service: string; term: number; coverage: number } {
   const services = plan.services || {};
   const serviceValues = Object.values(services);
   const firstService = serviceValues[0];
   if (firstService) {
-    // When a plan spans multiple services, show "Multiple" instead of
-    // arbitrarily picking the first one's label.
-    const service = serviceValues.length > 1
-      ? 'Multiple'
-      : (firstService.service || '—');
+    const service = serviceValues.length === 0
+      ? '—'
+      : serviceValues
+          .map(s => planServiceLabel(s.service || '—'))
+          .join(', ');
     return {
       provider: firstService.provider || 'aws',
       service,
