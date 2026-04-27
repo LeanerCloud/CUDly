@@ -378,10 +378,31 @@ func (p *AWSProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
 	return regions, nil
 }
 
-// GetDefaultRegion returns the default AWS region
+// GetDefaultRegion returns the default AWS region.
+//
+// Priority order:
+//
+//  1. p.region if explicitly set on the provider.
+//  2. p.cfg.Region if the caller pre-populated cfg (e.g. tests with a
+//     synthetic config) — checked BEFORE IsConfigured to avoid the SDK's
+//     credentials/config chain overwriting a caller-supplied region with
+//     the ambient AWS_REGION / ~/.aws/config default.
+//  3. The SDK-loaded region (via IsConfigured → loadConfig).
+//  4. "us-east-1" as a last-resort default.
+//
+// Step 2 is what fixes #96: previously this function called
+// IsConfigured() unconditionally, which triggers cfgOnce.Do(loadConfig)
+// and lets the SDK's credentials/config chain populate p.cfg.Region from
+// the developer's ambient environment, masking a region the test had set
+// explicitly. Reading the already-set p.cfg.Region first keeps test
+// fixtures honest while still falling through to the SDK chain when no
+// caller has touched cfg.
 func (p *AWSProvider) GetDefaultRegion() string {
 	if p.region != "" {
 		return p.region
+	}
+	if p.cfg.Region != "" {
+		return p.cfg.Region
 	}
 	if p.IsConfigured() && p.cfg.Region != "" {
 		return p.cfg.Region
