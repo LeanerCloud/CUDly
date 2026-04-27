@@ -341,15 +341,38 @@ func validateRequestBodySize(body string) error {
 	return nil
 }
 
+// MaxAccountIDsPerRequest caps the number of account IDs accepted in a
+// single comma-separated `account_ids` query parameter. Each accepted ID
+// fans out into per-account DB queries / cloud API calls downstream, so
+// an unbounded list is an amplification vector — a single request with
+// thousands of IDs can exhaust connection pools or hit cloud-API rate
+// limits. 200 is generous for legitimate usage (typical operators have
+// far fewer onboarded accounts) while keeping the worst-case work bounded.
+const MaxAccountIDsPerRequest = 200
+
 // parseAccountIDs splits a comma-separated account_ids query parameter into a slice.
 // Empty entries are removed. Returns nil when the input is empty.
-// Returns an error if any value is not a valid UUID.
+// Returns an error if any value is not a valid UUID, or if the list
+// exceeds MaxAccountIDsPerRequest entries.
 func parseAccountIDs(raw string) ([]string, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	var ids []string
-	for _, id := range strings.Split(raw, ",") {
+	parts := strings.Split(raw, ",")
+	// Cap the parse step itself: count non-empty entries before allocating
+	// the result slice. We reject early so a megabyte-long string of empty
+	// commas can't pin an Lambda CPU on Split allocations.
+	nonEmpty := 0
+	for _, id := range parts {
+		if strings.TrimSpace(id) != "" {
+			nonEmpty++
+		}
+	}
+	if nonEmpty > MaxAccountIDsPerRequest {
+		return nil, NewClientError(400, fmt.Sprintf("too many account IDs: max %d per request", MaxAccountIDsPerRequest))
+	}
+	ids := make([]string, 0, nonEmpty)
+	for _, id := range parts {
 		trimmed := strings.TrimSpace(id)
 		if trimmed == "" {
 			continue
