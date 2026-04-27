@@ -1327,3 +1327,353 @@ func TestHandler_cancelPurchase_Session_RejectsMissingSession(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no authorization token provided")
 }
+
+// ─── Session-authed Retry (issue #47) ──────────────────────────────────────
+//
+// Mirror image of the cancel matrix above. retryPurchase creates a NEW
+// execution from the failed row's stored Recommendations slice and stamps
+// retry_execution_id on the original.
+//
+// Covered cells:
+//   1. admin                                     → allowed (any failed row)
+//   2. user with retry-any (operator role)       → allowed (any failed row)
+//   3. user with retry-own + matching creator    → allowed
+//   4. user with retry-own + different creator   → 403
+//   5. user with neither verb                    → 403
+//   6. failed-state guard                        → 409 on non-failed status
+//   7. legacy NULL creator + non-admin retry-own → 403
+//   8. persistent-failure block                  → 409 + ops_hint
+//   9. threshold soft-block                      → 409 (n=5, no force)
+//  10. threshold soft-block + force=true         → allowed (n=5, force=true)
+//  11. just-under threshold                      → allowed (n=4)
+//  12. happy path: linkage + retry_attempt_n+1
+
+const retryExecID = "88888888-8888-8888-8888-888888888888"
+const retryCallerID = "99999999-9999-9999-9999-999999999999"
+const retryOtherID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+func buildSessionRetryHandler(failed *config.PurchaseExecution, session *Session, hasAny, hasOwn bool) (*Handler, *MockConfigStore, *MockAuthService) {
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, failed.ExecutionID).Return(failed, nil)
+	// GetGlobalConfig is consulted for grace-period suppressions; an
+	// empty config is fine (no suppressions written).
+	mockConfig.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	if session != nil && session.Role != "admin" {
+		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-any", "purchases").Return(hasAny, nil).Maybe()
+		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-own", "purchases").Return(hasOwn, nil).Maybe()
+	}
+
+	return &Handler{config: mockConfig, auth: mockAuth}, mockConfig, mockAuth
+}
+
+func sessionRetryReq() *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+}
+
+func sessionRetryReqWithForce() *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
+		QueryStringParameters: map[string]string{"force": "true"},
+	}
+}
+
+// runSessionRetryAllowed asserts the success path of retryPurchase given a
+// permission-matrix cell that should be allowed. Captures BOTH saves —
+// the new successor execution AND the original failed row updated with
+// the linkage pointer — so callers can assert linkage invariants
+// (retry_attempt_n stamped to predecessor.n+1, RetryExecutionID on the
+// original points at the successor).
+func runSessionRetryAllowed(t *testing.T, failed *config.PurchaseExecution, session *Session, hasAny, hasOwn bool, req *events.LambdaFunctionURLRequest) (newExec, updatedOriginal *config.PurchaseExecution) {
+	t.Helper()
+	handler, mockConfig, mockAuth := buildSessionRetryHandler(failed, session, hasAny, hasOwn)
+	saved := []*config.PurchaseExecution{}
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) {
+			// Copy so subsequent in-place mutations by the handler
+			// (e.g. finalizePurchaseStatus flipping status to failed
+			// when the email path errors out) don't retroactively
+			// rewrite the captured record.
+			snap := *args.Get(1).(*config.PurchaseExecution)
+			saved = append(saved, &snap)
+		}).
+		Return(nil)
+
+	result, err := handler.retryPurchase(context.Background(), req, failed.ExecutionID)
+	require.NoError(t, err)
+	resp := result.(map[string]any)
+	assert.NotEmpty(t, resp["execution_id"])
+	assert.Equal(t, failed.ExecutionID, resp["original_execution"])
+	require.GreaterOrEqual(t, len(saved), 2, "expected at least 2 SavePurchaseExecution calls (new + original linkage)")
+
+	// First save is the new successor; second is the original with
+	// retry_execution_id stamped. The retry tx orders them this way
+	// so the FK constraint on retry_execution_id is satisfied.
+	newExec = saved[0]
+	updatedOriginal = saved[1]
+	mockAuth.AssertExpectations(t)
+	return newExec, updatedOriginal
+}
+
+func TestHandler_retryPurchase_Admin_AllowsAny(t *testing.T) {
+	creator := retryOtherID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "send failed: transient SES throttle",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin", Email: "admin@example.com"}
+	newExec, updated := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	assert.Equal(t, "pending", newExec.Status)
+	assert.Equal(t, 1, newExec.RetryAttemptN, "fresh first retry → n=1")
+	require.NotNil(t, updated.RetryExecutionID, "original must carry pointer to successor")
+	assert.Equal(t, newExec.ExecutionID, *updated.RetryExecutionID)
+	assert.Equal(t, "failed", updated.Status, "original keeps failed status as historical record")
+}
+
+func TestHandler_retryPurchase_RetryAny_AllowsAny(t *testing.T) {
+	creator := retryOtherID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "send failed: transient SES throttle",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "user", Email: "ops@example.com"}
+	runSessionRetryAllowed(t, failed, session, true, false, sessionRetryReq())
+}
+
+func TestHandler_retryPurchase_RetryOwn_AllowsCreator(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "send failed: SES recipient mailbox full",
+		CreatedByUserID: &creator,
+		RetryAttemptN:   2, // already retried twice
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+	newExec, updated := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
+	assert.Equal(t, 3, newExec.RetryAttemptN, "n=2 predecessor → n=3 successor")
+	require.NotNil(t, updated.RetryExecutionID)
+	assert.Equal(t, newExec.ExecutionID, *updated.RetryExecutionID)
+}
+
+func TestHandler_retryPurchase_RetryOwn_RejectsNonCreator(t *testing.T) {
+	creator := retryOtherID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, mockAuth := buildSessionRetryHandler(failed, session, false, true)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "another user's failed purchase")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_retryPurchase_NoVerb_Rejects(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, mockAuth := buildSessionRetryHandler(failed, session, false, false)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retry-any or retry-own")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_retryPurchase_RejectsNonFailedStatus(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "completed", // already done — no retry from here
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be retried")
+	assert.Contains(t, err.Error(), "completed")
+	mockConfig.AssertNotCalled(t, "WithTx")
+}
+
+func TestHandler_retryPurchase_LegacyNullCreator_NonAdminRejected(t *testing.T) {
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		CreatedByUserID: nil, // pre-migration row
+	}
+	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+	handler, mockConfig, mockAuth := buildSessionRetryHandler(failed, session, false, true)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "another user's failed purchase")
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_retryPurchase_PersistentFailure_BlocksWithOpsHint(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "FROM_EMAIL not configured for this deployment",
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "operator-fixable")
+	// The structured details carry the ops hint so the frontend can
+	// render the badge without parsing the message.
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	require.NotNil(t, ce.Details())
+	assert.Equal(t, "Set FROM_EMAIL tfvar then retry", ce.Details()["ops_hint"])
+	mockConfig.AssertNotCalled(t, "WithTx")
+}
+
+func TestHandler_retryPurchase_PersistentFailure_NoMatch_AllowsRetry(t *testing.T) {
+	// Transient SES throttle is NOT in the persistent-failure map →
+	// retry proceeds normally. Sanity check that we don't accidentally
+	// classify all SES errors as persistent.
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "send failed: SES throttle exceeded, please retry",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+}
+
+func TestHandler_retryPurchase_Threshold_BlocksAtFive_NoForce(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		RetryAttemptN:   5, // already at the threshold
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "force=true")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	require.NotNil(t, ce.Details())
+	assert.Equal(t, 5, ce.Details()["retry_attempt_n"])
+	mockConfig.AssertNotCalled(t, "WithTx")
+}
+
+func TestHandler_retryPurchase_Threshold_AllowsWithForce(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		RetryAttemptN:   5,
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReqWithForce())
+	assert.Equal(t, 6, newExec.RetryAttemptN, "force=true past threshold still increments the chain count")
+}
+
+func TestHandler_retryPurchase_JustUnderThreshold_AllowsNoForce(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		RetryAttemptN:   4, // n=4 < threshold=5 → allowed
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	assert.Equal(t, 5, newExec.RetryAttemptN)
+}
+
+func TestHandler_retryPurchase_AlreadyRetried_Rejects(t *testing.T) {
+	// A failed row that already has a retry_execution_id pointer must
+	// not be retried again — that would silently overwrite the linkage
+	// and orphan the previous chain.
+	creator := retryCallerID
+	successor := "11111111-2222-3333-4444-555555555555"
+	failed := &config.PurchaseExecution{
+		ExecutionID:      retryExecID,
+		Status:           "failed",
+		CreatedByUserID:  &creator,
+		RetryExecutionID: &successor,
+		Recommendations:  []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin"}
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already retried")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	assert.Equal(t, successor, ce.Details()["retry_execution_id"])
+	mockConfig.AssertNotCalled(t, "WithTx")
+}
+
+func TestHandler_retryPurchase_RejectsMissingSession(t *testing.T) {
+	failed := &config.PurchaseExecution{ExecutionID: retryExecID, Status: "failed"}
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, retryExecID).Return(failed, nil)
+	handler := &Handler{config: mockConfig, auth: new(MockAuthService)}
+	_, err := handler.retryPurchase(context.Background(), &events.LambdaFunctionURLRequest{}, retryExecID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no authorization token provided")
+}
+
+func TestResolveOpsHint(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"empty input", "", ""},
+		{"transient SES throttle (no match)", "send failed: SES throttle exceeded", ""},
+		{"FROM_EMAIL exact", "FROM_EMAIL not configured for this deployment", "Set FROM_EMAIL tfvar then retry"},
+		{"SES sandbox case-insensitive", "send failed: ses sandbox active", "Move SES out of sandbox or verify recipient, then retry"},
+		{"domain not verified", "send failed: SES domain not verified", "Verify SES domain in AWS console, then retry"},
+		{"IAM denied", "AssumeRole error: IAM denied", "Grant the deploy role missing IAM permission, then retry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, resolveOpsHint(tt.input))
+		})
+	}
+}

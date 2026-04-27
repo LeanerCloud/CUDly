@@ -197,6 +197,25 @@ type PurchaseExecution struct {
 	// — a non-admin may cancel only executions they themselves created.
 	// NULL is treated as "not the current user".
 	CreatedByUserID *string `json:"created_by_user_id,omitempty" dynamodbav:"created_by_user_id,omitempty"`
+	// RetryExecutionID points from a *failed* execution to the new
+	// execution created when the user clicked Retry (issue #47). Set
+	// only on the original failed row; NULL on every other row including
+	// the retry itself (the retry's own RetryAttemptN > 0 is the
+	// "this is a retry" marker). Forms a forward-pointing chain:
+	// failed_v1.retry_execution_id = failed_v2.execution_id, etc.
+	// Migration 000042 self-FKs the column ON DELETE SET NULL so a
+	// cleanup of a successor doesn't cascade-delete its predecessor.
+	RetryExecutionID *string `json:"retry_execution_id,omitempty" dynamodbav:"retry_execution_id,omitempty"`
+	// RetryAttemptN is the position of this execution in a retry chain.
+	// 0 (default) on every fresh execution; 1 on the first retry of any
+	// failed row; n+1 on the n+1-th retry. The handler reads the
+	// predecessor's count and stamps n+1 atomically with the new
+	// INSERT inside the retry transaction. The History UI uses this to
+	// soft-block retries past a threshold so an obviously-stuck
+	// configuration doesn't accumulate dozens of dead retry rows.
+	// Migration 000042 added the column with default 0 so legacy rows
+	// look exactly like fresh first-retry candidates.
+	RetryAttemptN int `json:"retry_attempt_n,omitempty" dynamodbav:"retry_attempt_n,omitempty"`
 	// CapacityPercent records what fraction of the originally-recommended
 	// counts the user chose when the bulk Purchase flow submitted this
 	// execution (1..100). Audit-only: the Recommendations slice already
@@ -356,6 +375,26 @@ type PurchaseHistoryRecord struct {
 	// rows (where the action has already completed). Excluded from DB
 	// persistence.
 	CreatedByUserID string `json:"created_by_user_id,omitempty" dynamodbav:"-"`
+	// RetryExecutionID propagates the originating execution's pointer to
+	// its successor when the user retried it (issue #47). Set only on
+	// the *original* failed row that has been retried; the History UI
+	// renders an inline "Retried as #abc" link to the successor row when
+	// this is non-empty. Excluded from DB persistence (synthesised from
+	// purchase_executions).
+	RetryExecutionID string `json:"retry_execution_id,omitempty" dynamodbav:"-"`
+	// RetryAttemptN propagates the originating execution's retry-chain
+	// position so the History UI can render "↻ Retry of #xyz" inline
+	// links on retry rows (n > 0) and gate the Retry button against the
+	// soft-block threshold (n >= 5). Excluded from DB persistence.
+	RetryAttemptN int `json:"retry_attempt_n,omitempty" dynamodbav:"-"`
+	// OpsHint is a short operator-actionable message rendered inline in
+	// place of the Retry button when the failure reason on the row
+	// matches a known-persistent-misconfiguration pattern (e.g.
+	// "FROM_EMAIL not configured" → "Set FROM_EMAIL tfvar then retry").
+	// Set only on `failed` rows whose Error matches the persistent map;
+	// empty otherwise. Excluded from DB persistence (computed at read
+	// time so updates to the persistent-failure map land instantly).
+	OpsHint string `json:"ops_hint,omitempty" dynamodbav:"-"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

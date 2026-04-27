@@ -329,6 +329,22 @@ func (h *Handler) handleRequestError(err error) (int, any) {
 		return 404, map[string]string{"error": "Not found"}
 	}
 	if ce, ok := IsClientError(err); ok {
+		// If the error carries structured details (e.g. retry soft-block
+		// surfaces ops_hint / retry_attempt_n / threshold), flatten them
+		// into the JSON body next to "error" so the frontend can branch
+		// on machine-readable hints without substring-matching the
+		// human message.
+		if details := ce.Details(); len(details) > 0 {
+			body := make(map[string]any, len(details)+1)
+			body["error"] = ce.message
+			for k, v := range details {
+				if k == "error" {
+					continue // never let a detail key shadow the message
+				}
+				body[k] = v
+			}
+			return ce.code, body
+		}
 		return ce.code, map[string]string{"error": ce.message}
 	}
 

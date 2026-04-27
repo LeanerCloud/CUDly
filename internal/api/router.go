@@ -106,6 +106,12 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/cancel/", Method: "GET", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
+		// Retry a failed purchase execution (issue #47). Session-authed
+		// only — the original failed row's email-token has already been
+		// consumed/expired, so there is no token-mode dispatch here.
+		// AuthUser gates "must be signed in"; the handler then enforces
+		// the retry-any/retry-own RBAC matrix.
+		{PathPrefix: "/api/purchases/retry/", Method: "POST", Handler: r.retryPurchaseHandler, Auth: AuthUser},
 
 		// Planned purchases endpoints (must come before generic /api/purchases/{id})
 		{ExactPath: "/api/purchases/planned", Method: "GET", Handler: r.getPlannedPurchasesHandler},
@@ -365,6 +371,10 @@ func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaF
 func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	token := req.QueryStringParameters["token"]
 	return r.h.cancelPurchase(ctx, req, params["id"], token)
+}
+
+func (r *Router) retryPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.retryPurchase(ctx, req, params["id"])
 }
 
 func (r *Router) getPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

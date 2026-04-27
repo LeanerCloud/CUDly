@@ -183,6 +183,27 @@ export interface HistoryPurchase {
   // (issue #46) is visible — non-admins only see it on rows they
   // themselves created.
   created_by_user_id?: string;
+  // RetryExecutionID: pointer from a *failed* row to the successor
+  // execution created when the user clicked Retry (issue #47). Set
+  // only on the original failed row; absent on every other row
+  // (including the retry row itself — its own retry_attempt_n > 0 is
+  // the "this is a retry" marker). The History UI renders an inline
+  // "↻ Retried as #abc" link to the successor when this is non-empty.
+  retry_execution_id?: string;
+  // RetryAttemptN: position of this execution in a retry chain. 0 on
+  // every fresh execution; 1 on the first retry; n+1 on the n+1-th.
+  // The History UI renders "↻ Retry of #xyz" on retry rows (n > 0)
+  // pointing back to the predecessor, and gates the Retry button
+  // against the soft-block threshold (n >= 5 → confirm-with-warning).
+  retry_attempt_n?: number;
+  // OpsHint: short operator-actionable message rendered inline in
+  // place of the Retry button when the failure reason on the row
+  // matches a known-persistent-misconfiguration pattern (e.g.
+  // "FROM_EMAIL not configured" → "Set FROM_EMAIL tfvar then retry").
+  // Set only on `failed` rows whose Error matches the persistent map;
+  // absent otherwise. Replaces the Retry button entirely — there is
+  // no actionable retry from a persistent misconfig.
+  ops_hint?: string;
 }
 
 // Savings Analytics types

@@ -160,6 +160,10 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 	if exec.CreatedByUserID != nil {
 		createdBy = *exec.CreatedByUserID
 	}
+	var retryExecID string
+	if exec.RetryExecutionID != nil {
+		retryExecID = *exec.RetryExecutionID
+	}
 	row := config.PurchaseHistoryRecord{
 		AccountID:        accountID,
 		PurchaseID:       exec.ExecutionID,
@@ -173,6 +177,15 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 		PlanID:           exec.PlanID,
 		Status:           exec.Status,
 		CreatedByUserID:  createdBy,
+		RetryExecutionID: retryExecID,
+		RetryAttemptN:    exec.RetryAttemptN,
+	}
+	// Compute ops_hint at read time (issue #47, Q3) so updates to the
+	// persistent-failure map land instantly without a re-collect. Only
+	// failed rows can carry a hint — the resolver returns "" for empty
+	// inputs, so this is safe to call unconditionally.
+	if exec.Status == "failed" {
+		row.OpsHint = resolveOpsHint(exec.Error)
 	}
 	annotateHistoryRowByStatus(&row, exec, approver)
 	return row

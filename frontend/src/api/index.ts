@@ -115,6 +115,7 @@ export {
   executePurchase,
   getPurchaseDetails,
   cancelPurchase,
+  retryPurchase,
   getPlannedPurchases,
   pausePlannedPurchase,
   resumePlannedPurchase,
@@ -122,6 +123,7 @@ export {
   deletePlannedPurchase,
   createPlannedPurchases
 } from './purchases';
+export type { RetryPurchaseResult } from './purchases';
 
 // Re-export users functions
 export {

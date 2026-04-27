@@ -436,6 +436,309 @@ func (h *Handler) requireSession(ctx context.Context, req *events.LambdaFunction
 	return session, nil
 }
 
+// retryThreshold is the number of attempts after which a retry is
+// soft-blocked and requires `?force=true` to override (issue #47, Q2).
+// Five was picked to be generous enough to absorb transient SES /
+// recipient-mailbox blips (which usually clear within a couple of
+// attempts) while still surfacing genuinely-stuck deployments before
+// they accumulate dozens of dead retry rows.
+const retryThreshold = 5
+
+// persistentFailureHints maps known-persistent failure substrings to
+// the operator-actionable hint surfaced on the History row in place of
+// the Retry button (issue #47, Q3). The match is a case-INsensitive
+// substring contains check (see resolveOpsHint) — wording variations
+// like "ses sandbox" / "SES Sandbox" all hit. Keep needles short and
+// distinctive so legitimate transient failures don't accidentally
+// substring-match a persistent hint and lock the user out.
+//
+// Membership criteria: only failures that NO retry can possibly fix —
+// they require an operator to change configuration or unblock an
+// upstream resource. SES sandbox / unverified domain / missing
+// FROM_EMAIL all fit; a transient SES throttle does NOT (the next
+// retry might succeed). When in doubt, leave it out — false-negatives
+// cost a wasted retry; false-positives lock the user out of an
+// actionable button entirely.
+var persistentFailureHints = map[string]string{
+	"FROM_EMAIL not configured": "Set FROM_EMAIL tfvar then retry",
+	"SES sandbox":               "Move SES out of sandbox or verify recipient, then retry",
+	"SES domain not verified":   "Verify SES domain in AWS console, then retry",
+	"IAM denied":                "Grant the deploy role missing IAM permission, then retry",
+}
+
+// resolveOpsHint returns a non-empty hint when the failure reason
+// matches a known-persistent pattern, else empty. Match is case-
+// insensitive substring contains so backend wording variations don't
+// silently slip through ("ses sandbox" / "SES sandbox" / "SES Sandbox"
+// all hit).
+func resolveOpsHint(failureReason string) string {
+	if failureReason == "" {
+		return ""
+	}
+	lower := strings.ToLower(failureReason)
+	for needle, hint := range persistentFailureHints {
+		if strings.Contains(lower, strings.ToLower(needle)) {
+			return hint
+		}
+	}
+	return ""
+}
+
+// retryPurchase creates a new execution from a *failed* execution's
+// stored Recommendations slice (issue #47). The original failed row
+// keeps its `failed` status as a historical record and gains a
+// retry_execution_id pointer to the successor; the new row inherits
+// retry_attempt_n = predecessor.retry_attempt_n + 1.
+//
+// Permission gate (mirrors authorizeSessionCancel from #46):
+//   - retry-any → may retry any failed row.
+//   - retry-own AND failedExec.created_by_user_id == session.user_id
+//     → may retry their own failed row.
+//   - else → 403.
+//
+// State gate:
+//   - failedExec.Status must be "failed" → 409 otherwise.
+//   - failedExec.Error must NOT match the persistent-failure map →
+//     409 with ops_hint when it does (Q3).
+//   - failedExec.RetryAttemptN < retryThreshold OR ?force=true → soft
+//     block at threshold (Q2).
+//
+// Atomicity:
+//
+//	A single tx writes (a) the new execution row and (b) the linkage
+//	on the original failed row. Suppressions for the new execution are
+//	created in the same tx. A crash between any two writes leaves
+//	either everything or nothing — no orphaned successor without a
+//	predecessor pointer, no dangling pointer to a non-existent row.
+func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID string) (any, error) {
+	failedExec, session, err := h.loadAndValidateRetryRequest(ctx, req, execID)
+	if err != nil {
+		return nil, err
+	}
+
+	totalUpfront, totalSavings, err := validateAndTotalRecommendations(failedExec.Recommendations)
+	if err != nil {
+		return nil, err
+	}
+
+	newExecution, err := h.persistRetryExecution(ctx, failedExec, session, totalUpfront, totalSavings)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send the approval email outside the tx — same pattern as
+	// executePurchase. Email failures flip the new execution to
+	// `failed` so the user sees the reason in History; the linkage on
+	// the original row is unaffected (it points at the failed-again
+	// successor, which is exactly the audit trail we want).
+	emailSent, emailReason := h.sendPurchaseApprovalEmail(ctx, req, newExecution, failedExec.Recommendations, totalUpfront, totalSavings)
+	status := h.finalizePurchaseStatus(ctx, newExecution, emailSent, emailReason)
+
+	resp := map[string]any{
+		"execution_id":         newExecution.ExecutionID,
+		"original_execution":   failedExec.ExecutionID,
+		"status":               status,
+		"recommendation_count": len(failedExec.Recommendations),
+		"total_upfront_cost":   totalUpfront,
+		"estimated_savings":    totalSavings,
+		"email_sent":           emailSent,
+		"retry_attempt_n":      newExecution.RetryAttemptN,
+	}
+	if emailReason != "" {
+		resp["email_reason"] = emailReason
+	}
+	return resp, nil
+}
+
+// loadAndValidateRetryRequest fetches the failed execution, the
+// session, and runs every gate (status, already-retried, RBAC,
+// persistent-failure, threshold) before returning a green-light pair.
+// Extracted from retryPurchase to keep that function under the
+// cyclomatic-complexity ceiling; the gates remain in the order
+// documented on retryPurchase so the security boundary is the same.
+func (h *Handler) loadAndValidateRetryRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, execID string) (*config.PurchaseExecution, *Session, error) {
+	if err := validateUUID(execID); err != nil {
+		return nil, nil, err
+	}
+
+	failedExec, err := h.config.GetExecutionByID(ctx, execID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get execution: %w", err)
+	}
+	if failedExec == nil {
+		return nil, nil, NewClientError(404, "execution not found")
+	}
+
+	session, err := h.requireSession(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if failedExec.Status != "failed" {
+		return nil, nil, NewClientError(409, fmt.Sprintf("execution %s cannot be retried (status=%s)", failedExec.ExecutionID, failedExec.Status))
+	}
+
+	// Already-retried guard: a row with retry_execution_id set was
+	// already retried into a successor. Retrying it AGAIN would
+	// silently overwrite the linkage pointer and orphan the previous
+	// chain, breaking History attribution.
+	if failedExec.RetryExecutionID != nil && *failedExec.RetryExecutionID != "" {
+		return nil, nil, NewClientErrorWithDetails(409,
+			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
+			map[string]any{"retry_execution_id": *failedExec.RetryExecutionID})
+	}
+
+	if err := h.authorizeSessionRetry(ctx, session, failedExec); err != nil {
+		return nil, nil, err
+	}
+
+	if err := checkRetryRateGates(failedExec, req); err != nil {
+		return nil, nil, err
+	}
+
+	return failedExec, session, nil
+}
+
+// checkRetryRateGates runs the persistent-failure (Q3) and
+// retry-attempt-threshold (Q2) gates and returns the appropriate
+// 409 ClientError when either fires. Extracted from
+// loadAndValidateRetryRequest to keep that function under the
+// cyclomatic-complexity ceiling without flattening the gate sequence.
+func checkRetryRateGates(failedExec *config.PurchaseExecution, req *events.LambdaFunctionURLRequest) error {
+	// Persistent-failure block (Q3). Surfaces the ops_hint via the
+	// API for stale-cache callers; the History UI already shows it
+	// inline in place of the Retry button.
+	if hint := resolveOpsHint(failedExec.Error); hint != "" {
+		return NewClientErrorWithDetails(409,
+			"this failure is operator-fixable; retrying without changing configuration will fail again",
+			map[string]any{"ops_hint": hint, "failure_reason": failedExec.Error})
+	}
+
+	// Threshold soft-block (Q2). force=true (set by the frontend
+	// confirm-with-warning) skips the block but still increments the
+	// chain so the next retry is gated by the same threshold against
+	// the new attempt count.
+	force := strings.EqualFold(req.QueryStringParameters["force"], "true")
+	if !force && failedExec.RetryAttemptN >= retryThreshold {
+		return NewClientErrorWithDetails(409,
+			fmt.Sprintf("execution %s has been retried %d times already; pass ?force=true to override", failedExec.ExecutionID, failedExec.RetryAttemptN),
+			map[string]any{"retry_attempt_n": failedExec.RetryAttemptN, "threshold": retryThreshold})
+	}
+
+	return nil
+}
+
+// persistRetryExecution builds the successor PurchaseExecution and
+// writes it + the predecessor linkage + suppressions in a single tx.
+// Returns the populated newExecution so the caller can send the
+// approval email and synthesize the response. Extracted from
+// retryPurchase to keep that function under the cyclomatic-complexity
+// ceiling; tx ordering and the slice-aliasing fix live here.
+func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.PurchaseExecution, session *Session, totalUpfront, totalSavings float64) (*config.PurchaseExecution, error) {
+	// Defensive deep copy of the recommendations slice. Sharing the
+	// backing array with failedExec.Recommendations would let the
+	// downstream purchase pipeline (purchase.Manager.purchaseRecommendations
+	// at internal/purchase/execution.go) mutate per-element fields
+	// (.Error / .Purchased / .PurchaseID) on the *original failed row's*
+	// in-memory representation as well — corrupting the historical
+	// record any caller still holding the failedExec pointer would see.
+	// The DB rows are isolated (each row JSON-marshals its own copy),
+	// but in-process aliasing across a "historical" row and its
+	// "successor" is a footgun we want to remove at the source.
+	copiedRecs := append([]config.RecommendationRecord(nil), failedExec.Recommendations...)
+
+	newExecutionID := uuid.New().String()
+	newExecution := &config.PurchaseExecution{
+		ExecutionID:      newExecutionID,
+		Status:           "pending",
+		ScheduledDate:    time.Now(),
+		Recommendations:  copiedRecs,
+		TotalUpfrontCost: totalUpfront,
+		EstimatedSavings: totalSavings,
+		ApprovalToken:    uuid.New().String(),
+		Source:           common.PurchaseSourceWeb,
+		CapacityPercent:  failedExec.CapacityPercent,
+		CreatedByUserID:  resolveCreatorUserID(session),
+		RetryAttemptN:    failedExec.RetryAttemptN + 1,
+	}
+
+	// Stamp the original failed row with the linkage. This is a
+	// separate value copy so the caller's pointer to failedExec doesn't
+	// accidentally pick up other status-mutating concerns: only
+	// retry_execution_id changes here, the status stays `failed`.
+	originalUpdated := *failedExec
+	originalUpdated.RetryExecutionID = &newExecutionID
+
+	var gracePeriodCfg *config.GlobalConfig
+	if g, err := h.config.GetGlobalConfig(ctx); err == nil {
+		gracePeriodCfg = g
+	}
+	suppressions := buildSuppressions(failedExec.Recommendations, newExecutionID, gracePeriodCfg, time.Now())
+
+	// Three writes in one tx:
+	//  1. INSERT the new execution row (the successor).
+	//  2. UPSERT the original failed row to set retry_execution_id.
+	//  3. INSERT suppression rows for the new execution.
+	// Order matters: the FK on retry_execution_id requires the
+	// successor to exist before the original can point at it.
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
+			return err
+		}
+		if err := h.config.SavePurchaseExecutionTx(ctx, tx, &originalUpdated); err != nil {
+			return err
+		}
+		for i := range suppressions {
+			if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to save retry execution: %w", err)
+	}
+
+	return newExecution, nil
+}
+
+// authorizeSessionRetry is the retry-side mirror of
+// authorizeSessionCancel. Returns nil when the session is permitted to
+// retry the given failed execution under the retry-any / retry-own
+// rules (issue #47); 403 ClientError otherwise. Admins short-circuit;
+// non-admins must hold retry-any (allowed for any execution) or
+// retry-own (allowed only when the execution's CreatedByUserID matches
+// the session UserID — legacy NULL-creator rows are out of reach for
+// non-admins, same as the cancel path).
+func (h *Handler) authorizeSessionRetry(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	if session.Role == "admin" {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRetryAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+
+	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRetryOwn, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if !hasOwn {
+		return NewClientError(403, "permission denied: requires retry-any or retry-own on purchases")
+	}
+
+	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		return NewClientError(403, "permission denied: cannot retry another user's failed purchase")
+	}
+	return nil
+}
+
 // tryResolveActorEmail returns the email of the session-authenticated user
 // who made the request, or "" when the request carries no valid session.
 // Best-effort: the approve/cancel routes are AuthPublic (token-only), so

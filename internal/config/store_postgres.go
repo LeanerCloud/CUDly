@@ -657,8 +657,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			notification_sent, approval_token, recommendations,
 			total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 			cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-			created_by_user_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			created_by_user_id, retry_execution_id, retry_attempt_n
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -674,6 +674,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			approved_by = $16,
 			cancelled_by = $17,
 			capacity_percent = $18,
+			retry_execution_id = $20,
 			updated_at = NOW()
 	`
 
@@ -687,9 +688,16 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		planIDArg = execution.PlanID
 	}
 
-	// created_by_user_id is INSERT-only: the original creator must not be
-	// rewritten by an ON CONFLICT update (e.g. the scheduler upserting status
-	// transitions). The column is omitted from the DO UPDATE SET clause above.
+	// created_by_user_id and retry_attempt_n are INSERT-only: the original
+	// creator and the retry-chain position must not be rewritten by an
+	// ON CONFLICT update (e.g. the scheduler upserting status transitions).
+	// They are omitted from the DO UPDATE SET clause above.
+	//
+	// retry_execution_id IS in the DO UPDATE SET clause because the retry
+	// handler explicitly updates the *original* failed row to point at the
+	// new successor execution after creating it (issue #47). That update
+	// re-saves the failed row through this same path, and the pointer
+	// must persist.
 	_, err = tx.Exec(ctx, query,
 		planIDArg,
 		execution.ExecutionID,
@@ -710,6 +718,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.CancelledBy,
 		capacityPercent,
 		execution.CreatedByUserID,
+		execution.RetryExecutionID,
+		execution.RetryAttemptN,
 	)
 
 	if err != nil {
@@ -731,7 +741,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		          notification_sent, approval_token, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		          cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		          created_by_user_id
+		          created_by_user_id, retry_execution_id, retry_attempt_n
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
@@ -770,7 +780,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id
+		       created_by_user_id, retry_execution_id, retry_attempt_n
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date DESC
@@ -786,7 +796,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id
+		       created_by_user_id, retry_execution_id, retry_attempt_n
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -804,7 +814,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id
+		       created_by_user_id, retry_execution_id, retry_attempt_n
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -828,7 +838,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id
+		       created_by_user_id, retry_execution_id, retry_attempt_n
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -882,6 +892,8 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 			&exec.CancelledBy,
 			&exec.CapacityPercent,
 			&exec.CreatedByUserID,
+			&exec.RetryExecutionID,
+			&exec.RetryAttemptN,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
