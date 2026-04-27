@@ -207,6 +207,11 @@ func TestAWSProvider_GetSupportedServices(t *testing.T) {
 	assert.Contains(t, services, common.ServiceCache)
 	assert.Contains(t, services, common.ServiceSearch)
 	assert.Contains(t, services, common.ServiceDataWarehouse)
+	assert.Contains(t, services, common.ServiceSavingsPlansCompute)
+	assert.Contains(t, services, common.ServiceSavingsPlansEC2Instance)
+	assert.Contains(t, services, common.ServiceSavingsPlansSageMaker)
+	assert.Contains(t, services, common.ServiceSavingsPlansDatabase)
+	// Legacy umbrella SP slug for backward compat with persisted records.
 	assert.Contains(t, services, common.ServiceSavingsPlans)
 	// Legacy types
 	assert.Contains(t, services, common.ServiceEC2)
@@ -274,6 +279,13 @@ func TestAWSProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 		{common.ServiceDataWarehouse, common.ServiceDataWarehouse},
 		{common.ServiceRedshift, common.ServiceDataWarehouse},
 		{common.ServiceMemoryDB, common.ServiceCache},
+		{common.ServiceSavingsPlansCompute, common.ServiceSavingsPlansCompute},
+		{common.ServiceSavingsPlansEC2Instance, common.ServiceSavingsPlansEC2Instance},
+		{common.ServiceSavingsPlansSageMaker, common.ServiceSavingsPlansSageMaker},
+		{common.ServiceSavingsPlansDatabase, common.ServiceSavingsPlansDatabase},
+		// Legacy umbrella: GetServiceClient returns an SP client with
+		// an empty plan-type filter (umbrella mode); GetServiceType
+		// reports the umbrella slug, matching pre-split behaviour.
 		{common.ServiceSavingsPlans, common.ServiceSavingsPlans},
 	}
 

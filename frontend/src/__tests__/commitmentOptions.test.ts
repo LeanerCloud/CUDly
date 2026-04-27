@@ -187,6 +187,24 @@ describe('commitmentOptions', () => {
         expect(isValidCombination('aws', 'savingsplans', 1, 'no-upfront')).toBe(true);
         expect(isValidCombination('aws', 'savingsplans', 3, 'no-upfront')).toBe(true);
       });
+
+      // Issue #22 follow-up: per-plan-type SP slugs fall through the
+      // _default arm of getCommitmentConfig (no per-key entry needed),
+      // so all 6 (term × payment) combos are valid for each. This test
+      // pins that behaviour so a future change to the _default
+      // fallback can't silently restrict SP saves.
+      it.each([
+        'savings-plans-compute',
+        'savings-plans-ec2instance',
+        'savings-plans-sagemaker',
+        'savings-plans-database',
+      ])('should return true for all %s combinations (24 total: 4 keys × 6 combos)', (service) => {
+        for (const term of [1, 3]) {
+          for (const payment of ['no-upfront', 'partial-upfront', 'all-upfront']) {
+            expect(isValidCombination('aws', service, term, payment)).toBe(true);
+          }
+        }
+      });
     });
 
     describe('AWS services with 3yr no-upfront restriction', () => {

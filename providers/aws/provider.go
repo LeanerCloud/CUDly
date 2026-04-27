@@ -17,6 +17,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/LeanerCloud/CUDly/providers/aws/services/savingsplans"
 )
 
 // AWS SDK v2 credential source identifiers.
@@ -388,7 +389,9 @@ func (p *AWSProvider) GetDefaultRegion() string {
 	return "us-east-1"
 }
 
-// GetSupportedServices returns the list of services supported by AWS provider
+// GetSupportedServices returns the list of services supported by AWS provider.
+// Savings Plans are exposed as four distinct services (one per AWS plan type)
+// so users can configure term/payment defaults per plan type via ServiceConfig.
 func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 	return []common.ServiceType{
 		common.ServiceCompute,
@@ -396,6 +399,12 @@ func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceCache,
 		common.ServiceSearch,
 		common.ServiceDataWarehouse,
+		common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase,
+		// Legacy umbrella for backward compat with persisted records;
+		// see the GetServiceClient case below for rationale.
 		common.ServiceSavingsPlans,
 		// Legacy service types for backward compatibility
 		common.ServiceEC2,
@@ -430,8 +439,23 @@ func (p *AWSProvider) GetServiceClient(ctx context.Context, service common.Servi
 		return NewRedshiftClient(regionalCfg), nil
 	case common.ServiceMemoryDB:
 		return NewMemoryDBClient(regionalCfg), nil
+	case common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase:
+		pt, _ := savingsplans.PlanTypeForServiceType(service)
+		return NewSavingsPlansClient(regionalCfg, pt), nil
 	case common.ServiceSavingsPlans:
-		return NewSavingsPlansClient(regionalCfg), nil
+		// Legacy umbrella path for any persisted RecommendationRecord
+		// (or scheduled purchase) still tagged with the pre-split slug.
+		// The constructor's empty plan type signals "umbrella mode" to
+		// the SP client: GetExistingCommitments returns every plan type
+		// unfiltered, and findOfferingID falls back to the
+		// recommendation's Details.PlanType (matching pre-split
+		// behaviour). New code paths use the four per-plan-type cases
+		// above; this case exists so legacy data doesn't 503 the
+		// purchase pipeline.
+		return NewSavingsPlansClient(regionalCfg, ""), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}

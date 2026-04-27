@@ -46,8 +46,21 @@ const (
 	ServiceStorage ServiceType = "storage" // S3, Blob Storage, Cloud Storage
 
 	// Savings/Commitments
-	ServiceSavingsPlans ServiceType = "savings-plans" // AWS Savings Plans
-	ServiceCommitments  ServiceType = "commitments"   // Generic commitments
+	//
+	// ServiceSavingsPlans is the legacy umbrella slug and is being retired in
+	// favour of per-plan-type constants below. It remains defined so existing
+	// call sites continue to compile during the split; new code MUST use one
+	// of the four per-plan-type constants or the IsSavingsPlan helper.
+	ServiceSavingsPlans ServiceType = "savings-plans" // AWS Savings Plans (legacy umbrella)
+
+	// Per-plan-type Savings Plans slugs. Each maps 1:1 to an AWS
+	// types.SupportedSavingsPlansType so users can configure term/payment
+	// defaults independently per plan type.
+	ServiceSavingsPlansCompute     ServiceType = "savings-plans-compute"     // ComputeSp: EC2, Fargate, Lambda
+	ServiceSavingsPlansEC2Instance ServiceType = "savings-plans-ec2instance" // Ec2InstanceSp: specific EC2 families
+	ServiceSavingsPlansSageMaker   ServiceType = "savings-plans-sagemaker"   // SagemakerSp
+	ServiceSavingsPlansDatabase    ServiceType = "savings-plans-database"    // DatabaseSp: RDS
+	ServiceCommitments             ServiceType = "commitments"               // Generic commitments
 
 	// Other
 	ServiceOther ServiceType = "other" // Catch-all for unclassified services
@@ -68,6 +81,24 @@ const (
 // String returns the string representation of the service type
 func (s ServiceType) String() string {
 	return string(s)
+}
+
+// IsSavingsPlan reports whether s is any Savings Plans service slug —
+// the legacy umbrella (ServiceSavingsPlans), any of the four per-plan-type
+// constants, or the dash-free frontend spelling "savingsplans" that the API
+// handler stores verbatim without normalisation. Use it when code needs to
+// recognise the Savings Plans family irrespective of plan type (e.g., stats
+// aggregation, region-ignoring filters, display-name branching).
+func IsSavingsPlan(s ServiceType) bool {
+	switch s {
+	case ServiceSavingsPlans,
+		ServiceSavingsPlansCompute,
+		ServiceSavingsPlansEC2Instance,
+		ServiceSavingsPlansSageMaker,
+		ServiceSavingsPlansDatabase:
+		return true
+	}
+	return string(s) == "savingsplans"
 }
 
 // CommitmentType represents different commitment types across clouds

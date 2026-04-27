@@ -40,6 +40,10 @@ func TestServiceType_String(t *testing.T) {
 		{ServiceDataWarehouse, "data-warehouse"},
 		{ServiceStorage, "storage"},
 		{ServiceSavingsPlans, "savings-plans"},
+		{ServiceSavingsPlansCompute, "savings-plans-compute"},
+		{ServiceSavingsPlansEC2Instance, "savings-plans-ec2instance"},
+		{ServiceSavingsPlansSageMaker, "savings-plans-sagemaker"},
+		{ServiceSavingsPlansDatabase, "savings-plans-database"},
 		{ServiceCommitments, "commitments"},
 		{ServiceOther, "other"},
 		{ServiceEC2, "ec2"},
@@ -55,6 +59,29 @@ func TestServiceType_String(t *testing.T) {
 		t.Run(string(tt.service), func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.expected, tt.service.String())
+		})
+	}
+}
+
+func TestIsSavingsPlan(t *testing.T) {
+	tests := []struct {
+		name    string
+		service ServiceType
+		want    bool
+	}{
+		{"legacy umbrella", ServiceSavingsPlans, true},
+		{"compute", ServiceSavingsPlansCompute, true},
+		{"ec2 instance", ServiceSavingsPlansEC2Instance, true},
+		{"sagemaker", ServiceSavingsPlansSageMaker, true},
+		{"database", ServiceSavingsPlansDatabase, true},
+		{"dash-free frontend spelling", ServiceType("savingsplans"), true},
+		{"unrelated service", ServiceRDS, false},
+		{"empty", ServiceType(""), false},
+		{"random string", ServiceType("savings"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsSavingsPlan(tt.service))
 		})
 	}
 }

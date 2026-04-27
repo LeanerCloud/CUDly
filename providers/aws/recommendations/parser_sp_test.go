@@ -8,8 +8,6 @@ import (
 )
 
 func TestGetFilteredPlanTypes(t *testing.T) {
-	client := &Client{}
-
 	tests := []struct {
 		name           string
 		includeSPTypes []string
@@ -134,7 +132,7 @@ func TestGetFilteredPlanTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.getFilteredPlanTypes(tt.includeSPTypes, tt.excludeSPTypes)
+			result := getFilteredPlanTypes(tt.includeSPTypes, tt.excludeSPTypes)
 
 			assert.Len(t, result, tt.expectedLen)
 
