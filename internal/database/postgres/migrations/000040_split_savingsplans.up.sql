@@ -47,7 +47,7 @@
 -- already-split detection make re-running safe.
 --
 -- Deprecation follow-up: drop `(aws, sagemaker)` after one release —
--- TODO: file follow-up issue, then cite it here.
+-- tracked in issue #133.
 
 BEGIN;
 
