@@ -121,6 +121,11 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	// SavingsPlanType and only return commitments matching this client's type.
 	// The provider registers four SP services and calls GetExistingCommitments
 	// on each; without filtering, every SP commitment would surface four times.
+	//
+	// An empty planType signals legacy umbrella mode (the
+	// `case common.ServiceSavingsPlans` branch in provider.go's
+	// GetServiceClient): in that mode, return every commitment unfiltered
+	// to match pre-split behaviour. Per-plan-type clients still partition.
 	commitments := make([]common.Commitment, 0, len(result.SavingsPlans))
 	service := c.GetServiceType()
 
@@ -128,7 +133,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 		if sp.SavingsPlanId == nil {
 			continue
 		}
-		if sp.SavingsPlanType != c.planType {
+		if c.planType != "" && sp.SavingsPlanType != c.planType {
 			continue
 		}
 
@@ -213,9 +218,25 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		return "", fmt.Errorf("invalid service details for Savings Plans")
 	}
 
-	planType, err := convertPlanType(spDetails.PlanType)
-	if err != nil {
-		return "", err
+	// Per-plan-type client (post-split): the client's planType is the
+	// source of truth. Reject mismatched recommendations rather than
+	// silently buying the wrong product. Umbrella legacy clients
+	// (c.planType == "") fall back to rec.Details.PlanType to preserve
+	// pre-split behaviour.
+	planType, convErr := convertPlanType(spDetails.PlanType)
+	if c.planType != "" {
+		if convErr != nil {
+			return "", convErr
+		}
+		if planType != c.planType {
+			return "", fmt.Errorf(
+				"recommendation plan type %q does not match client scope %q",
+				spDetails.PlanType, c.planType,
+			)
+		}
+		planType = c.planType
+	} else if convErr != nil {
+		return "", convErr
 	}
 
 	termSeconds := convertTermToSeconds(rec.Term)

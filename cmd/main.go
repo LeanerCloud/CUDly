@@ -137,8 +137,20 @@ var toolCfg = Config{}
 // existing CLI scripts that pass --services savingsplans keep covering every
 // plan type. Specific slugs (savingsplans-compute, etc.) are also accepted for
 // targeted runs.
+//
+// Duplicates are silently dropped via a `seen` set so combinations like
+// `--services savingsplans,savingsplans-compute` don't double-process Compute
+// SP through both the fan-out path and the explicit-slug path.
 func parseServices(serviceNames []string) []common.ServiceType {
 	var result []common.ServiceType
+	seen := make(map[common.ServiceType]struct{})
+	add := func(service common.ServiceType) {
+		if _, ok := seen[service]; ok {
+			return
+		}
+		seen[service] = struct{}{}
+		result = append(result, service)
+	}
 	allSPSlugs := []common.ServiceType{
 		common.ServiceSavingsPlansCompute,
 		common.ServiceSavingsPlansEC2Instance,
@@ -166,11 +178,13 @@ func parseServices(serviceNames []string) []common.ServiceType {
 	for _, name := range serviceNames {
 		key := strings.ToLower(name)
 		if key == "savingsplans" || key == "savings-plans" || key == "sp" {
-			result = append(result, allSPSlugs...)
+			for _, service := range allSPSlugs {
+				add(service)
+			}
 			continue
 		}
 		if service, ok := serviceMap[key]; ok {
-			result = append(result, service)
+			add(service)
 		} else {
 			log.Printf("Warning: Unknown service '%s', skipping", name)
 		}

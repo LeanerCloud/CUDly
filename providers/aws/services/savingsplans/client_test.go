@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockSavingsPlansClient implements SavingsPlansAPI for testing
@@ -215,6 +216,80 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+// TestClient_GetExistingCommitments_UmbrellaMode verifies that an SP client
+// constructed with an empty plan type (legacy umbrella mode, used by the
+// AWS provider's `case common.ServiceSavingsPlans` branch in GetServiceClient)
+// returns every commitment unfiltered — matching pre-issue-#22-split
+// behaviour for any persisted RecommendationRecord still tagged with the
+// umbrella slug.
+func TestClient_GetExistingCommitments_UmbrellaMode(t *testing.T) {
+	mockClient := &MockSavingsPlansClient{}
+	mockClient.On("DescribeSavingsPlans", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOutput{
+			SavingsPlans: []types.SavingsPlan{
+				{
+					SavingsPlanId:   aws.String("sp-compute"),
+					SavingsPlanType: types.SavingsPlanTypeCompute,
+					State:           types.SavingsPlanStateActive,
+				},
+				{
+					SavingsPlanId:   aws.String("sp-sagemaker"),
+					SavingsPlanType: types.SavingsPlanTypeSagemaker,
+					State:           types.SavingsPlanStateActive,
+				},
+				{
+					SavingsPlanId:   aws.String("sp-database"),
+					SavingsPlanType: types.SavingsPlanTypeDatabase,
+					State:           types.SavingsPlanStateActive,
+				},
+			},
+		}, nil).Once()
+
+	// planType is the zero value — umbrella mode.
+	client := &Client{client: mockClient, region: "us-east-1"}
+
+	result, err := client.GetExistingCommitments(context.Background())
+	assert.NoError(t, err)
+	// All three commitments returned because filtering is skipped.
+	assert.Len(t, result, 3)
+	mockClient.AssertExpectations(t)
+}
+
+// TestClient_findOfferingID_RejectsMismatchedPlanType pins the
+// per-plan-type isolation post-split: a client scoped to one plan type
+// must refuse to look up an offering for a different plan type, even if
+// the recommendation's Details say otherwise. This protects against
+// upstream bugs that pass mismatched recommendations into the wrong
+// service client.
+func TestClient_findOfferingID_RejectsMismatchedPlanType(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	// Client scoped to Compute SP.
+	client := &Client{
+		client:   mockSP,
+		region:   "us-east-1",
+		planType: types.SavingsPlanTypeCompute,
+	}
+
+	// Recommendation claims to be a SageMaker SP (mismatch).
+	rec := common.Recommendation{
+		Service:       common.ServiceSavingsPlansSageMaker,
+		ResourceType:  "SageMaker",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.SavingsPlanDetails{
+			PlanType:         "SageMaker",
+			HourlyCommitment: 10.0,
+		},
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match client scope")
+	// AWS API must not be called — the mismatch should be caught
+	// client-side before any DescribeSavingsPlansOfferings request.
+	mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
 }
 
 func TestClient_GetValidResourceTypes(t *testing.T) {

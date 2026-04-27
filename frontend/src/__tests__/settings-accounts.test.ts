@@ -624,10 +624,15 @@ describe('Create-override modal', () => {
     const { modal } = await expandOverridesPanel('acc-1');
 
     expect(modal.classList.contains('hidden')).toBe(false);
-    // Service dropdown should be populated with all 7 AWS service options.
+    // Service dropdown should be populated with all 9 AWS service options
+    // (5 RIs + 4 per-plan-type SP slugs after the issue #22 follow-up).
     const svcSelect = document.getElementById('override-service') as HTMLSelectElement;
     const values = Array.from(svcSelect.options).map(o => o.value);
-    expect(values).toEqual(['ec2', 'rds', 'elasticache', 'opensearch', 'redshift', 'savingsplans', 'sagemaker']);
+    expect(values).toEqual([
+      'ec2', 'rds', 'elasticache', 'opensearch', 'redshift',
+      'savings-plans-compute', 'savings-plans-ec2instance',
+      'savings-plans-sagemaker', 'savings-plans-database',
+    ]);
   });
 
   test('populated panel shows an Add override button that opens the modal', async () => {
@@ -788,7 +793,13 @@ describe('Create-override modal', () => {
   });
 
   test('all services already overridden disables submit', async () => {
-    const all = ['ec2', 'rds', 'elasticache', 'opensearch', 'redshift', 'savingsplans', 'sagemaker'];
+    // Mirrors AWS_OVERRIDE_SERVICES post-issue-#22-follow-up: 5 RI services
+    // plus the four per-plan-type SP slugs.
+    const all = [
+      'ec2', 'rds', 'elasticache', 'opensearch', 'redshift',
+      'savings-plans-compute', 'savings-plans-ec2instance',
+      'savings-plans-sagemaker', 'savings-plans-database',
+    ];
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue(
       all.map((service, i) => ({
         id: `o-${i}`, account_id: 'acc-1', provider: 'aws', service, term: 1,

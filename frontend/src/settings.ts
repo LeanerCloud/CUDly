@@ -445,13 +445,20 @@ const AWS_PAYMENT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 // entries in SERVICE_FIELDS \u2014 Azure/GCP override creation is a follow-up
 // (issue #104) since the backend payment/term semantics differ per provider.
 const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'ec2',          label: 'EC2 (Reserved Instances)' },
-  { value: 'rds',          label: 'RDS' },
-  { value: 'elasticache',  label: 'ElastiCache' },
-  { value: 'opensearch',   label: 'OpenSearch' },
-  { value: 'redshift',     label: 'Redshift' },
-  { value: 'savingsplans', label: 'Savings Plans' },
-  { value: 'sagemaker',    label: 'SageMaker Savings Plans' },
+  { value: 'ec2',                       label: 'EC2 (Reserved Instances)' },
+  { value: 'rds',                       label: 'RDS' },
+  { value: 'elasticache',               label: 'ElastiCache' },
+  { value: 'opensearch',                label: 'OpenSearch' },
+  { value: 'redshift',                  label: 'Redshift' },
+  // Issue #22 follow-up: per-plan-type SP slugs aligned with
+  // SERVICE_FIELDS so per-account overrides target the same rows the
+  // global Settings cards write to. The legacy `savingsplans` and PR
+  // #71 `sagemaker` values were removed because they no longer
+  // correspond to live ServiceConfig rows after migration 000040.
+  { value: 'savings-plans-compute',     label: 'Compute Savings Plans' },
+  { value: 'savings-plans-ec2instance', label: 'EC2 Instance Savings Plans' },
+  { value: 'savings-plans-sagemaker',   label: 'SageMaker Savings Plans' },
+  { value: 'savings-plans-database',    label: 'Database Savings Plans' },
 ];
 
 

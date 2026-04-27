@@ -59,7 +59,13 @@ BEGIN
     SELECT COUNT(*) INTO umbrella_count FROM service_configs
         WHERE provider = 'aws' AND service IN ('savings-plans', 'savingsplans');
     SELECT COUNT(*) INTO split_count FROM service_configs
-        WHERE provider = 'aws' AND service = 'savings-plans-compute';
+        WHERE provider = 'aws'
+          AND service IN (
+              'savings-plans-compute',
+              'savings-plans-ec2instance',
+              'savings-plans-sagemaker',
+              'savings-plans-database'
+          );
 
     IF umbrella_count = 0 AND split_count = 0 THEN
         RAISE NOTICE 'split_savingsplans: no SP rows present, migration is a no-op';
@@ -121,11 +127,15 @@ SET services = (
         -- Fan the SP entry out into four. CROSS JOIN with a literal
         -- VALUES list of the four target keys; the source value is
         -- copied into each.
+        -- COALESCE prefers the canonical hyphenated key when both
+        -- spellings are present so the rewrite is deterministic.
+        -- jsonb_each + LIMIT 1 would pick non-deterministically.
         SELECT 'aws:' || target_service AS new_key, sp_val AS new_val
         FROM (
-            SELECT v AS sp_val FROM jsonb_each(services) AS e(k, v)
-            WHERE k IN ('aws:savings-plans', 'aws:savingsplans')
-            LIMIT 1
+            SELECT COALESCE(
+                services -> 'aws:savings-plans',
+                services -> 'aws:savingsplans'
+            ) AS sp_val
         ) src
         CROSS JOIN (VALUES
             ('savings-plans-compute'),
@@ -133,6 +143,7 @@ SET services = (
             ('savings-plans-sagemaker'),
             ('savings-plans-database')
         ) AS targets(target_service)
+        WHERE src.sp_val IS NOT NULL
     ) merged
 )
 WHERE services ?| ARRAY['aws:savings-plans', 'aws:savingsplans'];

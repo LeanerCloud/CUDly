@@ -60,6 +60,16 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 		}
 
 		if err != nil {
+			// When the caller scoped the request to one plan type
+			// (post-issue-#22 split), a Cost Explorer failure means an
+			// entire SP service collection returns nothing — silently
+			// dropping that as "0 recommendations" hides real outages.
+			// Propagate. The umbrella iterate-all path keeps logging
+			// and continuing so a transient failure on one plan type
+			// doesn't poison the others.
+			if len(planTypes) == 1 {
+				return nil, fmt.Errorf("failed to get %s recommendations: %w", planType, err)
+			}
 			fmt.Printf("Warning: Failed to get %s recommendations: %v\n", planType, err)
 			continue
 		}
@@ -202,14 +212,19 @@ func serviceSlugForPlanType(pt types.SupportedSavingsPlansType) common.ServiceTy
 	return common.ServiceSavingsPlans
 }
 
-// getFilteredPlanTypes returns the list of Savings Plan types to query based on include/exclude filters
+// getFilteredPlanTypes returns the list of Savings Plan types to query based
+// on include/exclude filters. Iterates a fixed-order slice rather than a map
+// so the returned order is deterministic — downstream "first plan type wins"
+// behaviour and test assertions can rely on it.
 func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.SupportedSavingsPlansType {
-	// All available plan types
-	allPlanTypes := map[string]types.SupportedSavingsPlansType{
-		"compute":     types.SupportedSavingsPlansTypeComputeSp,
-		"ec2instance": types.SupportedSavingsPlansTypeEc2InstanceSp,
-		"sagemaker":   types.SupportedSavingsPlansTypeSagemakerSp,
-		"database":    types.SupportedSavingsPlansTypeDatabaseSp,
+	allPlanTypes := []struct {
+		name string
+		typ  types.SupportedSavingsPlansType
+	}{
+		{"compute", types.SupportedSavingsPlansTypeComputeSp},
+		{"ec2instance", types.SupportedSavingsPlansTypeEc2InstanceSp},
+		{"sagemaker", types.SupportedSavingsPlansTypeSagemakerSp},
+		{"database", types.SupportedSavingsPlansTypeDatabaseSp},
 	}
 
 	// Normalize filter values to lowercase
@@ -228,16 +243,16 @@ func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.Suppo
 
 	// If include list is specified, only include those types
 	if len(includeMap) > 0 {
-		for name, planType := range allPlanTypes {
-			if includeMap[name] && !excludeMap[name] {
-				result = append(result, planType)
+		for _, item := range allPlanTypes {
+			if includeMap[item.name] && !excludeMap[item.name] {
+				result = append(result, item.typ)
 			}
 		}
 	} else {
 		// Include all types except those in the exclude list
-		for name, planType := range allPlanTypes {
-			if !excludeMap[name] {
-				result = append(result, planType)
+		for _, item := range allPlanTypes {
+			if !excludeMap[item.name] {
+				result = append(result, item.typ)
 			}
 		}
 	}

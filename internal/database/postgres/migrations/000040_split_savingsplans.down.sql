@@ -59,10 +59,25 @@ SET services = (
         )
         UNION ALL
         -- Collapse the four per-plan-type entries back into a single
-        -- `aws:savings-plans` entry sourced from the compute slot.
+        -- `aws:savings-plans` entry. Prefer the compute slot (most
+        -- common, mirrors the service_configs down rule) but fall back
+        -- to whichever per-plan-type key is present so a plan that was
+        -- created post-split with only sagemaker/database/ec2instance
+        -- still gets a usable umbrella key on rollback.
         SELECT 'aws:savings-plans' AS new_key, v AS new_val
         FROM jsonb_each(services) AS e(k, v)
-        WHERE k = 'aws:savings-plans-compute'
+        WHERE k IN (
+            'aws:savings-plans-compute',
+            'aws:savings-plans-ec2instance',
+            'aws:savings-plans-sagemaker',
+            'aws:savings-plans-database'
+        )
+        ORDER BY CASE k
+            WHEN 'aws:savings-plans-compute'     THEN 1
+            WHEN 'aws:savings-plans-ec2instance' THEN 2
+            WHEN 'aws:savings-plans-sagemaker'   THEN 3
+            ELSE 4
+        END
         LIMIT 1
     ) merged
 )
