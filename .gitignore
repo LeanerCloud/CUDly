@@ -8,6 +8,9 @@ cudly
 cmd/cmd
 cmd.test
 
+# Local build output directory (e.g. `bin/cudly-server` from `go build -o bin/...`)
+bin/
+
 # Go build artifacts
 *.exe
 *.exe~
