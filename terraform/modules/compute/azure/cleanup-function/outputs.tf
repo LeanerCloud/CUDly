@@ -12,8 +12,3 @@ output "identity_principal_id" {
   description = "Principal ID of the managed identity"
   value       = azurerm_user_assigned_identity.cleanup.principal_id
 }
-
-output "schedule" {
-  description = "Cleanup schedule"
-  value       = var.schedule
-}
