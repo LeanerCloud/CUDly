@@ -43,7 +43,7 @@ describe('History Module', () => {
   });
 
   describe('initHistoryDateRange', () => {
-    test('sets default date range to 3 months', () => {
+    test('sets default date range to 7 days', () => {
       initHistoryDateRange();
 
       const startInput = document.getElementById('history-start') as HTMLInputElement;
@@ -57,9 +57,12 @@ describe('History Module', () => {
       const todayUTC = today.toISOString().split('T')[0] || '';
       expect(endInput.value).toBe(todayUTC);
 
-      // Start date should be about 3 months ago (UTC)
+      // Start date should be 7 days ago (UTC). Purchase events are a log
+      // view — recent activity is what matters. Savings History (the trend
+      // view) defaults to 90 days separately via #savings-period in
+      // index.html.
       const expectedStart = new Date();
-      expectedStart.setMonth(expectedStart.getMonth() - 3);
+      expectedStart.setDate(expectedStart.getDate() - 7);
       const expectedStartUTC = expectedStart.toISOString().split('T')[0] || '';
       expect(startInput.value).toBe(expectedStartUTC);
     });

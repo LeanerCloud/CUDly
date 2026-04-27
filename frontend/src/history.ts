@@ -74,12 +74,19 @@ export function setupHistoryHandlers(): void {
 }
 
 /**
- * Initialize history date range
+ * Initialize history date range.
+ *
+ * Defaults to a 7-day window because the Purchase events table is a *log*
+ * view — recent activity is what matters; older days are mostly empty and
+ * mostly noise. The Savings History card on the same page covers the
+ * complementary multi-month *trend* view (default 90 days, see
+ * `#savings-period` in index.html), so the two controls open to their
+ * own natural windows rather than fighting over one default.
  */
 export function initHistoryDateRange(): void {
   const end = new Date();
   const start = new Date();
-  start.setMonth(start.getMonth() - 3);
+  start.setDate(start.getDate() - 7);
 
   const startInput = document.getElementById('history-start') as HTMLInputElement | null;
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
