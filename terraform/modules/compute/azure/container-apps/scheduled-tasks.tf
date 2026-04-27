@@ -2,11 +2,12 @@
 # This is the Azure equivalent of AWS EventBridge + Lambda or GCP Cloud Scheduler + Cloud Run
 #
 # SECURITY: The shared scheduled-task secret is NEVER interpolated into the
-# workflow definition or Terraform state. Each Logic App workflow has a
-# system-assigned managed identity that holds "Key Vault Secrets User" on the
-# vault that stores `scheduled-task-secret`. At workflow runtime the first
-# action (`get-secret`) calls the Key Vault data-plane REST API authenticated
-# by the workflow's managed identity, and the call-endpoint action references
+# workflow definition or Terraform state. Each Logic App workflow is attached
+# to a per-workflow user-assigned managed identity (see the UA-identity
+# resources defined just below) that holds "Key Vault Secrets User" on the
+# vault storing `scheduled-task-secret`. At workflow runtime the first action
+# (`get-secret`) calls the Key Vault data-plane REST API authenticated by that
+# user-assigned identity, and the call-endpoint action references
 # `@body('get-secret')['value']` in the outgoing Authorization header.
 #
 # Effect: `terraform show` / `az logicapp show` only ever reveal the Key Vault
@@ -138,7 +139,7 @@ resource "azurerm_logic_app_trigger_recurrence" "daily" {
 }
 
 # Step 1: Fetch the shared secret from Key Vault using the workflow's
-# system-assigned managed identity. The secret value lives in the workflow
+# user-assigned managed identity. The secret value lives in the workflow
 # run's transient state only — never in the workflow definition or TF state.
 resource "azurerm_logic_app_action_custom" "recommendations_get_secret" {
   count = var.enable_scheduled_tasks ? 1 : 0
