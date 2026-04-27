@@ -37,9 +37,13 @@ jobs:
         # Required by the terraform_fmt + terraform_validate pre-commit hooks.
         # terraform_validate calls `terraform init` per module, which the
         # action wraps with HTTP-cached provider downloads.
+        #
+        # Pin must satisfy `required_version = ">= 1.10.0"` declared by every
+        # `terraform/environments/*/main.tf` — pinning to a sub-1.10 version
+        # makes init abort before validate even runs.
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
+          terraform_version: "1.10.5"
           terraform_wrapper: false
 
       - name: Install tflint
