@@ -279,10 +279,13 @@ function renderAccountsList(
   provider: AccountProvider,
   filter: AccountStatusFilter = 'all'
 ): void {
-  // Remove prior rendered rows (Overrides panels are sibling elements,
-  // banner lives in a separate className managed by renderSelfAccountBanner).
+  // Remove prior rendered rows (banner lives in a separate className
+  // managed by renderSelfAccountBanner). `.account-overrides-panel` used
+  // to be cleaned up here too — it was the inline expandable panel each
+  // account carried before #122/#124 moved overrides into a per-account
+  // modal. No such elements exist anymore.
   container.querySelectorAll(
-    '.accounts-table, .account-overrides-panel, .accounts-empty, .status-chip-row'
+    '.accounts-table, .accounts-empty, .status-chip-row'
   ).forEach(el => el.remove());
 
   if (!accounts || accounts.length === 0) {
