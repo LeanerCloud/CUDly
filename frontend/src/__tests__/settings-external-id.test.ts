@@ -127,6 +127,9 @@ function buildAccountsDOM(): void {
   const bastionDiv = div('account-aws-bastion-fields', 'hidden');
   bastionDiv.appendChild(select('account-aws-bastion-id', ['']));
   bastionDiv.appendChild(input('account-aws-bastion-role-arn'));
+  bastionDiv.appendChild(input('account-aws-external-id-bastion'));
+  bastionDiv.appendChild(el('pre', {}, 'account-aws-trust-policy-bastion'));
+  bastionDiv.appendChild(el('small', {}, 'account-aws-trust-policy-bastion-hint'));
   awsFields.appendChild(bastionDiv);
 
   const wifDiv = div('account-aws-wif-fields', 'hidden');
@@ -396,6 +399,104 @@ describe('AWS trust-policy snippet (issue #130)', () => {
     await new Promise(r => setTimeout(r, 0));
 
     expect((api.getConfig as jest.Mock).mock.calls.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #129 — bastion auth mode collects + renders the External ID
+// ---------------------------------------------------------------------------
+
+describe('AWS bastion-mode External ID + trust policy (issue #129)', () => {
+  beforeEach(() => {
+    buildAccountsDOM();
+    installRealSessionStorage();
+    sessionStorage.clear();
+    jest.clearAllMocks();
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'bastion-uuid-1', name: 'Bastion', provider: 'aws',
+        external_id: '999888777666', enabled: true },
+    ]);
+    (api.getConfig as jest.Mock).mockResolvedValue({
+      source_identity: { provider: 'aws', account_id: 'cudly-host-acct', partition: 'aws' },
+    });
+    resetConfigCache();
+    setupSettingsHandlers();
+  });
+
+  test('bastion mode shows the same draft External ID as role_arn mode', () => {
+    document.getElementById('add-aws-account-btn')!.click();
+    const roleVal = (document.getElementById('account-aws-external-id') as HTMLInputElement).value;
+    const bastionVal = (document.getElementById('account-aws-external-id-bastion') as HTMLInputElement).value;
+    expect(bastionVal).not.toBe('');
+    expect(bastionVal).toBe(roleVal);
+  });
+
+  test('selecting a bastion renders a trust-policy snippet whose Principal is the bastion account', async () => {
+    document.getElementById('add-aws-account-btn')!.click();
+    const authMode = document.getElementById('account-aws-auth-mode') as HTMLSelectElement;
+    authMode.value = 'bastion';
+    authMode.dispatchEvent(new Event('change'));
+    // Give populateBastionAccountDropdown a tick to settle.
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    const select = document.getElementById('account-aws-bastion-id') as HTMLSelectElement;
+    select.value = 'bastion-uuid-1';
+    select.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    const snippet = document.getElementById('account-aws-trust-policy-bastion')!.textContent ?? '';
+    expect(snippet).not.toBe('');
+    const policy = JSON.parse(snippet);
+    expect(policy.Statement[0].Principal.AWS).toBe('arn:aws:iam::999888777666:root');
+    const externalID = (document.getElementById('account-aws-external-id-bastion') as HTMLInputElement).value;
+    expect(policy.Statement[0].Condition.StringEquals['sts:ExternalId']).toBe(externalID);
+  });
+
+  test('buildAccountRequest collects aws_external_id for bastion mode', async () => {
+    (api.createAccount as jest.Mock).mockResolvedValue({
+      id: 'new-id', name: 'Acct', provider: 'aws', external_id: '111122223333', enabled: true,
+    });
+
+    document.getElementById('add-aws-account-btn')!.click();
+    const authMode = document.getElementById('account-aws-auth-mode') as HTMLSelectElement;
+    authMode.value = 'bastion';
+    authMode.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    (document.getElementById('account-name') as HTMLInputElement).value = 'Target';
+    (document.getElementById('account-external-id') as HTMLInputElement).value = '111122223333';
+    (document.getElementById('account-aws-bastion-id') as HTMLSelectElement).value = 'bastion-uuid-1';
+    (document.getElementById('account-aws-bastion-role-arn') as HTMLInputElement).value =
+      'arn:aws:iam::111122223333:role/CUDly';
+
+    const draft = (document.getElementById('account-aws-external-id-bastion') as HTMLInputElement).value;
+    expect(draft).not.toBe('');
+
+    document.getElementById('account-form')!.dispatchEvent(new Event('submit'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect((api.createAccount as jest.Mock).mock.calls.length).toBe(1);
+    const submitted = (api.createAccount as jest.Mock).mock.calls[0][0];
+    expect(submitted.aws_auth_mode).toBe('bastion');
+    expect(submitted.aws_external_id).toBe(draft);
+    expect(submitted.aws_bastion_id).toBe('bastion-uuid-1');
+  });
+
+  test('toggling between role_arn and bastion preserves the draft value', () => {
+    document.getElementById('add-aws-account-btn')!.click();
+    const roleInput = document.getElementById('account-aws-external-id') as HTMLInputElement;
+    const bastionInput = document.getElementById('account-aws-external-id-bastion') as HTMLInputElement;
+    const initial = roleInput.value;
+    expect(initial).not.toBe('');
+    expect(bastionInput.value).toBe(initial);
+
+    // Close + reopen — both inputs should still carry the same draft.
+    document.getElementById('close-account-modal-btn')!.click();
+    document.getElementById('add-aws-account-btn')!.click();
+    expect(roleInput.value).toBe(initial);
+    expect(bastionInput.value).toBe(initial);
   });
 });
 

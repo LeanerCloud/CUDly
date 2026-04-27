@@ -124,6 +124,9 @@ function buildAccountsDOM(): void {
   const bastionDiv = div('account-aws-bastion-fields', 'hidden');
   bastionDiv.appendChild(select('account-aws-bastion-id', ['']));
   bastionDiv.appendChild(input('account-aws-bastion-role-arn'));
+  bastionDiv.appendChild(input('account-aws-external-id-bastion'));
+  bastionDiv.appendChild(el('pre', {}, 'account-aws-trust-policy-bastion'));
+  bastionDiv.appendChild(el('small', {}, 'account-aws-trust-policy-bastion-hint'));
   awsFields.appendChild(bastionDiv);
 
   const orgRootCb = input('account-aws-is-org-root', 'checkbox');

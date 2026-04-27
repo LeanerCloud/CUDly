@@ -1124,6 +1124,21 @@
                         <div id="account-aws-bastion-fields" class="hidden">
                             <label>Bastion Account: <select id="account-aws-bastion-id"><option value="">Select bastion account...</option></select></label>
                             <label>Role ARN in target: <input type="text" id="account-aws-bastion-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>External ID:
+                                <span class="input-with-copy">
+                                    <input type="text" id="account-aws-external-id-bastion" readonly>
+                                    <button type="button" id="account-aws-external-id-bastion-copy" class="copy-btn" aria-label="Copy External ID to clipboard"><span class="copy-icon">Copy</span></button>
+                                </span>
+                            </label>
+                            <small>CUDly auto-generates this value per account. Copy it into the <code>sts:ExternalId</code> condition of the target role's trust policy so only CUDly &mdash; via the selected bastion account &mdash; can assume it (issue #129).</small>
+                            <div class="trust-policy-section">
+                                <label for="account-aws-trust-policy-bastion">IAM Trust Policy (paste into the target role's trust relationship):</label>
+                                <div class="input-with-copy">
+                                    <pre id="account-aws-trust-policy-bastion" class="code-block"></pre>
+                                    <button type="button" id="account-aws-trust-policy-bastion-copy" class="copy-btn" aria-label="Copy trust policy JSON to clipboard"><span class="copy-icon">Copy</span></button>
+                                </div>
+                                <small id="account-aws-trust-policy-bastion-hint">Attach this policy to the target IAM role's trust relationship so CUDly can assume it through the bastion. The Principal is the selected bastion account; the <code>sts:ExternalId</code> condition locks the role to this specific CUDly registration.</small>
+                            </div>
                         </div>
                         <div id="account-aws-wif-fields" class="hidden">
                             <label>Role ARN: <input type="text" id="account-aws-wif-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
