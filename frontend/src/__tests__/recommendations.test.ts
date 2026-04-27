@@ -1,13 +1,28 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, refreshRecommendations, setupRecommendationsHandlers } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache } from '../recommendations';
 
 // Mock the api module
 jest.mock('../api', () => ({
   getRecommendations: jest.fn(),
   refreshRecommendations: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([])
+}));
+
+// Mock the per-id detail endpoint module so the drawer-fetch tests can
+// assert on call shape without going through the apiRequest layer.
+// Default resolution returns a benign empty payload so tests that
+// merely open + close the drawer (and don't care about the detail
+// fetch) don't trip on an undefined-promise return.
+jest.mock('../api/recommendations', () => ({
+  getRecommendationDetail: jest.fn().mockResolvedValue({
+    id: 'rec-default',
+    usage_history: [],
+    confidence_bucket: 'low',
+    provenance_note: '',
+  }),
+  getRecommendationsFreshness: jest.fn().mockResolvedValue({ last_collected_at: null, last_collection_error: null }),
 }));
 
 // Mock state module
@@ -457,6 +472,122 @@ describe('Recommendations Module', () => {
       expect(document.querySelector('.detail-drawer')).not.toBeNull();
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       expect(document.querySelector('.detail-drawer')).toBeNull();
+    });
+
+    describe('drawer fetches detail from /api/recommendations/:id/detail (issue #44)', () => {
+      // The detail-fetch mock lives on the api/recommendations module
+      // so the test can assert call shape without round-tripping
+      // through apiRequest.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const recApi = require('../api/recommendations') as { getRecommendationDetail: jest.Mock };
+
+      beforeEach(() => {
+        // Real timers — the drawer's fetch uses microtasks (Promise
+        // resolution) which jest's fake timers don't auto-advance.
+        jest.useRealTimers();
+        clearRecommendationDetailCache();
+        recApi.getRecommendationDetail.mockReset();
+      });
+
+      afterEach(() => {
+        jest.useFakeTimers();
+      });
+
+      test('drawer fetches detail once per id and renders backend confidence + provenance', async () => {
+        recApi.getRecommendationDetail.mockResolvedValue({
+          id: 'rec-15',
+          usage_history: [],
+          confidence_bucket: 'high',
+          provenance_note: 'AWS ec2 recommendation APIs · last collected 2026-04-24T12:00:00Z',
+        });
+
+        await loadRecommendations();
+        const firstRow = document.querySelector<HTMLTableRowElement>('tr.recommendation-row');
+        firstRow?.querySelectorAll('td')[3]?.click();
+
+        // Allow the .then() handler to run.
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(recApi.getRecommendationDetail).toHaveBeenCalledTimes(1);
+        // Default sort is savings desc → rec-15 ($1500) renders first.
+        expect(recApi.getRecommendationDetail).toHaveBeenCalledWith('rec-15');
+
+        const badge = document.querySelector('.detail-drawer .confidence-badge');
+        expect(badge?.classList.contains('confidence-high')).toBe(true);
+        expect(badge?.textContent).toBe('High');
+
+        const provenance = document.querySelector('.detail-drawer .detail-drawer-note');
+        expect(provenance?.textContent).toContain('last collected 2026-04-24T12:00:00Z');
+      });
+
+      test('empty usage_history renders the "not yet available" placeholder, not a broken chart', async () => {
+        recApi.getRecommendationDetail.mockResolvedValue({
+          id: 'rec-15',
+          usage_history: [],
+          confidence_bucket: 'medium',
+          provenance_note: 'AWS ec2 recommendation APIs.',
+        });
+
+        await loadRecommendations();
+        const firstRow = document.querySelector<HTMLTableRowElement>('tr.recommendation-row');
+        firstRow?.querySelectorAll('td')[3]?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // No SVG sparkline — degraded path.
+        expect(document.querySelector('.detail-drawer-sparkline')).toBeNull();
+        // Placeholder note present.
+        const usageNote = document.querySelector('.detail-drawer-usage .detail-drawer-note-muted');
+        expect(usageNote?.textContent).toBe('Usage history not yet available.');
+      });
+
+      test('non-empty usage_history renders an inline SVG sparkline', async () => {
+        recApi.getRecommendationDetail.mockResolvedValue({
+          id: 'rec-15',
+          usage_history: [
+            { timestamp: '2026-04-23T00:00:00Z', cpu_pct: 12, mem_pct: 30 },
+            { timestamp: '2026-04-23T01:00:00Z', cpu_pct: 18, mem_pct: 32 },
+            { timestamp: '2026-04-23T02:00:00Z', cpu_pct: 25, mem_pct: 40 },
+          ],
+          confidence_bucket: 'high',
+          provenance_note: 'AWS ec2 recommendation APIs.',
+        });
+
+        await loadRecommendations();
+        const firstRow = document.querySelector<HTMLTableRowElement>('tr.recommendation-row');
+        firstRow?.querySelectorAll('td')[3]?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const svg = document.querySelector('.detail-drawer-sparkline');
+        expect(svg).not.toBeNull();
+        // Two paths (CPU + memory).
+        expect(svg?.querySelectorAll('path').length).toBe(2);
+      });
+
+      test('repeated open of same drawer reuses the cached detail (one fetch per id)', async () => {
+        recApi.getRecommendationDetail.mockResolvedValue({
+          id: 'rec-15',
+          usage_history: [],
+          confidence_bucket: 'low',
+          provenance_note: 'AWS ec2 recommendation APIs.',
+        });
+
+        await loadRecommendations();
+        const firstRow = document.querySelector<HTMLTableRowElement>('tr.recommendation-row');
+        firstRow?.querySelectorAll('td')[3]?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // Close and re-open the same drawer.
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        firstRow?.querySelectorAll('td')[3]?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(recApi.getRecommendationDetail).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

@@ -75,10 +75,13 @@ func (r *Router) registerRoutes() {
 		// but we don't expose it unauthenticated.
 		{ExactPath: "/api/commitment-options", Method: "GET", Handler: r.commitmentOptionsHandler, Auth: AuthUser},
 
-		// Recommendations endpoints
+		// Recommendations endpoints. The /:id/detail suffix route uses
+		// the same prefix+suffix pattern as /api/plans/{id}/purchases
+		// below — extractParams strips both ends to recover the id.
 		{ExactPath: "/api/recommendations", Method: "GET", Handler: r.getRecommendationsHandler},
 		{ExactPath: "/api/recommendations/freshness", Method: "GET", Handler: r.getRecommendationsFreshnessHandler},
 		{ExactPath: "/api/recommendations/refresh", Method: "POST", Handler: r.refreshRecommendationsHandler},
+		{PathPrefix: "/api/recommendations/", PathSuffix: "/detail", Method: "GET", Handler: r.getRecommendationDetailHandler},
 
 		// Purchase plans endpoints
 		{ExactPath: "/api/plans", Method: "GET", Handler: r.listPlansHandler},
@@ -312,6 +315,10 @@ func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.
 
 func (r *Router) getRecommendationsFreshnessHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getRecommendationsFreshness(ctx, req)
+}
+
+func (r *Router) getRecommendationDetailHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getRecommendationDetail(ctx, req, params["id"])
 }
 
 func (r *Router) listPlansHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
