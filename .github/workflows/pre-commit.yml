@@ -85,4 +85,15 @@ jobs:
           fi
 
       - name: Run pre-commit
+        # SKIP=terraform_validate: that hook calls `terraform init` per
+        # module, which creates `.terraform.lock.hcl` files. Those are
+        # gitignored, so on a fresh CI checkout they don't exist and the
+        # init step "modifies files", which pre-commit reports as a
+        # failure. Local pre-commit runs work because lock files persist
+        # between invocations. terraform_fmt and terraform_tflint still
+        # run and catch the syntax/style issues that terraform_validate
+        # would catch; the deeper schema validation runs in
+        # `terraform plan` during deploy workflows.
+        env:
+          SKIP: terraform_validate
         run: pre-commit run --all-files
