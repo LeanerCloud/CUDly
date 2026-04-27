@@ -71,13 +71,24 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 // in pkg/exchange.fillAlternativesFromRecs can compare apples-to-apples
 // against RIInfo.TermSeconds populated from ec2.ConvertibleRI.Duration.
 func recommendationToOffering(rec config.RecommendationRecord, currencyCode string) exchange.OfferingOption {
-	monthly := rec.MonthlyCost
+	// AWS Cost Explorer returns MonthlyCost and UpfrontCost as totals for
+	// the recommended Count of instances, not per-instance. The reshape
+	// layer compares OfferingOption.EffectiveMonthlyCost against
+	// RIInfo.MonthlyCost which is per-instance, so we normalize here.
+	// rec.Count == 0 is treated as "unknown count, fall back to total"
+	// rather than dividing by zero — practically rare since the scheduler
+	// only stores recs with Count >= 1.
+	count := float64(1)
+	if rec.Count > 0 {
+		count = float64(rec.Count)
+	}
+	monthly := rec.MonthlyCost / count
 	if rec.Term > 0 {
 		// rec.Term is in years; canonical AWS RI/SP amortisation uses
 		// 12 months per year regardless of leap years.
 		termMonths := float64(rec.Term * 12)
 		if termMonths > 0 {
-			monthly += rec.UpfrontCost / termMonths
+			monthly += rec.UpfrontCost / (count * termMonths)
 		}
 	}
 	_, size := splitInstanceType(rec.ResourceType)

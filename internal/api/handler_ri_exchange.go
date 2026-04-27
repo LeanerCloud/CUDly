@@ -267,7 +267,13 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	// CloudAccount registration hasn't happened yet; a real ListCloudAccounts
 	// error aborts the request instead of silently falling through to an
 	// unscoped query that could match the wrong tenant's recs.
-	cloudAccountID, err := h.resolveAWSCloudAccountID(ctx)
+	resolveAccount := h.resolveAWSCloudAccountID
+	if h.reshapeAccountResolver != nil {
+		// Test injection — bypasses sts.GetCallerIdentity so the
+		// integration suite runs without AWS credentials.
+		resolveAccount = h.reshapeAccountResolver
+	}
+	cloudAccountID, err := resolveAccount(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve cloud account scope for reshape: %w", err)
 	}

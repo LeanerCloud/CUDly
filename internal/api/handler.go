@@ -70,6 +70,14 @@ type Handler struct {
 	reshapeEC2Factory  func(aws.Config) reshapeEC2Client
 	reshapeRecsFactory func(aws.Config) reshapeRecsClient
 
+	// Optional account-resolver injection point used by the reshape
+	// handler integration test. When nil (the production default), the
+	// handler calls h.resolveAWSCloudAccountID which in turn invokes
+	// sts.GetCallerIdentity — fine in Lambda but fails on dev machines
+	// without AWS credentials. Tests set this to a fixed-result fake so
+	// the integration suite runs hermetically.
+	reshapeAccountResolver func(context.Context) (string, error)
+
 	// commitmentOpts discovers which AWS (term, payment) combinations
 	// each service actually sells and validates saves against that data.
 	// Nil is valid: the endpoint returns unavailable and save-side

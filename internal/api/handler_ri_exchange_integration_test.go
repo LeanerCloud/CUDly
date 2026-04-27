@@ -67,6 +67,12 @@ func buildReshapeHandler(store *config.PostgresStore, ec2Fake *fakeReshapeEC2, r
 		apiKey:             "test-api-key",
 		reshapeEC2Factory:  func(_ aws.Config) reshapeEC2Client { return ec2Fake },
 		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient { return recsFake },
+		// Bypass STS GetCallerIdentity so the test runs without real
+		// AWS credentials. Empty cloud-account ID = no AccountIDs
+		// filter on the recs lookup, which is the legitimate
+		// "no-scope-filter" path; tests that assert scope filtering
+		// would set this to a UUID matching a seeded CloudAccount.
+		reshapeAccountResolver: func(_ context.Context) (string, error) { return "", nil },
 	}
 	// Pre-populate the AWS config cache so loadAWSConfigWithRegion
 	// returns immediately without LoadDefaultConfig. The Region field
