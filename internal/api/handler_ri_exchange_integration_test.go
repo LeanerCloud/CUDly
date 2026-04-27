@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -116,11 +117,15 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
 	defer cleanup()
 
-	// Seed cross-family recs in us-east-1: m5 (same family, must be
-	// excluded), c5, r5. The handler should surface c5 + r5 as
-	// cross-family alternatives ordered by EffectiveMonthlyCost.
+	// Seed cross-family recs in us-east-1. Same-family seed uses a
+	// different SIZE (m5.2xlarge) than the primary target (m5.large)
+	// so the test exercises the FAMILY-exclusion filter rather than
+	// trivial exact-match dedupe. Handler should surface c5 + r5 as
+	// cross-family alternatives ordered by EffectiveMonthlyCost;
+	// m5.2xlarge must NOT appear despite being a different size —
+	// same-family RIs aren't valid Convertible exchange targets.
 	seedRecsForRegion(ctx, t, store, "us-east-1", []config.RecommendationRecord{
-		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Term: 1, MonthlyCost: 40},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.2xlarge", Term: 1, MonthlyCost: 40},
 		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: 50},
 		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "r5.large", Term: 1, MonthlyCost: 60},
 	})
@@ -148,11 +153,17 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 
 	// Same-family m5 stripped; c5 + r5 surface ascending by cost.
 	require.Len(t, rec.AlternativeTargets, 2,
-		"cross-family alternatives must come from the cached recs (m5 same-family excluded)")
+		"cross-family alternatives must come from the cached recs (same-family m5.2xlarge excluded)")
 	require.Equal(t, "c5.large", rec.AlternativeTargets[0].InstanceType)
 	require.InDelta(t, 50.0, rec.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
 	require.Equal(t, "r5.large", rec.AlternativeTargets[1].InstanceType)
 	require.InDelta(t, 60.0, rec.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
+	// Independent regression guard: no m5.* of any size should appear
+	// in alternatives — pins the family-exclusion contract.
+	for _, alt := range rec.AlternativeTargets {
+		require.False(t, strings.HasPrefix(alt.InstanceType, "m5."),
+			"same-family m5.* alternatives must be excluded, got %s", alt.InstanceType)
+	}
 
 	// Verify the RI utilization cache row landed in Postgres.
 	entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
@@ -237,4 +248,122 @@ func TestReshapeRecommendations_Integration_NoCachedRecsReturnsPrimaryOnly(t *te
 	require.Equal(t, "m5.large", rec.TargetInstanceType, "primary target stays intact")
 	require.Empty(t, rec.AlternativeTargets,
 		"empty cache → no alternatives, primary target still surfaced")
+}
+
+// seedCloudAccount inserts a minimal CloudAccount row and returns its
+// generated UUID. Used by the scoped-account integration test so the
+// recommendations table can carry a cloud_account_id that satisfies the
+// FK to cloud_accounts(id). All fields beyond Provider / ExternalID /
+// Name are left at their zero value — the recs scope filter joins only
+// on cloud_account_id, so credentials and auth-mode plumbing are
+// irrelevant for this test.
+func seedCloudAccount(ctx context.Context, t *testing.T, store *config.PostgresStore, externalID, name string) string {
+	t.Helper()
+	account := &config.CloudAccount{
+		Name:       name,
+		Provider:   "aws",
+		ExternalID: externalID,
+		Enabled:    true,
+	}
+	require.NoError(t, store.CreateCloudAccount(ctx, account),
+		"seeding CloudAccount %q failed", externalID)
+	require.NotEmpty(t, account.ID, "CreateCloudAccount must generate a UUID")
+	return account.ID
+}
+
+// TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount
+// is the companion to the existing unscoped integration tests
+// (CodeRabbit pass-5 finding 2). The other tests all wire
+// reshapeAccountResolver to ("", nil), exercising only the unscoped
+// "no AccountIDs filter" path. This test exercises the scoped branch:
+//
+//  1. Seed two CloudAccounts (A and B) so the cloud_account_id FK on
+//     the recommendations table is satisfied for both rows.
+//  2. Seed two recs in the same region — A's is c5.large, B's is
+//     r5.large — each tagged with its account's UUID.
+//  3. Override reshapeAccountResolver to return A's UUID, simulating
+//     the production path where the running AWS account maps to one
+//     registered CloudAccount via h.resolveAWSCloudAccountID.
+//  4. Assert the response only surfaces c5.large in alternatives, not
+//     r5.large — proving the recs query was scoped by AccountIDs
+//     rather than served as an unscoped read across both tenants.
+//
+// This is the cross-tenant leak guard the rest of the reshape path
+// relies on. Without this test, the scoped branch had zero coverage —
+// a regression that silently dropped the AccountIDs filter (e.g. a
+// future refactor reintroducing the resolved-but-unregistered fall-
+// through bug) would have shipped undetected.
+func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
+	defer cleanup()
+
+	// Two registered accounts, distinct AWS account numbers. The recs
+	// scope filter compares against the CloudAccount UUID (not the AWS
+	// external ID), so the test resolver just hands back the UUID.
+	accountAID := seedCloudAccount(ctx, t, store, "111111111111", "Tenant A")
+	accountBID := seedCloudAccount(ctx, t, store, "222222222222", "Tenant B")
+
+	// Seed one cross-family rec per tenant in the same region. If the
+	// scope filter is honoured, only Tenant A's c5.large surfaces;
+	// otherwise both alternatives leak through (the regression we're
+	// guarding against).
+	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), []config.RecommendationRecord{
+		{
+			Provider:       "aws",
+			Service:        "ec2",
+			Region:         "us-east-1",
+			ResourceType:   "c5.large",
+			Term:           1,
+			MonthlyCost:    50,
+			CloudAccountID: &accountAID,
+		},
+		{
+			Provider:       "aws",
+			Service:        "ec2",
+			Region:         "us-east-1",
+			ResourceType:   "r5.large",
+			Term:           1,
+			MonthlyCost:    60,
+			CloudAccountID: &accountBID,
+		},
+	}), "seeding scoped recommendations failed")
+
+	ec2Fake := &fakeReshapeEC2{
+		instances: []ec2svc.ConvertibleRI{
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
+		},
+	}
+	recsFake := &fakeReshapeRecs{
+		utilization: []recommendations.RIUtilization{
+			{ReservedInstanceID: "ri-1", UtilizationPercent: 50.0},
+		},
+	}
+	h := buildReshapeHandler(store, ec2Fake, recsFake)
+	// Override the unscoped default the helper sets: pretend the
+	// running AWS account resolves to Tenant A's CloudAccount UUID.
+	// Equivalent to h.resolveAWSCloudAccountID returning a real match.
+	h.reshapeAccountResolver = func(_ context.Context) (string, error) {
+		return accountAID, nil
+	}
+
+	resp, err := h.getReshapeRecommendations(ctx, reshapeRequest())
+	require.NoError(t, err)
+	body, ok := resp.(*ReshapeRecommendationsResponse)
+	require.True(t, ok, "response should be a ReshapeRecommendationsResponse")
+	require.Len(t, body.Recommendations, 1)
+	rec := body.Recommendations[0]
+	require.Equal(t, "ri-1", rec.SourceRIID)
+
+	// Tenant A's c5.large is the only valid alternative; Tenant B's
+	// r5.large MUST be filtered out by the AccountIDs predicate.
+	require.Len(t, rec.AlternativeTargets, 1,
+		"scoped lookup must surface exactly one alternative — Tenant A's c5.large; "+
+			"if Tenant B's r5.large appears, the cloud_account_id filter regressed "+
+			"and recs are leaking across tenants")
+	require.Equal(t, "c5.large", rec.AlternativeTargets[0].InstanceType)
+	for _, alt := range rec.AlternativeTargets {
+		require.NotEqual(t, "r5.large", alt.InstanceType,
+			"r5.large belongs to Tenant B and must never surface for a Tenant-A-scoped request")
+	}
 }
