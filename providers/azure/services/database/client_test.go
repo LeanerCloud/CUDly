@@ -63,13 +63,17 @@ func (m *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsump
 	return page, nil
 }
 
-// MockCapabilitiesClient mocks the CapabilitiesClient interface
+// MockCapabilitiesClient mocks the CapabilitiesClient interface.
+// CallCount tracks how many times ListByLocation was invoked — used by
+// the cachedSKULookup-fetched-once test to pin the perf invariant.
 type MockCapabilitiesClient struct {
-	response armsql.CapabilitiesClientListByLocationResponse
-	err      error
+	response  armsql.CapabilitiesClientListByLocationResponse
+	err       error
+	CallCount int
 }
 
 func (m *MockCapabilitiesClient) ListByLocation(ctx context.Context, locationName string, options *armsql.CapabilitiesClientListByLocationOptions) (armsql.CapabilitiesClientListByLocationResponse, error) {
+	m.CallCount++
 	if m.err != nil {
 		return armsql.CapabilitiesClientListByLocationResponse{}, m.err
 	}
@@ -660,9 +664,15 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_NilGuards(t *testing.T) {
 
 // TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields
 // asserts the converter forwards every helper-extracted field + applies
-// the Database-service-specific constants.
+// the Database-service-specific constants. An empty capabilities
+// response (region with no SKU mapping) is the "no signal" baseline —
+// EngineVersion stays empty.
 func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
+	// Inject empty capabilities client so cachedSKULookup doesn't make a
+	// real Azure call during this test.
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{})
+
 	rec := mocks.BuildLegacyReservationRecommendation(
 		mocks.WithRegion("northeurope"),
 		mocks.WithTerm("P1Y"),
@@ -686,15 +696,117 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields(t *test
 	assert.Equal(t, "upfront", out.PaymentOption)
 
 	// Details carries Engine=sqlserver + InstanceClass from the SKU
-	// string. EngineVersion/AZConfig/Deployment are deferred to batched
-	// enrichment via armsql.
+	// string. EngineVersion stays empty when the catalogue has no
+	// matching SKU (no signal); AZConfig/Deployment still need a
+	// per-server lookup and remain deferred.
 	require.NotNil(t, out.Details)
 	details, ok := out.Details.(common.DatabaseDetails)
 	require.True(t, ok, "Details must be a common.DatabaseDetails value")
 	assert.Equal(t, "sqlserver", details.Engine)
 	assert.Equal(t, "GeneralPurpose_Gen5_2", details.InstanceClass)
-	assert.Empty(t, details.EngineVersion, "EngineVersion is deferred to batched enrichment")
+	assert.Empty(t, details.EngineVersion, "EngineVersion empty when no matching SKU in catalogue")
 	assert.Empty(t, details.AZConfig, "AZConfig is deferred to batched enrichment")
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesEngineVersion
+// asserts the new batched-SKU-catalogue lookup populates
+// DatabaseDetails.EngineVersion when the recommendation's SKU appears
+// in the location capabilities response.
+func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesEngineVersion(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+
+	skuName := "GeneralPurpose_Gen5_2"
+	versionName := "12.0"
+
+	mockClient := &MockCapabilitiesClient{
+		response: armsql.CapabilitiesClientListByLocationResponse{
+			LocationCapabilities: armsql.LocationCapabilities{
+				SupportedServerVersions: []*armsql.ServerVersionCapability{
+					{
+						Name: &versionName,
+						SupportedEditions: []*armsql.EditionCapability{
+							{
+								SupportedServiceLevelObjectives: []*armsql.ServiceObjectiveCapability{
+									{
+										SKU: &armsql.SKU{Name: &skuName},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetCapabilitiesClient(mockClient)
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize(skuName),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Equal(t, "sqlserver", details.Engine)
+	assert.Equal(t, skuName, details.InstanceClass)
+	assert.Equal(t, "12.0", details.EngineVersion, "EngineVersion must be enriched from the cached SKU catalogue")
+}
+
+// TestDatabaseClient_ConvertAzureSQLRecommendation_CapabilitiesErrorFallsBack
+// asserts that a capabilities-listing failure does NOT fail the
+// conversion — EngineVersion just stays empty.
+func TestDatabaseClient_ConvertAzureSQLRecommendation_CapabilitiesErrorFallsBack(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCapabilitiesClient(&MockCapabilitiesClient{
+		err: errors.New("transient Azure API error"),
+	})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("GeneralPurpose_Gen5_2"),
+	)
+	out := client.convertAzureSQLRecommendation(context.Background(), rec)
+	require.NotNil(t, out, "conversion must NOT fail on capabilities-fetch error")
+	details, ok := out.Details.(common.DatabaseDetails)
+	require.True(t, ok)
+	assert.Equal(t, "sqlserver", details.Engine)
+	assert.Equal(t, "GeneralPurpose_Gen5_2", details.InstanceClass)
+	assert.Empty(t, details.EngineVersion, "EngineVersion empty when capabilities fetch fails")
+}
+
+// TestDatabaseClient_CachedSKULookup_FetchedOnce pins the perf invariant:
+// many converter calls in the same GetRecommendations run trigger
+// exactly ONE armsql.ListByLocation call.
+func TestDatabaseClient_CachedSKULookup_FetchedOnce(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+
+	skuName := "GeneralPurpose_Gen5_2"
+	versionName := "12.0"
+	mockClient := &MockCapabilitiesClient{
+		response: armsql.CapabilitiesClientListByLocationResponse{
+			LocationCapabilities: armsql.LocationCapabilities{
+				SupportedServerVersions: []*armsql.ServerVersionCapability{
+					{
+						Name: &versionName,
+						SupportedEditions: []*armsql.EditionCapability{
+							{
+								SupportedServiceLevelObjectives: []*armsql.ServiceObjectiveCapability{
+									{SKU: &armsql.SKU{Name: &skuName}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetCapabilitiesClient(mockClient)
+
+	for i := 0; i < 10; i++ {
+		_, _ = client.cachedSKULookup(context.Background(), skuName)
+	}
+	assert.Equal(t, 1, mockClient.CallCount, "capabilities catalogue must be fetched ONCE regardless of lookup count")
 }
 
 // MockTokenCredential for testing PurchaseCommitment
