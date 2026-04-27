@@ -258,7 +258,13 @@ func (h *Handler) createPurchaseExecutions(ctx context.Context, plan *config.Pur
 
 		approvalToken, err := common.GenerateApprovalToken()
 		if err != nil {
-			return 0, fmt.Errorf("failed to generate approval token: %w", err)
+			// Return the running `created` count rather than 0 so callers
+			// (and future retry logic) can see how many executions made it
+			// to the DB before the loop bailed. The current caller drops
+			// the count on error, but reporting it in the error message
+			// + return value keeps the option open without a contract
+			// change later.
+			return created, fmt.Errorf("failed to generate approval token after creating %d executions: %w", created, err)
 		}
 		execution := &config.PurchaseExecution{
 			PlanID:        planID,
@@ -270,7 +276,7 @@ func (h *Handler) createPurchaseExecutions(ctx context.Context, plan *config.Pur
 		}
 
 		if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-			return 0, fmt.Errorf("failed to save execution: %w", err)
+			return created, fmt.Errorf("failed to save execution after creating %d executions: %w", created, err)
 		}
 		created++
 	}

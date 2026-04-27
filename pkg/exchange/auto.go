@@ -283,7 +283,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		// failure, mirroring the auto-mode failure paths in
 		// processAutoExchange. crypto/rand failures are rare in practice
 		// but still merit an audit trail.
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, errMsg, "manual")
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, errMsg, ExchangeModeManual)
 		return ExchangeOutcome{
 			SourceRIID:         rec.SourceRIID,
 			SourceInstanceType: rec.SourceInstanceType,
@@ -365,7 +365,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if err != nil {
 		logging.Errorf("daily cap check failed for %s: %v", rec.SourceRIID, err)
 		outcome.Error = fmt.Sprintf("daily cap check failed: %v", err)
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, "auto")
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -374,7 +374,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if err != nil {
 		logging.Errorf("failed to parse daily spend %q: %v", dailySpendStr, err)
 		outcome.Error = fmt.Sprintf("failed to parse daily spend: %v", err)
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, "auto")
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -392,7 +392,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 			dailySpent.FloatString(2), paymentDue.FloatString(2), params.Config.MaxPaymentDailyUSD)
 		logging.Warnf("skipping exchange for %s: %s", rec.SourceRIID, reason)
 		outcome.Error = reason
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, reason, "auto")
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, reason, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -408,7 +408,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if execErr != nil {
 		logging.Errorf("exchange execution failed for %s: %v", rec.SourceRIID, execErr)
 		outcome.Error = execErr.Error()
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, "auto")
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -439,11 +439,21 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	return outcome
 }
 
+// ExchangeMode constrains the originating code path of an exchange record so
+// `saveFailedRecord` (and any future caller) can't silently leak a typo into
+// `ExchangeRecord.Mode`. The storage field stays `string` for serialization
+// stability — this is a call-site discipline, not a schema change.
+type ExchangeMode string
+
+const (
+	ExchangeModeAuto   ExchangeMode = "auto"
+	ExchangeModeManual ExchangeMode = "manual"
+)
+
 // saveFailedRecord persists a failed exchange attempt for DB audit.
-// `mode` should be "auto" or "manual" to match the originating code path so
-// downstream filters/UI can distinguish auto-mode failures from manual-mode
-// failures.
-func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr, errMsg, mode string) {
+// `mode` distinguishes auto-mode failures from manual-mode failures so
+// downstream filters/UI can split the two.
+func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr, errMsg string, mode ExchangeMode) {
 	record := &ExchangeRecord{
 		AccountID:          params.AccountID,
 		Region:             params.Region,
@@ -456,7 +466,7 @@ func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec Res
 		PaymentDue:         paymentDueStr,
 		Status:             "failed",
 		Error:              errMsg,
-		Mode:               mode,
+		Mode:               string(mode),
 	}
 	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
 		logging.Errorf("failed to save failed exchange record for %s: %v", rec.SourceRIID, err)
