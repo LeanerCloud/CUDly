@@ -397,7 +397,7 @@ function renderAccountsList(
     overridesPanel.className = 'account-overrides-panel hidden';
     overridesBtn.addEventListener('click', () => {
       const hidden = overridesPanel.classList.toggle('hidden');
-      if (!hidden) void loadOverridesPanel(account.id, overridesPanel);
+      if (!hidden) void loadOverridesPanel(account.id, overridesPanel, account.provider);
     });
     actionsTd.appendChild(overridesBtn);
 
@@ -436,6 +436,20 @@ const AWS_PAYMENT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'partial-upfront', label: 'Partial Upfront' },
   { value: 'all-upfront',     label: 'All Upfront' },
 ];
+
+// AWS services that can carry a per-account override. Mirrors the AWS-only
+// entries in SERVICE_FIELDS \u2014 Azure/GCP override creation is a follow-up
+// (issue #104) since the backend payment/term semantics differ per provider.
+const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'ec2',          label: 'EC2 (Reserved Instances)' },
+  { value: 'rds',          label: 'RDS' },
+  { value: 'elasticache',  label: 'ElastiCache' },
+  { value: 'opensearch',   label: 'OpenSearch' },
+  { value: 'redshift',     label: 'Redshift' },
+  { value: 'savingsplans', label: 'Savings Plans' },
+  { value: 'sagemaker',    label: 'SageMaker Savings Plans' },
+];
+
 
 /**
  * Build the per-row Payment <select> for the overrides panel. Issue #23.
@@ -518,7 +532,10 @@ async function handlePaymentOverrideChange(
       message: `Payment override updated for ${override.provider}/${override.service}.`,
       kind: 'success',
     });
-    await loadOverridesPanel(accountId, panel);
+    // The inline payment selector only renders for AWS rows (per the
+    // o.provider === 'aws' guard in loadOverridesPanel's row loop), so
+    // override.provider is always 'aws' at this call site — cast is safe.
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
   } catch (err) {
     select.value = previous;
     showToast({
@@ -531,20 +548,63 @@ async function handlePaymentOverrideChange(
 }
 
 /**
- * Load and render the service overrides panel for an account
+ * Load and render the service overrides panel for an account.
+ *
+ * Empty state (no overrides yet for this account) auto-opens the create
+ * modal \u2014 the previous "No service overrides set." text was a dead-end
+ * because there was no UI affordance to create one. See issue #104.
+ *
+ * Populated state: render the existing table + an "Add override" button at
+ * the top so users can add another override for a different service.
+ *
+ * The Add Override flow is AWS-only for now; Azure/GCP keep the read-only
+ * empty-state text since their per-product term/payment semantics differ
+ * (issue #104 follow-up tracks Azure/GCP modal support).
  */
-async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promise<void> {
+async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
   panel.textContent = 'Loading\u2026';
   try {
     const overrides = await api.listAccountServiceOverrides(accountId);
     panel.textContent = '';
+
+    const canCreate = provider === 'aws';
+
     if (!overrides || overrides.length === 0) {
       const msg = document.createElement('p');
       msg.className = 'help-text';
-      msg.textContent = 'No service overrides set. All services use global defaults.';
+      msg.textContent = canCreate
+        ? 'No service overrides yet for this account.'
+        : 'No service overrides set. All services use global defaults.';
       panel.appendChild(msg);
+      if (canCreate) {
+        // No overrides yet \u2014 auto-open the modal so the user lands directly
+        // on the create flow instead of staring at empty-state text. The
+        // button stays in the panel as a fallback if the user cancels and
+        // wants to retry without re-expanding the row.
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'btn btn-small';
+        addBtn.textContent = 'Add override';
+        addBtn.addEventListener('click', () => {
+          openOverrideModal(accountId, provider, overrides ?? [], panel);
+        });
+        panel.appendChild(addBtn);
+        openOverrideModal(accountId, provider, [], panel);
+      }
       return;
     }
+
+    if (canCreate) {
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'btn btn-small';
+      addBtn.textContent = 'Add override';
+      addBtn.addEventListener('click', () => {
+        openOverrideModal(accountId, provider, overrides, panel);
+      });
+      panel.appendChild(addBtn);
+    }
+
     const table = document.createElement('table');
     table.className = 'overrides-table';
     const thead = table.createTHead();
@@ -593,7 +653,7 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promis
         if (!ok) return;
         try {
           await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
-          await loadOverridesPanel(accountId, panel);
+          await loadOverridesPanel(accountId, panel, provider);
         } catch (err) {
           showToast({ message: `Failed to reset override: ${(err as Error).message}`, kind: 'error' });
         }
@@ -664,6 +724,142 @@ async function testAccount(accountId: string, accountLabel: string, btn: HTMLBut
       btn.textContent = original;
       btn.disabled = false;
     }, 3000);
+  }
+}
+
+// State carried from openOverrideModal → submitOverrideForm so the form
+// handler knows which account/provider/panel it belongs to without
+// inspecting the DOM. Cleared on close so it can't leak across opens.
+let overrideModalContext: { accountId: string; provider: string; panel: HTMLElement } | null = null;
+
+/**
+ * Open the create-override modal for a specific account.
+ *
+ * `existingOverrides` is used to filter the service dropdown so users
+ * can't pick a service that already has an override for this account
+ * (the backend would UPSERT, silently overwriting the existing values —
+ * users should use the panel's Reset + re-create flow for that, not the
+ * Add flow).
+ *
+ * Issue #104.
+ */
+function openOverrideModal(
+  accountId: string,
+  provider: string,
+  existingOverrides: api.AccountServiceOverride[],
+  panel: HTMLElement,
+): void {
+  const modal = document.getElementById('override-modal');
+  if (!modal) return;
+
+  overrideModalContext = { accountId, provider, panel };
+
+  setInputValue('override-account-id', accountId);
+  setInputValue('override-provider', provider);
+
+  // Reset form fields to defaults each open so a previous cancelled
+  // session doesn't bleed values forward.
+  setInputValue('override-term', '');
+  setInputValue('override-payment', '');
+  setInputValue('override-coverage', '');
+  const errEl = document.getElementById('override-form-error');
+  if (errEl) errEl.textContent = '';
+
+  // Populate the service dropdown, excluding services this account already
+  // has an override for. AWS-only for now (issue #104 follow-up tracks
+  // Azure/GCP).
+  const used = new Set(
+    existingOverrides
+      .filter(o => o.provider === provider)
+      .map(o => o.service),
+  );
+  const select = document.getElementById('override-service') as HTMLSelectElement | null;
+  if (select) {
+    select.replaceChildren();
+    const available = AWS_OVERRIDE_SERVICES.filter(s => !used.has(s.value));
+    if (available.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'All services already have overrides';
+      opt.disabled = true;
+      select.appendChild(opt);
+      const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
+    } else {
+      for (const { value, label } of available) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        select.appendChild(opt);
+      }
+      const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeOverrideModal(): void {
+  const modal = document.getElementById('override-modal');
+  modal?.classList.add('hidden');
+  overrideModalContext = null;
+}
+
+/**
+ * Submit the create-override form. Sends a sparse PUT — fields left blank
+ * (term/payment/coverage = "Inherit") are omitted so the backend's
+ * applyOverrideScalars treats them as "unset → inherit global default".
+ */
+async function submitOverrideForm(e: Event): Promise<void> {
+  e.preventDefault();
+  const ctx = overrideModalContext;
+  if (!ctx) return;
+
+  const service = (byId<HTMLSelectElement>('override-service')?.value ?? '').trim();
+  if (!service) return;
+
+  const termRaw = (byId<HTMLSelectElement>('override-term')?.value ?? '').trim();
+  const paymentRaw = (byId<HTMLSelectElement>('override-payment')?.value ?? '').trim();
+  const coverageRaw = (byId<HTMLInputElement>('override-coverage')?.value ?? '').trim();
+
+  const req: api.AccountServiceOverrideRequest = {};
+  if (termRaw !== '') req.term = parseInt(termRaw, 10);
+  if (paymentRaw !== '') req.payment = paymentRaw;
+  if (coverageRaw !== '') {
+    const n = Number(coverageRaw);
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      const errEl = document.getElementById('override-form-error');
+      if (errEl) errEl.textContent = 'Coverage must be between 0 and 100.';
+      return;
+    }
+    req.coverage = n;
+  }
+
+  if (Object.keys(req).length === 0) {
+    // The backend would happily store an all-null override row, but it'd
+    // be a no-op semantically — no field overrides anything. Block at the
+    // UI to avoid silent confusion.
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Coverage.';
+    return;
+  }
+
+  const submitBtn = document.querySelector<HTMLButtonElement>('#override-form button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(ctx.accountId, ctx.provider, service, req);
+    showToast({
+      message: `Override created for ${ctx.provider}/${service}.`,
+      kind: 'success',
+    });
+    closeOverrideModal();
+    await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+  } catch (err) {
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = `Failed to create override: ${(err as Error).message}`;
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
   }
 }
 
@@ -1167,6 +1363,22 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   const accountModal = document.getElementById('account-modal');
   accountModal?.addEventListener('click', (e) => {
     if (e.target === accountModal) closeAccountModal();
+  }, { signal });
+
+  // Override modal — submit, cancel, click-outside-to-dismiss (issue #104).
+  document.getElementById('override-form')?.addEventListener(
+    'submit',
+    (e) => void submitOverrideForm(e),
+    { signal },
+  );
+  document.getElementById('close-override-modal-btn')?.addEventListener(
+    'click',
+    closeOverrideModal,
+    { signal },
+  );
+  const overrideModal = document.getElementById('override-modal');
+  overrideModal?.addEventListener('click', (e) => {
+    if (e.target === overrideModal) closeOverrideModal();
   }, { signal });
 }
 
