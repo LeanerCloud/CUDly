@@ -69,7 +69,11 @@ resource "aws_iam_policy" "compute" {
         Resource = "arn:aws:events:*:*:rule/cudly-*"
       },
       {
-        Sid    = "ECR"
+        # ECR repository-scoped actions: every action that takes a
+        # repository ARN is restricted to cudly-* repositories. This
+        # prevents the deploy SA from poisoning, deleting, or exfiltrating
+        # images in unrelated ECR repositories sharing the same account.
+        Sid    = "ECRRepositoryScoped"
         Effect = "Allow"
         Action = [
           "ecr:BatchCheckLayerAvailability",
@@ -81,7 +85,6 @@ resource "aws_iam_policy" "compute" {
           "ecr:DeleteRepository",
           "ecr:DeleteRepositoryPolicy",
           "ecr:DescribeRepositories",
-          "ecr:GetAuthorizationToken",
           "ecr:GetDownloadUrlForLayer",
           "ecr:GetLifecyclePolicy",
           "ecr:GetRepositoryPolicy",
@@ -96,21 +99,46 @@ resource "aws_iam_policy" "compute" {
           "ecr:UntagResource",
           "ecr:UploadLayerPart",
         ]
+        Resource = "arn:aws:ecr:*:*:repository/cudly-*"
+      },
+      {
+        # ECR token endpoint — does not take a resource ARN and is
+        # account-wide by design. Required for `docker login` against ECR.
+        Sid      = "ECRGetAuthorizationToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
         Resource = "*"
       },
       {
-        Sid    = "CloudFrontFrontend"
+        # CloudFront create + read actions don't take a resource ARN at
+        # the API level (a distribution's ARN is only known after create).
+        # Read actions are also broad because terraform plan needs to
+        # enumerate resources. Mutating actions are gated below.
+        Sid    = "CloudFrontCreateAndRead"
         Effect = "Allow"
         Action = [
           "cloudfront:CreateDistribution",
           "cloudfront:CreateFunction",
-          "cloudfront:DeleteDistribution",
-          "cloudfront:DeleteFunction",
           "cloudfront:DescribeFunction",
           "cloudfront:GetDistribution",
           "cloudfront:GetDistributionConfig",
           "cloudfront:GetFunction",
           "cloudfront:ListTagsForResource",
+        ]
+        Resource = "*"
+      },
+      {
+        # CloudFront mutations are restricted to distributions/functions
+        # tagged Project=CUDly. The Terraform aws_cloudfront_distribution
+        # resource sets this tag at creation time (see modules/frontend/aws),
+        # so subsequent Update/Delete/Tag/Untag operations against
+        # CUDly-owned distributions succeed while attempts to mutate any
+        # third-party distribution sharing the account are denied.
+        Sid    = "CloudFrontMutateTaggedOnly"
+        Effect = "Allow"
+        Action = [
+          "cloudfront:DeleteDistribution",
+          "cloudfront:DeleteFunction",
           "cloudfront:PublishFunction",
           "cloudfront:TagResource",
           "cloudfront:UntagResource",
@@ -118,6 +146,11 @@ resource "aws_iam_policy" "compute" {
           "cloudfront:UpdateFunction",
         ]
         Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/Project" = "CUDly"
+          }
+        }
       },
       {
         Sid    = "CloudWatchAlarms"
@@ -133,28 +166,55 @@ resource "aws_iam_policy" "compute" {
         Resource = "arn:aws:cloudwatch:*:*:alarm:cudly-*"
       },
       {
-        Sid    = "ECSFargate"
+        # ECS resource-scoped actions: cluster, service, and task ARNs
+        # all match cudly-* prefix. RegisterTaskDefinition cannot take a
+        # specific ARN at registration time and is split below.
+        Sid    = "ECSFargateResourceScoped"
         Effect = "Allow"
         Action = [
           "ecs:CreateCluster",
           "ecs:CreateService",
           "ecs:DeleteCluster",
           "ecs:DeleteService",
-          "ecs:DeregisterTaskDefinition",
           "ecs:DescribeClusters",
           "ecs:DescribeServices",
-          "ecs:DescribeTaskDefinition",
-          "ecs:ListTagsForResource",
           "ecs:ListTasks",
           "ecs:PutClusterCapacityProviders",
           "ecs:StopTask",
-          "ecs:RegisterTaskDefinition",
           "ecs:TagResource",
           "ecs:UntagResource",
           "ecs:UpdateCluster",
           "ecs:UpdateService",
         ]
+        Resource = [
+          "arn:aws:ecs:*:*:cluster/cudly-*",
+          "arn:aws:ecs:*:*:service/cudly-*/*",
+          "arn:aws:ecs:*:*:task/cudly-*/*",
+          "arn:aws:ecs:*:*:task-definition/cudly-*:*",
+        ]
+      },
+      {
+        # ECS task-definition + tag-listing actions don't take a specific
+        # ARN at API level. RegisterTaskDefinition has no resource;
+        # DeregisterTaskDefinition + DescribeTaskDefinition take a
+        # task-definition ARN that we constrain to cudly-*.
+        # ListTagsForResource takes any ARN type but is read-only.
+        Sid    = "ECSFargateAccountWide"
+        Effect = "Allow"
+        Action = [
+          "ecs:RegisterTaskDefinition",
+          "ecs:ListTagsForResource",
+        ]
         Resource = "*"
+      },
+      {
+        Sid    = "ECSFargateTaskDefinition"
+        Effect = "Allow"
+        Action = [
+          "ecs:DeregisterTaskDefinition",
+          "ecs:DescribeTaskDefinition",
+        ]
+        Resource = "arn:aws:ecs:*:*:task-definition/cudly-*:*"
       },
       {
         Sid    = "ELBFargate"
@@ -213,24 +273,36 @@ resource "aws_iam_policy" "compute" {
         Resource = "*"
       },
       {
-        # KMS asymmetric signing key for the CUDly OIDC issuer.
-        # Broad KMS management perms scoped to Describe/Tag/Alias
-        # actions required by terraform-aws-provider on key create
-        # and update. Resource is "*" because KMS key ARNs are only
-        # known after creation.
-        Sid    = "KMSSigningKey"
+        # KMS create + read-only actions don't accept a key ARN at API
+        # level (key ARNs are only known after CreateKey). Read-only
+        # actions are also broad because terraform plan needs to
+        # enumerate key state.
+        Sid    = "KMSCreateAndRead"
         Effect = "Allow"
         Action = [
           "kms:CreateAlias",
           "kms:CreateKey",
-          "kms:DeleteAlias",
           "kms:DescribeKey",
-          "kms:DisableKey",
-          "kms:EnableKey",
           "kms:GetKeyPolicy",
           "kms:GetKeyRotationStatus",
           "kms:ListAliases",
           "kms:ListResourceTags",
+        ]
+        Resource = "*"
+      },
+      {
+        # KMS mutating + destructive actions are gated on the key being
+        # tagged Project=CUDly. The CUDly OIDC signing key is tagged at
+        # creation by Terraform (see modules/security/aws/kms_signing.tf).
+        # Without this gate the deploy SA could schedule deletion or
+        # disable any KMS key in the account, causing denial of service
+        # for unrelated workloads.
+        Sid    = "KMSMutateTaggedOnly"
+        Effect = "Allow"
+        Action = [
+          "kms:DeleteAlias",
+          "kms:DisableKey",
+          "kms:EnableKey",
           "kms:PutKeyPolicy",
           "kms:ScheduleKeyDeletion",
           "kms:TagResource",
@@ -239,6 +311,11 @@ resource "aws_iam_policy" "compute" {
           "kms:UpdateKeyDescription",
         ]
         Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/Project" = "CUDly"
+          }
+        }
       },
     ]
   })
