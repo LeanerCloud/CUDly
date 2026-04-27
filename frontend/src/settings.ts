@@ -338,7 +338,6 @@ function renderAccountsList(
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  const panels: HTMLDivElement[] = [];
 
   visible.forEach((account) => {
     const accountLabel = `${account.name} (${account.external_id})`;
@@ -393,12 +392,7 @@ function renderAccountsList(
     overridesBtn.className = 'btn btn-small';
     overridesBtn.textContent = 'Overrides';
     overridesBtn.setAttribute('aria-label', `Service overrides for ${accountLabel}`);
-    const overridesPanel = document.createElement('div');
-    overridesPanel.className = 'account-overrides-panel hidden';
-    overridesBtn.addEventListener('click', () => {
-      const hidden = overridesPanel.classList.toggle('hidden');
-      if (!hidden) void loadOverridesPanel(account.id, overridesPanel, account.provider);
-    });
+    overridesBtn.addEventListener('click', () => openAccountOverridesModal(account));
     actionsTd.appendChild(overridesBtn);
 
     // Destructive Delete lives in its own subgroup to isolate it from the
@@ -419,13 +413,13 @@ function renderAccountsList(
 
     tr.appendChild(actionsTd);
     tbody.appendChild(tr);
-    panels.push(overridesPanel);
   });
   table.appendChild(tbody);
   container.appendChild(table);
-  // Append overrides panels after the table so "show overrides" expands
-  // below the row rather than inside it.
-  panels.forEach((p) => container.appendChild(p));
+  // Per-account overrides used to render in inline panels appended below
+  // the table; they now live in the account-overrides-modal (issue #122)
+  // so the accounts table stays compact and per-account scoping is
+  // unambiguous.
 }
 
 // AWS payment-option choices, kept in sync with the per-service Purchasing
@@ -561,6 +555,45 @@ async function handlePaymentOverrideChange(
  * empty-state text since their per-product term/payment semantics differ
  * (issue #104 follow-up tracks Azure/GCP modal support).
  */
+/**
+ * Open the per-account overrides modal (issue #122). Replaces the inline
+ * expandable panel that used to render below the accounts table — the
+ * panels stacked without per-row attachment, so two open panels gave the
+ * user no way to tell which override row belonged to which account.
+ *
+ * The modal title binds explicitly to the account; the body uses the same
+ * `loadOverridesPanel` rendering function as before, so all CRUD wiring
+ * (Reset button, inline payment select, Add override button, empty-state
+ * auto-open of the create modal) carries forward unchanged.
+ */
+function openAccountOverridesModal(account: api.CloudAccount): void {
+  const modal = document.getElementById('account-overrides-modal');
+  if (!modal) return;
+  const titleEl = document.getElementById('account-overrides-modal-title');
+  if (titleEl) {
+    titleEl.textContent = `Service overrides for ${account.name} (${account.external_id})`;
+  }
+  const body = document.getElementById('account-overrides-modal-body');
+  if (!body) return;
+  modal.classList.remove('hidden');
+  void loadOverridesPanel(account.id, body, account.provider);
+}
+
+function closeAccountOverridesModal(): void {
+  const modal = document.getElementById('account-overrides-modal');
+  modal?.classList.add('hidden');
+  // Drop the body content so the next open doesn't briefly flash stale
+  // data from a previous account before loadOverridesPanel populates it.
+  const body = document.getElementById('account-overrides-modal-body');
+  if (body) body.replaceChildren();
+  // Close the inner create modal too if it's still open. The user can't
+  // visually reach the outer's close affordances while the inner is up
+  // (inner backdrop covers them), but a programmatic close — or a future
+  // ESC-to-close from issue #115 — should leave a clean slate, not an
+  // orphaned inner modal whose Save would target a hidden parent.
+  closeOverrideModal();
+}
+
 async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
   panel.textContent = 'Loading\u2026';
   try {
@@ -1379,6 +1412,17 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   const overrideModal = document.getElementById('override-modal');
   overrideModal?.addEventListener('click', (e) => {
     if (e.target === overrideModal) closeOverrideModal();
+  }, { signal });
+
+  // Per-account overrides modal — close + click-outside-to-dismiss (issue #122).
+  document.getElementById('close-account-overrides-modal-btn')?.addEventListener(
+    'click',
+    closeAccountOverridesModal,
+    { signal },
+  );
+  const accountOverridesModal = document.getElementById('account-overrides-modal');
+  accountOverridesModal?.addEventListener('click', (e) => {
+    if (e.target === accountOverridesModal) closeAccountOverridesModal();
   }, { signal });
 }
 

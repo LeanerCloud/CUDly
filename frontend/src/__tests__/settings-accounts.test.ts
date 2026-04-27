@@ -164,6 +164,15 @@ function buildAccountsDOM(): void {
   overrideModal.appendChild(overrideForm);
   overrideModal.appendChild(btn('close-override-modal-btn'));
   document.body.appendChild(overrideModal);
+
+  // ── Per-account overrides modal (issue #122) ───────────────
+  const accountOverridesModal = div('account-overrides-modal', 'modal hidden');
+  const accountOverridesTitle = el('h2', {}, 'account-overrides-modal-title');
+  accountOverridesTitle.textContent = 'Service overrides';
+  accountOverridesModal.appendChild(accountOverridesTitle);
+  accountOverridesModal.appendChild(div('account-overrides-modal-body'));
+  accountOverridesModal.appendChild(btn('close-account-overrides-modal-btn'));
+  document.body.appendChild(accountOverridesModal);
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +525,9 @@ describe('Overrides panel — AWS payment selector', () => {
     overridesBtn!.click();
     // loadOverridesPanel is async; let microtasks flush.
     await new Promise(r => setTimeout(r, 0));
-    const panel = document.querySelector('.account-overrides-panel') as HTMLElement | null;
+    // Issue #122: the inline expandable panel was replaced by a per-account
+    // modal. The body element is what loadOverridesPanel renders into.
+    const panel = document.getElementById('account-overrides-modal-body') as HTMLElement | null;
     expect(panel).not.toBeNull();
     return panel!;
   }
@@ -605,7 +616,8 @@ describe('Create-override modal', () => {
     expect(overridesBtn).not.toBeNull();
     overridesBtn!.click();
     await new Promise(r => setTimeout(r, 0));
-    const panel = document.querySelector('.account-overrides-panel') as HTMLElement | null;
+    // Issue #122: panel is now inside the per-account overrides modal.
+    const panel = document.getElementById('account-overrides-modal-body') as HTMLElement | null;
     expect(panel).not.toBeNull();
     const modal = document.getElementById('override-modal') as HTMLElement | null;
     expect(modal).not.toBeNull();
@@ -773,10 +785,10 @@ describe('Create-override modal', () => {
     overridesBtn.click();
     await new Promise(r => setTimeout(r, 0));
 
-    const panel = document.querySelector('.account-overrides-panel') as HTMLElement;
+    const panel = document.getElementById('account-overrides-modal-body') as HTMLElement;
     const modal = document.getElementById('override-modal') as HTMLElement;
 
-    // Modal must NOT have auto-opened for a non-AWS account.
+    // The inner create modal must NOT have auto-opened for a non-AWS account.
     expect(modal.classList.contains('hidden')).toBe(true);
 
     // No Add override button on non-AWS for now (issue #104 follow-up).
@@ -802,5 +814,104 @@ describe('Create-override modal', () => {
 
     const submitBtn = modal.querySelector('button[type="submit"]') as HTMLButtonElement;
     expect(submitBtn.disabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-account overrides modal — issue #122
+// ---------------------------------------------------------------------------
+
+describe('Account overrides modal', () => {
+  beforeEach(() => {
+    buildAccountsDOM();
+    setupSettingsHandlers();
+    jest.clearAllMocks();
+  });
+
+  test('Overrides button opens an account-scoped modal whose title binds to the account', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-1', name: 'AWS Prod', provider: 'aws', external_id: '540659244915', enabled: true },
+    ]);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', payment: 'all-upfront' },
+    ]);
+
+    await loadAccountsForProvider('aws');
+    const btn = document.querySelector(
+      `button[aria-label="Service overrides for AWS Prod (540659244915)"]`,
+    ) as HTMLButtonElement;
+    btn.click();
+    await new Promise(r => setTimeout(r, 0));
+
+    const modal = document.getElementById('account-overrides-modal') as HTMLElement;
+    expect(modal.classList.contains('hidden')).toBe(false);
+    const title = document.getElementById('account-overrides-modal-title') as HTMLElement;
+    expect(title.textContent).toBe('Service overrides for AWS Prod (540659244915)');
+  });
+
+  test('switching accounts swaps the modal title; only one account context is active at a time', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-a', name: 'AWS Prod',  provider: 'aws', external_id: '540659244915', enabled: true },
+      { id: 'acc-b', name: 'CUDly host', provider: 'aws', external_id: '909626172446', enabled: true },
+    ]);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadAccountsForProvider('aws');
+    const titleEl = document.getElementById('account-overrides-modal-title') as HTMLElement;
+
+    // Click Overrides on Account A.
+    (document.querySelector(
+      `button[aria-label="Service overrides for AWS Prod (540659244915)"]`,
+    ) as HTMLButtonElement).click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(titleEl.textContent).toContain('AWS Prod');
+
+    // Click Overrides on Account B without closing the modal first.
+    (document.querySelector(
+      `button[aria-label="Service overrides for CUDly host (909626172446)"]`,
+    ) as HTMLButtonElement).click();
+    await new Promise(r => setTimeout(r, 0));
+
+    // Title now reflects Account B; only ONE modal exists in the DOM.
+    expect(titleEl.textContent).toContain('CUDly host');
+    expect(titleEl.textContent).not.toContain('AWS Prod');
+    expect(document.querySelectorAll('#account-overrides-modal').length).toBe(1);
+  });
+
+  test('Close button hides the modal and clears the body to avoid stale flash on next open', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-1', name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+    ]);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', payment: 'all-upfront' },
+    ]);
+
+    await loadAccountsForProvider('aws');
+    (document.querySelector(
+      `button[aria-label="Service overrides for Prod (111)"]`,
+    ) as HTMLButtonElement).click();
+    await new Promise(r => setTimeout(r, 0));
+
+    const modal = document.getElementById('account-overrides-modal') as HTMLElement;
+    const body = document.getElementById('account-overrides-modal-body') as HTMLElement;
+    expect(modal.classList.contains('hidden')).toBe(false);
+    expect(body.querySelector('table.overrides-table')).not.toBeNull();
+
+    (document.getElementById('close-account-overrides-modal-btn') as HTMLButtonElement).click();
+    expect(modal.classList.contains('hidden')).toBe(true);
+    // Body cleared so the next open doesn't flash stale rows for ~1ms.
+    expect(body.children.length).toBe(0);
+  });
+
+  test('no inline panel renders below the accounts table (issue #122 regression guard)', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-1', name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+    ]);
+
+    await loadAccountsForProvider('aws');
+
+    // The inline expandable panel was the cause of the panel-stacking bug.
+    // Verify it is gone — the only override container is the modal body.
+    expect(document.querySelector('.account-overrides-panel')).toBeNull();
   });
 });

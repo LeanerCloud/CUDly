@@ -990,6 +990,22 @@
             </div>
         </div>
 
+        <!-- Per-account overrides modal (issue #122) — replaces the inline
+             expandable panel that stacked all accounts' panels below the
+             accounts table without per-row attachment. Title binds the
+             modal to one specific account; body holds the overrides table
+             rendered dynamically. -->
+        <div id="account-overrides-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-overrides-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="account-overrides-modal-title">Service overrides</h2>
+                <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Settings → Purchasing.</p>
+                <div id="account-overrides-modal-body"></div>
+                <div class="modal-buttons">
+                    <button type="button" id="close-account-overrides-modal-btn">Close</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Cloud Account Modal -->
         <div id="override-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="override-modal-title">
             <div class="modal-content">
