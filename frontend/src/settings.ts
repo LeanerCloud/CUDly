@@ -428,6 +428,108 @@ function renderAccountsList(
   panels.forEach((p) => container.appendChild(p));
 }
 
+// AWS payment-option choices, kept in sync with the per-service Purchasing
+// selectors in frontend/src/index.html (e.g. #aws-ec2-payment). Centralised
+// here so the override editor and the global selectors can't drift.
+const AWS_PAYMENT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'no-upfront',      label: 'No Upfront' },
+  { value: 'partial-upfront', label: 'Partial Upfront' },
+  { value: 'all-upfront',     label: 'All Upfront' },
+];
+
+/**
+ * Build the per-row Payment <select> for the overrides panel. Issue #23.
+ *
+ * - "Inherit (default)" keeps the override silent on payment so the global
+ *   default applies. We only emit it as the chosen value when the override
+ *   currently has no payment set; once a payment is set, switching back
+ *   would require deleting/recreating the override (out of scope for #23).
+ * - The change handler PUTs only `{ payment }` — the backend's
+ *   applyOverrideScalars (handler_accounts.go) treats unset request fields
+ *   as "leave alone", so other override fields (term, coverage, etc.) are
+ *   preserved.
+ */
+function buildPaymentOverrideSelect(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+): HTMLSelectElement {
+  const select = document.createElement('select');
+  select.className = 'override-payment-select';
+  select.setAttribute(
+    'aria-label',
+    `Payment option for ${override.provider}/${override.service} override`,
+  );
+
+  const inheritOpt = document.createElement('option');
+  inheritOpt.value = '';
+  inheritOpt.textContent = 'Inherit (default)';
+  select.appendChild(inheritOpt);
+
+  for (const { value, label } of AWS_PAYMENT_OPTIONS) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
+
+  const initial = override.payment ?? '';
+  select.value = initial;
+  select.dataset['previous'] = initial;
+
+  // If a payment is already set, "Inherit" is not a clean transition (the
+  // backend has no clear-field channel — it would require resetting the
+  // whole override). Disable the option so the user can still pick another
+  // payment value but can't accidentally pick a no-op state.
+  if (initial !== '') {
+    inheritOpt.disabled = true;
+    inheritOpt.title = 'Use Reset to clear all override fields including payment';
+  }
+
+  select.addEventListener('change', () => {
+    void handlePaymentOverrideChange(accountId, override, select, panel);
+  });
+
+  return select;
+}
+
+async function handlePaymentOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  select: HTMLSelectElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const previous = select.dataset['previous'] ?? '';
+  const next = select.value;
+  if (next === previous) return;
+  if (next === '') {
+    // Reverting to Inherit while a payment is set is blocked above; defensive
+    // no-op here keeps types narrow if the option becomes selectable later.
+    select.value = previous;
+    return;
+  }
+  select.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      payment: next,
+    });
+    select.dataset['previous'] = next;
+    showToast({
+      message: `Payment override updated for ${override.provider}/${override.service}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel);
+  } catch (err) {
+    select.value = previous;
+    showToast({
+      message: `Failed to update payment override: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    select.disabled = false;
+  }
+}
+
 /**
  * Load and render the service overrides panel for an account
  */
@@ -458,12 +560,24 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement): Promis
       [
         `${o.provider}/${o.service}`,
         o.term !== undefined ? `${o.term}yr` : '\u2014',
-        o.payment ?? '\u2014',
-        o.coverage !== undefined ? `${o.coverage}%` : '\u2014',
       ].forEach(text => {
         const td = tr.insertCell();
         td.textContent = text;
       });
+
+      // Payment cell: editable <select> for AWS (the only provider whose
+      // reservations support distinct payment options); read-only text for
+      // Azure/GCP. Issue #23.
+      const paymentTd = tr.insertCell();
+      if (o.provider === 'aws') {
+        paymentTd.appendChild(buildPaymentOverrideSelect(accountId, o, panel));
+      } else {
+        paymentTd.textContent = o.payment ?? '\u2014';
+      }
+
+      const coverageTd = tr.insertCell();
+      coverageTd.textContent = o.coverage !== undefined ? `${o.coverage}%` : '\u2014';
+
       const actionTd = tr.insertCell();
       const resetBtn = document.createElement('button');
       resetBtn.type = 'button';

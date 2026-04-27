@@ -15,7 +15,10 @@ jest.mock('../api', () => ({
   updateAccount: jest.fn(),
   deleteAccount: jest.fn(),
   testAccountCredentials: jest.fn(),
-  saveAccountCredentials: jest.fn()
+  saveAccountCredentials: jest.fn(),
+  listAccountServiceOverrides: jest.fn(),
+  saveAccountServiceOverride: jest.fn(),
+  deleteAccountServiceOverride: jest.fn()
 }));
 
 const mockShowToast = jest.fn<{ dismiss: () => void }, [unknown]>(() => ({ dismiss: jest.fn() }));
@@ -470,5 +473,95 @@ describe('Account form submit', () => {
       credential_type: 'azure_client_secret',
       payload: { client_secret: 'mysecret' }
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Account overrides panel — payment option selector (issue #23)
+// ---------------------------------------------------------------------------
+
+describe('Overrides panel — AWS payment selector', () => {
+  /**
+   * Render the AWS accounts list and expand the first account's overrides
+   * panel so the panel DOM is populated with whatever
+   * listAccountServiceOverrides has been mocked to return.
+   */
+  async function openOverridesPanel(accountId = 'acc-1'): Promise<HTMLElement> {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: accountId, name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+    ]);
+    await loadAccountsForProvider('aws');
+    const overridesBtn = document.querySelector(
+      `button[aria-label="Service overrides for Prod (111)"]`,
+    ) as HTMLButtonElement | null;
+    expect(overridesBtn).not.toBeNull();
+    overridesBtn!.click();
+    // loadOverridesPanel is async; let microtasks flush.
+    await new Promise(r => setTimeout(r, 0));
+    const panel = document.querySelector('.account-overrides-panel') as HTMLElement | null;
+    expect(panel).not.toBeNull();
+    return panel!;
+  }
+
+  beforeEach(() => {
+    buildAccountsDOM();
+    jest.clearAllMocks();
+  });
+
+  test('renders payment <select> with Inherit + 3 AWS options for AWS overrides', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2' },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const select = panel.querySelector('select.override-payment-select') as HTMLSelectElement | null;
+    expect(select).not.toBeNull();
+    const values = Array.from(select!.options).map(o => o.value);
+    expect(values).toEqual(['', 'no-upfront', 'partial-upfront', 'all-upfront']);
+    expect(select!.value).toBe(''); // Inherit by default when no payment set
+    expect(select!.options[0]!.disabled).toBe(false);
+  });
+
+  test('changing payment from Inherit calls saveAccountServiceOverride with only {payment}', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'rds', term: 1 },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'rds', term: 1, payment: 'all-upfront',
+    });
+
+    const panel = await openOverridesPanel('acc-1');
+    const select = panel.querySelector('select.override-payment-select') as HTMLSelectElement;
+    select.value = 'all-upfront';
+    select.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+      'acc-1', 'aws', 'rds', { payment: 'all-upfront' },
+    );
+  });
+
+  test('Inherit is disabled when override already has a payment set (no clear-field channel)', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', payment: 'partial-upfront' },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const select = panel.querySelector('select.override-payment-select') as HTMLSelectElement;
+    expect(select.value).toBe('partial-upfront');
+    expect(select.options[0]!.disabled).toBe(true);
+    // The selector still does NOT call save on initial render (no change yet).
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+  });
+
+  test('non-AWS rows render the existing read-only payment cell, no <select>', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', payment: 'all-upfront' },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    expect(panel.querySelector('select.override-payment-select')).toBeNull();
+    expect(panel.textContent).toContain('all-upfront');
   });
 });
