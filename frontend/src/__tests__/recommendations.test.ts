@@ -39,6 +39,12 @@ jest.mock('../state', () => ({
   removeSelectedRecommendation: jest.fn(),
   getRecommendationsSort: jest.fn().mockReturnValue({ column: 'savings', direction: 'desc' }),
   setRecommendationsSort: jest.fn(),
+  // Bundle A column-filter accessors (default empty filters → applyColumnFilters is a no-op).
+  getRecommendationsColumnFilters: jest.fn().mockReturnValue({}),
+  setRecommendationsColumnFilter: jest.fn(),
+  clearAllRecommendationsColumnFilters: jest.fn(),
+  getVisibleRecommendations: jest.fn().mockReturnValue([]),
+  setVisibleRecommendations: jest.fn(),
 }));
 
 // Mock utils
@@ -794,5 +800,260 @@ describe('Recommendations Module', () => {
       const minSavingsFilter = document.getElementById('min-savings-filter') as HTMLInputElement;
       expect(minSavingsFilter).toBeTruthy();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bundle A: numeric expression parser + applyColumnFilters
+// ---------------------------------------------------------------------------
+
+import { parseNumericFilter, applyColumnFilters } from '../recommendations';
+import type { LocalRecommendation } from '../types';
+
+describe('parseNumericFilter', () => {
+  const accept = (expr: string, n: number): boolean => {
+    const r = parseNumericFilter(expr);
+    if (!r.ok) throw new Error(`unexpected parse failure for "${expr}": ${r.error}`);
+    return r.predicate(n);
+  };
+
+  test('empty / whitespace expression matches everything', () => {
+    expect(accept('', 0)).toBe(true);
+    expect(accept('   ', 42)).toBe(true);
+    expect(accept('\t\n', -7)).toBe(true);
+  });
+
+  test('plain integer matches by equality', () => {
+    expect(accept('42', 42)).toBe(true);
+    expect(accept('42', 41)).toBe(false);
+    expect(accept('-3', -3)).toBe(true);
+  });
+
+  test('plain decimal matches by equality', () => {
+    expect(accept('3.14', 3.14)).toBe(true);
+    expect(accept('3.14', 3.15)).toBe(false);
+  });
+
+  test('comparator > / >= / < / <=', () => {
+    expect(accept('>10', 11)).toBe(true);
+    expect(accept('>10', 10)).toBe(false);
+    expect(accept('>=10', 10)).toBe(true);
+    expect(accept('<5', 4)).toBe(true);
+    expect(accept('<5', 5)).toBe(false);
+    expect(accept('<=5', 5)).toBe(true);
+  });
+
+  test('inclusive range X..Y', () => {
+    expect(accept('10..20', 10)).toBe(true);
+    expect(accept('10..20', 20)).toBe(true);
+    expect(accept('10..20', 15)).toBe(true);
+    expect(accept('10..20', 9)).toBe(false);
+    expect(accept('10..20', 21)).toBe(false);
+  });
+
+  test('reversed range still works (max..min)', () => {
+    expect(accept('20..10', 15)).toBe(true);
+  });
+
+  test('comma-separated terms OR together', () => {
+    // `5, >100, 200..400`
+    expect(accept('5, >100, 200..400', 5)).toBe(true);
+    expect(accept('5, >100, 200..400', 150)).toBe(true);
+    expect(accept('5, >100, 200..400', 250)).toBe(true);
+    expect(accept('5, >100, 200..400', 50)).toBe(false);
+    expect(accept('5, >100, 200..400', 500)).toBe(true); // matches >100
+  });
+
+  test('whitespace inside terms is tolerated', () => {
+    expect(accept('  >  10  ', 11)).toBe(true);
+    expect(accept('10 .. 20', 15)).toBe(true);
+  });
+
+  test('invalid expression returns ok:false with an error message', () => {
+    const r1 = parseNumericFilter('>>5');
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.error).toMatch(/Invalid filter term/);
+
+    const r2 = parseNumericFilter('not a number');
+    expect(r2.ok).toBe(false);
+
+    const r3 = parseNumericFilter('1..');
+    expect(r3.ok).toBe(false);
+  });
+});
+
+describe('applyColumnFilters', () => {
+  const rec = (
+    overrides: Partial<LocalRecommendation> = {},
+  ): LocalRecommendation => ({
+    id: overrides.id ?? 'r1',
+    provider: overrides.provider ?? 'aws',
+    cloud_account_id: overrides.cloud_account_id ?? 'acct-1',
+    service: overrides.service ?? 'ec2',
+    resource_type: overrides.resource_type ?? 't3.medium',
+    region: overrides.region ?? 'us-east-1',
+    count: overrides.count ?? 1,
+    term: overrides.term ?? 1,
+    upfront_cost: overrides.upfront_cost ?? 100,
+    monthly_cost: overrides.monthly_cost ?? 10,
+    savings: overrides.savings ?? 50,
+    engine: overrides.engine,
+  } as unknown as LocalRecommendation);
+
+  test('empty filters returns a clone of the input (no-op)', () => {
+    const recs = [rec({ id: 'a' }), rec({ id: 'b' })];
+    const out = applyColumnFilters(recs, {});
+    expect(out).toEqual(recs);
+    expect(out).not.toBe(recs); // defensive clone
+  });
+
+  test('categorical set filter narrows by membership', () => {
+    const recs = [
+      rec({ id: 'a', provider: 'aws' }),
+      rec({ id: 'b', provider: 'azure' }),
+      rec({ id: 'c', provider: 'gcp' }),
+    ];
+    const out = applyColumnFilters(recs, {
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    expect(out.map(r => r.id)).toEqual(['a']);
+  });
+
+  test('Account filter matches on cloud_account_id, not display name', () => {
+    const recs = [
+      rec({ id: 'a', cloud_account_id: 'acct-prod' }),
+      rec({ id: 'b', cloud_account_id: 'acct-dev' }),
+    ];
+    const out = applyColumnFilters(recs, {
+      account: { kind: 'set', values: ['acct-prod'] },
+    });
+    expect(out.map(r => r.id)).toEqual(['a']);
+  });
+
+  test('Term filter values are strings; row term integer stringifies', () => {
+    const recs = [
+      rec({ id: 'a', term: 1 }),
+      rec({ id: 'b', term: 3 }),
+    ];
+    const out = applyColumnFilters(recs, {
+      term: { kind: 'set', values: ['3'] },
+    });
+    expect(out.map(r => r.id)).toEqual(['b']);
+  });
+
+  test('(empty) sentinel matches null / undefined / "" cloud_account_id', () => {
+    // Build raw objects — bypass the rec() factory because its `??` defaults
+    // would replace null/undefined cloud_account_id with 'acct-1'.
+    const recs: LocalRecommendation[] = [
+      { ...rec({ id: 'a' }), cloud_account_id: '' } as LocalRecommendation,
+      { ...rec({ id: 'b' }), cloud_account_id: undefined } as unknown as LocalRecommendation,
+      rec({ id: 'c', cloud_account_id: 'acct-x' }),
+    ];
+    const out = applyColumnFilters(recs, {
+      account: { kind: 'set', values: [''] },
+    });
+    expect(out.map(r => r.id).sort()).toEqual(['a', 'b']);
+  });
+
+  test('numeric expr filter narrows by predicate', () => {
+    const recs = [
+      rec({ id: 'a', savings: 25 }),
+      rec({ id: 'b', savings: 150 }),
+      rec({ id: 'c', savings: 1500 }),
+    ];
+    const out = applyColumnFilters(recs, {
+      savings: { kind: 'expr', expr: '>100' },
+    });
+    expect(out.map(r => r.id)).toEqual(['b', 'c']);
+  });
+
+  test('invalid numeric expression is ignored (filter not applied)', () => {
+    const recs = [rec({ id: 'a', savings: 1 }), rec({ id: 'b', savings: 100 })];
+    const out = applyColumnFilters(recs, {
+      savings: { kind: 'expr', expr: '>>5' }, // syntax error
+    });
+    // All rows pass — broken filter is silently inert.
+    expect(out.map(r => r.id)).toEqual(['a', 'b']);
+  });
+
+  test('multiple column filters AND together', () => {
+    const recs = [
+      rec({ id: 'a', provider: 'aws', savings: 50 }),
+      rec({ id: 'b', provider: 'aws', savings: 500 }),
+      rec({ id: 'c', provider: 'azure', savings: 500 }),
+    ];
+    const out = applyColumnFilters(recs, {
+      provider: { kind: 'set', values: ['aws'] },
+      savings: { kind: 'expr', expr: '>100' },
+    });
+    expect(out.map(r => r.id)).toEqual(['b']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bundle A: state-accessor tests for the new column-filter / visible-recs API.
+// These import the REAL state module (the recommendations.test.ts above mocks
+// it; here we exercise the actual implementation in a separate require scope).
+// ---------------------------------------------------------------------------
+
+describe('state.ts column-filter accessors', () => {
+  // The top-level jest.mock('../state', …) replaces the module for every
+  // import. Use jest.requireActual to bypass it for these state-accessor
+  // tests so we exercise the real implementation. Each test starts from
+  // a clean filter state via clearAllRecommendationsColumnFilters().
+  const realState = jest.requireActual<typeof import('../state')>('../state');
+
+  beforeEach(() => {
+    realState.clearAllRecommendationsColumnFilters();
+    realState.setVisibleRecommendations([]);
+  });
+
+  test('default filters are empty', () => {
+    expect(realState.getRecommendationsColumnFilters()).toEqual({});
+  });
+
+  test('setRecommendationsColumnFilter adds an entry', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    expect(realState.getRecommendationsColumnFilters()).toEqual({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+  });
+
+  test('passing null clears that single column', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    realState.setRecommendationsColumnFilter('savings', { kind: 'expr', expr: '>100' });
+    realState.setRecommendationsColumnFilter('provider', null);
+    expect(realState.getRecommendationsColumnFilters()).toEqual({
+      savings: { kind: 'expr', expr: '>100' },
+    });
+  });
+
+  test('clearAllRecommendationsColumnFilters empties the record', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    realState.setRecommendationsColumnFilter('savings', { kind: 'expr', expr: '>100' });
+    realState.clearAllRecommendationsColumnFilters();
+    expect(realState.getRecommendationsColumnFilters()).toEqual({});
+  });
+
+  test('getRecommendationsColumnFilters returns a defensive shallow copy', () => {
+    realState.setRecommendationsColumnFilter('provider', { kind: 'set', values: ['aws'] });
+    const a = realState.getRecommendationsColumnFilters();
+    delete a.provider;
+    // mutation of the returned object must not affect module state
+    expect(realState.getRecommendationsColumnFilters()).toEqual({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+  });
+
+  test('setVisibleRecommendations / getVisibleRecommendations round-trip with defensive clone', () => {
+    const recs = [{ id: 'r1' }, { id: 'r2' }] as unknown as Parameters<
+      typeof realState.setVisibleRecommendations
+    >[0];
+    realState.setVisibleRecommendations(recs);
+    const out = realState.getVisibleRecommendations();
+    expect(out.map((r) => (r as unknown as { id: string }).id)).toEqual(['r1', 'r2']);
+    // mutating returned array must not affect module state
+    (out as unknown as Array<unknown>).pop();
+    expect(realState.getVisibleRecommendations()).toHaveLength(2);
   });
 });

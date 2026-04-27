@@ -199,6 +199,129 @@ function sortedRecommendations(recs: LocalRecommendation[]): LocalRecommendation
   return recs.slice().sort((a, b) => (key(a) - key(b)) * direction);
 }
 
+// Numeric filter expression parser. Grammar:
+//   - empty/whitespace      -> match-all
+//   - "42"                  -> equals
+//   - ">X" / "<X" / ">=X" / "<=X" -> comparator
+//   - "X..Y"                -> inclusive range (X and Y both numbers)
+//   - comma-separated       -> OR of any of the above
+// Returns a discriminated union so callers can render parse errors
+// inline without type-narrowing gymnastics. Whitespace inside terms is
+// trimmed; whitespace between terms is allowed.
+export type ParsedNumericFilter =
+  | { ok: true; predicate: (n: number) => boolean }
+  | { ok: false; error: string };
+
+const MATCH_ALL: ParsedNumericFilter = { ok: true, predicate: () => true };
+
+export function parseNumericFilter(expr: string): ParsedNumericFilter {
+  if (!expr || expr.trim() === '') return MATCH_ALL;
+  const terms = expr.split(',').map((t) => t.trim()).filter((t) => t !== '');
+  if (terms.length === 0) return MATCH_ALL;
+
+  const predicates: Array<(n: number) => boolean> = [];
+  for (const term of terms) {
+    // Order matters: ">=" / "<=" must be checked before ">" / "<".
+    let p: ((n: number) => boolean) | null = null;
+    let m: RegExpMatchArray | null;
+    if ((m = term.match(/^>=\s*(-?\d+(?:\.\d+)?)$/))) {
+      const v = Number(m[1]);
+      p = (n) => n >= v;
+    } else if ((m = term.match(/^<=\s*(-?\d+(?:\.\d+)?)$/))) {
+      const v = Number(m[1]);
+      p = (n) => n <= v;
+    } else if ((m = term.match(/^>\s*(-?\d+(?:\.\d+)?)$/))) {
+      const v = Number(m[1]);
+      p = (n) => n > v;
+    } else if ((m = term.match(/^<\s*(-?\d+(?:\.\d+)?)$/))) {
+      const v = Number(m[1]);
+      p = (n) => n < v;
+    } else if ((m = term.match(/^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)$/))) {
+      const lo = Number(m[1]);
+      const hi = Number(m[2]);
+      const min = Math.min(lo, hi);
+      const max = Math.max(lo, hi);
+      p = (n) => n >= min && n <= max;
+    } else if ((m = term.match(/^(-?\d+(?:\.\d+)?)$/))) {
+      const v = Number(m[1]);
+      p = (n) => n === v;
+    }
+    if (p === null) {
+      return { ok: false, error: `Invalid filter term: "${term}"` };
+    }
+    predicates.push(p);
+  }
+  // OR across terms
+  return {
+    ok: true,
+    predicate: (n) => predicates.some((p) => p(n)),
+  };
+}
+
+// Apply the per-column filters to a rec list. ANDs all column filters
+// together. Categorical: row passes iff its column value (string-form,
+// empty/null mapped to "") is in `values`. Numeric: row passes iff
+// parseNumericFilter(expr).predicate accepts the value (skipped if
+// parse failed — the popover's inline error tells the user).
+//
+// Account uses cloud_account_id for matching; Term uses String(r.term).
+// All other categorical columns compare on the underlying string field.
+export function applyColumnFilters(
+  recs: readonly LocalRecommendation[],
+  filters: state.RecommendationsColumnFilters,
+): LocalRecommendation[] {
+  const entries = Object.entries(filters) as Array<
+    [state.RecommendationsColumnId, state.RecommendationsColumnFilter]
+  >;
+  if (entries.length === 0) return [...recs];
+
+  return recs.filter((r) => {
+    for (const [col, f] of entries) {
+      if (f.kind === 'set') {
+        const cellRaw = categoricalCellValue(r, col);
+        if (!f.values.includes(cellRaw)) return false;
+      } else {
+        const parsed = parseNumericFilter(f.expr);
+        if (!parsed.ok) continue; // ignore broken expressions; UI shows the error
+        const cellNum = numericCellValue(r, col);
+        if (!parsed.predicate(cellNum)) return false;
+      }
+    }
+    return true;
+  });
+}
+
+function categoricalCellValue(r: LocalRecommendation, col: state.RecommendationsColumnId): string {
+  switch (col) {
+    case 'provider':       return r.provider ?? '';
+    case 'account':        return r.cloud_account_id ?? '';
+    case 'service':        return r.service ?? '';
+    case 'resource_type':  return r.resource_type ?? '';
+    case 'region':         return r.region ?? '';
+    case 'term':           return r.term == null ? '' : String(r.term);
+    // Numeric columns shouldn't reach this branch; return empty for type-safety.
+    case 'count':
+    case 'savings':
+    case 'upfront_cost':   return '';
+  }
+}
+
+function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColumnId): number {
+  switch (col) {
+    case 'count':         return r.count ?? 0;
+    case 'savings':       return r.savings ?? 0;
+    case 'upfront_cost':  return r.upfront_cost ?? 0;
+    // Categorical columns shouldn't reach this branch; return NaN so any
+    // numeric predicate returns false rather than coincidentally matching 0.
+    case 'provider':
+    case 'account':
+    case 'service':
+    case 'resource_type':
+    case 'region':
+    case 'term':          return Number.NaN;
+  }
+}
+
 function renderBulkToolbar(container: HTMLElement, recommendations: LocalRecommendation[], selectedCount: number): void {
   const existing = container.querySelector('.recommendations-bulk-toolbar');
   if (existing) existing.remove();
@@ -881,9 +1004,21 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   return section;
 }
 
-function renderRecommendationsList(recommendations: LocalRecommendation[]): void {
+function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   const container = document.getElementById('recommendations-list');
   if (!container) return;
+
+  // Pipeline (Bundle A — no-op when no column filters are set):
+  //   loaded -> applyColumnFilters -> visible
+  //   state.setVisibleRecommendations(visible)   (read by plans.ts:savePlan)
+  // When the column-filters record is empty, applyColumnFilters returns a
+  // clone of the input, so every existing test stays green. Bundle B will
+  // populate filters from the per-column popovers.
+  const recommendations = applyColumnFilters(
+    loadedRecs ?? [],
+    state.getRecommendationsColumnFilters(),
+  );
+  state.setVisibleRecommendations(recommendations as unknown as readonly api.Recommendation[]);
 
   if (!recommendations || recommendations.length === 0) {
     container.innerHTML = '<p class="empty">No recommendations found. Try adjusting filters or refreshing.</p>';
