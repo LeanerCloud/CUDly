@@ -117,29 +117,33 @@ func splitInstanceType(instanceType string) (family, size string) {
 // resolveAWSCloudAccountID maps the running AWS account ID (raw, from
 // STS) to the registered CloudAccount UUID so the reshape lookup can
 // scope its query against the correct row in the recommendations
-// table. Returns ("", nil) for the intentionally-unregistered cases:
+// table. Returns ("", nil) ONLY for the truly-no-scope cases:
 //
 //   - AWS SDK config could not load (deployment is running on an
 //     Azure / GCP host with no AWS context at all — resolveAWSAccountID
 //     returns ("", nil) for this case);
-//   - ListCloudAccounts returned no rows (no CloudAccounts registered
-//     at all);
-//   - no CloudAccount row matches the running ExternalID (the operator
-//     hasn't registered THIS account yet — common on first-run / dev).
+//   - ListCloudAccounts returned ZERO rows (no CloudAccounts registered
+//     at all — the bootstrap-before-first-account path; the recs table
+//     is also empty so an unscoped read is harmless).
 //
-// All three are clean "no scope filter" signals — purchaseRecLookupFromStore
-// treats ("", nil) as "skip the AccountIDs filter" so a deployment with
-// ambient credentials and no registered CloudAccounts still sees
-// alternatives, not a permanently empty list. Once the operator
-// registers the account the filter engages automatically.
+// purchaseRecLookupFromStore treats ("", nil) as "skip the AccountIDs
+// filter" so a deployment with ambient credentials and no registered
+// CloudAccounts still sees alternatives, not a permanently empty list.
+// Once the operator registers the account the filter engages.
 //
-// FAIL CLOSED on real failures:
+// FAIL CLOSED on every real failure:
 //   - resolveAWSAccountID returns a non-nil error (STS GetCallerIdentity
 //     denied, transient AWS API failure, token expiry) — propagated so
 //     the caller aborts the lookup rather than silently falling through
 //     to an unscoped query that could leak another tenant's recs.
 //   - ListCloudAccounts returns an error (DB outage, permissions) —
 //     same treatment.
+//   - The running AWS account is resolved but DOES NOT match any
+//     registered CloudAccount AND there ARE registered accounts:
+//     return an error. Returning ("", nil) here would have
+//     purchaseRecLookupFromStore omit the AccountIDs filter and serve
+//     up another tenant's recs — exactly the multi-tenant leak the rest
+//     of this code path is designed to prevent.
 func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) (string, error) {
 	awsAccountID, err := h.resolveAWSAccountID(ctx)
 	if err != nil {
@@ -149,7 +153,7 @@ func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) (string, error) 
 		return "", fmt.Errorf("resolve source aws account for reshape scope: %w", err)
 	}
 	if awsAccountID == "" {
-		// Genuine "no AWS context" (Azure/GCP host, or unregistered).
+		// Genuine "no AWS context" (Azure/GCP host).
 		return "", nil
 	}
 	provider := "aws"
@@ -157,10 +161,22 @@ func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("list cloud accounts for reshape scope: %w", err)
 	}
+	if len(accounts) == 0 {
+		// Bootstrap: no CloudAccounts registered at all. The recs
+		// table is necessarily empty too, so an unscoped read is a
+		// no-op rather than a leak.
+		return "", nil
+	}
 	for _, a := range accounts {
 		if a.ExternalID == awsAccountID {
 			return a.ID, nil
 		}
 	}
-	return "", nil
+	// Resolved-but-unregistered: AWS host has accounts, but the running
+	// account isn't one of them. Could be a misconfigured deployment, a
+	// fresh first-run before the operator added their own account, or
+	// (worst case) a host running in a different account than any
+	// registered tenant. Either way, returning "" here would skip the
+	// AccountIDs filter and leak other tenants' recs — fail closed.
+	return "", fmt.Errorf("running aws account %s is not registered in cloud_accounts; reshape scope cannot be resolved safely", awsAccountID)
 }

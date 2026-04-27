@@ -519,20 +519,34 @@ func (h *Handler) resolveAWSAccountID(ctx context.Context) (string, error) {
 // the trust-policy snippet renderer to emit the correct ARN prefix in
 // AWS China and GovCloud deployments (issue #130c).
 //
-// Return shape distinguishes the same three cases as resolveAWSAccountID:
+// Return shape:
 //
-//   - ("", "", nil)               — AWS SDK config could not load (Azure/GCP host).
-//   - ("", "", err)               — config loaded but STS failed; security-
-//     sensitive callers MUST fail closed on this.
+//   - ("", "", nil)               — host is non-AWS (sourceCloud() != "aws")
+//     AND AWS SDK config could not load. This is the legitimate
+//     "no AWS context" path for Azure/GCP-hosted deployments.
+//   - ("", "", err)               — host is AWS but the SDK config could
+//     not load, OR config loaded but STS GetCallerIdentity failed.
+//     Both are real failures; security-sensitive callers MUST fail
+//     closed on this.
 //   - (accountID, partition, nil) — success. partition may still be "" if the
 //     ARN was malformed (frontend defaults to "aws").
+//
+// The sourceCloud() check on the config-load path prevents an
+// AWS-hosted deployment from being silently treated as "no AWS context"
+// when its own SDK config breaks — that would degrade the multi-tenant
+// scope filter in resolveAWSCloudAccountID into an unscoped read.
 func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string, error) {
 	h.awsCfgOnce.Do(func() {
 		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
 	})
 	if h.awsCfgErr != nil {
-		// AWS context genuinely unavailable — not an error from this
-		// caller's perspective (Azure/GCP host runs land here).
+		if sourceCloud() == "aws" {
+			// AWS host but SDK config broken: real failure. Surface
+			// the error so security-sensitive callers fail closed.
+			return "", "", fmt.Errorf("aws sdk config load: %w", h.awsCfgErr)
+		}
+		// Azure/GCP host: AWS context is legitimately absent, not an
+		// error from this caller's perspective.
 		return "", "", nil
 	}
 	client := sts.NewFromConfig(h.awsCfg)
