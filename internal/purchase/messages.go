@@ -101,7 +101,28 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) e
 	return purchaseErr
 }
 
-// handleApproveMessage processes an approve message
+// handleApproveMessage processes an approve message.
+//
+// KNOWN AUTHORIZATION GAP (legacy token-only path):
+// The SQS approve/cancel handlers bypass the per-account contact_email
+// gating enforced by the HTTP path's authorizeApprovalAction in
+// internal/api/handler_purchases.go. ApproveExecution and CancelExecution
+// validate only the approval token here, so any holder of the token
+// (forwarded SQS message, replayed payload) can approve/cancel without a
+// session-email match.
+//
+// This is acceptable today because the SQS path is internal-only (no
+// external producers) and exists for the legacy email-link delivery flow.
+// Future hardening should either:
+//  1. Deprecate the SQS path in favour of the HTTP /purchases/{action}/:id
+//     route gated by authorizeApprovalAction, or
+//  2. Carry the approver's verified session email in AsyncMessage and have
+//     ApproveExecution/CancelExecution enforce the same per-account
+//     contact_email check before mutating state.
+//
+// TODO(security): pick (1) or (2) and remove this gap. See
+// internal/api/handler_purchases.go authorizeApprovalAction for the HTTP
+// counterpart.
 func (m *Manager) handleApproveMessage(ctx context.Context, msg AsyncMessage) error {
 	if msg.ExecutionID == "" || msg.Token == "" {
 		return fmt.Errorf("execution_id and token required for approve message")
@@ -112,7 +133,11 @@ func (m *Manager) handleApproveMessage(ctx context.Context, msg AsyncMessage) er
 	return m.ApproveExecution(ctx, msg.ExecutionID, msg.Token, "")
 }
 
-// handleCancelMessage processes a cancel message
+// handleCancelMessage processes a cancel message.
+//
+// Inherits the same authorization gap documented on handleApproveMessage —
+// CancelExecution only validates the token and does not enforce a
+// session-email match against the per-account contact_email.
 func (m *Manager) handleCancelMessage(ctx context.Context, msg AsyncMessage) error {
 	if msg.ExecutionID == "" || msg.Token == "" {
 		return fmt.Errorf("execution_id and token required for cancel message")
