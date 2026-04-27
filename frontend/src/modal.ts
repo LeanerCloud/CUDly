@@ -14,7 +14,13 @@
  * established show/hide convention without touching the stylesheet.
  */
 
-const FOCUSABLE_SELECTOR = [
+/**
+ * Single source of truth for "what counts as a focusable element inside a
+ * modal". Exported so the integration test in `modal.test.ts` can import
+ * the same selector instead of duplicating the string and silently drifting
+ * if the canonical list changes.
+ */
+export const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
   'input:not([disabled]):not([type="hidden"])',

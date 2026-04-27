@@ -6,7 +6,7 @@
  * engages end-to-end through the production show/hide path.
  */
 
-import { openModal, closeModal } from '../modal';
+import { openModal, closeModal, FOCUSABLE_SELECTOR } from '../modal';
 
 // ----- Mocks for the call-site integration tests -----
 // plans.openCreatePlanModal touches state and a few helpers; mock them
@@ -410,10 +410,9 @@ describe('focus trap engages on real call sites', () => {
     // Focus should be inside the modal.
     expect(modal.contains(document.activeElement)).toBe(true);
 
-    // Tab from the last focusable wraps to first.
-    const focusables = modal.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    );
+    // Tab from the last focusable wraps to first. Reuses the canonical
+    // selector exported from modal.ts so it can't drift from the impl.
+    const focusables = modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
     expect(focusables.length).toBeGreaterThan(1);
     const last = focusables[focusables.length - 1]!;
     const first = focusables[0]!;
