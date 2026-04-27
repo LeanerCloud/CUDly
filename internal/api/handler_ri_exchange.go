@@ -229,6 +229,15 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	// Normalize region: when the caller omits ?region=, loadAWSConfigWithRegion
+	// resolves a default from the AWS SDK chain but the local string stays
+	// empty — which would scope the RI utilization cache and the recs lookup
+	// unscoped, leaking alternatives from other regions onto the reshape page.
+	// Adopt the resolved region so every downstream consumer sees the same
+	// value the AWS clients are actually talking to.
+	if region == "" {
+		region = cfg.Region
+	}
 
 	ec2Client := h.buildReshapeEC2Client(cfg)
 	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
