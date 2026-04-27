@@ -227,6 +227,17 @@ function mountAccountModalDOM(): { trigger: HTMLButtonElement; modal: HTMLDivEle
   return { trigger, modal };
 }
 
+// Each test mounts its own DOM via buildModal/mountPlanModalDOM/
+// mountAccountModalDOM, all of which append to document.body. Reset
+// between tests so a failure mid-test doesn't leak elements (or the
+// active focus they own) into the next one. replaceChildren() rather
+// than innerHTML to keep the file free of XSS-flagged sinks (the
+// project's security hook flags any innerHTML write, even on test
+// scaffolding — see the mountPlanModalDOM comment above).
+afterEach(() => {
+  document.body.replaceChildren();
+});
+
 describe('modal focus-trap helper', () => {
   describe('openModal', () => {
     test('removes hidden class', () => {
