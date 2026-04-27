@@ -15,11 +15,6 @@ variable "environment" {
   type        = string
 }
 
-variable "region" {
-  description = "GCP region"
-  type        = string
-}
-
 variable "db_instance_id" {
   description = "Cloud SQL instance ID"
   type        = string
