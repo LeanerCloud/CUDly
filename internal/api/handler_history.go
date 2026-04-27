@@ -156,6 +156,10 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 	if exec.CloudAccountID != nil {
 		accountID = *exec.CloudAccountID
 	}
+	var createdBy string
+	if exec.CreatedByUserID != nil {
+		createdBy = *exec.CreatedByUserID
+	}
 	row := config.PurchaseHistoryRecord{
 		AccountID:        accountID,
 		PurchaseID:       exec.ExecutionID,
@@ -168,6 +172,7 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 		EstimatedSavings: exec.EstimatedSavings,
 		PlanID:           exec.PlanID,
 		Status:           exec.Status,
+		CreatedByUserID:  createdBy,
 	}
 	annotateHistoryRowByStatus(&row, exec, approver)
 	return row

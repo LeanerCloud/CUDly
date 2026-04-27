@@ -1111,3 +1111,192 @@ func TestHandler_pausePlannedPurchase_OutOfScope(t *testing.T) {
 	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus")
 }
+
+// ─── Session-authed Cancel (issue #46) ─────────────────────────────────────
+//
+// Covers the full cancel-any / cancel-own RBAC matrix on the
+// session-authed branch of cancelPurchase (token == ""):
+//
+//   1. admin                                     → allowed (any execution)
+//   2. user with cancel-any (e.g. ops role)      → allowed (any execution)
+//   3. user with cancel-own + matching creator   → allowed
+//   4. user with cancel-own + different creator  → 403
+//   5. user with neither verb                    → 403
+//   6. cancellable-state guard                   → 409 on non-pending status
+//   7. legacy NULL creator + non-admin cancel-own → 403 (still reachable
+//      via the email-token path, which is exercised by the existing
+//      TestHandler_cancelPurchase happy-path test).
+
+const cancelExecID = "55555555-5555-5555-5555-555555555555"
+const cancelCallerID = "66666666-6666-6666-6666-666666666666"
+const cancelOtherID = "77777777-7777-7777-7777-777777777777"
+
+// buildSessionCancelHandler wires the handler with mocks the session-authed
+// cancel tests share. Token is left empty by callers when invoking
+// cancelPurchase to drive the new branch.
+func buildSessionCancelHandler(exec *config.PurchaseExecution, session *Session, hasAny, hasOwn bool) (*Handler, *MockConfigStore, *MockAuthService) {
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	if session != nil && session.Role != "admin" {
+		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "cancel-any", "purchases").Return(hasAny, nil).Maybe()
+		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "cancel-own", "purchases").Return(hasOwn, nil).Maybe()
+	}
+
+	return &Handler{config: mockConfig, auth: mockAuth}, mockConfig, mockAuth
+}
+
+func sessionCancelReq() *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+}
+
+func TestHandler_cancelPurchase_Session_Admin_AllowsAny(t *testing.T) {
+	creator := cancelOtherID
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "pending",
+		CreatedByUserID: &creator,
+	}
+	transitioned := *exec
+	transitioned.Status = "cancelled"
+	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
+
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, false)
+	mockConfig.On("TransitionExecutionStatus", mock.Anything, cancelExecID, []string{"pending", "notified"}, "cancelled").Return(&transitioned, nil)
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+
+	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+}
+
+func TestHandler_cancelPurchase_Session_CancelAny_AllowsAny(t *testing.T) {
+	// Non-admin operator role with cancel-any:purchases. Future use case
+	// (no role currently has it by default) but the verb exists today.
+	creator := cancelOtherID
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "pending",
+		CreatedByUserID: &creator,
+	}
+	transitioned := *exec
+	transitioned.Status = "cancelled"
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "ops@example.com"}
+
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, true, false)
+	mockConfig.On("TransitionExecutionStatus", mock.Anything, cancelExecID, []string{"pending", "notified"}, "cancelled").Return(&transitioned, nil)
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+
+	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+}
+
+func TestHandler_cancelPurchase_Session_CancelOwn_AllowsCreator(t *testing.T) {
+	creator := cancelCallerID // execution created by the same user
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "notified",
+		CreatedByUserID: &creator,
+	}
+	transitioned := *exec
+	transitioned.Status = "cancelled"
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, true)
+	mockConfig.On("TransitionExecutionStatus", mock.Anything, cancelExecID, []string{"pending", "notified"}, "cancelled").Return(&transitioned, nil)
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+
+	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+}
+
+func TestHandler_cancelPurchase_Session_CancelOwn_RejectsNonCreator(t *testing.T) {
+	creator := cancelOtherID // someone else created it
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "pending",
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, true)
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "another user's pending purchase")
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+}
+
+func TestHandler_cancelPurchase_Session_NoVerb_Rejects(t *testing.T) {
+	creator := cancelCallerID // even own row is rejected without the verb
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "pending",
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, false)
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cancel-any or cancel-own")
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+}
+
+func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
+	creator := cancelCallerID
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "completed", // already done — cannot transition
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: cancelCallerID, Role: "admin"}
+
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, false)
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be cancelled")
+	assert.Contains(t, err.Error(), "completed")
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+}
+
+func TestHandler_cancelPurchase_Session_LegacyNullCreator_NonAdminRejected(t *testing.T) {
+	// Pre-migration row: created_by_user_id is NULL. cancel-own can't
+	// match a NULL creator, so a non-admin must be rejected. The email
+	// token in the inbox stays the escape hatch (covered by the existing
+	// TestHandler_cancelPurchase happy-path test).
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "pending",
+		CreatedByUserID: nil,
+	}
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, _ := buildSessionCancelHandler(exec, session, false, true)
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "another user's pending purchase")
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus")
+}
+
+func TestHandler_cancelPurchase_Session_RejectsMissingSession(t *testing.T) {
+	exec := &config.PurchaseExecution{ExecutionID: cancelExecID, Status: "pending"}
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
+
+	handler := &Handler{config: mockConfig, auth: new(MockAuthService)}
+	// No Authorization header → 401, not 403. Tokenless + sessionless is
+	// the only state where the user can't reach either branch.
+	_, err := handler.cancelPurchase(context.Background(), &events.LambdaFunctionURLRequest{}, cancelExecID, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no authorization token provided")
+}

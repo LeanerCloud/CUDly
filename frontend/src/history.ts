@@ -6,6 +6,9 @@ import * as api from './api';
 import { formatCurrency, formatDate, formatTerm, escapeHtml, populateAccountFilter } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
+import { confirmDialog } from './confirmDialog';
+import { showToast } from './toast';
+import { getCurrentUser } from './state';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
@@ -285,6 +288,26 @@ function providerCell(p: HistoryPurchase): string {
   return `<span class="provider-badge ${p.provider}">${p.provider.toUpperCase()}</span>`;
 }
 
+// canCancelPendingRow returns true when the current session is permitted
+// to cancel the given pending/notified history row via the session-authed
+// Cancel button (issue #46). Mirror of the backend RBAC matrix in
+// internal/api/handler_purchases.go::authorizeSessionCancel — keep both
+// sides in sync. The backend remains authoritative; this helper is a UX
+// gate (don't show buttons users can't use) and never the security
+// boundary.
+function canCancelPendingRow(p: HistoryPurchase): boolean {
+  const status = (p.status || '').toLowerCase();
+  if (status !== 'pending' && status !== 'notified') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  // Non-admin: only the original creator. Legacy rows with no
+  // created_by_user_id can't be cancelled via this UI; the email-token
+  // path remains the escape hatch.
+  if (!p.created_by_user_id) return false;
+  return p.created_by_user_id === user.id;
+}
+
 function renderHistoryList(purchases: HistoryPurchase[]): void {
   const container = document.getElementById('history-list');
   if (!container) return;
@@ -328,6 +351,13 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       return badge;
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
+    // Inline Cancel button on pending/notified rows the current user is
+    // permitted to cancel. Renders in the Plan column so the table
+    // width stays the same; pending rows show their plan in
+    // StatusDescription, not the Plan column, so this is non-conflicting.
+    const planCellContent = canCancelPendingRow(p) && p.purchase_id
+      ? `<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`
+      : escapeHtml(p.plan_name || '-');
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
@@ -340,7 +370,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         <td>${formatTerm(p.term)}</td>
         <td>${formatCurrency(p.upfront_cost)}</td>
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
-        <td>${escapeHtml(p.plan_name || '-')}</td>
+        <td>${planCellContent}</td>
       </tr>
     `;
   }).join('');
@@ -376,6 +406,35 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       if (!next || next === activeStatusFilter) return;
       activeStatusFilter = next;
       renderHistoryList(lastPurchases);
+    });
+  });
+
+  // Wire the inline Cancel button on pending/notified rows the current
+  // session may cancel (issue #46). confirmDialog → POST → reload. The
+  // backend remains the security boundary; this UX gate just hides the
+  // button when the call would 403.
+  container.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['cancelId'];
+      if (!id) return;
+      const ok = await confirmDialog({
+        title: 'Cancel this pending purchase?',
+        body: 'This will permanently abort the approval flow. The pending email approval link will stop working. This action cannot be undone.',
+        confirmLabel: 'Cancel purchase',
+        destructive: true,
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await api.cancelPurchase(id);
+        showToast({ message: 'Purchase cancelled', kind: 'success', timeout: 5_000 });
+        await loadHistory();
+      } catch (cancelError) {
+        console.error('Failed to cancel pending purchase:', cancelError);
+        const err = cancelError as Error;
+        showToast({ message: `Failed to cancel: ${err.message || 'unknown error'}`, kind: 'error' });
+        btn.disabled = false;
+      }
     });
   });
 

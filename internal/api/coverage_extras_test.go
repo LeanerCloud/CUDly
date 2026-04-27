@@ -71,11 +71,20 @@ func TestHandler_cancelPurchase_InvalidUUID(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid ID format")
 }
 
-func TestHandler_cancelPurchase_EmptyToken(t *testing.T) {
-	h := &Handler{}
-	_, err := h.cancelPurchase(context.Background(), nil, "11111111-1111-1111-1111-111111111111", "")
+// TestHandler_cancelPurchase_EmptyToken_FallsThroughToSession asserts that
+// the token-empty branch no longer short-circuits with "cancellation token
+// is required" — the empty-token path is now the dispatch into the
+// session-authed cancel flow (issue #46). Without an execution to load,
+// GetExecutionByID is the first thing that runs; with no config wired,
+// the call surfaces a downstream error rather than the legacy 400.
+func TestHandler_cancelPurchase_EmptyToken_FallsThroughToSession(t *testing.T) {
+	execID := "11111111-1111-1111-1111-111111111111"
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, execID).Return(nil, errors.New("store error"))
+	h := &Handler{config: mockConfig}
+	_, err := h.cancelPurchase(context.Background(), nil, execID, "")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cancellation token is required")
+	assert.Contains(t, err.Error(), "failed to get execution")
 }
 
 func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {

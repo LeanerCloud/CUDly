@@ -168,6 +168,12 @@ export interface HistoryPurchase {
   // non-ok rows. "failed" → backend's send-error message; "expired" → canned
   // 7-day-window reminder. Empty on completed / pending rows.
   status_description?: string;
+  // CreatedByUserID: UUID of the user who created the underlying execution.
+  // Set only on pending/notified rows (synthesised from purchase_executions);
+  // empty on completed history rows. The History UI uses it to decide
+  // whether the inline Cancel button (issue #46) is visible to the current
+  // session — non-admins only see it on rows they themselves created.
+  created_by_user_id?: string;
 }
 
 // Savings Analytics types

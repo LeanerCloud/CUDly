@@ -275,6 +275,22 @@ const (
 	ActionExecute = "execute"
 	ActionApprove = "approve"
 	ActionAdmin   = "admin"
+	// ActionCancelOwn / ActionCancelAny gate the session-authed Cancel
+	// button on pending Purchase History rows (issue #46).
+	//   * cancel-own + purchases — granted to every authenticated user
+	//     role by default; allows cancelling pending executions whose
+	//     created_by_user_id matches the session user. Legacy rows with
+	//     a NULL creator are out of reach for non-admins via this verb;
+	//     admins still cancel them via cancel-any (or implicit admin).
+	//   * cancel-any + purchases — granted via ActionAdmin/ResourceAll
+	//     for admin role; this constant exists so future non-admin
+	//     operator roles can be granted broad cancel rights without
+	//     escalating to admin. Allows cancelling pending executions
+	//     regardless of creator.
+	// The legacy email-token cancel path stays unchanged as an escape
+	// hatch and is gated by token possession, not these verbs.
+	ActionCancelOwn = "cancel-own"
+	ActionCancelAny = "cancel-any"
 )
 
 // Predefined resources
@@ -307,6 +323,12 @@ func DefaultUserPermissions() []Permission {
 		{Action: ActionView, Resource: ResourceHistory},
 		{Action: ActionCreate, Resource: ResourcePlans},
 		{Action: ActionUpdate, Resource: ResourcePlans},
+		// cancel-own:purchases — every authenticated user can cancel
+		// pending purchase executions they created themselves (issue #46).
+		// The handler still requires the execution to be in a cancellable
+		// state (pending/notified) and the creator UUID to match the
+		// session UserID before honouring the request.
+		{Action: ActionCancelOwn, Resource: ResourcePurchases},
 	}
 }
 

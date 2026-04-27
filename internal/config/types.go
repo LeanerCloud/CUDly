@@ -188,6 +188,15 @@ type PurchaseExecution struct {
 	// accountable party in that case. Nullable TEXT in Postgres.
 	ApprovedBy  *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
 	CancelledBy *string `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"`
+	// CreatedByUserID is the UUID of the session-authenticated user who
+	// triggered this execution (e.g. clicked Execute on the Recommendations
+	// page or submitted the bulk-purchase modal). NULL on rows created
+	// before the column was introduced (migration 000041) and on
+	// scheduler-driven executions where there is no human creator. Used
+	// by the session-authed cancel handler to enforce cancel:own_executions
+	// — a non-admin may cancel only executions they themselves created.
+	// NULL is treated as "not the current user".
+	CreatedByUserID *string `json:"created_by_user_id,omitempty" dynamodbav:"created_by_user_id,omitempty"`
 	// CapacityPercent records what fraction of the originally-recommended
 	// counts the user chose when the bulk Purchase flow submitted this
 	// execution (1..100). Audit-only: the Recommendations slice already
@@ -339,6 +348,14 @@ type PurchaseHistoryRecord struct {
 	// the 7-day approval window elapsed. Empty on completed/pending rows —
 	// those speak for themselves via Status alone.
 	StatusDescription string `json:"status_description,omitempty" dynamodbav:"-"`
+	// CreatedByUserID propagates the originating execution's
+	// created_by_user_id so the History UI can decide whether to render
+	// the inline Cancel button (issue #46): a non-admin user only sees
+	// the button on their own pending rows. Set only for synthesised
+	// pending/notified rows (executions); empty on completed history
+	// rows (where the action has already completed). Excluded from DB
+	// persistence.
+	CreatedByUserID string `json:"created_by_user_id,omitempty" dynamodbav:"-"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table
