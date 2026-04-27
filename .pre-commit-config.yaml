@@ -135,9 +135,9 @@ repos:
         # Trivy is a required tool: the previous fallback `|| echo
         # "skipping"` masked an absent gate, which is worse than no gate.
         # Install via `brew install trivy` or `apt install trivy`. CI
-        # installs it via the trivy-action step in
-        # .github/workflows/ci.yml, so PRs are always scanned regardless
-        # of a developer's local setup.
+        # installs trivy v0.58.0 via the workflow step in
+        # .github/workflows/pre-commit.yml, so PRs are always scanned
+        # regardless of a developer's local setup.
         entry: bash -c 'trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs terraform/environments/aws .'
         language: system
         pass_filenames: false

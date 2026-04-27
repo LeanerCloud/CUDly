@@ -40,43 +40,73 @@ jobs:
         #
         # Pin must satisfy `required_version = ">= 1.10.0"` declared by every
         # `terraform/environments/*/main.tf` — pinning to a sub-1.10 version
-        # makes init abort before validate even runs.
-        uses: hashicorp/setup-terraform@v3
+        # makes init abort before validate even runs. Action major matches
+        # `.github/workflows/ci.yml` so both workflows resolve to the same
+        # Terraform binary; otherwise a behavioural drift between the two
+        # could pass one and fail the other.
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.10.5"
           terraform_wrapper: false
 
       - name: Install tflint
-        # Required by the terraform_tflint pre-commit hook (separate binary
-        # from the terraform CLI).
+        # Pinned to a release tag (not master) so a malicious or accidental
+        # change to install_linux.sh on master can't silently land on this
+        # CI runner. `curl -fsSL` makes transport errors fail loudly
+        # instead of writing an HTML error page to stdin and feeding it
+        # to bash.
+        env:
+          TFLINT_VERSION: v0.55.0
         run: |
-          curl -sSL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+          set -euo pipefail
+          curl -fsSL -o /tmp/tflint-install.sh \
+            "https://raw.githubusercontent.com/terraform-linters/tflint/${TFLINT_VERSION}/install_linux.sh"
+          bash /tmp/tflint-install.sh
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        # Pinned to the same version ci.yml's `securego/gosec` Action uses,
+        # so an upstream gosec release with rule changes can't silently
+        # downgrade the gate between the two workflows.
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
 
       - name: Install gocyclo
-        run: go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+        # Pinned to match ci.yml — security tool installs must not use
+        # @latest; that's exactly the supply-chain weakness this PR is
+        # closing for Dockerfile FROMs.
+        run: go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
 
       - name: Install Trivy
         run: |
+          set -euo pipefail
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin
+            | sh -s -- -b /usr/local/bin v0.58.0
 
       - name: Install git-secrets
+        # Pinned to a release tag rather than master HEAD. After install
+        # we register the AWS pattern set and ASSERT at least one pattern
+        # was registered — without the assert, a registration failure
+        # produces a patternless scanner that exits 0 unconditionally,
+        # leaving the gate silently downgraded.
         run: |
-          git clone --depth 1 https://github.com/awslabs/git-secrets.git /tmp/git-secrets
+          set -euo pipefail
+          git clone --depth 1 --branch 1.3.0 https://github.com/awslabs/git-secrets.git /tmp/git-secrets
           sudo make -C /tmp/git-secrets install
-          git secrets --register-aws --global || true
+          git secrets --register-aws --global
+          git secrets --list --global | grep -q '.' || {
+            echo "git-secrets registration produced no patterns — gate would be silently disabled"
+            exit 1
+          }
 
-      - name: Install hadolint
-        run: |
-          curl -sSL -o /usr/local/bin/hadolint \
-            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
-          chmod +x /usr/local/bin/hadolint
+      # Note: the hadolint-docker pre-commit hook
+      # (.pre-commit-config.yaml:80) runs the official
+      # hadolint/hadolint:v2.14.0 Docker image. We do NOT install a host
+      # binary here — it would be dead code (never invoked by the hook)
+      # AND a supply-chain hole (latest tag, no checksum). If a future
+      # change switches the hook from hadolint-docker to plain hadolint,
+      # install a pinned + sha256-verified binary here.
 
       - name: Install pre-commit
-        run: pip install pre-commit
+        run: pip install 'pre-commit==4.0.1'
 
       - name: Install frontend deps
         run: |
