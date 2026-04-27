@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -98,32 +99,39 @@ func splitInstanceType(instanceType string) (family, size string) {
 // resolveAWSCloudAccountID maps the running AWS account ID (raw, from
 // STS) to the registered CloudAccount UUID so the reshape lookup can
 // scope its query against the correct row in the recommendations
-// table. Returns "" when:
+// table. Returns ("", nil) for the intentionally-unregistered cases:
+//
 //   - no AWS account ID could be resolved (STS denied / ambient creds
 //     not available);
-//   - no CloudAccount row exists with that ExternalID (the operator
-//     hasn't registered this account yet — common on first-run / dev).
+//   - ListCloudAccounts returned no rows (no CloudAccounts registered
+//     at all);
+//   - no CloudAccount row matches the running ExternalID (the operator
+//     hasn't registered THIS account yet — common on first-run / dev).
 //
-// Empty UUID propagates to purchaseRecLookupFromStore as "skip the
-// AccountIDs filter", which causes the lookup to return whatever recs
-// exist in the region. That's intentional: a deployment with one
-// ambient-credentials account and no registered CloudAccounts should
-// still see alternatives, not a permanently empty list. Once the
-// operator registers the account the filter engages automatically.
-func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) string {
+// All three are clean "no scope filter" signals — purchaseRecLookupFromStore
+// treats ("", nil) as "skip the AccountIDs filter" so a deployment with
+// ambient credentials and no registered CloudAccounts still sees
+// alternatives, not a permanently empty list. Once the operator
+// registers the account the filter engages automatically.
+//
+// A real ListCloudAccounts error (DB outage, permissions failure) is
+// returned verbatim so the caller can abort the lookup rather than
+// silently fall through to an unscoped query that might match the
+// wrong tenant's recs.
+func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) (string, error) {
 	awsAccountID := h.resolveAWSAccountID(ctx)
 	if awsAccountID == "" {
-		return ""
+		return "", nil
 	}
 	provider := "aws"
 	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{Provider: &provider})
-	if err != nil || len(accounts) == 0 {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("list cloud accounts for reshape scope: %w", err)
 	}
 	for _, a := range accounts {
 		if a.ExternalID == awsAccountID {
-			return a.ID
+			return a.ID, nil
 		}
 	}
-	return ""
+	return "", nil
 }

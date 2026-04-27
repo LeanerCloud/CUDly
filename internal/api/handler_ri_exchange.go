@@ -259,8 +259,13 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	// account (when registered) so a multi-tenant deployment can't
 	// surface another tenant's recs. Empty resolved account ID means
 	// "no scope filter" for ambient-credentials deployments where
-	// CloudAccount registration hasn't happened yet.
-	cloudAccountID := h.resolveAWSCloudAccountID(ctx)
+	// CloudAccount registration hasn't happened yet; a real ListCloudAccounts
+	// error aborts the request instead of silently falling through to an
+	// unscoped query that could match the wrong tenant's recs.
+	cloudAccountID, err := h.resolveAWSCloudAccountID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve cloud account scope for reshape: %w", err)
+	}
 	currencyCode := firstNonEmptyCurrency(instances)
 	lookup := purchaseRecLookupFromStore(h.config, cloudAccountID)
 	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, threshold, region, currencyCode, lookup)
