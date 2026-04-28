@@ -56,6 +56,43 @@ func TestParseAccountIDs(t *testing.T) {
 	}
 }
 
+// TestParseAccountIDs_Cap verifies the MaxAccountIDsPerRequest guard
+// blocks input amplification — an unbounded account_ids list could fan
+// out into thousands of per-account DB queries / cloud API calls.
+func TestParseAccountIDs_Cap(t *testing.T) {
+	validUUID := "12345678-1234-1234-1234-123456789abc"
+	build := func(n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = validUUID
+		}
+		return strings.Join(parts, ",")
+	}
+
+	t.Run("at the limit succeeds", func(t *testing.T) {
+		ids, err := parseAccountIDs(build(MaxAccountIDsPerRequest))
+		require.NoError(t, err)
+		assert.Len(t, ids, MaxAccountIDsPerRequest)
+	})
+
+	t.Run("just over the limit is rejected with 400", func(t *testing.T) {
+		_, err := parseAccountIDs(build(MaxAccountIDsPerRequest + 1))
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "should return a clientError mappable to HTTP 400")
+		assert.Equal(t, 400, ce.code)
+		assert.Contains(t, err.Error(), "too many account IDs")
+	})
+
+	t.Run("massively over the limit is rejected fast", func(t *testing.T) {
+		// 10000 entries — without the cap this would allocate a 10k-element
+		// slice and run 10k UUID validations. With the cap we reject before
+		// the validation loop.
+		_, err := parseAccountIDs(build(10_000))
+		require.Error(t, err)
+	})
+}
+
 // ---------------------------------------------------------------------------
 // redactEmail
 // ---------------------------------------------------------------------------
