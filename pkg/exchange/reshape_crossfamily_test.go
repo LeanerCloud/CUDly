@@ -10,132 +10,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCandidateFamilies_AllowlistedFamilies(t *testing.T) {
+func TestAnalyzeReshaping_BaseEmitsNoAlternatives(t *testing.T) {
 	t.Parallel()
-
-	cases := []struct {
-		source string
-		want   []string
-	}{
-		// General-purpose peers.
-		{"m5", []string{"m5", "m6i", "m7g"}},
-		{"m6i", []string{"m5", "m6i", "m7g"}},
-		{"m7g", []string{"m5", "m6i", "m7g"}},
-		// Compute-optimised peers.
-		{"c5", []string{"c5", "c6i", "c7g"}},
-		{"c7g", []string{"c5", "c6i", "c7g"}},
-		// Memory-optimised peers.
-		{"r5", []string{"r5", "r6i", "r7g"}},
-		{"r6i", []string{"r5", "r6i", "r7g"}},
-		// Burstable peers.
-		{"t3", []string{"t3", "t3a", "t4g"}},
-		// Case insensitivity — operators may supply uppercase.
-		{"M5", []string{"m5", "m6i", "m7g"}},
-	}
-	for _, c := range cases {
-		got := candidateFamilies(c.source)
-		sort.Strings(got)
-		sort.Strings(c.want)
-		assert.Equal(t, c.want, got, "unexpected peers for %q", c.source)
-	}
-}
-
-func TestCandidateFamilies_SpecialtyAndLegacyFamilies(t *testing.T) {
-	t.Parallel()
-	// Specialty (GPU/HPC) and legacy-generation families are now in
-	// the allowlist; the local passesDollarUnitsCheck pre-filter (in
-	// fillAlternativesFromOfferings) drops unviable cross-family
-	// pairs so suggestions stay actionable without per-pair AWS quote
-	// API calls. These groups are fixed in code; the test pins the
-	// exact membership.
-	cases := []struct {
-		source string
-		want   []string
-	}{
-		// GPU
-		{"p3", []string{"p3", "p4d", "p5"}},
-		{"p4d", []string{"p3", "p4d", "p5"}},
-		{"g4dn", []string{"g4dn", "g5"}},
-		// HPC
-		{"hpc6a", []string{"hpc6a", "hpc6id", "hpc7g"}},
-		// Legacy generations.
-		{"m4", []string{"m4", "m5"}},
-		{"c4", []string{"c4", "c5"}},
-		{"r3", []string{"r3", "r4", "r5"}},
-		{"r4", []string{"r3", "r4", "r5"}},
-	}
-	for _, c := range cases {
-		got := candidateFamilies(c.source)
-		sort.Strings(got)
-		sort.Strings(c.want)
-		assert.Equal(t, c.want, got, "unexpected peers for %q", c.source)
-	}
-}
-
-func TestCandidateFamilies_UnlistedFamiliesReturnNil(t *testing.T) {
-	t.Parallel()
-	// Truly off-allowlist families: x1 / g4 (note: g4dn IS in the
-	// allowlist, but plain "g4" without the dn suffix isn't), older
-	// HPC variants, and the empty string. These return nil — no
-	// cross-family suggestions surface for the underlying RI.
-	for _, fam := range []string{"g4", "x1", "hpc7a", ""} {
-		assert.Nil(t, candidateFamilies(fam), "expected nil for unlisted family %q", fam)
-	}
-}
-
-func TestAnalyzeReshaping_EmitsCrossFamilyAlternatives(t *testing.T) {
-	t.Parallel()
-	// m5.xlarge at 50% → primary target m5.large; alternatives
-	// should list m6i.large and m7g.large (same peer group, same
-	// target size, source family excluded).
+	// The base AnalyzeReshaping no longer emits cross-family
+	// alternatives — that responsibility now lives in
+	// AnalyzeReshapingWithRecs, which sources options from the cached
+	// AWS Cost Explorer recommendations table. The base path's
+	// AlternativeTargets must always be nil regardless of family so the
+	// auto.go pipeline (which uses the base path) keeps its current
+	// "primary target only" contract.
 	recs := AnalyzeReshaping(
 		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
 		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
 		95,
 	)
-	if len(recs) != 1 {
-		t.Fatalf("expected 1 recommendation; got %d", len(recs))
-	}
-	got := recs[0]
-	assert.Equal(t, "m5.large", got.TargetInstanceType)
-
-	gotAlts := make([]string, 0, len(got.AlternativeTargets))
-	for _, alt := range got.AlternativeTargets {
-		gotAlts = append(gotAlts, alt.InstanceType)
-	}
-	sort.Strings(gotAlts)
-	assert.Equal(t, []string{"m6i.large", "m7g.large"}, gotAlts,
-		"peer families should be suggested at the same target size, source family excluded")
-	// No lookup injected at this call site → pricing fields stay zero.
-	for _, alt := range got.AlternativeTargets {
-		assert.Empty(t, alt.OfferingID, "base AnalyzeReshaping does not resolve offering IDs")
-		assert.Zero(t, alt.EffectiveMonthlyCost, "base AnalyzeReshaping does not resolve prices")
-	}
-}
-
-func TestAnalyzeReshaping_NoAlternativesForUnlistedFamily(t *testing.T) {
-	t.Parallel()
-	// "x1" is not in the allowlist, so no cross-family alternatives
-	// are emitted at the base layer. We still emit the same-family
-	// primary reshape — name-only alternatives only get filled in
-	// when the family has peers in the group.
-	recs := AnalyzeReshaping(
-		[]RIInfo{{ID: "ri-x", InstanceType: "x1.16xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
-		[]UtilizationInfo{{RIID: "ri-x", UtilizationPercent: 40}},
-		95,
-	)
-	if len(recs) != 1 {
-		t.Fatalf("expected 1 recommendation; got %d", len(recs))
-	}
+	require.Len(t, recs, 1)
+	assert.Equal(t, "m5.large", recs[0].TargetInstanceType, "primary same-family downsize stays")
 	assert.Nil(t, recs[0].AlternativeTargets,
-		"unlisted families must not get cross-family alternatives")
+		"base path emits no alternatives — recs-driven path owns that surface")
 }
 
 func TestAnalyzeReshaping_StandardRIStillSkipped(t *testing.T) {
 	t.Parallel()
-	// Regression guard: adding cross-family suggestions must not
-	// start emitting recommendations for Standard RIs, which AWS
-	// forbids from exchanging entirely.
+	// Regression guard: the refactor must not start emitting
+	// recommendations for Standard RIs, which AWS forbids from
+	// exchanging entirely.
 	recs := AnalyzeReshaping(
 		[]RIInfo{{ID: "ri-std", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "standard"}},
 		[]UtilizationInfo{{RIID: "ri-std", UtilizationPercent: 30}},
@@ -144,123 +43,322 @@ func TestAnalyzeReshaping_StandardRIStillSkipped(t *testing.T) {
 	assert.Empty(t, recs, "standard RI must never produce a recommendation")
 }
 
-func TestAnalyzeReshapingWithOfferings_EnrichesAlternatives(t *testing.T) {
+// TestAnalyzeReshapingWithRecs_RecommendationDrivenAlternatives — the
+// fake lookup returns offerings spanning m5/c5/r5; an underutilised m5
+// RI should surface c5 + r5 alternatives (cross-family), with the same
+// family (m5) excluded so the alternatives slice carries only options
+// that differ meaningfully from the primary target. Sort order is
+// ascending by EffectiveMonthlyCost — cheapest first.
+func TestAnalyzeReshapingWithRecs_RecommendationDrivenAlternatives(t *testing.T) {
 	t.Parallel()
-	// m5.xlarge at 50% → primary m5.large + alternatives m6i.large,
-	// m7g.large. Lookup returns pricing for all three plus an extra
-	// unrelated offering that should be ignored. Lookup is called
-	// exactly once with the de-duplicated instance-type set.
-	var gotTypes []string
+
 	var callCount int
-	lookup := func(ctx context.Context, instanceTypes []string) ([]OfferingOption, error) {
+	var gotRegion, gotCurrency string
+	lookup := func(_ context.Context, region, currency string) ([]OfferingOption, error) {
 		callCount++
-		gotTypes = append([]string{}, instanceTypes...)
+		gotRegion, gotCurrency = region, currency
 		return []OfferingOption{
-			{InstanceType: "m5.large", OfferingID: "off-m5", EffectiveMonthlyCost: 40.0},
-			{InstanceType: "m6i.large", OfferingID: "off-m6i", EffectiveMonthlyCost: 35.0},
-			{InstanceType: "m7g.large", OfferingID: "off-m7g", EffectiveMonthlyCost: 30.0},
-			{InstanceType: "irrelevant.size", OfferingID: "off-x", EffectiveMonthlyCost: 999.0},
+			{InstanceType: "m5.large", OfferingID: "off-m5", EffectiveMonthlyCost: 40.0, NormalizationFactor: 4, CurrencyCode: "USD"},
+			{InstanceType: "c5.large", OfferingID: "off-c5", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4, CurrencyCode: "USD"},
+			{InstanceType: "r5.large", OfferingID: "off-r5", EffectiveMonthlyCost: 60.0, NormalizationFactor: 4, CurrencyCode: "USD"},
 		}, nil
 	}
 
-	recs := AnalyzeReshapingWithOfferings(
+	recs := AnalyzeReshapingWithRecs(
 		context.Background(),
-		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD", // src units = 200
+		}},
 		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
 		95,
+		"us-east-1", "USD",
 		lookup,
 	)
-	if len(recs) != 1 {
-		t.Fatalf("expected 1 rec; got %d", len(recs))
-	}
-	assert.Equal(t, 1, callCount, "lookup must be called exactly once (batched)")
-
-	sort.Strings(gotTypes)
-	assert.Equal(t, []string{"m5.large", "m6i.large", "m7g.large"}, gotTypes,
-		"lookup should receive de-duplicated instance types")
+	require.Len(t, recs, 1)
+	assert.Equal(t, 1, callCount, "lookup must be called exactly once per reshape pass")
+	assert.Equal(t, "us-east-1", gotRegion, "region must be threaded through")
+	assert.Equal(t, "USD", gotCurrency, "currency must be threaded through")
 
 	got := recs[0]
-	assert.Equal(t, "m5.large", got.TargetInstanceType)
-	if len(got.AlternativeTargets) != 2 {
-		t.Fatalf("expected 2 alternatives; got %+v", got.AlternativeTargets)
+	assert.Equal(t, "m5.large", got.TargetInstanceType, "primary downsize unchanged")
+
+	gotAlts := make([]string, 0, len(got.AlternativeTargets))
+	for _, alt := range got.AlternativeTargets {
+		gotAlts = append(gotAlts, alt.InstanceType)
 	}
-	// AnalyzeReshapingWithOfferings sorts alternatives ascending by
-	// EffectiveMonthlyCost so the cheapest option is first. Lookup
-	// returned m6i.large=$35 and m7g.large=$30 → m7g first.
-	assert.Equal(t, "m7g.large", got.AlternativeTargets[0].InstanceType)
-	assert.Equal(t, "off-m7g", got.AlternativeTargets[0].OfferingID)
-	assert.InDelta(t, 30.0, got.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
-	assert.Equal(t, "m6i.large", got.AlternativeTargets[1].InstanceType)
-	assert.InDelta(t, 35.0, got.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
+	sort.Strings(gotAlts)
+	assert.Equal(t, []string{"c5.large", "r5.large"}, gotAlts,
+		"cross-family alternatives must surface; same-family m5 must be excluded")
+	// Ascending by EffectiveMonthlyCost: c5 ($50) before r5 ($60).
+	require.Len(t, got.AlternativeTargets, 2)
+	assert.Equal(t, "c5.large", got.AlternativeTargets[0].InstanceType)
+	assert.Equal(t, "off-c5", got.AlternativeTargets[0].OfferingID)
+	assert.InDelta(t, 50.0, got.AlternativeTargets[0].EffectiveMonthlyCost, 0.001)
+	assert.Equal(t, "r5.large", got.AlternativeTargets[1].InstanceType)
+	assert.InDelta(t, 60.0, got.AlternativeTargets[1].EffectiveMonthlyCost, 0.001)
 }
 
-func TestAnalyzeReshapingWithOfferings_MissingOfferingDroppedNotWholeRec(t *testing.T) {
+// TestAnalyzeReshapingWithRecs_EmptyLookupReturnsNoAlternatives — cold
+// cache / no recs in the region: the rec ships with its primary target
+// and an empty AlternativeTargets slice. UI matches "AWS hasn't
+// recommended anything for this region yet".
+func TestAnalyzeReshapingWithRecs_EmptyLookupReturnsNoAlternatives(t *testing.T) {
 	t.Parallel()
-	// AWS doesn't offer m7g.large in this region. The lookup returns
-	// only m5.large + m6i.large. The rec should still ship with
-	// m5.large as primary and m6i.large as the only alternative;
-	// m7g.large is silently dropped.
-	lookup := func(ctx context.Context, _ []string) ([]OfferingOption, error) {
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return nil, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	assert.Equal(t, "m5.large", recs[0].TargetInstanceType)
+	assert.Empty(t, recs[0].AlternativeTargets,
+		"empty cache → no alternatives but primary target still surfaced")
+}
+
+// TestAnalyzeReshapingWithRecs_AppliesDollarUnitsFilter — alternatives
+// that would fail AWS's $-units exchange check are dropped before
+// reaching the UI, matching the existing behaviour of the local
+// pre-filter. Source pricing must be supplied (NF + MonthlyCost) for
+// the gate to engage.
+func TestAnalyzeReshapingWithRecs_AppliesDollarUnitsFilter(t *testing.T) {
+	t.Parallel()
+
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
 		return []OfferingOption{
-			{InstanceType: "m5.large", OfferingID: "off-m5", EffectiveMonthlyCost: 40.0},
-			{InstanceType: "m6i.large", OfferingID: "off-m6i", EffectiveMonthlyCost: 35.0},
+			// c5.large priced too cheap to satisfy the units check
+			// (4 × 5 = 20 < src 200) — should be filtered out.
+			{InstanceType: "c5.large", OfferingID: "off-c5", EffectiveMonthlyCost: 5.0, NormalizationFactor: 4, CurrencyCode: "USD"},
+			// r5.large priced enough to pass (4 × 50 = 200 ≥ 200).
+			{InstanceType: "r5.large", OfferingID: "off-r5", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4, CurrencyCode: "USD"},
 		}, nil
 	}
-	recs := AnalyzeReshapingWithOfferings(
+
+	recs := AnalyzeReshapingWithRecs(
 		context.Background(),
-		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD", // src units = 200
+		}},
 		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
 		95,
+		"us-east-1", "USD",
 		lookup,
 	)
-	if len(recs) != 1 {
-		t.Fatalf("expected rec to still ship; got %d", len(recs))
-	}
-	if len(recs[0].AlternativeTargets) != 1 || recs[0].AlternativeTargets[0].InstanceType != "m6i.large" {
-		t.Fatalf("expected only m6i.large to survive; got %+v", recs[0].AlternativeTargets)
-	}
+	require.Len(t, recs, 1)
+	alts := recs[0].AlternativeTargets
+	require.Len(t, alts, 1, "only r5.large should pass; c5.large gets filtered for failing the $-units check")
+	assert.Equal(t, "r5.large", alts[0].InstanceType)
 }
 
-func TestAnalyzeReshapingWithOfferings_LookupErrorFallsBackToBaseRecs(t *testing.T) {
+// TestAnalyzeReshapingWithRecs_NoSourcePricingSkipsFilter — when the
+// caller doesn't populate RIInfo.MonthlyCost (zero), the filter is
+// skipped entirely and every cross-family offering passes through.
+// Pins backwards compatibility for older callers that don't compute
+// per-RI monthly cost.
+func TestAnalyzeReshapingWithRecs_NoSourcePricingSkipsFilter(t *testing.T) {
 	t.Parallel()
-	// Cost Explorer 5xx → return base recs with empty
-	// AlternativeTargets (primary target still shown). Losing pricing
-	// is strictly less bad than losing the whole reshape page.
-	lookup := func(ctx context.Context, _ []string) ([]OfferingOption, error) {
-		return nil, fmt.Errorf("api call failed")
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// Would normally be dropped if the filter ran, but no source
+			// pricing means we keep today's "show every cross-family match"
+			// behaviour.
+			{InstanceType: "c5.large", OfferingID: "off-c5", EffectiveMonthlyCost: 5.0, NormalizationFactor: 4},
+			{InstanceType: "r5.large", OfferingID: "off-r5", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
+		}, nil
 	}
-	recs := AnalyzeReshapingWithOfferings(
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		// Older RIInfo shape: no MonthlyCost / CurrencyCode populated.
+		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	require.Len(t, recs[0].AlternativeTargets, 2,
+		"with no source pricing, both cross-family alternatives must remain visible")
+}
+
+// TestAnalyzeReshapingWithRecs_ExcludesPrimaryTarget — when the lookup
+// returns an offering whose InstanceType matches the rec's primary
+// TargetInstanceType, that offering is excluded from AlternativeTargets
+// because it isn't an alternative to itself; it's the same suggestion.
+// The cross-family offerings that remain are surfaced as before.
+func TestAnalyzeReshapingWithRecs_ExcludesPrimaryTarget(t *testing.T) {
+	t.Parallel()
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// Same family + same size as the primary target — must be
+			// excluded by the same-family guard regardless.
+			{InstanceType: "m5.large", OfferingID: "off-m5", EffectiveMonthlyCost: 40.0, NormalizationFactor: 4},
+			{InstanceType: "c5.large", OfferingID: "off-c5", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
 		context.Background(),
 		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
 		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
 		95,
+		"us-east-1", "",
 		lookup,
 	)
-	if len(recs) != 1 {
-		t.Fatalf("expected 1 rec; got %d", len(recs))
+	require.Len(t, recs, 1)
+	require.Len(t, recs[0].AlternativeTargets, 1)
+	assert.Equal(t, "c5.large", recs[0].AlternativeTargets[0].InstanceType)
+}
+
+// TestAnalyzeReshapingWithRecs_LookupErrorFallsBackToBaseRecs — Cost
+// Explorer cache read fails: return the base recs (primary target
+// intact, empty alternatives). Losing alternatives is strictly less
+// bad than losing the whole reshape page.
+func TestAnalyzeReshapingWithRecs_LookupErrorFallsBackToBaseRecs(t *testing.T) {
+	t.Parallel()
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return nil, fmt.Errorf("postgres timeout")
 	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
 	assert.Equal(t, "m5.large", recs[0].TargetInstanceType)
-	// Base recs had name-only alternatives; lookup failed so those
-	// are preserved as-is (not silently cleared). The handler can
-	// still render instance-type chips even without pricing.
-	assert.NotEmpty(t, recs[0].AlternativeTargets,
-		"lookup error should leave the name-only alternatives intact")
+	assert.Empty(t, recs[0].AlternativeTargets,
+		"lookup error → no alternatives, primary target still ships")
 }
 
-func TestAnalyzeReshapingWithOfferings_NilLookupUsesBaseRecs(t *testing.T) {
+// TestAnalyzeReshapingWithRecs_NilLookupUsesBaseRecs — defensive: nil
+// lookup should not panic; the base recs flow through unchanged.
+func TestAnalyzeReshapingWithRecs_NilLookupUsesBaseRecs(t *testing.T) {
 	t.Parallel()
-	recs := AnalyzeReshapingWithOfferings(
+	recs := AnalyzeReshapingWithRecs(
 		context.Background(),
 		[]RIInfo{{ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
 		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
 		95,
+		"us-east-1", "USD",
 		nil,
 	)
-	if len(recs) != 1 {
-		t.Fatalf("expected 1 rec; got %d", len(recs))
+	require.Len(t, recs, 1)
+	assert.Equal(t, "m5.large", recs[0].TargetInstanceType)
+	assert.Empty(t, recs[0].AlternativeTargets)
+}
+
+// TestAnalyzeReshapingWithRecs_LegacyFamilyM4GeneratesAlternatives —
+// post-refactor, "legacy family" support is no longer hand-curated:
+// any cross-family offering returned by the cached recs surfaces as
+// long as it passes the dollar-units check. An underutilised m4 RI
+// paired against c5 / r5 / m5 recs surfaces all three (m5 because it
+// is a different family from m4 and the gate accepts).
+func TestAnalyzeReshapingWithRecs_LegacyFamilyM4GeneratesAlternatives(t *testing.T) {
+	t.Parallel()
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			{InstanceType: "m5.large", OfferingID: "off-m5l", EffectiveMonthlyCost: 60.0, NormalizationFactor: 4, CurrencyCode: "USD"},
+			{InstanceType: "c5.large", OfferingID: "off-c5l", EffectiveMonthlyCost: 70.0, NormalizationFactor: 4, CurrencyCode: "USD"},
+		}, nil
 	}
-	assert.NotEmpty(t, recs[0].AlternativeTargets,
-		"nil lookup should still leave the name-only alternatives in place")
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-m4", InstanceType: "m4.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD", // src units = 200
+		}},
+		[]UtilizationInfo{{RIID: "ri-m4", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	got := recs[0]
+	assert.Equal(t, "m4.large", got.TargetInstanceType)
+	require.Len(t, got.AlternativeTargets, 2,
+		"both m5.large and c5.large should pass the $-units check")
+	// Ascending by EffectiveMonthlyCost.
+	assert.Equal(t, "m5.large", got.AlternativeTargets[0].InstanceType)
+	assert.Equal(t, "c5.large", got.AlternativeTargets[1].InstanceType)
+}
+
+// TestAnalyzeReshapingWithRecs_TermMismatchedAlternativesFiltered pins
+// the term-match guard: a 1y source RI must not see 3y alternatives in
+// AlternativeTargets (and vice versa) because AWS only allows exchanges
+// within the same term. Both sides populate TermSeconds — the guard
+// rejects the mismatched offering before AlternativeTargets is built.
+const oneYearSeconds = int64(365 * 24 * 60 * 60)
+const threeYearSeconds = 3 * oneYearSeconds
+
+func TestAnalyzeReshapingWithRecs_TermMismatchedAlternativesFiltered(t *testing.T) {
+	t.Parallel()
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// 1y c5.large — same term as the source, must surface.
+			{InstanceType: "c5.large", OfferingID: "off-c5-1y", EffectiveMonthlyCost: 50, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: oneYearSeconds},
+			// 3y r5.large — term mismatch, must be filtered out even
+			// though it would otherwise pass the $-units check.
+			{InstanceType: "r5.large", OfferingID: "off-r5-3y", EffectiveMonthlyCost: 60, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: threeYearSeconds},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD",
+			TermSeconds: oneYearSeconds, // 1y source
+		}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	require.Len(t, recs[0].AlternativeTargets, 1,
+		"only the 1y alternative survives; the 3y r5.large must be filtered as term-mismatched")
+	assert.Equal(t, "c5.large", recs[0].AlternativeTargets[0].InstanceType)
+	assert.Equal(t, oneYearSeconds, recs[0].AlternativeTargets[0].TermSeconds,
+		"surviving alternative must carry the source's term so the UI can label it")
+}
+
+// TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard pins the
+// backwards-compat path: when either the source or the offering omits
+// TermSeconds, the guard does not fire and the alternative passes
+// through (subject to the other gates). Mirrors the existing
+// MonthlyCost==0 / CurrencyCode=="" skip semantics.
+func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
+	t.Parallel()
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			// 3y offering, but the source has no term info — the term
+			// gate stays disabled so the offering surfaces.
+			{InstanceType: "r5.large", OfferingID: "off-r5-3y", EffectiveMonthlyCost: 60, NormalizationFactor: 4, CurrencyCode: "USD", TermSeconds: threeYearSeconds},
+		}, nil
+	}
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 25, CurrencyCode: "USD",
+			// TermSeconds intentionally zero — older callers / fixtures.
+		}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	require.Len(t, recs[0].AlternativeTargets, 1,
+		"source TermSeconds==0 must skip the term gate so today's behaviour is preserved")
+	assert.Equal(t, "r5.large", recs[0].AlternativeTargets[0].InstanceType)
 }
 
 // TestPassesDollarUnitsCheck pins the local pre-filter rule that gates
@@ -347,100 +445,4 @@ func TestPassesDollarUnitsCheck(t *testing.T) {
 			assert.Equal(t, c.want, got)
 		})
 	}
-}
-
-// TestAnalyzeReshapingWithOfferings_LegacyFamilyM4GeneratesM5Alternative
-// — given an underutilised m4 RI, the new legacy-family entry in
-// peerFamilyGroups + the dollar-units pre-filter should surface m5 as
-// an alternative when its (NF × EMC) is at least the source's units.
-func TestAnalyzeReshapingWithOfferings_LegacyFamilyM4GeneratesM5Alternative(t *testing.T) {
-	t.Parallel()
-
-	lookup := func(_ context.Context, _ []string) ([]OfferingOption, error) {
-		return []OfferingOption{
-			// m4.large primary: NF=4, EMC=$50 → 200 units (matches src 200, passes the boundary).
-			{InstanceType: "m4.large", OfferingID: "off-m4l", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
-			// m5.large alternative: NF=4, EMC=$60 → 240 units (>= src 200 → passes).
-			{InstanceType: "m5.large", OfferingID: "off-m5l", EffectiveMonthlyCost: 60.0, NormalizationFactor: 4},
-		}, nil
-	}
-
-	recs := AnalyzeReshapingWithOfferings(
-		context.Background(),
-		[]RIInfo{{
-			ID: "ri-m4", InstanceType: "m4.xlarge", InstanceCount: 1, OfferingClass: "convertible",
-			NormalizationFactor: 8, MonthlyCost: 25, // src units = 200
-		}},
-		[]UtilizationInfo{{RIID: "ri-m4", UtilizationPercent: 50}},
-		95,
-		lookup,
-	)
-	require.Len(t, recs, 1)
-	got := recs[0]
-	assert.Equal(t, "m4.large", got.TargetInstanceType)
-	require.Len(t, got.AlternativeTargets, 1, "m5.large should pass the $-units check")
-	assert.Equal(t, "m5.large", got.AlternativeTargets[0].InstanceType)
-}
-
-// TestAnalyzeReshapingWithOfferings_DollarUnitsFilterDropsUnviable
-// — when an alternative would fail AWS's $-units check, the local
-// pre-filter excludes it from the rec's AlternativeTargets so the UI
-// doesn't show a suggestion that would be rejected at exchange time.
-func TestAnalyzeReshapingWithOfferings_DollarUnitsFilterDropsUnviable(t *testing.T) {
-	t.Parallel()
-
-	lookup := func(_ context.Context, _ []string) ([]OfferingOption, error) {
-		return []OfferingOption{
-			// Primary m5.large stays untouched (it's not an "alternative").
-			{InstanceType: "m5.large", OfferingID: "off-m5l", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
-			// m6i.large priced too cheap to satisfy the units check — should be filtered out.
-			{InstanceType: "m6i.large", OfferingID: "off-m6il", EffectiveMonthlyCost: 5.0, NormalizationFactor: 4},
-			// m7g.large priced enough to pass.
-			{InstanceType: "m7g.large", OfferingID: "off-m7gl", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
-		}, nil
-	}
-
-	recs := AnalyzeReshapingWithOfferings(
-		context.Background(),
-		[]RIInfo{{
-			ID: "ri-m5", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
-			NormalizationFactor: 8, MonthlyCost: 25, // src units = 200
-		}},
-		[]UtilizationInfo{{RIID: "ri-m5", UtilizationPercent: 50}},
-		95,
-		lookup,
-	)
-	require.Len(t, recs, 1)
-	alts := recs[0].AlternativeTargets
-	require.Len(t, alts, 1, "only m7g.large should pass; m6i.large gets filtered for failing the $-units check")
-	assert.Equal(t, "m7g.large", alts[0].InstanceType)
-}
-
-// TestAnalyzeReshapingWithOfferings_NoSourcePricingSkipsFilter — when
-// the caller doesn't populate RIInfo.MonthlyCost (zero), the filter is
-// skipped entirely and behaviour matches today's "name + offering"
-// shape. Pins backwards compatibility for older callers.
-func TestAnalyzeReshapingWithOfferings_NoSourcePricingSkipsFilter(t *testing.T) {
-	t.Parallel()
-
-	lookup := func(_ context.Context, _ []string) ([]OfferingOption, error) {
-		return []OfferingOption{
-			{InstanceType: "m5.large", OfferingID: "off-m5l", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
-			// Would normally be dropped if the filter ran, but no source
-			// pricing means we keep today's "show every match" behaviour.
-			{InstanceType: "m6i.large", OfferingID: "off-m6il", EffectiveMonthlyCost: 5.0, NormalizationFactor: 4},
-			{InstanceType: "m7g.large", OfferingID: "off-m7gl", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
-		}, nil
-	}
-
-	recs := AnalyzeReshapingWithOfferings(
-		context.Background(),
-		// Older RIInfo shape: no MonthlyCost / CurrencyCode populated.
-		[]RIInfo{{ID: "ri-m5", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible"}},
-		[]UtilizationInfo{{RIID: "ri-m5", UtilizationPercent: 50}},
-		95,
-		lookup,
-	)
-	require.Len(t, recs, 1)
-	require.Len(t, recs[0].AlternativeTargets, 2, "with no source pricing, both alternatives must remain visible")
 }

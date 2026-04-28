@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,6 +64,116 @@ func TestHandler_loadAPIKey_EmptyARN(t *testing.T) {
 	key, err := handler.loadAPIKey(ctx)
 	assert.NoError(t, err)
 	assert.Empty(t, key)
+}
+
+// TestLoadAPIKey_DoesNotPoisonSharedAWSConfigCache is a regression test
+// for CodeRabbit pass-5 finding 1: loadAPIKey used to share
+// h.awsCfgOnce/h.awsCfgErr with the request-path identity resolver, so a
+// transient cold-start failure (NewHandler runs loadAPIKey under a 5s
+// deadline) could permanently seal awsCfgErr for the entire Lambda
+// container lifetime — and after the fail-closed STS error propagation
+// landed, that meant the multi-tenant reshape scope filter would be
+// permanently broken until the container recycled.
+//
+// The fix (commit 62667c8d2) made loadAPIKey load AWS config locally and
+// stop touching the shared sync.Once. This test asserts that logical
+// isolation rather than trying to provoke a config-load failure
+// (LoadDefaultConfig itself rarely errs — credential failures surface
+// later at the SDK call). Two halves:
+//
+//  1. h.awsCfgErr stays nil regardless of loadAPIKey's outcome — the
+//     shared error field must not be written at all.
+//  2. h.awsCfgOnce is still virgin after loadAPIKey returns. Verified
+//     by having a sentinel sync.Once.Do fire (Do only runs the func if
+//     it has not yet been called). If loadAPIKey had used the shared
+//     Once, our sentinel call would no-op and the test would fail.
+func TestLoadAPIKey_DoesNotPoisonSharedAWSConfigCache(t *testing.T) {
+	// Force a deterministic AWS config environment so the test does not
+	// depend on the dev machine's ambient credentials. The actual outcome
+	// of the GetSecretValue call is irrelevant — we only assert that the
+	// shared cache is left untouched on the way through. We CLEAR rather
+	// than set fake credential env-vars: setting an `AKIA…` shaped value
+	// trips the repo's git-secrets pre-commit scanner, and clearing them
+	// (combined with /dev/null shared-config files) is enough to keep
+	// LoadDefaultConfig deterministic — it will resolve to "no
+	// credentials" without hitting any user's ambient profile.
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	// Disable any locally-configured shared config / profile so the SDK
+	// never tries to read ~/.aws/config in CI.
+	t.Setenv("AWS_SDK_LOAD_CONFIG", "0")
+	t.Setenv("AWS_CONFIG_FILE", "/dev/null")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+	t.Setenv("AWS_PROFILE", "")
+	// Disable IMDS so the SDK doesn't probe EC2 instance metadata on
+	// hosts where it's reachable (CI runners, dev EC2). Without this,
+	// the credential provider chain can hang for the full IMDS retry
+	// window before falling through to "no credentials" — making the
+	// test slow and host-dependent. (CodeRabbit nit on PR #79.)
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+	cases := []struct {
+		name       string
+		secretsARN string
+	}{
+		{
+			name:       "empty ARN short-circuits before any AWS work",
+			secretsARN: "",
+		},
+		{
+			name: "non-empty ARN goes through awsconfig.LoadDefaultConfig",
+			// Syntactically valid but unresolvable ARN. The SecretsManager
+			// call will fail (no network / fake creds), but the failure
+			// must NOT touch the shared awsCfg* fields.
+			secretsARN: "arn:aws:secretsmanager:us-east-1:000000000000:secret:nonexistent-XXX",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			h := &Handler{secretsARN: tc.secretsARN}
+
+			// Bound the call so a hung credential-resolution attempt
+			// can't stall the test. We don't care about the outcome.
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_, _ = h.loadAPIKey(ctx)
+
+			// Half 1: the shared error field must be untouched.
+			assert.NoError(t, h.awsCfgErr,
+				"loadAPIKey must not write to h.awsCfgErr; doing so poisons the request-path identity resolver for the rest of the handler's lifetime")
+
+			// Half 2: the shared sync.Once must still be virgin. If
+			// loadAPIKey had called h.awsCfgOnce.Do, our sentinel.Do
+			// below would no-op and `fired` would stay false.
+			fired := false
+			h.awsCfgOnce.Do(func() { fired = true })
+			assert.True(t, fired,
+				"loadAPIKey must not call h.awsCfgOnce.Do; the request-path resolver owns that Once and a transient loadAPIKey failure must not seal it")
+
+			// And nothing we did inside loadAPIKey should have populated
+			// the cached config — only the request-path resolver does.
+			// The Region we just set via our own Do above is the test's
+			// sentinel write, not loadAPIKey's. Compare structurally:
+			// loadAPIKey would have called LoadDefaultConfig and written
+			// a fully-populated config; the sentinel branch wrote zero.
+			assert.Empty(t, h.awsCfg.Region,
+				"loadAPIKey must not populate h.awsCfg; that field is owned by the request-path resolver")
+		})
+	}
+
+	// Sanity: an independent Once on a fresh handler still works
+	// normally — i.e. the test's sentinel trick isn't mutating package
+	// state in a way that breaks the production call site. This guards
+	// against a future refactor that accidentally shares the Once at
+	// package scope.
+	var probe sync.Once
+	probeFired := false
+	probe.Do(func() { probeFired = true })
+	require.True(t, probeFired, "sanity: a fresh sync.Once must fire on first Do")
 }
 
 // Tests moved from handler_router_test.go - these test HandleRequest routing logic
