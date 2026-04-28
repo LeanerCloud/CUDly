@@ -8,7 +8,15 @@ import { formatCurrency, formatTerm, escapeHtml } from './utils';
 import { renderFreshness } from './freshness';
 import { getRecommendationDetail, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
-import { isPaymentSupported, paymentOptionsFor, type Provider as CompatProvider, type Payment as CompatPayment } from './lib/purchase-compatibility';
+import {
+  isPaymentSupported,
+  isSavingsPlanService,
+  paymentOptionsFor,
+  SAVINGS_PLANS_BUCKET_KEY,
+  savingsPlansBucketLabel,
+  type Payment as CompatPayment,
+  type Provider as CompatProvider,
+} from './lib/purchase-compatibility';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 import { openModal } from './modal';
@@ -1379,20 +1387,38 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   // each rec is purchased with its OWN per-row term (the toolbar Term
   // selector is gone). Multi-term selections legitimately fan out into
   // multiple buckets, e.g. AWS EC2 1y + AWS EC2 3y → 2 buckets.
+  //
+  // Issue #132: SP recs (savings-plans-{compute,ec2instance,sagemaker,
+  // database}) collapse into a single bucket per (provider, term) so an
+  // operator who used to bulk-buy SP pre-PR-#123 (when there was one
+  // 'savings-plans' service) keeps the one-click experience. Each rec
+  // retains its real per-plan-type service slug — only the bucket key
+  // is canonicalized via SAVINGS_PLANS_BUCKET_KEY. The backend
+  // executePurchase loops per rec and uses rec.service for the
+  // suppression and audit records, so a mixed-SP POST behaves
+  // identically to four separate POSTs except that there's only one
+  // approval token / email.
   const buckets = new Map<string, LocalRecommendation[]>();
   for (const r of scaled) {
-    const key = `${r.provider}|${r.service}|${r.term}`;
+    const bucketService = isSavingsPlanService(r.service) ? SAVINGS_PLANS_BUCKET_KEY : r.service;
+    const key = `${r.provider}|${bucketService}|${r.term}`;
     const existing = buckets.get(key);
     if (existing) existing.push(r);
     else buckets.set(key, [r]);
   }
   const bucketEntries = Array.from(buckets.entries());
 
-  // Per-bucket compatibility check using the bucket's own term.
+  // Per-bucket compatibility check using the bucket's own term. For a
+  // mixed-SP bucket we check every rec's service — if ANY rec's
+  // (provider, service, term, payment) is unsupported, the whole bucket
+  // is flagged incompatible. SP plan types share the same compatibility
+  // rules today (no SP variant rejects no-upfront the way RDS 3yr does),
+  // so this is a defensive belt-and-suspenders check rather than a
+  // common case.
   const incompatible = bucketEntries.filter(([_key, recs]) => {
-    const r = recs[0];
-    if (!r) return false;
-    return !isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, tb.payment);
+    return recs.some(
+      (r) => !isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, tb.payment),
+    );
   });
 
   if (bucketEntries.length > 1 || incompatible.length > 0) {
@@ -1418,6 +1444,13 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
 // FanOutBucket groups one batch of recs under a single (provider,
 // service, term, payment, capacity) choice. A multi-bucket Purchase
 // fires one executePurchase POST per bucket.
+//
+// `service` is the canonical bucket slug — equal to the rec's service
+// for non-SP buckets, or `SAVINGS_PLANS_BUCKET_KEY` for any bucket
+// containing one or more savings-plans-* recs (issue #132). Per-rec
+// service slugs are preserved on `recs[].service` and round-trip into
+// the executePurchase POST body — the backend uses each rec's own
+// service for suppression and audit records.
 //
 // `paymentSource` (issue #111) records WHERE this bucket's payment
 // default came from:
@@ -1564,9 +1597,13 @@ async function openFanOutModal(
     .map(([_key, recs]) => {
       const r = recs[0]!;
       const seed = resolveBucketPaymentSeed(recs, toolbar, overridesByAccount);
+      // SP buckets carry the canonical bucket key as `service` so the
+      // section header can render the mixed-plan-type label; the per-
+      // rec slugs on recs[].service are what the backend sees.
+      const bucketService = isSavingsPlanService(r.service) ? SAVINGS_PLANS_BUCKET_KEY : r.service;
       return {
         provider: r.provider as CompatProvider,
-        service: r.service,
+        service: bucketService,
         // Each bucket is now term-uniform (key includes term), so we read
         // the term from the bucket itself rather than from the dropped
         // toolbar override.
@@ -1638,17 +1675,31 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   const section = document.createElement('section');
   section.className = 'fanout-bucket form-section';
 
+  // Service label: SP bucket → "Savings Plans (Compute + SageMaker)"
+  // listing only the plan types actually present in this bucket;
+  // non-SP bucket → the raw service slug (e.g. "ec2", "rds"). Order
+  // follows the recs' insertion order so it tracks the table.
+  const isSPBucket = b.service === SAVINGS_PLANS_BUCKET_KEY;
+  const serviceLabel = isSPBucket
+    ? savingsPlansBucketLabel(b.recs.map((r) => r.service))
+    : b.service;
+
   const title = document.createElement('h4');
-  title.textContent = `${b.provider.toUpperCase()} / ${b.service} — ${b.recs.length} commitment${b.recs.length === 1 ? '' : 's'}`;
+  title.textContent = `${b.provider.toUpperCase()} / ${serviceLabel} — ${b.recs.length} commitment${b.recs.length === 1 ? '' : 's'}`;
   section.appendChild(title);
 
   const status = document.createElement('p');
   const renderStatus = (): void => {
-    const compat = isPaymentSupported(b.provider, b.service, b.term, b.payment);
+    // For mixed-SP buckets check compatibility per rec — every rec must
+    // be supported. For non-SP buckets every rec shares b.service so a
+    // single check is equivalent.
+    const compat = b.recs.every((r) =>
+      isPaymentSupported(b.provider, r.service, b.term, b.payment),
+    );
     status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
     status.textContent = compat
       ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
-      : `Invalid combo: ${b.provider} / ${b.service} doesn't support ${b.term}yr + ${b.payment}. This bucket will be skipped.`;
+      : `Invalid combo: ${b.provider} / ${serviceLabel} doesn't support ${b.term}yr + ${b.payment}. This bucket will be skipped.`;
   };
   renderStatus();
   section.appendChild(status);

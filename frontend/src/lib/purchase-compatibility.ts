@@ -64,3 +64,50 @@ export function paymentOptionsFor(provider: Provider, service: string, term: Ter
   const candidates: Payment[] = ['all-upfront', 'partial-upfront', 'no-upfront', 'monthly'];
   return candidates.filter((p) => isPaymentSupported(provider, service, term, p));
 }
+
+// Mirror of common.IsSavingsPlan (pkg/common/types.go). PR #123 split a
+// single 'savings-plans' service into four plan-type slugs
+// (savings-plans-{compute,ec2instance,sagemaker,database}). Code that
+// needs to treat all four as one logical group — bulk-buy bucketing,
+// aggregate filters — uses this predicate. Kept as a `startsWith`
+// rather than a hardcoded set so a future plan type added on the
+// backend (`common.IsSavingsPlan` is also `HasPrefix`) is picked up
+// without a frontend edit.
+export function isSavingsPlanService(service: string): boolean {
+  return service.startsWith('savings-plans');
+}
+
+// SAVINGS_PLANS_BUCKET_KEY is the canonical service slug used in the
+// bulk-buy bucket key for any SP rec, so all four plan types collapse
+// into one bucket. Each rec keeps its real per-plan-type service slug
+// — only the bucket key is canonicalized.
+export const SAVINGS_PLANS_BUCKET_KEY = 'savings-plans';
+
+// Pretty short label per SP plan type used inside the mixed-bucket
+// label (e.g. "Savings Plans (Compute + SageMaker)"). Mirrors the
+// abbreviations in plans.ts:planServiceLabel without coupling to it.
+const SP_SHORT_LABEL: Record<string, string> = {
+  'savings-plans-compute':     'Compute',
+  'savings-plans-ec2instance': 'EC2 Instance',
+  'savings-plans-sagemaker':   'SageMaker',
+  'savings-plans-database':    'Database',
+};
+
+// savingsPlansBucketLabel formats the bulk-buy bucket title for one
+// or more SP plan types. Returns:
+//   - 'Savings Plans (Compute)' for a single plan type
+//   - 'Savings Plans (Compute + SageMaker)' for a mixed bucket
+//   - 'Savings Plans' if no plan types resolve (defensive fallback)
+// Plan-type order in the output follows insertion order of the input
+// slugs — caller controls the order.
+export function savingsPlansBucketLabel(serviceSlugs: readonly string[]): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const slug of serviceSlugs) {
+    if (!isSavingsPlanService(slug) || seen.has(slug)) continue;
+    seen.add(slug);
+    parts.push(SP_SHORT_LABEL[slug] ?? slug);
+  }
+  if (parts.length === 0) return 'Savings Plans';
+  return `Savings Plans (${parts.join(' + ')})`;
+}
