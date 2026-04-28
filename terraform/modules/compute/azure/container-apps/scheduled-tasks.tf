@@ -10,9 +10,15 @@
 # user-assigned identity, and the call-endpoint action references
 # `@body('get-secret')['value']` in the outgoing Authorization header.
 #
-# Effect: `terraform show` / `az logicapp show` only ever reveal the Key Vault
-# URL the workflow is going to call — the actual secret value is fetched
-# in-process by the Logic Apps engine and never lands in any persisted artifact.
+# Effect: `terraform show` / `az resource show --resource-type
+# Microsoft.Logic/workflows --api-version 2019-05-01 -g <rg> -n <wf>` only ever
+# reveal the Key Vault URL the workflow is going to call — the actual secret
+# value is fetched in-process by the Logic Apps engine and never lands in any
+# persisted artifact. Note: `az logicapp show` is for Logic Apps Standard
+# (`Microsoft.Web/sites`); these workflows are Consumption-tier
+# (`Microsoft.Logic/workflows`), and `az logic workflow show` requires the
+# `logic` cli extension which can fail to install in some environments —
+# `az resource show` works without extensions. See issue #183.
 
 # Parse cron schedule into Logic Apps recurrence format
 # Azure Logic Apps uses a different format than cron
