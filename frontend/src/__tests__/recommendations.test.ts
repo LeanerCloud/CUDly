@@ -1212,6 +1212,136 @@ describe('Bundle B: column header filter triggers', () => {
     expect(live?.getAttribute('aria-live')).toBe('polite');
     expect(live?.textContent).toMatch(/Showing \d+ of \d+/);
   });
+
+  // Issue #137: 'All Savings Plans' affordance in the service column-filter
+  // popover. PR #123 split a single 'savings-plans' service into four per-
+  // plan-type slugs, so the user lost the one-click "filter to all SP recs"
+  // affordance. These tests pin the new tri-state group toggle.
+  describe('Issue #137: All Savings Plans tri-state in service column-filter', () => {
+    const spRecs = [
+      { id: 'rec-aws-1',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2',                        resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'rec-sp-c',   provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',      resource_type: 'sp',        region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+      { id: 'rec-sp-e',   provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-ec2instance',  resource_type: 'sp',        region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 700 },
+      { id: 'rec-sp-s',   provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker',    resource_type: 'sp',        region: 'us-east-1', count: 1, term: 1, savings: 250, upfront_cost: 900 },
+    ];
+
+    beforeEach(() => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: spRecs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(spRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(spRecs);
+    });
+
+    test('service popover renders the All Savings Plans group toggle when 2+ SP slugs present', async () => {
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const groupBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="sp-group"]');
+      expect(groupBox).not.toBeNull();
+      const groupLabel = groupBox?.closest('label');
+      expect(groupLabel?.textContent).toContain('All Savings Plans');
+    });
+
+    test('group toggle does NOT render for non-service columns', async () => {
+      await loadRecommendations();
+      const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+      providerBtn?.click();
+      const groupBox = document.querySelector('.column-filter-popover input[data-role="sp-group"]');
+      expect(groupBox).toBeNull();
+    });
+
+    test('group toggle does NOT render when only 0 or 1 SP slugs present', async () => {
+      const oneSPRec = [
+        { id: 'rec1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',                   resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+        { id: 'rec2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute', resource_type: 'sp',        region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: oneSPRec, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(oneSPRec);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(oneSPRec);
+
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const groupBox = document.querySelector('.column-filter-popover input[data-role="sp-group"]');
+      expect(groupBox).toBeNull();
+    });
+
+    test('clicking group toggle commits a filter with all SP slug values', async () => {
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const groupBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="sp-group"]');
+      expect(groupBox).not.toBeNull();
+      // Browser flips checked → true on first click; simulate that.
+      groupBox!.checked = true;
+      groupBox!.dispatchEvent(new Event('change'));
+
+      // Filter committed with the three SP values (in any order). Asserting
+      // on the mock rather than cb.checked because rerenderRecommendations
+      // → resyncOpenPopover resets cb state from the (mocked) filter
+      // accessor — the mock call args are the canonical signal of what
+      // the click handler did.
+      const calls = (state.setRecommendationsColumnFilter as jest.Mock).mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[0]).toBe('service');
+      expect(lastCall[1]?.kind).toBe('set');
+      expect((lastCall[1]?.values as string[]).sort()).toEqual([
+        'savings-plans-compute',
+        'savings-plans-ec2instance',
+        'savings-plans-sagemaker',
+      ]);
+    });
+
+    test('clicking group toggle (off) clears the SP filter', async () => {
+      // Pre-set the filter so the SP tri-state renders as checked.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['savings-plans-compute', 'savings-plans-ec2instance', 'savings-plans-sagemaker'] },
+      });
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const groupBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="sp-group"]');
+      expect(groupBox?.checked).toBe(true);
+      // Browser flips → unchecked on click of an already-checked tri-state.
+      groupBox!.checked = false;
+      groupBox!.dispatchEvent(new Event('change'));
+
+      // No SP boxes selected → commit() treats "no selections" as "no
+      // narrowing" and persists null (filter cleared).
+      expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('service', null);
+    });
+
+    test('group toggle resyncs to indeterminate when only some SPs are filter-active', async () => {
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['savings-plans-compute'] },
+      });
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const groupBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="sp-group"]');
+      expect(groupBox?.checked).toBe(false);
+      expect(groupBox?.indeterminate).toBe(true);
+    });
+
+    test('individual SP checkbox change commits the partial-SP filter', async () => {
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const cbCompute = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-value="savings-plans-compute"]');
+      cbCompute!.checked = true;
+      cbCompute!.dispatchEvent(new Event('change'));
+      // 1 of 4 service distinct values selected → filter committed with
+      // just that slug.
+      const calls = (state.setRecommendationsColumnFilter as jest.Mock).mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[0]).toBe('service');
+      expect(lastCall[1]?.kind).toBe('set');
+      expect(lastCall[1]?.values).toEqual(['savings-plans-compute']);
+    });
+  });
 });
 
 describe('Bundle B: sticky bottom action box', () => {
