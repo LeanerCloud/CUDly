@@ -261,6 +261,12 @@ resource "aws_iam_policy" "compute" {
         Resource = "*"
       },
       {
+        # CI deploy SA configures email identities (verify domain,
+        # rotate DKIM, tag) but does NOT send mail — that path lives
+        # in the Lambda runtime role (modules/compute/aws/lambda).
+        # ses:SendEmail intentionally excluded here per CR pass-3
+        # nitpick — adding it would let a leaked deploy SA exfiltrate
+        # via mail without unlocking any deploy capability.
         Sid    = "SES"
         Effect = "Allow"
         Action = [
@@ -268,7 +274,6 @@ resource "aws_iam_policy" "compute" {
           "ses:DeleteEmailIdentity",
           "ses:GetEmailIdentity",
           "ses:PutEmailIdentityDkimSigningAttributes",
-          "ses:SendEmail",
           "ses:TagResource",
           "ses:UntagResource",
         ]
