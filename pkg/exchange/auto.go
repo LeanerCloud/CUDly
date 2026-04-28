@@ -313,7 +313,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		PaymentDue:         paymentDueStr,
 		Status:             "pending",
 		ApprovalToken:      token,
-		Mode:               "manual",
+		Mode:               string(ExchangeModeManual),
 		ExpiresAt:          &expiresAt,
 	}
 
@@ -426,7 +426,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		TargetCount:        int(rec.TargetCount),
 		PaymentDue:         paymentDueStr,
 		Status:             "completed",
-		Mode:               "auto",
+		Mode:               string(ExchangeModeAuto),
 		CompletedAt:        &now,
 	}
 
