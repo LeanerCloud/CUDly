@@ -209,6 +209,37 @@ func logMissingCSRFToken(req *events.LambdaFunctionURLRequest, csrfToken string)
 		req.RequestContext.HTTP.Method, req.RequestContext.HTTP.Path, req.RequestContext.HTTP.SourceIP)
 }
 
+// requireUser checks that the request carries a valid authentication
+// (admin API key OR any valid Bearer-token session) and returns the
+// resolved Session. Returns 401 on absence/invalid credentials. Used by
+// Router.Route to enforce AuthUser routes at the router layer rather
+// than relying solely on validateSecurity middleware ordering — see #60.
+//
+// Unlike requireAdmin, this does NOT require admin role. Any
+// authenticated identity passes.
+func (h *Handler) requireUser(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
+	// Admin API key first (stateless).
+	apiKey := extractAPIKey(req)
+	if h.checkAdminAPIKey(apiKey) {
+		return &Session{Role: "admin", UserID: "admin-api-key"}, nil
+	}
+
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil, NewClientError(401, "no authorization token provided")
+	}
+
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil || session == nil {
+		return nil, NewClientError(401, "invalid session")
+	}
+	return session, nil
+}
+
 // requireAdmin checks if the current user has admin role.
 // Accepts both admin API-key auth and Bearer token auth.
 func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {

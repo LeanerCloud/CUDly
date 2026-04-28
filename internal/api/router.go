@@ -11,20 +11,31 @@ import (
 // RouteHandler is a function that handles a matched route
 type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error)
 
-// AuthLevel controls how Router.Route() enforces authentication.
-// The zero value is AuthAdmin — secure by default.
-// Any Route without an explicit Auth field requires admin access.
+// AuthLevel controls how Router.Route() enforces authentication. Each
+// non-AuthPublic level is enforced AT THE ROUTER LAYER (in Route()
+// below) — not solely via validateSecurity / authenticate middleware,
+// so a future refactor that reorders middleware or adds a path that
+// bypasses validateSecurity cannot silently expose AuthUser routes
+// (see #60).
+//
+// The zero value is AuthAdmin — secure by default. Any Route without
+// an explicit Auth field requires admin access.
 type AuthLevel int
 
 const (
 	// AuthAdmin requires admin role (API key or admin bearer token).
-	// Zero value — any Route without an explicit Auth field gets this.
+	// Enforced via h.requireAdmin in Router.Route — returns 401/403
+	// before the handler runs. Zero value — any Route without an
+	// explicit Auth field gets this.
 	AuthAdmin AuthLevel = iota
-	// AuthUser requires any authenticated user. Use for self-service
+	// AuthUser requires any authenticated user (admin API key OR a
+	// valid session). Enforced via h.requireUser in Router.Route —
+	// returns 401 before the handler runs. Use for self-service
 	// endpoints (logout, profile, API key management).
 	AuthUser
-	// AuthPublic requires no authentication. Must also be listed in
-	// isPublicEndpoint() for middleware bypass.
+	// AuthPublic requires no authentication. The router does NOT call
+	// any auth helper for these routes; the handler runs directly.
+	// Must also be listed in isPublicEndpoint() for middleware bypass.
 	AuthPublic
 )
 
@@ -217,14 +228,31 @@ func (r *Router) registerRoutes() {
 }
 
 // Route finds and executes the matching route handler.
-// Routes with Auth == AuthAdmin (the default) require admin access before the handler is called.
+//
+// Auth enforcement happens here at the router layer so a future
+// refactor that reorders or removes validateSecurity middleware cannot
+// silently expose AuthUser/AuthAdmin routes (see #60):
+//
+//   - AuthAdmin → r.h.requireAdmin (admin API key OR admin-role session)
+//   - AuthUser  → r.h.requireUser  (admin API key OR any valid session)
+//   - AuthPublic → no router-level auth check; the handler runs directly
+//
+// Both helpers return ClientError-wrapped 401/403 which the transport
+// layer converts to the matching HTTP response.
 func (r *Router) Route(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (any, error) {
 	for _, route := range r.routes {
 		if r.matches(route, method, path) {
-			if route.Auth == AuthAdmin {
+			switch route.Auth {
+			case AuthAdmin:
 				if _, err := r.h.requireAdmin(ctx, req); err != nil {
 					return nil, err
 				}
+			case AuthUser:
+				if _, err := r.h.requireUser(ctx, req); err != nil {
+					return nil, err
+				}
+			case AuthPublic:
+				// no router-level auth — handler runs directly.
 			}
 			params := r.extractParams(route, path)
 			return route.Handler(ctx, req, params)
