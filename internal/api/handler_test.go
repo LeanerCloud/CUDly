@@ -107,6 +107,12 @@ func TestLoadAPIKey_DoesNotPoisonSharedAWSConfigCache(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", "/dev/null")
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
 	t.Setenv("AWS_PROFILE", "")
+	// Disable IMDS so the SDK doesn't probe EC2 instance metadata on
+	// hosts where it's reachable (CI runners, dev EC2). Without this,
+	// the credential provider chain can hang for the full IMDS retry
+	// window before falling through to "no credentials" — making the
+	// test slow and host-dependent. (CodeRabbit nit on PR #79.)
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 
 	cases := []struct {
 		name       string
