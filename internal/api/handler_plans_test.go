@@ -271,6 +271,76 @@ func TestHandler_createPlannedPurchases(t *testing.T) {
 	assert.Equal(t, 3, result.Created)
 }
 
+// TestHandler_createPlannedPurchases_MidLoopFailureRollsBack verifies
+// the partial-failure regression CodeRabbit flagged: a save failure on
+// row N must NOT leave rows 1..N-1 persisted (they would be retried as
+// duplicates) and must NOT bump the plan's next_execution_date (which
+// would otherwise be ahead of the actually-committed rows). The fix
+// wraps the loop + plan update in a single WithTx; this test asserts
+// the rollback semantics by making the 3rd SavePurchaseExecutionTx
+// call fail and confirming UpdatePurchasePlan was never reached.
+func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	plan := &config.PurchasePlan{
+		ID:   "11111111-1111-1111-1111-111111111111",
+		Name: "Test Plan",
+		RampSchedule: config.RampSchedule{
+			StepIntervalDays: 7,
+			CurrentStep:      0,
+		},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
+
+	// Drive the SavePurchaseExecutionTx mock branch directly (registered
+	// expectation overrides the un-tx fallback). Two successes, then a
+	// hard failure on the third row — simulates a transient DB blip in
+	// the middle of the loop.
+	saveCall := 0
+	mockStore.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
+		Return(nil).
+		Run(func(_ mock.Arguments) { saveCall++ }).
+		Times(2)
+	mockStore.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
+		Return(errors.New("simulated transient DB error")).
+		Once()
+
+	// Critical assertion: UpdatePurchasePlan / UpdatePurchasePlanTx
+	// must NOT be called when the inner loop bails. The mock framework
+	// would otherwise raise an unexpected-call error if either fired.
+	// We don't register expectations for them.
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	body := `{"count": 5, "start_date": "2024-12-01"}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+		Body: body,
+	}
+	result, err := handler.createPlannedPurchases(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "failed to save execution")
+
+	mockStore.AssertExpectations(t)
+	// Belt-and-braces: explicitly assert the plan update was never
+	// attempted. Both the un-tx and Tx variants are guarded.
+	mockStore.AssertNotCalled(t, "UpdatePurchasePlan")
+	mockStore.AssertNotCalled(t, "UpdatePurchasePlanTx")
+}
+
 func TestHandler_createPlannedPurchases_InvalidCount(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

@@ -88,6 +88,18 @@ func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
+// UpdatePurchasePlanTx falls back to UpdatePurchasePlan when no
+// expectation is registered.
+func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, _ pgx.Tx, plan *config.PurchasePlan) error {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "UpdatePurchasePlanTx" {
+			args := m.Called(ctx, plan)
+			return args.Error(0)
+		}
+	}
+	return m.UpdatePurchasePlan(ctx, plan)
+}
+
 func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	args := m.Called(ctx, planID)
 	return args.Error(0)

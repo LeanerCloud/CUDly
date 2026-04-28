@@ -892,7 +892,11 @@ func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.R
 // insertion-ordered list of contact emails for the unique accounts
 // referenced by recs. Accounts without a CloudAccountID or without a
 // contact_email are silently skipped — they're not an error, just not a
-// contribution to the authorised-approver set.
+// contribution to the authorised-approver set. A real DB error from
+// lookupContactEmail is propagated so the caller surfaces it as a
+// retriable failure instead of silently degrading to a globalNotify
+// fallback (which would be wrong: a transient DB blip should not change
+// who is allowed to approve).
 func (h *Handler) gatherAccountContactEmails(ctx context.Context, recs []config.RecommendationRecord) ([]string, error) {
 	orderedIDs := uniqueAccountIDsFromRecs(recs)
 	if len(orderedIDs) == 0 {
@@ -901,7 +905,10 @@ func (h *Handler) gatherAccountContactEmails(ctx context.Context, recs []config.
 	emailsSeen := map[string]bool{}
 	var out []string
 	for _, id := range orderedIDs {
-		addr := h.lookupContactEmail(ctx, id)
+		addr, err := h.lookupContactEmail(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("lookup contact email for account %s: %w", id, err)
+		}
 		if addr == "" {
 			continue
 		}
@@ -934,19 +941,30 @@ func uniqueAccountIDsFromRecs(recs []config.RecommendationRecord) []string {
 	return out
 }
 
-// lookupContactEmail resolves the account's ContactEmail, or returns "" if
-// the account can't be found or doesn't have one. A single missing account
-// should not poison the whole email — errors are logged and swallowed.
-func (h *Handler) lookupContactEmail(ctx context.Context, id string) string {
+// lookupContactEmail resolves the account's ContactEmail. The caller
+// must distinguish three outcomes:
+//
+//   - real DB error → return ("", err). The caller propagates as a
+//     retriable failure rather than silently treating the actor as
+//     unauthorised or falling through to globalNotify; a transient
+//     blip should not change who is allowed to approve.
+//   - account-not-found (GetCloudAccount returns nil, nil per pgx
+//     ErrNoRows handling in the postgres store) → return ("", nil).
+//     Semantically equivalent to "no contact email configured".
+//   - account found but ContactEmail is empty/whitespace →
+//     return ("", nil). Same fall-through as above.
+//
+// Trimming happens here so the caller sees only normalised values.
+func (h *Handler) lookupContactEmail(ctx context.Context, id string) (string, error) {
 	acct, err := h.config.GetCloudAccount(ctx, id)
 	if err != nil {
-		logging.Warnf("resolveApprovalRecipients: GetCloudAccount(%s) failed: %v", id, err)
-		return ""
+		logging.Warnf("lookupContactEmail: GetCloudAccount(%s) failed: %v", id, err)
+		return "", err
 	}
 	if acct == nil {
-		return ""
+		return "", nil
 	}
-	return strings.TrimSpace(acct.ContactEmail)
+	return strings.TrimSpace(acct.ContactEmail), nil
 }
 
 // authorizeApprovalAction returns the actor email to record on an

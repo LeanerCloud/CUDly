@@ -474,9 +474,30 @@ func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*Pu
 	return &plan, nil
 }
 
-// UpdatePurchasePlan updates an existing purchase plan
+// UpdatePurchasePlan updates an existing purchase plan. Delegates to
+// UpdatePurchasePlanTx inside a single-call WithTx — keeps the public
+// surface unchanged for callers that don't need to bundle this with
+// other writes, while sharing the SQL with the Tx variant. UpdatedAt
+// is stamped here (before the WithTx call) so existing tests that
+// inspect plan.UpdatedAt without exercising the DB still see it set —
+// see TestPostgresStore_UpdatePurchasePlan_NilDB.
 func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePlan) error {
 	plan.UpdatedAt = time.Now()
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		return s.UpdatePurchasePlanTx(ctx, tx, plan)
+	})
+}
+
+// UpdatePurchasePlanTx is the tx-accepting variant of UpdatePurchasePlan.
+// Used by createPlannedPurchases so the per-row execution inserts and
+// the plan's next_execution_date bump commit atomically — see the
+// interface doc for the partial-failure rationale. Callers that need
+// the auto-stamp of UpdatedAt either use UpdatePurchasePlan (which
+// stamps before WithTx) or stamp it themselves before calling Tx.
+func (s *PostgresStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) error {
+	if plan.UpdatedAt.IsZero() {
+		plan.UpdatedAt = time.Now()
+	}
 
 	// Marshal services and ramp_schedule to JSONB
 	servicesJSON, err := json.Marshal(plan.Services)
@@ -504,7 +525,7 @@ func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePl
 		WHERE id = $1
 	`
 
-	result, err := s.db.Exec(ctx, query,
+	result, err := tx.Exec(ctx, query,
 		plan.ID,
 		plan.Name,
 		plan.Enabled,

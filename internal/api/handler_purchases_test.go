@@ -340,6 +340,36 @@ func TestHandler_resolveApprovalRecipients_NoContactEmail(t *testing.T) {
 	assert.Empty(t, approvers, "global notify must NOT be in the approver set — only per-account contact_email can approve")
 }
 
+// TestHandler_resolveApprovalRecipients_LookupErrorPropagates verifies
+// the regression CodeRabbit flagged: a transient GetCloudAccount error
+// must NOT silently degrade to a globalNotify-only fallback (which
+// would change who is authorised to approve based on a DB blip).
+// Instead, the lookup error propagates to the caller, which surfaces
+// it as a retriable failure so the operator's next attempt sees the
+// real approver list.
+func TestHandler_resolveApprovalRecipients_LookupErrorPropagates(t *testing.T) {
+	ctx := context.Background()
+	globalNotify := "global@cudly.example"
+	accountID := "acct-flaky"
+	transient := errors.New("connection reset by peer")
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return nil, transient
+	}
+
+	h := &Handler{config: mockConfig}
+	recs := []config.RecommendationRecord{
+		{ID: "r1", CloudAccountID: &accountID},
+	}
+	to, cc, approvers, err := h.resolveApprovalRecipients(ctx, recs, globalNotify)
+	require.Error(t, err, "transient lookup error must propagate")
+	assert.ErrorIs(t, err, transient, "wrapped error chain must preserve the underlying cause")
+	assert.Empty(t, to)
+	assert.Nil(t, cc)
+	assert.Nil(t, approvers)
+}
+
 func TestHandler_getPlannedPurchases(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
