@@ -55,9 +55,10 @@ func TestLoad_MissingDefaultFile_NoError(t *testing.T) {
 	// NOT parallel: uses os.Chdir which mutates process-wide working directory.
 	// No ./cudly.yaml in temp dir; should silently use defaults
 	dir := t.TempDir()
-	orig, _ := os.Getwd()
+	orig, err := os.Getwd()
+	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { os.Chdir(orig) })
+	t.Cleanup(func() { require.NoError(t, os.Chdir(orig)) })
 
 	cfg, err := Load("", newFlags())
 	require.NoError(t, err)
