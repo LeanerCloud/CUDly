@@ -371,6 +371,20 @@ func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *confi
 	return nil
 }
 func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	// Route through m.Called only when a test has registered an
+	// expectation; otherwise fall back to the historical "no account"
+	// stub so the dozens of pre-existing tests that don't care about
+	// account lookups stay green. Mirrors the isExpected pattern in
+	// internal/api/mocks_test.go.
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GetCloudAccount" {
+			args := m.Called(ctx, id)
+			if args.Get(0) == nil {
+				return nil, args.Error(1)
+			}
+			return args.Get(0).(*config.CloudAccount), args.Error(1)
+		}
+	}
 	return nil, nil
 }
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
