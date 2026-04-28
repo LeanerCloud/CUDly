@@ -1233,6 +1233,12 @@ describe('Bundle B: column header filter triggers', () => {
       });
       (state.getRecommendations as jest.Mock).mockReturnValue(spRecs);
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue(spRecs);
+      // Reset the column-filters mock to a deterministic empty state so a
+      // prior test in this describe block leaving a custom mockReturnValue
+      // (e.g. the indeterminate test setting `service: { values: [...] }`)
+      // doesn't bleed into a later test's popover-build that reads
+      // getRecommendationsColumnFilters() during resync.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
     });
 
     test('service popover renders the All Savings Plans group toggle when 2+ SP slugs present', async () => {
