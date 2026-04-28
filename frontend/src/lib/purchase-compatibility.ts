@@ -105,6 +105,10 @@ export function savingsPlansBucketLabel(serviceSlugs: readonly string[]): string
   const parts: string[] = [];
   for (const slug of serviceSlugs) {
     if (!isSavingsPlanService(slug) || seen.has(slug)) continue;
+    // Skip the canonical bucket key itself if it shows up in the input
+    // — it's a marker, not a plan-type label, so rendering it as
+    // "savings-plans" inside the parentheses would be ugly.
+    if (slug === SAVINGS_PLANS_BUCKET_KEY) continue;
     seen.add(slug);
     parts.push(SP_SHORT_LABEL[slug] ?? slug);
   }

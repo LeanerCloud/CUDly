@@ -1131,8 +1131,23 @@ const BULK_PURCHASE_LS_KEY = 'cudly.recommendations.bulkPurchase.v1';
 // handleBulkPurchaseClick). loadBulkPurchaseState explicitly picks known
 // fields so any legacy `term` from older localStorage values is silently
 // ignored on read — no migration shim needed.
+type BulkPurchasePayment = 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
+
+// Centralized bucket-level payment compatibility check. A bucket is
+// compatible iff EVERY rec in it has a supported (provider, service,
+// term, payment) combination. Used by the bulk-buy fan-out path to
+// flag buckets the user has built but won't be allowed to submit.
+function isBucketPaymentCompatible(
+  recs: readonly LocalRecommendation[],
+  payment: BulkPurchasePayment,
+): boolean {
+  return recs.every((r) =>
+    isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, payment),
+  );
+}
+
 interface BulkPurchaseToolbarState {
-  payment: 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
+  payment: BulkPurchasePayment;
   capacity: number; // 1..100
 }
 
@@ -1415,11 +1430,7 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   // rules today (no SP variant rejects no-upfront the way RDS 3yr does),
   // so this is a defensive belt-and-suspenders check rather than a
   // common case.
-  const incompatible = bucketEntries.filter(([_key, recs]) => {
-    return recs.some(
-      (r) => !isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, tb.payment),
-    );
-  });
+  const incompatible = bucketEntries.filter(([_key, recs]) => !isBucketPaymentCompatible(recs, tb.payment));
 
   if (bucketEntries.length > 1 || incompatible.length > 0) {
     // Multi-bucket / incompatible path: open the fan-out modal so the
@@ -1692,10 +1703,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   const renderStatus = (): void => {
     // For mixed-SP buckets check compatibility per rec — every rec must
     // be supported. For non-SP buckets every rec shares b.service so a
-    // single check is equivalent.
-    const compat = b.recs.every((r) =>
-      isPaymentSupported(b.provider, r.service, b.term, b.payment),
-    );
+    // single check is equivalent. The shared helper keeps this in sync
+    // with the same check at handleBulkPurchaseClick.
+    const compat = isBucketPaymentCompatible(b.recs, b.payment);
     status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
     status.textContent = compat
       ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`

@@ -131,4 +131,15 @@ describe('savingsPlansBucketLabel (issue #132)', () => {
       savingsPlansBucketLabel(['ec2', 'savings-plans-compute', 'rds']),
     ).toBe('Savings Plans (Compute)');
   });
+
+  test('skips the canonical SAVINGS_PLANS_BUCKET_KEY itself', () => {
+    // Defensive: if a caller accidentally passes the bucket key (a
+    // marker, not a plan-type), don't render it as "(savings-plans)".
+    expect(
+      savingsPlansBucketLabel([SAVINGS_PLANS_BUCKET_KEY]),
+    ).toBe('Savings Plans');
+    expect(
+      savingsPlansBucketLabel([SAVINGS_PLANS_BUCKET_KEY, 'savings-plans-compute']),
+    ).toBe('Savings Plans (Compute)');
+  });
 });
