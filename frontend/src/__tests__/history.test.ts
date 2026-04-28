@@ -275,4 +275,91 @@ describe('History Module', () => {
       });
     });
   });
+
+  // Issue #186 (History slice): provider+account dropdowns must call
+  // loadHistory() on `change`. Previously only the date-range Apply
+  // button triggered a re-query; users would change the provider, see
+  // no update, and be confused.
+  describe('Issue #186: provider+account change wiring triggers loadHistory', () => {
+    let setupHistoryHandlers: typeof import('../history').setupHistoryHandlers;
+
+    beforeEach(async () => {
+      setupHistoryHandlers = (await import('../history')).setupHistoryHandlers;
+      // Build the test DOM via createElement to avoid innerHTML.
+      document.body.replaceChildren();
+      const providerSel = document.createElement('select');
+      providerSel.id = 'history-provider-filter';
+      for (const [v, t] of [['', 'All'], ['aws', 'AWS'], ['azure', 'Azure']] as const) {
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = t;
+        providerSel.appendChild(opt);
+      }
+      document.body.appendChild(providerSel);
+      const acctSel = document.createElement('select');
+      acctSel.id = 'history-account-filter';
+      const allOpt = document.createElement('option');
+      allOpt.value = ''; allOpt.textContent = '(All accounts)';
+      acctSel.appendChild(allOpt);
+      const acct1 = document.createElement('option');
+      acct1.value = 'acct-1'; acct1.textContent = 'acct-1';
+      acctSel.appendChild(acct1);
+      document.body.appendChild(acctSel);
+      const startIn = document.createElement('input');
+      startIn.id = 'history-start'; startIn.type = 'date';
+      document.body.appendChild(startIn);
+      const endIn = document.createElement('input');
+      endIn.id = 'history-end'; endIn.type = 'date';
+      document.body.appendChild(endIn);
+      const summaryDiv = document.createElement('div');
+      summaryDiv.id = 'history-summary';
+      document.body.appendChild(summaryDiv);
+      const listDiv = document.createElement('div');
+      listDiv.id = 'history-list';
+      document.body.appendChild(listDiv);
+
+      (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [] });
+    });
+
+    test('account dropdown change triggers loadHistory', async () => {
+      setupHistoryHandlers();
+      (api.getHistory as jest.Mock).mockClear();
+
+      const acctSel = document.getElementById('history-account-filter') as HTMLSelectElement;
+      acctSel.value = 'acct-1';
+      acctSel.dispatchEvent(new Event('change'));
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(api.getHistory).toHaveBeenCalled();
+      const args = (api.getHistory as jest.Mock).mock.calls[0][0];
+      expect(args.account_ids).toEqual(['acct-1']);
+    });
+
+    test('provider dropdown change awaits populate then triggers loadHistory', async () => {
+      const utils = await import('../utils');
+      // First call (init) resolves immediately; second (provider-change) blocks.
+      let resolvePopulate: (() => void) | undefined;
+      const populateBlocker = new Promise<void>((resolve) => { resolvePopulate = resolve; });
+      (utils.populateAccountFilter as jest.Mock)
+        .mockImplementationOnce(() => Promise.resolve())
+        .mockImplementationOnce(() => populateBlocker);
+
+      setupHistoryHandlers();
+      await new Promise(r => setTimeout(r, 0));
+      (api.getHistory as jest.Mock).mockClear();
+
+      const providerSel = document.getElementById('history-provider-filter') as HTMLSelectElement;
+      providerSel.value = 'azure';
+      providerSel.dispatchEvent(new Event('change'));
+
+      // Yield once — populate is pending; loadHistory must NOT have run.
+      await new Promise(r => setTimeout(r, 0));
+      expect((api.getHistory as jest.Mock).mock.calls.length).toBe(0);
+
+      // Resolve populate; loadHistory runs after.
+      resolvePopulate!();
+      await new Promise(r => setTimeout(r, 0));
+      await new Promise(r => setTimeout(r, 0));
+      expect((api.getHistory as jest.Mock).mock.calls.length).toBeGreaterThan(0);
+    });
+  });
 });

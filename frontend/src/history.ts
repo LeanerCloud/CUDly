@@ -69,8 +69,30 @@ function populateHistoryAccountFilter(provider?: string): Promise<void> {
 export function setupHistoryHandlers(): void {
   const providerFilter = document.getElementById('history-provider-filter') as HTMLSelectElement | null;
   if (providerFilter) {
+    // Issue #186 (History slice): the change handler used to only
+    // repopulate the account dropdown and rely on the user clicking
+    // the date-range Apply button to actually re-query. That was
+    // inconsistent with Dashboard / Plans (where filter changes
+    // refresh data immediately) and routinely confused operators.
+    // Mirror the dashboard.ts pattern from #185: await populate so
+    // the dropdown is in a known state, reset its display value
+    // (any account from the previous provider is invalid), then
+    // reload. loadHistory reads the dropdown values itself so no
+    // additional state plumbing is needed.
     providerFilter.addEventListener('change', () => {
-      void populateHistoryAccountFilter(providerFilter.value);
+      void (async (): Promise<void> => {
+        await populateHistoryAccountFilter(providerFilter.value);
+        const accountSel = document.getElementById('history-account-filter') as HTMLSelectElement | null;
+        if (accountSel) accountSel.value = '';
+        await loadHistory();
+      })();
+    });
+  }
+  const accountFilter = document.getElementById('history-account-filter') as HTMLSelectElement | null;
+  if (accountFilter) {
+    // Issue #186: account change triggers a reload.
+    accountFilter.addEventListener('change', () => {
+      void loadHistory();
     });
   }
   void populateHistoryAccountFilter();
