@@ -17,7 +17,10 @@
 #
 #  - KMSAliasMutate: kms:CreateAlias/DeleteAlias/UpdateAlias act on
 #    alias resources, but aws:ResourceTag/Project gates only key
-#    resources (aliases inherit nothing). ARN scope used instead.
+#    resources (aliases inherit nothing). KMS evaluates these actions
+#    against BOTH the alias and the target key, so the alias-side
+#    check lives here (ARN-scoped) and the key-side check lives in
+#    policy_compute.tf KMSMutateTaggedOnly (tag-gated to CUDly keys).
 
 resource "aws_iam_policy" "compute_b" {
   name        = "cudly-deploy-compute-b"

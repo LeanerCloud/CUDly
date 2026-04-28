@@ -279,11 +279,10 @@ resource "aws_iam_policy" "compute" {
         # level (key ARNs are only known after CreateKey). Read-only
         # actions are also broad because terraform plan needs to
         # enumerate key state.
-        # kms:CreateAlias is NOT here — alias actions act on alias
-        # resources, and the aws:ResourceTag/Project gate below applies
-        # only to keys (aliases inherit no IAM-visible tags). Alias
-        # operations live in policy_compute_b.tf scoped by alias-ARN
-        # prefix.
+        # kms:CreateAlias is NOT here — it moved to KMSMutateTaggedOnly
+        # below (key-side check, tag-gated) and policy_compute_b.tf
+        # KMSAliasMutate (alias-side check, ARN-scoped). KMS evaluates
+        # alias actions against both the alias and the target key.
         Sid    = "KMSCreateAndRead"
         Effect = "Allow"
         Action = [
@@ -303,18 +302,24 @@ resource "aws_iam_policy" "compute" {
         # Without this gate the deploy SA could schedule deletion or
         # disable any KMS key in the account, causing denial of service
         # for unrelated workloads.
-        # Alias mutations (DeleteAlias/UpdateAlias) live in
-        # policy_compute_b.tf — the aws:ResourceTag condition does not
-        # match alias resources.
+        # Alias mutations (CreateAlias/DeleteAlias/UpdateAlias) appear
+        # here because AWS KMS evaluates these actions against BOTH the
+        # alias and the target key resource — this statement covers the
+        # key-side check (tag-gated). The alias-side check lives in
+        # policy_compute_b.tf KMSAliasMutate (ARN-scoped because aliases
+        # have no IAM-visible tags).
         Sid    = "KMSMutateTaggedOnly"
         Effect = "Allow"
         Action = [
+          "kms:CreateAlias",
+          "kms:DeleteAlias",
           "kms:DisableKey",
           "kms:EnableKey",
           "kms:PutKeyPolicy",
           "kms:ScheduleKeyDeletion",
           "kms:TagResource",
           "kms:UntagResource",
+          "kms:UpdateAlias",
           "kms:UpdateKeyDescription",
         ]
         Resource = "*"
