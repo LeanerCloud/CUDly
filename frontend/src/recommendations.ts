@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatTerm, escapeHtml, formatRelativeTime } from './utils';
+import { formatCurrency, formatTerm, escapeHtml } from './utils';
 import { renderFreshness } from './freshness';
 import { getRecommendationDetail, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
