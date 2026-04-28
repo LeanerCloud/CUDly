@@ -161,11 +161,14 @@ func TestCreateAccount_AWSExternalID_RoleArnNoRoleArnSelfAccount(t *testing.T) {
 }
 
 // TestCreateAccount_AWSExternalID_NotRequiredForOtherAuthModes asserts
-// that the new validation only fires for role_arn — bastion and WIF
-// auth modes have their own assume-role mechanics where ExternalId is
-// not the primary guard, and access_keys doesn't assume a role at all.
+// that the new validation does not fire for auth modes that don't call
+// sts:AssumeRole into a customer role: access_keys (no role at all) and
+// workload_identity_federation (OIDC verifies identity via the token
+// subject claim — stscreds.WebIdentityRoleOptions has no ExternalID
+// field; see resolveWebIdentityProvider). bastion mode IS validated when
+// a role ARN is set (issue #129), covered by its own tests below.
 func TestCreateAccount_AWSExternalID_NotRequiredForOtherAuthModes(t *testing.T) {
-	for _, mode := range []string{"access_keys", "bastion", "workload_identity_federation"} {
+	for _, mode := range []string{"access_keys", "workload_identity_federation"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			mockAuth := new(MockAuthService)
@@ -179,6 +182,65 @@ func TestCreateAccount_AWSExternalID_NotRequiredForOtherAuthModes(t *testing.T) 
 			require.NoError(t, err)
 		})
 	}
+}
+
+// TestCreateAccount_AWSExternalID_BastionRequiresExternalID asserts that
+// bastion mode with a non-empty role ARN rejects an empty External ID
+// (issue #129) — the bastion's STS client calls AssumeRole into the
+// target role just like role_arn mode, so the same sts:ExternalId guard
+// applies.
+func TestCreateAccount_AWSExternalID_BastionRequiresExternalID(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	store := setupAdminMock(ctx)
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"name":"Target","provider":"aws","external_id":"123456789012",` +
+		`"aws_auth_mode":"bastion","aws_role_arn":"arn:aws:iam::123456789012:role/CUDly",` +
+		`"aws_bastion_id":"00000000-0000-0000-0000-000000000001"}` // no aws_external_id
+	_, err := handler.createAccount(ctx, adminRequest(body))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "aws_external_id is required")
+}
+
+// TestCreateAccount_AWSExternalID_BastionHappyPath asserts that bastion
+// mode with a valid External ID passes validation end-to-end (#129).
+func TestCreateAccount_AWSExternalID_BastionHappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	store := setupAdminMock(ctx)
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"name":"Target","provider":"aws","external_id":"123456789012",` +
+		`"aws_auth_mode":"bastion","aws_role_arn":"arn:aws:iam::123456789012:role/CUDly",` +
+		`"aws_bastion_id":"00000000-0000-0000-0000-000000000001",` +
+		`"aws_external_id":"550e8400-e29b-41d4-a716-446655440000"}`
+	_, err := handler.createAccount(ctx, adminRequest(body))
+	require.NoError(t, err)
+}
+
+// TestCreateAccount_AWSExternalID_BastionNoRoleArnExempt mirrors the
+// role_arn self-onboarding exemption: a bastion-mode request without a
+// role ARN cannot legitimately AssumeRole, so the External ID rule
+// doesn't apply (the credential resolver rejects the request elsewhere
+// — see resolveBastionProvider's empty-aws_bastion_id / empty-role-arn
+// guards).
+func TestCreateAccount_AWSExternalID_BastionNoRoleArnExempt(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	store := setupAdminMock(ctx)
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"name":"Target","provider":"aws","external_id":"123456789012",` +
+		`"aws_auth_mode":"bastion"}` // no aws_role_arn, no aws_external_id
+	_, err := handler.createAccount(ctx, adminRequest(body))
+	require.NoError(t, err)
 }
 
 // TestParseArnPartition covers the helper that extracts the partition

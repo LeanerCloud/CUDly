@@ -321,21 +321,33 @@ func validateAuthMode(req CloudAccountRequest) error {
 }
 
 // validateAWSAuthMode checks the AWS-specific auth-mode invariants:
-// the mode is one of the known values (when set) and, for cross-account
-// role_arn, the External ID satisfies the AWS sts:ExternalId rules
-// (issue #128). The split from validateAuthMode keeps the parent
-// function's cyclomatic complexity inside the project's gocyclo budget.
+// the mode is one of the known values (when set) and, for any auth
+// mode that calls sts:AssumeRole into a customer role, the External ID
+// satisfies the AWS sts:ExternalId rules (issue #128, extended to
+// bastion mode by #129). The split from validateAuthMode keeps the
+// parent function's cyclomatic complexity inside the project's gocyclo
+// budget.
 //
 // Self-account onboarding uses role_arn with an empty role ARN to mean
 // "use ambient Lambda/container credentials" (see awsAmbientCredResult).
 // That path never calls sts:AssumeRole, so the ExternalId requirement
 // doesn't apply — only enforce the validation when an actual cross-
-// account role ARN is set.
+// account role ARN is set. The same exemption is applied to bastion
+// mode for parity (an empty role ARN in bastion mode is rejected
+// elsewhere by the credential resolver, but the validator stays
+// defensive).
+//
+// workload_identity_federation does NOT use ExternalID — OIDC verifies
+// identity via the token subject claim (see resolveWebIdentityProvider
+// in internal/credentials/resolver.go), and stscreds.WebIdentityRoleOptions
+// has no ExternalID field. access_keys doesn't assume a role at all.
 func validateAWSAuthMode(req CloudAccountRequest) error {
 	if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
 		return NewClientError(400, "invalid aws_auth_mode")
 	}
-	if req.AWSAuthMode == "role_arn" && strings.TrimSpace(req.AWSRoleARN) != "" {
+	requiresExternalID := (req.AWSAuthMode == "role_arn" || req.AWSAuthMode == "bastion") &&
+		strings.TrimSpace(req.AWSRoleARN) != ""
+	if requiresExternalID {
 		return validateAWSExternalID(req.AWSExternalID)
 	}
 	return nil
@@ -364,7 +376,7 @@ const (
 func validateAWSExternalID(s string) error {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
-		return NewClientError(400, "aws_external_id is required for role_arn auth mode")
+		return NewClientError(400, "aws_external_id is required for role_arn and bastion auth modes")
 	}
 	if len(trimmed) < awsExternalIDMinLen || len(trimmed) > awsExternalIDMaxLen {
 		return NewClientError(400, fmt.Sprintf(

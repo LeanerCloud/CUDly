@@ -676,6 +676,29 @@ describe('HTML Structure', () => {
       expect(hint).not.toBeNull();
     });
 
+    test('aws bastion-fields render an external-id input + trust-policy block (issue #129)', () => {
+      const bastionFields = document.getElementById('account-aws-bastion-fields');
+      expect(bastionFields).not.toBeNull();
+
+      const input = document.getElementById('account-aws-external-id-bastion') as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      expect(input?.hasAttribute('readonly')).toBe(true);
+      // The input must live inside the bastion-fields section so it's
+      // hidden in non-bastion modes via the parent's `hidden` class.
+      expect(bastionFields?.contains(input!)).toBe(true);
+
+      const copyBtn = document.getElementById('account-aws-external-id-bastion-copy');
+      expect(copyBtn).not.toBeNull();
+      expect(copyBtn?.classList.contains('copy-btn')).toBe(true);
+
+      const pre = document.getElementById('account-aws-trust-policy-bastion');
+      expect(pre?.tagName.toLowerCase()).toBe('pre');
+      const policyCopyBtn = document.getElementById('account-aws-trust-policy-bastion-copy');
+      expect(policyCopyBtn?.classList.contains('copy-btn')).toBe(true);
+      const hint = document.getElementById('account-aws-trust-policy-bastion-hint');
+      expect(hint).not.toBeNull();
+    });
+
     test('aws IAM console deep link opens the role-creation wizard in a new tab (issue #21)', () => {
       const link = document.getElementById('account-aws-iam-console-link') as HTMLAnchorElement | null;
       expect(link).not.toBeNull();

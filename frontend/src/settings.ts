@@ -1092,7 +1092,15 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
   // close/reopen cycle returns the same value (issue #126). The field
   // itself is marked readonly in index.html so users can't hand-craft
   // values that would defeat the purpose.
-  setInputValue('account-aws-external-id', resolveAwsExternalIdForModal(account));
+  // Bastion mode shares the same draft External ID value as role_arn mode
+  // (issue #129) — both are AWS sts:ExternalId values used as a confused-
+  // deputy guard. Sharing the draft key keeps a single source of truth so
+  // toggling auth modes mid-edit doesn't surface diverging values, and the
+  // generator semantics are identical (CSPRNG + sessionStorage persistence
+  // until save). The two readonly inputs are wired to the same value.
+  const externalID = resolveAwsExternalIdForModal(account);
+  setInputValue('account-aws-external-id', externalID);
+  setInputValue('account-aws-external-id-bastion', externalID);
   setInputValue('account-aws-bastion-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-role-arn', account?.aws_role_arn ?? '');
   setInputValue('account-aws-wif-token-file', account?.aws_web_identity_token_file ?? '');
@@ -1102,8 +1110,11 @@ function populateAwsAccountFields(account?: api.CloudAccount): void {
 
   // Render the trust-policy snippet asynchronously — we need the CUDly
   // host account ID from getConfig.source_identity (issue #19). Kept
-  // void so the modal doesn't block waiting for the network.
+  // void so the modal doesn't block waiting for the network. The bastion
+  // variant (issue #129) is also rendered eagerly so it's ready when the
+  // operator switches to that mode mid-edit.
   void renderAwsTrustPolicy();
+  void renderAwsBastionTrustPolicy();
 }
 
 /**
@@ -1219,6 +1230,98 @@ async function renderAwsTrustPolicy(): Promise<void> {
 }
 
 /**
+ * Render the IAM trust-policy snippet for the bastion auth mode (issue
+ * #129). Mirrors renderAwsTrustPolicy but the Principal is the *bastion*
+ * account root (the AWS account whose credentials call sts:AssumeRole
+ * into the customer's role), not the CUDly host account.
+ *
+ * Rerun whenever the operator toggles into bastion mode or picks a
+ * different bastion in the dropdown. If no bastion is selected yet, the
+ * snippet block is cleared and the hint asks the operator to pick one.
+ *
+ * Race short-circuit (mirrors #130a): if the auth mode changed while we
+ * were waiting on listAccounts/getConfig, abort so we don't paint into
+ * a now-hidden field.
+ */
+async function renderAwsBastionTrustPolicy(): Promise<void> {
+  const block = document.getElementById('account-aws-trust-policy-bastion');
+  const hint = document.getElementById('account-aws-trust-policy-bastion-hint');
+  if (!block) return;
+  const externalID = (document.getElementById('account-aws-external-id-bastion') as HTMLInputElement | null)?.value ?? '';
+  const bastionSelectVal = (document.getElementById('account-aws-bastion-id') as HTMLSelectElement | null)?.value ?? '';
+
+  // Snapshot the auth mode at call time — recheck after the awaits to
+  // detect a race where the user switched modes mid-fetch (#130a).
+  const authModeSnapshot = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+
+  if (!bastionSelectVal) {
+    block.textContent = '';
+    if (hint) {
+      hint.textContent =
+        'Pick a bastion account above to render the trust policy snippet. ' +
+        "The Principal will be the bastion's AWS account root; the " +
+        'sts:ExternalId condition uses the value displayed above.';
+    }
+    return;
+  }
+
+  let bastionAccountID = '';
+  let partition = 'aws';
+  try {
+    const [accounts, cfg] = await Promise.all([
+      api.listAccounts({ provider: 'aws' }),
+      getCachedConfig(),
+    ]);
+    const bastion = accounts.find(a => a.id === bastionSelectVal);
+    bastionAccountID = bastion?.external_id ?? '';
+    if (cfg.source_identity?.provider === 'aws') {
+      partition = awsPartitionForArn(cfg.source_identity.partition);
+    }
+  } catch {
+    // Non-critical — fall through to the placeholder text below.
+  }
+
+  const authModeNow = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+  if (authModeSnapshot !== undefined && authModeSnapshot !== authModeNow) {
+    return;
+  }
+
+  if (!bastionAccountID) {
+    block.textContent = '';
+    if (hint) {
+      hint.textContent =
+        "CUDly couldn't determine the bastion account ID. Build the trust " +
+        'policy manually with Principal=arn:' + partition +
+        ':iam::<bastion account ID>:root, Action=sts:AssumeRole, and a ' +
+        'StringEquals sts:ExternalId condition on the value above.';
+    }
+    return;
+  }
+
+  const policy = {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Principal: { AWS: `arn:${partition}:iam::${bastionAccountID}:root` },
+        Action: 'sts:AssumeRole',
+        Condition: {
+          StringEquals: { 'sts:ExternalId': externalID },
+        },
+      },
+    ],
+  };
+  block.textContent = JSON.stringify(policy, null, 2);
+  if (hint) {
+    hint.textContent =
+      "Attach this policy to the target IAM role's trust relationship so " +
+      'CUDly can assume it through the bastion. The Principal is the ' +
+      'bastion account root; the sts:ExternalId condition locks the role ' +
+      'to this specific CUDly registration.';
+  }
+}
+
+/**
  * Show/hide AWS auth mode sub-fields
  */
 function updateAwsAuthModeFields(mode: string, bastionId?: string): void {
@@ -1233,7 +1336,9 @@ function updateAwsAuthModeFields(mode: string, bastionId?: string): void {
   wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
 
   if (mode === 'bastion') {
-    void populateBastionAccountDropdown(bastionId);
+    // Refresh the dropdown then re-render the trust-policy snippet so
+    // a freshly-selected bastion is reflected in the Principal (#129).
+    void populateBastionAccountDropdown(bastionId).then(() => renderAwsBastionTrustPolicy());
   }
 }
 
@@ -1312,6 +1417,10 @@ function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest
     } else if (authMode === 'bastion') {
       req.aws_bastion_id = byId<HTMLSelectElement>('account-aws-bastion-id')?.value ?? '';
       req.aws_role_arn = (byId<HTMLInputElement>('account-aws-bastion-role-arn')?.value ?? '').trim();
+      // Collect the External ID for bastion mode too (issue #129) — the
+      // bastion's STS client calls AssumeRole into the target role just
+      // like role_arn mode, so the same sts:ExternalId guard applies.
+      req.aws_external_id = (byId<HTMLInputElement>('account-aws-external-id-bastion')?.value ?? '').trim() || undefined;
     } else if (authMode === 'workload_identity_federation') {
       req.aws_role_arn = byId<HTMLInputElement>('account-aws-wif-role-arn')?.value.trim();
       req.aws_web_identity_token_file = byId<HTMLInputElement>('account-aws-wif-token-file')?.value.trim() || undefined;
@@ -1548,6 +1657,28 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   document.getElementById('account-aws-trust-policy-copy')?.addEventListener(
     'click',
     () => copyToClipboard('account-aws-trust-policy'),
+    { signal },
+  );
+
+  // Bastion-mode counterparts of the External ID copy button + trust-
+  // policy copy button (issue #129).
+  document.getElementById('account-aws-external-id-bastion-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-external-id-bastion'),
+    { signal },
+  );
+  document.getElementById('account-aws-trust-policy-bastion-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-trust-policy-bastion'),
+    { signal },
+  );
+
+  // Re-render the bastion trust-policy snippet whenever the bastion
+  // account dropdown changes — the snippet's Principal is the selected
+  // bastion's account root (issue #129).
+  document.getElementById('account-aws-bastion-id')?.addEventListener(
+    'change',
+    () => void renderAwsBastionTrustPolicy(),
     { signal },
   );
 
