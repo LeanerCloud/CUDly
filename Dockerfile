@@ -80,7 +80,21 @@ FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
-RUN npm ci && test -x node_modules/.bin/webpack
+# `--no-progress`: disables the npm progress reporter, whose worker has a
+#   long-standing race condition in npm 10/11 that surfaces as
+#   `npm error Exit handler never called!` on memory-constrained hosts
+#   (Linux VMs, low-RAM CI runners). See npm/cli issues for the bug; the
+#   fix is "don't run that worker".
+# `--maxsockets 1`: serialise registry fetches so peak memory during the
+#   install stays low. With 810 lockfile entries, parallel fetch + the
+#   gzip-decode workers race the OOM killer on hosts with <2 GB free.
+# `--no-audit --no-fund`: skip post-install network calls that aren't
+#   relevant to a build context.
+# `test -x`: existing guard against silent zero-exit npm failures
+#   (kept from #044dc583c — addresses a different failure mode where
+#   npm exits 0 but leaves node_modules empty).
+RUN npm ci --no-progress --maxsockets 1 --no-audit --no-fund && \
+    test -x node_modules/.bin/webpack
 COPY frontend/ ./
 RUN npm run build
 
