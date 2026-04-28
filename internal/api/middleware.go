@@ -209,6 +209,21 @@ func logMissingCSRFToken(req *events.LambdaFunctionURLRequest, csrfToken string)
 		req.RequestContext.HTTP.Method, req.RequestContext.HTTP.Path, req.RequestContext.HTTP.SourceIP)
 }
 
+// requireAuth verifies the request carries a valid authentication credential
+// of any kind (admin API key, user API key, or session bearer token).
+//
+// Used as a defence-in-depth check by Router.Route for AuthUser routes:
+// validateSecurity → authenticate already runs before dispatch, but if a
+// future refactor reorders middleware or a new route bypasses
+// validateSecurity, this check still rejects unauthenticated requests at
+// the router level. Returns nil on success, a 401 ClientError otherwise.
+func (h *Handler) requireAuth(ctx context.Context, req *events.LambdaFunctionURLRequest) error {
+	if h.authenticate(ctx, req) {
+		return nil
+	}
+	return NewClientError(401, "authentication required")
+}
+
 // requireAdmin checks if the current user has admin role.
 // Accepts both admin API-key auth and Bearer token auth.
 func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {

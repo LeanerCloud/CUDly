@@ -14,17 +14,26 @@ type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest
 // AuthLevel controls how Router.Route() enforces authentication.
 // The zero value is AuthAdmin — secure by default.
 // Any Route without an explicit Auth field requires admin access.
+//
+// Router.Route enforces these levels itself as a defence-in-depth check,
+// in addition to the validateSecurity → authenticate middleware that runs
+// earlier in the request pipeline. If middleware ordering ever changes or
+// a new route bypasses validateSecurity, the router-level enforcement
+// still rejects unauthorized requests.
 type AuthLevel int
 
 const (
-	// AuthAdmin requires admin role (API key or admin bearer token).
-	// Zero value — any Route without an explicit Auth field gets this.
+	// AuthAdmin requires admin role (admin API key or admin bearer-token
+	// session). Zero value — any Route without an explicit Auth field gets
+	// this. Enforced by Router.Route via h.requireAdmin.
 	AuthAdmin AuthLevel = iota
-	// AuthUser requires any authenticated user. Use for self-service
-	// endpoints (logout, profile, API key management).
+	// AuthUser requires any authenticated user (admin API key, user API
+	// key, or any valid bearer-token session). Use for self-service
+	// endpoints (logout, profile, API key management). Enforced by
+	// Router.Route via h.requireAuth.
 	AuthUser
 	// AuthPublic requires no authentication. Must also be listed in
-	// isPublicEndpoint() for middleware bypass.
+	// isPublicEndpoint() so the middleware skips its auth/CSRF checks.
 	AuthPublic
 )
 
@@ -217,14 +226,28 @@ func (r *Router) registerRoutes() {
 }
 
 // Route finds and executes the matching route handler.
-// Routes with Auth == AuthAdmin (the default) require admin access before the handler is called.
+//
+// Authentication enforcement is defence-in-depth: validateSecurity →
+// authenticate already runs in the middleware pipeline before dispatch,
+// but Router.Route also enforces the per-route Auth level so routes stay
+// protected even if middleware ordering changes or a new code path
+// bypasses validateSecurity. Routes with Auth == AuthAdmin (the default)
+// require admin access; AuthUser routes require any authenticated user;
+// AuthPublic routes are unauthenticated.
 func (r *Router) Route(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (any, error) {
 	for _, route := range r.routes {
 		if r.matches(route, method, path) {
-			if route.Auth == AuthAdmin {
+			switch route.Auth {
+			case AuthAdmin:
 				if _, err := r.h.requireAdmin(ctx, req); err != nil {
 					return nil, err
 				}
+			case AuthUser:
+				if err := r.h.requireAuth(ctx, req); err != nil {
+					return nil, err
+				}
+			case AuthPublic:
+				// no auth check; relied upon by middleware via isPublicEndpoint
 			}
 			params := r.extractParams(route, path)
 			return route.Handler(ctx, req, params)
