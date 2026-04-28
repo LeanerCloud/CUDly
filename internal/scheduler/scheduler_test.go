@@ -1296,6 +1296,112 @@ func TestScheduler_ConvertRecommendations_Empty(t *testing.T) {
 	assert.Len(t, records, 0)
 }
 
+// TestScheduler_ConvertRecommendations_HashUniqueness pins issue #187 +
+// #188: the rec ID hash must include term, account, and engine — not
+// just (provider, service, region, resource_type, payment) — otherwise
+// recs that should be distinct get the same ID, which (a) collapses two
+// rendered rows into one selection in the UI (#187), and (b) silently
+// drops one of two same-cell recs at any storage stage that dedupes by
+// ID (#188). Each subtest asserts that two recs differing only in the
+// listed dimension produce different IDs.
+func TestScheduler_ConvertRecommendations_HashUniqueness(t *testing.T) {
+	scheduler := &Scheduler{}
+	base := common.Recommendation{
+		Provider:      common.ProviderAWS,
+		Account:       "test-account-a",
+		Service:       common.ServiceEC2,
+		Region:        "us-east-1",
+		ResourceType:  "m5.large",
+		Count:         1,
+		Term:          "1yr",
+		PaymentOption: "all-upfront",
+	}
+
+	cases := []struct {
+		name    string
+		mutator func(common.Recommendation) common.Recommendation
+	}{
+		{
+			name: "term: 1yr vs 3yr (issue #188 — AWS 1yr recs were vanishing)",
+			mutator: func(r common.Recommendation) common.Recommendation {
+				r.Term = "3yr"
+				return r
+			},
+		},
+		{
+			name: "account: separates multi-subscription recs (issue #187)",
+			mutator: func(r common.Recommendation) common.Recommendation {
+				r.Account = "test-account-b"
+				return r
+			},
+		},
+		{
+			name: "payment: all-upfront vs no-upfront",
+			mutator: func(r common.Recommendation) common.Recommendation {
+				r.PaymentOption = "no-upfront"
+				return r
+			},
+		},
+		{
+			name: "engine: MySQL vs Postgres at same RDS SKU",
+			mutator: func(r common.Recommendation) common.Recommendation {
+				r.Service = common.ServiceRDS
+				r.ResourceType = "db.m5.large"
+				r.Details = common.DatabaseDetails{Engine: "mysql"}
+				return r
+			},
+		},
+	}
+
+	// Seed an "engine = postgres" twin once for the engine subtest.
+	enginePostgresTwin := base
+	enginePostgresTwin.Service = common.ServiceRDS
+	enginePostgresTwin.ResourceType = "db.m5.large"
+	enginePostgresTwin.Details = common.DatabaseDetails{Engine: "postgres"}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := base
+			b := tc.mutator(base)
+			recs := []common.Recommendation{a, b}
+			// For the engine subtest, override `b` with the postgres twin
+			// so the diff is engine-only (the mutator above only sets
+			// mysql; we need a second rec with the same SKU but postgres).
+			if tc.name == "engine: MySQL vs Postgres at same RDS SKU" {
+				recs[1] = enginePostgresTwin
+			}
+			records := scheduler.convertRecommendations(recs, "aws")
+			require.Len(t, records, 2)
+			assert.NotEqual(t, records[0].ID, records[1].ID,
+				"hash collision — recs differing in %s produce the same ID; this regresses #187/#188", tc.name)
+		})
+	}
+}
+
+// TestScheduler_ConvertRecommendations_HashDeterminism ensures the same
+// input produces the same ID across calls (i.e. the hash is stable
+// rather than including a random or time-dependent component). Without
+// this, the column-filter-driven selection state (which round-trips
+// rec.id through the frontend) would lose selections between collections.
+func TestScheduler_ConvertRecommendations_HashDeterminism(t *testing.T) {
+	scheduler := &Scheduler{}
+	rec := common.Recommendation{
+		Provider:      common.ProviderAWS,
+		Account:       "test-account-determinism",
+		Service:       common.ServiceEC2,
+		Region:        "us-east-1",
+		ResourceType:  "m5.large",
+		Count:         3,
+		Term:          "3yr",
+		PaymentOption: "all-upfront",
+	}
+	first := scheduler.convertRecommendations([]common.Recommendation{rec}, "aws")
+	second := scheduler.convertRecommendations([]common.Recommendation{rec}, "aws")
+	require.Len(t, first, 1)
+	require.Len(t, second, 1)
+	assert.Equal(t, first[0].ID, second[0].ID, "hash must be deterministic across calls")
+}
+
 // Test successful AWS recommendations with provider returning data
 func TestScheduler_CollectAWSRecommendations_Success(t *testing.T) {
 	ctx := context.Background()

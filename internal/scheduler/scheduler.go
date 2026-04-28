@@ -824,7 +824,28 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			}
 		}
 
-		key := fmt.Sprintf("%s:%s:%s:%s:%s", providerName, rec.Service, rec.Region, rec.ResourceType, rec.PaymentOption)
+		// The ID hash key needs to be unique per logically-distinct rec,
+		// otherwise the frontend collapses two rows into one selection (the
+		// data-rec-id collision in recommendations.ts:1067-1069 / the
+		// selection-set toggle in :1639-1660 — see issue #187), and any
+		// downstream stage that dedupes by ID drops the second rec entirely
+		// (the AWS-1yr-missing symptom in issue #188).
+		//
+		// Fields the hash MUST include:
+		//   - providerName: separates AWS/Azure/GCP recs
+		//   - rec.Account:  separates per-account/per-subscription recs
+		//                   sharing the same provider+SKU+region+payment
+		//   - rec.Service / rec.Region / rec.ResourceType: the cell
+		//   - engine:       MySQL vs Postgres RDS at same SKU collide otherwise
+		//   - term:         1yr vs 3yr at same SKU collide otherwise
+		//   - rec.PaymentOption: all-upfront vs no-upfront collide otherwise
+		//
+		// The integer `term` is hashed (not rec.Term) so a rec with Term=""
+		// or "3yr" both reduce to the same canonical value and don't drift
+		// out of agreement with the persisted Term column.
+		key := fmt.Sprintf("%s:%s:%s:%s:%s:%s:%d:%s",
+			providerName, rec.Account, rec.Service, rec.Region,
+			rec.ResourceType, engine, term, rec.PaymentOption)
 		hash := sha256.Sum256([]byte(key))
 		recordID := hex.EncodeToString(hash[:])[:16]
 
