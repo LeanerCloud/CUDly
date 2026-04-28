@@ -47,6 +47,11 @@ resource "aws_iam_role_policy_attachment" "compute" {
   policy_arn = aws_iam_policy.compute.arn
 }
 
+resource "aws_iam_role_policy_attachment" "compute_b" {
+  role       = aws_iam_role.cudly_deploy.name
+  policy_arn = aws_iam_policy.compute_b.arn
+}
+
 resource "aws_iam_role_policy_attachment" "data" {
   role       = aws_iam_role.cudly_deploy.name
   policy_arn = aws_iam_policy.data.arn

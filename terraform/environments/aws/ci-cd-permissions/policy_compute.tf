@@ -128,22 +128,22 @@ resource "aws_iam_policy" "compute" {
         Resource = "*"
       },
       {
-        # CloudFront mutations are restricted to distributions/functions
+        # CloudFront distribution mutations are restricted to distributions
         # tagged Project=CUDly. The Terraform aws_cloudfront_distribution
         # resource sets this tag at creation time (see modules/frontend/aws),
         # so subsequent Update/Delete/Tag/Untag operations against
         # CUDly-owned distributions succeed while attempts to mutate any
         # third-party distribution sharing the account are denied.
+        # Function mutations live in policy_compute_b.tf — the function
+        # resource type does not support aws:ResourceTag per the AWS
+        # Service Authorization Reference, so it needs ARN scoping.
         Sid    = "CloudFrontMutateTaggedOnly"
         Effect = "Allow"
         Action = [
           "cloudfront:DeleteDistribution",
-          "cloudfront:DeleteFunction",
-          "cloudfront:PublishFunction",
           "cloudfront:TagResource",
           "cloudfront:UntagResource",
           "cloudfront:UpdateDistribution",
-          "cloudfront:UpdateFunction",
         ]
         Resource = "*"
         Condition = {
@@ -169,6 +169,9 @@ resource "aws_iam_policy" "compute" {
         # ECS resource-scoped actions: cluster, service, and task ARNs
         # all match cudly-* prefix. RegisterTaskDefinition cannot take a
         # specific ARN at registration time and is split below.
+        # ecs:ListTasks does NOT support resource-level permissions per
+        # the AWS Service Authorization Reference; it lives in
+        # policy_compute_b.tf gated by an ecs:cluster condition.
         Sid    = "ECSFargateResourceScoped"
         Effect = "Allow"
         Action = [
@@ -178,7 +181,6 @@ resource "aws_iam_policy" "compute" {
           "ecs:DeleteService",
           "ecs:DescribeClusters",
           "ecs:DescribeServices",
-          "ecs:ListTasks",
           "ecs:PutClusterCapacityProviders",
           "ecs:StopTask",
           "ecs:TagResource",
@@ -277,10 +279,14 @@ resource "aws_iam_policy" "compute" {
         # level (key ARNs are only known after CreateKey). Read-only
         # actions are also broad because terraform plan needs to
         # enumerate key state.
+        # kms:CreateAlias is NOT here — alias actions act on alias
+        # resources, and the aws:ResourceTag/Project gate below applies
+        # only to keys (aliases inherit no IAM-visible tags). Alias
+        # operations live in policy_compute_b.tf scoped by alias-ARN
+        # prefix.
         Sid    = "KMSCreateAndRead"
         Effect = "Allow"
         Action = [
-          "kms:CreateAlias",
           "kms:CreateKey",
           "kms:DescribeKey",
           "kms:GetKeyPolicy",
@@ -297,17 +303,18 @@ resource "aws_iam_policy" "compute" {
         # Without this gate the deploy SA could schedule deletion or
         # disable any KMS key in the account, causing denial of service
         # for unrelated workloads.
+        # Alias mutations (DeleteAlias/UpdateAlias) live in
+        # policy_compute_b.tf — the aws:ResourceTag condition does not
+        # match alias resources.
         Sid    = "KMSMutateTaggedOnly"
         Effect = "Allow"
         Action = [
-          "kms:DeleteAlias",
           "kms:DisableKey",
           "kms:EnableKey",
           "kms:PutKeyPolicy",
           "kms:ScheduleKeyDeletion",
           "kms:TagResource",
           "kms:UntagResource",
-          "kms:UpdateAlias",
           "kms:UpdateKeyDescription",
         ]
         Resource = "*"
