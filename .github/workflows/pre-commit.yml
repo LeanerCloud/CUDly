@@ -76,10 +76,17 @@ jobs:
         run: go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
 
       - name: Install Trivy
+        # Pinned to v0.69.3 (the latest release with published GitHub-release
+        # tarballs as of writing). Tags exist for v0.58 onwards but several
+        # mid-range releases skipped publishing assets to the Releases page;
+        # the install.sh script fetches via GitHub Releases, so picking one
+        # of those tags makes install bail silently after detecting the
+        # version. v0.69.3 ships the standard `trivy_<ver>_Linux-64bit.tar.gz`
+        # asset.
         run: |
-          set -euo pipefail
+          set -eo pipefail
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.58.0
+            | sh -s -- -b /usr/local/bin v0.69.3
 
       - name: Install git-secrets
         # Pinned to a release tag rather than master HEAD. After install
