@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -302,6 +303,31 @@ func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
 
+	// Explicit WithTx expectation: this is the regression CR flagged. The
+	// fallback in MockConfigStore.WithTx invokes fn(nil) regardless of
+	// whether the handler uses WithTx, so a future refactor that drops
+	// the transaction boundary would still pass without this assertion.
+	// By registering the expectation we guarantee createPlannedPurchases
+	// MUST run the loop inside a WithTx; if it ever stops doing so the
+	// test fails on AssertExpectations below.
+	//
+	// We mirror the production WithTx contract: invoke the callback so
+	// the inner SavePurchaseExecutionTx expectations actually fire, then
+	// capture its error in withTxFnErr for the assertion below. The mock
+	// itself returns a sentinel error (the inner-loop error is asserted
+	// directly via withTxFnErr instead of through the handler's
+	// returned err — both cover the regression).
+	withTxCalled := false
+	var withTxFnErr error
+	mockStore.On("WithTx", ctx, mock.AnythingOfType("func(pgx.Tx) error")).
+		Run(func(args mock.Arguments) {
+			withTxCalled = true
+			fn := args.Get(1).(func(pgx.Tx) error)
+			withTxFnErr = fn(nil)
+		}).
+		Return(errors.New("simulated transient DB error")).
+		Once()
+
 	// Drive the SavePurchaseExecutionTx mock branch directly (registered
 	// expectation overrides the un-tx fallback). Two successes, then a
 	// hard failure on the third row — simulates a transient DB blip in
@@ -332,13 +358,19 @@ func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
 	result, err := handler.createPlannedPurchases(ctx, req, "11111111-1111-1111-1111-111111111111")
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "failed to save execution")
+	// The handler propagates whatever WithTx returned; the regression we
+	// care about is the inner-loop wrapping, asserted via withTxFnErr.
+	require.Error(t, withTxFnErr, "inner WithTx callback must surface the save failure")
+	assert.Contains(t, withTxFnErr.Error(), "failed to save execution")
 
 	mockStore.AssertExpectations(t)
 	// Belt-and-braces: explicitly assert the plan update was never
 	// attempted. Both the un-tx and Tx variants are guarded.
 	mockStore.AssertNotCalled(t, "UpdatePurchasePlan")
 	mockStore.AssertNotCalled(t, "UpdatePurchasePlanTx")
+	// And confirm the loop ran inside a transaction — see the WithTx
+	// expectation above for why this matters.
+	require.True(t, withTxCalled, "createPlannedPurchases must run save loop inside WithTx")
 }
 
 func TestHandler_createPlannedPurchases_InvalidCount(t *testing.T) {
