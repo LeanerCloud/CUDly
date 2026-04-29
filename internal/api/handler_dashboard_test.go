@@ -85,11 +85,11 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 // scenarios from being exercised end-to-end.
 type dashboardOverrideStore struct {
 	*MockConfigStore
-	overrides map[string]*config.AccountServiceOverride // key: account|provider|service
+	overrides map[string]*config.AccountServiceOverride
 }
 
 func (s *dashboardOverrideStore) GetAccountServiceOverride(_ context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
-	return s.overrides[accountID+"|"+provider+"|"+service], nil
+	return s.overrides[config.AccountConfigKey(accountID, provider, service)], nil
 }
 
 // Issue #196 — per-account coverage override scales the headline
@@ -102,7 +102,7 @@ func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.
 	store := &dashboardOverrideStore{
 		MockConfigStore: mockStore,
 		overrides: map[string]*config.AccountServiceOverride{
-			"acct-A|aws|rds": {Coverage: float64Ptr(50)},
+			config.AccountConfigKey("acct-A", "aws", "rds"): {Coverage: float64Ptr(50)},
 		},
 	}
 
