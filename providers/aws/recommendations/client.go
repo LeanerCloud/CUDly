@@ -143,6 +143,16 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 			}
 			recs, err := c.GetRecommendations(ctx, params)
 			if err != nil {
+				// A canceled / deadline-exceeded ctx is NOT a per-combo
+				// failure to be tolerated — every subsequent combo
+				// would just hit the same dead context and waste time
+				// while we accumulate "failures" that hide the real
+				// reason. Short-circuit so the caller sees the ctx
+				// error verbatim. Per-combo errors (throttle, 5xx)
+				// keep the existing skip-and-continue tolerance.
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				lastErr = err
 				continue
 			}
@@ -171,6 +181,14 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 	for _, service := range services {
 		recs, err := c.GetRecommendationsForService(ctx, service)
 		if err != nil {
+			// Same rationale as in GetRecommendationsForService: a
+			// canceled / deadline-exceeded ctx is not a recoverable
+			// per-service error — short-circuit instead of marching
+			// through the remaining services and silently swallowing
+			// the cancellation.
+			if ctx.Err() != nil {
+				return allRecommendations, ctx.Err()
+			}
 			continue
 		}
 		allRecommendations = append(allRecommendations, recs...)

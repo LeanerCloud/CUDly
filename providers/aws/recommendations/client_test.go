@@ -395,6 +395,32 @@ func TestGetRecommendationsForService_QueriesEveryCombo(t *testing.T) {
 		"every (term, payment) combo must be requested — issue #188 + payment follow-up")
 }
 
+// TestGetRecommendationsForService_ContextCancelShortCircuits pins the
+// CodeRabbit fix for PR #195: a canceled / deadline-exceeded context
+// must short-circuit the (term, payment) loop instead of being treated
+// as a per-combo failure and accumulating into "all variants failed".
+// Otherwise the function spends 6× the wasted Cost Explorer attempts
+// after cancellation and may even return partial data with a nil error
+// if some early combos succeeded before the cancellation. We force a
+// canceled ctx and assert: (a) the caller sees ctx.Err() back, and
+// (b) at most one Cost Explorer call was attempted (the loop bails on
+// the first iteration's error rather than fan-out-then-aggregate).
+func TestGetRecommendationsForService_ContextCancelShortCircuits(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riError: context.Canceled,
+	}
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so the very first GetRecommendations sees a dead ctx
+	_, err := client.GetRecommendationsForService(ctx, common.ServiceEC2)
+
+	require.ErrorIs(t, err, context.Canceled,
+		"GetRecommendationsForService must propagate ctx.Err() verbatim, not wrap it as 'all variants failed'")
+	assert.LessOrEqual(t, len(mockAPI.riCalls), 1,
+		"loop must short-circuit on ctx cancellation, not march through all 6 (term, payment) combos")
+}
+
 func TestGetAllRecommendations(t *testing.T) {
 	// GetAllRecommendations will call the API 5 times for different services
 	// Our mock returns EC2 details for all calls, so only EC2 will parse successfully
