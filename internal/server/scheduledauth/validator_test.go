@@ -27,6 +27,15 @@ import (
 // email" regression slip past the suite.
 const testSchedulerSubject = "112233445566778899001"
 
+// testNonSchedulerSubject is a stand-in for any non-listed SA's unique_id,
+// used by negative-path tests that verify the validator rejects subjects
+// outside SCHEDULED_TASK_OIDC_SUBJECTS. Same shape as testSchedulerSubject
+// (21-digit numeric) — using an email-shaped fixture in the rejection
+// tests would have made them pass for the wrong reason (subject
+// mismatch by FORMAT, not by VALUE), masking a regression that
+// silently widened the validator to accept any string.
+const testNonSchedulerSubject = "999888777666555444333"
+
 // testKey wraps an RSA keypair plus the kid we'll publish in the JWKS.
 type testKey struct {
 	priv *rsa.PrivateKey
@@ -279,7 +288,7 @@ func TestValidate_OIDC_WrongSubject(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tok := signToken(t, key, baseClaims(time.Now(),
-		"attacker@example.iam.gserviceaccount.com",
+		testNonSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 

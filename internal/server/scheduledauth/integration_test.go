@@ -33,7 +33,7 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 		Issuer:    "https://accounts.example.com",
 		JWKSURL:   jwksSrv.URL,
 		Audiences: []string{"https://cudly.example.com"},
-		Subjects:  []string{"scheduler@cudly.iam.gserviceaccount.com"},
+		Subjects:  []string{testSchedulerSubject},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -68,7 +68,7 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 			name: "valid token signed by published key",
 			buildAuth: func(t *testing.T) string {
 				return "Bearer " + signToken(t, signingKey, baseClaims(now,
-					"scheduler@cudly.iam.gserviceaccount.com",
+					testSchedulerSubject,
 					"https://cudly.example.com",
 					"https://accounts.example.com"))
 			},
@@ -79,7 +79,7 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 			name: "token signed by key not in JWKS",
 			buildAuth: func(t *testing.T) string {
 				return "Bearer " + signToken(t, otherKey, baseClaims(now,
-					"scheduler@cudly.iam.gserviceaccount.com",
+					testSchedulerSubject,
 					"https://cudly.example.com",
 					"https://accounts.example.com"))
 			},
@@ -96,7 +96,7 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 			name: "wrong subject (audience matches but sub does not)",
 			buildAuth: func(t *testing.T) string {
 				return "Bearer " + signToken(t, signingKey, baseClaims(now,
-					"random@cudly.iam.gserviceaccount.com",
+					testNonSchedulerSubject,
 					"https://cudly.example.com",
 					"https://accounts.example.com"))
 			},
@@ -107,7 +107,7 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 			name: "wrong audience (sub matches but aud does not)",
 			buildAuth: func(t *testing.T) string {
 				return "Bearer " + signToken(t, signingKey, baseClaims(now,
-					"scheduler@cudly.iam.gserviceaccount.com",
+					testSchedulerSubject,
 					"https://attacker.example.com",
 					"https://accounts.example.com"))
 			},
