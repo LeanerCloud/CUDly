@@ -8,7 +8,8 @@ import { formatCurrency, formatTerm, escapeHtml } from './utils';
 import { renderFreshness } from './freshness';
 import { getRecommendationDetail, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
-import { isPaymentSupported, type Provider as CompatProvider } from './lib/purchase-compatibility';
+import { isPaymentSupported, paymentOptionsFor, type Provider as CompatProvider, type Payment as CompatPayment } from './lib/purchase-compatibility';
+import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 import { openModal } from './modal';
 
@@ -1398,7 +1399,11 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
     // Multi-bucket / incompatible path: open the fan-out modal so the
     // user can review per-bucket details before submitting one
     // executePurchase call per bucket in parallel.
-    openFanOutModal(bucketEntries, tb);
+    // openFanOutModal is async (issue #111: it pre-fetches per-account
+    // service overrides to seed each bucket's Payment default); the
+    // returned promise is fire-and-forget — the modal is the surface
+    // the user interacts with.
+    void openFanOutModal(bucketEntries, tb);
     return;
   }
 
@@ -1411,6 +1416,23 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
 // FanOutBucket groups one batch of recs under a single (provider,
 // service, term, payment, capacity) choice. A multi-bucket Purchase
 // fires one executePurchase POST per bucket.
+//
+// `paymentSource` (issue #111) records WHERE this bucket's payment
+// default came from:
+//   - 'override': all recs share one cloud_account_id, that account
+//     has an AccountServiceOverride matching the bucket's
+//     (provider, service), and the override's payment is supported by
+//     the (provider, service, term) cell. The bucket section renders
+//     a small "(from account override)" note next to the Payment
+//     dropdown.
+//   - 'toolbar': fallback — multi-account bucket, no override, override
+//     has no payment, or the override's payment is unsupported for
+//     this cell. Bucket inherits the bulk-toolbar Payment, today's
+//     pre-#111 behavior.
+//
+// The user can change the per-bucket Payment via the dropdown
+// rendered in the modal; the `change` handler updates `payment` (and
+// keeps `paymentSource` so the source note doesn't lie about origin).
 export interface FanOutBucket {
   provider: CompatProvider;
   service: string;
@@ -1418,6 +1440,7 @@ export interface FanOutBucket {
   payment: 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
   capacityPercent: number;
   recs: LocalRecommendation[]; // scaled by capacityPercent
+  paymentSource: 'override' | 'toolbar';
 }
 
 // Fan-out modal state. app.ts's Execute Purchase click reads these
@@ -1433,14 +1456,112 @@ export function clearFanOutBuckets(): void {
   currentFanOutBuckets = null;
 }
 
-function openFanOutModal(
+// resolveBucketPaymentSeed picks the default Payment value for a
+// bucket per issue #111 sub-option (ii):
+//   - When all recs in the bucket share one non-empty cloud_account_id
+//     AND that account has a saved AccountServiceOverride matching
+//     `(provider, recs[0].service)` AND the override's `payment` is a
+//     non-empty value supported by the (provider, service, term) cell:
+//     seed from override.
+//   - Otherwise: seed from the toolbar payment (today's behavior).
+//
+// IMPORTANT: the override-lookup uses `recs[0].service` (the per-rec
+// service slug), NOT `bucket.service`. That's a future-proofing choice
+// for the post-#132 SP-canonical-bucket-key landing in PR #180 — when
+// `bucket.service` becomes the canonical `'savings-plans'` for a
+// mixed-plan-type SP bucket, the override is still keyed on the
+// per-plan-type slug (`savings-plans-compute`, etc.), so this lookup
+// stays correct under either bucket-key encoding.
+//
+// Multi-account fallback: if recs span 2+ distinct cloud_account_id
+// values, no single account's override applies cleanly. Falling back
+// to toolbar avoids surprising the user. TODO(#111-followup): consider
+// per-rec seeding inside a multi-account bucket — would need either
+// per-rec dropdowns or a "split this bucket by account" UX.
+function resolveBucketPaymentSeed(
+  recs: LocalRecommendation[],
+  toolbar: BulkPurchaseToolbarState,
+  overridesByAccount: Map<string, AccountServiceOverride[]>,
+): { payment: BulkPurchaseToolbarState['payment']; source: 'override' | 'toolbar' } {
+  const fallback = { payment: toolbar.payment, source: 'toolbar' as const };
+  if (recs.length === 0) return fallback;
+  const r0 = recs[0]!;
+  const provider = r0.provider as CompatProvider;
+  const term = r0.term as 1 | 3;
+
+  // Single-account check: every rec must carry the same non-empty cloud_account_id.
+  const accountIDs = new Set<string>();
+  for (const r of recs) {
+    if (!r.cloud_account_id) return fallback; // any rec missing an id → toolbar
+    accountIDs.add(r.cloud_account_id);
+  }
+  if (accountIDs.size !== 1) return fallback;
+  const accountID = recs[0]!.cloud_account_id!;
+
+  const overrides = overridesByAccount.get(accountID);
+  if (!overrides) return fallback;
+
+  // Match on the per-rec service (NOT bucket.service) — see the comment
+  // above for the SP-canonical-bucket-key future-proofing rationale.
+  const match = overrides.find(
+    (o) => o.provider === provider && o.service === r0.service,
+  );
+  if (!match || !match.payment) return fallback;
+
+  // Defensive: only honour the override when the (provider, service,
+  // term, payment) combo is actually supported. A stale or hand-saved
+  // override pointing at an unsupported payment for this term shouldn't
+  // poison the dropdown — fall back to toolbar.
+  if (!isPaymentSupported(provider, r0.service, term, match.payment as CompatPayment)) {
+    return fallback;
+  }
+  return {
+    payment: match.payment as BulkPurchaseToolbarState['payment'],
+    source: 'override',
+  };
+}
+
+async function openFanOutModal(
   bucketEntries: Array<[string, LocalRecommendation[]]>,
   toolbar: BulkPurchaseToolbarState,
-): void {
+): Promise<void> {
+  // Pre-fetch service-overrides for every account that's the SOLE
+  // account in any bucket — these are the only buckets eligible for
+  // the override seed (multi-account buckets always fall back to
+  // toolbar). One fetch per distinct accountID; cached for the
+  // lifetime of this openFanOutModal call. Errors are swallowed: the
+  // toolbar-seed fallback always works, so a transient API failure
+  // shouldn't block the modal.
+  const eligibleAccountIDs = new Set<string>();
+  for (const [, recs] of bucketEntries) {
+    if (recs.length === 0) continue;
+    const ids = new Set<string>();
+    for (const r of recs) {
+      if (r.cloud_account_id) ids.add(r.cloud_account_id);
+    }
+    if (ids.size === 1) {
+      const only = recs[0]?.cloud_account_id;
+      if (only) eligibleAccountIDs.add(only);
+    }
+  }
+  const overridesByAccount = new Map<string, AccountServiceOverride[]>();
+  await Promise.all(
+    Array.from(eligibleAccountIDs).map(async (id) => {
+      try {
+        const list = await api.listAccountServiceOverrides(id);
+        overridesByAccount.set(id, list);
+      } catch {
+        // Silent fallback to toolbar seed — a network blip shouldn't
+        // block the user from purchasing.
+      }
+    }),
+  );
+
   const buckets: FanOutBucket[] = bucketEntries
     .filter(([_key, recs]) => recs.length > 0)
     .map(([_key, recs]) => {
       const r = recs[0]!;
+      const seed = resolveBucketPaymentSeed(recs, toolbar, overridesByAccount);
       return {
         provider: r.provider as CompatProvider,
         service: r.service,
@@ -1448,7 +1569,8 @@ function openFanOutModal(
         // the term from the bucket itself rather than from the dropped
         // toolbar override.
         term: r.term as 1 | 3,
-        payment: toolbar.payment,
+        payment: seed.payment,
+        paymentSource: seed.source,
         capacityPercent: toolbar.capacity,
         recs,
       };
@@ -1460,10 +1582,7 @@ function openFanOutModal(
   if (!container || !modal) return;
 
   // Build the modal body via createElement so the innerHTML hook
-  // doesn't flag any template-literal HTML. The bucket summary is
-  // pure data (provider, service, counts, totals) — no edit controls
-  // in this initial drop. A later iteration can add per-bucket
-  // Term/Payment/Capacity edits.
+  // doesn't flag any template-literal HTML.
   while (container.firstChild) container.removeChild(container.firstChild);
 
   const summary = document.createElement('div');
@@ -1521,13 +1640,63 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   title.textContent = `${b.provider.toUpperCase()} / ${b.service} — ${b.recs.length} commitment${b.recs.length === 1 ? '' : 's'}`;
   section.appendChild(title);
 
-  const compat = isPaymentSupported(b.provider, b.service, b.term, b.payment);
   const status = document.createElement('p');
-  status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
-  status.textContent = compat
-    ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
-    : `Invalid combo: ${b.provider} / ${b.service} doesn't support ${b.term}yr + ${b.payment}. This bucket will be skipped.`;
+  const renderStatus = (): void => {
+    const compat = isPaymentSupported(b.provider, b.service, b.term, b.payment);
+    status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
+    status.textContent = compat
+      ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
+      : `Invalid combo: ${b.provider} / ${b.service} doesn't support ${b.term}yr + ${b.payment}. This bucket will be skipped.`;
+  };
+  renderStatus();
   section.appendChild(status);
+
+  // Issue #111: Per-bucket Payment dropdown. Default-selected =
+  // bucket.payment (seeded by resolveBucketPaymentSeed: override →
+  // toolbar). Options come from paymentOptionsFor, which already
+  // filters to the supported (provider, service, term) Payment values
+  // — so the user can never pick an unsupported combo here. The
+  // change handler updates the bucket's payment in module state
+  // (`currentFanOutBuckets`) so getFanOutBuckets() returns the
+  // user's choice and handleFanOutExecute (in app.ts) reads the
+  // right value per POST.
+  const paymentRow = document.createElement('div');
+  paymentRow.className = 'fanout-bucket-payment-row';
+  const paymentLabel = document.createElement('label');
+  paymentLabel.className = 'fanout-bucket-payment-label';
+  paymentLabel.appendChild(document.createTextNode('Payment: '));
+  const paymentSelect = document.createElement('select');
+  paymentSelect.className = 'fanout-bucket-payment';
+  for (const opt of paymentOptionsFor(b.provider, b.service, b.term)) {
+    const option = document.createElement('option');
+    option.value = opt;
+    option.textContent = opt;
+    if (opt === b.payment) option.selected = true;
+    paymentSelect.appendChild(option);
+  }
+  paymentSelect.addEventListener('change', () => {
+    const next = paymentSelect.value as FanOutBucket['payment'];
+    // Find this bucket in module state by reference equality on the
+    // recs array (the recs array is preserved across the b ↔
+    // currentFanOutBuckets[i] mapping; identity comparison is safe).
+    if (currentFanOutBuckets) {
+      const idx = currentFanOutBuckets.findIndex((cb) => cb.recs === b.recs);
+      if (idx >= 0) {
+        currentFanOutBuckets[idx]!.payment = next;
+      }
+    }
+    b.payment = next;
+    renderStatus();
+  });
+  paymentLabel.appendChild(paymentSelect);
+  paymentRow.appendChild(paymentLabel);
+  if (b.paymentSource === 'override') {
+    const sourceNote = document.createElement('span');
+    sourceNote.className = 'fanout-bucket-payment-source';
+    sourceNote.textContent = ' (from account override)';
+    paymentRow.appendChild(sourceNote);
+  }
+  section.appendChild(paymentRow);
 
   const bucketTotal = b.recs.reduce(
     (acc, r) => ({
