@@ -49,10 +49,17 @@ module "compute_cloud_run" {
   # VPC Access (for Cloud SQL)
   vpc_connector_id = module.networking.vpc_connector_id
 
-  # Scheduled tasks
+  # Scheduled tasks. Per #159 the cloud-run module no longer takes a
+  # plaintext scheduled_task_secret — Cloud Scheduler signs an OIDC
+  # ID token with the scheduler SA, and the CUDly app validates that
+  # token at /api/scheduled/* via internal/server/scheduledauth
+  # (signature, issuer, audience, sub-pin). Cloud Run's IAM gate
+  # (roles/run.invoker, gated by cloud_run_allow_unauthenticated —
+  # tracked separately in #78) acts as defence in depth on top.
+  # Azure stays on bearer + Key Vault because Logic Apps' HTTP
+  # Connector does not emit Entra OIDC tokens.
   enable_scheduled_tasks  = var.enable_scheduled_tasks
   recommendation_schedule = var.recommendation_schedule
-  scheduled_task_secret   = module.secrets.scheduled_task_secret_value
 
   # RI exchange automation
   enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
@@ -73,7 +80,6 @@ module "compute_cloud_run" {
       FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
       CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                  = "gcp"
     },
@@ -147,7 +153,6 @@ module "compute_gke" {
       FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
       DASHBOARD_URL                       = local.dashboard_url
       CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
-      SCHEDULED_TASK_SECRET               = module.secrets.scheduled_task_secret_value
       CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                  = "gcp"
     },

@@ -161,13 +161,6 @@ variable "recommendation_schedule" {
   default     = "0 2 * * *"
 }
 
-variable "scheduled_task_secret" {
-  description = "Shared secret for authenticating scheduled task HTTP calls"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
 variable "additional_secret_accessor_ids" {
   description = <<-EOT
     Map of Secret Manager secret IDs (full resource names) the Cloud Run

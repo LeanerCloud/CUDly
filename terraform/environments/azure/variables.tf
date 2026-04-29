@@ -378,9 +378,15 @@ variable "enable_scheduled_tasks" {
 }
 
 variable "recommendation_schedule" {
-  description = "Cron schedule for recommendations task"
+  description = <<-EOT
+    Cron-shaped schedule for the recommendations Logic App. Only the
+    hour field is parsed (the Azure module converts it to Logic Apps
+    frequency=Day + interval=1 + startTime=<hour>:00). Sub-daily,
+    day-of-week, and day-of-month patterns are silently ignored;
+    use daily-at-hour-N values only.
+  EOT
   type        = string
-  default     = "0 2 * * *" # 2 AM daily
+  default     = "0 2 * * *" # Daily at 02:00 UTC
 }
 
 variable "enable_ri_exchange_schedule" {

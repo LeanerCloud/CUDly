@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -20,9 +19,13 @@ import (
 func CreateHTTPServer(app *Application, port int) *http.Server {
 	mux := http.NewServeMux()
 
-	// Register health and scheduled task routes (always available)
+	// Register health and scheduled task routes (always available).
+	// /api/scheduled/* sits behind the scheduledauth middleware — see
+	// internal/server/scheduledauth. Mode is selected by
+	// SCHEDULED_TASK_AUTH_MODE: oidc on GCP, bearer on Azure, disabled
+	// for local dev.
 	mux.HandleFunc("/health", app.handleHealthCheck)
-	mux.HandleFunc("/api/scheduled/", app.handleScheduledHTTP)
+	mux.Handle("/api/scheduled/", app.scheduledAuthMiddleware(http.HandlerFunc(app.handleScheduledHTTP)))
 
 	// When STATIC_DIR is set, serve static files for non-API paths
 	// and route only /api/ to the API handler.
@@ -105,22 +108,27 @@ func (app *Application) handleHTTPRequest(w http.ResponseWriter, r *http.Request
 	lambdaResponseToHTTP(w, lambdaResp)
 }
 
+// scheduledAuthMiddleware returns the configured scheduledauth middleware,
+// or a passthrough no-op if app.scheduledAuth is nil. Tests that build
+// an Application directly (without NewApplicationFromDeps) leave it
+// nil — they exercise the handler in isolation, with the middleware
+// covered separately in scheduledauth's own tests.
+func (app *Application) scheduledAuthMiddleware(next http.Handler) http.Handler {
+	if app.scheduledAuth == nil {
+		return next
+	}
+	return app.scheduledAuth.Middleware(next)
+}
+
 // handleScheduledHTTP handles scheduled tasks via HTTP endpoint
-// This is used by GCP Cloud Scheduler and Azure Logic Apps
+// This is used by GCP Cloud Scheduler and Azure Logic Apps. Auth is
+// enforced upstream by scheduledAuthMiddleware (see CreateHTTPServer);
+// by the time we reach here the request is already authenticated for
+// the configured mode.
 func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
-	}
-
-	// Verify shared secret for scheduled task authentication
-	if secret := app.appConfig.ScheduledTaskSecret; secret != "" {
-		provided := r.Header.Get("Authorization")
-		expected := "Bearer " + secret
-		if subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
 	}
 
 	ctx := r.Context()

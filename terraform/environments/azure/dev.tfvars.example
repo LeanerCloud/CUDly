@@ -78,9 +78,24 @@ key_vault_default_network_acl_action = "Allow"
 # ==============================================
 # Scheduled Tasks (Logic Apps)
 # ==============================================
+#
+# Logic Apps fetch a shared bearer secret from Key Vault at invocation
+# time and call /api/scheduled/* with `Authorization: Bearer <secret>`.
+# The CUDly app validates via SCHEDULED_TASK_AUTH_MODE=bearer (set
+# automatically by the container-apps / aks modules) — the secret name
+# itself is wired through `module.secrets.scheduled_task_secret_name`
+# and never lives in the container env.
 
-enable_scheduled_tasks  = true
-recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM
+enable_scheduled_tasks = true
+
+# recommendation_schedule: a cron-shaped string, but ONLY the hour field
+# (index [1]) is honored — the Azure module converts it into a Logic
+# Apps recurrence trigger of frequency=Day + interval=1 starting at
+# that hour (see modules/compute/azure/container-apps/scheduled-tasks.tf).
+# Sub-daily / day-of-week / day-of-month patterns are silently ignored.
+# Stick to daily-at-hour-N values; if you need finer granularity,
+# extend the parser before pinning a different schedule.
+recommendation_schedule = "0 2 * * *" # Daily at 02:00 UTC
 
 # ==============================================
 # Frontend (Azure CDN)

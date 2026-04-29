@@ -223,7 +223,14 @@ variable "scheduled_task_secret_name" {
 }
 
 variable "recommendation_schedule" {
-  description = "Cron schedule for recommendations refresh (default: daily at 2 AM UTC)"
+  description = <<-EOT
+    Cron-shaped schedule for the recommendations Logic App. Only the
+    hour field (index [1]) is parsed — see scheduled-tasks.tf — and
+    the value is materialized as a frequency=Day + interval=1
+    recurrence starting at that hour. Sub-daily, day-of-week, and
+    day-of-month cron patterns are silently ignored; stick to
+    daily-at-hour-N values. Default: daily at 02:00 UTC.
+  EOT
   type        = string
   default     = "0 2 * * *"
 }
