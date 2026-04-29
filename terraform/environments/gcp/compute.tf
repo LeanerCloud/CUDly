@@ -50,11 +50,14 @@ module "compute_cloud_run" {
   vpc_connector_id = module.networking.vpc_connector_id
 
   # Scheduled tasks. Per #159 the cloud-run module no longer takes a
-  # plaintext scheduled_task_secret — Cloud Scheduler authenticates to
-  # Cloud Run via OIDC token + roles/run.invoker. Application-level
-  # bearer auth is dropped on GCP (Cloud Run's IAM gate is the
-  # primary defence; on Azure the bearer check stays because Container
-  # Apps does not have Cloud Run's built-in OIDC validation).
+  # plaintext scheduled_task_secret — Cloud Scheduler signs an OIDC
+  # ID token with the scheduler SA, and the CUDly app validates that
+  # token at /api/scheduled/* via internal/server/scheduledauth
+  # (signature, issuer, audience, sub-pin). Cloud Run's IAM gate
+  # (roles/run.invoker, gated by cloud_run_allow_unauthenticated —
+  # tracked separately in #78) acts as defence in depth on top.
+  # Azure stays on bearer + Key Vault because Logic Apps' HTTP
+  # Connector does not emit Entra OIDC tokens.
   enable_scheduled_tasks  = var.enable_scheduled_tasks
   recommendation_schedule = var.recommendation_schedule
 

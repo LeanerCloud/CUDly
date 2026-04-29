@@ -195,12 +195,22 @@ func (v *Validator) Mode() Mode {
 	return v.mode
 }
 
+// warmupTimeout is the fallback deadline for the JWKS warmup probe
+// when the caller passes a context without one. http.DefaultClient
+// has no timeout, so without this guard a misconfigured / unreachable
+// JWKS endpoint would block startup indefinitely.
+const warmupTimeout = 5 * time.Second
+
 // Warmup performs a best-effort sanity check on the JWKS endpoint at
 // startup. Failure is non-fatal — it is logged and the validator stays
 // operable; the underlying *oidc.RemoteKeySet retries on the first real
 // request. This avoids crashlooping the container when Google's CDN
 // hiccups, while still surfacing misconfiguration (wrong URL, blocked
 // egress) prominently in the startup logs.
+//
+// If ctx has no deadline, a 5s fallback is applied — startup must
+// always make forward progress, even if the caller forgot to bound the
+// warmup. Callers that DO want to wait longer are respected.
 //
 // Implementation note: go-oidc's RemoteKeySet does not expose a public
 // "fetch now" method — it only fetches on demand from VerifySignature
@@ -209,6 +219,11 @@ func (v *Validator) Mode() Mode {
 func (v *Validator) Warmup(ctx context.Context) {
 	if v.mode != ModeOIDC || v.jwksURL == "" {
 		return
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, warmupTimeout)
+		defer cancel()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
 	if err != nil {

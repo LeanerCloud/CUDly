@@ -13,7 +13,7 @@
 //     Used by Azure Container Apps + Logic Apps where the workflow
 //     pulls the secret from Key Vault at invocation time.
 //
-// See plan: ~/.claude/projects/.../plans/issue-161-oidc-validator.md
+// Design context: GitHub PR #161 / issue #159.
 package scheduledauth
 
 import "errors"

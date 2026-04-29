@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,13 +82,18 @@ func newJWKSServer(t *testing.T, body []byte) *jwksServer {
 		_, _ = w.Write(current)
 	})
 	mux.HandleFunc("/swap", func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
 		// Body of POST /swap replaces the served JWKS. Used to test
-		// refresh-on-unknown-kid.
-		buf := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(buf)
+		// refresh-on-unknown-kid. io.ReadAll handles short Reads
+		// correctly — a single Body.Read call may return less than
+		// ContentLength and silently truncate the JWKS.
+		buf, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
 		current = buf
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
 	srv := httptest.NewServer(mux)

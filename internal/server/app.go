@@ -80,11 +80,14 @@ type Application struct {
 	signer oidc.Signer
 
 	// scheduledAuth authenticates inbound /api/scheduled/* requests.
-	// Always non-nil — disabled mode allows everything through with a
-	// loud WARN log. In oidc mode (GCP) it validates the Cloud
-	// Scheduler-signed ID token; in bearer mode (Azure) it constant-
-	// time-compares the shared secret resolved at startup from Key
-	// Vault.
+	// Non-nil after NewApplicationFromDeps — disabled mode allows
+	// everything through with a loud WARN log; oidc mode (GCP)
+	// validates the Cloud Scheduler-signed ID token; bearer mode
+	// (Azure) constant-time-compares the shared secret resolved at
+	// startup from Key Vault. May be nil in tests that build
+	// Application directly without the constructor; the
+	// scheduledAuthMiddleware helper passes through unmodified in
+	// that case so handler-only tests stay focused.
 	scheduledAuth *scheduledauth.Validator
 }
 
