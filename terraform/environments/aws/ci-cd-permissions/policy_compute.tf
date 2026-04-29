@@ -110,22 +110,37 @@ resource "aws_iam_policy" "compute" {
         Resource = "*"
       },
       {
-        # CloudFront create + read actions don't take a resource ARN at
-        # the API level (a distribution's ARN is only known after create).
-        # Read actions are also broad because terraform plan needs to
-        # enumerate resources. Mutating actions are gated below.
+        # CloudFront create + distribution-read actions don't take a
+        # resource ARN at the API level (a distribution's ARN is only
+        # known after create, and CreateFunction has no resource type
+        # per the AWS Service Authorization Reference). Read actions
+        # against distributions are also broad because terraform plan
+        # needs to enumerate resources. Mutating actions are gated
+        # below; function reads are scoped in CloudFrontFnRead.
         Sid    = "CloudFrontCreateAndRead"
         Effect = "Allow"
         Action = [
           "cloudfront:CreateDistribution",
           "cloudfront:CreateFunction",
-          "cloudfront:DescribeFunction",
           "cloudfront:GetDistribution",
           "cloudfront:GetDistributionConfig",
-          "cloudfront:GetFunction",
           "cloudfront:ListTagsForResource",
         ]
         Resource = "*"
+      },
+      {
+        # CloudFront DescribeFunction/GetFunction support the
+        # function resource type per the AWS Service Authorization
+        # Reference, so scope them to CUDly-owned functions to match
+        # the ARN scoping used by CloudFrontFnMutate in
+        # policy_compute_b.tf.
+        Sid    = "CloudFrontFnRead"
+        Effect = "Allow"
+        Action = [
+          "cloudfront:DescribeFunction",
+          "cloudfront:GetFunction",
+        ]
+        Resource = "arn:aws:cloudfront::*:function/cudly-*"
       },
       {
         # CloudFront distribution mutations are restricted to distributions
