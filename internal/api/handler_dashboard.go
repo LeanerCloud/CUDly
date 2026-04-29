@@ -146,9 +146,9 @@ func summarizeRecommendationsWithCoverage(
 	return total, byService
 }
 
-// scaledSavings returns rec.Savings * min(coverage, 100) / 100 when a
-// non-zero coverage entry exists for the rec's (account, provider, service)
-// triple. Otherwise returns rec.Savings unchanged.
+// scaledSavings returns rec.Savings * min(max(coverage, 0), 100) / 100 when
+// a coverage entry exists for the rec's (account, provider, service) triple.
+// Otherwise returns rec.Savings unchanged.
 func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 {
 	if rec.CloudAccountID == nil || coverageByKey == nil {
 		return rec.Savings
@@ -164,7 +164,6 @@ func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]flo
 		return rec.Savings
 	}
 	return rec.Savings * coverage / 100
-}
 }
 
 // resolveCoverageByAccountKey returns a map of AccountConfigKey -> resolved

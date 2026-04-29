@@ -172,10 +172,10 @@ func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
 			wantTotal: 50 + 200,
 		},
 		{
-			name:      "zero coverage treated as 'no scaling configured'",
+			name:      "zero coverage scales savings to zero",
 			recs:      []config.RecommendationRecord{rec(acctA, 100)},
 			coverage:  map[string]float64{keyA: 0},
-			wantTotal: 100,
+			wantTotal: 0,
 		},
 		{
 			name:      "coverage at 100 applies no scaling",

@@ -260,6 +260,24 @@ func TestApplyAccountOverrides_LookupError_PassesThrough(t *testing.T) {
 	assert.Len(t, recs, 1, "un-filtered list returned on lookup failure")
 }
 
+func TestApplyAccountOverrides_OverrideLookupError_PassesThrough(t *testing.T) {
+	// Mirrors the global-config lookup failure contract: if the per-account
+	// override lookup fails, the page should over-show rather than blank.
+	ctx := context.Background()
+	store := &mockOverrideStore{
+		recs: []config.RecommendationRecord{rdsRec("acct-A", "us-east-1", "mysql")},
+		globals: map[string]*config.ServiceConfig{
+			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true},
+		},
+		getOverrideErr: errors.New("override lookup timeout"),
+	}
+	s := &Scheduler{config: store}
+
+	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err, "ListRecommendations swallows the override-resolver error")
+	assert.Len(t, recs, 1, "un-filtered list returned on override lookup failure")
+}
+
 // Issue #196 acceptance criterion (mirrored from issue #111):
 //
 // Seed a global ServiceConfig + a per-account override that disables one

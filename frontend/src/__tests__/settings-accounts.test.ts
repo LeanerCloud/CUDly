@@ -616,21 +616,23 @@ describe('Overrides panel — AWS payment selector', () => {
     mockLoadRecommendations.mockRejectedValueOnce(new Error('network blip'));
     const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const panel = await openOverridesPanel('acc-1');
-    const select = panel.querySelector('select.override-payment-select') as HTMLSelectElement;
-    select.value = 'all-upfront';
-    select.dispatchEvent(new Event('change'));
-    await new Promise(r => setTimeout(r, 0));
+    try {
+      const panel = await openOverridesPanel('acc-1');
+      const select = panel.querySelector('select.override-payment-select') as HTMLSelectElement;
+      select.value = 'all-upfront';
+      select.dispatchEvent(new Event('change'));
+      await new Promise(r => setTimeout(r, 0));
 
-    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
-    expect(consoleWarnSpy).toHaveBeenCalled();
-    // No error toast should have been shown for the refresh failure: the
-    // success toast from the save path is what the user sees.
-    const toastCalls = mockShowToast.mock.calls.map(c => c[0]);
-    const errorToasts = toastCalls.filter(t => (t as { kind?: string }).kind === 'error');
-    expect(errorToasts).toHaveLength(0);
-
-    consoleWarnSpy.mockRestore();
+      expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+      expect(consoleWarnSpy).toHaveBeenCalled();
+      // No error toast should have been shown for the refresh failure: the
+      // success toast from the save path is what the user sees.
+      const toastCalls = mockShowToast.mock.calls.map(c => c[0]);
+      const errorToasts = toastCalls.filter(t => (t as { kind?: string }).kind === 'error');
+      expect(errorToasts).toHaveLength(0);
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
   });
 
   test('Inherit is disabled when override already has a payment set (no clear-field channel)', async () => {
