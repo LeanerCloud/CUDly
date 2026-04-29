@@ -11,6 +11,25 @@ import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
 import { isValidCombination } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
+import { loadRecommendations } from './recommendations';
+
+/**
+ * Issue #196 — after any mutation to an `account_service_overrides` row
+ * (create, edit, reset/delete), refresh the cached recommendations list so
+ * the read-time filters (`enabled`, include/exclude lists) and the
+ * dashboard's coverage cap reflect the new state without a manual reload.
+ *
+ * Errors are swallowed: the override mutation that just succeeded shouldn't
+ * be reported as a failure because the secondary refresh fails. The recs
+ * page re-fetches on the next nav event, so a stale list is recoverable.
+ */
+async function refreshRecommendationsAfterOverrideChange(): Promise<void> {
+  try {
+    await loadRecommendations();
+  } catch (err) {
+    console.warn('Failed to refresh recommendations after override change:', err);
+  }
+}
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -576,6 +595,7 @@ async function handlePaymentOverrideChange(
     // o.provider === 'aws' guard in loadOverridesPanel's row loop), so
     // override.provider is always 'aws' at this call site — cast is safe.
     await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
   } catch (err) {
     select.value = previous;
     showToast({
@@ -733,6 +753,7 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement, provide
         try {
           await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
           await loadOverridesPanel(accountId, panel, provider);
+          await refreshRecommendationsAfterOverrideChange();
         } catch (err) {
           showToast({ message: `Failed to reset override: ${(err as Error).message}`, kind: 'error' });
         }
@@ -934,6 +955,7 @@ async function submitOverrideForm(e: Event): Promise<void> {
     });
     closeOverrideModal();
     await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
   } catch (err) {
     const errEl = document.getElementById('override-form-error');
     if (errEl) errEl.textContent = `Failed to create override: ${(err as Error).message}`;

@@ -31,6 +31,15 @@ jest.mock('../confirmDialog', () => ({
   confirmDialog: (opts: unknown) => mockConfirmDialog(opts)
 }));
 
+// Mock the recommendations module to keep the settings tests focused on
+// the settings flows. Issue #196 wires settings.ts to call loadRecommendations
+// after override mutations; without this mock the test bundle would pull in
+// the full recommendations page module (~2k LOC) and its DOM expectations.
+const mockLoadRecommendations = jest.fn<Promise<void>, []>().mockResolvedValue(undefined);
+jest.mock('../recommendations', () => ({
+  loadRecommendations: () => mockLoadRecommendations()
+}));
+
 import * as api from '../api';
 
 // ---------------------------------------------------------------------------
@@ -572,6 +581,56 @@ describe('Overrides panel — AWS payment selector', () => {
     expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
       'acc-1', 'aws', 'rds', { payment: 'all-upfront' },
     );
+  });
+
+  // Issue #196 — once the read path consults per-account overrides, the
+  // recs list must refresh after a mutation or the user keeps seeing
+  // stale data until the next page navigation.
+  test('inline payment change triggers a recommendations refresh (issue #196)', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'rds', term: 1 },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'rds', term: 1, payment: 'all-upfront',
+    });
+
+    const panel = await openOverridesPanel('acc-1');
+    const select = panel.querySelector('select.override-payment-select') as HTMLSelectElement;
+    select.value = 'all-upfront';
+    select.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(mockLoadRecommendations).toHaveBeenCalledTimes(1);
+  });
+
+  // The refresh is best-effort: a failure to refresh must not surface to
+  // the user as an error toast, and must not block the override mutation
+  // from completing successfully.
+  test('refresh failure after override save is swallowed (issue #196)', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'rds', term: 1 },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'rds', term: 1, payment: 'all-upfront',
+    });
+    mockLoadRecommendations.mockRejectedValueOnce(new Error('network blip'));
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const panel = await openOverridesPanel('acc-1');
+    const select = panel.querySelector('select.override-payment-select') as HTMLSelectElement;
+    select.value = 'all-upfront';
+    select.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+    expect(consoleWarnSpy).toHaveBeenCalled();
+    // No error toast should have been shown for the refresh failure: the
+    // success toast from the save path is what the user sees.
+    const toastCalls = mockShowToast.mock.calls.map(c => c[0]);
+    const errorToasts = toastCalls.filter(t => (t as { kind?: string }).kind === 'error');
+    expect(errorToasts).toHaveLength(0);
+
+    consoleWarnSpy.mockRestore();
   });
 
   test('Inherit is disabled when override already has a payment set (no clear-field channel)', async () => {
