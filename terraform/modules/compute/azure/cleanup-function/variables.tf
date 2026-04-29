@@ -44,12 +44,6 @@ variable "subnet_id" {
   default     = ""
 }
 
-variable "schedule" {
-  description = "CRON schedule (NCRONTAB format)"
-  type        = string
-  default     = "0 2 * * *"
-}
-
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

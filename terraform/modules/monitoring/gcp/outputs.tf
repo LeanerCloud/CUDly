@@ -9,6 +9,9 @@ output "email_notification_channel_ids" {
 output "slack_notification_channel_id" {
   description = "ID of Slack notification channel (if configured)"
   value       = var.slack_webhook_url != "" ? google_monitoring_notification_channel.slack[0].id : null
+  # Channel ID is derived from the slack_webhook_url (declared sensitive),
+  # so the output inherits the sensitive marker per Terraform's flow rules.
+  sensitive = true
 }
 
 # Log sink

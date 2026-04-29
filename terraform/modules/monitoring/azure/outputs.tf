@@ -54,6 +54,10 @@ output "email_action_group_id" {
 output "slack_action_group_id" {
   description = "ID of the Slack action group (if configured)"
   value       = var.slack_webhook_url != "" ? azurerm_monitor_action_group.slack[0].id : null
+  # Action group ID is derived from the slack_webhook_url (declared
+  # sensitive), so the output inherits the sensitive marker per
+  # Terraform's flow rules.
+  sensitive = true
 }
 
 # Metric Alerts

@@ -42,25 +42,30 @@
 **Goal:** Distinguish "access denied / not in org" (silent) from "transient or unknown" (loud).
 
 **Files to modify:**
+
 - `providers/aws/provider.go:213-243` — refine the error classification
 - `providers/aws/provider_test.go` — new test cases
 
 **Steps:**
+
 1. At the `err != nil` branch, use `errors.As` to check for `*types.AWSOrganizationsNotInUseException` and access-denied variants (`*smithy.GenericAPIError` with codes `AccessDeniedException`, `AWSOrganizationsNotInUseException`). Return the accumulated list silently only for those.
 2. For any other error, log via `logging.Warnf` and return the error to the caller. Decide whether `GetAccounts` should propagate the error or just stop pagination — propagate is safer (incomplete data is dangerous for purchase flows).
 3. Consider a config flag (`AWS_ORG_LIST_PARTIAL_OK`) to allow the current silent behaviour for users who intentionally run with limited permissions.
 
 **Edge cases the fix must handle:**
+
 - First page succeeds, second page throttles → return error (partial list unsafe).
 - First page returns `AWSOrganizationsNotInUseException` → return just the single-account list silently.
 - Permission denied on page 1 → same as current behaviour (silent fallback to single account).
 
 **Test plan:**
+
 - `TestAppendOrgAccounts_NotInOrg_ReturnsCallerOnly` — asserts silent behaviour.
 - `TestAppendOrgAccounts_ThrottleMidPage_ReturnsError` — asserts error propagation.
 - `TestAppendOrgAccounts_AccessDeniedPage1_ReturnsCallerOnly` — asserts the historical silent path.
 
 **Verification:**
+
 - `go test ./providers/aws/...`
 
 **Effort:** `small`
@@ -78,15 +83,19 @@
 **Goal:** Pass `context.Background()` consistently.
 
 **Files to modify:**
+
 - `providers/aws/provider_test.go:233, 264`
 
 **Steps:**
+
 1. Replace `p.GetServiceClient(nil, ...)` with `p.GetServiceClient(context.Background(), ...)` at both call sites.
 
 **Test plan:**
+
 - Existing tests continue to pass; no new tests required.
 
 **Verification:**
+
 - `go test ./providers/aws/...`
 
 **Effort:** `small`
@@ -104,21 +113,26 @@
 **Goal:** Make the SDK coupling explicit so an SDK upgrade is a compile-or-test failure rather than a silent misclassification.
 
 **Files to modify:**
+
 - `providers/aws/provider.go:162-186` — move literals to named constants and add a comment
 - `providers/aws/provider_test.go` — add a test that panics/fails if the SDK constant is renamed
 
 **Steps:**
+
 1. Define `const (awsSourceSharedConfig = "SharedConfigCredentials"; awsSourceAssumeRole = "AssumeRoleProvider")` with a comment noting they are SDK internals and must be re-verified on every `aws-sdk-go-v2` upgrade.
 2. Use the constants in the switch.
 3. Add a table-driven test that exercises each known source value and asserts the mapping; annotate it "if this fails, re-audit sdk internals".
 
 **Edge cases the fix must handle:**
+
 - SDK emits a new source string — default case still returns `CredentialSourceEnvironment`; consider returning a new `CredentialSourceUnknown` to surface the unknown case.
 
 **Test plan:**
+
 - `TestGetCredentials_SourceMapping` — loops through known sources, asserts mapping.
 
 **Verification:**
+
 - `go test ./providers/aws/...`
 
 **Effort:** `small`
