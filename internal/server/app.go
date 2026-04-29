@@ -27,6 +27,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
+	"github.com/LeanerCloud/CUDly/internal/server/scheduledauth"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -77,6 +78,14 @@ type Application struct {
 	// federated credential path). Nil when the deployment has not
 	// opted into the federated flow.
 	signer oidc.Signer
+
+	// scheduledAuth authenticates inbound /api/scheduled/* requests.
+	// Always non-nil — disabled mode allows everything through with a
+	// loud WARN log. In oidc mode (GCP) it validates the Cloud
+	// Scheduler-signed ID token; in bearer mode (Azure) it constant-
+	// time-compares the shared secret resolved at startup from Key
+	// Vault.
+	scheduledAuth *scheduledauth.Validator
 }
 
 // ApplicationConfig holds all env-based configuration for the application
@@ -267,6 +276,35 @@ func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, reso
 	return resolved
 }
 
+// envSourceOS implements scheduledauth.EnvSource against os.Getenv. The
+// scheduledauth package owns the env var names and parse rules so they
+// stay aligned with Terraform.
+type envSourceOS struct{}
+
+func (envSourceOS) Get(key string) string { return os.Getenv(key) }
+
+// buildScheduledAuth wires up the /api/scheduled/* validator. It pulls
+// mode + OIDC params from env (they're per-deployment Terraform inputs)
+// but injects the bearer secret from cfg — that path goes through the
+// SecretResolver (Key Vault) for production deployments and never lives
+// in a container env var. Returns ErrConfigInvalid on misconfig so the
+// container fails fast rather than silently accepting everything.
+func buildScheduledAuth(cfg ApplicationConfig) (*scheduledauth.Validator, error) {
+	saCfg, err := scheduledauth.LoadConfig(envSourceOS{})
+	if err != nil {
+		return nil, err
+	}
+	// In bearer mode, override the env-supplied secret with the one
+	// already resolved from KV / SM. LoadConfig reads SCHEDULED_TASK_SECRET
+	// directly which is fine for local dev where the env carries the
+	// plaintext, but in prod cfg.ScheduledTaskSecret is the authoritative
+	// value (resolved by resolveScheduledTaskSecret upstream).
+	if saCfg.Mode == scheduledauth.ModeBearer {
+		saCfg.Bearer = cfg.ScheduledTaskSecret
+	}
+	return scheduledauth.New(saCfg)
+}
+
 // NewApplicationFromDeps creates an Application from pre-built configuration and dependencies.
 // This is the testable constructor - all external I/O is done before calling this.
 func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) {
@@ -275,6 +313,20 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	}
 
 	cfg.ScheduledTaskSecret = resolveScheduledTaskSecret(ctx, cfg, deps.SecretResolver)
+
+	// Build the /api/scheduled/* auth validator. Fail-fast on bad
+	// config (empty subjects in oidc mode, unknown mode, etc.) — better
+	// to crash on startup than to silently accept unauthenticated
+	// scheduled-task calls in production.
+	scheduledAuth, err := buildScheduledAuth(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+	}
+	// Best-effort JWKS warmup — surfaces misconfiguration in startup
+	// logs without blocking startup if Google's CDN is unreachable.
+	warmCtx, warmCancel := context.WithTimeout(ctx, 5*time.Second)
+	scheduledAuth.Warmup(warmCtx)
+	warmCancel()
 
 	// Construct the OIDC issuer signer once per deployment. Nil means
 	// the deployment has not opted into the federated flow yet — all
@@ -381,6 +433,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		secretResolver: deps.SecretResolver,
 		appConfig:      cfg,
 		signer:         signer,
+		scheduledAuth:  scheduledAuth,
 	}, nil
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
+	"github.com/LeanerCloud/CUDly/internal/server/scheduledauth"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -263,7 +264,14 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			method: "POST",
 			path:   "/api/scheduled/collect_recommendations",
 			setupApp: func(app *Application) {
-				app.appConfig.ScheduledTaskSecret = "my-secret"
+				v, err := scheduledauth.New(scheduledauth.Config{
+					Mode:   scheduledauth.ModeBearer,
+					Bearer: "my-secret",
+				})
+				if err != nil {
+					panic(err)
+				}
+				app.scheduledAuth = v
 			},
 			expectedStatus: 401,
 		},
@@ -273,7 +281,14 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			path:       "/api/scheduled/collect_recommendations",
 			authHeader: "Bearer my-secret",
 			setupApp: func(app *Application) {
-				app.appConfig.ScheduledTaskSecret = "my-secret"
+				v, err := scheduledauth.New(scheduledauth.Config{
+					Mode:   scheduledauth.ModeBearer,
+					Bearer: "my-secret",
+				})
+				if err != nil {
+					panic(err)
+				}
+				app.scheduledAuth = v
 				app.Scheduler = &testutil.MockScheduler{
 					CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
 						return &scheduler.CollectResult{}, nil
@@ -297,7 +312,10 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			app.handleScheduledHTTP(w, req)
+			// Drive the request through the same middleware chain
+			// that CreateHTTPServer wires up, so auth is enforced
+			// upstream of handleScheduledHTTP.
+			app.scheduledAuthMiddleware(http.HandlerFunc(app.handleScheduledHTTP)).ServeHTTP(w, req)
 
 			testutil.AssertEqual(t, tt.expectedStatus, w.Code)
 
