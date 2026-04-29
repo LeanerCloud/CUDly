@@ -21,10 +21,14 @@ type mockCostExplorerAPI struct {
 	riError           error
 	spError           error
 	callCount         int
+	// riCalls records the per-request input so tests can assert which
+	// term/payment combos were actually queried (issue #188 regression).
+	riCalls []*costexplorer.GetReservationPurchaseRecommendationInput
 }
 
 func (m *mockCostExplorerAPI) GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
 	m.callCount++
+	m.riCalls = append(m.riCalls, params)
 	if m.riError != nil {
 		return nil, m.riError
 	}
@@ -323,11 +327,98 @@ func TestGetRecommendationsForService(t *testing.T) {
 	recs, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
 
 	require.NoError(t, err)
-	assert.Len(t, recs, 1)
-	assert.Equal(t, common.ServiceEC2, recs[0].Service)
-	// Verify default params are applied
-	assert.Equal(t, "partial-upfront", recs[0].PaymentOption)
-	assert.Equal(t, "3yr", recs[0].Term)
+	// GetRecommendationsForService now fetches the full Cartesian
+	// product of {1yr, 3yr} × {all-upfront, partial-upfront, no-upfront}
+	// (issue #188 + payment-option follow-up — Cost Explorer requires
+	// per-call TermInYears AND PaymentOption, so the previously
+	// hardcoded "3yr" + "partial-upfront" pair hid every other variant
+	// from the user). The mock returns the same payload for every
+	// call, so we expect one rec per (term, payment) combo = 2 × 3 = 6.
+	require.Len(t, recs, 6)
+	for _, r := range recs {
+		assert.Equal(t, common.ServiceEC2, r.Service)
+	}
+	type combo struct{ term, payment string }
+	got := make([]combo, len(recs))
+	for i, r := range recs {
+		got[i] = combo{term: r.Term, payment: r.PaymentOption}
+	}
+	want := []combo{
+		{"1yr", "all-upfront"}, {"1yr", "partial-upfront"}, {"1yr", "no-upfront"},
+		{"3yr", "all-upfront"}, {"3yr", "partial-upfront"}, {"3yr", "no-upfront"},
+	}
+	assert.ElementsMatch(t, want, got)
+}
+
+// TestGetRecommendationsForService_QueriesEveryCombo is the regression
+// test for issue #188 and the payment-option follow-up. Cost Explorer's
+// GetReservationPurchaseRecommendation requires both `TermInYears` and
+// `PaymentOption` on each request and returns recs for that single
+// (term, payment) cell — so to let the user choose between every
+// variant in the UI we MUST issue one request per combo. The previous
+// behaviour hardcoded ("3yr", "partial-upfront") and the user-visible
+// symptoms were "AWS recs only ever show Term = 3 Years" plus "no
+// all-upfront / no-upfront variants ever appear". We assert directly
+// against the captured input slice that all 6 (term, payment) combos
+// were requested, so a future regression that quietly drops a combo
+// fails this test even if the parser tags the surviving recs correctly.
+func TestGetRecommendationsForService_QueriesEveryCombo(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{},
+		},
+	}
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	_, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
+	require.NoError(t, err)
+
+	require.Len(t, mockAPI.riCalls, 6,
+		"GetRecommendationsForService must issue one Cost Explorer call per (term, payment) combo")
+	type combo struct {
+		term    types.TermInYears
+		payment types.PaymentOption
+	}
+	got := make([]combo, len(mockAPI.riCalls))
+	for i, c := range mockAPI.riCalls {
+		got[i] = combo{term: c.TermInYears, payment: c.PaymentOption}
+	}
+	want := []combo{
+		{types.TermInYearsOneYear, types.PaymentOptionAllUpfront},
+		{types.TermInYearsOneYear, types.PaymentOptionPartialUpfront},
+		{types.TermInYearsOneYear, types.PaymentOptionNoUpfront},
+		{types.TermInYearsThreeYears, types.PaymentOptionAllUpfront},
+		{types.TermInYearsThreeYears, types.PaymentOptionPartialUpfront},
+		{types.TermInYearsThreeYears, types.PaymentOptionNoUpfront},
+	}
+	assert.ElementsMatch(t, want, got,
+		"every (term, payment) combo must be requested — issue #188 + payment follow-up")
+}
+
+// TestGetRecommendationsForService_ContextCancelShortCircuits pins the
+// CodeRabbit fix for PR #195: a canceled / deadline-exceeded context
+// must short-circuit the (term, payment) loop instead of being treated
+// as a per-combo failure and accumulating into "all variants failed".
+// Otherwise the function spends 6× the wasted Cost Explorer attempts
+// after cancellation and may even return partial data with a nil error
+// if some early combos succeeded before the cancellation. We force a
+// canceled ctx and assert: (a) the caller sees ctx.Err() back, and
+// (b) at most one Cost Explorer call was attempted (the loop bails on
+// the first iteration's error rather than fan-out-then-aggregate).
+func TestGetRecommendationsForService_ContextCancelShortCircuits(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riError: context.Canceled,
+	}
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so the very first GetRecommendations sees a dead ctx
+	_, err := client.GetRecommendationsForService(ctx, common.ServiceEC2)
+
+	require.Equal(t, context.Canceled, err,
+		"GetRecommendationsForService must propagate ctx.Err() verbatim, not wrap it as 'all variants failed'")
+	assert.Empty(t, mockAPI.riCalls,
+		"pre-canceled contexts must short-circuit before Cost Explorer work")
 }
 
 func TestGetAllRecommendations(t *testing.T) {
