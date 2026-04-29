@@ -21,10 +21,14 @@ type mockCostExplorerAPI struct {
 	riError           error
 	spError           error
 	callCount         int
+	// riCalls records the per-request input so tests can assert which
+	// term/payment combos were actually queried (issue #188 regression).
+	riCalls []*costexplorer.GetReservationPurchaseRecommendationInput
 }
 
 func (m *mockCostExplorerAPI) GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
 	m.callCount++
+	m.riCalls = append(m.riCalls, params)
 	if m.riError != nil {
 		return nil, m.riError
 	}
@@ -323,11 +327,50 @@ func TestGetRecommendationsForService(t *testing.T) {
 	recs, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
 
 	require.NoError(t, err)
-	assert.Len(t, recs, 1)
-	assert.Equal(t, common.ServiceEC2, recs[0].Service)
-	// Verify default params are applied
-	assert.Equal(t, "partial-upfront", recs[0].PaymentOption)
-	assert.Equal(t, "3yr", recs[0].Term)
+	// GetRecommendationsForService now fetches both 1yr and 3yr terms
+	// (issue #188 — Cost Explorer requires per-call TermInYears, so a
+	// single hardcoded "3yr" call meant 1yr recs never reached the
+	// scheduler). The mock returns the same payload for every Cost
+	// Explorer call, so we expect one rec per term.
+	require.Len(t, recs, 2)
+	for _, r := range recs {
+		assert.Equal(t, common.ServiceEC2, r.Service)
+		assert.Equal(t, "partial-upfront", r.PaymentOption)
+	}
+	terms := []string{recs[0].Term, recs[1].Term}
+	assert.ElementsMatch(t, []string{"1yr", "3yr"}, terms)
+}
+
+// TestGetRecommendationsForService_QueriesBothTerms is the regression
+// test for issue #188: Cost Explorer's GetReservationPurchaseRecommendation
+// requires `TermInYears` on each request, so to surface both 1yr and 3yr
+// recs we MUST issue two requests per service. The previous behaviour
+// hardcoded "3yr" and the user-visible symptom was "AWS recs only ever
+// show Term = 3 Years" on the Recommendations page. We assert directly
+// against the captured input slice that both ONE_YEAR and THREE_YEARS
+// were requested, so a future regression that quietly drops one term
+// fails this test even if the parser tags recs correctly.
+func TestGetRecommendationsForService_QueriesBothTerms(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{},
+		},
+	}
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	_, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
+	require.NoError(t, err)
+
+	require.Len(t, mockAPI.riCalls, 2,
+		"GetRecommendationsForService must issue one Cost Explorer call per term")
+	requestedTerms := []types.TermInYears{
+		mockAPI.riCalls[0].TermInYears,
+		mockAPI.riCalls[1].TermInYears,
+	}
+	assert.ElementsMatch(t,
+		[]types.TermInYears{types.TermInYearsOneYear, types.TermInYearsThreeYears},
+		requestedTerms,
+		"both ONE_YEAR and THREE_YEARS must be requested — issue #188")
 }
 
 func TestGetAllRecommendations(t *testing.T) {

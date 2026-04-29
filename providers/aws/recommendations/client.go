@@ -92,17 +92,46 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 	return c.parseRecommendations(result.Recommendations, params)
 }
 
-// GetRecommendationsForService fetches recommendations for a specific service (for discovery)
-func (c *Client) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
-	params := common.RecommendationParams{
-		Service:        service,
-		PaymentOption:  "partial-upfront",
-		Term:           "3yr",
-		LookbackPeriod: "7d",
-		Region:         "",
-	}
+// defaultDiscoveryTerms enumerates the term lengths the discovery flow
+// fetches per service. Cost Explorer's GetReservationPurchaseRecommendation
+// requires `TermInYears` on each request and returns recs for that single
+// term — there's no "give me both" mode. Issue #188 traced the
+// "AWS recs only ever show Term = 3 Years" symptom to this loop having
+// previously been a single hardcoded "3yr" entry, so 1yr recs never
+// reached the scheduler regardless of how unique their downstream IDs
+// were after PR #189.
+var defaultDiscoveryTerms = []string{"1yr", "3yr"}
 
-	return c.GetRecommendations(ctx, params)
+// GetRecommendationsForService fetches recommendations for a specific
+// service across all standard term lengths in defaultDiscoveryTerms.
+// A per-term Cost Explorer error is tolerated and skipped so a single
+// throttle on one term doesn't suppress the other term's results;
+// only an error is returned when every term fails. This mirrors the
+// "continue on per-service error" tolerance in GetAllRecommendations.
+func (c *Client) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
+	allRecs := make([]common.Recommendation, 0)
+	var lastErr error
+	successCount := 0
+	for _, term := range defaultDiscoveryTerms {
+		params := common.RecommendationParams{
+			Service:        service,
+			PaymentOption:  "partial-upfront",
+			Term:           term,
+			LookbackPeriod: "7d",
+			Region:         "",
+		}
+		recs, err := c.GetRecommendations(ctx, params)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		successCount++
+		allRecs = append(allRecs, recs...)
+	}
+	if successCount == 0 && lastErr != nil {
+		return nil, fmt.Errorf("all term variants failed for service %s: %w", service, lastErr)
+	}
+	return allRecs, nil
 }
 
 // GetAllRecommendations fetches recommendations for all supported services
