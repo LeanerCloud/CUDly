@@ -33,7 +33,13 @@ locals {
   # SA, var.scheduled_task_auth_mode_override decides — its default is
   # the fail-closed "oidc" so an unauthenticated boot requires opting
   # in to "disabled" deliberately.
-  scheduled_task_oidc_audience = try(google_service_account.scheduler[0].email, "")
+  # Audience is bound to the receiving endpoint, NOT to the scheduler
+  # service-account identity. `sub` already pins the caller to that SA's
+  # unique_id; using the same SA identity for `aud` made both checks
+  # describe the caller, which is replay-prone if the SA is ever reused.
+  # Pinning `aud` to the endpoint URL keeps tokens recipient-bound — the
+  # OAuth/OIDC convention. (CodeRabbit nitpick on PR #161.)
+  scheduled_task_oidc_audience = "${var.app_url}/api/scheduled/recommendations"
   scheduled_task_oidc_subject  = try(google_service_account.scheduler[0].unique_id, "")
   scheduled_task_auth_mode = (
     length(google_service_account.scheduler) > 0
@@ -716,15 +722,17 @@ resource "google_cloud_scheduler_job" "recommendations" {
     # IAM gate, so the OIDC token is validated by the app at
     # /api/scheduled/* via internal/server/scheduledauth — signature,
     # issuer, audience, and `sub` pinned to this SA. Audience is set
-    # explicitly here so the validator's allow-list stays
-    # deterministic; without it Cloud Scheduler defaults audience to
-    # the target URL.
+    # to the receiving endpoint URL (the OAuth/OIDC convention — keeps
+    # the token recipient-bound and limits replay if this SA is ever
+    # reused for a different service). The same value is exported to
+    # the app via local.scheduled_task_oidc_audience so the validator's
+    # whitelist matches by construction.
     # The previous static `Authorization: Bearer
     # ${var.scheduled_task_secret}` header leaked the shared secret into
     # the scheduler resource definition + Terraform state — closes #159.
     oidc_token {
       service_account_email = google_service_account.scheduler[0].email
-      audience              = google_service_account.scheduler[0].email
+      audience              = local.scheduled_task_oidc_audience
     }
   }
 }

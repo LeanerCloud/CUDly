@@ -49,9 +49,29 @@ resource "google_service_account" "cloud_run" {
 # we use try() to short-circuit). `join(",")` produces the CSV format
 # the validator parses.
 locals {
+  # Per-schedule audiences: each Cloud Scheduler job mints an OIDC
+  # token whose `aud` claim names the receiving endpoint, NOT the
+  # scheduler SA. `sub` already pins the caller to the SA's unique_id;
+  # using the SA email for `aud` made both checks describe the caller
+  # and was replay-prone if the SA was ever reused for a different
+  # service. The new shape keeps the token recipient-bound. (CodeRabbit
+  # nitpick on PR #161.)
+  #
+  # We deliberately use ${var.service_name}/api/scheduled/<endpoint>
+  # rather than the Cloud Run URL: the URL would create a Terraform
+  # cycle (google_cloud_run_v2_service.main.uri → env vars on the
+  # service itself → the audience locals → back to the service).
+  # `service_name` is a module input, so the audience is fully
+  # resolvable before the Cloud Run resource is planned. Any string
+  # that's unique-per-(service, endpoint) satisfies the OIDC
+  # recipient-bound contract — the validator only does string-equality
+  # against this same value (built once into the env var below).
+  scheduled_task_recommendations_audience = "${var.service_name}/api/scheduled/recommendations"
+  scheduled_task_ri_exchange_audience     = "${var.service_name}/api/scheduled/ri-exchange"
+
   scheduled_task_oidc_audiences = join(",", compact([
-    var.enable_scheduled_tasks ? try(google_service_account.scheduler[0].email, "") : "",
-    var.enable_ri_exchange_schedule ? try(google_service_account.scheduler_ri_exchange[0].email, "") : "",
+    var.enable_scheduled_tasks ? local.scheduled_task_recommendations_audience : "",
+    var.enable_ri_exchange_schedule ? local.scheduled_task_ri_exchange_audience : "",
   ]))
   scheduled_task_oidc_subjects = join(",", compact([
     var.enable_scheduled_tasks ? try(google_service_account.scheduler[0].unique_id, "") : "",
@@ -312,17 +332,17 @@ resource "google_cloud_scheduler_job" "recommendations" {
     #   2. App-level OIDC validation on /api/scheduled/* — the Go
     #      validator (internal/server/scheduledauth) checks the JWT
     #      signature, issuer, audience, and pins the subject to this
-    #      SA. Pinning `audience` here explicitly to the SA email
-    #      makes the validator's allow-list deterministic; without an
-    #      explicit value Cloud Scheduler defaults audience to the
-    #      target URL, which would couple #159's fix to the Cloud Run
-    #      URL shape.
+    #      SA's unique_id. Audience is pinned to the receiving endpoint
+    #      URL (the OAuth/OIDC convention — keeps the token recipient-
+    #      bound). The validator's whitelist reads the same value via
+    #      local.scheduled_task_oidc_audiences so the JWT claim and
+    #      the env-var match by construction.
     # The previous static `Authorization: Bearer
     # ${var.scheduled_task_secret}` header leaked the shared secret into
     # the scheduler resource definition + Terraform state — closes #159.
     oidc_token {
       service_account_email = google_service_account.scheduler[0].email
-      audience              = google_service_account.scheduler[0].email
+      audience              = local.scheduled_task_recommendations_audience
     }
   }
 }
@@ -371,11 +391,13 @@ resource "google_cloud_scheduler_job" "ri_exchange" {
     uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/ri-exchange"
 
     # Same OIDC-only model as the recommendations scheduler above —
-    # see #159 for the rationale. Audience pinned to this SA email so
-    # the app-level validator's allow-list stays deterministic.
+    # see #159 for the rationale. Audience pinned to the receiving
+    # endpoint URL so the token is recipient-bound and the validator's
+    # whitelist is matched by construction (the env var includes this
+    # value via local.scheduled_task_oidc_audiences).
     oidc_token {
       service_account_email = google_service_account.scheduler_ri_exchange[0].email
-      audience              = google_service_account.scheduler_ri_exchange[0].email
+      audience              = local.scheduled_task_ri_exchange_audience
     }
   }
 }
