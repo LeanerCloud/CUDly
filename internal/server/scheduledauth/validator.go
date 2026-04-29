@@ -3,10 +3,13 @@ package scheduledauth
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -132,6 +135,9 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	if cfg.JWKSURL == "" {
 		cfg.JWKSURL = GoogleJWKSURL
 	}
+	if err := validateAbsoluteURL(cfg.JWKSURL, "SCHEDULED_TASK_OIDC_JWKS_URL"); err != nil {
+		return nil, err
+	}
 	if len(cfg.Audiences) == 0 {
 		return nil, fmt.Errorf("%w: oidc mode requires SCHEDULED_TASK_OIDC_AUDIENCE", ErrConfigInvalid)
 	}
@@ -193,6 +199,17 @@ func cleanSet(in []string, label string) (map[string]struct{}, error) {
 	return out, nil
 }
 
+func validateAbsoluteURL(raw, label string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%w: %s must be an absolute URL: %v", ErrConfigInvalid, label, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("%w: %s must be an absolute URL", ErrConfigInvalid, label)
+	}
+	return nil
+}
+
 // Mode returns the validator's auth mode. Useful for /health.
 func (v *Validator) Mode() Mode {
 	return v.mode
@@ -243,7 +260,25 @@ func (v *Validator) Warmup(ctx context.Context) {
 	if resp.StatusCode >= 400 {
 		log.Printf("scheduledauth: WARN — JWKS warmup got %d from %s "+
 			"(validator will retry on first request)", resp.StatusCode, v.jwksURL)
+		return
 	}
+	if err := validateJWKSBody(resp.Body); err != nil {
+		log.Printf("scheduledauth: WARN — JWKS warmup got invalid JWKS payload from %s: %v "+
+			"(validator will retry on first request)", v.jwksURL, err)
+	}
+}
+
+func validateJWKSBody(r io.Reader) error {
+	var doc struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.NewDecoder(r).Decode(&doc); err != nil {
+		return err
+	}
+	if doc.Keys == nil {
+		return errors.New(`missing "keys" array`)
+	}
+	return nil
 }
 
 // Middleware wraps next with auth enforcement. On failure, writes a 401

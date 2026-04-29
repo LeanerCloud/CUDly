@@ -514,6 +514,22 @@ func TestNew_Rejects_OIDCWithoutAudiences(t *testing.T) {
 	}
 }
 
+func TestNew_RejectsOIDCMalformedJWKSURL(t *testing.T) {
+	for _, jwksURL := range []string{"://bad", "/relative/path", "https://"} {
+		t.Run(jwksURL, func(t *testing.T) {
+			_, err := New(Config{
+				Mode:      ModeOIDC,
+				JWKSURL:   jwksURL,
+				Audiences: []string{"https://api.example.com"},
+				Subjects:  []string{"scheduler@example.iam.gserviceaccount.com"},
+			})
+			if !errors.Is(err, ErrConfigInvalid) {
+				t.Fatalf("expected ErrConfigInvalid, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestNew_Rejects_BearerWithoutSecret(t *testing.T) {
 	_, err := New(Config{Mode: ModeBearer})
 	if !errors.Is(err, ErrConfigInvalid) {
@@ -663,6 +679,32 @@ func TestWarmup_HitsJWKSEndpoint(t *testing.T) {
 	after := srv.hits.Load()
 	if after <= before {
 		t.Fatalf("Warmup should have hit JWKS endpoint at least once (before=%d after=%d)", before, after)
+	}
+}
+
+func TestValidateJWKSBody_RequiresKeysArray(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "valid", body: `{"keys":[]}`},
+		{name: "invalid json", body: `{`, wantErr: true},
+		{name: "missing keys", body: `{}`, wantErr: true},
+		{name: "null keys", body: `{"keys":null}`, wantErr: true},
+		{name: "object keys", body: `{"keys":{}}`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateJWKSBody(strings.NewReader(tt.body))
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected nil, got: %v", err)
+			}
+		})
 	}
 }
 
