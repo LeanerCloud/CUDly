@@ -29,10 +29,32 @@ export function setupDashboardHandlers(): void {
     // Set initial value from state
     providerFilter.value = state.getCurrentProvider();
 
+    // Issue #185: previously this handler fired populateAccountFilter
+    // and loadDashboard in parallel via two `void` calls. loadDashboard
+    // ran first, reading stale `state.currentAccountIDs` from the
+    // prior provider — so the dashboard rendered with the wrong
+    // account filter. Worse, populateAccountFilter restores
+    // `select.value = current` after repopulating; if the previously-
+    // picked account isn't in the new provider's account list, the
+    // dropdown silently goes empty (programmatic value change → no
+    // `change` event fires) and state never resyncs. The fix:
+    //   (a) clear the account selection in state synchronously so any
+    //       in-flight read sees the cleared value,
+    //   (b) await populateAccountFilter so loadDashboard sees a
+    //       fully-populated dropdown,
+    //   (c) explicitly reset the dropdown's display value to "(All
+    //       accounts)" — no account from the previous provider can
+    //       ever be valid here.
     providerFilter.addEventListener('change', () => {
-      state.setCurrentProvider(providerFilter.value as '' | 'aws' | 'azure' | 'gcp');
-      void populateAccountFilter('dashboard-account-filter', api.listAccounts, providerFilter.value);
-      void loadDashboard();
+      void (async (): Promise<void> => {
+        const newProvider = providerFilter.value as '' | 'aws' | 'azure' | 'gcp';
+        state.setCurrentProvider(newProvider);
+        state.setCurrentAccountIDs([]);
+        await populateAccountFilter('dashboard-account-filter', api.listAccounts, newProvider);
+        const accountSel = document.getElementById('dashboard-account-filter') as HTMLSelectElement | null;
+        if (accountSel) accountSel.value = '';
+        await loadDashboard();
+      })();
     });
   }
 
