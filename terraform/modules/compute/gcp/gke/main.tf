@@ -20,10 +20,17 @@ locals {
   )
 
   # Scheduled-task OIDC validator wiring — see
-  # internal/server/scheduledauth. Audience pinned to the scheduler SA
-  # email (matches the explicit `audience` on the oidc_token block);
-  # subject pinned to the SA's unique numeric ID (the value Google puts
-  # in the JWT `sub` claim for SA-signed ID tokens).
+  # internal/server/scheduledauth.
+  #
+  # `aud` (audience) names the RECEIVING endpoint — the URL Cloud
+  # Scheduler is calling. Pinning aud to the endpoint keeps tokens
+  # recipient-bound (the OAuth/OIDC convention) and limits cross-service
+  # replay if the scheduler SA is ever reused.
+  #
+  # `sub` (subject) names the CALLER — the scheduler SA's unique
+  # numeric ID. Google puts the SA unique_id (not its email) in the
+  # JWT `sub` claim for SA-signed ID tokens, so the validator's
+  # SCHEDULED_TASK_OIDC_SUBJECTS env var must contain that numeric form.
   #
   # Auth mode is derived from scheduler SA presence, NOT from
   # var.enable_scheduled_tasks. kubernetes_ingress_v1.app exposes
@@ -33,12 +40,6 @@ locals {
   # SA, var.scheduled_task_auth_mode_override decides — its default is
   # the fail-closed "oidc" so an unauthenticated boot requires opting
   # in to "disabled" deliberately.
-  # Audience is bound to the receiving endpoint, NOT to the scheduler
-  # service-account identity. `sub` already pins the caller to that SA's
-  # unique_id; using the same SA identity for `aud` made both checks
-  # describe the caller, which is replay-prone if the SA is ever reused.
-  # Pinning `aud` to the endpoint URL keeps tokens recipient-bound — the
-  # OAuth/OIDC convention. (CodeRabbit nitpick on PR #161.)
   scheduled_task_oidc_audience = "${var.app_url}/api/scheduled/recommendations"
   scheduled_task_oidc_subject  = try(google_service_account.scheduler[0].unique_id, "")
   scheduled_task_auth_mode = (
@@ -715,18 +716,19 @@ resource "google_cloud_scheduler_job" "recommendations" {
 
   http_target {
     http_method = "POST"
-    uri         = "${var.app_url}/api/scheduled/recommendations"
+    # Both the request target and the OIDC audience read the same
+    # local so they cannot drift. If they ever did, Cloud Scheduler
+    # would mint a token with `aud` for the old endpoint while
+    # actually POSTing to the new one — the validator would 401
+    # silently. Sharing the local makes that class of regression a
+    # syntax-level mismatch rather than a runtime auth failure.
+    uri = local.scheduled_task_oidc_audience
 
     # Auth: oidc_token below is signed by the scheduler's service
     # account at invocation time. GKE Ingress has no Cloud-Run-style
     # IAM gate, so the OIDC token is validated by the app at
     # /api/scheduled/* via internal/server/scheduledauth — signature,
-    # issuer, audience, and `sub` pinned to this SA. Audience is set
-    # to the receiving endpoint URL (the OAuth/OIDC convention — keeps
-    # the token recipient-bound and limits replay if this SA is ever
-    # reused for a different service). The same value is exported to
-    # the app via local.scheduled_task_oidc_audience so the validator's
-    # whitelist matches by construction.
+    # issuer, audience, and `sub` pinned to this SA's unique_id.
     # The previous static `Authorization: Bearer
     # ${var.scheduled_task_secret}` header leaked the shared secret into
     # the scheduler resource definition + Terraform state — closes #159.
