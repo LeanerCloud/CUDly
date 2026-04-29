@@ -137,7 +137,10 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	}
 	// Subject pinning is REQUIRED in oidc mode. Any GCP service account
 	// in the same org can mint OIDC tokens with arbitrary `aud` values
-	// — we MUST also pin the issuer SA email via `sub`. See plan §1.
+	// — we MUST also pin the issuer SA unique_id via `sub`. Google uses
+	// the service-account unique_id, not the email address, as the `sub`
+	// claim for Cloud Scheduler-signed ID tokens. That is what
+	// SCHEDULED_TASK_OIDC_SUBJECTS must contain.
 	if len(cfg.Subjects) == 0 {
 		return nil, fmt.Errorf("%w: oidc mode requires SCHEDULED_TASK_OIDC_SUBJECTS (defence in depth)", ErrConfigInvalid)
 	}
