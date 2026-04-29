@@ -154,13 +154,17 @@ func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]flo
 		return rec.Savings
 	}
 	coverage, ok := coverageByKey[config.AccountConfigKey(*rec.CloudAccountID, rec.Provider, rec.Service)]
-	if !ok || coverage <= 0 {
+	if !ok {
 		return rec.Savings
+	}
+	if coverage <= 0 {
+		return 0
 	}
 	if coverage >= 100 {
 		return rec.Savings
 	}
 	return rec.Savings * coverage / 100
+}
 }
 
 // resolveCoverageByAccountKey returns a map of AccountConfigKey -> resolved
