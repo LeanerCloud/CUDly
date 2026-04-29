@@ -1,13 +1,19 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache } from '../recommendations';
 
 // Mock the api module
 jest.mock('../api', () => ({
   getRecommendations: jest.fn(),
   refreshRecommendations: jest.fn(),
-  listAccounts: jest.fn().mockResolvedValue([])
+  listAccounts: jest.fn().mockResolvedValue([]),
+  // Issue #111: openFanOutModal now pre-fetches per-account service
+  // overrides to seed each bucket's Payment default. Default-empty so
+  // pre-#111 tests retain their toolbar-seeded behavior without any
+  // mock setup; tests that specifically exercise the override seed
+  // override this mock per-test.
+  listAccountServiceOverrides: jest.fn().mockResolvedValue([]),
 }));
 
 // Mock the per-id detail endpoint module so the drawer-fetch tests can
@@ -385,6 +391,9 @@ describe('Recommendations Module', () => {
       const purchaseBtn = document.querySelector('#bulk-purchase-btn') as HTMLButtonElement;
       expect(purchaseBtn).not.toBeNull();
       purchaseBtn.click();
+      // Issue #111 (iii): openPurchaseModal is async; flush microtasks
+      // so the modal-open call lands before we assert visibility.
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
       const modal = document.getElementById('purchase-modal');
       expect(modal?.classList.contains('hidden')).toBe(false);
@@ -627,7 +636,10 @@ describe('Recommendations Module', () => {
   });
 
   describe('openPurchaseModal', () => {
-    test('displays purchase modal', () => {
+    // Issue #111 (iii): openPurchaseModal is now async (it pre-fetches
+    // per-account service overrides to seed each row's Payment default).
+    // Tests must `await` it so the DOM is populated before assertions.
+    test('displays purchase modal', async () => {
       const recommendations = [
         { id: 'rec-1', provider: 'aws' as const,
           service: 'ec2',
@@ -640,42 +652,42 @@ describe('Recommendations Module', () => {
         }
       ];
 
-      openPurchaseModal(recommendations);
+      await openPurchaseModal(recommendations);
 
       const modal = document.getElementById('purchase-modal');
       expect(modal?.classList.contains('hidden')).toBe(false);
     });
 
-    test('shows purchase summary', () => {
+    test('shows purchase summary', async () => {
       const recommendations = [
         { id: 'rec-2', provider: 'aws' as const, service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5, term: 1, savings: 100, upfront_cost: 500 },
         { id: 'rec-3', provider: 'aws' as const, service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', count: 2, term: 1, savings: 200, upfront_cost: 1000 }
       ];
 
-      openPurchaseModal(recommendations);
+      await openPurchaseModal(recommendations);
 
       const details = document.getElementById('purchase-details');
-      expect(details?.innerHTML).toContain('2'); // count of commitments
-      expect(details?.innerHTML).toContain('Purchase Summary');
+      expect(details?.textContent).toContain('2'); // count of commitments
+      expect(details?.textContent).toContain('Purchase Summary');
     });
 
-    test('lists individual recommendations', () => {
+    test('lists individual recommendations', async () => {
       const recommendations = [
         { id: 'rec-4', provider: 'aws' as const, service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5, term: 1, savings: 100, upfront_cost: 500 }
       ];
 
-      openPurchaseModal(recommendations);
+      await openPurchaseModal(recommendations);
 
       const details = document.getElementById('purchase-details');
-      expect(details?.innerHTML).toContain('ec2');
-      expect(details?.innerHTML).toContain('t3.medium');
-      expect(details?.innerHTML).toContain('us-east-1');
+      expect(details?.textContent).toContain('ec2');
+      expect(details?.textContent).toContain('t3.medium');
+      expect(details?.textContent).toContain('us-east-1');
     });
 
-    test('handles missing modal element', () => {
-      document.body.innerHTML = '';
+    test('handles missing modal element', async () => {
+      document.body.replaceChildren();
 
-      expect(() => openPurchaseModal([])).not.toThrow();
+      await expect(openPurchaseModal([])).resolves.not.toThrow();
     });
   });
 
@@ -1311,6 +1323,11 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
     await loadRecommendations();
     const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
     purchaseBtn.click();
+    // openFanOutModal is async (issue #111: pre-fetches per-account
+    // overrides). Yield twice so the awaits inside resolve before
+    // we read getFanOutBuckets().
+    await Promise.resolve();
+    await Promise.resolve();
 
     const { getFanOutBuckets } = await import('../recommendations');
     const buckets = getFanOutBuckets();
@@ -1322,5 +1339,360 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
     const b1 = buckets![1]!;
     expect(b0.recs.every((r) => r.term === b0.term)).toBe(true);
     expect(b1.recs.every((r) => r.term === b1.term)).toBe(true);
+  });
+});
+
+// Issue #111: per-bucket Payment dropdown in the fan-out modal,
+// seeded from the per-account service override when all recs in a
+// bucket share one cloud_account_id and that account has a saved
+// override matching the bucket's (provider, service). Otherwise
+// (multi-account, no override, override has no payment, override
+// payment unsupported by the (provider, service, term) cell) the
+// bucket falls back to the toolbar payment.
+describe('Issue #111: per-bucket Payment seed from per-account service override', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    const recsTab = document.createElement('div');
+    recsTab.id = 'recommendations-tab';
+    recsTab.className = 'tab-content active';
+    const summary = document.createElement('div');
+    summary.id = 'recommendations-summary';
+    const list = document.createElement('div');
+    list.id = 'recommendations-list';
+    recsTab.appendChild(summary);
+    recsTab.appendChild(list);
+    document.body.appendChild(recsTab);
+    const purchaseModal = document.createElement('div');
+    purchaseModal.id = 'purchase-modal';
+    purchaseModal.className = 'hidden';
+    const purchaseDetails = document.createElement('div');
+    purchaseDetails.id = 'purchase-details';
+    purchaseModal.appendChild(purchaseDetails);
+    document.body.appendChild(purchaseModal);
+    jest.clearAllMocks();
+    // Default: empty overrides — overridden per-test.
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+  });
+
+  // Force a multi-bucket fan-out by mixing terms (1yr + 3yr both
+  // present); this drives openFanOutModal rather than the
+  // single-bucket happy path. Each test seeds overrides differently
+  // to exercise the (override / no-override / multi-account / edit)
+  // matrix.
+  const setupMixedTermRecs = (recs: Array<Record<string, unknown>>): void => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+  };
+
+  test('(a) single-account bucket with matching override → bucket payment seeded from override', async () => {
+    const recs = [
+      { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+    ];
+    setupMixedTermRecs(recs);
+    // Override pins payment=partial-upfront for AWS EC2 on this
+    // account. partial-upfront is supported for both 1yr and 3yr.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'test-account-a') {
+        return [{ id: 'ovr-1', account_id: 'test-account-a', provider: 'aws', service: 'ec2', payment: 'partial-upfront' }];
+      }
+      return [];
+    });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    expect(buckets!.length).toBe(2);
+    for (const b of buckets!) {
+      expect(b.payment).toBe('partial-upfront');
+      expect(b.paymentSource).toBe('override');
+    }
+    // Source-note span renders.
+    const noteSpans = document.querySelectorAll('.fanout-bucket-payment-source');
+    expect(noteSpans.length).toBe(2);
+    expect((noteSpans[0] as HTMLElement).textContent).toContain('account override');
+    // Dropdown's selected value matches.
+    const selects = document.querySelectorAll<HTMLSelectElement>('.fanout-bucket-payment');
+    expect(selects.length).toBe(2);
+    expect(selects[0]!.value).toBe('partial-upfront');
+  });
+
+  test('(b) single-account bucket with NO matching override → bucket payment seeded from toolbar', async () => {
+    const recs = [
+      { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+    ];
+    setupMixedTermRecs(recs);
+    // Account exists but has overrides for a DIFFERENT service — the
+    // ec2 lookup should miss and fall back.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'test-account-a') {
+        return [{ id: 'ovr-1', account_id: 'test-account-a', provider: 'aws', service: 'rds', payment: 'no-upfront' }];
+      }
+      return [];
+    });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    for (const b of buckets!) {
+      // Toolbar default is 'all-upfront' (loadBulkPurchaseState's
+      // defaultBulkPurchaseState).
+      expect(b.payment).toBe('all-upfront');
+      expect(b.paymentSource).toBe('toolbar');
+    }
+    // No source-note rendered.
+    expect(document.querySelectorAll('.fanout-bucket-payment-source').length).toBe(0);
+  });
+
+  test('(c) multi-account bucket → bucket payment seeded from toolbar regardless of any override', async () => {
+    // Two recs, same (provider, service, term) — bucket-key match —
+    // but different cloud_account_ids. resolveBucketPaymentSeed must
+    // return toolbar (the documented multi-account fallback).
+    // Pair with a third 3yr rec to force multi-bucket fan-out.
+    const recs = [
+      { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-b', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 600 },
+      { id: 'c', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+    ];
+    setupMixedTermRecs(recs);
+    // Both accounts have ec2 overrides — the multi-account bucket
+    // must NOT pick either; only the single-account 3yr bucket may
+    // honour the override.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'test-account-a') return [{ id: 'ovr-a', account_id: 'test-account-a', provider: 'aws', service: 'ec2', payment: 'partial-upfront' }];
+      if (id === 'test-account-b') return [{ id: 'ovr-b', account_id: 'test-account-b', provider: 'aws', service: 'ec2', payment: 'no-upfront' }];
+      return [];
+    });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    expect(buckets!.length).toBe(2);
+    const bucket1yr = buckets!.find((b) => b.term === 1)!;
+    const bucket3yr = buckets!.find((b) => b.term === 3)!;
+    // 1yr bucket: 2 recs, 2 distinct accounts → toolbar.
+    expect(bucket1yr.recs.length).toBe(2);
+    expect(bucket1yr.payment).toBe('all-upfront');
+    expect(bucket1yr.paymentSource).toBe('toolbar');
+    // 3yr bucket: 1 rec, single account a → override honoured.
+    expect(bucket3yr.recs.length).toBe(1);
+    expect(bucket3yr.payment).toBe('partial-upfront');
+    expect(bucket3yr.paymentSource).toBe('override');
+  });
+
+  test('(d) user-edited Payment dropdown is reflected in module state', async () => {
+    const recs = [
+      { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+    ];
+    setupMixedTermRecs(recs);
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const before = getFanOutBuckets();
+    expect(before).not.toBeNull();
+    expect(before![0]!.payment).toBe('all-upfront');
+
+    // Pick the dropdown for the 1yr bucket and switch to no-upfront
+    // (a supported value for AWS EC2 1yr).
+    const selects = Array.from(document.querySelectorAll<HTMLSelectElement>('.fanout-bucket-payment'));
+    expect(selects.length).toBe(2);
+    const firstSel = selects[0]!;
+    firstSel.value = 'no-upfront';
+    firstSel.dispatchEvent(new Event('change'));
+
+    const after = getFanOutBuckets();
+    expect(after).not.toBeNull();
+    // The bucket whose dropdown we changed now reports 'no-upfront'.
+    // We don't rely on bucket[0] vs bucket[1] order; pick by recs
+    // identity to find which bucket the first select belonged to.
+    const firstBucketIdx = before!.findIndex((b) => b.recs[0]?.id === recs[0]!.id || b.recs[0]?.id === recs[1]!.id);
+    expect(firstBucketIdx).toBeGreaterThanOrEqual(0);
+    // At least one bucket payment must now be 'no-upfront'.
+    expect(after!.some((b) => b.payment === 'no-upfront')).toBe(true);
+  });
+});
+
+// Issue #111 (iii): per-row Payment seed in openPurchaseModal — the
+// single-bucket / single-rec purchase modal renders editable Term and
+// Payment dropdowns. Each row's defaults walk the precedence
+// override → rec.payment → paymentOptionsFor[0]. Edits mutate
+// currentPurchaseRecommendations[idx] in place; getPurchaseModalRecommendations()
+// returns the user's choices; app.ts::handleExecutePurchase posts
+// `r.payment` per rec (no longer hardcoded 'all-upfront').
+describe('Issue #111 (iii): per-row Payment seed in openPurchaseModal', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    const purchaseModal = document.createElement('div');
+    purchaseModal.id = 'purchase-modal';
+    purchaseModal.className = 'hidden';
+    const purchaseDetails = document.createElement('div');
+    purchaseDetails.id = 'purchase-details';
+    purchaseModal.appendChild(purchaseDetails);
+    document.body.appendChild(purchaseModal);
+    jest.clearAllMocks();
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+  });
+
+  test('(a) single rec with matching override → row Payment seeded from override; source-note rendered', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'test-account-a') {
+        return [{ id: 'ovr-1', account_id: 'test-account-a', provider: 'aws', service: 'ec2', payment: 'partial-upfront' }];
+      }
+      return [];
+    });
+
+    const rec = {
+      id: 'rec-1', provider: 'aws' as const, cloud_account_id: 'test-account-a',
+      service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+      count: 5, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
+    };
+
+    await openPurchaseModal([rec]);
+
+    const live = getPurchaseModalRecommendations();
+    expect(live).toHaveLength(1);
+    expect(live[0]!.payment).toBe('partial-upfront');
+
+    const select = document.querySelector<HTMLSelectElement>('.purchase-row-payment');
+    expect(select).not.toBeNull();
+    expect(select!.value).toBe('partial-upfront');
+
+    const note = document.querySelector<HTMLElement>('.purchase-row-payment-source');
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toContain('account override');
+  });
+
+  test('(b) single rec with NO matching override → row Payment seeded from rec.payment; no source-note', async () => {
+    // Override exists but for a different service — the lookup misses
+    // and the rec's own payment ('partial-upfront') wins.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'test-account-a') {
+        return [{ id: 'ovr-1', account_id: 'test-account-a', provider: 'aws', service: 'rds', payment: 'no-upfront' }];
+      }
+      return [];
+    });
+
+    const rec = {
+      id: 'rec-2', provider: 'aws' as const, cloud_account_id: 'test-account-a',
+      service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+      count: 5, term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: 500,
+    };
+
+    await openPurchaseModal([rec]);
+
+    const live = getPurchaseModalRecommendations();
+    expect(live[0]!.payment).toBe('partial-upfront');
+
+    const select = document.querySelector<HTMLSelectElement>('.purchase-row-payment');
+    expect(select!.value).toBe('partial-upfront');
+
+    const note = document.querySelector('.purchase-row-payment-source');
+    expect(note).toBeNull();
+  });
+
+  test('(c) override has unsupported payment for the (provider,service,term) cell → falls back to rec.payment', async () => {
+    // AWS RDS 3yr does NOT support no-upfront (per
+    // isPaymentSupported / cmd/validators.go:warnRDS3YearNoUpfront).
+    // The override pins no-upfront → must be ignored; rec.payment wins.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'test-account-a') {
+        return [{ id: 'ovr-1', account_id: 'test-account-a', provider: 'aws', service: 'rds', payment: 'no-upfront' }];
+      }
+      return [];
+    });
+
+    const rec = {
+      id: 'rec-3', provider: 'aws' as const, cloud_account_id: 'test-account-a',
+      service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1',
+      count: 1, term: 3, payment: 'all-upfront', savings: 200, upfront_cost: 1000,
+    };
+
+    await openPurchaseModal([rec]);
+
+    const live = getPurchaseModalRecommendations();
+    expect(live[0]!.payment).toBe('all-upfront');
+
+    const note = document.querySelector('.purchase-row-payment-source');
+    expect(note).toBeNull();
+  });
+
+  test('(d) user changes Term 1→3 → row Payment options rebuilt; live state still consistent', async () => {
+    const rec = {
+      id: 'rec-4', provider: 'aws' as const, cloud_account_id: 'test-account-a',
+      service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+      count: 5, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
+    };
+
+    await openPurchaseModal([rec]);
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term');
+    const paymentSelect = document.querySelector<HTMLSelectElement>('.purchase-row-payment');
+    expect(termSelect).not.toBeNull();
+    expect(paymentSelect).not.toBeNull();
+
+    // Switch term to 3yr.
+    termSelect!.value = '3';
+    termSelect!.dispatchEvent(new Event('change'));
+
+    const live = getPurchaseModalRecommendations();
+    expect(live[0]!.term).toBe(3);
+    // Payment is set to a value supported for AWS EC2 3yr — the
+    // exact value depends on whether 'all-upfront' (the prior value)
+    // remained valid for the new term; we only require that:
+    //   (i) live.payment is non-empty
+    //   (ii) live.payment matches the dropdown's current value
+    //   (iii) the dropdown's options are now the 3yr-supported set.
+    expect(live[0]!.payment).toBeTruthy();
+    expect(paymentSelect!.value).toBe(live[0]!.payment);
+    const options = Array.from(paymentSelect!.options).map((o) => o.value);
+    expect(options.length).toBeGreaterThan(0);
+  });
+
+  test('(e) user changes Payment dropdown → live state reflects new value (and would round-trip via handleExecutePurchase)', async () => {
+    const rec = {
+      id: 'rec-5', provider: 'aws' as const, cloud_account_id: 'test-account-a',
+      service: 'ec2', resource_type: 't3.medium', region: 'us-east-1',
+      count: 5, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500,
+    };
+
+    await openPurchaseModal([rec]);
+
+    const paymentSelect = document.querySelector<HTMLSelectElement>('.purchase-row-payment');
+    expect(paymentSelect).not.toBeNull();
+
+    // Change to 'no-upfront' (always supported for AWS EC2 1yr).
+    paymentSelect!.value = 'no-upfront';
+    paymentSelect!.dispatchEvent(new Event('change'));
+
+    const live = getPurchaseModalRecommendations();
+    expect(live[0]!.payment).toBe('no-upfront');
+
+    // The mapping in app.ts::handleExecutePurchase reads this value
+    // verbatim (`payment: r.payment ?? 'all-upfront'`), so a downstream
+    // assertion that the API call carries 'no-upfront' is implicit in
+    // (a) the live state above and (b) the source-of-truth read at
+    // app.ts:289-303. No separate mock-call assertion needed here —
+    // the integration of that mapping is exercised by app.ts'
+    // existing handleExecutePurchase tests.
   });
 });
