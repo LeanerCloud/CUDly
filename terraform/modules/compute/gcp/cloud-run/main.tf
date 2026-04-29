@@ -35,6 +35,36 @@ resource "google_service_account" "cloud_run" {
 }
 
 # ==============================================
+# Scheduled-task auth wiring
+# ==============================================
+#
+# Both Cloud Scheduler jobs below sign OIDC tokens with `audience` set to
+# the scheduler SA email and `sub` set to the SA's unique numeric ID.
+# The Go validator (internal/server/scheduledauth) checks signature +
+# issuer + audience + subject; pinning these here keeps the allow-list
+# in the container env in sync with what Cloud Scheduler actually emits.
+#
+# `compact` drops empty strings produced when a scheduler is disabled
+# (count = 0 → google_service_account.scheduler[0] is unavailable, so
+# we use try() to short-circuit). `join(",")` produces the CSV format
+# the validator parses.
+locals {
+  scheduled_task_oidc_audiences = join(",", compact([
+    var.enable_scheduled_tasks ? try(google_service_account.scheduler[0].email, "") : "",
+    var.enable_ri_exchange_schedule ? try(google_service_account.scheduler_ri_exchange[0].email, "") : "",
+  ]))
+  scheduled_task_oidc_subjects = join(",", compact([
+    var.enable_scheduled_tasks ? try(google_service_account.scheduler[0].unique_id, "") : "",
+    var.enable_ri_exchange_schedule ? try(google_service_account.scheduler_ri_exchange[0].unique_id, "") : "",
+  ]))
+  # Auth mode selector. When neither scheduler is enabled there's
+  # nothing to validate; staying on "disabled" avoids fail-fast on an
+  # empty allow-list in the validator. The resulting WARN log is
+  # harmless when /api/scheduled/* is never hit.
+  scheduled_task_auth_mode = (var.enable_scheduled_tasks || var.enable_ri_exchange_schedule) ? "oidc" : "disabled"
+}
+
+# ==============================================
 # Cloud Run Service
 # ==============================================
 
@@ -99,6 +129,11 @@ resource "google_cloud_run_v2_service" "main" {
             # OIDC issuer signing key — see internal/oidc/gcp_signer.go.
             CUDLY_SOURCE_CLOUD         = "gcp"
             CUDLY_SIGNING_KEY_RESOURCE = local.signing_key_version_resource
+            # Scheduled-task OIDC validator config — see
+            # internal/server/scheduledauth and the locals block above.
+            SCHEDULED_TASK_AUTH_MODE     = local.scheduled_task_auth_mode
+            SCHEDULED_TASK_OIDC_AUDIENCE = local.scheduled_task_oidc_audiences
+            SCHEDULED_TASK_OIDC_SUBJECTS = local.scheduled_task_oidc_subjects
           },
           var.additional_env_vars
         )
@@ -270,14 +305,24 @@ resource "google_cloud_scheduler_job" "recommendations" {
     uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/recommendations"
 
     # Auth: oidc_token below is signed by the scheduler's service
-    # account at invocation time and validated by Cloud Run's IAM gate
-    # (roles/run.invoker grants this SA access; cloud_run_allow_unauthenticated
-    # defaults to false). The previous static `Authorization: Bearer
+    # account at invocation time. Two complementary defences:
+    #   1. Cloud Run's IAM gate via roles/run.invoker (when
+    #      cloud_run_allow_unauthenticated = false; tracked separately
+    #      in #78).
+    #   2. App-level OIDC validation on /api/scheduled/* — the Go
+    #      validator (internal/server/scheduledauth) checks the JWT
+    #      signature, issuer, audience, and pins the subject to this
+    #      SA. Pinning `audience` here explicitly to the SA email
+    #      makes the validator's allow-list deterministic; without an
+    #      explicit value Cloud Scheduler defaults audience to the
+    #      target URL, which would couple #159's fix to the Cloud Run
+    #      URL shape.
+    # The previous static `Authorization: Bearer
     # ${var.scheduled_task_secret}` header leaked the shared secret into
     # the scheduler resource definition + Terraform state — closes #159.
-    # OIDC supersedes the application-level bearer check on GCP.
     oidc_token {
       service_account_email = google_service_account.scheduler[0].email
+      audience              = google_service_account.scheduler[0].email
     }
   }
 }
@@ -326,9 +371,11 @@ resource "google_cloud_scheduler_job" "ri_exchange" {
     uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/ri-exchange"
 
     # Same OIDC-only model as the recommendations scheduler above —
-    # see #159 for the rationale.
+    # see #159 for the rationale. Audience pinned to this SA email so
+    # the app-level validator's allow-list stays deterministic.
     oidc_token {
       service_account_email = google_service_account.scheduler_ri_exchange[0].email
+      audience              = google_service_account.scheduler_ri_exchange[0].email
     }
   }
 }

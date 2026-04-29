@@ -78,6 +78,13 @@ key_vault_default_network_acl_action = "Allow"
 # ==============================================
 # Scheduled Tasks (Logic Apps)
 # ==============================================
+#
+# Logic Apps fetch a shared bearer secret from Key Vault at invocation
+# time and call /api/scheduled/* with `Authorization: Bearer <secret>`.
+# The CUDly app validates via SCHEDULED_TASK_AUTH_MODE=bearer (set
+# automatically by the container-apps / aks modules) — the secret name
+# itself is wired through `module.secrets.scheduled_task_secret_name`
+# and never lives in the container env.
 
 enable_scheduled_tasks  = true
 recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM

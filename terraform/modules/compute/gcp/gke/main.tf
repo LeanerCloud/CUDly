@@ -18,6 +18,18 @@ locals {
       managed_by  = "terraform"
     }
   )
+
+  # Scheduled-task OIDC validator wiring — see
+  # internal/server/scheduledauth. Audience pinned to the scheduler SA
+  # email (matches the explicit `audience` on the oidc_token block);
+  # subject pinned to the SA's unique numeric ID (the value Google puts
+  # in the JWT `sub` claim for SA-signed ID tokens). When the scheduler
+  # is disabled the env vars become empty strings and the validator
+  # stays in "disabled" mode (with a startup WARN log) — matches the
+  # cloud-run module's behaviour.
+  scheduled_task_oidc_audience = try(google_service_account.scheduler[0].email, "")
+  scheduled_task_oidc_subject  = try(google_service_account.scheduler[0].unique_id, "")
+  scheduled_task_auth_mode     = var.enable_scheduled_tasks ? "oidc" : "disabled"
 }
 
 # ==============================================
@@ -448,6 +460,23 @@ resource "kubernetes_deployment" "app" {
             value = join(",", var.allowed_origins)
           }
 
+          # Scheduled-task OIDC validator config — see locals block above
+          # and internal/server/scheduledauth.
+          env {
+            name  = "SCHEDULED_TASK_AUTH_MODE"
+            value = local.scheduled_task_auth_mode
+          }
+
+          env {
+            name  = "SCHEDULED_TASK_OIDC_AUDIENCE"
+            value = local.scheduled_task_oidc_audience
+          }
+
+          env {
+            name  = "SCHEDULED_TASK_OIDC_SUBJECTS"
+            value = local.scheduled_task_oidc_subject
+          }
+
           dynamic "env" {
             for_each = var.additional_env_vars
             content {
@@ -672,15 +701,20 @@ resource "google_cloud_scheduler_job" "recommendations" {
     http_method = "POST"
     uri         = "${var.app_url}/api/scheduled/recommendations"
 
-    # Auth: oidc_token below is signed by the scheduler's service account
-    # at invocation time. The previous static `Authorization: Bearer
+    # Auth: oidc_token below is signed by the scheduler's service
+    # account at invocation time. GKE Ingress has no Cloud-Run-style
+    # IAM gate, so the OIDC token is validated by the app at
+    # /api/scheduled/* via internal/server/scheduledauth — signature,
+    # issuer, audience, and `sub` pinned to this SA. Audience is set
+    # explicitly here so the validator's allow-list stays
+    # deterministic; without it Cloud Scheduler defaults audience to
+    # the target URL.
+    # The previous static `Authorization: Bearer
     # ${var.scheduled_task_secret}` header leaked the shared secret into
     # the scheduler resource definition + Terraform state — closes #159.
-    # OIDC supersedes the application-level bearer check on GCP. (The
-    # GKE-side var was also defaulting to "" in practice — the static
-    # header was sending an empty Bearer header anyway.)
     oidc_token {
       service_account_email = google_service_account.scheduler[0].email
+      audience              = google_service_account.scheduler[0].email
     }
   }
 }

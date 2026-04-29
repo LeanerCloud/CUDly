@@ -65,6 +65,12 @@ enable_nat_logging    = false
 # ==============================================
 # Scheduled Tasks (Cloud Scheduler)
 # ==============================================
+#
+# Cloud Scheduler signs OIDC ID tokens with `audience` and `sub` set
+# from the per-job service account. The CUDly app validates these
+# tokens via SCHEDULED_TASK_AUTH_MODE=oidc + SCHEDULED_TASK_OIDC_*
+# env vars — those are wired automatically by the cloud-run / gke
+# modules and do not need to be set here.
 
 enable_scheduled_tasks  = true
 recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM
