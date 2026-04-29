@@ -1399,7 +1399,7 @@ func TestScheduler_ConvertRecommendations_IDDeterminism(t *testing.T) {
 	second := scheduler.convertRecommendations([]common.Recommendation{rec}, "aws")
 	require.Len(t, first, 1)
 	require.Len(t, second, 1)
-	assert.Equal(t, first[0].ID, second[0].ID, "hash must be deterministic across calls")
+	assert.Equal(t, first[0].ID, second[0].ID, "ID must be deterministic across calls")
 }
 
 // Test successful AWS recommendations with provider returning data
