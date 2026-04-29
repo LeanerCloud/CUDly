@@ -28,14 +28,17 @@ const (
 	EnvBearerSecret = "SCHEDULED_TASK_SECRET"        // bearer mode only
 )
 
-// LoadConfig parses Config from env. Unset SCHEDULED_TASK_AUTH_MODE
-// defaults to ModeDisabled (with a startup WARN logged inside New). Any
-// other invalid combination returns an ErrConfigInvalid error so the
-// server fails fast instead of silently downgrading to no-auth.
+// LoadConfig parses Config from env. SCHEDULED_TASK_AUTH_MODE MUST be
+// set explicitly to one of "oidc", "bearer", or "disabled" — an unset
+// value returns ErrConfigInvalid so a missed Terraform/Kubernetes env
+// wiring fails server startup instead of silently booting
+// /api/scheduled/* unauthenticated. "disabled" is reserved for an
+// explicit local-dev choice and must be opted into deliberately.
 func LoadConfig(env EnvSource) (Config, error) {
 	mode := strings.ToLower(strings.TrimSpace(env.Get(EnvAuthMode)))
 	if mode == "" {
-		mode = string(ModeDisabled)
+		return Config{}, fmt.Errorf("%w: %s is unset (set to oidc, bearer, or disabled)",
+			ErrConfigInvalid, EnvAuthMode)
 	}
 
 	cfg := Config{Mode: Mode(mode)}

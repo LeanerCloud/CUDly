@@ -20,6 +20,13 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 )
 
+// testSchedulerSubject is the SA unique_id format Google puts in the
+// JWT `sub` claim for SA-signed ID tokens (21-digit numeric). The
+// production SCHEDULED_TASK_OIDC_SUBJECTS expects this format, NOT the
+// SA email — wiring tests around the email shape would let a "sub-as-
+// email" regression slip past the suite.
+const testSchedulerSubject = "112233445566778899001"
+
 // testKey wraps an RSA keypair plus the kid we'll publish in the JWKS.
 type testKey struct {
 	priv *rsa.PrivateKey
@@ -153,7 +160,7 @@ func newOIDCValidator(t *testing.T, jwksURL string) *Validator {
 		Issuer:    "https://accounts.example.com",
 		JWKSURL:   jwksURL,
 		Audiences: []string{"https://api.example.com"},
-		Subjects:  []string{"scheduler@example.iam.gserviceaccount.com"},
+		Subjects:  []string{testSchedulerSubject},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -167,7 +174,7 @@ func TestValidate_OIDC_Valid(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tok := signToken(t, key, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 
@@ -203,7 +210,7 @@ func TestValidate_OIDC_Expired(t *testing.T) {
 
 	now := time.Now()
 	claims := baseClaims(now,
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com")
 	// 2 minutes past expiry, well beyond the 60s skew.
@@ -222,7 +229,7 @@ func TestValidate_OIDC_ExpiryWithinSkew(t *testing.T) {
 
 	now := time.Now()
 	claims := baseClaims(now,
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com")
 	// Just expired but within the 60s skew window.
@@ -242,7 +249,7 @@ func TestValidate_OIDC_WrongAudience(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tok := signToken(t, key, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://attacker.example.com",
 		"https://accounts.example.com"))
 
@@ -257,7 +264,7 @@ func TestValidate_OIDC_WrongIssuer(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tok := signToken(t, key, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://attacker-iss.com"))
 
@@ -288,7 +295,7 @@ func TestValidate_OIDC_BadSignature(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tok := signToken(t, other, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 
@@ -311,7 +318,7 @@ func TestValidate_OIDC_AlgorithmConfusion(t *testing.T) {
 	// kid="kid-1" is a strictly easier case for the attacker; if the
 	// validator rejects this it covers the core alg-confusion gap.
 	tok := signTokenAlg(t, jose.HS256, []byte("attacker-secret-32-bytes-padding!!"), key.kid, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 
@@ -328,7 +335,7 @@ func TestValidate_OIDC_IATInFuture(t *testing.T) {
 
 	now := time.Now()
 	claims := baseClaims(now,
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com")
 	// 2 minutes in the future, well beyond the 60s skew.
@@ -348,7 +355,7 @@ func TestValidate_OIDC_NotBeforeFuture(t *testing.T) {
 
 	now := time.Now()
 	claims := baseClaims(now,
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com")
 	claims["nbf"] = now.Add(2 * time.Minute).Unix()
@@ -369,7 +376,7 @@ func TestValidate_OIDC_AudienceListClaim(t *testing.T) {
 
 	now := time.Now()
 	claims := baseClaims(now,
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"placeholder", // overridden below
 		"https://accounts.example.com")
 	claims["aud"] = []string{"https://other.example.com", "https://api.example.com"}
@@ -391,7 +398,7 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tokA := signToken(t, keyA, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 	if err := v.Validate(context.Background(), "Bearer "+tokA); err != nil {
@@ -408,7 +415,7 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 	resp.Body.Close()
 
 	tokB := signToken(t, keyB, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 	if err := v.Validate(context.Background(), "Bearer "+tokB); err != nil {
@@ -426,7 +433,7 @@ func TestValidate_OIDC_SingleFlight_StampedeProtection(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tok := signToken(t, key, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 
@@ -507,7 +514,7 @@ func TestNew_Rejects_OIDCWithoutSubjects(t *testing.T) {
 func TestNew_Rejects_OIDCWithoutAudiences(t *testing.T) {
 	_, err := New(Config{
 		Mode:     ModeOIDC,
-		Subjects: []string{"scheduler@example.iam.gserviceaccount.com"},
+		Subjects: []string{testSchedulerSubject},
 	})
 	if !errors.Is(err, ErrConfigInvalid) {
 		t.Fatalf("expected ErrConfigInvalid, got: %v", err)
@@ -521,7 +528,7 @@ func TestNew_RejectsOIDCMalformedJWKSURL(t *testing.T) {
 				Mode:      ModeOIDC,
 				JWKSURL:   jwksURL,
 				Audiences: []string{"https://api.example.com"},
-				Subjects:  []string{"scheduler@example.iam.gserviceaccount.com"},
+				Subjects:  []string{testSchedulerSubject},
 			})
 			if !errors.Is(err, ErrConfigInvalid) {
 				t.Fatalf("expected ErrConfigInvalid, got: %v", err)
@@ -544,13 +551,20 @@ func TestNew_Rejects_UnknownMode(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_DefaultsToDisabled(t *testing.T) {
-	cfg, err := LoadConfig(EnvMap{})
+func TestLoadConfig_RejectsMissingAuthMode(t *testing.T) {
+	_, err := LoadConfig(EnvMap{})
+	if !errors.Is(err, ErrConfigInvalid) {
+		t.Fatalf("expected ErrConfigInvalid for unset SCHEDULED_TASK_AUTH_MODE, got: %v", err)
+	}
+}
+
+func TestLoadConfig_ExplicitDisabledIsAccepted(t *testing.T) {
+	cfg, err := LoadConfig(EnvMap{EnvAuthMode: "disabled"})
 	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+		t.Fatalf("LoadConfig(disabled): %v", err)
 	}
 	if cfg.Mode != ModeDisabled {
-		t.Fatalf("default mode = %s, want %s", cfg.Mode, ModeDisabled)
+		t.Fatalf("mode = %s, want %s", cfg.Mode, ModeDisabled)
 	}
 }
 
@@ -621,7 +635,7 @@ func TestMiddleware_OIDC_AllowsAndCallsNextOnSuccess(t *testing.T) {
 	v := newOIDCValidator(t, srv.URL)
 
 	tok := signToken(t, key, baseClaims(time.Now(),
-		"scheduler@example.iam.gserviceaccount.com",
+		testSchedulerSubject,
 		"https://api.example.com",
 		"https://accounts.example.com"))
 
@@ -714,7 +728,7 @@ func TestWarmup_LoggedAndNonFatal_OnDeadEndpoint(t *testing.T) {
 		Issuer:    "https://accounts.example.com",
 		JWKSURL:   "http://127.0.0.1:1/this-port-is-closed", // ECONNREFUSED
 		Audiences: []string{"https://api.example.com"},
-		Subjects:  []string{"scheduler@example.iam.gserviceaccount.com"},
+		Subjects:  []string{testSchedulerSubject},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

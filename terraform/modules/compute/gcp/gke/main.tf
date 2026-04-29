@@ -23,13 +23,23 @@ locals {
   # internal/server/scheduledauth. Audience pinned to the scheduler SA
   # email (matches the explicit `audience` on the oidc_token block);
   # subject pinned to the SA's unique numeric ID (the value Google puts
-  # in the JWT `sub` claim for SA-signed ID tokens). When the scheduler
-  # is disabled the env vars become empty strings and the validator
-  # stays in "disabled" mode (with a startup WARN log) — matches the
-  # cloud-run module's behaviour.
+  # in the JWT `sub` claim for SA-signed ID tokens).
+  #
+  # Auth mode is derived from scheduler SA presence, NOT from
+  # var.enable_scheduled_tasks. kubernetes_ingress_v1.app exposes
+  # /api/scheduled/* via the catch-all rule even when the scheduler is
+  # disabled, so tying auth to enable_scheduled_tasks would turn a
+  # disabled scheduler into an unauthenticated public trigger. With no
+  # SA, var.scheduled_task_auth_mode_override decides — its default is
+  # the fail-closed "oidc" so an unauthenticated boot requires opting
+  # in to "disabled" deliberately.
   scheduled_task_oidc_audience = try(google_service_account.scheduler[0].email, "")
   scheduled_task_oidc_subject  = try(google_service_account.scheduler[0].unique_id, "")
-  scheduled_task_auth_mode     = var.enable_scheduled_tasks ? "oidc" : "disabled"
+  scheduled_task_auth_mode = (
+    length(google_service_account.scheduler) > 0
+    ? "oidc"
+    : var.scheduled_task_auth_mode_override
+  )
 }
 
 # ==============================================
