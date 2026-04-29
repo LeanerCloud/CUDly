@@ -171,6 +171,9 @@ func backoffFor(attempt int, cfg Config) time.Duration {
 	}
 	if cfg.Jitter {
 		// ±25% noise: rand.Float64() ∈ [0, 1) → noise factor ∈ [0.75, 1.25).
+		// Non-cryptographic use — backoff jitter only smears retry storms;
+		// crypto/rand would add cost for zero security benefit.
+		// #nosec G404 -- math/rand/v2 is intentional for jitter.
 		factor := 0.75 + rand.Float64()*0.5
 		delay = time.Duration(float64(delay) * factor)
 	}

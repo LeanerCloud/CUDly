@@ -20,6 +20,11 @@ func WriteAuditRecord(record AuditRecord, path string) error {
 		return fmt.Errorf("marshal audit record: %w", err)
 	}
 
+	// 0644 (world-readable) is intentional: the audit log is consumed by
+	// ops tooling and reconciled against purchase_history; restricting to
+	// 0600 would break that workflow without adding meaningful protection
+	// since the file lives under the run-owned working dir.
+	// #nosec G302 -- 0644 perms are required for downstream readers.
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("open audit log %s: %w", path, err)
