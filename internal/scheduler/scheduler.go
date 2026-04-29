@@ -3,8 +3,6 @@ package scheduler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"sort"
@@ -824,9 +822,41 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			}
 		}
 
-		key := fmt.Sprintf("%s:%s:%s:%s:%s", providerName, rec.Service, rec.Region, rec.ResourceType, rec.PaymentOption)
-		hash := sha256.Sum256([]byte(key))
-		recordID := hex.EncodeToString(hash[:])[:16]
+		// The ID must be unique per logically-distinct rec — otherwise
+		// the frontend collapses two rows into one selection (the
+		// data-rec-id collision in recommendations.ts:1067-1069 / the
+		// selection-set toggle in :1639-1660 — see issue #187), and
+		// any downstream stage that dedupes by ID drops the second rec
+		// entirely (the AWS-1yr-missing symptom in issue #188).
+		//
+		// We use the natural composite key directly rather than a hash:
+		// no truncation collision risk, self-documenting in DevTools
+		// (an id like "aws|123456789012|ec2|us-east-1|m5.large||1|all-upfront"
+		// makes any future regression visibly identical), and the
+		// downstream consumers — frontend selection Set, plan-target
+		// matching, suppression keying — all treat the id opaquely as
+		// a string. The fields are alphanumeric/hyphen by upstream
+		// contract (provider slugs, AWS/Azure/GCP account IDs and
+		// subscription UUIDs, AWS region names, instance-type SKUs,
+		// payment-option enums), so `|` cannot appear inside any
+		// component — no escaping needed.
+		//
+		// Fields:
+		//   - providerName: separates AWS/Azure/GCP recs
+		//   - rec.Account:  separates per-account/per-subscription recs
+		//                   sharing the same provider+SKU+region+payment
+		//   - rec.Service / rec.Region / rec.ResourceType: the cell
+		//   - engine:       MySQL vs Postgres RDS at same SKU collide otherwise
+		//   - term:         1yr vs 3yr at same SKU collide otherwise
+		//   - rec.PaymentOption: all-upfront vs no-upfront collide otherwise
+		//
+		// The parsed integer `term` is used (not rec.Term) so a rec
+		// with Term="" or "3yr" both reduce to the same canonical
+		// value and don't drift out of agreement with the persisted
+		// Term column.
+		recordID := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%s",
+			providerName, rec.Account, rec.Service, rec.Region,
+			rec.ResourceType, engine, term, rec.PaymentOption)
 
 		records = append(records, config.RecommendationRecord{
 			ID:           recordID,

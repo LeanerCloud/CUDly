@@ -1296,6 +1296,112 @@ func TestScheduler_ConvertRecommendations_Empty(t *testing.T) {
 	assert.Len(t, records, 0)
 }
 
+// TestScheduler_ConvertRecommendations_IDUniqueness pins issue #187 +
+// #188: the rec ID must include term, account, and engine — not just
+// (provider, service, region, resource_type, payment) — otherwise
+// recs that should be distinct get the same ID, which (a) collapses
+// two rendered rows into one selection in the UI (#187), and (b)
+// silently drops one of two same-cell recs at any storage stage that
+// dedupes by ID (#188). Each subtest asserts that two recs differing
+// only in the listed dimension produce different IDs.
+func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
+	scheduler := &Scheduler{}
+	base := common.Recommendation{
+		Provider:      common.ProviderAWS,
+		Account:       "test-account-a",
+		Service:       common.ServiceEC2,
+		Region:        "us-east-1",
+		ResourceType:  "m5.large",
+		Count:         1,
+		Term:          "1yr",
+		PaymentOption: "all-upfront",
+	}
+
+	// Each case mutates one and only one field of `base` so the
+	// resulting (a, b) pair differs in exactly that dimension. The
+	// engine subtest is built from a separate `rdsBase` below so the
+	// "only Details.Engine differs" property holds at every level
+	// (Service / ResourceType already match across the pair).
+	cases := []struct {
+		name string
+		recs func() (common.Recommendation, common.Recommendation)
+	}{
+		{
+			name: "term: 1yr vs 3yr (issue #188 — AWS 1yr recs were vanishing)",
+			recs: func() (common.Recommendation, common.Recommendation) {
+				b := base
+				b.Term = "3yr"
+				return base, b
+			},
+		},
+		{
+			name: "account: separates multi-subscription recs (issue #187)",
+			recs: func() (common.Recommendation, common.Recommendation) {
+				b := base
+				b.Account = "test-account-b"
+				return base, b
+			},
+		},
+		{
+			name: "payment: all-upfront vs no-upfront",
+			recs: func() (common.Recommendation, common.Recommendation) {
+				b := base
+				b.PaymentOption = "no-upfront"
+				return base, b
+			},
+		},
+		{
+			name: "engine: MySQL vs Postgres at same RDS SKU",
+			recs: func() (common.Recommendation, common.Recommendation) {
+				rdsBase := base
+				rdsBase.Service = common.ServiceRDS
+				rdsBase.ResourceType = "db.m5.large"
+				rdsBase.Details = common.DatabaseDetails{Engine: "mysql"}
+				rdsTwin := rdsBase
+				rdsTwin.Details = common.DatabaseDetails{Engine: "postgres"}
+				return rdsBase, rdsTwin
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := tc.recs()
+			records := scheduler.convertRecommendations([]common.Recommendation{a, b}, "aws")
+			require.Len(t, records, 2)
+			assert.NotEqual(t, records[0].ID, records[1].ID,
+				"ID collision — recs differing in %s produce the same ID; this regresses #187/#188", tc.name)
+		})
+	}
+}
+
+// TestScheduler_ConvertRecommendations_IDDeterminism ensures the same
+// input produces the same ID across calls (no random or time-dependent
+// component). Without this, the frontend selection state — which
+// round-trips rec.id between renders — would lose selections between
+// collection cycles. With the natural-composite-key encoding this is
+// trivially true (the ID is a pure function of the input fields), but
+// pinned here so a future refactor that re-introduces randomness or
+// non-determinism trips the suite immediately.
+func TestScheduler_ConvertRecommendations_IDDeterminism(t *testing.T) {
+	scheduler := &Scheduler{}
+	rec := common.Recommendation{
+		Provider:      common.ProviderAWS,
+		Account:       "test-account-determinism",
+		Service:       common.ServiceEC2,
+		Region:        "us-east-1",
+		ResourceType:  "m5.large",
+		Count:         3,
+		Term:          "3yr",
+		PaymentOption: "all-upfront",
+	}
+	first := scheduler.convertRecommendations([]common.Recommendation{rec}, "aws")
+	second := scheduler.convertRecommendations([]common.Recommendation{rec}, "aws")
+	require.Len(t, first, 1)
+	require.Len(t, second, 1)
+	assert.Equal(t, first[0].ID, second[0].ID, "ID must be deterministic across calls")
+}
+
 // Test successful AWS recommendations with provider returning data
 func TestScheduler_CollectAWSRecommendations_Success(t *testing.T) {
 	ctx := context.Background()
