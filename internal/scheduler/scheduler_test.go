@@ -1296,15 +1296,15 @@ func TestScheduler_ConvertRecommendations_Empty(t *testing.T) {
 	assert.Len(t, records, 0)
 }
 
-// TestScheduler_ConvertRecommendations_HashUniqueness pins issue #187 +
-// #188: the rec ID hash must include term, account, and engine — not
-// just (provider, service, region, resource_type, payment) — otherwise
-// recs that should be distinct get the same ID, which (a) collapses two
-// rendered rows into one selection in the UI (#187), and (b) silently
-// drops one of two same-cell recs at any storage stage that dedupes by
-// ID (#188). Each subtest asserts that two recs differing only in the
-// listed dimension produce different IDs.
-func TestScheduler_ConvertRecommendations_HashUniqueness(t *testing.T) {
+// TestScheduler_ConvertRecommendations_IDUniqueness pins issue #187 +
+// #188: the rec ID must include term, account, and engine — not just
+// (provider, service, region, resource_type, payment) — otherwise
+// recs that should be distinct get the same ID, which (a) collapses
+// two rendered rows into one selection in the UI (#187), and (b)
+// silently drops one of two same-cell recs at any storage stage that
+// dedupes by ID (#188). Each subtest asserts that two recs differing
+// only in the listed dimension produce different IDs.
+func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
 	scheduler := &Scheduler{}
 	base := common.Recommendation{
 		Provider:      common.ProviderAWS,
@@ -1376,17 +1376,20 @@ func TestScheduler_ConvertRecommendations_HashUniqueness(t *testing.T) {
 			records := scheduler.convertRecommendations(recs, "aws")
 			require.Len(t, records, 2)
 			assert.NotEqual(t, records[0].ID, records[1].ID,
-				"hash collision — recs differing in %s produce the same ID; this regresses #187/#188", tc.name)
+				"ID collision — recs differing in %s produce the same ID; this regresses #187/#188", tc.name)
 		})
 	}
 }
 
-// TestScheduler_ConvertRecommendations_HashDeterminism ensures the same
-// input produces the same ID across calls (i.e. the hash is stable
-// rather than including a random or time-dependent component). Without
-// this, the column-filter-driven selection state (which round-trips
-// rec.id through the frontend) would lose selections between collections.
-func TestScheduler_ConvertRecommendations_HashDeterminism(t *testing.T) {
+// TestScheduler_ConvertRecommendations_IDDeterminism ensures the same
+// input produces the same ID across calls (no random or time-dependent
+// component). Without this, the frontend selection state — which
+// round-trips rec.id between renders — would lose selections between
+// collection cycles. With the natural-composite-key encoding this is
+// trivially true (the ID is a pure function of the input fields), but
+// pinned here so a future refactor that re-introduces randomness or
+// non-determinism trips the suite immediately.
+func TestScheduler_ConvertRecommendations_IDDeterminism(t *testing.T) {
 	scheduler := &Scheduler{}
 	rec := common.Recommendation{
 		Provider:      common.ProviderAWS,
