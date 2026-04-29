@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Plans handlers
@@ -201,12 +203,27 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	created, err := h.createPurchaseExecutions(ctx, plan, planID, req.Count, startDate)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := h.updatePlanNextExecutionDate(ctx, plan, startDate); err != nil {
+	// Atomic write: per-row execution inserts and the plan's
+	// next_execution_date bump commit together, or roll back together.
+	// The previous implementation called SavePurchaseExecution outside
+	// a transaction, so a mid-loop failure (e.g. network blip on row 4
+	// of 5) left rows 1-3 persisted and updatePlanNextExecutionDate
+	// either skipped (orphaned rows) or partially-applied (stale plan
+	// pointer). A retry would then duplicate rows 1-3. WithTx makes
+	// both classes of corruption impossible — the caller can safely
+	// retry on transient errors knowing nothing was committed.
+	created := 0
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		n, txErr := h.createPurchaseExecutionsTx(ctx, tx, plan, planID, req.Count, startDate)
+		if txErr != nil {
+			return txErr
+		}
+		if planErr := h.updatePlanNextExecutionDateTx(ctx, tx, plan, startDate); planErr != nil {
+			return planErr
+		}
+		created = n
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
@@ -244,8 +261,13 @@ func (h *Handler) getPlanForPurchaseCreation(ctx context.Context, planID string)
 	return plan, nil
 }
 
-// createPurchaseExecutions creates multiple purchase executions based on the plan's schedule
-func (h *Handler) createPurchaseExecutions(ctx context.Context, plan *config.PurchasePlan, planID string, count int, startDate time.Time) (int, error) {
+// createPurchaseExecutionsTx creates the per-row purchase executions
+// inside the caller's transaction. A mid-loop failure rolls the whole
+// transaction back, so the caller never sees orphaned rows on retry.
+// Returns the number of rows that would have been committed had the
+// loop completed — used for the user-visible response on success;
+// undefined (and unused) on error since the rollback voids them all.
+func (h *Handler) createPurchaseExecutionsTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, planID string, count int, startDate time.Time) (int, error) {
 	intervalDays := plan.RampSchedule.StepIntervalDays
 	if intervalDays == 0 {
 		intervalDays = 7 // Default to weekly if not set
@@ -255,17 +277,21 @@ func (h *Handler) createPurchaseExecutions(ctx context.Context, plan *config.Pur
 	for i := 0; i < count; i++ {
 		scheduledDate := startDate.AddDate(0, 0, i*intervalDays)
 
+		approvalToken, err := common.GenerateApprovalToken()
+		if err != nil {
+			return created, fmt.Errorf("failed to generate approval token (row %d/%d): %w", created+1, count, err)
+		}
 		execution := &config.PurchaseExecution{
 			PlanID:        planID,
 			ExecutionID:   uuid.New().String(),
 			Status:        "pending",
 			StepNumber:    plan.RampSchedule.CurrentStep + i + 1,
 			ScheduledDate: scheduledDate,
-			ApprovalToken: uuid.New().String(),
+			ApprovalToken: approvalToken,
 		}
 
-		if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-			return 0, fmt.Errorf("failed to save execution: %w", err)
+		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
+			return created, fmt.Errorf("failed to save execution (row %d/%d): %w", created+1, count, err)
 		}
 		created++
 	}
@@ -273,12 +299,14 @@ func (h *Handler) createPurchaseExecutions(ctx context.Context, plan *config.Pur
 	return created, nil
 }
 
-// updatePlanNextExecutionDate updates the plan's next execution date if needed
-func (h *Handler) updatePlanNextExecutionDate(ctx context.Context, plan *config.PurchasePlan, startDate time.Time) error {
+// updatePlanNextExecutionDateTx bumps the plan's next_execution_date
+// inside the caller's transaction so it commits atomically with the
+// SavePurchaseExecutionTx writes from createPurchaseExecutionsTx.
+func (h *Handler) updatePlanNextExecutionDateTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, startDate time.Time) error {
 	if plan.NextExecutionDate == nil || plan.NextExecutionDate.After(startDate) {
 		plan.NextExecutionDate = &startDate
 		plan.UpdatedAt = time.Now()
-		if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
+		if err := h.config.UpdatePurchasePlanTx(ctx, tx, plan); err != nil {
 			return fmt.Errorf("failed to update plan: %w", err)
 		}
 	}

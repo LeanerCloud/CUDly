@@ -88,6 +88,21 @@ func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
+// UpdatePurchasePlanTx falls back to UpdatePurchasePlan when no
+// expectation is registered. When an expectation is registered, the
+// transaction is forwarded to m.Called so test expectations can match
+// on the (ctx, tx, plan) tuple — mirroring the canonical mock in
+// internal/mocks/stores.go.
+func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan) error {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "UpdatePurchasePlanTx" {
+			args := m.Called(ctx, tx, plan)
+			return args.Error(0)
+		}
+	}
+	return m.UpdatePurchasePlan(ctx, plan)
+}
+
 func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	args := m.Called(ctx, planID)
 	return args.Error(0)

@@ -215,6 +215,19 @@ func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
+// UpdatePurchasePlanTx falls back to UpdatePurchasePlan when no
+// expectation is registered. Mirrors the pattern used by
+// SavePurchaseExecutionTx and the api-package mock.
+func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan) error {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "UpdatePurchasePlanTx" {
+			args := m.Called(ctx, tx, plan)
+			return args.Error(0)
+		}
+	}
+	return m.UpdatePurchasePlan(ctx, plan)
+}
+
 func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	args := m.Called(ctx, planID)
 	return args.Error(0)
@@ -371,6 +384,20 @@ func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *confi
 	return nil
 }
 func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	// Route through m.Called only when a test has registered an
+	// expectation; otherwise fall back to the historical "no account"
+	// stub so the dozens of pre-existing tests that don't care about
+	// account lookups stay green. Mirrors the isExpected pattern in
+	// internal/api/mocks_test.go.
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GetCloudAccount" {
+			args := m.Called(ctx, id)
+			if args.Get(0) == nil {
+				return nil, args.Error(1)
+			}
+			return args.Get(0).(*config.CloudAccount), args.Error(1)
+		}
+	}
 	return nil, nil
 }
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {

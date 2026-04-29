@@ -6,8 +6,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
-	"github.com/google/uuid"
 )
 
 // ExchangeRecord is a lightweight record type for the auto exchange logic.
@@ -275,7 +275,26 @@ func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec Re
 }
 
 func processManualExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string) ExchangeOutcome {
-	token := uuid.New().String()
+	token, err := common.GenerateApprovalToken()
+	if err != nil {
+		logging.Errorf("failed to generate approval token for %s: %v", rec.SourceRIID, err)
+		errMsg := fmt.Sprintf("failed to generate approval token: %v", err)
+		// Persist a failed record so an operator auditing the DB sees this
+		// failure, mirroring the auto-mode failure paths in
+		// processAutoExchange. crypto/rand failures are rare in practice
+		// but still merit an audit trail.
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, errMsg, ExchangeModeManual)
+		return ExchangeOutcome{
+			SourceRIID:         rec.SourceRIID,
+			SourceInstanceType: rec.SourceInstanceType,
+			TargetInstanceType: rec.TargetInstanceType,
+			TargetOfferingID:   offeringID,
+			TargetCount:        rec.TargetCount,
+			PaymentDue:         paymentDueStr,
+			UtilizationPct:     rec.UtilizationPercent,
+			Error:              errMsg,
+		}
+	}
 	// 24h is a safety net; the email says "approve within 6 hours" because
 	// CancelAllPendingExchanges at the next run start (every 6h) will cancel
 	// this record. The 24h expiry catches edge cases where the scheduled run
@@ -294,7 +313,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		PaymentDue:         paymentDueStr,
 		Status:             "pending",
 		ApprovalToken:      token,
-		Mode:               "manual",
+		Mode:               string(ExchangeModeManual),
 		ExpiresAt:          &expiresAt,
 	}
 
@@ -346,7 +365,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if err != nil {
 		logging.Errorf("daily cap check failed for %s: %v", rec.SourceRIID, err)
 		outcome.Error = fmt.Sprintf("daily cap check failed: %v", err)
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -355,7 +374,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if err != nil {
 		logging.Errorf("failed to parse daily spend %q: %v", dailySpendStr, err)
 		outcome.Error = fmt.Sprintf("failed to parse daily spend: %v", err)
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -373,7 +392,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 			dailySpent.FloatString(2), paymentDue.FloatString(2), params.Config.MaxPaymentDailyUSD)
 		logging.Warnf("skipping exchange for %s: %s", rec.SourceRIID, reason)
 		outcome.Error = reason
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, reason)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, reason, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -389,7 +408,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if execErr != nil {
 		logging.Errorf("exchange execution failed for %s: %v", rec.SourceRIID, execErr)
 		outcome.Error = execErr.Error()
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
 		return outcome
 	}
 
@@ -407,7 +426,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		TargetCount:        int(rec.TargetCount),
 		PaymentDue:         paymentDueStr,
 		Status:             "completed",
-		Mode:               "auto",
+		Mode:               string(ExchangeModeAuto),
 		CompletedAt:        &now,
 	}
 
@@ -420,7 +439,21 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	return outcome
 }
 
-func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr, errMsg string) {
+// ExchangeMode constrains the originating code path of an exchange record so
+// `saveFailedRecord` (and any future caller) can't silently leak a typo into
+// `ExchangeRecord.Mode`. The storage field stays `string` for serialization
+// stability — this is a call-site discipline, not a schema change.
+type ExchangeMode string
+
+const (
+	ExchangeModeAuto   ExchangeMode = "auto"
+	ExchangeModeManual ExchangeMode = "manual"
+)
+
+// saveFailedRecord persists a failed exchange attempt for DB audit.
+// `mode` distinguishes auto-mode failures from manual-mode failures so
+// downstream filters/UI can split the two.
+func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr, errMsg string, mode ExchangeMode) {
 	record := &ExchangeRecord{
 		AccountID:          params.AccountID,
 		Region:             params.Region,
@@ -433,7 +466,7 @@ func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec Res
 		PaymentDue:         paymentDueStr,
 		Status:             "failed",
 		Error:              errMsg,
-		Mode:               "auto",
+		Mode:               string(mode),
 	}
 	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
 		logging.Errorf("failed to save failed exchange record for %s: %v", rec.SourceRIID, err)

@@ -12,9 +12,13 @@ import (
 
 // ApproveExecution approves a pending execution. actor carries the email
 // of the session-authenticated user who clicked approve (from the
-// auth-gated deep-link flow) — empty when the call came via the legacy
-// token-only path, in which case the History UI falls back to the
-// approver's notification email as the accountable party.
+// HTTP route gated by authorizeApprovalAction) or the actor_email
+// carried by an SQS approve message after verifyAsyncApprovalActor has
+// validated it against the per-account contact_email approver list.
+// Both call paths now enforce the approver gate before reaching this
+// function — actor is empty only on legacy in-process callers (tests,
+// older code paths) and is recorded as nil so we don't claim "approved
+// by nobody".
 func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string) error {
 	logging.Infof("Approving execution: %s", executionID)
 
@@ -57,8 +61,10 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 }
 
 // CancelExecution cancels a pending execution. actor carries the email of
-// the session-authenticated user who clicked cancel — empty when the call
-// came via the legacy token-only path; same fallback as ApproveExecution.
+// the session-authenticated user who clicked cancel; verified by the
+// caller (HTTP path: authorizeApprovalAction; SQS path:
+// verifyAsyncApprovalActor) before reaching here. Same empty-actor
+// rationale as ApproveExecution.
 func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor string) error {
 	logging.Infof("Cancelling execution: %s", executionID)
 

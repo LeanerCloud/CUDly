@@ -38,15 +38,24 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 	approver := "approver@example.com"
 
 	mockConfig := new(MockConfigStore)
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "tok",
 		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: approver}, nil
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
-	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
-		NotificationEmail: &approver,
-	}, nil)
+	// authorizeApprovalAction reads GetGlobalConfig only for Cc-recipient
+	// derivation; with per-account contact_email gating, the global notify
+	// mailbox no longer participates in authorization. Return an empty
+	// config so the test stays minimal.
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
@@ -93,15 +102,22 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 	approver := "approver@example.com"
 
 	mockConfig := new(MockConfigStore)
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "tok",
 		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: approver}, nil
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
-	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
-		NotificationEmail: &approver,
-	}, nil)
+	// See approve test above — GetGlobalConfig is no longer authorization-
+	// relevant; return an empty config to keep the test minimal.
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)

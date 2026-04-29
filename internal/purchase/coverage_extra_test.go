@@ -250,19 +250,30 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to save execution status")
 }
 
-// Tests for ProcessMessage with approve and cancel happy paths
+// Tests for ProcessMessage with approve and cancel happy paths.
+// Post-hardening: SQS approve/cancel messages MUST carry actor_email,
+// and the actor MUST match a per-account contact_email on one of the
+// execution's recommendations. The mocks below set up that gating.
 func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   "exec-appv",
 		Status:        "pending",
 		ApprovalToken: "correct-token",
+		Recommendations: []config.RecommendationRecord{
+			{CloudAccountID: &accountID},
+		},
 	}
+	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
 
-	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil)
+	// verifyAsyncApprovalActor + ApproveExecution both load the
+	// execution; mock returns it twice.
+	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Twice()
+	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	manager := &Manager{
@@ -271,7 +282,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv","token":"correct-token"}`)
+	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv","token":"correct-token","actor_email":"owner@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
 }
@@ -281,13 +292,21 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   "exec-cancel",
 		Status:        "pending",
 		ApprovalToken: "correct-token",
+		Recommendations: []config.RecommendationRecord{
+			{CloudAccountID: &accountID},
+		},
 	}
+	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
 
-	mockStore.On("GetExecutionByID", ctx, "exec-cancel").Return(exec, nil)
+	// verifyAsyncApprovalActor + CancelExecution both load the
+	// execution; mock returns it twice.
+	mockStore.On("GetExecutionByID", ctx, "exec-cancel").Return(exec, nil).Twice()
+	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	manager := &Manager{
@@ -296,9 +315,151 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	err := manager.ProcessMessage(ctx, `{"type":"cancel","execution_id":"exec-cancel","token":"correct-token"}`)
+	err := manager.ProcessMessage(ctx, `{"type":"cancel","execution_id":"exec-cancel","token":"correct-token","actor_email":"owner@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+}
+
+// TestProcessMessage_ApproveRejectsMissingActor verifies the SQS
+// approve handler refuses to process a message without an actor_email.
+// This is the regression test for the closed bypass: legacy / replayed
+// payloads without the field must NOT fall through to a tokenless
+// approval.
+func TestProcessMessage_ApproveRejectsMissingActor(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-x","token":"some-token"}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "actor_email required")
+	// No store calls should have happened — no approval, no save.
+	mockStore.AssertNotCalled(t, "GetExecutionByID")
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution")
+}
+
+// TestProcessMessage_CancelRejectsMissingActor mirrors the approve
+// guard for the cancel path.
+func TestProcessMessage_CancelRejectsMissingActor(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	err := manager.ProcessMessage(ctx, `{"type":"cancel","execution_id":"exec-x","token":"some-token"}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "actor_email required")
+	mockStore.AssertNotCalled(t, "GetExecutionByID")
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution")
+}
+
+// TestProcessMessage_ApproveRejectsNonMatchingActor: token is valid,
+// actor_email is present but not on the per-account contact_email
+// approver list. Reject — same outcome as the HTTP path's
+// authorizeApprovalAction.
+func TestProcessMessage_ApproveRejectsNonMatchingActor(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	accountID := "acct-1"
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "exec-mismatch",
+		Status:        "pending",
+		ApprovalToken: "correct-token",
+		Recommendations: []config.RecommendationRecord{
+			{CloudAccountID: &accountID},
+		},
+	}
+	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
+
+	mockStore.On("GetExecutionByID", ctx, "exec-mismatch").Return(exec, nil)
+	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-mismatch","token":"correct-token","actor_email":"intruder@example.com"}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not an authorised approver")
+	// SavePurchaseExecution must NOT have been called — no mutation.
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution")
+}
+
+// TestProcessMessage_ApproveRejectsTokenMismatch: token is wrong,
+// actor_email is set. Existing behaviour (token check fails) — verified
+// here so a future refactor of verifyAsyncApprovalActor doesn't
+// regress the token comparison ordering.
+func TestProcessMessage_ApproveRejectsTokenMismatch(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "exec-bad-token",
+		Status:        "pending",
+		ApprovalToken: "correct-token",
+	}
+
+	mockStore.On("GetExecutionByID", ctx, "exec-bad-token").Return(exec, nil)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-bad-token","token":"wrong-token","actor_email":"owner@example.com"}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid approval token")
+	// No GetCloudAccount (token failure is checked before approver
+	// resolution) and no SavePurchaseExecution.
+	mockStore.AssertNotCalled(t, "GetCloudAccount")
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution")
+}
+
+// TestProcessMessage_ApproveRejectsNoApprovers: token + actor are valid
+// in shape, but no recommendation references an account with a
+// configured contact_email. Same policy as the HTTP path: the global
+// notify mailbox is not an approver — reject.
+func TestProcessMessage_ApproveRejectsNoApprovers(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:     "exec-no-approvers",
+		Status:          "pending",
+		ApprovalToken:   "correct-token",
+		Recommendations: []config.RecommendationRecord{}, // no account refs
+	}
+
+	mockStore.On("GetExecutionByID", ctx, "exec-no-approvers").Return(exec, nil)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-no-approvers","token":"correct-token","actor_email":"owner@example.com"}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no per-account contact email configured")
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution")
 }
 
 // Tests for executeSinglePurchase error paths via executePurchase

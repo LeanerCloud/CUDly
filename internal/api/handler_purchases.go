@@ -630,41 +630,10 @@ func resolveCreatorUserID(session *Session) *string {
 }
 
 // executePurchase handles direct purchase execution from recommendations
-func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	execReq, session, err := h.validateExecutePurchaseRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	totalUpfront, totalSavings, err := validateAndTotalRecommendations(execReq.Recommendations)
-	if err != nil {
-		return nil, err
-	}
-
-	executionID := uuid.New().String()
-	execution := &config.PurchaseExecution{
-		ExecutionID:      executionID,
-		Status:           "pending",
-		ScheduledDate:    time.Now(),
-		Recommendations:  execReq.Recommendations,
-		TotalUpfrontCost: totalUpfront,
-		EstimatedSavings: totalSavings,
-		ApprovalToken:    uuid.New().String(),
-		Source:           common.PurchaseSourceWeb,
-		CapacityPercent:  execReq.CapacityPercent,
-		CreatedByUserID:  resolveCreatorUserID(session),
-	}
-
-	// Load the grace-period config once before entering the tx so a
-	// GetGlobalConfig failure fails the whole request cleanly rather
-	// than leaving a half-committed tx state. Errors here don't block
-	// the purchase — we just default the grace period per-provider.
-	var gracePeriodCfg *config.GlobalConfig
-	if g, err := h.config.GetGlobalConfig(ctx); err == nil {
-		gracePeriodCfg = g
-	}
-
-	suppressions := buildSuppressions(execReq.Recommendations, executionID, gracePeriodCfg, time.Now())
+// persistExecutionAndSuppressions saves the execution + its suppression
+// records in a single transaction. Extracted from executePurchase to keep
+// that function under the gocyclo threshold.
+func (h *Handler) persistExecutionAndSuppressions(ctx context.Context, execution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
 			return err
@@ -676,7 +645,67 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		}
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("failed to save execution: %w", err)
+		return fmt.Errorf("failed to save execution: %w", err)
+	}
+	return nil
+}
+
+// newPendingExecution builds a fresh pending PurchaseExecution with a
+// crypto/rand-backed approval token. Extracted from executePurchase to keep
+// that function under the gocyclo threshold.
+func newPendingExecution(req *ExecutePurchaseRequest, totalUpfront, totalSavings float64) (*config.PurchaseExecution, error) {
+	approvalToken, err := common.GenerateApprovalToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate approval token: %w", err)
+	}
+	return &config.PurchaseExecution{
+		ExecutionID:      uuid.New().String(),
+		Status:           "pending",
+		ScheduledDate:    time.Now(),
+		Recommendations:  req.Recommendations,
+		TotalUpfrontCost: totalUpfront,
+		EstimatedSavings: totalSavings,
+		ApprovalToken:    approvalToken,
+		Source:           common.PurchaseSourceWeb,
+		CapacityPercent:  req.CapacityPercent,
+	}, nil
+}
+
+func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	execReq, session, err := h.validateExecutePurchaseRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	totalUpfront, totalSavings, err := validateAndTotalRecommendations(execReq.Recommendations)
+	if err != nil {
+		return nil, err
+	}
+
+	execution, err := newPendingExecution(&execReq, totalUpfront, totalSavings)
+	if err != nil {
+		return nil, err
+	}
+	// CreatedByUserID is set after construction so newPendingExecution stays
+	// signature-stable. The cancel-own RBAC path in cancelPurchase relies on
+	// this stamp to identify the creator on later cancellation; legacy rows
+	// pre-dating issue #46 can carry NULL here, so always go through the
+	// resolveCreatorUserID helper rather than dereferencing the session.
+	execution.CreatedByUserID = resolveCreatorUserID(session)
+	executionID := execution.ExecutionID
+
+	// Load the grace-period config once before entering the tx so a
+	// GetGlobalConfig failure fails the whole request cleanly rather
+	// than leaving a half-committed tx state. Errors here don't block
+	// the purchase — we just default the grace period per-provider.
+	var gracePeriodCfg *config.GlobalConfig
+	if g, err := h.config.GetGlobalConfig(ctx); err == nil {
+		gracePeriodCfg = g
+	}
+
+	suppressions := buildSuppressions(execReq.Recommendations, executionID, gracePeriodCfg, time.Now())
+	if err := h.persistExecutionAndSuppressions(ctx, execution, suppressions); err != nil {
+		return nil, err
 	}
 
 	// Send approval email synchronously so the response can surface the
@@ -807,12 +836,17 @@ func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) stri
 // and the approve/cancel token is only honoured for session holders whose
 // email matches one of the authorised approvers (case-insensitive).
 //
-// Fallbacks:
-//   - When none of the rec'd accounts carry a contact_email, the global
-//     notification email takes the To slot and is itself the sole
-//     authorised approver (legacy single-recipient behaviour).
-//   - When neither is configured, returns ("", nil, nil, nil); the caller
-//     surfaces a user-facing error.
+// **Authorisation policy** (post-security-hardening): the authorised-
+// approver set is ALWAYS the per-account contact_email list, never the
+// global notification email. The global notify mailbox is informed of the
+// purchase via Cc but cannot itself approve. If no recommendation has a
+// per-account contact_email, the approver set is empty and the caller
+// must reject the approval with a clear error directing the operator to
+// set a contact email on the account. This closes the loophole where a
+// catch-all inbox could authorise spend on accounts it doesn't own.
+//
+// Returns ("", nil, nil, nil) when neither contact_email nor globalNotify
+// is configured — the caller surfaces a user-facing error.
 func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.RecommendationRecord, globalNotify string) (to string, cc []string, approvers []string, err error) {
 	contactEmails, err := h.gatherAccountContactEmails(ctx, recs)
 	if err != nil {
@@ -822,12 +856,14 @@ func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.R
 	globalNotify = strings.TrimSpace(globalNotify)
 
 	if len(contactEmails) == 0 {
-		// No per-account contacts — fall back to the global notification
-		// email as the sole addressee + sole approver.
+		// No per-account contact_email anywhere — the global notify mailbox
+		// can still receive the email (it's "To" so something gets sent),
+		// but it is NOT in the approvers set. authorizeApprovalAction will
+		// reject the approve/cancel because approvers is empty.
 		if globalNotify == "" {
 			return "", nil, nil, nil
 		}
-		return globalNotify, nil, []string{globalNotify}, nil
+		return globalNotify, nil, nil, nil
 	}
 
 	to = contactEmails[0]
@@ -856,7 +892,11 @@ func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.R
 // insertion-ordered list of contact emails for the unique accounts
 // referenced by recs. Accounts without a CloudAccountID or without a
 // contact_email are silently skipped — they're not an error, just not a
-// contribution to the authorised-approver set.
+// contribution to the authorised-approver set. A real DB error from
+// lookupContactEmail is propagated so the caller surfaces it as a
+// retriable failure instead of silently degrading to a globalNotify
+// fallback (which would be wrong: a transient DB blip should not change
+// who is allowed to approve).
 func (h *Handler) gatherAccountContactEmails(ctx context.Context, recs []config.RecommendationRecord) ([]string, error) {
 	orderedIDs := uniqueAccountIDsFromRecs(recs)
 	if len(orderedIDs) == 0 {
@@ -865,7 +905,10 @@ func (h *Handler) gatherAccountContactEmails(ctx context.Context, recs []config.
 	emailsSeen := map[string]bool{}
 	var out []string
 	for _, id := range orderedIDs {
-		addr := h.lookupContactEmail(ctx, id)
+		addr, err := h.lookupContactEmail(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("lookup contact email for account %s: %w", id, err)
+		}
 		if addr == "" {
 			continue
 		}
@@ -898,19 +941,30 @@ func uniqueAccountIDsFromRecs(recs []config.RecommendationRecord) []string {
 	return out
 }
 
-// lookupContactEmail resolves the account's ContactEmail, or returns "" if
-// the account can't be found or doesn't have one. A single missing account
-// should not poison the whole email — errors are logged and swallowed.
-func (h *Handler) lookupContactEmail(ctx context.Context, id string) string {
+// lookupContactEmail resolves the account's ContactEmail. The caller
+// must distinguish three outcomes:
+//
+//   - real DB error → return ("", err). The caller propagates as a
+//     retriable failure rather than silently treating the actor as
+//     unauthorised or falling through to globalNotify; a transient
+//     blip should not change who is allowed to approve.
+//   - account-not-found (GetCloudAccount returns nil, nil per pgx
+//     ErrNoRows handling in the postgres store) → return ("", nil).
+//     Semantically equivalent to "no contact email configured".
+//   - account found but ContactEmail is empty/whitespace →
+//     return ("", nil). Same fall-through as above.
+//
+// Trimming happens here so the caller sees only normalised values.
+func (h *Handler) lookupContactEmail(ctx context.Context, id string) (string, error) {
 	acct, err := h.config.GetCloudAccount(ctx, id)
 	if err != nil {
-		logging.Warnf("resolveApprovalRecipients: GetCloudAccount(%s) failed: %v", id, err)
-		return ""
+		logging.Warnf("lookupContactEmail: GetCloudAccount(%s) failed: %v", id, err)
+		return "", err
 	}
 	if acct == nil {
-		return ""
+		return "", nil
 	}
-	return strings.TrimSpace(acct.ContactEmail)
+	return strings.TrimSpace(acct.ContactEmail), nil
 }
 
 // authorizeApprovalAction returns the actor email to record on an
@@ -941,11 +995,13 @@ func (h *Handler) authorizeApprovalAction(ctx context.Context, req *events.Lambd
 		return "", fmt.Errorf("failed to resolve approvers: %w", err)
 	}
 	if len(approvers) == 0 {
-		// No authorised approvers at all — happens when the account has
-		// no contact email AND Settings → General has no notification
-		// email. Reject; an operator has to set at least one before the
-		// flow works.
-		return "", NewClientError(403, "no authorised approver configured for this execution (set the account's contact email or the global notification email)")
+		// No per-account contact_email set on any of this execution's
+		// recommendations. Per the authorisation policy in
+		// resolveApprovalRecipients, the global notify mailbox is NOT a
+		// valid approver — only per-account contact emails are. Direct
+		// the operator to set the account's contact_email before approval
+		// can proceed.
+		return "", NewClientError(403, "no per-account contact email configured for this execution; set the cloud account's contact_email before approving")
 	}
 	actorLower := strings.ToLower(strings.TrimSpace(actor))
 	for _, addr := range approvers {

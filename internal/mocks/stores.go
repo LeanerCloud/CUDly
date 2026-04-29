@@ -75,6 +75,18 @@ func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
+// UpdatePurchasePlanTx mocks the UpdatePurchasePlanTx operation. Falls
+// back to UpdatePurchasePlan when no expectation is registered so tests
+// that don't care about the Tx variant stay green — same pattern as
+// SavePurchaseExecutionTx below.
+func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan) error {
+	if !isExpected(&m.Mock, "UpdatePurchasePlanTx") {
+		return m.UpdatePurchasePlan(ctx, plan)
+	}
+	args := m.Called(ctx, tx, plan)
+	return args.Error(0)
+}
+
 // DeletePurchasePlan mocks the DeletePurchasePlan operation
 func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	args := m.Called(ctx, planID)
