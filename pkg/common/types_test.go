@@ -142,6 +142,51 @@ func TestComputeDetails_GetDetailDescription(t *testing.T) {
 			},
 			expected: "windows/dedicated",
 		},
+		{
+			// vCPU alone is insufficient — both fields must be populated for
+			// the size suffix to appear, otherwise we'd surface "16 vCPU /
+			// 0 GB" which is misleading.
+			name: "VCPU populated but MemoryGB zero — base description only",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				VCPU:     16,
+			},
+			expected: "linux/default",
+		},
+		{
+			// Symmetric guard for the MemoryGB-only case.
+			name: "MemoryGB populated but VCPU zero — base description only",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				MemoryGB: 32,
+			},
+			expected: "linux/default",
+		},
+		{
+			// Whole-number GB renders without trailing zeros (16 GB,
+			// not 16.000000 GB).
+			name: "Both fields populated — integer memory",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				VCPU:     4,
+				MemoryGB: 16,
+			},
+			expected: "linux/default (4 vCPU / 16 GB)",
+		},
+		{
+			// Fractional GB (Azure has 0.5 GB SKUs) renders verbatim.
+			name: "Both fields populated — fractional memory",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				VCPU:     1,
+				MemoryGB: 0.5,
+			},
+			expected: "linux/default (1 vCPU / 0.5 GB)",
+		},
 	}
 
 	for _, tt := range tests {

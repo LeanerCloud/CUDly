@@ -273,20 +273,40 @@ type Region struct {
 	DisplayName string       `json:"display_name"`
 }
 
-// ComputeDetails represents compute-specific details (EC2, VM, Compute Engine)
+// ComputeDetails represents compute-specific details (EC2, VM, Compute Engine).
+//
+// VCPU + MemoryGB are populated by per-provider catalogue lookups when
+// available (Azure: armcompute.ResourceSKU.Capabilities; AWS:
+// ec2:DescribeInstanceTypes; GCP: machine-type catalogue). They are
+// optional — converters that don't yet wire a catalogue leave them at the
+// zero value, and the JSON tag uses omitempty so unknown values don't
+// pollute the API payload.
 type ComputeDetails struct {
-	InstanceType string `json:"instance_type"`
-	Platform     string `json:"platform"` // linux, windows
-	Tenancy      string `json:"tenancy"`  // default, dedicated, host
-	Scope        string `json:"scope"`    // regional, zonal
+	InstanceType string  `json:"instance_type"`
+	Platform     string  `json:"platform"`            // linux, windows
+	Tenancy      string  `json:"tenancy"`             // default, dedicated, host
+	Scope        string  `json:"scope"`               // regional, zonal
+	VCPU         int     `json:"vcpu,omitempty"`      // 0 = unknown
+	MemoryGB     float64 `json:"memory_gb,omitempty"` // 0 = unknown
 }
 
 func (d ComputeDetails) GetServiceType() ServiceType {
 	return ServiceCompute
 }
 
+// GetDetailDescription returns a short human description of the compute
+// recommendation. The base form is "<platform>/<tenancy>"; when both VCPU
+// and MemoryGB are populated (>0) the size is appended as
+// " (<vcpu> vCPU / <memory> GB)" to give the UI a one-line summary
+// without forcing the caller to inspect the struct.
 func (d ComputeDetails) GetDetailDescription() string {
-	return d.Platform + "/" + d.Tenancy
+	base := d.Platform + "/" + d.Tenancy
+	if d.VCPU > 0 && d.MemoryGB > 0 {
+		// %g trims trailing zeros (16 GB, not 16.000000 GB) but keeps
+		// fractional sizes (e.g. 0.5 GB for the smallest Azure SKUs).
+		return fmt.Sprintf("%s (%d vCPU / %g GB)", base, d.VCPU, d.MemoryGB)
+	}
+	return base
 }
 
 // DatabaseDetails represents database-specific details (RDS, Azure SQL, Cloud SQL)
