@@ -556,7 +556,7 @@ function buildPaymentOverrideSelect(
   // payment value but can't accidentally pick a no-op state.
   if (initial !== '') {
     inheritOpt.disabled = true;
-    inheritOpt.title = 'Use Reset to clear all override fields including payment';
+    inheritOpt.title = 'Use Delete to remove the override entirely (clears all fields including payment)';
   }
 
   select.addEventListener('change', () => {
@@ -660,7 +660,7 @@ function closeAccountOverridesModal(): void {
   closeOverrideModal();
 }
 
-async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
+export async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
   panel.textContent = 'Loading\u2026';
   try {
     const overrides = await api.listAccountServiceOverrides(accountId);
@@ -741,12 +741,17 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement, provide
       const resetBtn = document.createElement('button');
       resetBtn.type = 'button';
       resetBtn.className = 'btn btn-small btn-danger';
-      resetBtn.textContent = 'Reset';
+      // Button + dialog wording aligned with the actual data semantics
+      // (DELETE on account_service_overrides) per #114. The previous
+      // "Reset … will be replaced" copy implied the row stuck around
+      // with new values; in fact the row goes away entirely and the
+      // engine reads the global default as a side effect of its absence.
+      resetBtn.textContent = 'Delete';
       resetBtn.addEventListener('click', async () => {
         const ok = await confirmDialog({
-          title: 'Reset override?',
-          body: `Reset ${o.provider}/${o.service} override to the global default? Any per-service values you set will be replaced.`,
-          confirmLabel: 'Reset override',
+          title: 'Delete override?',
+          body: `Delete the ${o.provider}/${o.service} override? This account's recommendations will revert to the global default. The override row and any per-service values you set will be removed.`,
+          confirmLabel: 'Delete override',
           destructive: true,
         });
         if (!ok) return;
@@ -755,7 +760,7 @@ async function loadOverridesPanel(accountId: string, panel: HTMLElement, provide
           await loadOverridesPanel(accountId, panel, provider);
           await refreshRecommendationsAfterOverrideChange();
         } catch (err) {
-          showToast({ message: `Failed to reset override: ${(err as Error).message}`, kind: 'error' });
+          showToast({ message: `Failed to delete override: ${(err as Error).message}`, kind: 'error' });
         }
       });
       actionTd.appendChild(resetBtn);
