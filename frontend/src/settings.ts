@@ -861,6 +861,7 @@ async function testAccount(accountId: string, accountLabel: string, btn: HTMLBut
 // handler knows which account/provider/panel it belongs to without
 // inspecting the DOM. Cleared on close so it can't leak across opens.
 let overrideModalContext: { accountId: string; provider: string; panel: HTMLElement } | null = null;
+let overridePaymentOptionsController: AbortController | null = null;
 
 /**
  * Open the create-override modal for a specific account.
@@ -932,13 +933,13 @@ export function openOverrideModal(
   // global Settings cards already hide invalid combinations; the override
   // modal must do the same so we can't silently save an invalid combo.
   // Per #107.
+  overridePaymentOptionsController?.abort();
+  overridePaymentOptionsController = new AbortController();
   syncOverridePaymentOptions(provider);
   const onChange = () => syncOverridePaymentOptions(provider);
-  select?.removeEventListener('change', onChange);
-  select?.addEventListener('change', onChange);
+  select?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
   const termSel = document.getElementById('override-term') as HTMLSelectElement | null;
-  termSel?.removeEventListener('change', onChange);
-  termSel?.addEventListener('change', onChange);
+  termSel?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
 
   modal.classList.remove('hidden');
 }
@@ -990,6 +991,8 @@ function closeOverrideModal(): void {
   const modal = document.getElementById('override-modal');
   modal?.classList.add('hidden');
   overrideModalContext = null;
+  overridePaymentOptionsController?.abort();
+  overridePaymentOptionsController = null;
 }
 
 /**
