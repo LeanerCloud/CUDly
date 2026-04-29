@@ -1353,10 +1353,14 @@ func TestScheduler_ConvertRecommendations_HashUniqueness(t *testing.T) {
 		},
 	}
 
-	// Seed an "engine = postgres" twin once for the engine subtest.
-	enginePostgresTwin := base
-	enginePostgresTwin.Service = common.ServiceRDS
-	enginePostgresTwin.ResourceType = "db.m5.large"
+	// Seed an RDS-version of base for the engine subtest.
+	// Both recs must share the same RDS SKU so only Details.Engine differs.
+	rdsBase := base
+	rdsBase.Service = common.ServiceRDS
+	rdsBase.ResourceType = "db.m5.large"
+	rdsBase.Details = common.DatabaseDetails{Engine: "mysql"}
+
+	enginePostgresTwin := rdsBase
 	enginePostgresTwin.Details = common.DatabaseDetails{Engine: "postgres"}
 
 	for _, tc := range cases {
@@ -1364,11 +1368,10 @@ func TestScheduler_ConvertRecommendations_HashUniqueness(t *testing.T) {
 			a := base
 			b := tc.mutator(base)
 			recs := []common.Recommendation{a, b}
-			// For the engine subtest, override `b` with the postgres twin
-			// so the diff is engine-only (the mutator above only sets
-			// mysql; we need a second rec with the same SKU but postgres).
+			// For the engine subtest, use rdsBase and enginePostgresTwin
+			// so the diff is engine-only (both have the same RDS SKU).
 			if tc.name == "engine: MySQL vs Postgres at same RDS SKU" {
-				recs[1] = enginePostgresTwin
+				recs = []common.Recommendation{rdsBase, enginePostgresTwin}
 			}
 			records := scheduler.convertRecommendations(recs, "aws")
 			require.Len(t, records, 2)
