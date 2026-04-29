@@ -415,11 +415,27 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 	}
 
 	// Swap the JWKS to publish kid B.
-	swap, _ := http.NewRequest("POST", srv.URL+"/swap", strings.NewReader(string(jwks(keyB))))
-	swap.ContentLength = int64(len(jwks(keyB)))
+	//
+	// Both the request build and the response status are checked: if the
+	// /swap handler 5xx's (or — more subtly — returns a non-200 because
+	// the body short-read), the JWKS would silently NOT update. The test
+	// would then fail later at "unknown kid" instead of pointing at the
+	// real cause. Surfacing the swap failure here keeps the diagnostic
+	// chain short.
+	jwksB := jwks(keyB)
+	swap, err := http.NewRequest(http.MethodPost, srv.URL+"/swap", strings.NewReader(string(jwksB)))
+	if err != nil {
+		t.Fatalf("build swap request: %v", err)
+	}
+	swap.ContentLength = int64(len(jwksB))
 	resp, err := http.DefaultClient.Do(swap)
 	if err != nil {
 		t.Fatalf("swap: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("swap: unexpected status %d, body: %s", resp.StatusCode, string(body))
 	}
 	resp.Body.Close()
 
