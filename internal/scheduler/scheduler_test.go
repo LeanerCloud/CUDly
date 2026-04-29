@@ -1317,63 +1317,57 @@ func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
 		PaymentOption: "all-upfront",
 	}
 
+	// Each case mutates one and only one field of `base` so the
+	// resulting (a, b) pair differs in exactly that dimension. The
+	// engine subtest is built from a separate `rdsBase` below so the
+	// "only Details.Engine differs" property holds at every level
+	// (Service / ResourceType already match across the pair).
 	cases := []struct {
-		name    string
-		mutator func(common.Recommendation) common.Recommendation
+		name string
+		recs func() (common.Recommendation, common.Recommendation)
 	}{
 		{
 			name: "term: 1yr vs 3yr (issue #188 — AWS 1yr recs were vanishing)",
-			mutator: func(r common.Recommendation) common.Recommendation {
-				r.Term = "3yr"
-				return r
+			recs: func() (common.Recommendation, common.Recommendation) {
+				b := base
+				b.Term = "3yr"
+				return base, b
 			},
 		},
 		{
 			name: "account: separates multi-subscription recs (issue #187)",
-			mutator: func(r common.Recommendation) common.Recommendation {
-				r.Account = "test-account-b"
-				return r
+			recs: func() (common.Recommendation, common.Recommendation) {
+				b := base
+				b.Account = "test-account-b"
+				return base, b
 			},
 		},
 		{
 			name: "payment: all-upfront vs no-upfront",
-			mutator: func(r common.Recommendation) common.Recommendation {
-				r.PaymentOption = "no-upfront"
-				return r
+			recs: func() (common.Recommendation, common.Recommendation) {
+				b := base
+				b.PaymentOption = "no-upfront"
+				return base, b
 			},
 		},
 		{
 			name: "engine: MySQL vs Postgres at same RDS SKU",
-			mutator: func(r common.Recommendation) common.Recommendation {
-				r.Service = common.ServiceRDS
-				r.ResourceType = "db.m5.large"
-				r.Details = common.DatabaseDetails{Engine: "mysql"}
-				return r
+			recs: func() (common.Recommendation, common.Recommendation) {
+				rdsBase := base
+				rdsBase.Service = common.ServiceRDS
+				rdsBase.ResourceType = "db.m5.large"
+				rdsBase.Details = common.DatabaseDetails{Engine: "mysql"}
+				rdsTwin := rdsBase
+				rdsTwin.Details = common.DatabaseDetails{Engine: "postgres"}
+				return rdsBase, rdsTwin
 			},
 		},
 	}
 
-	// Seed an RDS-version of base for the engine subtest.
-	// Both recs must share the same RDS SKU so only Details.Engine differs.
-	rdsBase := base
-	rdsBase.Service = common.ServiceRDS
-	rdsBase.ResourceType = "db.m5.large"
-	rdsBase.Details = common.DatabaseDetails{Engine: "mysql"}
-
-	enginePostgresTwin := rdsBase
-	enginePostgresTwin.Details = common.DatabaseDetails{Engine: "postgres"}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := base
-			b := tc.mutator(base)
-			recs := []common.Recommendation{a, b}
-			// For the engine subtest, use rdsBase and enginePostgresTwin
-			// so the diff is engine-only (both have the same RDS SKU).
-			if tc.name == "engine: MySQL vs Postgres at same RDS SKU" {
-				recs = []common.Recommendation{rdsBase, enginePostgresTwin}
-			}
-			records := scheduler.convertRecommendations(recs, "aws")
+			a, b := tc.recs()
+			records := scheduler.convertRecommendations([]common.Recommendation{a, b}, "aws")
 			require.Len(t, records, 2)
 			assert.NotEqual(t, records[0].ID, records[1].ID,
 				"ID collision — recs differing in %s produce the same ID; this regresses #187/#188", tc.name)
