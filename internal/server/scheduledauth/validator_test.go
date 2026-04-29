@@ -1,6 +1,7 @@
 package scheduledauth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -748,6 +750,17 @@ func TestValidateJWKSBody_RequiresKeysArray(t *testing.T) {
 }
 
 func TestWarmup_LoggedAndNonFatal_OnDeadEndpoint(t *testing.T) {
+	// Capture the global logger so we can assert the failure path was
+	// actually exercised. Without this, the test passes just as well if
+	// Warmup were to short-circuit before the fetch ever ran (CR pass on
+	// PR #161 — "did not hang" alone doesn't pin the non-fatal branch).
+	// No tests in this package use t.Parallel(), so swapping the global
+	// log writer here is safe; t.Cleanup restores it.
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+
 	v, err := New(Config{
 		Mode:      ModeOIDC,
 		Issuer:    "https://accounts.example.com",
@@ -763,6 +776,17 @@ func TestWarmup_LoggedAndNonFatal_OnDeadEndpoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	v.Warmup(ctx) // non-fatal — only logs
+
+	// Assert the failure-path log fired. The validator emits
+	// "scheduledauth: WARN — JWKS warmup fetch failed for <url>: <err>"
+	// on connect refused (validator.go:255). We pin on the substring
+	// "JWKS warmup" so a future log-message tweak doesn't break the
+	// test for cosmetic reasons, while still proving the code path
+	// reached the post-fetch error branch.
+	logs := logBuf.String()
+	if !strings.Contains(logs, "JWKS warmup") {
+		t.Fatalf("expected a JWKS-warmup failure log, got: %q", logs)
+	}
 }
 
 // guard: sanity-check that Mode is reported back.
