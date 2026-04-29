@@ -1410,7 +1410,9 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   // Single-bucket happy path: open the preview modal + submit via the
   // existing execute-purchase flow. The modal's "Execute Purchase" button
   // (wired in app.ts) picks up the recs via getPurchaseModalRecommendations.
-  openPurchaseModal(scaled);
+  // openPurchaseModal is async (issue #111 (iii): per-rec override
+  // prefetch); fire-and-forget — the modal is the user's surface.
+  void openPurchaseModal(scaled);
 }
 
 // FanOutBucket groups one batch of recs under a single (provider,
@@ -1837,47 +1839,297 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   });
 }
 
+// resolvePerRecPaymentSeed picks the default Payment value for one rec
+// in the per-row purchase modal (issue #111 sub-option (iii)). The
+// precedence:
+//   1. Account override: rec carries a non-empty cloud_account_id, that
+//      account has an AccountServiceOverride matching
+//      `(rec.provider, rec.service)`, the override's `payment` is
+//      non-empty, AND `(provider, service, term, payment)` is supported
+//      by isPaymentSupported. → seed from override; the row's source-
+//      note span renders "(from account override)".
+//   2. Rec's own payment: the API stamps payment at collection time;
+//      use it if non-empty AND supported for `(provider, service, term)`.
+//   3. paymentOptionsFor(provider, service, term)[0]: defensive fallback
+//      for malformed test fixtures or pre-#111 cached responses where
+//      the rec lacks a payment. paymentOptionsFor returns at least one
+//      option for every provider/service the recommendations engine
+//      generates rows for.
+//
+// NOTE: this helper duplicates the override-fetch shape from
+// resolveBucketPaymentSeed (per-bucket, used by the fan-out modal). The
+// two are kept separate by deliberate scope discipline; a follow-up
+// issue will consolidate them into a single
+// `frontend/src/lib/overrides.ts` helper once both surfaces have shipped.
+function resolvePerRecPaymentSeed(
+  rec: LocalRecommendation,
+  overridesByAccount: Map<string, AccountServiceOverride[]>,
+): { payment: CompatPayment; source: 'override' | 'rec' | 'fallback' } {
+  const provider = rec.provider as CompatProvider;
+  const term = rec.term as 1 | 3;
+
+  if (rec.cloud_account_id) {
+    const overrides = overridesByAccount.get(rec.cloud_account_id);
+    if (overrides) {
+      const match = overrides.find(
+        (o) => o.provider === provider && o.service === rec.service,
+      );
+      if (
+        match
+        && match.payment
+        && isPaymentSupported(provider, rec.service, term, match.payment as CompatPayment)
+      ) {
+        return { payment: match.payment as CompatPayment, source: 'override' };
+      }
+    }
+  }
+
+  if (rec.payment && isPaymentSupported(provider, rec.service, term, rec.payment as CompatPayment)) {
+    return { payment: rec.payment as CompatPayment, source: 'rec' };
+  }
+
+  // Defensive fallback: rec is missing/has-unsupported payment AND no
+  // matching override. paymentOptionsFor always returns at least one
+  // option for the (provider, service, term) cells the engine emits.
+  const options = paymentOptionsFor(provider, rec.service, term);
+  return { payment: (options[0] ?? 'all-upfront') as CompatPayment, source: 'fallback' };
+}
+
 /**
- * Open purchase modal
+ * Open the single-bucket purchase modal with editable per-row Term and
+ * Payment dropdowns (issue #111 sub-option (iii)).
+ *
+ * Defaults are seeded by resolvePerRecPaymentSeed:
+ *   override → rec's own payment → paymentOptionsFor[0] fallback.
+ *
+ * On change, handlers mutate `currentPurchaseRecommendations[idx]` in
+ * place so `getPurchaseModalRecommendations()` returns the user's
+ * edits, and `app.ts::handleExecutePurchase` posts those values per row
+ * (replacing the historical hardcoded `'all-upfront'` on that path).
+ *
+ * Async because it pre-fetches per-account overrides — same pattern as
+ * `openFanOutModal`. Errors swallowed: the rec-payment fallback always
+ * works, so a transient API blip shouldn't block the modal.
  */
-export function openPurchaseModal(recommendations: LocalRecommendation[]): void {
+export async function openPurchaseModal(recommendations: LocalRecommendation[]): Promise<void> {
   currentPurchaseRecommendations = [...recommendations];
   const container = document.getElementById('purchase-details');
   if (!container) return;
 
-  const totalSavings = recommendations.reduce((sum, r) => sum + (r.savings || 0), 0);
-  const totalUpfront = recommendations.reduce((sum, r) => sum + (r.upfront_cost || 0), 0);
+  // Pre-fetch overrides for every distinct non-empty cloud_account_id
+  // in the input set. One fetch per account, parallel via Promise.all,
+  // cached in a per-call Map.
+  const accountIDs = new Set<string>();
+  for (const r of currentPurchaseRecommendations) {
+    if (r.cloud_account_id) accountIDs.add(r.cloud_account_id);
+  }
+  const overridesByAccount = new Map<string, AccountServiceOverride[]>();
+  await Promise.all(
+    Array.from(accountIDs).map(async (id) => {
+      try {
+        const list = await api.listAccountServiceOverrides(id);
+        overridesByAccount.set(id, list);
+      } catch {
+        // Silent fallback to rec-own / paymentOptionsFor[0] seed.
+      }
+    }),
+  );
 
-  container.innerHTML = `
-    <div class="form-section">
-      <h3>Purchase Summary</h3>
-      <p><strong>${recommendations.length}</strong> commitments to purchase</p>
-      <p>Estimated Monthly Savings: <strong class="savings">${formatCurrency(totalSavings)}</strong></p>
-      <p>Total Upfront Cost: <strong>${formatCurrency(totalUpfront)}</strong></p>
-    </div>
-    <div class="form-section">
-      <h3>Commitments</h3>
-      <table>
-        <thead>
-          <tr><th>Service</th><th>Type</th><th>Region</th><th>Count</th><th>Savings/mo</th></tr>
-        </thead>
-        <tbody>
-          ${recommendations.map(r => `
-            <tr>
-              <td>${escapeHtml(r.service)}</td>
-              <td>${escapeHtml(r.resource_type)}</td>
-              <td>${escapeHtml(r.region)}</td>
-              <td>${r.count}</td>
-              <td class="savings">${formatCurrency(r.savings)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
+  // Compute seed per rec and mutate currentPurchaseRecommendations in
+  // place so the in-flight modal state matches what the dropdowns
+  // render. The 'rec' source case is a no-op write (same value), but
+  // keeping the assignment uniform avoids "did the user edit this?"
+  // ambiguity downstream — every rec carries an explicit payment by
+  // the time the modal opens.
+  const seeds = currentPurchaseRecommendations.map((r) => resolvePerRecPaymentSeed(r, overridesByAccount));
+  for (let i = 0; i < currentPurchaseRecommendations.length; i++) {
+    currentPurchaseRecommendations[i]!.payment = seeds[i]!.payment;
+  }
+
+  while (container.firstChild) container.removeChild(container.firstChild);
+
+  const totalSavings = currentPurchaseRecommendations.reduce((sum, r) => sum + (r.savings || 0), 0);
+  const totalUpfront = currentPurchaseRecommendations.reduce((sum, r) => sum + (r.upfront_cost || 0), 0);
+
+  // Summary section (DOM-built; no template-literal HTML interpolation).
+  const summary = document.createElement('div');
+  summary.className = 'form-section';
+  const summaryTitle = document.createElement('h3');
+  summaryTitle.textContent = 'Purchase Summary';
+  summary.appendChild(summaryTitle);
+
+  const countLine = document.createElement('p');
+  const countStrong = document.createElement('strong');
+  countStrong.textContent = String(currentPurchaseRecommendations.length);
+  countLine.appendChild(countStrong);
+  countLine.appendChild(document.createTextNode(' commitments to purchase'));
+  summary.appendChild(countLine);
+
+  const savingsLine = document.createElement('p');
+  savingsLine.appendChild(document.createTextNode('Estimated Monthly Savings: '));
+  const savingsStrong = document.createElement('strong');
+  savingsStrong.className = 'savings';
+  savingsStrong.textContent = formatCurrency(totalSavings);
+  savingsLine.appendChild(savingsStrong);
+  summary.appendChild(savingsLine);
+
+  const upfrontLine = document.createElement('p');
+  upfrontLine.appendChild(document.createTextNode('Total Upfront Cost: '));
+  const upfrontStrong = document.createElement('strong');
+  upfrontStrong.textContent = formatCurrency(totalUpfront);
+  upfrontLine.appendChild(upfrontStrong);
+  summary.appendChild(upfrontLine);
+
+  container.appendChild(summary);
+
+  // Commitments table with per-row Term and Payment selects.
+  const commitsSection = document.createElement('div');
+  commitsSection.className = 'form-section';
+  const commitsTitle = document.createElement('h3');
+  commitsTitle.textContent = 'Commitments';
+  commitsSection.appendChild(commitsTitle);
+
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  for (const label of ['Service', 'Type', 'Region', 'Count', 'Term', 'Payment', 'Savings/mo']) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (let i = 0; i < currentPurchaseRecommendations.length; i++) {
+    tbody.appendChild(renderPurchaseModalRow(i, seeds[i]!.source));
+  }
+  table.appendChild(tbody);
+  commitsSection.appendChild(table);
+  container.appendChild(commitsSection);
 
   const purchaseModal = document.getElementById('purchase-modal');
   if (purchaseModal) openModal(purchaseModal);
+}
+
+// renderPurchaseModalRow builds one editable <tr> for the per-row
+// purchase modal. Idx is the index into currentPurchaseRecommendations
+// — change handlers locate the live rec via that index so subsequent
+// edits to other rows don't stale-close over an outdated array
+// reference. The modal does NOT re-render mid-edit; only the row's own
+// Payment <select> options are rebuilt on a Term change.
+function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' | 'fallback'): HTMLTableRowElement {
+  const rec = currentPurchaseRecommendations[idx]!;
+  const tr = document.createElement('tr');
+  tr.dataset['recIdx'] = String(idx);
+
+  const serviceCell = document.createElement('td');
+  serviceCell.textContent = rec.service;
+  tr.appendChild(serviceCell);
+
+  const typeCell = document.createElement('td');
+  typeCell.textContent = rec.resource_type;
+  tr.appendChild(typeCell);
+
+  const regionCell = document.createElement('td');
+  regionCell.textContent = rec.region;
+  tr.appendChild(regionCell);
+
+  const countCell = document.createElement('td');
+  countCell.textContent = String(rec.count);
+  tr.appendChild(countCell);
+
+  // Term select. AWS/Azure/GCP commitments universally support 1y and 3y;
+  // on change we rederive Payment options for the new term and pick a
+  // still-valid value if the current one becomes unsupported.
+  const termCell = document.createElement('td');
+  const termSelect = document.createElement('select');
+  termSelect.className = 'purchase-row-term';
+  for (const t of [1, 3]) {
+    const opt = document.createElement('option');
+    opt.value = String(t);
+    opt.textContent = `${t}yr`;
+    if (t === rec.term) opt.selected = true;
+    termSelect.appendChild(opt);
+  }
+  termCell.appendChild(termSelect);
+  tr.appendChild(termCell);
+
+  // Payment select. Options come from paymentOptionsFor (already
+  // filtered to supported values for this provider/service/term cell),
+  // so the user can never pick an unsupported combo through the UI.
+  const paymentCell = document.createElement('td');
+  const paymentSelect = document.createElement('select');
+  paymentSelect.className = 'purchase-row-payment';
+  rebuildPaymentOptions(paymentSelect, rec.provider as CompatProvider, rec.service, rec.term as 1 | 3, (rec.payment ?? '') as CompatPayment);
+  paymentCell.appendChild(paymentSelect);
+  if (paymentSource === 'override') {
+    const sourceNote = document.createElement('span');
+    sourceNote.className = 'purchase-row-payment-source';
+    sourceNote.textContent = ' (from account override)';
+    paymentCell.appendChild(sourceNote);
+  }
+  tr.appendChild(paymentCell);
+
+  const savingsCell = document.createElement('td');
+  savingsCell.className = 'savings';
+  savingsCell.textContent = formatCurrency(rec.savings);
+  tr.appendChild(savingsCell);
+
+  termSelect.addEventListener('change', () => {
+    const live = currentPurchaseRecommendations[idx];
+    if (!live) return;
+    const newTerm = parseInt(termSelect.value, 10) === 3 ? 3 : 1;
+    live.term = newTerm;
+    // Rebuild this row's payment options for the new term; if current
+    // payment is no longer supported, pick the first valid option and
+    // mirror back to live state.
+    rebuildPaymentOptions(
+      paymentSelect,
+      live.provider as CompatProvider,
+      live.service,
+      newTerm,
+      (live.payment ?? '') as CompatPayment,
+    );
+    live.payment = paymentSelect.value;
+  });
+
+  paymentSelect.addEventListener('change', () => {
+    const live = currentPurchaseRecommendations[idx];
+    if (!live) return;
+    live.payment = paymentSelect.value;
+  });
+
+  return tr;
+}
+
+// rebuildPaymentOptions clears and re-populates a <select> with the
+// supported Payment options for a (provider, service, term) cell.
+// If `desired` is in the new option set, it stays selected; otherwise
+// the first option wins and the select's `.value` reflects that.
+function rebuildPaymentOptions(
+  select: HTMLSelectElement,
+  provider: CompatProvider,
+  service: string,
+  term: 1 | 3,
+  desired: CompatPayment | '',
+): void {
+  while (select.firstChild) select.removeChild(select.firstChild);
+  const options = paymentOptionsFor(provider, service, term);
+  let matched = false;
+  for (const opt of options) {
+    const o = document.createElement('option');
+    o.value = opt;
+    o.textContent = opt;
+    if (opt === desired) {
+      o.selected = true;
+      matched = true;
+    }
+    select.appendChild(o);
+  }
+  if (!matched && options.length > 0) {
+    select.value = options[0]!;
+  }
 }
 
 /**

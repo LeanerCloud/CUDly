@@ -286,6 +286,12 @@ async function handleExecutePurchase(): Promise<void> {
   // Map LocalRecommendation to API Recommendation format. The counts +
   // costs here are already scaled by the bulk-toolbar's capacity % so
   // the backend records exactly what the user saw in the preview.
+  // Issue #111 (iii): payment now reads `r.payment` (set by
+  // `openPurchaseModal`'s per-row seed and live edits), replacing the
+  // historical hardcoded 'all-upfront' that silently dropped the
+  // toolbar's Payment for the single-bucket path. The `?? 'all-upfront'`
+  // is defensive only — direct test-harness callers that bypass the
+  // modal may not set `payment`; the production path always does.
   const apiRecs: api.Recommendation[] = localRecs.map((r) => ({
     id: r.id,
     provider: r.provider,
@@ -294,7 +300,7 @@ async function handleExecutePurchase(): Promise<void> {
     resource_type: r.resource_type,
     count: r.count,
     term: r.term,
-    payment: 'all-upfront',
+    payment: r.payment ?? 'all-upfront',
     upfront_cost: r.upfront_cost,
     monthly_cost: r.monthly_cost ?? 0,
     savings: r.savings,

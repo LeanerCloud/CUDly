@@ -64,6 +64,12 @@ export interface LocalRecommendation {
   region: string;
   count: number;
   term: number;
+  // The API stamps `payment` on every Recommendation row at collection
+  // time, so runtime data carries it; surfacing it in the type lets the
+  // issue #111 per-row purchase modal read/write it directly. Optional
+  // because pre-#111 cached responses and some test fixtures omit it;
+  // the modal handles undefined via its seed helper.
+  payment?: string;
   savings: number;
   upfront_cost: number;
   monthly_cost?: number;
