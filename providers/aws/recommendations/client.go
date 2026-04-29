@@ -133,6 +133,9 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 	attempts := 0
 	for _, term := range defaultDiscoveryTerms {
 		for _, payment := range defaultDiscoveryPaymentOptions {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			attempts++
 			params := common.RecommendationParams{
 				Service:        service,

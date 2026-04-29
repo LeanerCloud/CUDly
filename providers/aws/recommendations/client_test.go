@@ -415,10 +415,10 @@ func TestGetRecommendationsForService_ContextCancelShortCircuits(t *testing.T) {
 	cancel() // pre-cancel so the very first GetRecommendations sees a dead ctx
 	_, err := client.GetRecommendationsForService(ctx, common.ServiceEC2)
 
-	require.ErrorIs(t, err, context.Canceled,
+	require.Equal(t, context.Canceled, err,
 		"GetRecommendationsForService must propagate ctx.Err() verbatim, not wrap it as 'all variants failed'")
-	assert.LessOrEqual(t, len(mockAPI.riCalls), 1,
-		"loop must short-circuit on ctx cancellation, not march through all 6 (term, payment) combos")
+	assert.Empty(t, mockAPI.riCalls,
+		"pre-canceled contexts must short-circuit before Cost Explorer work")
 }
 
 func TestGetAllRecommendations(t *testing.T) {
