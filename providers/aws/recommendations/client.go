@@ -190,7 +190,7 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 			// through the remaining services and silently swallowing
 			// the cancellation.
 			if ctx.Err() != nil {
-				return allRecommendations, ctx.Err()
+				return nil, ctx.Err()
 			}
 			continue
 		}
@@ -198,7 +198,7 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 		select {
 		case <-time.After(100 * time.Millisecond):
 		case <-ctx.Done():
-			return allRecommendations, ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
 
