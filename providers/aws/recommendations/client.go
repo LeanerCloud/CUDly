@@ -102,34 +102,56 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 // were after PR #189.
 var defaultDiscoveryTerms = []string{"1yr", "3yr"}
 
+// defaultDiscoveryPaymentOptions enumerates the payment options the
+// discovery flow fetches per (service, term). Cost Explorer's
+// GetReservationPurchaseRecommendation requires a single `PaymentOption`
+// per request and returns recs only for that option; the prior single
+// hardcoded "partial-upfront" entry meant the Recommendations page
+// could never offer the user a choice between all-upfront / partial /
+// no-upfront variants. The recordID encoding (scheduler.go) and the
+// recommendations natural-key index (migration 000042) both already
+// include payment_option, so the three variants land as distinct DB
+// rows and render as distinct UI rows for free.
+var defaultDiscoveryPaymentOptions = []string{"all-upfront", "partial-upfront", "no-upfront"}
+
 // GetRecommendationsForService fetches recommendations for a specific
-// service across all standard term lengths in defaultDiscoveryTerms.
-// A per-term Cost Explorer error is tolerated and skipped so a single
-// throttle on one term doesn't suppress the other term's results;
-// only an error is returned when every term fails. This mirrors the
-// "continue on per-service error" tolerance in GetAllRecommendations.
+// service across the full Cartesian product of defaultDiscoveryTerms ×
+// defaultDiscoveryPaymentOptions (currently 2 × 3 = 6 Cost Explorer
+// calls per service). Each call returns the recs for that single
+// (term, payment) cell and the parser tags them with params.Term /
+// params.PaymentOption so the resulting slice contains every combo
+// for the user to choose from in the UI.
+//
+// A per-call Cost Explorer error is tolerated and skipped so a single
+// throttle on one (term, payment) combo doesn't suppress the others;
+// only an error where every combo fails is propagated. This mirrors
+// the "continue on per-service error" tolerance in GetAllRecommendations.
 func (c *Client) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
 	allRecs := make([]common.Recommendation, 0)
 	var lastErr error
 	successCount := 0
+	attempts := 0
 	for _, term := range defaultDiscoveryTerms {
-		params := common.RecommendationParams{
-			Service:        service,
-			PaymentOption:  "partial-upfront",
-			Term:           term,
-			LookbackPeriod: "7d",
-			Region:         "",
+		for _, payment := range defaultDiscoveryPaymentOptions {
+			attempts++
+			params := common.RecommendationParams{
+				Service:        service,
+				PaymentOption:  payment,
+				Term:           term,
+				LookbackPeriod: "7d",
+				Region:         "",
+			}
+			recs, err := c.GetRecommendations(ctx, params)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			successCount++
+			allRecs = append(allRecs, recs...)
 		}
-		recs, err := c.GetRecommendations(ctx, params)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		successCount++
-		allRecs = append(allRecs, recs...)
 	}
-	if successCount == 0 && lastErr != nil {
-		return nil, fmt.Errorf("all term variants failed for service %s: %w", service, lastErr)
+	if successCount == 0 && attempts > 0 && lastErr != nil {
+		return nil, fmt.Errorf("all (term, payment) variants failed for service %s: %w", service, lastErr)
 	}
 	return allRecs, nil
 }

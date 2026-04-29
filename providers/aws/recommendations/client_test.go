@@ -327,30 +327,42 @@ func TestGetRecommendationsForService(t *testing.T) {
 	recs, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
 
 	require.NoError(t, err)
-	// GetRecommendationsForService now fetches both 1yr and 3yr terms
-	// (issue #188 — Cost Explorer requires per-call TermInYears, so a
-	// single hardcoded "3yr" call meant 1yr recs never reached the
-	// scheduler). The mock returns the same payload for every Cost
-	// Explorer call, so we expect one rec per term.
-	require.Len(t, recs, 2)
+	// GetRecommendationsForService now fetches the full Cartesian
+	// product of {1yr, 3yr} × {all-upfront, partial-upfront, no-upfront}
+	// (issue #188 + payment-option follow-up — Cost Explorer requires
+	// per-call TermInYears AND PaymentOption, so the previously
+	// hardcoded "3yr" + "partial-upfront" pair hid every other variant
+	// from the user). The mock returns the same payload for every
+	// call, so we expect one rec per (term, payment) combo = 2 × 3 = 6.
+	require.Len(t, recs, 6)
 	for _, r := range recs {
 		assert.Equal(t, common.ServiceEC2, r.Service)
-		assert.Equal(t, "partial-upfront", r.PaymentOption)
 	}
-	terms := []string{recs[0].Term, recs[1].Term}
-	assert.ElementsMatch(t, []string{"1yr", "3yr"}, terms)
+	type combo struct{ term, payment string }
+	got := make([]combo, len(recs))
+	for i, r := range recs {
+		got[i] = combo{term: r.Term, payment: r.PaymentOption}
+	}
+	want := []combo{
+		{"1yr", "all-upfront"}, {"1yr", "partial-upfront"}, {"1yr", "no-upfront"},
+		{"3yr", "all-upfront"}, {"3yr", "partial-upfront"}, {"3yr", "no-upfront"},
+	}
+	assert.ElementsMatch(t, want, got)
 }
 
-// TestGetRecommendationsForService_QueriesBothTerms is the regression
-// test for issue #188: Cost Explorer's GetReservationPurchaseRecommendation
-// requires `TermInYears` on each request, so to surface both 1yr and 3yr
-// recs we MUST issue two requests per service. The previous behaviour
-// hardcoded "3yr" and the user-visible symptom was "AWS recs only ever
-// show Term = 3 Years" on the Recommendations page. We assert directly
-// against the captured input slice that both ONE_YEAR and THREE_YEARS
-// were requested, so a future regression that quietly drops one term
-// fails this test even if the parser tags recs correctly.
-func TestGetRecommendationsForService_QueriesBothTerms(t *testing.T) {
+// TestGetRecommendationsForService_QueriesEveryCombo is the regression
+// test for issue #188 and the payment-option follow-up. Cost Explorer's
+// GetReservationPurchaseRecommendation requires both `TermInYears` and
+// `PaymentOption` on each request and returns recs for that single
+// (term, payment) cell — so to let the user choose between every
+// variant in the UI we MUST issue one request per combo. The previous
+// behaviour hardcoded ("3yr", "partial-upfront") and the user-visible
+// symptoms were "AWS recs only ever show Term = 3 Years" plus "no
+// all-upfront / no-upfront variants ever appear". We assert directly
+// against the captured input slice that all 6 (term, payment) combos
+// were requested, so a future regression that quietly drops a combo
+// fails this test even if the parser tags the surviving recs correctly.
+func TestGetRecommendationsForService_QueriesEveryCombo(t *testing.T) {
 	mockAPI := &mockCostExplorerAPI{
 		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
 			Recommendations: []types.ReservationPurchaseRecommendation{},
@@ -361,16 +373,26 @@ func TestGetRecommendationsForService_QueriesBothTerms(t *testing.T) {
 	_, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
 	require.NoError(t, err)
 
-	require.Len(t, mockAPI.riCalls, 2,
-		"GetRecommendationsForService must issue one Cost Explorer call per term")
-	requestedTerms := []types.TermInYears{
-		mockAPI.riCalls[0].TermInYears,
-		mockAPI.riCalls[1].TermInYears,
+	require.Len(t, mockAPI.riCalls, 6,
+		"GetRecommendationsForService must issue one Cost Explorer call per (term, payment) combo")
+	type combo struct {
+		term    types.TermInYears
+		payment types.PaymentOption
 	}
-	assert.ElementsMatch(t,
-		[]types.TermInYears{types.TermInYearsOneYear, types.TermInYearsThreeYears},
-		requestedTerms,
-		"both ONE_YEAR and THREE_YEARS must be requested — issue #188")
+	got := make([]combo, len(mockAPI.riCalls))
+	for i, c := range mockAPI.riCalls {
+		got[i] = combo{term: c.TermInYears, payment: c.PaymentOption}
+	}
+	want := []combo{
+		{types.TermInYearsOneYear, types.PaymentOptionAllUpfront},
+		{types.TermInYearsOneYear, types.PaymentOptionPartialUpfront},
+		{types.TermInYearsOneYear, types.PaymentOptionNoUpfront},
+		{types.TermInYearsThreeYears, types.PaymentOptionAllUpfront},
+		{types.TermInYearsThreeYears, types.PaymentOptionPartialUpfront},
+		{types.TermInYearsThreeYears, types.PaymentOptionNoUpfront},
+	}
+	assert.ElementsMatch(t, want, got,
+		"every (term, payment) combo must be requested — issue #188 + payment follow-up")
 }
 
 func TestGetAllRecommendations(t *testing.T) {
