@@ -647,6 +647,15 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 		logging.Errorf("failed to apply suppressions; returning un-suppressed recs: %v", err)
 	}
 
+	recs, err = s.applyAccountOverrides(ctx, recs)
+	if err != nil {
+		// Same over-show-vs-under-show trade-off as applySuppressions.
+		// A missing global ServiceConfig or override-table read failure
+		// should leave the user looking at un-overridden recs, not a
+		// blank page. Issue #196.
+		logging.Errorf("failed to apply account overrides; returning un-filtered recs: %v", err)
+	}
+
 	s.maybeKickBackgroundRefresh(freshness)
 	return recs, nil
 }

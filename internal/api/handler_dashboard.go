@@ -39,7 +39,17 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	totalSavings, byService := summarizeRecommendations(recommendations)
+	// Issue #196 — cap the headline "potential savings" by the per-account
+	// coverage target. Without this scaling the dashboard always reports
+	// the un-overridden total, which is misleading once a per-account
+	// override has narrowed the user's intended commitment.
+	//
+	// The resolver is best-effort: a lookup error logs and falls through
+	// to the un-scaled total, mirroring the over-show-vs-under-show
+	// trade-off baked into Scheduler.applySuppressions / applyAccountOverrides.
+	coverageByKey := h.resolveCoverageByAccountKey(ctx, recommendations)
+
+	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
 	targetCoverage := h.resolveTargetCoverage(ctx)
 	activeCommitments, committedMonthly, ytdSavings := h.calculateCommitmentMetrics(ctx, effectiveAccountID)
 
@@ -103,18 +113,80 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 	return filtered, nil
 }
 
-// summarizeRecommendations reduces a list of recommendations to the totals
-// exposed on the dashboard summary.
-func summarizeRecommendations(recs []config.RecommendationRecord) (float64, map[string]ServiceSavings) {
+// summarizeRecommendationsWithCoverage is the dashboard reducer that
+// respects per-account, per-service coverage overrides. Each rec's
+// contribution is scaled by min(coverage, 100) / 100 looked up in
+// coverageByKey via config.AccountConfigKey(account, provider, service).
+// Pass coverageByKey=nil to disable scaling (every rec counts fully).
+//
+// Recs without a CloudAccountID, recs whose triple has no entry in the
+// map, and recs with a recorded coverage of zero (treated as "no
+// scaling configured") all count at full weight — this matches the
+// pre-#196 behaviour for un-configured accounts.
+//
+// Coverage > 100 is capped at 100 so a misconfigured override cannot
+// inflate the headline "potential savings" beyond the raw rec total.
+//
+// Note: assumes recs are generated at 100% coverage. A follow-up on
+// dashboard accuracy (see #196 references) will revisit if rec
+// generation becomes coverage-aware.
+func summarizeRecommendationsWithCoverage(
+	recs []config.RecommendationRecord,
+	coverageByKey map[string]float64,
+) (float64, map[string]ServiceSavings) {
 	var total float64
 	byService := make(map[string]ServiceSavings)
 	for _, rec := range recs {
-		total += rec.Savings
+		scaled := scaledSavings(rec, coverageByKey)
+		total += scaled
 		svc := byService[rec.Service]
-		svc.PotentialSavings += rec.Savings
+		svc.PotentialSavings += scaled
 		byService[rec.Service] = svc
 	}
 	return total, byService
+}
+
+// scaledSavings returns rec.Savings * min(max(coverage, 0), 100) / 100 when
+// a coverage entry exists for the rec's (account, provider, service) triple.
+// Otherwise returns rec.Savings unchanged.
+func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 {
+	if rec.CloudAccountID == nil || coverageByKey == nil {
+		return rec.Savings
+	}
+	coverage, ok := coverageByKey[config.AccountConfigKey(*rec.CloudAccountID, rec.Provider, rec.Service)]
+	if !ok {
+		return rec.Savings
+	}
+	if coverage <= 0 {
+		return 0
+	}
+	if coverage >= 100 {
+		return rec.Savings
+	}
+	return rec.Savings * coverage / 100
+}
+
+// resolveCoverageByAccountKey returns a map of AccountConfigKey -> resolved
+// coverage% for every (account, provider, service) triple represented in
+// recs. Lookup errors degrade gracefully to a nil map (no scaling applied
+// → un-overridden behaviour).
+func (h *Handler) resolveCoverageByAccountKey(ctx context.Context, recs []config.RecommendationRecord) map[string]float64 {
+	if len(recs) == 0 {
+		return nil
+	}
+	resolved, err := config.ResolveAccountConfigsForRecs(ctx, h.config, recs)
+	if err != nil {
+		logging.Errorf("dashboard: failed to resolve per-account configs for coverage cap; using un-scaled totals: %v", err)
+		return nil
+	}
+	if len(resolved) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(resolved))
+	for k, cfg := range resolved {
+		out[k] = cfg.Coverage
+	}
+	return out
 }
 
 // resolveTargetCoverage returns the configured default coverage or 80% when

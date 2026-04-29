@@ -77,6 +77,143 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 	assert.Equal(t, 200.0, result.ByService["ec2"].PotentialSavings)
 }
 
+// dashboardOverrideStore embeds MockConfigStore but overrides
+// GetAccountServiceOverride so that the dashboard's coverage-cap path
+// (issue #196) sees the per-account override the test seeded.
+// MockConfigStore stubs that method to return nil unconditionally, which is
+// the right default for the rest of the handler tests but blocks override
+// scenarios from being exercised end-to-end.
+type dashboardOverrideStore struct {
+	*MockConfigStore
+	overrides map[string]*config.AccountServiceOverride
+}
+
+func (s *dashboardOverrideStore) GetAccountServiceOverride(_ context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
+	return s.overrides[config.AccountConfigKey(accountID, provider, service)], nil
+}
+
+// Issue #196 — per-account coverage override scales the headline
+// "potential savings" so the dashboard reflects the user's intended
+// commitment, not the un-overridden total.
+func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.T) {
+	ctx := context.Background()
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+	store := &dashboardOverrideStore{
+		MockConfigStore: mockStore,
+		overrides: map[string]*config.AccountServiceOverride{
+			config.AccountConfigKey("acct-A", "aws", "rds"): {Coverage: float64Ptr(50)},
+		},
+	}
+
+	acctA := "acct-A"
+	acctB := "acct-B"
+	recommendations := []config.RecommendationRecord{
+		// $100/mo, account A overrides coverage to 50% → $50 contribution
+		{Provider: "aws", Service: "rds", Savings: 100.0, CloudAccountID: &acctA},
+		// $100/mo, account B has no override → full $100 contribution
+		{Provider: "aws", Service: "rds", Savings: 100.0, CloudAccountID: &acctB},
+	}
+
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(&config.ServiceConfig{
+		Provider: "aws", Service: "rds", Enabled: true, Coverage: 100,
+	}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{
+		auth:      mockAuth,
+		scheduler: mockScheduler,
+		config:    store,
+	}
+
+	result, err := handler.getDashboardSummary(ctx, req, map[string]string{"provider": "aws"})
+	require.NoError(t, err)
+
+	assert.InDelta(t, 150.0, result.PotentialMonthlySavings, 0.001,
+		"acct-A scaled to 50% ($50) + acct-B at full ($100) = $150")
+	assert.InDelta(t, 150.0, result.ByService["rds"].PotentialSavings, 0.001)
+}
+
+func float64Ptr(f float64) *float64 { return &f }
+
+// summarizeRecommendationsWithCoverage table-driven unit tests cover the
+// scaling math in isolation from the handler / store / auth dependencies.
+func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
+	acctA := "acct-A"
+	acctB := "acct-B"
+	rec := func(account string, savings float64) config.RecommendationRecord {
+		a := account
+		return config.RecommendationRecord{
+			Provider: "aws", Service: "rds", Savings: savings, CloudAccountID: &a,
+		}
+	}
+	keyA := config.AccountConfigKey(acctA, "aws", "rds")
+	_ = acctB // referenced only via rec(acctB, …) inside test cases
+
+	tests := []struct {
+		name      string
+		recs      []config.RecommendationRecord
+		coverage  map[string]float64
+		wantTotal float64
+	}{
+		{
+			name:      "nil coverage map preserves un-scaled total",
+			recs:      []config.RecommendationRecord{rec(acctA, 100), rec(acctB, 200)},
+			coverage:  nil,
+			wantTotal: 300,
+		},
+		{
+			name:      "missing key falls through to full savings",
+			recs:      []config.RecommendationRecord{rec(acctA, 100), rec(acctB, 200)},
+			coverage:  map[string]float64{keyA: 50}, // B unconfigured
+			wantTotal: 50 + 200,
+		},
+		{
+			name:      "zero coverage scales savings to zero",
+			recs:      []config.RecommendationRecord{rec(acctA, 100)},
+			coverage:  map[string]float64{keyA: 0},
+			wantTotal: 0,
+		},
+		{
+			name:      "coverage at 100 applies no scaling",
+			recs:      []config.RecommendationRecord{rec(acctA, 100)},
+			coverage:  map[string]float64{keyA: 100},
+			wantTotal: 100,
+		},
+		{
+			name:      "coverage above 100 capped at 100",
+			recs:      []config.RecommendationRecord{rec(acctA, 100)},
+			coverage:  map[string]float64{keyA: 150},
+			wantTotal: 100,
+		},
+		{
+			name: "nil CloudAccountID rec uses full savings",
+			recs: []config.RecommendationRecord{
+				{Provider: "aws", Service: "rds", Savings: 100, CloudAccountID: nil},
+			},
+			coverage:  map[string]float64{keyA: 50},
+			wantTotal: 100,
+		},
+		{
+			name:      "fractional scaling is preserved",
+			recs:      []config.RecommendationRecord{rec(acctA, 200)},
+			coverage:  map[string]float64{keyA: 33.5},
+			wantTotal: 200 * 33.5 / 100,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			total, byService := summarizeRecommendationsWithCoverage(tc.recs, tc.coverage)
+			assert.InDelta(t, tc.wantTotal, total, 0.0001)
+			assert.InDelta(t, tc.wantTotal, byService["rds"].PotentialSavings, 0.0001)
+		})
+	}
+}
+
 func TestHandler_getUpcomingPurchases(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

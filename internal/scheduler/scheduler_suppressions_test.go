@@ -32,6 +32,18 @@ func (m *mockSuppressionStore) GetRecommendationsFreshness(_ context.Context) (*
 	return &config.RecommendationsFreshness{LastCollectedAt: &now}, nil
 }
 
+// GetServiceConfig / GetAccountServiceOverride: required by the override
+// helper that runs inside ListRecommendations after the suppression pass
+// (issue #196). Returning nil signals "no global config registered" — the
+// resolver then leaves the rec un-filtered, which is what the suppression
+// tests want (they assert on the suppression counter, not on overrides).
+func (m *mockSuppressionStore) GetServiceConfig(_ context.Context, _, _ string) (*config.ServiceConfig, error) {
+	return nil, nil
+}
+func (m *mockSuppressionStore) GetAccountServiceOverride(_ context.Context, _, _, _ string) (*config.AccountServiceOverride, error) {
+	return nil, nil
+}
+
 func strPtr(s string) *string { return &s }
 
 func TestApplySuppressions_SubtractsCount(t *testing.T) {
