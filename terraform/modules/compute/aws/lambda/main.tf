@@ -230,10 +230,16 @@ resource "aws_iam_role_policy" "secrets_access" {
 # where SES walks up the identity hierarchy and evaluates IAM against the
 # verified parent's ARN (identity/leanercloud.com). Enumerating every
 # ancestor the operator might verify would work on paper but drifts every
-# time the SES identity tree is reorganised; `*` defers the real check to
-# SES itself (which still rejects sends from unverified identities at the
-# service layer). Configuration-set access stays scoped to ${stack_name}*
-# so a compromised Lambda can't touch unrelated stacks' config sets.
+# time the SES identity tree is reorganised.
+#
+# To still narrow the blast radius (a compromised Lambda must not be able
+# to spoof emails from arbitrary verified identities in the same account),
+# the SendEmail/SendRawEmail actions are gated by a `ses:FromAddress`
+# condition restricting the From header to *@${var.email_from_domain}.
+# SES enforces FromAddress on the wire, so this prevents phishing from
+# unrelated identities even though the resource ARN remains broad.
+# Configuration-set access stays scoped to ${stack_name}* so a compromised
+# Lambda can't touch unrelated stacks' config sets either.
 #
 # Only attached when var.email_from_domain is set — deployments without email
 # notifications don't get any SES permissions at all.
@@ -247,11 +253,25 @@ resource "aws_iam_role_policy" "ses_access" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "SendFromAnyVerifiedIdentity"
+        Sid    = "SendFromCUDlyDomain"
         Effect = "Allow"
         Action = [
           "ses:SendEmail",
           "ses:SendRawEmail",
+        ]
+        Resource = "*"
+        Condition = {
+          StringLike = {
+            "ses:FromAddress" = "*@${var.email_from_domain}"
+          }
+        }
+      },
+      {
+        # Read-only SES status checks for healthchecks and quota
+        # introspection. No spoofing risk — these don't send mail.
+        Sid    = "SESReadOnly"
+        Effect = "Allow"
+        Action = [
           "ses:GetAccount",
           "ses:GetEmailIdentity",
         ]
