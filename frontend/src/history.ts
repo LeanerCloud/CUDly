@@ -321,6 +321,113 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
   return p.created_by_user_id === user.id;
 }
 
+// canRetryFailedRow returns true when the current session is permitted
+// to retry the given failed history row via the inline Retry button
+// (issue #47). UX gate only — the backend authorizeSessionRetry in
+// internal/api/handler_purchases.go remains the security boundary.
+//
+// Heuristic mirrors canCancelPendingRow:
+//   * status must be "failed";
+//   * row must NOT carry an ops_hint (persistent failure → no retry,
+//     show the hint instead);
+//   * row must NOT already have a retry_execution_id (we don't allow
+//     retrying the same failure twice — the user should retry the
+//     latest descendant in the chain);
+//   * admin → always yes;
+//   * non-admin matching the row's created_by_user_id → yes (retry-own).
+function canRetryFailedRow(p: HistoryPurchase): boolean {
+  const status = (p.status || '').toLowerCase();
+  if (status !== 'failed') return false;
+  if (p.ops_hint) return false;
+  if (p.retry_execution_id) return false; // already retried — user should act on the descendant
+  const user = getCurrentUser();
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (!p.created_by_user_id) return false;
+  return p.created_by_user_id === user.id;
+}
+
+// retryThresholdReached returns true when the row has hit the soft-
+// block threshold (5 attempts). The frontend shows a confirm-with-
+// warning dialog and forwards force=true on confirmation.
+//
+// Kept in sync with retryThreshold in internal/api/handler_purchases.go;
+// the backend remains authoritative — if this client predicate disagrees
+// with the server, the API surfaces a structured 409 with retry_attempt_n
+// + threshold and the toast falls back to the server message.
+const RETRY_THRESHOLD = 5;
+function retryThresholdReached(p: HistoryPurchase): boolean {
+  return (p.retry_attempt_n ?? 0) >= RETRY_THRESHOLD;
+}
+
+// shortExecID renders the first 8 chars of a UUID so inline lineage
+// links ("Retried as #abc12345") stay readable in the table cell. The
+// full ID is preserved in the data-history-status attribute so the
+// click handler can deep-link without truncation surprises.
+function shortExecID(id: string): string {
+  return (id || '').replace(/^urn:.*?:/, '').slice(0, 8);
+}
+
+// renderActionCell returns the HTML for the Plan / action column on a
+// single history row. The column doubles as the per-row action surface
+// because pending / failed rows rarely have a meaningful plan_name (the
+// pending plan info already shows in StatusDescription) and reusing the
+// existing column keeps table width unchanged.
+//
+// Decision tree (status-driven, mutually exclusive):
+//   * pending|notified + canCancel  → Cancel button (issue #46)
+//   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry)
+//   * failed + threshold reached    → "Retried 5× — confirm to override" Retry button (Q2)
+//   * failed + canRetry             → standard ↻ Retry button
+//   * any row with retry lineage    → inline ↻ Retried as / ↻ Retry of link
+//   * else                          → plan_name or "-"
+function renderActionCell(p: HistoryPurchase): string {
+  // Pending → Cancel takes precedence; we never show Retry on a non-
+  // failed row.
+  if (canCancelPendingRow(p) && p.purchase_id) {
+    return `<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`;
+  }
+
+  // Failed → either ops-hint (no retry possible), Retry (with optional
+  // threshold-confirm flag), plus lineage link to the successor if it
+  // exists. We never show ops-hint AND Retry on the same row — the
+  // hint replaces the action entirely because retrying a persistent
+  // misconfig is guaranteed to fail again.
+  if ((p.status || '').toLowerCase() === 'failed') {
+    if (p.ops_hint) {
+      return `<span class="history-ops-hint" title="Operator action required — Retry will not help until this is fixed">⚠ ${escapeHtml(p.ops_hint)}</span>`;
+    }
+    if (canRetryFailedRow(p) && p.purchase_id) {
+      const overThreshold = retryThresholdReached(p);
+      const label = overThreshold ? `⚠ Retried ${p.retry_attempt_n ?? 0}× — click to override` : '↻ Retry';
+      const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
+      return `<button type="button" class="${cls}" data-retry-id="${escapeHtml(p.purchase_id)}">${label}</button>`;
+    }
+  }
+
+  // Lineage links: a row that was retried (retry_execution_id set) or
+  // is itself a retry (retry_attempt_n > 0) gets an inline cross-link
+  // to the other end of the chain so the user can navigate without
+  // scrolling. Both can be true simultaneously on a middle-of-chain
+  // row (failed_v2 was retried into v3 AND is itself a retry of v1).
+  const lineage: string[] = [];
+  if (p.retry_execution_id) {
+    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
+  }
+  if ((p.retry_attempt_n ?? 0) > 0) {
+    // We don't carry a back-pointer field — a future enhancement
+    // could surface the predecessor's exec ID via the API. For now
+    // we render a static badge (no link target) so users at least
+    // see "this is a retry" provenance.
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${p.retry_attempt_n} in its chain">↻ Retry #${p.retry_attempt_n}</span>`);
+  }
+  if (lineage.length > 0) {
+    return lineage.join(' ');
+  }
+
+  return escapeHtml(p.plan_name || '-');
+}
+
 function renderHistoryList(purchases: HistoryPurchase[]): void {
   const container = document.getElementById('history-list');
   if (!container) return;
@@ -364,13 +471,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       return badge;
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
-    // Inline Cancel button on pending/notified rows the current user is
-    // permitted to cancel. Renders in the Plan column so the table
-    // width stays the same; pending rows show their plan in
-    // StatusDescription, not the Plan column, so this is non-conflicting.
-    const planCellContent = canCancelPendingRow(p) && p.purchase_id
-      ? `<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`
-      : escapeHtml(p.plan_name || '-');
+    const planCellContent = renderActionCell(p);
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
@@ -466,6 +567,63 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         console.error('Failed to reload history after cancel:', reloadError);
         // Don't downgrade the success toast; loadHistory's own catch
         // already paints an error message into the list area.
+      }
+    });
+  });
+
+  // Wire the inline Retry button on failed rows the current session
+  // may retry (issue #47). Two flows:
+  //   * normal:    confirmDialog → POST /retry → reload + toast.
+  //   * over-threshold: confirmDialog with stronger warning → POST
+  //     with ?force=true → reload + toast.
+  // The backend may still 409 with an ops_hint or threshold response;
+  // the catch block surfaces the structured detail when present.
+  container.querySelectorAll<HTMLButtonElement>('.history-retry-btn[data-retry-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['retryId'];
+      if (!id) return;
+      const overThreshold = btn.classList.contains('history-retry-over-threshold');
+      const ok = await confirmDialog({
+        title: overThreshold ? 'Retry past threshold?' : 'Retry this failed purchase?',
+        body: overThreshold
+          ? 'The same recommendations have already failed multiple times. Are you sure you want to retry again? This may not succeed.'
+          : 'This will create a new purchase execution from the same recommendations. The original failed row will be linked to the new attempt.',
+        confirmLabel: overThreshold ? 'Retry anyway' : 'Retry purchase',
+        destructive: false,
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await api.retryPurchase(id, overThreshold ? { force: true } : undefined);
+      } catch (retryError) {
+        console.error('Failed to retry purchase:', retryError);
+        // Surface structured retry hints from the backend (issue #47):
+        //   * ops_hint — operator-actionable reason; takes priority
+        //   * retry_attempt_n + threshold — soft-block message
+        //   * else — fall back to the raw error message
+        const err = retryError as Error & { details?: Record<string, unknown> };
+        const opsHint = typeof err.details?.['ops_hint'] === 'string' ? err.details['ops_hint'] : '';
+        const retryAttemptN = typeof err.details?.['retry_attempt_n'] === 'number' ? err.details['retry_attempt_n'] : undefined;
+        const threshold = typeof err.details?.['threshold'] === 'number' ? err.details['threshold'] : undefined;
+        let detailMessage = '';
+        if (opsHint) {
+          detailMessage = opsHint;
+        } else if (retryAttemptN != null && threshold != null) {
+          detailMessage = `already retried ${retryAttemptN} times (threshold ${threshold}) — confirm the override prompt to force`;
+        }
+        const finalMessage = detailMessage || err.message || 'unknown error';
+        showToast({ message: `Failed to retry: ${finalMessage}`, kind: 'error' });
+        btn.disabled = false;
+        return;
+      }
+      // Retry POST succeeded — surface success regardless of whether
+      // the refresh works. The reload error path mirrors the cancel
+      // flow above.
+      showToast({ message: 'Retry execution created', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after retry:', reloadError);
       }
     });
   });

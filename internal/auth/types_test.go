@@ -16,8 +16,9 @@ func TestDefaultPermissions(t *testing.T) {
 
 	t.Run("DefaultUserPermissions returns user access", func(t *testing.T) {
 		perms := DefaultUserPermissions()
-		// 6 read/plan-author perms + cancel-own:purchases (issue #46) = 7.
-		assert.Len(t, perms, 7)
+		// 6 read/plan-author perms + cancel-own:purchases (issue #46)
+		// + retry-own:purchases (issue #47) = 8.
+		assert.Len(t, perms, 8)
 
 		actions := make(map[string]bool)
 		for _, p := range perms {
@@ -31,6 +32,7 @@ func TestDefaultPermissions(t *testing.T) {
 		assert.True(t, actions[ActionCreate+":"+ResourcePlans])
 		assert.True(t, actions[ActionUpdate+":"+ResourcePlans])
 		assert.True(t, actions[ActionCancelOwn+":"+ResourcePurchases])
+		assert.True(t, actions[ActionRetryOwn+":"+ResourcePurchases])
 	})
 
 	t.Run("DefaultReadOnlyPermissions returns readonly access", func(t *testing.T) {

@@ -297,6 +297,34 @@ const (
 	// hatch and is gated by token possession, not these verbs.
 	ActionCancelOwn = "cancel-own"
 	ActionCancelAny = "cancel-any"
+	// ActionRetryOwn / ActionRetryAny gate the session-authed Retry
+	// button on failed Purchase History rows (issue #47). Mirror image
+	// of the cancel verbs above:
+	//
+	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//     both verbs.
+	//   * RoleUser — DefaultUserPermissions() adds retry-own:purchases.
+	//     Allows retrying failed executions whose created_by_user_id
+	//     matches the session user. Legacy rows with NULL creator are
+	//     out of reach for non-admins via this verb; admins still
+	//     retry them via retry-any.
+	//   * RoleReadOnly — neither verb. Read-only users cannot retry.
+	//
+	// retry-any has no default non-admin grant; the constant exists so
+	// future operator roles can be granted broad retry rights without
+	// escalating to admin.
+	//
+	// Retry creates a NEW purchase execution from the failed row's
+	// stored Recommendations slice; it is NOT a status mutation of the
+	// original row (the original keeps its `failed` status as a
+	// historical record and gains a retry_execution_id pointer to the
+	// successor). The "execute purchases" action is therefore the
+	// natural permission to require, but the retry verbs let us gate
+	// the *source* — a user without retry-own can still trigger fresh
+	// purchases via the Recommendations page; they just can't act on
+	// somebody else's failed row.
+	ActionRetryOwn = "retry-own"
+	ActionRetryAny = "retry-any"
 )
 
 // Predefined resources
@@ -335,6 +363,14 @@ func DefaultUserPermissions() []Permission {
 		// state (pending/notified) and the creator UUID to match the
 		// session UserID before honouring the request.
 		{Action: ActionCancelOwn, Resource: ResourcePurchases},
+		// retry-own:purchases — every authenticated user can retry
+		// failed purchase executions they created themselves (issue #47).
+		// The handler still requires the execution to be in `failed`
+		// state, the creator UUID to match the session UserID, the
+		// failure reason not to match the persistent-misconfig list,
+		// and the retry-attempt counter on the chain to be below the
+		// soft-block threshold (overridable with ?force=true).
+		{Action: ActionRetryOwn, Resource: ResourcePurchases},
 	}
 }
 

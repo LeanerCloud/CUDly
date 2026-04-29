@@ -42,6 +42,38 @@ export async function cancelPurchase(executionId: string): Promise<void> {
 }
 
 /**
+ * Retry a failed purchase execution (issue #47).
+ *
+ * The session-authed endpoint creates a new execution from the failed
+ * row's stored Recommendations slice, stamps the predecessor with a
+ * pointer to the successor, and increments retry_attempt_n on the
+ * chain. Pass `force: true` to bypass the soft-block threshold (the
+ * frontend gates this behind a confirm-with-warning dialog so a user
+ * can't trip it accidentally).
+ *
+ * Returns the API response shape — execution_id of the new row and
+ * retry_attempt_n on it — so the caller can toast a meaningful link.
+ */
+export interface RetryPurchaseResult {
+  execution_id: string;
+  original_execution: string;
+  status: string;
+  retry_attempt_n: number;
+  email_sent?: boolean;
+  email_reason?: string;
+}
+
+export async function retryPurchase(
+  executionId: string,
+  opts?: { force?: boolean },
+): Promise<RetryPurchaseResult> {
+  const qs = opts?.force ? '?force=true' : '';
+  return apiRequest<RetryPurchaseResult>(`/purchases/retry/${executionId}${qs}`, {
+    method: 'POST',
+  });
+}
+
+/**
  * Get planned purchases (scheduled from plans)
  */
 export async function getPlannedPurchases(): Promise<PlannedPurchasesResponse> {
