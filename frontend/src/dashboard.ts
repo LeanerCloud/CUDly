@@ -358,7 +358,7 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDiv
     });
     if (!ok) return;
     try {
-      await api.deletePlannedPurchase(planId);
+      await api.deletePlan(planId);
       modal.remove();
       await loadDashboard();
       showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
@@ -380,21 +380,23 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDiv
 }
 
 async function cancelScheduledPurchase(planId: string): Promise<void> {
-  // Plan-level cancel: the row-on-the-Cancel-button is a PurchasePlan
-  // whose next execution hasn't fired yet, so there's no
-  // purchase_executions row to cancel. deletePlannedPurchase is the
-  // correct endpoint — `cancelPurchase` here would 500 with
-  // "execution not found" (issue #204).
+  // Plan-level cancel via DELETE /api/plans/{id}. The row-on-the-Cancel-
+  // button is a PurchasePlan whose next execution hasn't fired yet — no
+  // purchase_executions row exists to cancel via deletePlannedPurchase
+  // (which operates on purchase_executions and would 404 on a plan_id).
+  // deletePlan removes the plan and stops all future scheduled steps;
+  // for a soft-disable that preserves the record, swap to
+  // patchPlan(planId, { enabled: false }) — see issues #204/#205.
   const ok = await confirmDialog({
     title: 'Cancel this scheduled purchase?',
-    body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
+    body: 'Cancelling deletes the plan and stops all future scheduled steps. This cannot be undone — re-create the plan if you change your mind.',
     confirmLabel: 'Cancel purchase',
     destructive: true,
   });
   if (!ok) return;
 
   try {
-    await api.deletePlannedPurchase(planId);
+    await api.deletePlan(planId);
     await loadDashboard();
     showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {

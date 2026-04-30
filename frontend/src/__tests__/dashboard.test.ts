@@ -39,6 +39,7 @@ jest.mock('../api', () => ({
   // Plan-level cancel — the dashboard upcoming-list now targets plan
   // endpoints (issues #204 + #205), not execution endpoints.
   deletePlannedPurchase: jest.fn(),
+  deletePlan: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([]),
   getSavingsAnalytics: jest.fn().mockResolvedValue({ data_points: [] }),
 }));
@@ -336,7 +337,7 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      (api.deletePlannedPurchase as jest.Mock).mockResolvedValue({});
+      (api.deletePlan as jest.Mock).mockResolvedValue({});
       window.confirm = jest.fn().mockReturnValue(true);
 
       await loadDashboard();
@@ -350,7 +351,7 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(api.deletePlannedPurchase).toHaveBeenCalledWith('plan-123');
+      expect(api.deletePlan).toHaveBeenCalledWith('plan-123');
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
         message: 'Purchase cancelled successfully',
         kind: 'success',
@@ -385,7 +386,7 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(api.deletePlannedPurchase).not.toHaveBeenCalled();
+      expect(api.deletePlan).not.toHaveBeenCalled();
     });
 
     test('cancel purchase shows error on failure', async () => {
@@ -407,7 +408,7 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      (api.deletePlannedPurchase as jest.Mock).mockRejectedValue(new Error('API Error'));
+      (api.deletePlan as jest.Mock).mockRejectedValue(new Error('API Error'));
       window.confirm = jest.fn().mockReturnValue(true);
       console.error = jest.fn();
 
