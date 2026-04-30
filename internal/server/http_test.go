@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
+	"github.com/LeanerCloud/CUDly/internal/server/scheduledauth"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -216,12 +217,25 @@ func TestLambdaResponseToHTTP(t *testing.T) {
 }
 
 func TestHandleScheduledHTTP(t *testing.T) {
+	// newBearerValidator constructs a bearer-mode validator and fails
+	// the test on construction error — preferred over `panic` because
+	// failures stay scoped to the offending case.
+	newBearerValidator := func(t *testing.T, secret string) *scheduledauth.Validator {
+		t.Helper()
+		v, err := scheduledauth.New(scheduledauth.Config{
+			Mode:   scheduledauth.ModeBearer,
+			Bearer: secret,
+		})
+		testutil.AssertNoError(t, err)
+		return v
+	}
+
 	tests := []struct {
 		name           string
 		method         string
 		path           string
 		authHeader     string
-		setupApp       func(*Application)
+		setupApp       func(*testing.T, *Application)
 		expectedStatus int
 		expectError    bool
 	}{
@@ -229,7 +243,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			name:   "valid scheduled task",
 			method: "POST",
 			path:   "/api/scheduled/collect_recommendations",
-			setupApp: func(app *Application) {
+			setupApp: func(_ *testing.T, app *Application) {
 				app.Scheduler = &testutil.MockScheduler{
 					CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
 						return &scheduler.CollectResult{
@@ -246,7 +260,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			name:           "invalid method (GET instead of POST)",
 			method:         "GET",
 			path:           "/api/scheduled/collect_recommendations",
-			setupApp:       func(app *Application) {},
+			setupApp:       func(_ *testing.T, _ *Application) {},
 			expectedStatus: 405,
 			expectError:    false,
 		},
@@ -254,7 +268,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			name:           "invalid path (missing task type)",
 			method:         "POST",
 			path:           "/api/scheduled/",
-			setupApp:       func(app *Application) {},
+			setupApp:       func(_ *testing.T, _ *Application) {},
 			expectedStatus: 400,
 			expectError:    false,
 		},
@@ -262,8 +276,8 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			name:   "auth required but missing",
 			method: "POST",
 			path:   "/api/scheduled/collect_recommendations",
-			setupApp: func(app *Application) {
-				app.appConfig.ScheduledTaskSecret = "my-secret"
+			setupApp: func(t *testing.T, app *Application) {
+				app.scheduledAuth = newBearerValidator(t, "my-secret")
 			},
 			expectedStatus: 401,
 		},
@@ -272,8 +286,8 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			method:     "POST",
 			path:       "/api/scheduled/collect_recommendations",
 			authHeader: "Bearer my-secret",
-			setupApp: func(app *Application) {
-				app.appConfig.ScheduledTaskSecret = "my-secret"
+			setupApp: func(t *testing.T, app *Application) {
+				app.scheduledAuth = newBearerValidator(t, "my-secret")
 				app.Scheduler = &testutil.MockScheduler{
 					CollectRecommendationsFunc: func(ctx context.Context) (*scheduler.CollectResult, error) {
 						return &scheduler.CollectResult{}, nil
@@ -288,7 +302,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			app := &Application{}
 			if tt.setupApp != nil {
-				tt.setupApp(app)
+				tt.setupApp(t, app)
 			}
 
 			req := httptest.NewRequest(tt.method, tt.path, nil)
@@ -297,7 +311,10 @@ func TestHandleScheduledHTTP(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			app.handleScheduledHTTP(w, req)
+			// Drive the request through the same middleware chain
+			// that CreateHTTPServer wires up, so auth is enforced
+			// upstream of handleScheduledHTTP.
+			app.scheduledAuthMiddleware(http.HandlerFunc(app.handleScheduledHTTP)).ServeHTTP(w, req)
 
 			testutil.AssertEqual(t, tt.expectedStatus, w.Code)
 

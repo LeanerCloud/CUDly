@@ -360,6 +360,15 @@ resource "kubernetes_deployment" "app" {
             value = join(",", var.allowed_origins)
           }
 
+          # Scheduled-task auth — Azure stays on bearer mode (Logic Apps
+          # fetch the shared secret from Key Vault at invocation time;
+          # Logic Apps' HTTP Connector does not emit Entra OIDC tokens).
+          # Validated app-side via internal/server/scheduledauth.
+          env {
+            name  = "SCHEDULED_TASK_AUTH_MODE"
+            value = "bearer"
+          }
+
           dynamic "env" {
             for_each = var.additional_env_vars
             content {

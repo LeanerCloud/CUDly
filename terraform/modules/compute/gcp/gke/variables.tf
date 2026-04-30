@@ -261,15 +261,31 @@ variable "recommendation_schedule" {
   default     = "0 2 * * *"
 }
 
-variable "scheduled_task_secret" {
-  description = "Shared secret for authenticating scheduled task HTTP calls"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
 variable "app_url" {
   description = "Application URL for scheduled task HTTP triggers (e.g., https://app.example.com). Required when enable_scheduled_tasks is true."
   type        = string
   default     = ""
+}
+
+variable "scheduled_task_auth_mode_override" {
+  description = <<-EOT
+    Override for SCHEDULED_TASK_AUTH_MODE used ONLY when no scheduler SA
+    is created (var.enable_scheduled_tasks = false). When the SA exists,
+    auth mode is always derived as "oidc" — the override is ignored.
+
+    Why this exists: kubernetes_ingress_v1.app exposes /api/scheduled/*
+    via the catch-all rule even when the scheduler is disabled. Tying
+    auth to var.enable_scheduled_tasks would silently boot those
+    endpoints unauthenticated. The fail-closed default ("oidc") here
+    means a deploy without scheduler SA still requires the validator to
+    be configured (or it rejects every request). Set this to "disabled"
+    deliberately for local-dev / dry-run only.
+  EOT
+  type        = string
+  default     = "oidc"
+
+  validation {
+    condition     = contains(["oidc", "bearer", "disabled"], var.scheduled_task_auth_mode_override)
+    error_message = "scheduled_task_auth_mode_override must be one of: \"oidc\", \"bearer\", \"disabled\"."
+  }
 }

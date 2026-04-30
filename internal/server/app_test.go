@@ -368,6 +368,12 @@ func TestLoadApplicationConfig(t *testing.T) {
 func TestNewApplicationFromDeps(t *testing.T) {
 	ctx := testutil.TestContext(t)
 
+	// SCHEDULED_TASK_AUTH_MODE is required at startup (fail-closed default
+	// per CR pass-4 review on PR #161). Tests boot the app without
+	// scheduled-task wiring, so explicitly opt into "disabled" — the same
+	// thing local-dev tfvars do.
+	t.Setenv("SCHEDULED_TASK_AUTH_MODE", "disabled")
+
 	validDBConfig := &database.Config{
 		Host:     "localhost",
 		Port:     5432,

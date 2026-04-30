@@ -137,6 +137,13 @@ resource "azurerm_container_app" "main" {
             CUDLY_SOURCE_CLOUD          = "azure"
             CUDLY_SIGNING_KEY_VAULT_URL = var.key_vault_uri
             CUDLY_SIGNING_KEY_NAME      = var.signing_key_name
+            # Scheduled-task auth — Azure stays on the bearer mode where
+            # Logic Apps fetch the shared secret from Key Vault at
+            # invocation time and the app constant-time-compares it via
+            # internal/server/scheduledauth. Switching to oidc here
+            # would require Entra-issued tokens, which Logic Apps does
+            # not emit on the HTTP Connector trigger we use.
+            SCHEDULED_TASK_AUTH_MODE = "bearer"
           },
           var.additional_env_vars
         )
