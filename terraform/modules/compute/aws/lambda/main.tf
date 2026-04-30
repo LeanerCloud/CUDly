@@ -54,6 +54,19 @@ resource "aws_lambda_function" "main" {
         # cycle with aws_lambda_function.main. The server resolves the
         # issuer URL lazily from the first inbound request's
         # DomainName and caches it — see internal/oidc.IssuerCache.
+
+        # Scheduled-task auth: AWS uses EventBridge -> direct Lambda
+        # invocation (lambda:InvokeFunction, see
+        # scheduled_recommendations / ri_exchange event_target rules
+        # below), so no real scheduler hits /api/scheduled/*. The HTTP
+        # path IS reachable on the public Lambda URL
+        # (authorization_type=NONE) and would be an unauthenticated
+        # public trigger without a gate. Bearer mode resolves the
+        # value from Secrets Manager at startup
+        # (resolveScheduledTaskSecret in internal/server/app.go); the
+        # plaintext never lives in Lambda env or Terraform state.
+        SCHEDULED_TASK_AUTH_MODE   = "bearer"
+        SCHEDULED_TASK_SECRET_NAME = var.scheduled_task_secret_name
       },
       var.additional_env_vars
     )
@@ -203,6 +216,8 @@ resource "aws_iam_role_policy" "secrets_access" {
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}*" : "",
           var.credential_encryption_key_secret_arn,
           var.credential_encryption_key_secret_arn != "" ? "${var.credential_encryption_key_secret_arn}*" : "",
+          var.scheduled_task_secret_arn,
+          var.scheduled_task_secret_arn != "" ? "${var.scheduled_task_secret_arn}*" : "",
         ])
       },
       {

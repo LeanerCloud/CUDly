@@ -245,6 +245,18 @@ variable "credential_encryption_key_secret_arn" {
   default     = ""
 }
 
+variable "scheduled_task_secret_arn" {
+  description = "ARN of Secrets Manager secret holding the bearer secret for /api/scheduled/* (required when SCHEDULED_TASK_AUTH_MODE=bearer; resolved at runtime via SecretResolver)"
+  type        = string
+  default     = ""
+}
+
+variable "scheduled_task_secret_name" {
+  description = "Name of the scheduled-task bearer secret. Passed to compute as SCHEDULED_TASK_SECRET_NAME and resolved by internal/server.resolveScheduledTaskSecret on cold start."
+  type        = string
+  default     = ""
+}
+
 variable "enable_cross_account_sts" {
   description = "Grant the task role sts:AssumeRole on IAM roles whose name starts with cross_account_role_name_prefix. Required for multi-account plan execution."
   type        = bool

@@ -44,6 +44,16 @@ output "session_secret_name" {
   value       = var.create_session_secret ? aws_secretsmanager_secret.session_secret[0].name : null
 }
 
+output "scheduled_task_secret_arn" {
+  description = "ARN of the scheduled-task bearer secret (if created)"
+  value       = var.create_scheduled_task_secret ? aws_secretsmanager_secret.scheduled_task_secret[0].arn : null
+}
+
+output "scheduled_task_secret_name" {
+  description = "Name of the scheduled-task bearer secret (if created); pass into compute as SCHEDULED_TASK_SECRET_NAME"
+  value       = var.create_scheduled_task_secret ? aws_secretsmanager_secret.scheduled_task_secret[0].name : null
+}
+
 output "additional_secret_arns" {
   description = "Map of additional secret ARNs"
   value       = { for k, v in aws_secretsmanager_secret.additional : k => v.arn }

@@ -154,6 +154,8 @@ resource "aws_iam_role_policy" "task_secrets" {
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}-*" : "",
           var.credential_encryption_key_secret_arn,
           var.credential_encryption_key_secret_arn != "" ? "${var.credential_encryption_key_secret_arn}*" : "",
+          var.scheduled_task_secret_arn,
+          var.scheduled_task_secret_arn != "" ? "${var.scheduled_task_secret_arn}*" : "",
         ])
       },
       {
@@ -561,6 +563,21 @@ resource "aws_ecs_task_definition" "main" {
           {
             name  = "TASK_TIMEOUT"
             value = tostring(var.task_timeout)
+          },
+          # Scheduled-task auth: same model as Lambda. AWS schedules
+          # via EventBridge -> direct invocation; the HTTP path is
+          # exposed via the public ALB and needs an app-level gate.
+          # Bearer mode resolves the value from Secrets Manager at
+          # startup (resolveScheduledTaskSecret in
+          # internal/server/app.go); the plaintext never lives in the
+          # task definition or Terraform state.
+          {
+            name  = "SCHEDULED_TASK_AUTH_MODE"
+            value = "bearer"
+          },
+          {
+            name  = "SCHEDULED_TASK_SECRET_NAME"
+            value = var.scheduled_task_secret_name
           }
         ],
         [
