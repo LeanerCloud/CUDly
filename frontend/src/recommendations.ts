@@ -8,7 +8,13 @@ import { formatCurrency, formatTerm, escapeHtml } from './utils';
 import { renderFreshness } from './freshness';
 import { getRecommendationDetail, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
-import { isPaymentSupported, paymentOptionsFor, type Provider as CompatProvider, type Payment as CompatPayment } from './lib/purchase-compatibility';
+import {
+  isPaymentSupported,
+  isSavingsPlanService,
+  paymentOptionsFor,
+  type Payment as CompatPayment,
+  type Provider as CompatProvider,
+} from './lib/purchase-compatibility';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 import { openModal } from './modal';
@@ -479,6 +485,31 @@ function buildPopoverContent(
     allLabel.appendChild(allText);
     popover.appendChild(allLabel);
 
+    // Issue #137: when the service column popover lists 2+ SP plan-type
+    // slugs, render a second tri-state row "All Savings Plans" between
+    // (All) and the individual list. PR #123 split the single
+    // 'savings-plans' option into per-plan-type slugs, removing the
+    // one-click "filter to all SP recommendations" affordance — this
+    // restores it as a group-level toggle scoped to SP slugs only.
+    // Per-plan-type checkboxes remain individually selectable for
+    // narrowing.
+    const spSlugs: string[] = column === 'service'
+      ? distinct.filter((v) => isSavingsPlanService(v))
+      : [];
+    let spBox: HTMLInputElement | null = null;
+    if (spSlugs.length >= 2) {
+      const spLabel = document.createElement('label');
+      spLabel.className = 'column-filter-group';
+      spBox = document.createElement('input');
+      spBox.type = 'checkbox';
+      spBox.dataset['role'] = 'sp-group';
+      spLabel.appendChild(spBox);
+      const spText = document.createElement('span');
+      spText.textContent = 'All Savings Plans';
+      spLabel.appendChild(spText);
+      popover.appendChild(spLabel);
+    }
+
     const list = document.createElement('div');
     list.className = 'column-filter-list';
     for (const value of distinct) {
@@ -504,6 +535,20 @@ function buildPopoverContent(
       allBox.checked = checked === total && total > 0;
     };
 
+    // SP-group tri-state mirrors updateAllTriState but is scoped to the
+    // savings-plans-* boxes only. checked = every SP box ticked,
+    // indeterminate = some-but-not-all, unchecked = none.
+    const updateSPTriState = (): void => {
+      if (!spBox) return;
+      let checked = 0;
+      for (const slug of spSlugs) {
+        const cb = checkboxes.get(slug);
+        if (cb && cb.checked) checked++;
+      }
+      spBox.indeterminate = checked > 0 && checked < spSlugs.length;
+      spBox.checked = checked === spSlugs.length && spSlugs.length > 0;
+    };
+
     const commit = (): void => {
       const selected: string[] = [];
       checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
@@ -514,6 +559,7 @@ function buildPopoverContent(
         state.setRecommendationsColumnFilter(column, { kind: 'set', values: selected });
       }
       updateAllTriState();
+      updateSPTriState();
       rerenderRecommendations();
     };
 
@@ -526,6 +572,21 @@ function buildPopoverContent(
       // After (All) flips, update underlying filter once.
       commit();
     });
+    if (spBox) {
+      spBox.addEventListener('change', () => {
+        // Clicking SP tri-state ticks ALL SP boxes when transitioning
+        // from unchecked/indeterminate → checked, and unticks all SP
+        // boxes when transitioning checked → unchecked. The browser
+        // resolves indeterminate to checked on click, so spBox.checked
+        // after the click is the desired target state for SP boxes.
+        const target = spBox!.checked;
+        for (const slug of spSlugs) {
+          const cb = checkboxes.get(slug);
+          if (cb) cb.checked = target;
+        }
+        commit();
+      });
+    }
   }
 
   // Footer with Clear button.
@@ -579,6 +640,21 @@ function resyncOpenPopover(): void {
     openPopover.checkboxes.forEach((cb) => { if (cb.checked) checked++; });
     allBox.indeterminate = checked > 0 && checked < total;
     allBox.checked = checked === total && total > 0;
+  }
+  // Issue #137: also resync the "All Savings Plans" tri-state when the
+  // service column has the SP-group affordance rendered.
+  const spBox = openPopover.el.querySelector<HTMLInputElement>('input[data-role="sp-group"]');
+  if (spBox) {
+    let spTotal = 0;
+    let spChecked = 0;
+    openPopover.checkboxes.forEach((cb, value) => {
+      if (isSavingsPlanService(value)) {
+        spTotal++;
+        if (cb.checked) spChecked++;
+      }
+    });
+    spBox.indeterminate = spChecked > 0 && spChecked < spTotal;
+    spBox.checked = spChecked === spTotal && spTotal > 0;
   }
 }
 

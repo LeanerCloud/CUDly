@@ -64,3 +64,15 @@ export function paymentOptionsFor(provider: Provider, service: string, term: Ter
   const candidates: Payment[] = ['all-upfront', 'partial-upfront', 'no-upfront', 'monthly'];
   return candidates.filter((p) => isPaymentSupported(provider, service, term, p));
 }
+
+// Mirror of common.IsSavingsPlan (pkg/common/types.go). PR #123 split a
+// single 'savings-plans' service into four plan-type slugs
+// (savings-plans-{compute,ec2instance,sagemaker,database}). Code that
+// needs to treat all four as one logical group — service-filter
+// "All Savings Plans" affordance, bulk-buy bucketing — uses this
+// predicate. Kept as a `startsWith` rather than a hardcoded set so a
+// future plan type added on the backend (`common.IsSavingsPlan` is
+// also `HasPrefix`) is picked up without a frontend edit.
+export function isSavingsPlanService(service: string): boolean {
+  return service.startsWith('savings-plans');
+}
