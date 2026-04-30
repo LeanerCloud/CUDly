@@ -304,19 +304,38 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 		return nil, NewClientError(404, "execution not found")
 	}
 
-	// Two-mode dispatch (issue #46):
-	//   * token != ""  → legacy email-link flow. Token possession proves
-	//     intent; the handler still requires the session email (when one
-	//     exists) to be on the authorised-approver list, then delegates
-	//     to the purchase service which validates the token itself.
-	//   * token == ""  → session-authed dashboard Cancel button. The
-	//     session must carry a permission allowing the cancel:
-	//       - cancel-any:purchases (admin) → any pending execution; or
-	//       - cancel-own:purchases (default user) AND the execution's
-	//         created_by_user_id matches the session UserID.
-	//     Legacy rows with NULL created_by_user_id are reachable only
-	//     via cancel-any (admin) or via the email token already in the
-	//     inbox — they do not become orphaned by this change.
+	// Three-mode dispatch:
+	//   1. Session present AND RBAC-authorized (admin / cancel-any /
+	//      cancel-own match) → session-authed cancel, regardless of
+	//      whether a token is in the URL. Restores parity with the
+	//      History page Cancel button: a user who can cancel from the
+	//      dashboard should also be able to cancel from the email-link
+	//      flow, since the same email-link flow already requires a
+	//      logged-in session before reaching this endpoint (see
+	//      frontend purchases-deeplink.ts). Without this branch, an
+	//      admin clicking Cancel from a notification email about an
+	//      ambient-credentials execution (CloudAccountID == nil → no
+	//      per-account contact_email available) is locked out of an
+	//      action they can perform from the dashboard. The token in
+	//      the URL is informational at that point — the session has
+	//      already authenticated the actor.
+	//   2. token != "" → legacy email-link flow without a qualifying
+	//      session. authorizeApprovalAction enforces the per-account
+	//      contact_email gate from PR #101; the purchase service
+	//      validates the token itself before mutating state. This
+	//      preserves the security model for forwarded email / shared
+	//      inbox / stolen link cases — a non-privileged session falls
+	//      through to this branch.
+	//   3. token == "" → session-authed dashboard Cancel button (issue
+	//      #46). Same path as branch (1) but reached without a URL
+	//      token. cancelPurchaseViaSession runs the cancel-any /
+	//      cancel-own RBAC matrix and rejects sessions without it.
+	if session := h.tryGetSession(ctx, req); session != nil {
+		if err := h.authorizeSessionCancel(ctx, session, execution); err == nil {
+			return h.cancelPurchaseViaSession(ctx, req, execution)
+		}
+	}
+
 	if token != "" {
 		actor, err := h.authorizeApprovalAction(ctx, req, execution)
 		if err != nil {
@@ -759,18 +778,30 @@ func (h *Handler) authorizeSessionRetry(ctx context.Context, session *Session, e
 // → session-authed call with ?token=…) can record per-user attribution
 // without changing the token-only fallback path used by message workers.
 func (h *Handler) tryResolveActorEmail(ctx context.Context, req *events.LambdaFunctionURLRequest) string {
+	if s := h.tryGetSession(ctx, req); s != nil {
+		return s.Email
+	}
+	return ""
+}
+
+// tryGetSession returns the validated session for the request, or nil when
+// the request carries no Bearer token, the auth service isn't configured,
+// or session validation fails. Mirrors tryResolveActorEmail's silent
+// best-effort semantics so AuthPublic callers can opt into session-aware
+// behaviour without forcing a 401 on tokenless flows.
+func (h *Handler) tryGetSession(ctx context.Context, req *events.LambdaFunctionURLRequest) *Session {
 	if req == nil || h.auth == nil {
-		return ""
+		return nil
 	}
 	bearer := h.extractBearerToken(req)
 	if bearer == "" {
-		return ""
+		return nil
 	}
 	session, err := h.auth.ValidateSession(ctx, bearer)
 	if err != nil || session == nil {
-		return ""
+		return nil
 	}
-	return session.Email
+	return session
 }
 
 // buildPurchaseDetailsResponse builds the response map for a purchase execution.

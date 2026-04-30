@@ -121,6 +121,12 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// Session has no admin role / cancel permissions → cancelPurchase's
+	// session-authed pre-check falls through to authorizeApprovalAction →
+	// purchase manager invocation, which is what this test's
+	// "cancel failed" assertion exercises.
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("CancelExecution", ctx, execID, "tok", approver).

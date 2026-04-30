@@ -80,6 +80,12 @@ func TestHandler_cancelPurchase(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// Session has no admin role and no cancel permissions, so cancelPurchase's
+	// session-authed pre-check (added to fix the deep-link contact_email gate)
+	// falls through to authorizeApprovalAction. The contact_email + globalNotify
+	// fixture above is what proves the legacy email-link path still works.
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("CancelExecution", ctx, execID, "valid-token", approver).Return(nil)
@@ -1416,6 +1422,130 @@ func TestHandler_cancelPurchase_Session_RejectsMissingSession(t *testing.T) {
 	_, err := handler.cancelPurchase(context.Background(), &events.LambdaFunctionURLRequest{}, cancelExecID, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no authorization token provided")
+}
+
+// TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate is the
+// regression for the cancel-from-email contact_email-gate UX bug:
+//
+//	"Failed to cancel purchase: no per-account contact email configured for
+//	 this execution; set the cloud account's contact_email before approving"
+//
+// The deep-link cancel flow (frontend purchases-deeplink.ts) always POSTs
+// /api/purchases/cancel/:id with both an X-Authorization Bearer session AND
+// the email-link's URL token. Before this fix, cancelPurchase always took
+// the token branch → authorizeApprovalAction → 403 when the execution's
+// recs had no per-account contact_email (e.g. AWS ambient-credentials
+// rows where CloudAccountID is nil). The same admin could already cancel
+// the same execution from the History page Cancel button (session-authed,
+// no contact_email gate); the email-link path was the only place they
+// were locked out.
+//
+// Fix: when the caller has a valid session AND authorizeSessionCancel
+// passes (admin / cancel-any / cancel-own match), use the session-authed
+// cancel path, regardless of whether a token is present. Token-only
+// callers (no session, e.g. forwarded email or shared inbox) still hit
+// the contact_email gate from PR #101.
+func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testing.T) {
+	// Ambient-credentials execution: CloudAccountID is nil, so
+	// gatherAccountContactEmails returns []. Pre-fix this would 403 even
+	// for admin sessions. Post-fix the session-authed pre-check fires and
+	// the cancel succeeds.
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "notified",
+		CreatedByUserID: nil, // no creator binding either; admin can still cancel
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r-ambient", CloudAccountID: nil},
+		},
+	}
+	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
+
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
+	var saved *config.PurchaseExecution
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) {
+			saved = args.Get(1).(*config.PurchaseExecution)
+		}).
+		Return(nil)
+
+	// Token IS present in the URL — the deep-link flow always sends one.
+	// The fix's whole point is that the admin session takes the
+	// session-authed branch instead of routing through the token path.
+	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
+	require.NoError(t, err, "admin clicking Cancel from notification email must succeed even when no contact_email is configured")
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+
+	require.NotNil(t, saved, "session-authed branch must commit the status flip")
+	assert.Equal(t, "cancelled", saved.Status)
+	require.NotNil(t, saved.CancelledBy, "session-authed branch must stamp CancelledBy")
+	assert.Equal(t, session.Email, *saved.CancelledBy)
+
+	// Critical security assertion: the token branch's contact_email gate
+	// (authorizeApprovalAction → GetGlobalConfig → resolveApprovalRecipients)
+	// was NOT consulted. If a regression re-routed admins through the
+	// token path, GetGlobalConfig would fire because the gate fetches
+	// the global notification email; asserting it didn't is the cleanest
+	// way to pin the new branch behaviour.
+	mockConfig.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	mockAuth.AssertExpectations(t)
+}
+
+// TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate is
+// the cancel-own variant of the regression above: a non-admin user with
+// cancel-own on a purchase they themselves created should be able to
+// cancel it from the email link, bypassing the contact_email gate that
+// would otherwise lock them out for ambient-credentials executions.
+func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *testing.T) {
+	creator := cancelCallerID // session user is the creator
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "notified",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r-ambient", CloudAccountID: nil},
+		},
+	}
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false /*hasAny*/, true /*hasOwn*/)
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+
+	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
+	mockConfig.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	mockAuth.AssertExpectations(t)
+}
+
+// TestHandler_cancelPurchase_DeepLink_NonPrivilegedSessionStillHitsContactGate
+// pins the security-model invariant from PR #101: a logged-in user
+// without admin / cancel-any / cancel-own permission MUST still go
+// through authorizeApprovalAction and hit the contact_email gate when
+// clicking a forwarded cancel link. The session-authed pre-check is
+// strictly additive — it widens for privileged users only.
+func TestHandler_cancelPurchase_DeepLink_NonPrivilegedSessionStillHitsContactGate(t *testing.T) {
+	creator := cancelOtherID // someone else created it; no cancel-own match
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		ApprovalToken:   "deep-link-token",
+		Status:          "notified",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r-ambient", CloudAccountID: nil},
+		},
+	}
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false /*hasAny*/, false /*hasOwn*/)
+	// Token branch fetches the global config to populate the Cc list.
+	mockConfig.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no per-account contact email configured for this execution",
+		"non-privileged session must fall through to the contact_email gate from PR #101")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
+	mockAuth.AssertExpectations(t)
 }
 
 // ─── Session-authed Retry (issue #47) ──────────────────────────────────────
