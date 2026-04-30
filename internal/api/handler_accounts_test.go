@@ -661,13 +661,21 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	assert.Equal(t, 2, dr.Created)
 	assert.Equal(t, 1, dr.Skipped)
 
-	// Inspect the persisted rows: each must have enabled=false +
-	// aws_auth_mode=bastion + aws_bastion_id pointing at the org root.
+	// Inspect the persisted rows. Defaults locked in (CR pass 1):
+	//   * enabled=false   — operator review gate
+	//   * AWSAuthMode=""  — NOT "bastion": setting bastion mode while the
+	//                       row's AWSRoleARN is empty would cause
+	//                       awsAmbientCredResult to mis-classify the
+	//                       account as "ambient host" creds. Operator must
+	//                       set BOTH mode and role ARN before enabling.
+	//   * AWSBastionID=<root.ID> — pre-filled so the operator only needs
+	//                              to add the role ARN, not chase the
+	//                              bastion-id linkage.
 	require.Len(t, created, 2)
 	for _, a := range created {
 		assert.False(t, a.Enabled, "discovered accounts must boot disabled (operator gate)")
-		assert.Equal(t, "bastion", a.AWSAuthMode, "discovered accounts must default to bastion mode")
-		assert.Equal(t, root.ID, a.AWSBastionID, "bastion_id must point at the org root that discovered them")
+		assert.Empty(t, a.AWSAuthMode, "discovered accounts must boot with empty AWSAuthMode (operator must set it explicitly with a role ARN)")
+		assert.Equal(t, root.ID, a.AWSBastionID, "bastion_id must be pre-filled with the org root that discovered them")
 		assert.Equal(t, "aws", a.Provider)
 	}
 }

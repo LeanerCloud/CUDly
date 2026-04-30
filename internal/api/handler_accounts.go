@@ -1117,7 +1117,11 @@ type DiscoverOrgResult struct {
 // #208 for the spec; see specs/multi-account-execution/acceptance.md F-1..F-3
 // for the acceptance criteria.
 func (h *Handler) discoverOrgAccounts(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "create", "accounts"); err != nil {
+	// Admin-only: org discovery can create N cloud_accounts rows in one call
+	// and may bring unfamiliar accounts into the roster. Even though those
+	// rows boot disabled, the elevated privilege makes admin-scope the right
+	// gate (CR pass 1 on PR #212).
+	if _, err := h.requireAdmin(ctx, req); err != nil {
 		return nil, err
 	}
 
@@ -1171,6 +1175,17 @@ func (h *Handler) parseDiscoverOrgRoot(ctx context.Context, rawBody string) (*co
 
 // buildOrgRootAWSConfig resolves the org-root account's stored credentials and
 // returns an aws.Config configured to call AWS APIs as that account.
+//
+// Returns the resolver's error wrapped as a regular Go error (which the
+// handler-default mapping surfaces as 500) — NOT a 400 ClientError — because
+// ResolveAWSCredentialProvider mixes definite client-side validation
+// failures (e.g., missing aws_role_arn for role_arn mode) with transient
+// server-side failures (credential store unavailable, network errors during
+// access-key load). Without a sentinel/typed error in the credentials
+// package today, blanket-400 was misleading; 5xx is the safer default and
+// retries are possible. Refining this to a proper 400/500 split is tracked
+// in the credentials-package error-type cleanup (out of scope for this PR;
+// see CR pass 1 on #212).
 func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudAccount) (aws.Config, error) {
 	baseCfg, err := h.getBaseAWSConfig(ctx)
 	if err != nil {
@@ -1179,7 +1194,7 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 	stsClient := sts.NewFromConfig(baseCfg)
 	credProvider, err := credentials.ResolveAWSCredentialProvider(ctx, root, h.credStore, stsClient)
 	if err != nil {
-		return aws.Config{}, NewClientError(400, fmt.Sprintf("resolve credentials for account %s: %v", root.ID, err))
+		return aws.Config{}, fmt.Errorf("accounts: resolve credentials for org root %s: %w", root.ID, err)
 	}
 	cfg := baseCfg.Copy()
 	cfg.Credentials = credProvider
@@ -1224,11 +1239,20 @@ func (h *Handler) persistDiscoveredMembers(ctx context.Context, root *config.Clo
 			continue
 		}
 		// Defaults the spec mandates: persist disabled (operator review gate)
-		// + bastion mode chained off this org root. The operator fills in
-		// AWSRoleARN before flipping enabled=true; until then the scheduler
-		// silently skips disabled rows.
+		// + bastion-id pre-filled with this org root's ID. AWSAuthMode is
+		// LEFT EMPTY on purpose — pre-setting it to "bastion" while
+		// AWSRoleARN is empty would cause awsAmbientCredResult to falsely
+		// classify the row as having valid ambient creds (the role_arn /
+		// bastion + empty-AWSRoleARN branch returns OK with the "ambient
+		// host" message, which is wrong for a discovered member account).
+		// The operator's review step must set both AWSAuthMode="bastion"
+		// AND a non-empty AWSRoleARN before flipping enabled=true; the
+		// scheduler silently skips disabled rows in the meantime, and an
+		// empty AWSAuthMode also fails ResolveAWSCredentialProvider's
+		// switch with a clear "unsupported aws_auth_mode" error if the
+		// row is enabled prematurely. (CR pass 1 on PR #212.)
 		member.Enabled = false
-		member.AWSAuthMode = "bastion"
+		member.AWSAuthMode = ""
 		member.AWSBastionID = root.ID
 		if err := h.config.CreateCloudAccount(ctx, &member); err != nil {
 			return DiscoverOrgResult{}, fmt.Errorf("accounts: persist discovered %s: %w", member.ExternalID, err)
