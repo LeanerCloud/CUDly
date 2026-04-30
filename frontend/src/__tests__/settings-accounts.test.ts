@@ -5,6 +5,7 @@
 import {
   loadAccountsForProvider,
   loadOverridesPanel,
+  openOverrideModal,
   setupSettingsHandlers
 } from '../settings';
 
@@ -1035,5 +1036,141 @@ describe('Account overrides modal', () => {
     // Pre-#114 wording must not appear.
     expect(opts.body).not.toContain('replaced');
     expect(opts.body).not.toContain('Reset');
+  });
+
+  describe('override commitmentOptions parity (issue #107)', () => {
+    test('inline payment selector hides invalid options for RDS term=3 row', async () => {
+      // RDS rejects 3yr no-upfront per commitmentOptions invalidCombinations.
+      // The inline payment selector on an existing RDS override with term=3
+      // must not list no-upfront — the global Settings card already hides
+      // it; this PR brings the override surfaces in line.
+      (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+        {
+          account_id: 'acc-1',
+          provider: 'aws',
+          service: 'rds',
+          term: 3,
+          payment: 'all-upfront',
+          coverage: 80,
+        },
+      ]);
+
+      const panel = document.createElement('div');
+      document.body.appendChild(panel);
+      await loadOverridesPanel('acc-1', panel, 'aws');
+
+      const select = panel.querySelector<HTMLSelectElement>('select.override-payment-select');
+      expect(select).not.toBeNull();
+      const options = Array.from(select!.options).map(o => o.value);
+      expect(options).toContain('all-upfront');
+      expect(options).toContain('partial-upfront');
+      expect(options).not.toContain('no-upfront');
+    });
+
+    test('inline payment selector shows full list when term is unset', async () => {
+      // Without a term we can't pre-validate; fall back to the full list
+      // and let the user pick. The submit-side guard would catch any
+      // invalid combo.
+      (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+        {
+          account_id: 'acc-1',
+          provider: 'aws',
+          service: 'rds',
+          term: 0,
+          payment: '',
+          coverage: 80,
+        },
+      ]);
+
+      const panel = document.createElement('div');
+      document.body.appendChild(panel);
+      await loadOverridesPanel('acc-1', panel, 'aws');
+
+      const select = panel.querySelector<HTMLSelectElement>('select.override-payment-select');
+      const options = Array.from(select!.options).map(o => o.value);
+      expect(options).toContain('all-upfront');
+      expect(options).toContain('partial-upfront');
+      expect(options).toContain('no-upfront');
+    });
+
+    test('override-create modal hides invalid payment options on service+term change', async () => {
+      // Build the override modal DOM the production app provides via createElement
+      // (avoid innerHTML; same pattern as the rest of this test file).
+      document.body.replaceChildren();
+      const modal = document.createElement('div');
+      modal.id = 'override-modal';
+      modal.className = 'modal hidden';
+
+      const form = document.createElement('form');
+      form.id = 'override-form';
+
+      const acctIdInput = document.createElement('input');
+      acctIdInput.type = 'hidden';
+      acctIdInput.id = 'override-account-id';
+      form.appendChild(acctIdInput);
+
+      const provInput = document.createElement('input');
+      provInput.type = 'hidden';
+      provInput.id = 'override-provider';
+      form.appendChild(provInput);
+
+      const svcSel = document.createElement('select');
+      svcSel.id = 'override-service';
+      form.appendChild(svcSel);
+
+      const termSel = document.createElement('select');
+      termSel.id = 'override-term';
+      for (const v of ['', '1', '3']) {
+        const o = document.createElement('option');
+        o.value = v;
+        termSel.appendChild(o);
+      }
+      form.appendChild(termSel);
+
+      const paySel = document.createElement('select');
+      paySel.id = 'override-payment';
+      form.appendChild(paySel);
+
+      const covInput = document.createElement('input');
+      covInput.type = 'number';
+      covInput.id = 'override-coverage';
+      form.appendChild(covInput);
+
+      const errEl = document.createElement('p');
+      errEl.id = 'override-form-error';
+      form.appendChild(errEl);
+
+      const submitBtn = document.createElement('button');
+      submitBtn.type = 'submit';
+      form.appendChild(submitBtn);
+
+      modal.appendChild(form);
+      document.body.appendChild(modal);
+
+      const panel = document.createElement('div');
+      openOverrideModal('acc-1', 'aws', [], panel);
+
+      const svc = document.getElementById('override-service') as HTMLSelectElement;
+      const term = document.getElementById('override-term') as HTMLSelectElement;
+      const pay = document.getElementById('override-payment') as HTMLSelectElement;
+
+      // Pick rds + 3yr — payment dropdown must drop no-upfront.
+      svc.value = 'rds';
+      svc.dispatchEvent(new Event('change'));
+      term.value = '3';
+      term.dispatchEvent(new Event('change'));
+
+      const options = Array.from(pay.options).map(o => o.value);
+      expect(options).toContain(''); // Inherit
+      expect(options).toContain('all-upfront');
+      expect(options).toContain('partial-upfront');
+      expect(options).not.toContain('no-upfront');
+
+      // Switch term to 1 — no-upfront becomes valid again.
+      term.value = '1';
+      term.dispatchEvent(new Event('change'));
+      const opts2 = Array.from(pay.options).map(o => o.value);
+      expect(opts2).toContain('no-upfront');
+    });
   });
 });

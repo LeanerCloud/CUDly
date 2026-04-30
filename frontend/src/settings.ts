@@ -9,7 +9,7 @@ import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
-import { isValidCombination } from './commitmentOptions';
+import { isValidCombination, getValidPaymentOptions, getPaymentLabel } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
 
@@ -539,7 +539,18 @@ function buildPaymentOverrideSelect(
   inheritOpt.textContent = 'Inherit (default)';
   select.appendChild(inheritOpt);
 
-  for (const { value, label } of AWS_PAYMENT_OPTIONS) {
+  // Filter the payment dropdown to only the (term, payment) combinations
+  // AWS actually supports for THIS service. e.g. RDS rejects 3yr no-upfront,
+  // so an RDS override with term=3 must not list no-upfront. Per #107.
+  // Falls back to the full AWS list when term is missing (override row was
+  // saved without a term) — the global default's term will resolve at
+  // recommendation time, and we can't pre-validate without it.
+  const overrideTerm = override.term ?? 0;
+  const validPayments = overrideTerm > 0
+    ? getValidPaymentOptions(override.provider, override.service, overrideTerm)
+    : AWS_PAYMENT_OPTIONS.map(p => ({ value: p.value, label: p.label }));
+
+  for (const { value, label } of validPayments) {
     const opt = document.createElement('option');
     opt.value = value;
     opt.textContent = label;
@@ -547,6 +558,20 @@ function buildPaymentOverrideSelect(
   }
 
   const initial = override.payment ?? '';
+
+  // If the row's CURRENT payment isn't in the valid set (e.g., the row was
+  // saved via direct API curl before this filter shipped, or AWS tightened
+  // the rules), still render the current value so the row isn't silently
+  // mutated — but mark it as a problem so the user notices.
+  const currentIsValid = initial === '' || validPayments.some(p => p.value === initial);
+  if (!currentIsValid) {
+    const stale = document.createElement('option');
+    stale.value = initial;
+    stale.textContent = `${getPaymentLabel(initial)} (invalid for term ${overrideTerm}y — Delete the override and recreate)`;
+    stale.dataset['stale'] = 'true';
+    select.appendChild(stale);
+  }
+
   select.value = initial;
   select.dataset['previous'] = initial;
 
@@ -836,6 +861,7 @@ async function testAccount(accountId: string, accountLabel: string, btn: HTMLBut
 // handler knows which account/provider/panel it belongs to without
 // inspecting the DOM. Cleared on close so it can't leak across opens.
 let overrideModalContext: { accountId: string; provider: string; panel: HTMLElement } | null = null;
+let overridePaymentOptionsController: AbortController | null = null;
 
 /**
  * Open the create-override modal for a specific account.
@@ -848,7 +874,7 @@ let overrideModalContext: { accountId: string; provider: string; panel: HTMLElem
  *
  * Issue #104.
  */
-function openOverrideModal(
+export function openOverrideModal(
   accountId: string,
   provider: string,
   existingOverrides: api.AccountServiceOverride[],
@@ -902,13 +928,71 @@ function openOverrideModal(
     }
   }
 
+  // Wire service/term changes to repopulate payment options. AWS rejects
+  // some (service, term, payment) tuples (e.g., RDS 3yr no-upfront) — the
+  // global Settings cards already hide invalid combinations; the override
+  // modal must do the same so we can't silently save an invalid combo.
+  // Per #107.
+  overridePaymentOptionsController?.abort();
+  overridePaymentOptionsController = new AbortController();
+  syncOverridePaymentOptions(provider);
+  const onChange = () => syncOverridePaymentOptions(provider);
+  select?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
+  const termSel = document.getElementById('override-term') as HTMLSelectElement | null;
+  termSel?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
+
   modal.classList.remove('hidden');
+}
+
+// syncOverridePaymentOptions filters the override-payment <select> down to
+// the (service, term) combinations AWS supports. Called whenever the user
+// changes service or term in the modal. Per #107.
+function syncOverridePaymentOptions(provider: string): void {
+  const serviceSel = document.getElementById('override-service') as HTMLSelectElement | null;
+  const termSel = document.getElementById('override-term') as HTMLSelectElement | null;
+  const paymentSel = document.getElementById('override-payment') as HTMLSelectElement | null;
+  if (!serviceSel || !termSel || !paymentSel) return;
+
+  const service = serviceSel.value;
+  const term = parseInt(termSel.value, 10);
+
+  const previous = paymentSel.value;
+  paymentSel.replaceChildren();
+
+  // Always include the "Inherit (default)" option — corresponds to leaving
+  // the field unset on the sparse PUT.
+  const inheritOpt = document.createElement('option');
+  inheritOpt.value = '';
+  inheritOpt.textContent = 'Inherit (default)';
+  paymentSel.appendChild(inheritOpt);
+
+  // When service or term is unset, can't run the validity check yet —
+  // show the full AWS payment list so the user can choose; the
+  // submit-side guard will catch any invalid combo on Save.
+  const candidates = (service && Number.isFinite(term) && term > 0)
+    ? getValidPaymentOptions(provider, service, term).map(p => ({ value: p.value, label: p.label }))
+    : AWS_PAYMENT_OPTIONS.map(p => ({ value: p.value, label: p.label }));
+
+  for (const { value, label } of candidates) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    paymentSel.appendChild(opt);
+  }
+
+  // Preserve the previous selection if it's still valid; otherwise snap
+  // back to "Inherit". Snapping (rather than forcing a new value) avoids
+  // a confusing silent change.
+  const previousStillValid = previous === '' || candidates.some(c => c.value === previous);
+  paymentSel.value = previousStillValid ? previous : '';
 }
 
 function closeOverrideModal(): void {
   const modal = document.getElementById('override-modal');
   modal?.classList.add('hidden');
   overrideModalContext = null;
+  overridePaymentOptionsController?.abort();
+  overridePaymentOptionsController = null;
 }
 
 /**
@@ -948,6 +1032,21 @@ async function submitOverrideForm(e: Event): Promise<void> {
     const errEl = document.getElementById('override-form-error');
     if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Coverage.';
     return;
+  }
+
+  // Submit-side validation per #107: when both term and payment are
+  // explicitly set, refuse to save invalid (service, term, payment)
+  // combinations even if a stale select option somehow leaked through
+  // (e.g., browser back-button restoring a stale dropdown state).
+  // Mirror of the global Settings → Purchasing card's checkCommitmentOptionCombo.
+  if (req.term != null && req.payment) {
+    if (!isValidCombination(ctx.provider, service, req.term, req.payment)) {
+      const errEl = document.getElementById('override-form-error');
+      if (errEl) {
+        errEl.textContent = `${ctx.provider}/${service} does not support ${req.term}-year ${req.payment}. Pick a different term or payment.`;
+      }
+      return;
+    }
   }
 
   const submitBtn = document.querySelector<HTMLButtonElement>('#override-form button[type="submit"]');
