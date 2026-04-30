@@ -683,6 +683,69 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	}
 }
 
+func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	root := &config.CloudAccount{
+		ID:           "11111111-1111-1111-1111-111111111111",
+		Name:         "Org Root",
+		Provider:     "aws",
+		ExternalID:   "999999999999",
+		AWSAuthMode:  "access_keys",
+		AWSIsOrgRoot: true,
+	}
+
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return root, nil
+	}
+	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+
+	var created []config.CloudAccount
+	store.CreateCloudAccountFn = func(_ context.Context, a *config.CloudAccount) error {
+		created = append(created, *a)
+		if a.ExternalID == "300000000003" {
+			return errors.New("duplicate key value violates unique constraint")
+		}
+		return nil
+	}
+
+	handler := &Handler{
+		auth:   mockAuth,
+		config: store,
+		credStore: &fakeCredStore{
+			data: map[string][]byte{
+				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
+			},
+		},
+		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+			return &accounts.OrgDiscoveryResult{
+				Accounts: []config.CloudAccount{
+					{Provider: "aws", ExternalID: "300000000003", Name: "Dup On Insert"},
+					{Provider: "aws", ExternalID: "300000000003", Name: "Dup In Batch"},
+					{Provider: "aws", ExternalID: "400000000004", Name: "Created"},
+				},
+			}, nil
+		},
+	}
+
+	result, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"`+root.ID+`"}`))
+	require.NoError(t, err)
+
+	dr, ok := result.(DiscoverOrgResult)
+	require.True(t, ok, "result type = %T", result)
+	assert.Equal(t, 3, dr.Discovered)
+	assert.Equal(t, 1, dr.Created)
+	assert.Equal(t, 2, dr.Skipped)
+	require.Len(t, created, 2)
+	assert.Equal(t, "300000000003", created[0].ExternalID)
+	assert.Equal(t, "400000000004", created[1].ExternalID)
+}
+
 // fakeCredStore is a minimal CredentialStore for the discover-org happy-path
 // test. It only exists to satisfy ResolveAWSCredentialProvider's access_keys
 // mode without dragging in the real Secrets Manager / Postgres dependency.

@@ -1260,8 +1260,14 @@ func (h *Handler) persistDiscoveredMembers(ctx context.Context, root *config.Clo
 		member.AWSAuthMode = ""
 		member.AWSBastionID = root.ID
 		if err := h.config.CreateCloudAccount(ctx, &member); err != nil {
+			if isDuplicateKeyError(err) {
+				knownExternal[member.ExternalID] = struct{}{}
+				result.Skipped++
+				continue
+			}
 			return DiscoverOrgResult{}, fmt.Errorf("accounts: persist discovered %s: %w", member.ExternalID, err)
 		}
+		knownExternal[member.ExternalID] = struct{}{}
 		result.Created++
 	}
 	return result, nil
