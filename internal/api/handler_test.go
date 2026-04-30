@@ -764,6 +764,12 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+	// Session has no admin role / cancel permissions → cancelPurchase's
+	// session-authed pre-check falls through to authorizeApprovalAction →
+	// MockPurchaseManager.CancelExecution, exercising the legacy
+	// email-link path that this end-to-end test was always covering.
+	mockAuth.On("HasPermissionAPI", mock.Anything, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("CancelExecution", mock.Anything, execID, "token456", approver).Return(nil)
