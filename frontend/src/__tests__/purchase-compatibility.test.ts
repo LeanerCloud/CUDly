@@ -2,7 +2,13 @@
  * Tests for purchase-compatibility.isPaymentSupported — the UI-side
  * guardrail that hides payment options producing zero recommendations.
  */
-import { isPaymentSupported, paymentOptionsFor } from '../lib/purchase-compatibility';
+import {
+  isPaymentSupported,
+  paymentOptionsFor,
+  isSavingsPlanService,
+  savingsPlansBucketLabel,
+  SAVINGS_PLANS_BUCKET_KEY,
+} from '../lib/purchase-compatibility';
 
 describe('isPaymentSupported', () => {
   test('AWS EC2 accepts all payment options for both terms', () => {
@@ -56,5 +62,84 @@ describe('paymentOptionsFor', () => {
 
   test('GCP omits no-upfront + partial-upfront', () => {
     expect(paymentOptionsFor('gcp', 'computeengine', 3)).toEqual(['all-upfront', 'monthly']);
+  });
+});
+
+// Issue #132: bulk-buy bucketing collapses all SP plan-type slugs into
+// one bucket. These tests pin the small predicate + label utility.
+describe('isSavingsPlanService (issue #132)', () => {
+  test('matches every savings-plans-* slug', () => {
+    expect(isSavingsPlanService('savings-plans-compute')).toBe(true);
+    expect(isSavingsPlanService('savings-plans-ec2instance')).toBe(true);
+    expect(isSavingsPlanService('savings-plans-sagemaker')).toBe(true);
+    expect(isSavingsPlanService('savings-plans-database')).toBe(true);
+  });
+
+  test('matches the canonical bucket key itself', () => {
+    expect(isSavingsPlanService(SAVINGS_PLANS_BUCKET_KEY)).toBe(true);
+  });
+
+  test('rejects non-SP slugs', () => {
+    expect(isSavingsPlanService('ec2')).toBe(false);
+    expect(isSavingsPlanService('rds')).toBe(false);
+    expect(isSavingsPlanService('elasticache')).toBe(false);
+    expect(isSavingsPlanService('')).toBe(false);
+  });
+});
+
+describe('savingsPlansBucketLabel (issue #132)', () => {
+  test('renders single plan type without parens being empty', () => {
+    expect(savingsPlansBucketLabel(['savings-plans-compute'])).toBe(
+      'Savings Plans (Compute)',
+    );
+  });
+
+  test('renders mixed plan types in input order', () => {
+    expect(
+      savingsPlansBucketLabel(['savings-plans-compute', 'savings-plans-sagemaker']),
+    ).toBe('Savings Plans (Compute + SageMaker)');
+  });
+
+  test('deduplicates repeated plan types', () => {
+    expect(
+      savingsPlansBucketLabel([
+        'savings-plans-compute',
+        'savings-plans-compute',
+        'savings-plans-ec2instance',
+      ]),
+    ).toBe('Savings Plans (Compute + EC2 Instance)');
+  });
+
+  test('renders all four plan types', () => {
+    expect(
+      savingsPlansBucketLabel([
+        'savings-plans-compute',
+        'savings-plans-ec2instance',
+        'savings-plans-sagemaker',
+        'savings-plans-database',
+      ]),
+    ).toBe('Savings Plans (Compute + EC2 Instance + SageMaker + Database)');
+  });
+
+  test('skips non-SP slugs and falls back when none resolve', () => {
+    expect(savingsPlansBucketLabel(['ec2', 'rds'])).toBe('Savings Plans');
+    expect(savingsPlansBucketLabel([])).toBe('Savings Plans');
+  });
+
+  test('mixed SP and non-SP keeps only SP entries', () => {
+    expect(
+      savingsPlansBucketLabel(['ec2', 'savings-plans-compute', 'rds']),
+    ).toBe('Savings Plans (Compute)');
+  });
+
+  test('skips the canonical SAVINGS_PLANS_BUCKET_KEY itself', () => {
+    // Defensive: if a caller accidentally passes the bucket key (a
+    // marker, not a plan-type), don't render it as "(savings-plans)".
+    expect(
+      savingsPlansBucketLabel([SAVINGS_PLANS_BUCKET_KEY]),
+    ).toBe('Savings Plans');
+    expect(
+      savingsPlansBucketLabel([SAVINGS_PLANS_BUCKET_KEY, 'savings-plans-compute']),
+    ).toBe('Savings Plans (Compute)');
   });
 });
