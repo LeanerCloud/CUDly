@@ -674,6 +674,9 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	require.Len(t, created, 2)
 	for _, a := range created {
 		assert.False(t, a.Enabled, "discovered accounts must boot disabled (operator gate)")
+		assert.NotEmpty(t, a.ID, "discovered accounts must be assigned an ID before persistence")
+		assert.False(t, a.CreatedAt.IsZero(), "discovered accounts must carry CreatedAt metadata")
+		assert.False(t, a.UpdatedAt.IsZero(), "discovered accounts must carry UpdatedAt metadata")
 		assert.Empty(t, a.AWSAuthMode, "discovered accounts must boot with empty AWSAuthMode (operator must set it explicitly with a role ARN)")
 		assert.Equal(t, root.ID, a.AWSBastionID, "bastion_id must be pre-filled with the org root that discovered them")
 		assert.Equal(t, "aws", a.Provider)

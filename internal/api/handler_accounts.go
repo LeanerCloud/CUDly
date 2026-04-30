@@ -1110,12 +1110,12 @@ type DiscoverOrgResult struct {
 // (1) validates the named cloud account is an AWS org root, (2) resolves its
 // stored credentials, (3) calls AWS Organizations ListAccounts via the
 // credentials, (4) deduplicates against existing aws cloud_accounts rows by
-// external_id, and (5) persists the new ones with enabled=false +
-// aws_auth_mode=bastion + aws_bastion_id pointing at the org root, so an
-// operator must review/approve each discovered account (and fill in the
-// target role ARN) before it'll be picked up by the scheduler. See issue
-// #208 for the spec; see specs/multi-account-execution/acceptance.md F-1..F-3
-// for the acceptance criteria.
+// external_id, and (5) persists the new ones with enabled=false, an empty
+// aws_auth_mode, and aws_bastion_id pointing at the org root, so an operator
+// must review/approve each discovered account and explicitly choose the
+// bastion auth mode plus role ARN before it'll be picked up by the scheduler.
+// See issue #208 for the spec; see specs/multi-account-execution/
+// acceptance.md F-1..F-3 for the acceptance criteria.
 func (h *Handler) discoverOrgAccounts(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	// Admin-only: org discovery can create N cloud_accounts rows in one call
 	// and may bring unfamiliar accounts into the roster. Even though those
@@ -1218,8 +1218,8 @@ func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*account
 
 // persistDiscoveredMembers dedupes the discovered list against existing aws
 // rows and persists each new one with the spec-mandated defaults
-// (enabled=false, aws_auth_mode=bastion, aws_bastion_id=root.ID). Returns
-// the {discovered, created, skipped} summary.
+// (enabled=false, aws_auth_mode="", aws_bastion_id=root.ID). Returns the
+// {discovered, created, skipped} summary.
 func (h *Handler) persistDiscoveredMembers(ctx context.Context, root *config.CloudAccount, members []config.CloudAccount) (DiscoverOrgResult, error) {
 	awsProvider := "aws"
 	existing, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{Provider: &awsProvider})
@@ -1232,6 +1232,7 @@ func (h *Handler) persistDiscoveredMembers(ctx context.Context, root *config.Clo
 	}
 
 	result := DiscoverOrgResult{Discovered: len(members)}
+	now := time.Now()
 	for i := range members {
 		member := members[i]
 		if _, found := knownExternal[member.ExternalID]; found {
@@ -1247,11 +1248,15 @@ func (h *Handler) persistDiscoveredMembers(ctx context.Context, root *config.Clo
 		// host" message, which is wrong for a discovered member account).
 		// The operator's review step must set both AWSAuthMode="bastion"
 		// AND a non-empty AWSRoleARN before flipping enabled=true; the
-		// scheduler silently skips disabled rows in the meantime, and an
-		// empty AWSAuthMode also fails ResolveAWSCredentialProvider's
-		// switch with a clear "unsupported aws_auth_mode" error if the
-		// row is enabled prematurely. (CR pass 1 on PR #212.)
+		// scheduler silently skips disabled rows in the meantime, and the
+		// empty AWSAuthMode we persist here also fails
+		// ResolveAWSCredentialProvider's switch with a clear
+		// "unsupported aws_auth_mode" error if the row is enabled
+		// prematurely. (CR pass 1 on PR #212.)
 		member.Enabled = false
+		member.ID = uuid.New().String()
+		member.CreatedAt = now
+		member.UpdatedAt = now
 		member.AWSAuthMode = ""
 		member.AWSBastionID = root.ID
 		if err := h.config.CreateCloudAccount(ctx, &member); err != nil {
