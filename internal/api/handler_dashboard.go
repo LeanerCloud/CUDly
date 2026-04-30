@@ -258,7 +258,7 @@ func upcomingFromPlan(plan config.PurchasePlan) UpcomingPurchase {
 		break
 	}
 	return UpcomingPurchase{
-		ExecutionID:      plan.ID,
+		PlanID:           plan.ID,
 		PlanName:         plan.Name,
 		ScheduledDate:    plan.NextExecutionDate.Format("2006-01-02"),
 		Provider:         provider,

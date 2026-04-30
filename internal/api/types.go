@@ -417,9 +417,16 @@ type UpcomingPurchaseResponse struct {
 	Purchases []UpcomingPurchase `json:"purchases"`
 }
 
-// UpcomingPurchase represents a scheduled purchase
+// UpcomingPurchase represents a scheduled purchase that has not yet
+// produced a purchase_executions row. The identifier is therefore the
+// PurchasePlan.ID, not an execution ID — the dashboard's Cancel / View
+// Details affordances must target plan-level endpoints
+// (DELETE /api/purchases/planned/{id}, etc.), NOT execution-level ones
+// (/api/purchases/{id}, /api/purchases/cancel/{id}). Wiring plan IDs to
+// execution endpoints surfaces as a 500 from the SELECT-by-execution-id
+// path returning no row, exactly what issues #204 and #205 reported.
 type UpcomingPurchase struct {
-	ExecutionID      string  `json:"execution_id"`
+	PlanID           string  `json:"plan_id"`
 	PlanName         string  `json:"plan_name"`
 	ScheduledDate    string  `json:"scheduled_date"`
 	Provider         string  `json:"provider"`
