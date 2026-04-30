@@ -36,6 +36,9 @@ jest.mock('../api', () => ({
   getUpcomingPurchases: jest.fn(),
   getPurchaseDetails: jest.fn(),
   cancelPurchase: jest.fn(),
+  // Plan-level cancel — the dashboard upcoming-list now targets plan
+  // endpoints (issues #204 + #205), not execution endpoints.
+  deletePlannedPurchase: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([]),
   getSavingsAnalytics: jest.fn().mockResolvedValue({ data_points: [] }),
 }));
@@ -168,7 +171,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            execution_id: 'exec-1',
+            plan_id: 'plan-1',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -235,7 +238,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            execution_id: 'exec-1',
+            plan_id: 'plan-1',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -279,7 +282,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            execution_id: 'exec-123',
+            plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -290,61 +293,29 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      (api.getPurchaseDetails as jest.Mock).mockResolvedValue({
-        execution_id: 'exec-123',
-        status: 'pending'
-      });
 
       await loadDashboard();
 
       const viewBtn = document.querySelector('[data-action="view-purchase"]') as HTMLButtonElement;
       viewBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      expect(api.getPurchaseDetails).toHaveBeenCalledWith('exec-123');
-      // Modal should be rendered in the DOM instead of alert
+      // viewPurchaseDetails is sync now — renders from the in-memory
+      // upcoming-purchases index (issues #204 + #205). No API call to
+      // /api/purchases/{id}, since the row identifier is a plan_id and
+      // there's no execution row yet for an upcoming purchase.
+      expect(api.getPurchaseDetails).not.toHaveBeenCalled();
       const modal = document.getElementById('purchase-details-modal');
       expect(modal).toBeTruthy();
-      expect(modal?.textContent).toContain('exec-123');
-      expect(modal?.textContent).toContain('pending');
+      expect(modal?.textContent).toContain('Test Plan');
+      expect(modal?.textContent).toContain('plan-123');
     });
 
-    test('view purchase button shows error on failure', async () => {
-      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
-        potential_monthly_savings: 1000,
-        by_service: {}
-      });
-      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
-        purchases: [
-          {
-            execution_id: 'exec-123',
-            plan_name: 'Test Plan',
-            provider: 'aws',
-            service: 'ec2',
-            step_number: 1,
-            total_steps: 4,
-            estimated_savings: 100,
-            scheduled_date: '2024-02-15'
-          }
-        ]
-      });
-      (api.getPurchaseDetails as jest.Mock).mockRejectedValue(new Error('API Error'));
-      console.error = jest.fn();
-
-      await loadDashboard();
-
-      const viewBtn = document.querySelector('[data-action="view-purchase"]') as HTMLButtonElement;
-      viewBtn?.click();
-
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      // Q7: alert() migrated to showToast with kind:'error'.
-      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
-        message: 'Failed to load purchase details: API Error',
-        kind: 'error',
-      }));
-    });
+    // (The previous "shows error on failure" test exercised an API
+    // rejection path that no longer exists — viewPurchaseDetails is
+    // synchronous after the data-flow fix. The graceful-fallback for a
+    // pruned-from-index plan_id is enforced by the `if (!purchase) {
+    // showToast(...) }` guard in dashboard.ts but isn't easily reached
+    // through the public surface, so it's covered by code-review only.)
 
     test('cancel purchase button cancels and reloads', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
@@ -354,7 +325,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            execution_id: 'exec-123',
+            plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -365,7 +336,7 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      (api.cancelPurchase as jest.Mock).mockResolvedValue({});
+      (api.deletePlannedPurchase as jest.Mock).mockResolvedValue({});
       window.confirm = jest.fn().mockReturnValue(true);
 
       await loadDashboard();
@@ -379,7 +350,7 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(api.cancelPurchase).toHaveBeenCalledWith('exec-123');
+      expect(api.deletePlannedPurchase).toHaveBeenCalledWith('plan-123');
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
         message: 'Purchase cancelled successfully',
         kind: 'success',
@@ -394,7 +365,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            execution_id: 'exec-123',
+            plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -414,7 +385,7 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(api.cancelPurchase).not.toHaveBeenCalled();
+      expect(api.deletePlannedPurchase).not.toHaveBeenCalled();
     });
 
     test('cancel purchase shows error on failure', async () => {
@@ -425,7 +396,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            execution_id: 'exec-123',
+            plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -436,7 +407,7 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      (api.cancelPurchase as jest.Mock).mockRejectedValue(new Error('API Error'));
+      (api.deletePlannedPurchase as jest.Mock).mockRejectedValue(new Error('API Error'));
       window.confirm = jest.fn().mockReturnValue(true);
       console.error = jest.fn();
 

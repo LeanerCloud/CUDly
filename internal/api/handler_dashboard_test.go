@@ -254,7 +254,7 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 
 	// Only enabled plans should be returned
 	assert.Len(t, result.Purchases, 1)
-	assert.Equal(t, "11111111-1111-1111-1111-111111111111", result.Purchases[0].ExecutionID)
+	assert.Equal(t, "11111111-1111-1111-1111-111111111111", result.Purchases[0].PlanID)
 	assert.Equal(t, "Test Plan 1", result.Purchases[0].PlanName)
 	assert.Equal(t, "aws", result.Purchases[0].Provider)
 	assert.Equal(t, "rds", result.Purchases[0].Service)

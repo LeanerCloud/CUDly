@@ -20,6 +20,16 @@ Chart.register(...registerables);
 let savingsTrendChart: Chart | null = null;
 let savingsTrendRange: '7' | '30' | '90' | 'all' = '90';
 
+// In-memory index of the currently-rendered upcoming purchases, keyed by
+// plan_id. The "View Details" affordance renders from this — the
+// /api/dashboard/upcoming response already carries every field the
+// dialog needs (plan name, scheduled date, provider/service, ramp
+// step), and there is no execution row to look up yet (the upcoming
+// list shows plans whose next execution hasn't fired). Issues #204 +
+// #205 surfaced when we tried to look these up via /api/purchases/{id}
+// using the plan_id — no row, 500.
+let upcomingPurchasesIndex: Map<string, UpcomingPurchase> = new Map();
+
 /**
  * Setup dashboard event handlers
  */
@@ -215,6 +225,11 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
   const container = document.getElementById('upcoming-list');
   if (!container) return;
 
+  // Refresh the in-memory index so viewPurchaseDetails can render its
+  // dialog from local data — there is no execution row to look up yet
+  // (the upcoming list shows plans whose next execution hasn't fired).
+  upcomingPurchasesIndex = new Map(purchases.map(p => [p.plan_id, p]));
+
   if (!purchases || purchases.length === 0) {
     container.innerHTML = '<p class="empty">No upcoming scheduled purchases</p>';
     return;
@@ -239,8 +254,8 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
           <div class="label">Est. monthly savings</div>
         </div>
         <div class="upcoming-actions">
-          <button data-action="view-purchase" data-id="${p.execution_id}">View Details</button>
-          <button data-action="cancel-purchase" data-id="${p.execution_id}" class="danger">Cancel</button>
+          <button data-action="view-purchase" data-id="${p.plan_id}">View Details</button>
+          <button data-action="cancel-purchase" data-id="${p.plan_id}" class="danger">Cancel</button>
         </div>
       </div>
     `;
@@ -248,98 +263,128 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
 
   // Add event listeners
   container.querySelectorAll<HTMLButtonElement>('[data-action="view-purchase"]').forEach(btn => {
-    btn.addEventListener('click', () => void viewPurchaseDetails(btn.dataset['id'] || ''));
+    btn.addEventListener('click', () => viewPurchaseDetails(btn.dataset['id'] || ''));
   });
   container.querySelectorAll<HTMLButtonElement>('[data-action="cancel-purchase"]').forEach(btn => {
     btn.addEventListener('click', () => void cancelScheduledPurchase(btn.dataset['id'] || ''));
   });
 }
 
-async function viewPurchaseDetails(executionId: string): Promise<void> {
-  try {
-    const purchase = await api.getPurchaseDetails(executionId);
-
-    // Remove any existing details modal
-    document.getElementById('purchase-details-modal')?.remove();
-
-    const modal = document.createElement('div');
-    modal.id = 'purchase-details-modal';
-    modal.className = 'modal';
-    modal.innerHTML = `
-      <div class="modal-content modal-wide">
-        <h2>Purchase Details</h2>
-        <div class="form-section">
-          <h3>Execution Info</h3>
-          <table>
-            <tbody>
-              <tr><td><strong>Execution ID</strong></td><td>${escapeHtml(purchase.execution_id)}</td></tr>
-              <tr><td><strong>Status</strong></td><td><span class="status-badge ${purchase.status.toLowerCase().replace(/[^a-z-]/g, '')}">${escapeHtml(purchase.status)}</span></td></tr>
-              <tr><td><strong>Created</strong></td><td>${escapeHtml(purchase.created_at)}</td></tr>
-              ${purchase.completed_at ? `<tr><td><strong>Completed</strong></td><td>${escapeHtml(purchase.completed_at)}</td></tr>` : ''}
-            </tbody>
-          </table>
-        </div>
-        ${purchase.results && purchase.results.length > 0 ? `
-        <div class="form-section">
-          <h3>Results</h3>
-          <table>
-            <thead>
-              <tr><th>Recommendation ID</th><th>Status</th><th>Confirmation ID</th><th>Error</th></tr>
-            </thead>
-            <tbody>
-              ${purchase.results.map(r => `
-                <tr>
-                  <td>${escapeHtml(r.recommendation_id)}</td>
-                  <td><span class="status-badge ${r.status.toLowerCase().replace(/[^a-z-]/g, '')}">${escapeHtml(r.status)}</span></td>
-                  <td>${r.confirmation_id ? escapeHtml(r.confirmation_id) : '-'}</td>
-                  <td>${r.error ? escapeHtml(r.error) : '-'}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        ` : ''}
-        <div class="modal-buttons">
-          ${purchase.status.toLowerCase() === 'pending' ? '<button type="button" id="cancel-purchase-detail-btn" class="danger">Cancel Purchase</button>' : ''}
-          <button type="button" id="close-purchase-details-btn">Close</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-
-    modal.querySelector('#close-purchase-details-btn')?.addEventListener('click', () => {
-      modal.remove();
-    });
-
-    const cancelBtn = modal.querySelector('#cancel-purchase-detail-btn') as HTMLButtonElement | null;
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', async () => {
-        const ok = await confirmDialog({
-          title: 'Cancel this purchase?',
-          body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
-          confirmLabel: 'Cancel purchase',
-          destructive: true,
-        });
-        if (!ok) return;
-        try {
-          await api.cancelPurchase(executionId);
-          modal.remove();
-          await loadDashboard();
-          showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
-        } catch (cancelError) {
-          console.error('Failed to cancel purchase:', cancelError);
-          showToast({ message: 'Failed to cancel purchase', kind: 'error' });
-        }
-      });
-    }
-  } catch (error) {
-    console.error('Failed to load purchase details:', error);
-    const err = error as Error;
-    showToast({ message: `Failed to load purchase details: ${err.message}`, kind: 'error' });
+function viewPurchaseDetails(planId: string): void {
+  // The "upcoming" widget shows PurchasePlans whose next execution hasn't
+  // fired — there's no purchase_executions row to look up. Render the
+  // dialog from the in-memory snapshot the renderer just stored
+  // (issues #204 + #205).
+  const purchase = upcomingPurchasesIndex.get(planId);
+  if (!purchase) {
+    showToast({ message: 'Failed to load purchase details: not in current view', kind: 'error' });
+    return;
   }
+
+  // Remove any existing details modal
+  document.getElementById('purchase-details-modal')?.remove();
+
+  const modal = buildUpcomingDetailsModal(purchase, planId);
+  document.body.appendChild(modal);
 }
 
-async function cancelScheduledPurchase(executionId: string): Promise<void> {
+// buildUpcomingDetailsModal constructs the dialog via DOM-API, not
+// innerHTML, so user-controlled fields (plan_name, service) can never be
+// interpreted as HTML — closes a class of XSS regressions that the
+// previous escapeHtml-+-innerHTML pattern only avoided by convention.
+function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDivElement {
+  const modal = document.createElement('div');
+  modal.id = 'purchase-details-modal';
+  modal.className = 'modal';
+
+  const content = document.createElement('div');
+  content.className = 'modal-content modal-wide';
+  modal.appendChild(content);
+
+  const h2 = document.createElement('h2');
+  h2.textContent = 'Upcoming Purchase Details';
+  content.appendChild(h2);
+
+  const section = document.createElement('div');
+  section.className = 'form-section';
+  content.appendChild(section);
+
+  const sectionH3 = document.createElement('h3');
+  sectionH3.textContent = 'Plan Info';
+  section.appendChild(sectionH3);
+
+  const table = document.createElement('table');
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  section.appendChild(table);
+
+  const addRow = (label: string, value: string): void => {
+    const tr = document.createElement('tr');
+    const tdLabel = document.createElement('td');
+    const strong = document.createElement('strong');
+    strong.textContent = label;
+    tdLabel.appendChild(strong);
+    const tdValue = document.createElement('td');
+    tdValue.textContent = value;
+    tr.appendChild(tdLabel);
+    tr.appendChild(tdValue);
+    tbody.appendChild(tr);
+  };
+
+  addRow('Plan name', p.plan_name);
+  addRow('Plan ID', planId);
+  addRow('Scheduled', p.scheduled_date);
+  addRow('Provider', p.provider.toUpperCase());
+  addRow('Service', p.service);
+  addRow('Step', `${p.step_number} of ${p.total_steps}`);
+  addRow('Est. monthly savings', formatCurrency(p.estimated_savings));
+
+  // Buttons row
+  const btnRow = document.createElement('div');
+  btnRow.className = 'modal-buttons';
+  content.appendChild(btnRow);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.id = 'cancel-purchase-detail-btn';
+  cancelBtn.className = 'danger';
+  cancelBtn.textContent = 'Cancel Purchase';
+  cancelBtn.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: 'Cancel this scheduled purchase?',
+      body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
+      confirmLabel: 'Cancel purchase',
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deletePlannedPurchase(planId);
+      modal.remove();
+      await loadDashboard();
+      showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
+    } catch (cancelError) {
+      console.error('Failed to cancel purchase:', cancelError);
+      showToast({ message: 'Failed to cancel purchase', kind: 'error' });
+    }
+  });
+  btnRow.appendChild(cancelBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.id = 'close-purchase-details-btn';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => modal.remove());
+  btnRow.appendChild(closeBtn);
+
+  return modal;
+}
+
+async function cancelScheduledPurchase(planId: string): Promise<void> {
+  // Plan-level cancel: the row-on-the-Cancel-button is a PurchasePlan
+  // whose next execution hasn't fired yet, so there's no
+  // purchase_executions row to cancel. deletePlannedPurchase is the
+  // correct endpoint — `cancelPurchase` here would 500 with
+  // "execution not found" (issue #204).
   const ok = await confirmDialog({
     title: 'Cancel this scheduled purchase?',
     body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
@@ -349,7 +394,7 @@ async function cancelScheduledPurchase(executionId: string): Promise<void> {
   if (!ok) return;
 
   try {
-    await api.cancelPurchase(executionId);
+    await api.deletePlannedPurchase(planId);
     await loadDashboard();
     showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {
