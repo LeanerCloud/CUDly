@@ -358,7 +358,7 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDiv
     });
     if (!ok) return;
     try {
-      await api.deletePlannedPurchase(planId);
+      await api.deletePlan(planId);
       modal.remove();
       await loadDashboard();
       showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
@@ -382,9 +382,11 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDiv
 async function cancelScheduledPurchase(planId: string): Promise<void> {
   // Plan-level cancel: the row-on-the-Cancel-button is a PurchasePlan
   // whose next execution hasn't fired yet, so there's no
-  // purchase_executions row to cancel. deletePlannedPurchase is the
-  // correct endpoint — `cancelPurchase` here would 500 with
-  // "execution not found" (issue #204).
+  // purchase_executions row to cancel. The right endpoint is
+  // DELETE /api/plans/{id} (api.deletePlan) — both
+  // /api/purchases/cancel/{id} and /api/purchases/planned/{id}
+  // operate on execution rows and would 4xx with "execution not
+  // found" (issues #204 / #205 / #208).
   const ok = await confirmDialog({
     title: 'Cancel this scheduled purchase?',
     body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
@@ -394,7 +396,7 @@ async function cancelScheduledPurchase(planId: string): Promise<void> {
   if (!ok) return;
 
   try {
-    await api.deletePlannedPurchase(planId);
+    await api.deletePlan(planId);
     await loadDashboard();
     showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {
