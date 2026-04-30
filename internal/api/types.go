@@ -417,15 +417,22 @@ type UpcomingPurchaseResponse struct {
 	Purchases []UpcomingPurchase `json:"purchases"`
 }
 
-// UpcomingPurchase represents a scheduled purchase that has not yet
-// produced a purchase_executions row. The identifier is therefore the
-// PurchasePlan.ID, not an execution ID — the dashboard's Cancel / View
-// Details affordances must target plan-level endpoints
-// (DELETE /api/purchases/planned/{id}, etc.), NOT execution-level ones
-// (/api/purchases/{id}, /api/purchases/cancel/{id}). Wiring plan IDs to
-// execution endpoints surfaces as a 500 from the SELECT-by-execution-id
-// path returning no row, exactly what issues #204 and #205 reported.
+// UpcomingPurchase represents one upcoming planned purchase — a pending
+// purchase_executions row whose scheduled_date hasn't fired yet, joined
+// to its parent PurchasePlan for display.
+//
+// The dashboard's Cancel button targets ExecutionID via
+// DELETE /api/purchases/planned/{id} (api.deletePlannedPurchase) so the
+// operator removes just THIS scheduled instance and leaves the plan
+// template intact — the next scheduler tick re-creates the next instance
+// for the plan. PlanID is exposed as context (e.g. for linking to the
+// plan's settings) and is NOT what destructive action endpoints should
+// target. PR #207 + #213 history: an earlier iteration routed Cancel to
+// api.deletePlan(planID) which deleted the entire plan; that was too
+// aggressive — operators usually want "skip this scheduled run", not
+// "nuke the recurring template".
 type UpcomingPurchase struct {
+	ExecutionID      string  `json:"execution_id"`
 	PlanID           string  `json:"plan_id"`
 	PlanName         string  `json:"plan_name"`
 	ScheduledDate    string  `json:"scheduled_date"`

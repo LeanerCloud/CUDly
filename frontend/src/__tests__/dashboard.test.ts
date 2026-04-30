@@ -175,7 +175,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-1',
+            execution_id: 'exec-1', plan_id: 'plan-1',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -242,7 +242,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-1',
+            execution_id: 'exec-1', plan_id: 'plan-1',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -286,7 +286,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -311,7 +311,7 @@ describe('Dashboard Module', () => {
       const modal = document.getElementById('purchase-details-modal');
       expect(modal).toBeTruthy();
       expect(modal?.textContent).toContain('Test Plan');
-      expect(modal?.textContent).toContain('plan-123');
+      expect(modal?.textContent).toContain('exec-123');
     });
 
     // (The previous "shows error on failure" test exercised an API
@@ -329,7 +329,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -340,7 +340,7 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      (api.deletePlan as jest.Mock).mockResolvedValue({});
+      (api.deletePlannedPurchase as jest.Mock).mockResolvedValue({});
       window.confirm = jest.fn().mockReturnValue(true);
 
       await loadDashboard();
@@ -354,8 +354,10 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(api.deletePlan).toHaveBeenCalledWith('plan-123');
-      expect(api.deletePlannedPurchase).not.toHaveBeenCalled();
+      expect(api.deletePlannedPurchase).toHaveBeenCalledWith('exec-123');
+      // Cancel must NOT delete the entire plan — that was the wrong fix
+      // in PR #207. deletePlan should not be called from this path.
+      expect(api.deletePlan).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
         message: 'Purchase cancelled successfully',
         kind: 'success',
@@ -370,7 +372,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -390,7 +392,7 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(api.deletePlan).not.toHaveBeenCalled();
+      expect(api.deletePlannedPurchase).not.toHaveBeenCalled();
     });
 
     test('cancel purchase shows error on failure', async () => {
@@ -401,7 +403,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -412,7 +414,7 @@ describe('Dashboard Module', () => {
           }
         ]
       });
-      (api.deletePlan as jest.Mock).mockRejectedValue(new Error('API Error'));
+      (api.deletePlannedPurchase as jest.Mock).mockRejectedValue(new Error('API Error'));
       window.confirm = jest.fn().mockReturnValue(true);
       console.error = jest.fn();
 

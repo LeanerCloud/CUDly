@@ -923,6 +923,17 @@ func TestHandler_HandleRequest_GetUpcomingPurchases(t *testing.T) {
 	}
 
 	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	// New: handler now enumerates pending executions per PR #213. Fixture
+	// supplies one pending exec for the plan above so the integration test
+	// still observes a single upcoming row.
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
+		{
+			ExecutionID: "exec-int-1",
+			PlanID:      plans[0].ID,
+			Status:      "pending",
+			StepNumber:  1,
+		},
+	}, nil)
 
 	handler := &Handler{
 		config:            mockStore,
@@ -950,6 +961,7 @@ func TestHandler_HandleRequest_GetUpcomingPurchases(t *testing.T) {
 	err = json.Unmarshal([]byte(resp.Body), &body)
 	require.NoError(t, err)
 	assert.Len(t, body.Purchases, 1)
+	assert.Equal(t, "exec-int-1", body.Purchases[0].ExecutionID)
 }
 
 func TestHandler_HandleRequest_GetPlannedPurchases(t *testing.T) {
