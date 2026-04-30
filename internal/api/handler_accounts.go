@@ -1139,6 +1139,9 @@ func (h *Handler) discoverOrgAccounts(ctx context.Context, req *events.LambdaFun
 	if err != nil {
 		return nil, err
 	}
+	if disco == nil {
+		return DiscoverOrgResult{}, nil
+	}
 
 	return h.persistDiscoveredMembers(ctx, root, disco.Accounts)
 }

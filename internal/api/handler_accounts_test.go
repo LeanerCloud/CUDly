@@ -746,6 +746,48 @@ func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
 	assert.Equal(t, "400000000004", created[1].ExternalID)
 }
 
+func TestDiscoverOrgAccounts_AllowsNilDiscoveryResult(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	root := &config.CloudAccount{
+		ID:           "11111111-1111-1111-1111-111111111111",
+		Name:         "Org Root",
+		Provider:     "aws",
+		ExternalID:   "999999999999",
+		AWSAuthMode:  "access_keys",
+		AWSIsOrgRoot: true,
+	}
+
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return root, nil
+	}
+
+	handler := &Handler{
+		auth:   mockAuth,
+		config: store,
+		credStore: &fakeCredStore{
+			data: map[string][]byte{
+				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
+			},
+		},
+		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+			return nil, nil
+		},
+	}
+
+	result, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"`+root.ID+`"}`))
+	require.NoError(t, err)
+
+	dr, ok := result.(DiscoverOrgResult)
+	require.True(t, ok, "result type = %T", result)
+	assert.Zero(t, dr.Discovered)
+	assert.Zero(t, dr.Created)
+	assert.Zero(t, dr.Skipped)
+}
+
 // fakeCredStore is a minimal CredentialStore for the discover-org happy-path
 // test. It only exists to satisfy ResolveAWSCredentialProvider's access_keys
 // mode without dragging in the real Secrets Manager / Postgres dependency.
