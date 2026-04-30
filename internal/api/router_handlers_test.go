@@ -255,6 +255,11 @@ func TestRouter_createAccountHandler(t *testing.T) {
 }
 
 func TestRouter_discoverOrgAccountsHandler(t *testing.T) {
+	// Routing-only smoke test: verifies the dispatcher reaches the
+	// handler. The handler itself returns 400 on the empty body the
+	// router test sends — that's fine for proving dispatch worked
+	// (the call reached past auth and into the body parser). Full
+	// behaviour is exercised in handler_accounts_test.go.
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	adminSession := &Session{UserID: "uid", Role: "admin"}
@@ -266,9 +271,11 @@ func TestRouter_discoverOrgAccountsHandler(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}
-	result, err := r.discoverOrgAccountsHandler(ctx, req, nil)
-	require.NoError(t, err)
-	assert.NotNil(t, result)
+	_, err := r.discoverOrgAccountsHandler(ctx, req, nil)
+	require.Error(t, err, "empty body should fail JSON parse → ClientError")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
 }
 
 func TestRouter_getAccountHandler(t *testing.T) {
