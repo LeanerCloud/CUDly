@@ -331,8 +331,22 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	//      token. cancelPurchaseViaSession runs the cancel-any /
 	//      cancel-own RBAC matrix and rejects sessions without it.
 	if session := h.tryGetSession(ctx, req); session != nil {
-		if err := h.authorizeSessionCancel(ctx, session, execution); err == nil {
+		switch err := h.authorizeSessionCancel(ctx, session, execution); {
+		case err == nil:
+			// Session is RBAC-authorized → run the session-authed cancel.
 			return h.cancelPurchaseViaSession(ctx, req, execution)
+		case isPermissionDenied(err):
+			// Explicit "permission denied" (403) → fall through to the
+			// token branch so the contact_email gate still gets a chance
+			// (a logged-in user without admin / cancel-* may still be
+			// the per-account contact email recipient).
+		default:
+			// Transient failure (auth-service down, HasPermissionAPI
+			// returning a wrapped error, h.auth==nil 500). Propagate
+			// instead of silently widening to the contact_email gate —
+			// a stale auth backend should not mask itself as a 403 about
+			// missing contact emails. CR feedback on PR #216.
+			return nil, err
 		}
 	}
 
@@ -782,6 +796,17 @@ func (h *Handler) tryResolveActorEmail(ctx context.Context, req *events.LambdaFu
 		return s.Email
 	}
 	return ""
+}
+
+// isPermissionDenied reports whether err is a ClientError with HTTP status
+// 403. The cancel-from-email session pre-check uses this to distinguish a
+// legitimate "your session lacks cancel-* permission" answer (fall through
+// to the token branch's contact_email gate) from a transient auth-service
+// failure (propagate so the caller sees the real cause). CR feedback on
+// PR #216.
+func isPermissionDenied(err error) bool {
+	ce, ok := IsClientError(err)
+	return ok && ce.code == 403
 }
 
 // tryGetSession returns the validated session for the request, or nil when

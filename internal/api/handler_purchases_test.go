@@ -1517,6 +1517,48 @@ func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *te
 	mockAuth.AssertExpectations(t)
 }
 
+// TestHandler_cancelPurchase_DeepLink_TransientAuthErrorPropagates pins the
+// CR-feedback hardening on PR #216: when authorizeSessionCancel returns a
+// non-403 error (auth service down, HasPermissionAPI wrapped error,
+// h.auth nil), the pre-check MUST surface it instead of silently falling
+// through to the contact_email gate. A stale auth backend should not
+// disguise itself as a "set the contact_email" 403, which would mislead
+// operators investigating the failure.
+func TestHandler_cancelPurchase_DeepLink_TransientAuthErrorPropagates(t *testing.T) {
+	creator := cancelOtherID
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "notified",
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	// Simulate a transient auth-backend failure on the cancel-any check.
+	// authorizeSessionCancel wraps this as "permission check failed: …"
+	// — NOT a 403 ClientError. The pre-check must propagate.
+	mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "cancel-any", "purchases").
+		Return(false, errors.New("auth backend timeout"))
+
+	handler := &Handler{config: mockConfig, auth: mockAuth}
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "permission check failed",
+		"transient auth-service errors must surface, not silently route to the contact_email gate")
+	assert.NotContains(t, err.Error(), "contact email",
+		"the contact_email message would mislead operators about the actual failure cause")
+
+	// Token branch must NOT have been reached — GetGlobalConfig is the
+	// signature first call inside authorizeApprovalAction.
+	mockConfig.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	mockAuth.AssertExpectations(t)
+}
+
 // TestHandler_cancelPurchase_DeepLink_NonPrivilegedSessionStillHitsContactGate
 // pins the security-model invariant from PR #101: a logged-in user
 // without admin / cancel-any / cancel-own permission MUST still go
