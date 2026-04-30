@@ -62,6 +62,20 @@ variable "create_session_secret" {
   default     = true
 }
 
+variable "create_scheduled_task_secret" {
+  description = <<-EOT
+    Create the bearer secret for /api/scheduled/* on AWS compute. Default
+    true: the HTTP path is exposed via the Lambda URL (auth NONE) and
+    needs an app-level gate even though no real scheduler hits it (AWS
+    uses EventBridge -> direct Lambda invocation). Set false ONLY for
+    deployments where /api/scheduled/* is genuinely unreachable from the
+    public internet (e.g. Fargate behind a private ALB), and pair that
+    with SCHEDULED_TASK_AUTH_MODE=disabled set explicitly downstream.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "additional_secrets" {
   description = "Map of additional secrets to create (map keys are not sensitive, only values are)"
   type = map(object({

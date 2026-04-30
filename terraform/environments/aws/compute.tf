@@ -77,6 +77,12 @@ module "compute_lambda" {
   enable_org_discovery                 = true
   credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn
 
+  # Scheduled-task bearer secret. The HTTP /api/scheduled/* path is reachable
+  # via the public Lambda URL; bearer mode + Secrets Manager keeps it gated
+  # without putting the secret in Lambda env or Terraform state.
+  scheduled_task_secret_arn  = coalesce(module.secrets.scheduled_task_secret_arn, "")
+  scheduled_task_secret_name = coalesce(module.secrets.scheduled_task_secret_name, "")
+
   # SES From domain — scopes the Lambda's SES policy to identity/{domain}
   # plus configuration-set/{stack}*. Leave empty to disable SES entirely
   # (deployments without email notifications don't get any SES permissions).
@@ -185,6 +191,12 @@ module "compute_fargate" {
   enable_org_discovery                 = true
   credential_encryption_key_secret_arn = module.secrets.credential_encryption_key_secret_arn
   email_from_domain                    = local.effective_email_from_domain
+
+  # Scheduled-task bearer secret. The HTTP /api/scheduled/* path is
+  # exposed via the public ALB; bearer mode + Secrets Manager keeps it
+  # gated without putting the secret in the task definition or state.
+  scheduled_task_secret_arn  = coalesce(module.secrets.scheduled_task_secret_arn, "")
+  scheduled_task_secret_name = coalesce(module.secrets.scheduled_task_secret_name, "")
 
   tags = local.common_tags
 

@@ -148,6 +148,50 @@ resource "aws_secretsmanager_secret_version" "session_secret" {
 }
 
 # ==============================================
+# Scheduled-Task Bearer Secret
+# ==============================================
+#
+# Bearer secret for /api/scheduled/* on the AWS Lambda URL / Fargate ALB.
+# AWS schedules tasks via EventBridge -> direct Lambda invocation, which
+# bypasses the HTTP middleware entirely — so no scheduler ever needs this
+# value. The HTTP path itself, however, IS reachable on the public Lambda
+# URL (authorization_type=NONE) and would be an unauthenticated public
+# trigger without something gating it. We pre-generate a random secret,
+# store it in Secrets Manager, and pass only the ARN to compute via the
+# resolver pattern (see resolveScheduledTaskSecret in internal/server/app.go);
+# the runtime resolves it on cold start, so the plaintext never lands in
+# Lambda env / Terraform state. End result: every /api/scheduled/* request
+# from outside the runtime is rejected by scheduledauth in bearer mode.
+
+resource "random_password" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  length  = 64
+  special = false # base64-friendly; becomes a static Bearer header value
+}
+
+resource "aws_secretsmanager_secret" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  name_prefix             = "${var.stack_name}-scheduled-task-secret-"
+  description             = "Bearer secret for /api/scheduled/* on ${var.stack_name} (HTTP path; EventBridge invocations bypass it)"
+  recovery_window_in_days = var.recovery_window_days
+
+  tags = merge(var.tags, {
+    Name        = "${var.stack_name}-scheduled-task-secret"
+    ManagedBy   = "terraform"
+    Environment = var.environment
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "scheduled_task_secret" {
+  count = var.create_scheduled_task_secret ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.scheduled_task_secret[0].id
+  secret_string = random_password.scheduled_task_secret[0].result
+}
+
+# ==============================================
 # Credential Encryption Key (Multi-Account)
 # ==============================================
 
@@ -388,6 +432,7 @@ data "aws_iam_policy_document" "secret_read" {
       var.create_admin_password_secret ? [aws_secretsmanager_secret.admin_password[0].arn] : [],
       var.create_jwt_secret ? [aws_secretsmanager_secret.jwt_secret[0].arn] : [],
       var.create_session_secret ? [aws_secretsmanager_secret.session_secret[0].arn] : [],
+      var.create_scheduled_task_secret ? [aws_secretsmanager_secret.scheduled_task_secret[0].arn] : [],
       [for secret in aws_secretsmanager_secret.additional : secret.arn]
     )
   }
