@@ -21,6 +21,12 @@ type MockConfigStore struct {
 	// DeleteCloudAccountFn overrides DeleteCloudAccount when non-nil (used to assert
 	// delete was/was not invoked).
 	DeleteCloudAccountFn func(ctx context.Context, id string) error
+	// ListCloudAccountsFn overrides ListCloudAccounts when non-nil (used by
+	// org-discovery dedupe tests to inject a known-roster fixture).
+	ListCloudAccountsFn func(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error)
+	// CreateCloudAccountFn overrides CreateCloudAccount when non-nil (used by
+	// org-discovery tests to capture the new rows the handler persists).
+	CreateCloudAccountFn func(ctx context.Context, account *config.CloudAccount) error
 }
 
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -236,6 +242,9 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 }
 
 func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	if m.CreateCloudAccountFn != nil {
+		return m.CreateCloudAccountFn(ctx, account)
+	}
 	return nil
 }
 func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
@@ -254,6 +263,9 @@ func (m *MockConfigStore) DeleteCloudAccount(ctx context.Context, id string) err
 	return nil
 }
 func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
+	if m.ListCloudAccountsFn != nil {
+		return m.ListCloudAccountsFn(ctx, filter)
+	}
 	return nil, nil
 }
 func (m *MockConfigStore) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {

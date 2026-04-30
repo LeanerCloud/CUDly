@@ -2,12 +2,13 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
+	"github.com/LeanerCloud/CUDly/internal/accounts"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -506,21 +507,303 @@ func TestListPlanAccounts_Success(t *testing.T) {
 
 // --- discoverOrgAccounts ---
 
-func TestDiscoverOrgAccounts_ReturnsStub(t *testing.T) {
+// orgRootAccount is an org-root fixture used by the discover-org tests.
+// access_keys auth mode + a stored credential is the simplest path through
+// ResolveAWSCredentialProvider that doesn't require an STS round-trip.
+func orgRootAccount() *config.CloudAccount {
+	return &config.CloudAccount{
+		ID:           "11111111-1111-1111-1111-111111111111",
+		Provider:     "aws",
+		ExternalID:   "100000000001",
+		Name:         "Org Root",
+		Enabled:      true,
+		AWSAuthMode:  "access_keys",
+		AWSIsOrgRoot: true,
+	}
+}
+
+func TestDiscoverOrgAccounts_RejectsInvalidBody(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
+
+	_, err := handler.discoverOrgAccounts(ctx, adminRequest("not json"))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+}
+
+func TestDiscoverOrgAccounts_RejectsInvalidAccountID(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
+
+	_, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"not-a-uuid"}`))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+}
+
+func TestDiscoverOrgAccounts_RejectsNonAWSAccount(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Provider: "azure", AWSIsOrgRoot: true}, nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"11111111-1111-1111-1111-111111111111"}`))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "aws")
+}
+
+func TestDiscoverOrgAccounts_RejectsNonOrgRoot(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Provider: "aws", AWSIsOrgRoot: false}, nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"11111111-1111-1111-1111-111111111111"}`))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "org root")
+}
+
+func TestDiscoverOrgAccounts_NotFound(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return nil, nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"11111111-1111-1111-1111-111111111111"}`))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 404, ce.code)
+}
+
+func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	setupAdminAuth(ctx, mockAuth)
 
+	root := orgRootAccount()
+
+	// Bypass the credentials resolver: with access_keys auth mode and a
+	// stored cred, ResolveAWSCredentialProvider would try to load from the
+	// CredentialStore. Inject a CredentialStore that returns a valid blob
+	// so resolution succeeds in-process. The store doesn't matter beyond
+	// "doesn't error" — the discoverOrgFn injection bypasses the real AWS
+	// API call anyway.
+	credStore := &fakeCredStore{
+		data: map[string][]byte{
+			root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
+		},
+	}
+
 	store := setupAdminMock(ctx)
-	handler := &Handler{auth: mockAuth, config: store}
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return root, nil
+	}
+	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		// One member already exists — should be skipped on the dedupe pass.
+		return []config.CloudAccount{
+			{ID: "22222222-2222-2222-2222-222222222222", Provider: "aws", ExternalID: "200000000002"},
+		}, nil
+	}
 
-	result, err := handler.discoverOrgAccounts(ctx, adminRequest(""))
+	var created []config.CloudAccount
+	store.CreateCloudAccountFn = func(_ context.Context, a *config.CloudAccount) error {
+		created = append(created, *a)
+		return nil
+	}
+
+	handler := &Handler{
+		auth:      mockAuth,
+		config:    store,
+		credStore: credStore,
+		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+			return &accounts.OrgDiscoveryResult{
+				Accounts: []config.CloudAccount{
+					{Provider: "aws", ExternalID: "200000000002", Name: "Already Known"}, // dedupe: skipped
+					{Provider: "aws", ExternalID: "300000000003", Name: "Brand New"},     // create
+					{Provider: "aws", ExternalID: "400000000004", Name: "Brand New Two"}, // create
+				},
+			}, nil
+		},
+	}
+
+	result, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"`+root.ID+`"}`))
 	require.NoError(t, err)
 
-	data, err := json.Marshal(result)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "not yet implemented")
+	dr, ok := result.(DiscoverOrgResult)
+	require.True(t, ok, "result type = %T", result)
+	assert.Equal(t, 3, dr.Discovered)
+	assert.Equal(t, 2, dr.Created)
+	assert.Equal(t, 1, dr.Skipped)
+
+	// Inspect the persisted rows. Defaults locked in (CR pass 1):
+	//   * enabled=false   — operator review gate
+	//   * AWSAuthMode=""  — NOT "bastion": setting bastion mode while the
+	//                       row's AWSRoleARN is empty would cause
+	//                       awsAmbientCredResult to mis-classify the
+	//                       account as "ambient host" creds. Operator must
+	//                       set BOTH mode and role ARN before enabling.
+	//   * AWSBastionID=<root.ID> — pre-filled so the operator only needs
+	//                              to add the role ARN, not chase the
+	//                              bastion-id linkage.
+	require.Len(t, created, 2)
+	for _, a := range created {
+		assert.False(t, a.Enabled, "discovered accounts must boot disabled (operator gate)")
+		assert.NotEmpty(t, a.ID, "discovered accounts must be assigned an ID before persistence")
+		assert.False(t, a.CreatedAt.IsZero(), "discovered accounts must carry CreatedAt metadata")
+		assert.False(t, a.UpdatedAt.IsZero(), "discovered accounts must carry UpdatedAt metadata")
+		assert.Empty(t, a.AWSAuthMode, "discovered accounts must boot with empty AWSAuthMode (operator must set it explicitly with a role ARN)")
+		assert.Equal(t, root.ID, a.AWSBastionID, "bastion_id must be pre-filled with the org root that discovered them")
+		assert.Equal(t, "aws", a.Provider)
+	}
 }
+
+func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	root := &config.CloudAccount{
+		ID:           "11111111-1111-1111-1111-111111111111",
+		Name:         "Org Root",
+		Provider:     "aws",
+		ExternalID:   "999999999999",
+		AWSAuthMode:  "access_keys",
+		AWSIsOrgRoot: true,
+	}
+
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return root, nil
+	}
+	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+
+	var created []config.CloudAccount
+	store.CreateCloudAccountFn = func(_ context.Context, a *config.CloudAccount) error {
+		created = append(created, *a)
+		if a.ExternalID == "300000000003" {
+			return errors.New("duplicate key value violates unique constraint")
+		}
+		return nil
+	}
+
+	handler := &Handler{
+		auth:   mockAuth,
+		config: store,
+		credStore: &fakeCredStore{
+			data: map[string][]byte{
+				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
+			},
+		},
+		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+			return &accounts.OrgDiscoveryResult{
+				Accounts: []config.CloudAccount{
+					{Provider: "aws", ExternalID: "300000000003", Name: "Dup On Insert"},
+					{Provider: "aws", ExternalID: "300000000003", Name: "Dup In Batch"},
+					{Provider: "aws", ExternalID: "400000000004", Name: "Created"},
+				},
+			}, nil
+		},
+	}
+
+	result, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"`+root.ID+`"}`))
+	require.NoError(t, err)
+
+	dr, ok := result.(DiscoverOrgResult)
+	require.True(t, ok, "result type = %T", result)
+	assert.Equal(t, 3, dr.Discovered)
+	assert.Equal(t, 1, dr.Created)
+	assert.Equal(t, 2, dr.Skipped)
+	require.Len(t, created, 2)
+	assert.Equal(t, "300000000003", created[0].ExternalID)
+	assert.Equal(t, "400000000004", created[1].ExternalID)
+}
+
+func TestDiscoverOrgAccounts_AllowsNilDiscoveryResult(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	root := &config.CloudAccount{
+		ID:           "11111111-1111-1111-1111-111111111111",
+		Name:         "Org Root",
+		Provider:     "aws",
+		ExternalID:   "999999999999",
+		AWSAuthMode:  "access_keys",
+		AWSIsOrgRoot: true,
+	}
+
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return root, nil
+	}
+
+	handler := &Handler{
+		auth:   mockAuth,
+		config: store,
+		credStore: &fakeCredStore{
+			data: map[string][]byte{
+				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
+			},
+		},
+		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+			return nil, nil
+		},
+	}
+
+	result, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"`+root.ID+`"}`))
+	require.NoError(t, err)
+
+	dr, ok := result.(DiscoverOrgResult)
+	require.True(t, ok, "result type = %T", result)
+	assert.Zero(t, dr.Discovered)
+	assert.Zero(t, dr.Created)
+	assert.Zero(t, dr.Skipped)
+}
+
+// fakeCredStore is a minimal CredentialStore for the discover-org happy-path
+// test. It only exists to satisfy ResolveAWSCredentialProvider's access_keys
+// mode without dragging in the real Secrets Manager / Postgres dependency.
+type fakeCredStore struct {
+	data map[string][]byte
+}
+
+func (f *fakeCredStore) LoadRaw(_ context.Context, accountID, credType string) ([]byte, error) {
+	return f.data[accountID+"::"+credType], nil
+}
+
+func (f *fakeCredStore) SaveCredential(_ context.Context, _, _ string, _ []byte) error { return nil }
+func (f *fakeCredStore) DeleteCredential(_ context.Context, _, _ string) error         { return nil }
+func (f *fakeCredStore) HasCredential(_ context.Context, _, _ string) (bool, error)    { return true, nil }
+func (f *fakeCredStore) EncryptPayload(_ []byte) (string, error)                       { return "", nil }
+func (f *fakeCredStore) DecryptPayload(_ string) ([]byte, error)                       { return nil, nil }
 
 // --- buildAccountFilter ---
 

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/accounts"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
@@ -77,6 +78,12 @@ type Handler struct {
 	// without AWS credentials. Tests set this to a fixed-result fake so
 	// the integration suite runs hermetically.
 	reshapeAccountResolver func(context.Context) (string, error)
+
+	// Optional org-discovery factory used by tests to avoid live AWS
+	// Organizations API calls. When nil (production default), the handler
+	// falls back to accounts.DiscoverOrgAccounts which dials Organizations
+	// via the credentials resolved for the org-root account.
+	discoverOrgFn func(context.Context, aws.Config) (*accounts.OrgDiscoveryResult, error)
 
 	// commitmentOpts discovers which AWS (term, payment) combinations
 	// each service actually sells and validates saves against that data.
