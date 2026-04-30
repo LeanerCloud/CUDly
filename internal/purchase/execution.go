@@ -394,6 +394,15 @@ func (m *Manager) mapServiceType(service string) common.ServiceType {
 // matching common.ServiceType. The map covers the legacy umbrella plus the
 // four per-plan-type slugs in both spellings — pulled out of mapServiceType
 // to keep that switch under the gocyclo budget.
+//
+// TODO(#85): once purchase_executions JSONB rows persisted before the
+// "savingsplans" rename (~6-month retention window) have aged out, the
+// "savings-plans"-spelled aliases below can be removed and only the
+// dash-free spellings ("savingsplans", "savingsplans-compute", etc.)
+// need be matched here. The umbrella rename happened in PR #94; the
+// per-plan-type slugs were always dash-form on the wire so their
+// "savingsplans-*" aliases are forward-compat for any future
+// frontend-canonical normalisation.
 func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
 	slugs := map[string]common.ServiceType{
 		"savings-plans":             common.ServiceSavingsPlans,

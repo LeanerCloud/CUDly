@@ -47,15 +47,23 @@ const (
 
 	// Savings/Commitments
 	//
-	// ServiceSavingsPlans is the legacy umbrella slug and is being retired in
-	// favour of per-plan-type constants below. It remains defined so existing
-	// call sites continue to compile during the split; new code MUST use one
-	// of the four per-plan-type constants or the IsSavingsPlan helper.
-	ServiceSavingsPlans ServiceType = "savings-plans" // AWS Savings Plans (legacy umbrella)
+	// ServiceSavingsPlans is the canonical umbrella identifier for AWS Savings
+	// Plans. The string value "savingsplans" (no hyphen) matches the frontend's
+	// identifier and the value persisted in service_configs.service /
+	// purchase_history.service so that direct comparisons
+	// (rec.Service == ServiceSavingsPlans) work without a normaliser. See
+	// issue #85 for the rationale (frontend chosen as canonical to avoid a
+	// SQL data migration). Code that needs to recognise pre-#85 persisted
+	// "savings-plans" rows (e.g. purchase_executions JSONB blobs) goes
+	// through the mapper in internal/purchase/execution.go.
+	ServiceSavingsPlans ServiceType = "savingsplans" // AWS Savings Plans (umbrella)
 
 	// Per-plan-type Savings Plans slugs. Each maps 1:1 to an AWS
 	// types.SupportedSavingsPlansType so users can configure term/payment
-	// defaults independently per plan type.
+	// defaults independently per plan type. These were introduced after the
+	// umbrella was normalised; the dash-form slugs intentionally differ from
+	// the umbrella's "savingsplans" so a generic-vs-specific comparison is
+	// unambiguous (use IsSavingsPlan to recognise the family).
 	ServiceSavingsPlansCompute     ServiceType = "savings-plans-compute"     // ComputeSp: EC2, Fargate, Lambda
 	ServiceSavingsPlansEC2Instance ServiceType = "savings-plans-ec2instance" // Ec2InstanceSp: specific EC2 families
 	ServiceSavingsPlansSageMaker   ServiceType = "savings-plans-sagemaker"   // SagemakerSp
