@@ -21,13 +21,14 @@ let savingsTrendChart: Chart | null = null;
 let savingsTrendRange: '7' | '30' | '90' | 'all' = '90';
 
 // In-memory index of the currently-rendered upcoming purchases, keyed by
-// plan_id. The "View Details" affordance renders from this — the
+// execution_id. The "View Details" affordance renders from this — the
 // /api/dashboard/upcoming response already carries every field the
-// dialog needs (plan name, scheduled date, provider/service, ramp
-// step), and there is no execution row to look up yet (the upcoming
-// list shows plans whose next execution hasn't fired). Issues #204 +
-// #205 surfaced when we tried to look these up via /api/purchases/{id}
-// using the plan_id — no row, 500.
+// dialog displays, so no extra roundtrip is needed. The Cancel button
+// uses the same execution_id to call DELETE /api/purchases/planned/{id}
+// so cancelling removes JUST this scheduled step (the plan template
+// stays in place). Earlier iterations: PR #207 keyed by plan_id which
+// caused the cancel-then-delete-the-whole-plan bug; PR #213 (this one)
+// enumerates real pending executions to surface execution_id properly.
 let upcomingPurchasesIndex: Map<string, UpcomingPurchase> = new Map();
 
 /**
@@ -228,7 +229,7 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
   // Refresh the in-memory index so viewPurchaseDetails can render its
   // dialog from local data — there is no execution row to look up yet
   // (the upcoming list shows plans whose next execution hasn't fired).
-  upcomingPurchasesIndex = new Map(purchases.map(p => [p.plan_id, p]));
+  upcomingPurchasesIndex = new Map(purchases.map(p => [p.execution_id, p]));
 
   if (!purchases || purchases.length === 0) {
     container.innerHTML = '<p class="empty">No upcoming scheduled purchases</p>';
@@ -254,8 +255,8 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
           <div class="label">Est. monthly savings</div>
         </div>
         <div class="upcoming-actions">
-          <button data-action="view-purchase" data-id="${p.plan_id}">View Details</button>
-          <button data-action="cancel-purchase" data-id="${p.plan_id}" class="danger">Cancel</button>
+          <button data-action="view-purchase" data-id="${p.execution_id}">View Details</button>
+          <button data-action="cancel-purchase" data-id="${p.execution_id}" class="danger">Cancel</button>
         </div>
       </div>
     `;
@@ -270,12 +271,12 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
   });
 }
 
-function viewPurchaseDetails(planId: string): void {
-  // The "upcoming" widget shows PurchasePlans whose next execution hasn't
-  // fired — there's no purchase_executions row to look up. Render the
-  // dialog from the in-memory snapshot the renderer just stored
-  // (issues #204 + #205).
-  const purchase = upcomingPurchasesIndex.get(planId);
+function viewPurchaseDetails(executionId: string): void {
+  // The widget enumerates pending purchase_executions, so each row in the
+  // upcoming list maps to a real execution row. We still render the dialog
+  // from the in-memory snapshot to avoid an extra roundtrip — every field
+  // the dialog displays already came down with the upcoming list.
+  const purchase = upcomingPurchasesIndex.get(executionId);
   if (!purchase) {
     showToast({ message: 'Failed to load purchase details: not in current view', kind: 'error' });
     return;
@@ -284,7 +285,7 @@ function viewPurchaseDetails(planId: string): void {
   // Remove any existing details modal
   document.getElementById('purchase-details-modal')?.remove();
 
-  const modal = buildUpcomingDetailsModal(purchase, planId);
+  const modal = buildUpcomingDetailsModal(purchase, executionId);
   document.body.appendChild(modal);
 }
 
@@ -292,7 +293,7 @@ function viewPurchaseDetails(planId: string): void {
 // innerHTML, so user-controlled fields (plan_name, service) can never be
 // interpreted as HTML — closes a class of XSS regressions that the
 // previous escapeHtml-+-innerHTML pattern only avoided by convention.
-function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDivElement {
+function buildUpcomingDetailsModal(p: UpcomingPurchase, executionId: string): HTMLDivElement {
   const modal = document.createElement('div');
   modal.id = 'purchase-details-modal';
   modal.className = 'modal';
@@ -332,7 +333,8 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDiv
   };
 
   addRow('Plan name', p.plan_name);
-  addRow('Plan ID', planId);
+  addRow('Plan ID', p.plan_id);
+  addRow('Execution ID', executionId);
   addRow('Scheduled', p.scheduled_date);
   addRow('Provider', p.provider.toUpperCase());
   addRow('Service', p.service);
@@ -358,7 +360,7 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDiv
     });
     if (!ok) return;
     try {
-      await api.deletePlannedPurchase(planId);
+      await api.deletePlannedPurchase(executionId);
       modal.remove();
       await loadDashboard();
       showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
@@ -379,22 +381,27 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, planId: string): HTMLDiv
   return modal;
 }
 
-async function cancelScheduledPurchase(planId: string): Promise<void> {
-  // Plan-level cancel: the row-on-the-Cancel-button is a PurchasePlan
-  // whose next execution hasn't fired yet, so there's no
-  // purchase_executions row to cancel. deletePlannedPurchase is the
-  // correct endpoint — `cancelPurchase` here would 500 with
-  // "execution not found" (issue #204).
+async function cancelScheduledPurchase(executionId: string): Promise<void> {
+  // Cancel just THIS scheduled instance via DELETE /api/purchases/planned/{id}
+  // (the deletePlannedPurchase backend handler operates on
+  // purchase_executions). The plan template stays intact — the next
+  // scheduler tick re-creates the next instance for the plan. Earlier
+  // iterations got this wrong by either:
+  //   - sending plan_id to deletePlannedPurchase (404 because
+  //     deletePlannedPurchase expects an execution_id), or
+  //   - falling back to deletePlan (which deleted the WHOLE plan).
+  // The widget now enumerates real pending executions and surfaces
+  // execution_id, so neither workaround is needed.
   const ok = await confirmDialog({
     title: 'Cancel this scheduled purchase?',
-    body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
+    body: 'Cancelling removes this upcoming step from the plan. The plan itself stays in place; the next scheduled step (if any) is unaffected.',
     confirmLabel: 'Cancel purchase',
     destructive: true,
   });
   if (!ok) return;
 
   try {
-    await api.deletePlannedPurchase(planId);
+    await api.deletePlannedPurchase(executionId);
     await loadDashboard();
     showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {

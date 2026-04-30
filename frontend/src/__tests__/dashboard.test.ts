@@ -36,9 +36,13 @@ jest.mock('../api', () => ({
   getUpcomingPurchases: jest.fn(),
   getPurchaseDetails: jest.fn(),
   cancelPurchase: jest.fn(),
-  // Plan-level cancel — the dashboard upcoming-list now targets plan
-  // endpoints (issues #204 + #205), not execution endpoints.
+  // Plan-level cancel — the dashboard upcoming-list targets plan
+  // endpoints, not execution endpoints. PR #207 first wired this to
+  // deletePlannedPurchase but that handler still operates on
+  // purchase_executions; the correct endpoint is DELETE /api/plans/{id}
+  // via api.deletePlan (issues #204 / #205 / #208).
   deletePlannedPurchase: jest.fn(),
+  deletePlan: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([]),
   getSavingsAnalytics: jest.fn().mockResolvedValue({ data_points: [] }),
 }));
@@ -171,7 +175,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-1',
+            execution_id: 'exec-1', plan_id: 'plan-1',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -238,7 +242,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-1',
+            execution_id: 'exec-1', plan_id: 'plan-1',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -282,7 +286,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -307,7 +311,7 @@ describe('Dashboard Module', () => {
       const modal = document.getElementById('purchase-details-modal');
       expect(modal).toBeTruthy();
       expect(modal?.textContent).toContain('Test Plan');
-      expect(modal?.textContent).toContain('plan-123');
+      expect(modal?.textContent).toContain('exec-123');
     });
 
     // (The previous "shows error on failure" test exercised an API
@@ -325,7 +329,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -350,7 +354,10 @@ describe('Dashboard Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(api.deletePlannedPurchase).toHaveBeenCalledWith('plan-123');
+      expect(api.deletePlannedPurchase).toHaveBeenCalledWith('exec-123');
+      // Cancel must NOT delete the entire plan — that was the wrong fix
+      // in PR #207. deletePlan should not be called from this path.
+      expect(api.deletePlan).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
         message: 'Purchase cancelled successfully',
         kind: 'success',
@@ -365,7 +372,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',
@@ -396,7 +403,7 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: [
           {
-            plan_id: 'plan-123',
+            execution_id: 'exec-123', plan_id: 'plan-123',
             plan_name: 'Test Plan',
             provider: 'aws',
             service: 'ec2',

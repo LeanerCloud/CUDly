@@ -219,32 +219,49 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
 	nextExecDate := time.Now().AddDate(0, 0, 7)
-	plans := []config.PurchasePlan{
+	planA := config.PurchasePlan{
+		ID:      "11111111-1111-1111-1111-111111111111",
+		Name:    "Test Plan 1",
+		Enabled: true,
+		Services: map[string]config.ServiceConfig{
+			"aws/rds": {Provider: "aws", Service: "rds"},
+		},
+		RampSchedule: config.RampSchedule{TotalSteps: 5},
+	}
+	planB := config.PurchasePlan{
+		ID:      "22222222-2222-2222-2222-222222222222",
+		Name:    "Plan B (no pending exec)",
+		Enabled: true,
+		Services: map[string]config.ServiceConfig{
+			"aws/ec2": {Provider: "aws", Service: "ec2"},
+		},
+		RampSchedule: config.RampSchedule{TotalSteps: 3},
+	}
+
+	// Two pending executions, both belonging to planA — exercises the
+	// one-row-per-execution semantic (plan B has no pending execution and
+	// must NOT appear in the upcoming list).
+	pending := []config.PurchaseExecution{
 		{
-			ID:                "11111111-1111-1111-1111-111111111111",
-			Name:              "Test Plan 1",
-			Enabled:           true,
-			NextExecutionDate: &nextExecDate,
-			Services: map[string]config.ServiceConfig{
-				"aws/rds": {
-					Provider: "aws",
-					Service:  "rds",
-				},
-			},
-			RampSchedule: config.RampSchedule{
-				CurrentStep: 0,
-				TotalSteps:  5,
-			},
+			ExecutionID:      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			PlanID:           planA.ID,
+			Status:           "pending",
+			ScheduledDate:    nextExecDate,
+			StepNumber:       1,
+			EstimatedSavings: 100.0,
 		},
 		{
-			ID:                "22222222-2222-2222-2222-222222222222",
-			Name:              "Disabled Plan",
-			Enabled:           false,
-			NextExecutionDate: &nextExecDate,
+			ExecutionID:      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+			PlanID:           planA.ID,
+			Status:           "pending",
+			ScheduledDate:    nextExecDate.AddDate(0, 1, 0),
+			StepNumber:       2,
+			EstimatedSavings: 150.0,
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
+	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{planA, planB}, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
@@ -252,14 +269,50 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 	result, err := handler.getUpcomingPurchases(ctx, req)
 	require.NoError(t, err)
 
-	// Only enabled plans should be returned
-	assert.Len(t, result.Purchases, 1)
-	assert.Equal(t, "11111111-1111-1111-1111-111111111111", result.Purchases[0].PlanID)
-	assert.Equal(t, "Test Plan 1", result.Purchases[0].PlanName)
-	assert.Equal(t, "aws", result.Purchases[0].Provider)
-	assert.Equal(t, "rds", result.Purchases[0].Service)
-	assert.Equal(t, 1, result.Purchases[0].StepNumber)
-	assert.Equal(t, 5, result.Purchases[0].TotalSteps)
+	// Both pending executions of plan A appear, in order. Plan B has no
+	// pending execution → not in the list (one row per execution, not per
+	// plan, by design — see PR #213 history).
+	require.Len(t, result.Purchases, 2)
+
+	first := result.Purchases[0]
+	assert.Equal(t, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", first.ExecutionID,
+		"Cancel button targets ExecutionID via DELETE /api/purchases/planned/{id}")
+	assert.Equal(t, planA.ID, first.PlanID, "PlanID exposed for context, not action targeting")
+	assert.Equal(t, "Test Plan 1", first.PlanName)
+	assert.Equal(t, "aws", first.Provider)
+	assert.Equal(t, "rds", first.Service)
+	assert.Equal(t, 1, first.StepNumber)
+	assert.Equal(t, 5, first.TotalSteps)
+	assert.InDelta(t, 100.0, first.EstimatedSavings, 0.0001)
+
+	second := result.Purchases[1]
+	assert.Equal(t, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", second.ExecutionID)
+	assert.Equal(t, 2, second.StepNumber)
+}
+
+// TestHandler_getUpcomingPurchases_OrphanExecutionSkipped guards against the
+// "execution row with deleted parent plan" cleanup-gap edge case: rather
+// than crash, the widget hides the orphan. Cleanup is a separate concern.
+func TestHandler_getUpcomingPurchases_OrphanExecutionSkipped(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	pending := []config.PurchaseExecution{
+		{
+			ExecutionID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+			PlanID:      "deleted-plan-uuid", // not in plan list below
+			Status:      "pending",
+		},
+	}
+	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
+	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.getUpcomingPurchases(ctx, req)
+	require.NoError(t, err)
+	assert.Empty(t, result.Purchases, "orphan execution must be hidden, not crash")
 }
 
 // mockStoreWithPlanAccounts embeds MockConfigStore and overrides GetPlanAccounts
@@ -306,6 +359,10 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 	}
 
 	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{planA, planB}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
+		{ExecutionID: "exec-A", PlanID: planA.ID, Status: "pending", ScheduledDate: nextExecDate, StepNumber: 1},
+		{ExecutionID: "exec-B", PlanID: planB.ID, Status: "pending", ScheduledDate: nextExecDate, StepNumber: 1},
+	}, nil)
 	store := &mockStoreWithPlanAccounts{
 		MockConfigStore: mockStore,
 		planAccounts: map[string][]config.CloudAccount{
@@ -329,9 +386,10 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 	result, err := handler.getUpcomingPurchases(ctx, req)
 	require.NoError(t, err)
 
-	// Only Plan A (Production) passes the allowed_accounts filter.
-	assert.Len(t, result.Purchases, 1)
+	// Only Plan A's pending execution passes the allowed_accounts filter.
+	require.Len(t, result.Purchases, 1)
 	assert.Equal(t, "Plan A", result.Purchases[0].PlanName)
+	assert.Equal(t, "exec-A", result.Purchases[0].ExecutionID)
 }
 
 // TestHandler_getUpcomingPurchases_ScopedUser_SkipsUnattributed locks down
@@ -351,6 +409,9 @@ func TestHandler_getUpcomingPurchases_ScopedUser_SkipsUnattributed(t *testing.T)
 		RampSchedule:      config.RampSchedule{CurrentStep: 0, TotalSteps: 5},
 	}
 	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{plan}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
+		{ExecutionID: "exec-unattributed", PlanID: plan.ID, Status: "pending", ScheduledDate: nextExecDate, StepNumber: 1},
+	}, nil)
 	store := &mockStoreWithPlanAccounts{
 		MockConfigStore: mockStore,
 		planAccounts:    map[string][]config.CloudAccount{plan.ID: {}},
@@ -672,8 +733,21 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("get pending executions error", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetPendingExecutions", ctx).Return(nil, errors.New("db error"))
+
+		mockAuth, req := adminDashboardReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		_, err := handler.getUpcomingPurchases(ctx, req)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get pending executions")
+	})
+
 	t.Run("list plans error", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
 		mockStore.On("ListPurchasePlans", ctx).Return(nil, errors.New("db error"))
 
 		mockAuth, req := adminDashboardReq(ctx)
@@ -684,25 +758,16 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to get purchase plans")
 	})
 
-	t.Run("plan without next execution date", func(t *testing.T) {
+	t.Run("no pending executions yields empty list", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-
-		plans := []config.PurchasePlan{
-			{
-				ID:                "11111111-1111-1111-1111-111111111111",
-				Name:              "Plan Without Date",
-				Enabled:           true,
-				NextExecutionDate: nil, // No execution date
-			},
-		}
-
-		mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+		mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+		mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{}, nil)
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getUpcomingPurchases(ctx, req)
 		require.NoError(t, err)
-		assert.Len(t, result.Purchases, 0) // Should not include plan without date
+		assert.Len(t, result.Purchases, 0)
 	})
 }

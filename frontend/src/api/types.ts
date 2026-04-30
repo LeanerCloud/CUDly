@@ -32,6 +32,7 @@ export interface DashboardSummary {
 }
 
 export interface UpcomingPurchase {
+  execution_id: string;
   plan_id: string;
   plan_name: string;
   scheduled_date: string;
