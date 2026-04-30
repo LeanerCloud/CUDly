@@ -1517,6 +1517,35 @@ func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *te
 	mockAuth.AssertExpectations(t)
 }
 
+// TestIsPermissionDenied pins the strict (un-wrapped) type-assertion
+// invariant from CR pass 2 on PR #216: a wrapped 403 ClientError must
+// NOT count as permission-denied because the wrapper changes the
+// failure's outer category. Only an *exact* *clientError with code 403
+// triggers the fall-through to the contact_email gate.
+func TestIsPermissionDenied(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error is not denial", nil, false},
+		{"plain 403 ClientError is denial", NewClientError(403, "permission denied"), true},
+		{"500 ClientError is not denial", NewClientError(500, "auth service down"), false},
+		{"401 ClientError is not denial", NewClientError(401, "no session"), false},
+		{"non-ClientError is not denial", errors.New("auth backend timeout"), false},
+		{
+			name: "wrapped 403 is NOT denial (errors.As-style unwrap is rejected)",
+			err:  fmt.Errorf("permission check failed: %w", NewClientError(403, "denied")),
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isPermissionDenied(tc.err))
+		})
+	}
+}
+
 // TestHandler_cancelPurchase_DeepLink_TransientAuthErrorPropagates pins the
 // CR-feedback hardening on PR #216: when authorizeSessionCancel returns a
 // non-403 error (auth service down, HasPermissionAPI wrapped error,

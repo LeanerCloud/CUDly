@@ -798,14 +798,22 @@ func (h *Handler) tryResolveActorEmail(ctx context.Context, req *events.LambdaFu
 	return ""
 }
 
-// isPermissionDenied reports whether err is a ClientError with HTTP status
-// 403. The cancel-from-email session pre-check uses this to distinguish a
-// legitimate "your session lacks cancel-* permission" answer (fall through
-// to the token branch's contact_email gate) from a transient auth-service
-// failure (propagate so the caller sees the real cause). CR feedback on
-// PR #216.
+// isPermissionDenied reports whether err is *directly* a 403 ClientError
+// (not merely something that wraps one). Used by the cancel-from-email
+// session pre-check to distinguish a legitimate "your session lacks
+// cancel-* permission" answer (fall through to the token branch's
+// contact_email gate) from a transient auth-service failure (propagate so
+// the caller sees the real cause). CR feedback on PR #216.
+//
+// Strict (un-wrapped) type assertion is deliberate: if a future caller
+// wraps a 403 to add context (fmt.Errorf("permission check failed: %w",
+// ...)), that wrapped error represents the *outer* failure mode (the
+// wrapper's intent), not "this is still a 403". errors.As-style unwrapping
+// would erase that distinction and silently route wrapped backend
+// failures into the contact_email gate — exactly the misclassification
+// the propagate-vs-fall-through split is meant to prevent.
 func isPermissionDenied(err error) bool {
-	ce, ok := IsClientError(err)
+	ce, ok := err.(*clientError)
 	return ok && ce.code == 403
 }
 
