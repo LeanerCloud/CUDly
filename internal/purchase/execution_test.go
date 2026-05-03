@@ -834,3 +834,130 @@ func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 	mockProviderInst.AssertExpectations(t)
 	mockServiceClient.AssertExpectations(t)
 }
+
+// TestExecuteMultiAccount_RunsAccountsInParallel pins the spec E-2 parallelism
+// promise: a multi-account plan must fan out concurrently, not iterate serially.
+// The companion TestExecuteMultiAccount_PartialFailure_IsolatesAccounts above
+// proves per-account error isolation but would still pass if executeMultiAccount
+// were refactored to a serial for-loop. This test fails on a serial loop.
+//
+// Mechanics: two accounts, each with valid credentials, each blocking inside
+// PurchaseCommitment for perCallDelay. Parallel fan-out completes in roughly
+// perCallDelay; a serial loop would require ~2 * perCallDelay. The threshold
+// is set comfortably between the two so a slow CI runner does not flake on
+// parallel scheduling overhead but a serial-loop regression is caught.
+func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
+	const (
+		perCallDelay     = 300 * time.Millisecond
+		serialBoundary   = 2 * perCallDelay // serial fan-out lower bound: 600ms
+		parallelMaxBound = 500 * time.Millisecond
+	)
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	const (
+		accountAID = "aaaaaaaa-0000-0000-0000-000000000001"
+		accountBID = "bbbbbbbb-0000-0000-0000-000000000002"
+	)
+
+	accounts := []config.CloudAccount{
+		{ID: accountAID, Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
+		{ID: accountBID, Name: "B", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys"},
+	}
+
+	rec := config.RecommendationRecord{
+		Provider:     "aws",
+		Service:      "ec2",
+		ResourceType: "m5.large",
+		Region:       "us-east-1",
+		Count:        1,
+		Savings:      75.0,
+		UpfrontCost:  300.0,
+		Selected:     true,
+	}
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:     "exec-parallel",
+		PlanID:          "plan-parallel",
+		Status:          "pending",
+		Recommendations: []config.RecommendationRecord{rec},
+	}
+
+	plan := &config.PurchasePlan{
+		ID:           "plan-parallel",
+		Name:         "Parallel Fan-Out Plan",
+		RampSchedule: config.RampSchedule{CurrentStep: 0, TotalSteps: 1},
+	}
+
+	mockStore.On("GetPurchasePlan", ctx, "plan-parallel").Return(plan, nil)
+	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return accounts, nil
+	}
+
+	var savedMu sync.Mutex
+	var savedExecs []*config.PurchaseExecution
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
+		savedMu.Lock()
+		saved := *e
+		savedExecs = append(savedExecs, &saved)
+		savedMu.Unlock()
+		return nil
+	}
+
+	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil).Twice()
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Twice()
+
+	// Each PurchaseCommitment call blocks for perCallDelay. Under serial
+	// execution the total elapsed time would exceed serialBoundary; under
+	// errgroup-style parallelism it stays close to perCallDelay.
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("common.PurchaseOptions"),
+	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-parallel"}, nil).
+		Run(func(_ mock.Arguments) {
+			time.Sleep(perCallDelay)
+		}).Twice()
+
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Twice()
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Twice()
+
+	credStore := &MockCredentialStore{
+		LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`), nil
+		},
+	}
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       credStore,
+	}
+
+	start := time.Now()
+	_, err := manager.executePurchase(ctx, exec)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "both accounts have valid credentials and should succeed")
+	require.Len(t, savedExecs, 2, "exactly two SavePurchaseExecution calls expected — one per account")
+
+	// The core parallelism assertion: a serial loop would take >= serialBoundary
+	// (2 * perCallDelay = 600ms). Parallel fan-out completes in roughly
+	// perCallDelay (300ms) plus modest scheduling overhead. The boundary is
+	// set with margin so CI scheduler jitter does not flake the test, while
+	// any serial-loop regression is caught.
+	assert.Less(t, elapsed, parallelMaxBound,
+		"executeMultiAccount must run accounts in parallel — serial would take ~%v, parallel ~%v, observed %v",
+		serialBoundary, perCallDelay, elapsed)
+
+	mockStore.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
+	mockFactory.AssertExpectations(t)
+	mockProviderInst.AssertExpectations(t)
+	mockServiceClient.AssertExpectations(t)
+}
