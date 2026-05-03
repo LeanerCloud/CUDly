@@ -6,9 +6,13 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
+	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestListConvertibleRIs_RequiresAdmin(t *testing.T) {
@@ -314,6 +318,144 @@ func TestRejectRIExchange_MissingToken(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, err.Error(), "rejection token is required")
+}
+
+// fakeReshapeEC2Stub is a unit-test stub for reshapeEC2Client.
+// Returns a single convertible RI so the downstream
+// AnalyzeReshapingWithRecs actually invokes purchaseRecLookupFromStore's
+// closure — without an RI in the input slice the recs lookup is never
+// called and the region-normalization assertion would never fire
+// (silent test trap). Mirrors the integration-test fake but lives
+// here so this unit test runs without the //go:build integration tag.
+type fakeReshapeEC2Stub struct {
+	instances []ec2svc.ConvertibleRI
+}
+
+func (f *fakeReshapeEC2Stub) ListConvertibleReservedInstances(_ context.Context) ([]ec2svc.ConvertibleRI, error) {
+	return f.instances, nil
+}
+
+// fakeReshapeRecsStub returns a configurable RI utilization slice so
+// the reshape pipeline runs without a real Cost Explorer dependency.
+// AnalyzeReshapingWithRecs only emits a recommendation (and only then
+// invokes the recs lookup closure) when an RI has a utilization entry
+// BELOW the threshold — without one the analyzer returns nil and the
+// closure never fires, producing a silent test. Seed with util-percent
+// well under the request's threshold (95) to guarantee the closure
+// runs.
+type fakeReshapeRecsStub struct {
+	utilization []recommendations.RIUtilization
+}
+
+func (f *fakeReshapeRecsStub) GetRIUtilization(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+	return f.utilization, nil
+}
+
+// TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion pins the
+// region-normalization fix from commit afc3aa1ff: when the caller
+// omits ?region= (or sends ?region=), the handler MUST adopt
+// cfg.Region (the value the AWS SDK clients are actually talking to)
+// before threading the region through to the recs lookup. Without
+// the normalization the recs query lands as Region:"" — an unscoped
+// read that surfaces alternatives from every region onto the reshape
+// page.
+//
+// Mock injection strategy: build a Handler with the same factory-
+// injection seams the integration test uses (reshapeEC2Factory,
+// reshapeRecsFactory, reshapeAccountResolver) so the request runs
+// without real AWS calls or Postgres. Pre-seal awsCfgOnce with
+// Region:"us-west-2" so loadAWSConfigWithRegion(ctx, "") returns a
+// config carrying that region. Wire MockConfigStore.ListStoredRecommendations
+// with mock.Run to capture every filter the closure passes — the
+// load-bearing assertion is filter.Region == "us-west-2" (not "").
+//
+// Reverting the `if region == "" { region = cfg.Region }` block from
+// handler_ri_exchange.go makes this test fail loudly with the captured
+// filter showing Region:"".
+func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
+	const cfgRegion = "us-west-2"
+
+	mockStore := &MockConfigStore{}
+	// mock.Run captures every invocation's arguments without affecting
+	// the return value. Returning nil/nil from ListStoredRecommendations
+	// means "no recs in this region" which the downstream pipeline
+	// treats as empty alternatives — fine for our purposes.
+	var capturedFilters []config.RecommendationFilter
+	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
+		Return([]config.RecommendationRecord(nil), nil).
+		Run(func(args mock.Arguments) {
+			capturedFilters = append(capturedFilters, args.Get(1).(config.RecommendationFilter))
+		})
+
+	h := &Handler{
+		config: mockStore,
+		auth:   &mockAuthForExchange{},
+		// Inject one convertible RI so AnalyzeReshapingWithRecs
+		// actually drives purchaseRecLookupFromStore — otherwise the
+		// closure never fires and the assertion is silent.
+		reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
+			return &fakeReshapeEC2Stub{
+				instances: []ec2svc.ConvertibleRI{
+					{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: "USD"},
+				},
+			}
+		},
+		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient {
+			// Util well below threshold (95) → analyzeRI emits a
+			// recommendation → AnalyzeReshapingWithRecs invokes the
+			// recs lookup closure → MockConfigStore.ListStoredRecommendations
+			// captures the filter the assertion below inspects.
+			return &fakeReshapeRecsStub{
+				utilization: []recommendations.RIUtilization{
+					{ReservedInstanceID: "ri-1", UtilizationPercent: 50.0},
+				},
+			}
+		},
+		// Bypass STS so the test is hermetic. Empty cloud-account ID
+		// is the legitimate "no scope filter" path; this test isolates
+		// the region-normalization regression, not account scoping.
+		reshapeAccountResolver: func(_ context.Context) (string, error) { return "", nil },
+	}
+	// Pre-seal awsCfgOnce with the cfg.Region the handler must adopt
+	// when the caller sends an empty ?region=. loadAWSConfigWithRegion
+	// returns this config unmodified (region override is skipped on
+	// empty input), so cfg.Region == cfgRegion downstream.
+	h.awsCfgOnce.Do(func() {
+		h.awsCfg = aws.Config{Region: cfgRegion}
+	})
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{
+			// Explicit empty value — the regression case from issue #151.
+			// Equivalent to omitting the key entirely (Go map zero-value).
+			"region":        "",
+			"lookback_days": "30",
+			"threshold":     "95.0",
+		},
+	}
+
+	_, err := h.getReshapeRecommendations(context.Background(), req)
+	require.NoError(t, err, "reshape handler must succeed when region is empty (cfg.Region used)")
+
+	// Guard against a silent test: if AnalyzeReshapingWithRecs ever
+	// stops invoking the closure for synthetic RIs, the region check
+	// would vacuously pass. Require at least one captured filter.
+	require.NotEmpty(t, capturedFilters,
+		"recs lookup must be invoked at least once — without it the region-normalization "+
+			"assertion would silently pass even if the fix were reverted")
+
+	// Load-bearing assertion: every captured filter must carry the
+	// normalized cfg.Region value, NOT the empty string the request
+	// arrived with. If the `if region == "" { region = cfg.Region }`
+	// block in getReshapeRecommendations is removed, this fails.
+	for i, f := range capturedFilters {
+		assert.Equal(t, cfgRegion, f.Region,
+			"capturedFilters[%d].Region must equal cfg.Region (%q), not %q — empty ?region= "+
+				"must normalize to cfg.Region or the recs lookup runs unscoped and leaks "+
+				"alternatives from other regions onto the reshape page (commit afc3aa1ff)",
+			i, cfgRegion, f.Region)
+	}
 }
 
 // Suppress unused import warnings
