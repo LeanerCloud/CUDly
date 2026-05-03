@@ -500,13 +500,14 @@ const (
 )
 
 // awsPlan209 returns a plan whose services map yields a single derived
-// provider ("aws"). Used as the default fixture across the mismatch
+// provider ("aws"). Key format is "provider/service" as produced by
+// buildServiceConfig. Used as the default fixture across the mismatch
 // tests below.
 func awsPlan209() *config.PurchasePlan {
 	return &config.PurchasePlan{
 		ID:       planID209,
 		Name:     "AWS-only plan",
-		Services: map[string]config.ServiceConfig{"aws:ec2": {}},
+		Services: map[string]config.ServiceConfig{"aws/ec2": {}},
 	}
 }
 

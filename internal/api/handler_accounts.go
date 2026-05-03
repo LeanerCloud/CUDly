@@ -1040,8 +1040,9 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 }
 
 // derivePlanProviders extracts the distinct set of providers a plan
-// targets by parsing the keys of plan.Services (format "provider:service",
-// e.g. "aws:ec2"). Returns a sorted slice for stable error messages.
+// targets by parsing the keys of plan.Services (format "provider/service",
+// e.g. "aws/ec2" — produced by buildServiceConfig). Returns a sorted slice
+// for stable error messages.
 // An empty result means the plan has no parseable services — production
 // plans always carry at least one (frontend enforces this), so an empty
 // return is a defensive case that signals to skip provider validation.
@@ -1051,12 +1052,12 @@ func derivePlanProviders(plan *config.PurchasePlan) []string {
 	}
 	seen := make(map[string]struct{}, len(plan.Services))
 	for k := range plan.Services {
-		// Keys are "provider:service"; skip malformed keys rather than guess.
-		parts := strings.SplitN(k, ":", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		// Keys are "provider/service"; skip malformed keys rather than guess.
+		p, _, ok := strings.Cut(k, "/")
+		if !ok || p == "" {
 			continue
 		}
-		seen[parts[0]] = struct{}{}
+		seen[p] = struct{}{}
 	}
 	out := make([]string, 0, len(seen))
 	for p := range seen {

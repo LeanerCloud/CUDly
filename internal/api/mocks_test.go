@@ -320,11 +320,15 @@ func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accou
 // SetPlanAccounts uses SetPlanAccountsFn when non-nil so tests can
 // capture and assert on the call (the issue-#209 mismatch tests verify
 // the underlying store write is NOT invoked when validation fails).
-// The default no-op preserves the previous behaviour for tests that
-// don't care.
+// Falls back to m.Called when a testify expectation is registered so
+// .On("SetPlanAccounts", ...) works correctly. The no-op is preserved
+// only when neither path applies (tests that don't care).
 func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
 	if m.SetPlanAccountsFn != nil {
 		return m.SetPlanAccountsFn(ctx, planID, accountIDs)
+	}
+	if m.isExpected("SetPlanAccounts") {
+		return m.Called(ctx, planID, accountIDs).Error(0)
 	}
 	return nil
 }
