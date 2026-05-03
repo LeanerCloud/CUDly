@@ -237,15 +237,19 @@ func (h *Handler) validateSourceIdentity(ctx context.Context) error {
 // caller gets a clear 400 instead of a downloadable bundle that fails at
 // `terraform apply` with a cryptic provider error. See #42.
 //
-// Today the only impossible-by-construction combination is target=aws-cross-account
-// (target == "aws" && source == "aws") from a non-AWS CUDly deployment: the
-// rendered trust policy needs CUDly's AWS account ID in the principal ARN,
-// which a CUDly running on Azure/GCP cannot supply.
+// The rule: a self-source bundle (target == source) requires CUDly to be
+// deployed on the matching cloud. When target != source the bundle uses WIF
+// and carries no source-cloud identity, so any deployment can render it.
+//
+// Covered combinations (see also #140):
+//   - target=aws  + source=aws  on non-AWS  → 400 (aws-cross-account)
+//   - target=azure + source=azure on non-Azure → 400 (azure-self-source)
+//   - target=gcp  + source=gcp  on non-GCP  → 400 (gcp-self-source)
 func validateFederationTargetSource(target, source string) error {
-	if target == "aws" && source == "aws" && sourceCloud() != "aws" {
+	if target == source && sourceCloud() != target {
 		return NewClientError(400, fmt.Sprintf(
-			"target=aws-cross-account requires CUDly to be deployed on AWS; "+
-				"this deployment is on %s", sourceCloud()))
+			"target=%s-self-source requires CUDly to be deployed on %s; "+
+				"this deployment is on %s", target, strings.ToUpper(target), sourceCloud()))
 	}
 	return nil
 }
