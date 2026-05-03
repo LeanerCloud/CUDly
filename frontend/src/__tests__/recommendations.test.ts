@@ -2403,8 +2403,7 @@ describe('effectiveSavingsPct', () => {
 
   test('term=0 clamps to 12 months (no explosion)', () => {
     const pct = effectiveSavingsPct(mk({ savings: 60, upfront_cost: 120, monthly_cost: 40, term: 0 }));
-    expect(pct).not.toBeNull();
-    expect(pct!).toBeCloseTo(45.45, 1);
+    expect(pct).toBeNull();
   });
 
   test('negative effective savings returns a negative percentage', () => {

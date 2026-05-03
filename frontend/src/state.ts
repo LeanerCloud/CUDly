@@ -5,7 +5,7 @@
 import type { AppState } from './types';
 import type { Recommendation } from './api/types';
 
-export type RecommendationsSortColumn = 'savings' | 'upfront_cost' | 'count' | 'term' | 'payback';
+export type RecommendationsSortColumn = 'savings' | 'upfront_cost' | 'count' | 'term' | 'payback' | 'monthly_cost' | 'effective_savings_pct';
 export interface RecommendationsSort {
   column: RecommendationsSortColumn;
   direction: 'asc' | 'desc';

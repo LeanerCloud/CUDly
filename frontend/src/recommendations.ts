@@ -170,9 +170,11 @@ const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => numbe
   savings: (r) => r.savings,
   upfront_cost: (r) => r.upfront_cost,
   monthly_cost: (r) => r.monthly_cost ?? 0,
-  // effectiveSavingsPct returns null on division-by-zero edge cases;
-  // sentinel NEGATIVE_INFINITY sorts those rows to the bottom in asc order.
-  effective_savings_pct: (r) => effectiveSavingsPct(r) ?? Number.NEGATIVE_INFINITY,
+  // effectiveSavingsPct returns null for term=0 / on_demand=0 edge cases.
+  // POSITIVE_INFINITY places null rows at the bottom in ascending order and
+  // at the top in descending — the least surprising behaviour for a savings
+  // column where "no data" rows should be de-emphasised.
+  effective_savings_pct: (r) => effectiveSavingsPct(r) ?? Number.POSITIVE_INFINITY,
   count: (r) => r.count,
   term: (r) => r.term,
 };
@@ -230,7 +232,9 @@ export function effectiveMonthlySavings(r: LocalRecommendation): number {
  * outweighs the recurring savings over the term (anomaly signal).
  */
 export function effectiveSavingsPct(r: LocalRecommendation): number | null {
-  const monthsInTerm = Math.max(12, (r.term || 1) * 12);
+  // Per acceptance criteria: term=0 is a data anomaly — render as em-dash.
+  if (!r.term) return null;
+  const monthsInTerm = r.term * 12;
   const amortized = r.upfront_cost / monthsInTerm;
   const effectiveSavings = r.savings - amortized;
   const onDemand = (r.monthly_cost ?? 0) + r.savings + amortized;
