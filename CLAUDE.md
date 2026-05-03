@@ -134,6 +134,16 @@ rules live in `~/.claude/git-workflow.md` §"Post-PR review loop"
 Forgetting this rule leaves CR threads silently unresolved and pushes
 the triage burden onto the human reviewer.
 
+**When delegating PR work to a subagent**: the prompt MUST include the
+full CR loop, not stop at the first `@coderabbitai review` ping. A fork
+that pushes the PR, pings CR, then exits leaves the CR threads
+unresolved — same failure mode as forgetting the post-push CI watcher.
+The subagent's exit criteria must be: "CR's most recent review has zero
+Actionable items AND every Nitpick is either fixed or has a
+justification reply on the thread", not "PR opened and CR pinged". When
+in doubt, copy the iteration loop above (steps 2–6) into the fork
+prompt verbatim.
+
 ## PR labeling — mirror closing-issue labels (MANDATORY)
 
 Every PR opened in this repo must carry the **same** triage labels as
