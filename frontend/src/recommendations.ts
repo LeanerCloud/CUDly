@@ -169,6 +169,12 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
 const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => number> = {
   savings: (r) => r.savings,
   upfront_cost: (r) => r.upfront_cost,
+  monthly_cost: (r) => r.monthly_cost ?? 0,
+  // effectiveSavingsPct returns null for term=0 / on_demand=0 edge cases.
+  // POSITIVE_INFINITY places null rows at the bottom in ascending order and
+  // at the top in descending — the least surprising behaviour for a savings
+  // column where "no data" rows should be de-emphasised.
+  effective_savings_pct: (r) => effectiveSavingsPct(r) ?? Number.POSITIVE_INFINITY,
   count: (r) => r.count,
   term: (r) => r.term,
 };
@@ -195,7 +201,50 @@ function cellKey(rec: LocalRecommendation): string {
   return `${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.service}|${rec.region}|${rec.resource_type}|${rec.engine ?? ''}`;
 }
 
-// pickBestVariantPerCell collapses a list of recs to one rec per cell.
+/**
+ * Computes effective monthly savings by amortizing the upfront cost over the
+ * term. Assumes rec.savings is the on-demand vs. discounted recurring delta
+ * EXCLUDING upfront amortization (matches AWS Cost Explorer's
+ * EstimatedMonthlySavingsAmount semantics; verify per-provider if adding
+ * non-AWS sources).
+ *
+ * Edge case: term=0 clamps to 1yr to avoid division by zero (defensive
+ * clamp consistent with the original pickBestVariantPerCell behaviour).
+ */
+export function effectiveMonthlySavings(r: LocalRecommendation): number {
+  const monthsInTerm = Math.max(12, (r.term || 1) * 12);
+  return r.savings - (r.upfront_cost / monthsInTerm);
+}
+
+/**
+ * Computes effective savings as a percentage of the equivalent on-demand
+ * monthly cost, amortizing the upfront cost over the term. Returns null when
+ * the result would require division by zero (on_demand_monthly === 0).
+ *
+ * Formula (assumes rec.savings excludes upfront amortization — see
+ * effectiveMonthlySavings for the semantics note):
+ *   amortized_upfront_per_month = upfront_cost / (term * 12)
+ *   effective_monthly_savings   = savings - amortized_upfront_per_month
+ *   on_demand_monthly           = monthly_cost + savings + amortized_upfront_per_month
+ *   effective_savings_pct       = (effective_monthly_savings / on_demand_monthly) * 100
+ *
+ * A negative result is valid data — it flags a rec where the upfront cost
+ * outweighs the recurring savings over the term (anomaly signal).
+ */
+export function effectiveSavingsPct(r: LocalRecommendation): number | null {
+  // Per acceptance criteria: term=0 is a data anomaly — render as em-dash.
+  if (!r.term) return null;
+  const monthsInTerm = r.term * 12;
+  const amortized = r.upfront_cost / monthsInTerm;
+  const effectiveSavings = r.savings - amortized;
+  const onDemand = (r.monthly_cost ?? 0) + r.savings + amortized;
+  if (onDemand === 0) return null;
+  return (effectiveSavings / onDemand) * 100;
+}
+
+// pickBestVariantPerCell collapses a list of recs to one rec per cell,
+// preferring the variant matching resolved GlobalConfig.DefaultTerm +
+// DefaultPayment, then falling back to the highest effective monthly savings.
 //
 // issue #223: tiebreaker is "matches resolved GlobalConfig.DefaultTerm +
 // DefaultPayment". If no variant in a cell matches the configured defaults,
@@ -206,9 +255,19 @@ function cellKey(rec: LocalRecommendation): string {
 // the term:
 //   effective = savings - (upfront_cost / (term * 12))
 //
+// Two `(savings, upfront_cost, term)` tuples that look identical on raw
+// `savings` can score very differently on the amortized number — e.g. a
+// 3yr all-upfront commitment with a large lump-sum upfront has a much
+// lower effective monthly savings than a no-upfront variant with the
+// same headline savings. Picking by amortization picks the variant
+// that's actually best for the operator's wallet over the term.
+//
+// Used by issue #224's `select-all` handler. Sibling issue #223 will
+// replace this tiebreaker with "matches resolved GlobalConfig.DefaultTerm
+// + DefaultPayment" once that lands; until then, amortized savings is
+// the right deterministic default.
 // Exported so unit tests can exercise it directly.
 export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): LocalRecommendation[] {
-  // Group recs by cell key.
   const groups = new Map<string, LocalRecommendation[]>();
   for (const r of recs) {
     const k = cellKey(r);
@@ -219,13 +278,6 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
       groups.set(k, [r]);
     }
   }
-
-  const effective = (r: LocalRecommendation): number => {
-    // Defensive clamp: if a rec arrives with term=0 from a malformed
-    // fixture, treat it as 1yr so the division doesn't blow up.
-    const monthsInTerm = Math.max(12, (r.term || 1) * 12);
-    return r.savings - (r.upfront_cost / monthsInTerm);
-  };
 
   const result: LocalRecommendation[] = [];
   for (const group of groups.values()) {
@@ -240,7 +292,7 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
     // No config-matching variant in this cell: fall back to highest effective savings.
     let best = group[0]!;
     for (let i = 1; i < group.length; i++) {
-      if (effective(group[i]!) > effective(best)) best = group[i]!;
+      if (effectiveMonthlySavings(group[i]!) > effectiveMonthlySavings(best)) best = group[i]!;
     }
     result.push(best);
   }
@@ -257,6 +309,8 @@ const SORT_HEADER_LABELS: Record<string, string> = {
   term: 'Term',
   savings: 'Monthly Savings',
   upfront_cost: 'Upfront Cost',
+  monthly_cost: 'Monthly Cost',
+  effective_savings_pct: 'Effective %',
 };
 
 function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
@@ -384,15 +438,21 @@ function categoricalCellValue(r: LocalRecommendation, col: state.Recommendations
     // Numeric columns shouldn't reach this branch; return empty for type-safety.
     case 'count':
     case 'savings':
-    case 'upfront_cost':   return '';
+    case 'upfront_cost':
+    case 'monthly_cost':
+    case 'effective_savings_pct':   return '';
   }
 }
 
 function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColumnId): number {
   switch (col) {
-    case 'count':         return r.count ?? 0;
-    case 'savings':       return r.savings ?? 0;
-    case 'upfront_cost':  return r.upfront_cost ?? 0;
+    case 'count':                return r.count ?? 0;
+    case 'savings':              return r.savings ?? 0;
+    case 'upfront_cost':         return r.upfront_cost ?? 0;
+    case 'monthly_cost':         return r.monthly_cost ?? 0;
+    // Return NaN for null effective_savings_pct so any numeric predicate
+    // returns false rather than coincidentally matching 0.
+    case 'effective_savings_pct': return effectiveSavingsPct(r) ?? Number.NaN;
     // Categorical columns shouldn't reach this branch; return NaN so any
     // numeric predicate returns false rather than coincidentally matching 0.
     case 'provider':
@@ -419,7 +479,7 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
 // ---------------------------------------------------------------------------
 
 const NUMERIC_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set([
-  'count', 'savings', 'upfront_cost',
+  'count', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
 ]);
 
 interface PopoverState {
@@ -1215,7 +1275,7 @@ function providerDisplayName(provider: string): string {
 // neither sortable nor filterable).
 const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
   'provider', 'account', 'service', 'resource_type', 'region',
-  'count', 'term', 'savings', 'upfront_cost',
+  'count', 'term', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
 ];
 
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
@@ -1247,6 +1307,9 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
           const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '\u2014';
           const badge = renderSuppressionBadge(rec);
           const recId = escapeHtml(rec.id);
+          const pct = effectiveSavingsPct(rec);
+          const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
+          const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
           return `
           <tr class="recommendation-row ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
             <td class="checkbox-col">
@@ -1261,6 +1324,8 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
             <td>${formatTerm(rec.term)}</td>
             <td class="savings">${formatCurrency(rec.savings)}</td>
             <td>${formatCurrency(rec.upfront_cost)}</td>
+            <td>${formatCurrency(rec.monthly_cost ?? 0)}</td>
+            <td${pctClass}>${pctText}</td>
           </tr>`;
         }).join('')}
       </tbody>

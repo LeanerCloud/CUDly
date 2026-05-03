@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct } from '../recommendations';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -490,14 +490,15 @@ describe('Recommendations Module', () => {
       });
     });
 
-    test('renders sortable column headers with indicators (Bundle B: 9 columns)', async () => {
+    test('renders sortable column headers with indicators (Bundle B: 11 columns)', async () => {
       await loadRecommendations();
       const list = document.getElementById('recommendations-list');
-      // Bundle B: every data column is sortable. 9 sortable data columns:
+      // Bundle B: every data column is sortable. 11 sortable data columns:
       // provider, account, service, resource_type, region, count, term,
-      // savings, upfront_cost. The leading checkbox column is not sortable.
+      // savings, upfront_cost, monthly_cost, effective_savings_pct.
+      // The leading checkbox column is not sortable.
       const sortables = list?.querySelectorAll('th.sortable');
-      expect(sortables?.length).toBe(9);
+      expect(sortables?.length).toBe(11);
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
@@ -1131,7 +1132,7 @@ describe('Bundle B: column header filter triggers', () => {
     const buttons = document.querySelectorAll<HTMLButtonElement>('th .column-filter-btn[data-column]');
     const cols = Array.from(buttons).map((b) => b.dataset['column']);
     expect(cols.sort()).toEqual(
-      ['account', 'count', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
+      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
     );
   });
 
@@ -2273,8 +2274,8 @@ describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
     // Two variants in one cell: 1yr/all-upfront (configured default) vs
     // 3yr/no-upfront (higher effective savings).
     const recs = [
-      rec('want-this',  1, 'all-upfront',   300, 0),    // effective = $300/mo
-      rec('skip-this',  3, 'no-upfront',    400, 0),    // effective = $400/mo (higher)
+      rec('want-this', 1, 'all-upfront', 300, 0), // effective = $300/mo
+      rec('skip-this', 3, 'no-upfront', 400, 0), // effective = $400/mo (higher)
     ];
     seedGlobalDefaults(1, 'all-upfront');
     const result = pickBestVariantPerCell(recs);
@@ -2285,8 +2286,8 @@ describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
   test('falls back to highest-effective when no variant matches configured defaults', () => {
     // Neither variant matches term=1/all-upfront; fallback picks highest effective.
     const recs = [
-      rec('low-effective',  3, 'all-upfront',  1200, 36000),  // effective = 1200 - 1000 = $200
-      rec('high-effective', 3, 'no-upfront',    400, 0),      // effective = $400
+      rec('low-effective', 3, 'all-upfront', 1200, 36000), // effective = 1200 - 1000 = $200
+      rec('high-effective', 3, 'no-upfront', 400, 0), // effective = $400
     ];
     seedGlobalDefaults(1, 'all-upfront'); // neither matches
     const result = pickBestVariantPerCell(recs);
@@ -2297,8 +2298,8 @@ describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
   test('handles multiple independent cells and picks config-match in each', () => {
     // Two distinct cells; each has a variant matching configured defaults.
     const recs = [
-      rec('cell-a-match',  1, 'all-upfront', 100, 0),
-      rec('cell-a-other',  3, 'no-upfront',  400, 0),  // higher effective but different cell
+      rec('cell-a-match', 1, 'all-upfront', 100, 0),
+      rec('cell-a-other', 3, 'no-upfront', 400, 0), // higher effective but different cell
       { ...rec('cell-b-match', 1, 'all-upfront', 200, 0), region: 'eu-west-1', id: 'cell-b-match' },
       { ...rec('cell-b-other', 3, 'partial-upfront', 600, 0), region: 'eu-west-1', id: 'cell-b-other' },
     ];
@@ -2310,12 +2311,252 @@ describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
 
   test('config-match with 3yr/partial-upfront as configured defaults', () => {
     const recs = [
-      rec('wrong-1',   1, 'all-upfront',     100, 0),
-      rec('want-3yr',  3, 'partial-upfront', 100, 0),
+      rec('wrong-1', 1, 'all-upfront', 100, 0),
+      rec('want-3yr', 3, 'partial-upfront', 100, 0),
     ];
     seedGlobalDefaults(3, 'partial-upfront');
     const result = pickBestVariantPerCell(recs);
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe('want-3yr');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #220 / #221: effectiveMonthlySavings + effectiveSavingsPct helpers
+// + Monthly Cost and Effective % column rendering
+// ---------------------------------------------------------------------------
+
+describe('effectiveMonthlySavings', () => {
+  const mk = (overrides: Partial<LocalRecommendation>): LocalRecommendation => ({
+    id: 'r',
+    provider: 'aws',
+    service: 'ec2',
+    resource_type: 't3.medium',
+    region: 'us-east-1',
+    count: 1,
+    term: 1,
+    savings: 100,
+    upfront_cost: 0,
+    monthly_cost: 50,
+    ...overrides,
+  } as unknown as LocalRecommendation);
+
+  test('no-upfront: effective equals raw savings when upfront=0', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 100, upfront_cost: 0, term: 1 }))).toBeCloseTo(100);
+  });
+
+  test('all-upfront: effective = savings - upfront / (term * 12)', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 50, upfront_cost: 600, term: 1 }))).toBeCloseTo(0);
+    expect(effectiveMonthlySavings(mk({ savings: 1200, upfront_cost: 36000, term: 3 }))).toBeCloseTo(200);
+  });
+
+  test('partial-upfront: intermediate amortization', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 600, upfront_cost: 7200, term: 3 }))).toBeCloseTo(400);
+  });
+
+  test('term=0 clamps to 1yr (12 months) to avoid division by zero', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 60, upfront_cost: 120, term: 0 }))).toBeCloseTo(50);
+  });
+
+  test('can return negative when upfront dominates (data anomaly signal)', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 10, upfront_cost: 1200, term: 1 }))).toBeCloseTo(-90);
+  });
+});
+
+describe('effectiveSavingsPct', () => {
+  const mk = (overrides: Partial<LocalRecommendation>): LocalRecommendation => ({
+    id: 'r',
+    provider: 'aws',
+    service: 'ec2',
+    resource_type: 't3.medium',
+    region: 'us-east-1',
+    count: 1,
+    term: 1,
+    savings: 100,
+    upfront_cost: 0,
+    monthly_cost: 50,
+    ...overrides,
+  } as unknown as LocalRecommendation);
+
+  test('no-upfront: pct = savings / (monthly_cost + savings) * 100', () => {
+    const pct = effectiveSavingsPct(mk({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 }));
+    expect(pct).not.toBeNull();
+    expect(pct!).toBeCloseTo(66.67, 1);
+  });
+
+  test('all-upfront with monthly_cost=0: pct uses amortized upfront in onDemand', () => {
+    const pct = effectiveSavingsPct(mk({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1 }));
+    expect(pct).not.toBeNull();
+    expect(pct!).toBeCloseTo(0, 1);
+  });
+
+  test('partial-upfront: standard case', () => {
+    const pct = effectiveSavingsPct(mk({ savings: 600, upfront_cost: 7200, monthly_cost: 200, term: 3 }));
+    expect(pct).not.toBeNull();
+    expect(pct!).toBeCloseTo(40, 1);
+  });
+
+  test('on_demand_monthly=0 returns null (no division by zero)', () => {
+    const pct = effectiveSavingsPct(mk({ savings: 0, upfront_cost: 0, monthly_cost: 0, term: 1 }));
+    expect(pct).toBeNull();
+  });
+
+  test('term=0 clamps to 12 months (no explosion)', () => {
+    const pct = effectiveSavingsPct(mk({ savings: 60, upfront_cost: 120, monthly_cost: 40, term: 0 }));
+    expect(pct).toBeNull();
+  });
+
+  test('negative effective savings returns a negative percentage', () => {
+    const pct = effectiveSavingsPct(mk({ savings: 10, upfront_cost: 1200, monthly_cost: 400, term: 1 }));
+    expect(pct).not.toBeNull();
+    expect(pct!).toBeLessThan(0);
+    expect(pct!).toBeCloseTo(-17.65, 1);
+  });
+
+  test('undefined monthly_cost treated as 0', () => {
+    const pct = effectiveSavingsPct(mk({ savings: 100, upfront_cost: 0, monthly_cost: undefined, term: 1 }));
+    expect(pct).not.toBeNull();
+    expect(pct!).toBeCloseTo(100, 1);
+  });
+});
+
+describe('Monthly Cost + Effective % column rendering', () => {
+  beforeEach(() => {
+    document.body.innerHTML = [
+      '<div id="recommendations-tab" class="tab-content active">',
+      '<div id="recommendations-summary"></div>',
+      '<div id="recommendations-list"></div>',
+      '</div>',
+      '<div id="purchase-modal" class="hidden">',
+      '<div id="purchase-details"></div>',
+      '</div>',
+    ].join('');
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    window.alert = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const baseRec = (overrides: Partial<LocalRecommendation> = {}): LocalRecommendation => ({
+    id: 'test-rec',
+    provider: 'aws' as const,
+    service: 'ec2',
+    resource_type: 't3.medium',
+    region: 'us-east-1',
+    count: 1,
+    term: 1,
+    savings: 100,
+    upfront_cost: 0,
+    monthly_cost: 50,
+    ...overrides,
+  } as unknown as LocalRecommendation);
+
+  test('table header includes "Monthly Cost" and "Effective %" columns', async () => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [baseRec()],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([baseRec()]);
+    await loadRecommendations();
+
+    const headers = Array.from(document.querySelectorAll('th')).map((th) => th.textContent ?? '');
+    expect(headers.some((h) => h.includes('Monthly Cost'))).toBe(true);
+    expect(headers.some((h) => h.includes('Effective %'))).toBe(true);
+  });
+
+  test('no-upfront row: Monthly Cost shows rec.monthly_cost, Effective % is positive', async () => {
+    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [rec],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    await loadRecommendations();
+
+    const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
+    expect(cells.some((c) => c === '$50')).toBe(true);
+    expect(cells.some((c) => c.includes('%') && !c.includes('em'))).toBe(true);
+  });
+
+  test('all-upfront row: Monthly Cost shows $0, Effective % accounts for amortization', async () => {
+    const rec = baseRec({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1 });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [rec],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    await loadRecommendations();
+
+    const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
+    expect(cells.some((c) => c === '$0')).toBe(true);
+    expect(cells.some((c) => c === '0.0%')).toBe(true);
+  });
+
+  test('on_demand_monthly=0 row: Effective % renders as em-dash', async () => {
+    const rec = baseRec({ savings: 0, upfront_cost: 0, monthly_cost: 0, term: 1 });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [rec],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    await loadRecommendations();
+
+    const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
+    expect(cells.some((c) => c === '—')).toBe(true);
+  });
+
+  test('negative-effective row: Effective % cell has effective-pct-negative class', async () => {
+    const rec = baseRec({ savings: 10, upfront_cost: 1200, monthly_cost: 400, term: 1 });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [rec],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    await loadRecommendations();
+
+    const negativeCells = document.querySelectorAll('tbody td.effective-pct-negative');
+    expect(negativeCells.length).toBeGreaterThan(0);
+  });
+
+  test('sort header for monthly_cost is wired - clicking sets sort to monthly_cost', async () => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [baseRec()],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([baseRec()]);
+    await loadRecommendations();
+
+    const header = document.querySelector<HTMLTableCellElement>('th[data-sort="monthly_cost"]');
+    expect(header).not.toBeNull();
+    header!.click();
+    expect(state.setRecommendationsSort).toHaveBeenCalledWith(
+      expect.objectContaining({ column: 'monthly_cost' }),
+    );
+  });
+
+  test('sort header for effective_savings_pct is wired - clicking sets sort', async () => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [baseRec()],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([baseRec()]);
+    await loadRecommendations();
+
+    const header = document.querySelector<HTMLTableCellElement>('th[data-sort="effective_savings_pct"]');
+    expect(header).not.toBeNull();
+    header!.click();
+    expect(state.setRecommendationsSort).toHaveBeenCalledWith(
+      expect.objectContaining({ column: 'effective_savings_pct' }),
+    );
   });
 });
