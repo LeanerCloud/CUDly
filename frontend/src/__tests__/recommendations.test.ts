@@ -2401,7 +2401,7 @@ describe('effectiveSavingsPct', () => {
     expect(pct).toBeNull();
   });
 
-  test('term=0 clamps to 12 months (no explosion)', () => {
+  test('term=0 is a data anomaly — returns null (not a clamped percentage)', () => {
     const pct = effectiveSavingsPct(mk({ savings: 60, upfront_cost: 120, monthly_cost: 40, term: 0 }));
     expect(pct).toBeNull();
   });
@@ -2558,5 +2558,34 @@ describe('Monthly Cost + Effective % column rendering', () => {
     expect(state.setRecommendationsSort).toHaveBeenCalledWith(
       expect.objectContaining({ column: 'effective_savings_pct' }),
     );
+  });
+
+  test('null effective_savings_pct rows sort last in both asc and desc directions', async () => {
+    // rec-a: term=1 → pct ≈ 66.7%
+    // rec-b: term=0 → pct = null (data anomaly)
+    // rec-c: term=1 → pct ≈ 33.3%
+    const recA = baseRec({ id: 'rec-a', savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
+    const recB = baseRec({ id: 'rec-b', savings: 60, upfront_cost: 0, monthly_cost: 40, term: 0 });
+    const recC = baseRec({ id: 'rec-c', savings: 50, upfront_cost: 0, monthly_cost: 100, term: 1 });
+
+    const recs = [recA, recB, recC];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+
+    // Ascending: c (33%) → a (66%) → b (null-last)
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'effective_savings_pct', direction: 'asc' });
+    await loadRecommendations();
+    let rows = Array.from(document.querySelectorAll('tr.recommendation-row')).map(
+      (tr) => (tr as HTMLElement).dataset['recId'],
+    );
+    expect(rows[rows.length - 1]).toBe('rec-b'); // null row is last
+
+    // Descending: a (66%) → c (33%) → b (null-last)
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'effective_savings_pct', direction: 'desc' });
+    await loadRecommendations();
+    rows = Array.from(document.querySelectorAll('tr.recommendation-row')).map(
+      (tr) => (tr as HTMLElement).dataset['recId'],
+    );
+    expect(rows[rows.length - 1]).toBe('rec-b'); // null row is last in desc too
   });
 });

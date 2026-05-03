@@ -162,19 +162,17 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
   `;
 }
 
-// Comparator extractors per column. Numeric columns return numbers
-// (subtraction-based sort); string columns return strings (localeCompare-based
-// sort). Bundle B extended this with the string columns so every visible data
-// column is sortable.
-const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => number> = {
+// Comparator extractors per column. Numeric columns return numbers or null
+// (null means "no data" — see sortedRecommendations for null placement).
+// String columns return strings (localeCompare-based sort). Bundle B extended
+// this with the string columns so every visible data column is sortable.
+const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => number | null> = {
   savings: (r) => r.savings,
   upfront_cost: (r) => r.upfront_cost,
   monthly_cost: (r) => r.monthly_cost ?? 0,
   // effectiveSavingsPct returns null for term=0 / on_demand=0 edge cases.
-  // POSITIVE_INFINITY places null rows at the bottom in ascending order and
-  // at the top in descending — the least surprising behaviour for a savings
-  // column where "no data" rows should be de-emphasised.
-  effective_savings_pct: (r) => effectiveSavingsPct(r) ?? Number.POSITIVE_INFINITY,
+  // Null rows are placed last by sortedRecommendations regardless of direction.
+  effective_savings_pct: (r) => effectiveSavingsPct(r),
   count: (r) => r.count,
   term: (r) => r.term,
 };
@@ -232,8 +230,9 @@ export function effectiveMonthlySavings(r: LocalRecommendation): number {
  * outweighs the recurring savings over the term (anomaly signal).
  */
 export function effectiveSavingsPct(r: LocalRecommendation): number | null {
-  // Per acceptance criteria: term=0 is a data anomaly — render as em-dash.
-  if (!r.term) return null;
+  // Per acceptance criteria: null/undefined term (no data) and explicit
+  // term=0 (data anomaly) both render as em-dash.
+  if (r.term === 0 || r.term == null) return null;
   const monthsInTerm = r.term * 12;
   const amortized = r.upfront_cost / monthsInTerm;
   const effectiveSavings = r.savings - amortized;
@@ -326,7 +325,16 @@ function sortedRecommendations(recs: LocalRecommendation[]): LocalRecommendation
   const numericKey = SORTABLE_NUMERIC_COLUMNS[sort.column];
   if (numericKey) {
     // slice() clones so we don't mutate the caller's array.
-    return recs.slice().sort((a, b) => (numericKey(a) - numericKey(b)) * direction);
+    // Null values (no-data rows) are always placed last regardless of
+    // sort direction — they carry no meaningful numeric signal.
+    return recs.slice().sort((a, b) => {
+      const av = numericKey(a);
+      const bv = numericKey(b);
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;   // a is null → push to end
+      if (bv === null) return -1;  // b is null → push to end
+      return (av - bv) * direction;
+    });
   }
   const stringKey = SORTABLE_STRING_COLUMNS[sort.column];
   if (stringKey) {
