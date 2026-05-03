@@ -142,6 +142,55 @@ const SORTABLE_STRING_COLUMNS: Record<string, (r: LocalRecommendation) => string
   region: (r) => r.region ?? '',
 };
 
+// cellKey identifies the physical-resource cell a rec belongs to.
+// After PR #195's per-(term, payment) fan-out, a single physical resource
+// produces up to 6 alternative rec rows (2 terms × 3 payments). The
+// `(provider, cloud_account_id, service, region, resource_type, engine)`
+// prefix is the cell — recs sharing this prefix are alternatives, not
+// additions. Same prefix the scheduler ID encoding uses
+// (scheduler.go:856-858, PR #189) but without the (term, payment) suffix.
+//
+// Used by issue #224's radio enforcement: at most one variant per cell
+// can be selected at any time.
+function cellKey(rec: LocalRecommendation): string {
+  return `${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.service}|${rec.region}|${rec.resource_type}|${rec.engine ?? ''}`;
+}
+
+// pickBestVariantPerCell collapses a list of recs to one rec per cell,
+// choosing the variant with the highest effective monthly savings.
+//
+// Effective savings amortizes the upfront cost across the term:
+//   effective = savings - (upfront_cost / (term * 12))
+//
+// Two `(savings, upfront_cost, term)` tuples that look identical on raw
+// `savings` can score very differently on the amortized number — e.g. a
+// 3yr all-upfront commitment with a large lump-sum upfront has a much
+// lower effective monthly savings than a no-upfront variant with the
+// same headline savings. Picking by amortization picks the variant
+// that's actually best for the operator's wallet over the term.
+//
+// Used by issue #224's `select-all` handler. Sibling issue #223 will
+// replace this tiebreaker with "matches resolved GlobalConfig.DefaultTerm
+// + DefaultPayment" once that lands; until then, amortized savings is
+// the right deterministic default.
+function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): LocalRecommendation[] {
+  const byCell = new Map<string, LocalRecommendation>();
+  const effective = (r: LocalRecommendation): number => {
+    // Defensive clamp: if a rec arrives with term=0 from a malformed
+    // fixture, treat it as 1yr so the division doesn't blow up.
+    const monthsInTerm = Math.max(12, (r.term || 1) * 12);
+    return r.savings - (r.upfront_cost / monthsInTerm);
+  };
+  for (const r of recs) {
+    const k = cellKey(r);
+    const existing = byCell.get(k);
+    if (!existing || effective(r) > effective(existing)) {
+      byCell.set(k, r);
+    }
+  }
+  return Array.from(byCell.values());
+}
+
 const SORT_HEADER_LABELS: Record<string, string> = {
   provider: 'Provider',
   account: 'Account',
@@ -1930,7 +1979,16 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   if (selectAllCheckbox) {
     selectAllCheckbox.addEventListener('change', () => {
       if (selectAllCheckbox.checked) {
-        recommendations.forEach((r) => state.addSelectedRecommendation(r.id));
+        // Issue #224: select-all picks ONE variant per cell (highest-effective-
+        // savings) rather than every visible row. After PR #195's per-(term,
+        // payment) fan-out, naive "select every row" produces 6× the intended
+        // commitments per resource — wrong purchase intent. Clear current
+        // selection first so a stale choice from a different filter context
+        // doesn't bleed through.
+        state.clearSelectedRecommendations();
+        for (const r of pickBestVariantPerCell(recommendations)) {
+          state.addSelectedRecommendation(r.id);
+        }
       } else {
         state.clearSelectedRecommendations();
       }
@@ -1942,11 +2000,30 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // changes so a stale selection from a previous filter is a no-op
   // once the user narrows, rather than pointing at whichever rec
   // happens to occupy the old index position.
+  //
+  // Issue #224: enforce one-variant-per-cell radio behaviour on check.
+  // When the user checks a variant, deselect any other variant of the
+  // same cell that's already selected — a single physical resource
+  // can only carry one (term, payment) commitment at a time.
   container.querySelectorAll<HTMLInputElement>('input[data-rec-id]').forEach(cb => {
     cb.addEventListener('change', () => {
       const id = cb.dataset['recId'] || '';
       if (!id) return;
       if (cb.checked) {
+        const newRec = recommendations.find((r) => r.id === id);
+        if (newRec) {
+          const newCell = cellKey(newRec);
+          const selected = state.getSelectedRecommendationIDs();
+          // Scan the full loaded set (not just the filtered view) so that
+          // hidden siblings (e.g. filtered-out term variants) are also
+          // deselected, preserving the one-variant-per-cell contract.
+          const allLoaded = state.getRecommendations() as unknown as LocalRecommendation[];
+          for (const r of allLoaded) {
+            if (r.id !== id && selected.has(r.id) && cellKey(r) === newCell) {
+              state.removeSelectedRecommendation(r.id);
+            }
+          }
+        }
         state.addSelectedRecommendation(id);
       } else {
         state.removeSelectedRecommendation(id);
