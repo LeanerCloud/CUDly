@@ -1,13 +1,17 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults } from '../recommendations';
 
 // Mock the api module
 jest.mock('../api', () => ({
   getRecommendations: jest.fn(),
   refreshRecommendations: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([]),
+  // issue #223: getConfig is fetched on page load to resolve GlobalConfig
+  // defaults (DefaultTerm + DefaultPayment). Default-empty global config so
+  // pre-#223 tests retain their hardcoded-fallback behavior without extra setup.
+  getConfig: jest.fn().mockResolvedValue({ global: {} }),
   // Issue #111: openFanOutModal now pre-fetches per-account service
   // overrides to seed each bucket's Payment default. Default-empty so
   // pre-#111 tests retain their toolbar-seeded behavior without any
@@ -2229,5 +2233,89 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
     expect(addCalls).toHaveLength(1);
     // The "middle" variant has the highest effective ($400/mo > $300 > $200) — picked.
     expect(addCalls[0]![0]).toBe('middle');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #223: default-seed from GlobalConfig across all 3 surfaces.
+// These tests exercise the pickBestVariantPerCell config-match tiebreaker
+// and the seedGlobalDefaults hook that injects resolved GlobalConfig values.
+// ---------------------------------------------------------------------------
+
+describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
+  const rec = (
+    id: string,
+    term: 1 | 3,
+    payment: string,
+    savings = 100,
+    upfront_cost = 0,
+  ) => ({
+    id,
+    provider: 'aws' as const,
+    cloud_account_id: 'acct-1',
+    service: 'ec2',
+    resource_type: 't3.medium',
+    region: 'us-east-1',
+    engine: '',
+    count: 1,
+    term,
+    payment,
+    savings,
+    upfront_cost,
+  } as unknown as LocalRecommendation);
+
+  afterEach(() => {
+    // Reset module cache to initial defaults so tests don't bleed into each other.
+    seedGlobalDefaults(1, 'all-upfront');
+  });
+
+  test('prefers variant matching configured (term, payment) over highest-effective', () => {
+    // Two variants in one cell: 1yr/all-upfront (configured default) vs
+    // 3yr/no-upfront (higher effective savings).
+    const recs = [
+      rec('want-this',  1, 'all-upfront',   300, 0),    // effective = $300/mo
+      rec('skip-this',  3, 'no-upfront',    400, 0),    // effective = $400/mo (higher)
+    ];
+    seedGlobalDefaults(1, 'all-upfront');
+    const result = pickBestVariantPerCell(recs);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.id).toBe('want-this');
+  });
+
+  test('falls back to highest-effective when no variant matches configured defaults', () => {
+    // Neither variant matches term=1/all-upfront; fallback picks highest effective.
+    const recs = [
+      rec('low-effective',  3, 'all-upfront',  1200, 36000),  // effective = 1200 - 1000 = $200
+      rec('high-effective', 3, 'no-upfront',    400, 0),      // effective = $400
+    ];
+    seedGlobalDefaults(1, 'all-upfront'); // neither matches
+    const result = pickBestVariantPerCell(recs);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.id).toBe('high-effective');
+  });
+
+  test('handles multiple independent cells and picks config-match in each', () => {
+    // Two distinct cells; each has a variant matching configured defaults.
+    const recs = [
+      rec('cell-a-match',  1, 'all-upfront', 100, 0),
+      rec('cell-a-other',  3, 'no-upfront',  400, 0),  // higher effective but different cell
+      { ...rec('cell-b-match', 1, 'all-upfront', 200, 0), region: 'eu-west-1', id: 'cell-b-match' },
+      { ...rec('cell-b-other', 3, 'partial-upfront', 600, 0), region: 'eu-west-1', id: 'cell-b-other' },
+    ];
+    seedGlobalDefaults(1, 'all-upfront');
+    const result = pickBestVariantPerCell(recs);
+    const ids = result.map((r) => r.id).sort();
+    expect(ids).toEqual(['cell-a-match', 'cell-b-match']);
+  });
+
+  test('config-match with 3yr/partial-upfront as configured defaults', () => {
+    const recs = [
+      rec('wrong-1',   1, 'all-upfront',     100, 0),
+      rec('want-3yr',  3, 'partial-upfront', 100, 0),
+    ];
+    seedGlobalDefaults(3, 'partial-upfront');
+    const result = pickBestVariantPerCell(recs);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.id).toBe('want-3yr');
   });
 });
