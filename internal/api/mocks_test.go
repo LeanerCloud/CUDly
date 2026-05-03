@@ -37,6 +37,11 @@ type MockConfigStore struct {
 	// provider-validation tests use it to assert whether the underlying
 	// store write was invoked (mismatched assignments must NOT call it).
 	SetPlanAccountsFn func(ctx context.Context, planID string, accountIDs []string) error
+	// SaveAccountServiceOverrideFn overrides SaveAccountServiceOverride when
+	// non-nil. Tests use it to assert whether the persist path was (or was
+	// not) reached — e.g. confirming invalid-combo rejections short-circuit
+	// before the store write.
+	SaveAccountServiceOverrideFn func(ctx context.Context, override *config.AccountServiceOverride) error
 }
 
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -308,6 +313,9 @@ func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, account
 	return nil, nil
 }
 func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
+	if m.SaveAccountServiceOverrideFn != nil {
+		return m.SaveAccountServiceOverrideFn(ctx, override)
+	}
 	return nil
 }
 func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {

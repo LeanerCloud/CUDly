@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/accounts"
+	"github.com/LeanerCloud/CUDly/internal/commitmentopts"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -412,6 +413,110 @@ func TestSaveAccountServiceOverride_Success(t *testing.T) {
 	assert.Equal(t, "ec2", got.Service)
 	assert.Equal(t, "11111111-1111-1111-1111-111111111111", got.AccountID)
 	assert.NotEmpty(t, got.ID)
+}
+
+func TestSaveAccountServiceOverride_InvalidCombo_Returns400(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	saveCalled := false
+	store.SaveAccountServiceOverrideFn = func(_ context.Context, _ *config.AccountServiceOverride) error {
+		saveCalled = true
+		return nil
+	}
+	handler := &Handler{
+		auth:   mockAuth,
+		config: store,
+		commitmentOpts: &stubCommitmentOpts{
+			validateFn: func(_ context.Context, provider, service string, term int, payment string) (bool, error) {
+				assert.Equal(t, "aws", provider)
+				assert.Equal(t, "rds", service)
+				assert.Equal(t, 3, term)
+				assert.Equal(t, "no-upfront", payment)
+				return false, nil
+			},
+		},
+	}
+
+	body := `{"term":3,"payment":"no-upfront"}`
+	path := "11111111-1111-1111-1111-111111111111/service-overrides/aws/rds"
+
+	result, err := handler.saveAccountServiceOverride(ctx, adminRequest(body), path)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.message, "3yr no-upfront")
+	assert.False(t, saveCalled, "override must not be persisted when combo is invalid")
+}
+
+func TestSaveAccountServiceOverride_ValidCombo_Saves(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	handler := &Handler{
+		auth:   mockAuth,
+		config: store,
+		commitmentOpts: &stubCommitmentOpts{
+			validateFn: func(context.Context, string, string, int, string) (bool, error) {
+				return true, nil
+			},
+		},
+	}
+
+	body := `{"term":1,"payment":"all-upfront"}`
+	path := "11111111-1111-1111-1111-111111111111/service-overrides/aws/rds"
+
+	result, err := handler.saveAccountServiceOverride(ctx, adminRequest(body), path)
+	require.NoError(t, err)
+
+	got := result.(*config.AccountServiceOverride)
+	assert.Equal(t, "aws", got.Provider)
+	assert.Equal(t, "rds", got.Service)
+	assert.NotEmpty(t, got.ID)
+}
+
+func TestSaveAccountServiceOverride_NoProbeData_Permissive(t *testing.T) {
+	ctx := context.Background()
+	body := `{"term":3,"payment":"no-upfront"}`
+	path := "11111111-1111-1111-1111-111111111111/service-overrides/aws/rds"
+
+	t.Run("nil commitmentOpts", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		setupAdminAuth(ctx, mockAuth)
+
+		store := setupAdminMock(ctx)
+		handler := &Handler{auth: mockAuth, config: store} // commitmentOpts is nil
+
+		result, err := handler.saveAccountServiceOverride(ctx, adminRequest(body), path)
+		require.NoError(t, err, "nil commitmentOpts must be permissive")
+		assert.NotNil(t, result)
+	})
+
+	t.Run("ErrNoData falls through permissive", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		setupAdminAuth(ctx, mockAuth)
+
+		store := setupAdminMock(ctx)
+		handler := &Handler{
+			auth:   mockAuth,
+			config: store,
+			commitmentOpts: &stubCommitmentOpts{
+				validateFn: func(context.Context, string, string, int, string) (bool, error) {
+					return false, commitmentopts.ErrNoData
+				},
+			},
+		}
+
+		result, err := handler.saveAccountServiceOverride(ctx, adminRequest(body), path)
+		require.NoError(t, err, "ErrNoData must be permissive")
+		assert.NotNil(t, result)
+	})
 }
 
 // --- parseServiceOverridePath ---
