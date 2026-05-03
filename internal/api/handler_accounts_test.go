@@ -601,6 +601,98 @@ func TestDiscoverOrgAccounts_NotFound(t *testing.T) {
 	assert.Equal(t, 404, ce.code)
 }
 
+// TestDiscoverOrgAccounts_RejectsNonAdmin locks down the admin-only gate
+// added in PR #212 CR pass 1 (handler.go switched from
+// requirePermission("create","accounts") to requireAdmin). Without this
+// regression guard, a future refactor that swaps requireAdmin back to
+// requirePermission would silently re-open org discovery to non-admin
+// users — and discovered rows go straight into cloud_accounts, so this
+// is a privilege-escalation surface, not just a UX preference.
+func TestDiscoverOrgAccounts_RejectsNonAdmin(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	// Non-admin session: ValidateSession returns Role="user", which
+	// requireAdmin (middleware.go:227-256) explicitly rejects with 403.
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "regular-user",
+		Email:  "user@example.com",
+		Role:   "user",
+	}, nil)
+
+	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
+
+	_, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"11111111-1111-1111-1111-111111111111"}`))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "non-admin must get a ClientError, not a 5xx")
+	assert.Equal(t, 403, ce.code, "non-admin must be rejected with 403, not 401/400/404")
+}
+
+// TestDiscoverOrgAccounts_CredResolutionFailureIs5xx locks down the
+// 400→5xx remap in buildOrgRootAWSConfig from PR #212 CR pass 1. The
+// credentials resolver mixes definite client-side validation failures
+// (missing aws_role_arn) with transient server-side ones (credential
+// store unavailable, network errors during access-key load); blanket-400
+// was misleading. The current implementation wraps the resolver error as
+// a regular Go error which the handler-default mapping surfaces as 5xx,
+// preserving retryability. Without this regression guard, a future
+// refactor that wraps it as ClientError(400) would silently make
+// transient failures non-retryable.
+func TestDiscoverOrgAccounts_CredResolutionFailureIs5xx(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	root := orgRootAccount()
+	store := setupAdminMock(ctx)
+	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return root, nil
+	}
+
+	// access_keys mode + a credStore that returns a transient error from
+	// LoadRaw simulates a Secrets Manager / Postgres outage —
+	// ResolveAWSCredentialProvider wraps the store error and returns it,
+	// and buildOrgRootAWSConfig must not classify that as a 4xx.
+	credStore := &errCredStore{err: errors.New("simulated secrets manager outage")}
+
+	handler := &Handler{
+		auth:      mockAuth,
+		config:    store,
+		credStore: credStore,
+		// discoverOrgFn must NOT be reached — credential resolution fails
+		// upstream of it. If the test triggers this, the test is
+		// mis-wired (or the handler stopped failing on cred error).
+		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+			t.Fatal("discoverOrgFn must not be called when credential resolution fails")
+			return nil, nil
+		},
+	}
+
+	_, err := handler.discoverOrgAccounts(ctx, adminRequest(`{"account_id":"`+root.ID+`"}`))
+	require.Error(t, err)
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "transient credential-resolution failures must surface as 5xx (retryable), not 4xx — they're not the caller's fault")
+	assert.Contains(t, err.Error(), "resolve credentials", "error message should identify the credential-resolution stage so operators can find it in logs")
+}
+
+// errCredStore satisfies CredentialStore by always returning the same
+// error from LoadRaw. Used to simulate a transient store/network failure
+// in ResolveAWSCredentialProvider — exercises the 5xx-not-4xx contract
+// in TestDiscoverOrgAccounts_CredResolutionFailureIs5xx.
+type errCredStore struct {
+	err error
+}
+
+func (e *errCredStore) LoadRaw(_ context.Context, _, _ string) ([]byte, error) {
+	return nil, e.err
+}
+
+func (e *errCredStore) SaveCredential(_ context.Context, _, _ string, _ []byte) error { return nil }
+func (e *errCredStore) DeleteCredential(_ context.Context, _, _ string) error         { return nil }
+func (e *errCredStore) HasCredential(_ context.Context, _, _ string) (bool, error)    { return false, nil }
+func (e *errCredStore) EncryptPayload(_ []byte) (string, error)                       { return "", nil }
+func (e *errCredStore) DecryptPayload(_ string) ([]byte, error)                       { return nil, nil }
+
 func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
