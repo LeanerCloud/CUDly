@@ -5,6 +5,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -213,6 +214,9 @@ func runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminP
 
 	select {
 	case err := <-done:
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("migration timed out after %s: %w", timeout, err)
+		}
 		return err
 	case <-time.After(timeout):
 		cancelMig()
