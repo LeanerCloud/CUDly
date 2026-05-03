@@ -660,3 +660,177 @@ func TestExecuteForAccount_CredentialFailure_MarksFailed(t *testing.T) {
 		})
 	}
 }
+
+// TestExecuteMultiAccount_PartialFailure_IsolatesAccounts is the regression
+// guard for spec E-2: when one account (account-I) has invalid credentials and
+// another (account-V) has valid credentials, account-V's execution must
+// complete successfully and its record must be independent of account-I's failure.
+//
+// What this test pins:
+//   - Two SavePurchaseExecution calls fire (one per account — no record is skipped).
+//   - account-V's record: Status=="completed", PurchaseID set (purchase went through).
+//   - account-I's record: Status=="failed", Error non-empty.
+//   - account-I's error text does NOT contain account-V's credential material
+//     (cross-account data isolation / log-sanitisation guard).
+//   - account-V's CommitmentID does NOT appear in account-I's error text
+//     (result_data independence).
+//   - The overall executePurchase call returns an error (aggregated from I) —
+//     proving the errgroup collected I's failure — while V's record was still
+//     saved as "completed" (proving the errgroup did NOT short-circuit on I).
+func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	// account-V: valid mock credentials (access_keys path, LoadRaw returns key JSON).
+	// account-I: invalid mock credentials (LoadRaw returns nil → "no credentials" resolver error).
+	const (
+		accountVID  = "vvvvvvvv-0000-0000-0000-000000000001"
+		accountIID  = "iiiiiiii-0000-0000-0000-000000000002"
+		accountVKey = "AKIAIOSFODNN7EXAMPLE" // sentinel — must not appear in I's error
+		commitmentV = "ri-valid-001"         // V's CommitmentID — must not appear in I's error
+	)
+
+	accounts := []config.CloudAccount{
+		{ID: accountVID, Name: "Valid", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
+		{ID: accountIID, Name: "Invalid", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys"},
+	}
+
+	rec := config.RecommendationRecord{
+		Provider:     "aws",
+		Service:      "ec2",
+		ResourceType: "m5.large",
+		Region:       "us-east-1",
+		Count:        1,
+		Savings:      75.0,
+		UpfrontCost:  300.0,
+		Selected:     true,
+	}
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:     "exec-partial",
+		PlanID:          "plan-partial",
+		Status:          "pending",
+		Recommendations: []config.RecommendationRecord{rec},
+	}
+
+	plan := &config.PurchasePlan{
+		ID:           "plan-partial",
+		Name:         "Partial Failure Plan",
+		RampSchedule: config.RampSchedule{CurrentStep: 0, TotalSteps: 1},
+	}
+
+	mockStore.On("GetPurchasePlan", ctx, "plan-partial").Return(plan, nil)
+	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return accounts, nil
+	}
+
+	// Collect saved execution records concurrency-safely (goroutine fan-out).
+	var savedExecs []*config.PurchaseExecution
+	var mu sync.Mutex
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
+		mu.Lock()
+		// Copy the record before appending — executeForAccount reuses the acctExec
+		// struct value but Recommendations slice is already deep-copied; capture
+		// the status and error which are set before Save is called.
+		saved := *e
+		savedExecs = append(savedExecs, &saved)
+		mu.Unlock()
+		return nil
+	}
+
+	// Only account-V reaches the provider; account-I fails at credential resolution.
+	// Use .Once() so testify fails if the factory is called for account-I as well.
+	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil).Once()
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Once()
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("common.PurchaseOptions"),
+	).Return(common.PurchaseResult{Success: true, CommitmentID: commitmentV}, nil).Once()
+
+	// Only account-V triggers history + notification.
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Once()
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Once()
+
+	// Credential store: V gets valid key JSON; I gets nil (no credentials stored).
+	credStore := &MockCredentialStore{
+		LoadRawFn: func(_ context.Context, accountID, _ string) ([]byte, error) {
+			if accountID == accountVID {
+				return []byte(`{"access_key_id":"` + accountVKey + `","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`), nil
+			}
+			// account-I: no credentials stored → resolver returns error.
+			return nil, nil
+		},
+	}
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       credStore,
+	}
+
+	_, err := manager.executePurchase(ctx, exec)
+
+	// The call must return an error (account-I's failure is aggregated).
+	// This proves the errgroup collected the failure rather than discarding it.
+	require.Error(t, err, "executePurchase must surface account-I's credential failure")
+
+	// Both per-account records must have been saved (no silent skip).
+	require.Len(t, savedExecs, 2, "exactly two SavePurchaseExecution calls expected — one per account")
+
+	// Build a map keyed by cloud_account_id for order-independent lookup.
+	byAccount := make(map[string]*config.PurchaseExecution, 2)
+	for _, e := range savedExecs {
+		require.NotNil(t, e.CloudAccountID, "every saved record must have cloud_account_id set")
+		byAccount[*e.CloudAccountID] = e
+	}
+
+	// --- account-V assertions (success path must be unaffected by I's failure) ---
+	recordV, ok := byAccount[accountVID]
+	require.True(t, ok, "account-V's execution record must be saved")
+	assert.Equal(t, "completed", recordV.Status, "account-V must complete successfully")
+	assert.Empty(t, recordV.Error, "account-V's record must carry no error message")
+
+	// Verify the purchase went through: at least one recommendation must be marked Purchased.
+	purchasedV := false
+	for _, r := range recordV.Recommendations {
+		if r.Purchased {
+			purchasedV = true
+			assert.Equal(t, commitmentV, r.PurchaseID, "account-V's commitment ID must match the mock return value")
+		}
+	}
+	assert.True(t, purchasedV, "account-V must have at least one purchased recommendation")
+
+	// --- account-I assertions (failure path must be correctly recorded) ---
+	recordI, ok := byAccount[accountIID]
+	require.True(t, ok, "account-I's execution record must be saved")
+	assert.Equal(t, "failed", recordI.Status, "account-I must be marked failed")
+	assert.NotEmpty(t, recordI.Error, "account-I's record must carry an error message")
+
+	// Log-sanitisation guard: account-I's error must not contain account-V's
+	// credential material (cross-account data leak would be a security regression).
+	assert.NotContains(t, recordI.Error, accountVKey,
+		"account-I's error must not contain account-V's access key (cross-account credential leak)")
+
+	// Result-data independence: account-V's CommitmentID must not bleed into
+	// account-I's error or recommendation error fields.
+	assert.NotContains(t, recordI.Error, commitmentV,
+		"account-I's error must not reference account-V's commitment ID")
+	for _, r := range recordI.Recommendations {
+		assert.NotContains(t, r.Error, commitmentV,
+			"account-I's recommendation errors must not reference account-V's commitment ID")
+	}
+
+	// The base exec record must remain untagged (fan-out creates per-account copies).
+	assert.Nil(t, exec.CloudAccountID, "base execution record must have nil cloud_account_id after fan-out")
+
+	mockStore.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
+	mockFactory.AssertExpectations(t)
+	mockProviderInst.AssertExpectations(t)
+	mockServiceClient.AssertExpectations(t)
+}
