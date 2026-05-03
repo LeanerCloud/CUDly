@@ -942,6 +942,19 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 
 	override := buildServiceOverride(accountID, provider, service, req, existing, now)
 
+	// Defence-in-depth: reject invalid (term, payment) combos before persisting.
+	// checkCommitmentOptionCombo is permissive when commitmentOpts is nil or
+	// probe data is absent (ErrNoData) — the frontend's hardcoded rules are the
+	// primary gate in those cases.
+	if err := h.checkCommitmentOptionCombo(ctx, config.ServiceConfig{
+		Provider: override.Provider,
+		Service:  override.Service,
+		Term:     derefInt(override.Term),
+		Payment:  derefString(override.Payment),
+	}); err != nil {
+		return nil, err
+	}
+
 	if err := h.config.SaveAccountServiceOverride(ctx, override); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
@@ -1014,6 +1027,22 @@ func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOve
 	if req.ExcludeTypes != nil {
 		o.ExcludeTypes = req.ExcludeTypes
 	}
+}
+
+// derefInt dereferences an *int pointer, returning 0 for nil.
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// derefString dereferences a *string pointer, returning "" for nil.
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // deleteAccountServiceOverride handles DELETE /api/accounts/:id/service-overrides/:provider/:service.
