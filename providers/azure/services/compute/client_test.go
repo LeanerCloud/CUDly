@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -660,4 +661,175 @@ func TestBuildReservationBody_OmitsTagsWhenSourceEmpty(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &got))
 	_, present := got["tags"]
 	assert.False(t, present, "tags must be absent when source is empty")
+}
+
+// --- Issue #148: VCPU/MemoryGB enrichment via cached SKU catalogue ---
+
+// vmSKUCatalogueMockPager is a multi-page-and-error-capable mock used
+// only by the issue-148 SKU-catalogue tests below. The shared
+// mocks.MockResourceSKUsPager doesn't expose its page counter and
+// can't simulate a NextPage error — file-scoped here keeps the shared
+// mock surface untouched (matches the cosmosdb / cache test pattern
+// where each service defines its own catalogue mock).
+type vmSKUCatalogueMockPager struct {
+	pages    []armcompute.ResourceSKUsClientListResponse
+	index    int
+	err      error
+	pageHits int // count of NextPage invocations — pinned by FetchedOnce
+}
+
+func (m *vmSKUCatalogueMockPager) More() bool {
+	return m.index < len(m.pages)
+}
+
+func (m *vmSKUCatalogueMockPager) NextPage(_ context.Context) (armcompute.ResourceSKUsClientListResponse, error) {
+	m.pageHits++
+	if m.err != nil {
+		return armcompute.ResourceSKUsClientListResponse{}, m.err
+	}
+	if m.index >= len(m.pages) {
+		return armcompute.ResourceSKUsClientListResponse{}, errors.New("no more pages")
+	}
+	page := m.pages[m.index]
+	m.index++
+	return page, nil
+}
+
+// buildVMSKU constructs an armcompute.ResourceSKU for "virtualMachines"
+// in the given region with the standard vCPUs / MemoryGB capabilities
+// the converter parses out.
+func buildVMSKU(name, region string, vCPUs int, memoryGB string) *armcompute.ResourceSKU {
+	resourceType := "virtualMachines"
+	regionStr := region
+	nameStr := name
+	vcpuName := "vCPUs"
+	vcpuVal := strconv.Itoa(vCPUs)
+	memName := "MemoryGB"
+	memVal := memoryGB
+	return &armcompute.ResourceSKU{
+		Name:         &nameStr,
+		ResourceType: &resourceType,
+		Locations:    []*string{&regionStr},
+		Capabilities: []*armcompute.ResourceSKUCapabilities{
+			{Name: &vcpuName, Value: &vcpuVal},
+			{Name: &memName, Value: &memVal},
+		},
+	}
+}
+
+// TestComputeClient_ConvertAzureVMRecommendation_PopulatesVCPUAndMemoryFromSKUCache
+// asserts the cached SKU-catalogue lookup populates ComputeDetails.VCPU
+// and ComputeDetails.MemoryGB when the catalogue contains the SKU named
+// in the recommendation. Pin for issue #148.
+func TestComputeClient_ConvertAzureVMRecommendation_PopulatesVCPUAndMemoryFromSKUCache(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+
+	mockPager := &vmSKUCatalogueMockPager{
+		pages: []armcompute.ResourceSKUsClientListResponse{
+			{
+				ResourceSKUsResult: armcompute.ResourceSKUsResult{
+					Value: []*armcompute.ResourceSKU{
+						buildVMSKU("Standard_D2s_v3", "eastus", 2, "8"),
+						buildVMSKU("Standard_D4s_v3", "eastus", 4, "16"),
+					},
+				},
+			},
+		},
+	}
+	client.SetResourceSKUsPager(mockPager)
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+	)
+	out := client.convertAzureVMRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.ComputeDetails)
+	require.True(t, ok)
+	assert.Equal(t, "Standard_D2s_v3", details.InstanceType)
+	assert.Equal(t, 2, details.VCPU, "VCPU must be enriched from the cached SKU catalogue")
+	assert.Equal(t, 8.0, details.MemoryGB, "MemoryGB must be enriched from the cached SKU catalogue")
+}
+
+// TestComputeClient_ConvertAzureVMRecommendation_PagerErrorFallsBack
+// asserts that a SKU-catalogue fetch failure does NOT fail the
+// conversion — VCPU/MemoryGB stay at 0 and the rest of Details is
+// populated from the recommendation payload. Graceful-degradation
+// contract from PR #81, now extended to compute.
+func TestComputeClient_ConvertAzureVMRecommendation_PagerErrorFallsBack(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	mockPager := &vmSKUCatalogueMockPager{
+		pages: []armcompute.ResourceSKUsClientListResponse{{}},
+		err:   errors.New("transient Azure API error"),
+	}
+	client.SetResourceSKUsPager(mockPager)
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+	)
+	out := client.convertAzureVMRecommendation(context.Background(), rec)
+	require.NotNil(t, out, "conversion must NOT fail on catalogue-fetch error")
+	details, ok := out.Details.(common.ComputeDetails)
+	require.True(t, ok)
+	assert.Equal(t, "Standard_D2s_v3", details.InstanceType)
+	assert.Equal(t, 0, details.VCPU, "VCPU left at 0 when catalogue fetch fails")
+	assert.Equal(t, 0.0, details.MemoryGB, "MemoryGB left at 0 when catalogue fetch fails")
+}
+
+// TestComputeClient_ConvertAzureVMRecommendation_NoMatchLeavesFieldsZero
+// asserts that when the recommendation's SKU isn't in the catalogue
+// (e.g. SKU listed for another region only), VCPU/MemoryGB stay at 0
+// and the conversion still produces a usable recommendation.
+func TestComputeClient_ConvertAzureVMRecommendation_NoMatchLeavesFieldsZero(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	mockPager := &vmSKUCatalogueMockPager{
+		pages: []armcompute.ResourceSKUsClientListResponse{
+			{
+				ResourceSKUsResult: armcompute.ResourceSKUsResult{
+					Value: []*armcompute.ResourceSKU{
+						buildVMSKU("Standard_D2s_v3", "eastus", 2, "8"),
+					},
+				},
+			},
+		},
+	}
+	client.SetResourceSKUsPager(mockPager)
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("Standard_NC6s_v3"), // not in catalogue
+	)
+	out := client.convertAzureVMRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.ComputeDetails)
+	require.True(t, ok)
+	assert.Equal(t, "Standard_NC6s_v3", details.InstanceType)
+	assert.Equal(t, 0, details.VCPU)
+	assert.Equal(t, 0.0, details.MemoryGB)
+}
+
+// TestComputeClient_CachedSKULookup_FetchedOnce pins the perf
+// invariant from PR #81 (now also enforced for compute, per #148):
+// many converter calls in the same GetRecommendations run trigger
+// exactly ONE catalogue fetch.
+func TestComputeClient_CachedSKULookup_FetchedOnce(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	mockPager := &vmSKUCatalogueMockPager{
+		pages: []armcompute.ResourceSKUsClientListResponse{
+			{
+				ResourceSKUsResult: armcompute.ResourceSKUsResult{
+					Value: []*armcompute.ResourceSKU{
+						buildVMSKU("Standard_D2s_v3", "eastus", 2, "8"),
+					},
+				},
+			},
+		},
+	}
+	client.SetResourceSKUsPager(mockPager)
+
+	for i := 0; i < 10; i++ {
+		_, _ = client.cachedSKULookup(context.Background(), "Standard_D2s_v3")
+	}
+	assert.Equal(t, 1, mockPager.pageHits, "catalogue must be fetched ONCE regardless of lookup count")
 }

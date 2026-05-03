@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
@@ -48,6 +50,20 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+// vmSKUEntry holds the SKU-catalogue-derived fields the converter
+// wants for each VM SKU. Sourced from
+// armcompute.ResourceSKU.Capabilities (a name/value-pair list):
+//   - vCPUs: Capabilities[Name=="vCPUs"].Value, parsed as int.
+//   - memoryGB: Capabilities[Name=="MemoryGB"].Value, parsed as float64.
+//
+// Either field stays at the zero value when the capability is missing
+// or unparseable; common.ComputeDetails treats 0 as "unknown" (the
+// JSON tags on VCPU/MemoryGB are omitempty).
+type vmSKUEntry struct {
+	vCPUs    int
+	memoryGB float64
+}
+
 // ComputeClient handles Azure VM Reserved Instances
 type ComputeClient struct {
 	cred           azcore.TokenCredential
@@ -63,6 +79,17 @@ type ComputeClient struct {
 	// Microsoft.Capacity provider registration check (cached per client lifetime)
 	capacityProviderOnce sync.Once
 	capacityProviderErr  error
+
+	// Lazy SKU catalogue cache. armcompute.ResourceSKUsClient.NewListPager
+	// returns every SKU available to the subscription with its
+	// Capabilities (vCPUs, MemoryGB). Fetched ONCE per client lifetime;
+	// subsequent converter calls in the same GetRecommendations run hit
+	// the in-memory map. A failed fetch leaves skuCacheMap nil and
+	// converters fall back to VCPU=0/MemoryGB=0 with a WARN log — the
+	// conversion itself does NOT fail (graceful-degradation contract,
+	// matches cache/cosmosdb/database from PR #81).
+	skuCacheOnce sync.Once
+	skuCacheMap  map[string]vmSKUEntry
 }
 
 // NewClient creates a new Azure Compute client
@@ -672,20 +699,34 @@ func extractVMPricing(items []AzureRetailPriceItem, termYears int) (onDemand, re
 // providers/azure/internal/recommendations so the four Azure service
 // converters share the same type-assertion + nil-guard ladder.
 //
-// Compute is NOT yet wired to the batched-SKU-catalogue lookup landed
-// for cache/cosmosdb/database. Reason: common.ComputeDetails (in
-// pkg/common/types.go) currently only exposes InstanceType, Platform,
-// Tenancy, Scope. The two enrichments the SKU catalogue would supply
-// for compute are vCPU and MemoryGB — neither of which has a field on
-// ComputeDetails to write into. Adding new fields to a shared struct
-// touches every cloud provider + every consumer (frontend, common
-// matchers, three other providers' converters), which is well outside
-// the scope of this perf change. Tracked as a follow-up — see
-// known_issues/10_azure_provider.md.
-func (c *ComputeClient) convertAzureVMRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+// Details.VCPU and Details.MemoryGB are enriched from a lazily-cached
+// armcompute.ResourceSKUsClient catalogue (cachedSKULookup). The
+// catalogue is fetched ONCE per client lifetime; converter calls in
+// the same GetRecommendations run share the in-memory map (the N+1
+// invariant pinned by TestComputeClient_CachedSKULookup_FetchedOnce).
+// On catalogue-fetch failure or cache miss, both fields stay at 0
+// (the omitempty JSON tags hide them from API payloads) and the
+// conversion still succeeds — matches the graceful-degradation
+// contract from cache/cosmosdb/database in PR #81.
+//
+// Platform / Tenancy / Scope still require additional Azure data
+// sources (consumption usage records, dedicated-host inventory) and
+// remain unpopulated — out of scope for this issue.
+func (c *ComputeClient) convertAzureVMRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
 		return nil
+	}
+	details := common.ComputeDetails{
+		InstanceType: f.ResourceType,
+	}
+	if entry, ok := c.cachedSKULookup(ctx, f.ResourceType); ok {
+		if entry.vCPUs > 0 {
+			details.VCPU = entry.vCPUs
+		}
+		if entry.memoryGB > 0 {
+			details.MemoryGB = entry.memoryGB
+		}
 	}
 	return &common.Recommendation{
 		Provider:         common.ProviderAzure,
@@ -701,11 +742,111 @@ func (c *ComputeClient) convertAzureVMRecommendation(_ context.Context, azureRec
 		Term:             f.Term,
 		PaymentOption:    "upfront",
 		Timestamp:        time.Now(),
-		// Only InstanceType is safely derivable from the payload. Platform,
-		// Tenancy, Scope are armcompute.ResourceSKUsClient territory and
-		// are deferred — see the function godoc for the scope decision.
-		Details: common.ComputeDetails{
-			InstanceType: f.ResourceType,
-		},
+		Details:          details,
 	}
+}
+
+// cachedSKULookup returns the SKU catalogue entry for skuName, fetching
+// the catalogue lazily on first call. The catalogue is fetched ONCE per
+// client lifetime via armcompute.ResourceSKUsClient.NewListPager;
+// subsequent calls are O(1) map lookups. ok=false on cache miss OR
+// catalogue-fetch failure — the caller falls back to VCPU=0 / MemoryGB=0
+// rather than failing the whole conversion.
+func (c *ComputeClient) cachedSKULookup(ctx context.Context, skuName string) (vmSKUEntry, bool) {
+	c.skuCacheOnce.Do(func() {
+		c.skuCacheMap = c.fetchSKUCatalogue(ctx)
+	})
+	if c.skuCacheMap == nil {
+		return vmSKUEntry{}, false
+	}
+	entry, ok := c.skuCacheMap[skuName]
+	return entry, ok
+}
+
+// fetchSKUCatalogue performs the single ResourceSKUsClient.NewListPager
+// walk and reduces the response into a name->vmSKUEntry map keyed by
+// SKU.Name (matches the recommendation engine's ResourceType output).
+//
+// Filters out non-VM resource types and SKUs not available in c.region
+// (mirrors the existing extractVMSizeIfValid filter used by
+// GetValidResourceTypes — a SKU listed for a different region is not
+// safe to attribute to a recommendation in this client's region).
+//
+// Returns nil on pager-create or page-fetch error so the
+// sync.Once-gated cache field stays nil and cachedSKULookup falls back
+// to the empty-fields path. The fetch error is logged WARN once.
+func (c *ComputeClient) fetchSKUCatalogue(ctx context.Context) map[string]vmSKUEntry {
+	pager, err := c.createResourceSKUsPager()
+	if err != nil {
+		logging.Warnf("azure compute: SKU catalogue pager create failed for region %s: %v — Details.VCPU/MemoryGB left at 0", c.region, err)
+		return nil
+	}
+	out := make(map[string]vmSKUEntry)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			logging.Warnf("azure compute: SKU catalogue page fetch failed for region %s: %v — partial cache (%d entries) discarded, Details.VCPU/MemoryGB left at 0", c.region, err, len(out))
+			return nil
+		}
+		c.populateVMSKUMapFromPage(out, page.Value)
+	}
+	return out
+}
+
+// populateVMSKUMapFromPage writes one vmSKUEntry per qualifying VM SKU
+// found in the page into out. Filters non-VM resource types and SKUs
+// not available in c.region. First-write-wins on duplicate SKU names —
+// ResourceSKUs returns each SKU once per subscription, but defending
+// against duplicates keeps the cache deterministic regardless of pager
+// order. Extracted out of fetchSKUCatalogue to keep that function
+// under the cyclomatic-complexity threshold enforced by the
+// pre-commit hook (matches the cache/database extraction pattern from
+// PR #81).
+func (c *ComputeClient) populateVMSKUMapFromPage(out map[string]vmSKUEntry, skus []*armcompute.ResourceSKU) {
+	for _, sku := range skus {
+		if sku == nil || sku.Name == nil {
+			continue
+		}
+		if sku.ResourceType == nil || *sku.ResourceType != "virtualMachines" {
+			continue
+		}
+		if !c.isAvailableInRegion(sku, c.region) {
+			continue
+		}
+		if _, exists := out[*sku.Name]; exists {
+			continue
+		}
+		vCPUs, memoryGB := extractVMSKUCapabilities(sku)
+		out[*sku.Name] = vmSKUEntry{vCPUs: vCPUs, memoryGB: memoryGB}
+	}
+}
+
+// extractVMSKUCapabilities pulls the vCPUs and MemoryGB capabilities
+// out of an armcompute.ResourceSKU's Capabilities name/value list.
+// Returns (0, 0) when the capability is missing or unparseable —
+// callers treat the zero value as "unknown" (omitempty JSON tag on
+// common.ComputeDetails).
+//
+// Extracted out of fetchSKUCatalogue to keep that function under the
+// cyclomatic-complexity threshold enforced by the pre-commit hook
+// (matches the cache/database extraction pattern from PR #81).
+func extractVMSKUCapabilities(sku *armcompute.ResourceSKU) (int, float64) {
+	var vCPUs int
+	var memoryGB float64
+	for _, cb := range sku.Capabilities {
+		if cb == nil || cb.Name == nil || cb.Value == nil {
+			continue
+		}
+		switch *cb.Name {
+		case "vCPUs":
+			if v, err := strconv.Atoi(*cb.Value); err == nil {
+				vCPUs = v
+			}
+		case "MemoryGB":
+			if v, err := strconv.ParseFloat(*cb.Value, 64); err == nil {
+				memoryGB = v
+			}
+		}
+	}
+	return vCPUs, memoryGB
 }
