@@ -218,10 +218,9 @@ func runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminP
 			return fmt.Errorf("migration timed out after %s: %w", timeout, err)
 		}
 		return err
-	case <-time.After(timeout):
-		cancelMig()
+	case <-migCtx.Done():
 		<-done
-		return fmt.Errorf("migration timed out after %s", timeout)
+		return fmt.Errorf("migration timed out after %s: %w", timeout, migCtx.Err())
 	}
 }
 
