@@ -30,10 +30,31 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
+	// parseAccountIDs splits, trims, and UUID-validates the comma-separated
+	// account_ids query parameter. Returns nil (no filter) when absent.
+	// Returns 400 if any entry is not a valid UUID or the list exceeds
+	// MaxAccountIDsPerRequest (200). See validation.go::parseAccountIDs.
 	accountIDs, err := parseAccountIDs(params["account_ids"])
 	if err != nil {
 		return nil, NewClientError(400, err.Error())
 	}
+
+	// account_ids filter semantics (issue #211):
+	//
+	//   account_ids param  | cloud_account_id row | Result
+	//   -------------------|----------------------|----------------------------
+	//   absent             | any (incl. NULL)     | included (no SQL filter)
+	//   non-empty          | NULL                 | excluded (legacy rows are
+	//                      |                      |   not "in any account")
+	//   non-empty          | matches one of IDs   | included
+	//   non-empty          | doesn't match        | excluded
+	//   non-empty, contains| matches (account is  | excluded — enforced by
+	//     a disabled ID    |   disabled)          |   filterRecommendationsByAllowedAccounts
+	//                      |                      |   below, NOT by the SQL filter
+	//
+	// The SQL contract lives in config.buildRecommendationFilter
+	// (store_postgres_recommendations.go). The disabled-account case is
+	// enforced by filterRecommendationsByAllowedAccounts after the DB read.
 
 	// Translate query string → DB-level filter. ListRecommendations
 	// pushes these into the WHERE clause so the cache does the pruning.
