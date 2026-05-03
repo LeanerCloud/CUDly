@@ -1121,8 +1121,21 @@ func TestPGXMock_SetPlanAccounts_Success(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 	ctx := context.Background()
+	servicesJSON, err := json.Marshal(map[string]ServiceConfig{
+		"aws/ec2": {Provider: "aws", Service: "ec2"},
+	})
+	require.NoError(t, err)
 
 	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT services").WithArgs("plan-1").WillReturnRows(
+		pgxmock.NewRows([]string{"services"}).AddRow(servicesJSON),
+	)
+	mock.ExpectQuery("SELECT name, provider").WithArgs("acct-1").WillReturnRows(
+		pgxmock.NewRows([]string{"name", "provider"}).AddRow("Account 1", "aws"),
+	)
+	mock.ExpectQuery("SELECT name, provider").WithArgs("acct-2").WillReturnRows(
+		pgxmock.NewRows([]string{"name", "provider"}).AddRow("Account 2", "aws"),
+	)
 	mock.ExpectExec("DELETE FROM plan_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectExec("INSERT INTO plan_accounts").
@@ -1133,8 +1146,33 @@ func TestPGXMock_SetPlanAccounts_Success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	err := store.SetPlanAccounts(ctx, "plan-1", []string{"acct-1", "acct-2"})
+	err = store.SetPlanAccounts(ctx, "plan-1", []string{"acct-1", "acct-2"})
 	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_SetPlanAccounts_ProviderMismatchRollsBackBeforeDelete(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+	servicesJSON, err := json.Marshal(map[string]ServiceConfig{
+		"aws/ec2": {Provider: "aws", Service: "ec2"},
+	})
+	require.NoError(t, err)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT services").WithArgs("plan-1").WillReturnRows(
+		pgxmock.NewRows([]string{"services"}).AddRow(servicesJSON),
+	)
+	mock.ExpectQuery("SELECT name, provider").WithArgs("acct-1").WillReturnRows(
+		pgxmock.NewRows([]string{"name", "provider"}).AddRow("Azure Account", "azure"),
+	)
+	mock.ExpectRollback()
+
+	err = store.SetPlanAccounts(ctx, "plan-1", []string{"acct-1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plan provider mismatch")
+	assert.Contains(t, err.Error(), "Azure Account")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1142,14 +1180,37 @@ func TestPGXMock_SetPlanAccounts_Empty(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 	ctx := context.Background()
+	servicesJSON, err := json.Marshal(map[string]ServiceConfig{
+		"aws/ec2": {Provider: "aws", Service: "ec2"},
+	})
+	require.NoError(t, err)
 
 	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT services").WithArgs("plan-1").WillReturnRows(
+		pgxmock.NewRows([]string{"services"}).AddRow(servicesJSON),
+	)
 	mock.ExpectExec("DELETE FROM plan_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
-	err := store.SetPlanAccounts(ctx, "plan-1", []string{})
+	err = store.SetPlanAccounts(ctx, "plan-1", []string{})
 	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_SetPlanAccounts_EmptyMissingPlanReturnsNotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT services").WithArgs("missing-plan").WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
+
+	err := store.SetPlanAccounts(ctx, "missing-plan", []string{})
+	require.ErrorIs(t, err, ErrNotFound)
+	assert.Contains(t, err.Error(), "missing-plan")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPGXMock_SetPlanAccounts_BeginError(t *testing.T) {

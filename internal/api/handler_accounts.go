@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -1037,7 +1039,84 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 	return nil, nil
 }
 
+// validatePlanAccountProviders enforces the issue-#209 / spec E-4 rule
+// that every account assigned to a plan must have its provider match
+// one of the plan's derived providers. Returns:
+//   - 404 ClientError when the plan does not exist
+//   - 404 ClientError when an account_id does not exist (referencing
+//     the offending ID)
+//   - 400 ClientError listing every provider mismatch in one message
+//     (so clients fix everything in one round-trip rather than
+//     resubmitting to discover the next)
+//   - nil when all accounts match (or when the plan has no parseable
+//     services — defensive skip; production plans always carry at least
+//     one service, frontend enforces this)
+//
+// Pulled out of setPlanAccounts to keep that function under the gocyclo
+// budget (limit 10). No business logic lives here that isn't otherwise
+// described in setPlanAccounts' doc comment.
+func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID string, accountIDs []string) error {
+	plan, err := h.getPlanForAccountProviderValidation(ctx, planID)
+	if err != nil {
+		return err
+	}
+
+	expected := config.DerivePlanProviders(plan)
+	if len(expected) == 0 {
+		return nil
+	}
+
+	type mismatch struct {
+		ID       string
+		Name     string
+		Provider string
+	}
+	var mismatches []mismatch
+	for _, aid := range accountIDs {
+		acct, getErr := h.config.GetCloudAccount(ctx, aid)
+		if getErr != nil {
+			return fmt.Errorf("accounts: failed to get account %s: %w", aid, getErr)
+		}
+		if acct == nil {
+			return NewClientError(404, fmt.Sprintf("account not found: %s", aid))
+		}
+		if !slices.Contains(expected, acct.Provider) {
+			mismatches = append(mismatches, mismatch{ID: aid, Name: acct.Name, Provider: acct.Provider})
+		}
+	}
+	if len(mismatches) == 0 {
+		return nil
+	}
+
+	parts := make([]string, len(mismatches))
+	for i, m := range mismatches {
+		parts[i] = fmt.Sprintf("account %q has provider=%q, expected one of %v",
+			m.Name, m.Provider, expected)
+	}
+	return NewClientError(400, "plan provider mismatch: "+strings.Join(parts, "; "))
+}
+
+func (h *Handler) getPlanForAccountProviderValidation(ctx context.Context, planID string) (*config.PurchasePlan, error) {
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
+		}
+		return nil, fmt.Errorf("accounts: failed to get plan: %w", err)
+	}
+	if plan == nil {
+		return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
+	}
+	return plan, nil
+}
+
 // setPlanAccounts handles PUT /api/plans/:id/accounts.
+//
+// Per issue #209 / spec acceptance criterion E-4, every account assigned
+// to a plan must have its provider match one of the plan's derived
+// providers (extracted from plan.Services keys). Mismatches return 400
+// listing every offender; the assignment is rejected atomically (no
+// partial writes).
 func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
@@ -1060,7 +1139,16 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		}
 	}
 
+	// Provider-match validation (issue #209). Extracted to keep
+	// setPlanAccounts under the gocyclo budget (10).
+	if err := h.validatePlanAccountProviders(ctx, id, body.AccountIDs); err != nil {
+		return nil, err
+	}
+
 	if err := h.config.SetPlanAccounts(ctx, id, body.AccountIDs); err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, NewClientError(404, err.Error())
+		}
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 

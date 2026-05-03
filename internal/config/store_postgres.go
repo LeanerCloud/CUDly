@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -446,7 +447,7 @@ func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*Pu
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("purchase plan not found: %s", planID)
+			return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
 		}
 		return nil, fmt.Errorf("failed to get purchase plan: %w", err)
 	}
@@ -1928,6 +1929,10 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	if err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); err != nil {
+		return err
+	}
+
 	if _, err = tx.Exec(ctx, `DELETE FROM plan_accounts WHERE plan_id = $1`, planID); err != nil {
 		return fmt.Errorf("failed to clear plan accounts: %w", err)
 	}
@@ -1945,6 +1950,88 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 		return fmt.Errorf("failed to commit plan accounts: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresStore) validatePlanAccountProvidersTx(ctx context.Context, tx pgx.Tx, planID string, accountIDs []string) error {
+	services, err := s.getPlanServicesForShareTx(ctx, tx, planID)
+	if err != nil {
+		return err
+	}
+	if len(accountIDs) == 0 {
+		return nil
+	}
+	expected := DerivePlanProviders(&PurchasePlan{Services: services})
+	if len(expected) == 0 {
+		return nil
+	}
+
+	mismatches, err := s.findPlanAccountProviderMismatchesTx(ctx, tx, accountIDs, expected)
+	if err != nil {
+		return err
+	}
+	if len(mismatches) == 0 {
+		return nil
+	}
+
+	parts := make([]string, len(mismatches))
+	for i, mismatch := range mismatches {
+		parts[i] = fmt.Sprintf("account %q has provider=%q, expected one of %v",
+			mismatch.Name, mismatch.Provider, expected)
+	}
+	return fmt.Errorf("plan provider mismatch: %s", strings.Join(parts, "; "))
+}
+
+func (s *PostgresStore) getPlanServicesForShareTx(ctx context.Context, tx pgx.Tx, planID string) (map[string]ServiceConfig, error) {
+	var servicesJSON []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT services
+		FROM purchase_plans
+		WHERE id = $1
+		FOR SHARE
+	`, planID).Scan(&servicesJSON); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: plan %s", ErrNotFound, planID)
+		}
+		return nil, fmt.Errorf("failed to get plan services: %w", err)
+	}
+
+	services := make(map[string]ServiceConfig)
+	if err := json.Unmarshal(servicesJSON, &services); err != nil {
+		return nil, fmt.Errorf("failed to decode plan services: %w", err)
+	}
+	return services, nil
+}
+
+type planAccountProviderMismatch struct {
+	Name     string
+	Provider string
+}
+
+func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs []string, expected []string) ([]planAccountProviderMismatch, error) {
+	expectedSet := make(map[string]struct{}, len(expected))
+	for _, provider := range expected {
+		expectedSet[provider] = struct{}{}
+	}
+
+	var mismatches []planAccountProviderMismatch
+	for _, accountID := range accountIDs {
+		var name, provider string
+		if err := tx.QueryRow(ctx, `
+			SELECT name, provider
+			FROM cloud_accounts
+			WHERE id = $1
+			FOR SHARE
+		`, accountID).Scan(&name, &provider); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("%w: account %s", ErrNotFound, accountID)
+			}
+			return nil, fmt.Errorf("failed to get account %s: %w", accountID, err)
+		}
+		if _, ok := expectedSet[provider]; !ok {
+			mismatches = append(mismatches, planAccountProviderMismatch{Name: name, Provider: provider})
+		}
+	}
+	return mismatches, nil
 }
 
 // GetPlanAccounts returns all cloud accounts associated with a plan.
