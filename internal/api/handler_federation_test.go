@@ -1024,33 +1024,77 @@ func TestGetFederationIaC_FailsLoudOnEmptyGCPSourceIdentity(t *testing.T) {
 	assert.Contains(t, err.Error(), "federation iac")
 }
 
-// TestGetFederationIaC_RejectsImpossibleTargetSourceCombo covers issue #42:
-// requesting target=aws-cross-account (target=aws + source=aws) from a CUDly
-// not running on AWS must return HTTP 400 — the rendered trust policy needs
-// CUDly's AWS account ID, which a non-AWS deployment cannot supply.
+// TestGetFederationIaC_RejectsImpossibleTargetSourceCombo covers issues #42 and #140:
+// requesting a self-source bundle (target == source) from a CUDly not running on
+// the matching cloud must return HTTP 400 — the rendered bundle needs CUDly's own
+// cloud identity (account ID / subscription+tenant / project), which a deployment
+// on a different cloud cannot supply.
 func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
 	cases := []struct {
 		name        string
+		target      string
+		source      string
 		sourceCloud string
 		wantStatus  int
 		wantErrSub  string
 	}{
+		// aws-cross-account cases (original #42 coverage)
 		{
 			name:        "cudly-on-azure-rejects-aws-cross-account",
+			target:      "aws",
+			source:      "aws",
 			sourceCloud: "azure",
 			wantStatus:  400,
 			wantErrSub:  "deployment is on azure",
 		},
 		{
 			name:        "cudly-on-gcp-rejects-aws-cross-account",
+			target:      "aws",
+			source:      "aws",
 			sourceCloud: "gcp",
 			wantStatus:  400,
 			wantErrSub:  "deployment is on gcp",
 		},
 		{
 			name:        "cudly-on-aws-allows-aws-cross-account",
+			target:      "aws",
+			source:      "aws",
 			sourceCloud: "aws",
 			wantStatus:  0, // success
+		},
+		// azure-self-source cases (new #140 coverage)
+		{
+			name:        "cudly-on-aws-rejects-azure-self-source",
+			target:      "azure",
+			source:      "azure",
+			sourceCloud: "aws",
+			wantStatus:  400,
+			wantErrSub:  "deployment is on aws",
+		},
+		{
+			name:        "cudly-on-gcp-rejects-azure-self-source",
+			target:      "azure",
+			source:      "azure",
+			sourceCloud: "gcp",
+			wantStatus:  400,
+			wantErrSub:  "deployment is on gcp",
+		},
+		// gcp-self-source cases (new #140 coverage)
+		{
+			name:        "cudly-on-aws-rejects-gcp-self-source",
+			target:      "gcp",
+			source:      "gcp",
+			sourceCloud: "aws",
+			wantStatus:  400,
+			wantErrSub:  "deployment is on aws",
+		},
+		{
+			name:        "cudly-on-azure-rejects-gcp-self-source",
+			target:      "gcp",
+			source:      "gcp",
+			sourceCloud: "azure",
+			wantStatus:  400,
+			wantErrSub:  "deployment is on azure",
 		},
 	}
 	for _, tc := range cases {
@@ -1060,10 +1104,10 @@ func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
 			h := federationHandler()
 
 			_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
-				"target": "aws", "source": "aws", "format": "cli",
+				"target": tc.target, "source": tc.source, "format": "cli",
 			}))
 			if tc.wantStatus == 0 {
-				require.NoError(t, err, "CUDly-on-AWS aws-cross-account regression guard")
+				require.NoError(t, err, "regression guard: matching-cloud self-source must be allowed")
 				return
 			}
 			require.Error(t, err, "expected client error for impossible combo")
@@ -1071,10 +1115,59 @@ func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
 			require.True(t, ok, "must be a client error (400), got %T: %v", err, err)
 			assert.Equal(t, tc.wantStatus, ce.code,
 				"target/source consistency rejection must be a 400")
-			assert.Contains(t, err.Error(), "target=aws-cross-account requires CUDly to be deployed on AWS",
+			assert.Contains(t, err.Error(), "self-source requires CUDly to be deployed on",
 				"error must explain the constraint")
 			assert.Contains(t, err.Error(), tc.wantErrSub,
 				"error must name the actual deployment cloud")
+		})
+	}
+}
+
+// TestValidateFederationTargetSource unit-tests the guard directly, covering
+// all self-source rejection and allow cases (issues #42 and #140).
+func TestValidateFederationTargetSource(t *testing.T) {
+	cases := []struct {
+		name        string
+		target      string
+		source      string
+		sourceCloud string
+		wantErr     bool
+		wantCode    int
+		wantSub     string
+	}{
+		// Self-source combos on the correct cloud: allowed
+		{name: "aws-self-source-on-aws", target: "aws", source: "aws", sourceCloud: "aws", wantErr: false},
+		{name: "azure-self-source-on-azure", target: "azure", source: "azure", sourceCloud: "azure", wantErr: false},
+		{name: "gcp-self-source-on-gcp", target: "gcp", source: "gcp", sourceCloud: "gcp", wantErr: false},
+		// Self-source on mismatched cloud: rejected
+		{name: "aws-self-source-on-azure", target: "aws", source: "aws", sourceCloud: "azure", wantErr: true, wantCode: 400, wantSub: "deployment is on azure"},
+		{name: "aws-self-source-on-gcp", target: "aws", source: "aws", sourceCloud: "gcp", wantErr: true, wantCode: 400, wantSub: "deployment is on gcp"},
+		{name: "azure-self-source-on-aws", target: "azure", source: "azure", sourceCloud: "aws", wantErr: true, wantCode: 400, wantSub: "deployment is on aws"},
+		{name: "azure-self-source-on-gcp", target: "azure", source: "azure", sourceCloud: "gcp", wantErr: true, wantCode: 400, wantSub: "deployment is on gcp"},
+		{name: "gcp-self-source-on-aws", target: "gcp", source: "gcp", sourceCloud: "aws", wantErr: true, wantCode: 400, wantSub: "deployment is on aws"},
+		{name: "gcp-self-source-on-azure", target: "gcp", source: "gcp", sourceCloud: "azure", wantErr: true, wantCode: 400, wantSub: "deployment is on azure"},
+		// WIF combos (target != source): always allowed regardless of deployment cloud
+		{name: "azure-wif-from-aws", target: "azure", source: "aws", sourceCloud: "aws", wantErr: false},
+		{name: "azure-wif-from-gcp", target: "azure", source: "gcp", sourceCloud: "gcp", wantErr: false},
+		{name: "gcp-wif-from-aws", target: "gcp", source: "aws", sourceCloud: "aws", wantErr: false},
+		{name: "gcp-wif-from-azure", target: "gcp", source: "azure", sourceCloud: "azure", wantErr: false},
+		{name: "aws-wif-from-azure", target: "aws", source: "azure", sourceCloud: "azure", wantErr: false},
+		{name: "aws-wif-from-gcp", target: "aws", source: "gcp", sourceCloud: "gcp", wantErr: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CUDLY_SOURCE_CLOUD", tc.sourceCloud)
+			err := validateFederationTargetSource(tc.target, tc.source)
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "must be ClientError, got %T: %v", err, err)
+			assert.Equal(t, tc.wantCode, ce.code)
+			assert.Contains(t, err.Error(), tc.wantSub)
 		})
 	}
 }
