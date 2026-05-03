@@ -1,0 +1,64 @@
+name: Frontend build (PR)
+
+# Pre-merge gate: catches TypeScript errors and webpack build failures
+# BEFORE a PR is merged, not after. Motivated by the post-mortem in #191:
+# a TS6133 error rode through to the protected branch and caused all three
+# post-merge deploy jobs to fail after spending minutes on infrastructure
+# only to hit the same tsc error inside the Dockerfile frontend-builder stage.
+#
+# Companion to frontend-build-sentinel.yml, which guards the protected
+# branch post-merge against rebases and GitHub-UI merge commits.
+# This job guards the PR gate itself — the earlier the catch, the cheaper.
+#
+# Uses pull_request (not pull_request_target) so this job runs in the
+# PR-head context with no access to repository secrets. pull_request_target
+# executes in the base-branch context WITH secrets, which is a known
+# fork-exfiltration vector and must not be used for untrusted code builds.
+#
+# See also: #177 (sentinel), #191 (this PR gate).
+
+on:
+  pull_request:
+    branches:
+      - feat/multicloud-web-frontend
+      - main
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel redundant runs when new commits are pushed to the same PR.
+  group: frontend-build-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
