@@ -137,14 +137,20 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 		got := queryAWSSPRows(t, pool)
-		// Expect: 4 split rows + sagemaker (kept). Umbrella deleted.
-		require.Len(t, got, 5)
+		// Expect: 4 split rows. Umbrella deleted by 000040; PR #71's
+		// `(aws, sagemaker)` row is also deleted by 000045 (issue #133)
+		// after 000040 has copied its term/payment forward into the
+		// new `savings-plans-sagemaker` slot.
+		require.Len(t, got, 4)
 		_, hasUmbrella := got["savings-plans"]
 		assert.False(t, hasUmbrella, "umbrella should be deleted")
 		_, hasSagemaker := got["sagemaker"]
-		assert.True(t, hasSagemaker, "PR #71 sagemaker row must be kept for one release")
+		assert.False(t, hasSagemaker, "PR #71 sagemaker row should be deleted by 000045 (issue #133)")
 
 		// sagemaker slot inherits from PR #71's row (1, partial-upfront).
+		// The inheritance happens during 000040, which runs before
+		// 000045 deletes the source row, so the values still flow
+		// through into the persisted split row.
 		smRow := got["savings-plans-sagemaker"]
 		assert.Equal(t, 1, smRow.term, "sagemaker slot should inherit term from (aws, sagemaker)")
 		assert.Equal(t, "partial-upfront", smRow.payment, "sagemaker slot should inherit payment from (aws, sagemaker)")
