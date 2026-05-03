@@ -92,6 +92,11 @@ func ResolveAccountConfigsForRecs(
 	// Cache global configs per (provider, service) — many recs share the same
 	// pair so the lookup count is on the order of distinct services, not accounts.
 	cache := newGlobalConfigCache()
+	// seen tracks every (account, provider, service) triple we have already
+	// processed. We cannot use resolved as the seen-set because triples where
+	// both global and override are absent are skipped (nothing to write) yet
+	// must still be remembered to avoid redundant store lookups on duplicates.
+	seen := make(map[string]struct{})
 
 	for i := range recs {
 		rec := &recs[i]
@@ -100,9 +105,10 @@ func ResolveAccountConfigsForRecs(
 		}
 		accountID := *rec.CloudAccountID
 		key := AccountConfigKey(accountID, rec.Provider, rec.Service)
-		if _, seen := resolved[key]; seen {
+		if _, ok := seen[key]; ok {
 			continue
 		}
+		seen[key] = struct{}{}
 
 		global, err := cache.lookup(ctx, store, rec.Provider, rec.Service)
 		if err != nil {

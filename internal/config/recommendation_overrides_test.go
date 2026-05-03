@@ -211,6 +211,26 @@ func TestResolveAccountConfigsForRecs_GlobalAbsentCachedNegative(t *testing.T) {
 	assert.Equal(t, 3, reader.overrideCalls, "override lookup runs once per account even when global absent")
 }
 
+// TestResolveAccountConfigsForRecs_NoGlobalNoOverride_DedupedCorrectly verifies
+// that duplicate recs for the same triple with no global and no override do not
+// trigger redundant store lookups. Previously the resolved map was used as the
+// seen-set, so absent triples were never recorded and overrideCalls grew with
+// every duplicate rec.
+func TestResolveAccountConfigsForRecs_NoGlobalNoOverride_DedupedCorrectly(t *testing.T) {
+	reader := &fakeAccountConfigReader{} // no globals, no overrides
+	recs := []RecommendationRecord{
+		acctRec("acct-A", "aws", "rds"),
+		acctRec("acct-A", "aws", "rds"), // duplicate
+		acctRec("acct-A", "aws", "rds"), // duplicate
+	}
+
+	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
+	assert.NoError(t, err)
+	assert.Empty(t, got, "no entry when both absent")
+	assert.Equal(t, 1, reader.globalCalls, "global lookup deduped even when both absent")
+	assert.Equal(t, 1, reader.overrideCalls, "override lookup deduped even when both absent")
+}
+
 func TestResolveAccountConfigsForRecs_GlobalErrorPropagates(t *testing.T) {
 	reader := &fakeAccountConfigReader{globalErr: errors.New("boom")}
 	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
