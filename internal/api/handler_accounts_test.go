@@ -421,6 +421,11 @@ func TestSaveAccountServiceOverride_InvalidCombo_Returns400(t *testing.T) {
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	saveCalled := false
+	store.SaveAccountServiceOverrideFn = func(_ context.Context, _ *config.AccountServiceOverride) error {
+		saveCalled = true
+		return nil
+	}
 	handler := &Handler{
 		auth:   mockAuth,
 		config: store,
@@ -445,6 +450,7 @@ func TestSaveAccountServiceOverride_InvalidCombo_Returns400(t *testing.T) {
 	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, ce.message, "3yr no-upfront")
+	assert.False(t, saveCalled, "override must not be persisted when combo is invalid")
 }
 
 func TestSaveAccountServiceOverride_ValidCombo_Saves(t *testing.T) {
