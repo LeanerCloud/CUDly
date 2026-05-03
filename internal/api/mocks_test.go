@@ -27,6 +27,16 @@ type MockConfigStore struct {
 	// CreateCloudAccountFn overrides CreateCloudAccount when non-nil (used by
 	// org-discovery tests to capture the new rows the handler persists).
 	CreateCloudAccountFn func(ctx context.Context, account *config.CloudAccount) error
+	// GetPurchasePlanFn overrides GetPurchasePlan when non-nil. Used by the
+	// setPlanAccounts provider-validation tests (issue #209) to seed the
+	// plan without registering a testify expectation — see the fall-through
+	// comment in GetPurchasePlan below for why the default no-expectation
+	// path returns a minimal stub instead of panicking via m.Called.
+	GetPurchasePlanFn func(ctx context.Context, planID string) (*config.PurchasePlan, error)
+	// SetPlanAccountsFn overrides SetPlanAccounts when non-nil. The
+	// provider-validation tests use it to assert whether the underlying
+	// store write was invoked (mismatched assignments must NOT call it).
+	SetPlanAccountsFn func(ctx context.Context, planID string, accountIDs []string) error
 }
 
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -68,7 +78,21 @@ func (m *MockConfigStore) CreatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
+// GetPurchasePlan resolves to (in order): an explicit GetPurchasePlanFn
+// override, a registered testify expectation, or a default minimal plan
+// (`{ID: planID}` with empty Services). The default-fallback path lets
+// tests written before the issue-#209 provider-validation block (e.g.
+// TestSetPlanAccounts_Success) keep working without setting up the
+// new mock call — the empty Services map trips the defensive "no
+// parseable services, skip provider validation" branch in
+// setPlanAccounts so behaviour is unchanged for those legacy tests.
 func (m *MockConfigStore) GetPurchasePlan(ctx context.Context, planID string) (*config.PurchasePlan, error) {
+	if m.GetPurchasePlanFn != nil {
+		return m.GetPurchasePlanFn(ctx, planID)
+	}
+	if !m.isExpected("GetPurchasePlan") {
+		return &config.PurchasePlan{ID: planID}, nil
+	}
 	args := m.Called(ctx, planID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -292,7 +316,16 @@ func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, acco
 func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
 	return nil, nil
 }
+
+// SetPlanAccounts uses SetPlanAccountsFn when non-nil so tests can
+// capture and assert on the call (the issue-#209 mismatch tests verify
+// the underlying store write is NOT invoked when validation fails).
+// The default no-op preserves the previous behaviour for tests that
+// don't care.
 func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	if m.SetPlanAccountsFn != nil {
+		return m.SetPlanAccountsFn(ctx, planID, accountIDs)
+	}
 	return nil
 }
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {

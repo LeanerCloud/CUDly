@@ -485,6 +485,253 @@ func TestSetPlanAccounts_Success(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+// ── Provider-validation tests for setPlanAccounts (issue #209)
+// Every account assigned to a plan must have its provider match one of
+// the providers derived from the plan's services map (key format
+// "provider:service"). Mismatches return a single 400 listing every
+// offender; the underlying store write is never invoked on failure.
+
+const (
+	planID209   = "22222222-2222-2222-2222-222222222222"
+	awsAcct209  = "11111111-1111-1111-1111-111111111111"
+	azureAcct1  = "33333333-3333-3333-3333-333333333333"
+	azureAcct2  = "44444444-4444-4444-4444-444444444444"
+	missingAcct = "55555555-5555-5555-5555-555555555555"
+)
+
+// awsPlan209 returns a plan whose services map yields a single derived
+// provider ("aws"). Used as the default fixture across the mismatch
+// tests below.
+func awsPlan209() *config.PurchasePlan {
+	return &config.PurchasePlan{
+		ID:       planID209,
+		Name:     "AWS-only plan",
+		Services: map[string]config.ServiceConfig{"aws:ec2": {}},
+	}
+}
+
+func TestSetPlanAccounts_SingleMismatch(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return awsPlan209(), nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + azureAcct1 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got %T", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "prod-azure")
+	assert.Contains(t, ce.Error(), "azure")
+	assert.Contains(t, ce.Error(), "aws")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when validation fails")
+}
+
+func TestSetPlanAccounts_MultipleMismatches(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return awsPlan209(), nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		switch id {
+		case azureAcct1:
+			return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+		case azureAcct2:
+			return &config.CloudAccount{ID: id, Name: "stage-gcp", Provider: "gcp"}, nil
+		}
+		return nil, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + azureAcct1 + `","` + azureAcct2 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	// Both offenders named in a single error so the client gets the full
+	// picture in one round-trip.
+	assert.Contains(t, ce.Error(), "prod-azure")
+	assert.Contains(t, ce.Error(), "stage-gcp")
+	assert.Contains(t, ce.Error(), "azure")
+	assert.Contains(t, ce.Error(), "gcp")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when validation fails")
+}
+
+func TestSetPlanAccounts_ValidHappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	var capturedIDs []string
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return awsPlan209(), nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-aws", Provider: "aws"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, ids []string) error {
+		capturedIDs = ids
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + awsAcct209 + `"]}`
+	result, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.Equal(t, []string{awsAcct209}, capturedIDs, "SetPlanAccounts should be called with the validated IDs")
+}
+
+func TestSetPlanAccounts_PlanNotFound(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return nil, nil // store-style "not found": (nil, nil)
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + awsAcct209 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 404, ce.code)
+	assert.Contains(t, ce.Error(), planID209)
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when the plan is not found")
+}
+
+func TestSetPlanAccounts_AccountNotFound(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return awsPlan209(), nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		if id == missingAcct {
+			return nil, nil // store-style not-found
+		}
+		return &config.CloudAccount{ID: id, Name: "prod-aws", Provider: "aws"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + missingAcct + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 404, ce.code)
+	assert.Contains(t, ce.Error(), missingAcct, "404 should reference the missing account ID")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when an account is not found")
+}
+
+func TestSetPlanAccounts_MixedValidAndMismatch(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return awsPlan209(), nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		switch id {
+		case awsAcct209:
+			return &config.CloudAccount{ID: id, Name: "prod-aws", Provider: "aws"}, nil
+		case azureAcct1:
+			return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+		}
+		return nil, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + awsAcct209 + `","` + azureAcct1 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	// Only the Azure account is the offender; the AWS account does not
+	// appear in the error.
+	assert.Contains(t, ce.Error(), "prod-azure")
+	assert.NotContains(t, ce.Error(), "prod-aws")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when even one account fails validation")
+}
+
+func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	var capturedIDs []string
+	store := setupAdminMock(ctx)
+	// Plan with an empty services map — derived provider set is empty;
+	// the validation block skips and the assignment passes through.
+	// Pins the defensive behaviour so a future change is conscious.
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: planID209, Name: "no-services"}, nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, ids []string) error {
+		capturedIDs = ids
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + azureAcct1 + `"]}`
+	result, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.Equal(t, []string{azureAcct1}, capturedIDs, "empty services map → validation skipped → write proceeds")
+}
+
 func TestListPlanAccounts_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
