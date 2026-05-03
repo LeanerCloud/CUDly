@@ -26,6 +26,21 @@ let currentPurchaseRecommendations: LocalRecommendation[] = [];
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
 
+// issue #223: resolved GlobalConfig defaults, seeded on page load by
+// loadRecommendations(). Initial values mirror the historical hardcoded
+// defaults so the module is usable before the first API round-trip.
+let cachedGlobalDefaultPayment: CompatPayment = 'all-upfront';
+let cachedGlobalDefaultTerm: 1 | 3 = 1;
+
+/**
+ * Inject resolved GlobalConfig defaults into the module cache.
+ * Exported for testing only — not part of the public API.
+ */
+export function seedGlobalDefaults(term: 1 | 3, payment: CompatPayment): void {
+  cachedGlobalDefaultTerm = term;
+  cachedGlobalDefaultPayment = payment;
+}
+
 // populateRecommendationsAccountFilter / populateRegionFilter / the legacy
 // service-filter helpers were removed in Bundle B — those DOM elements are
 // gone from index.html. Provider / Account values now drive an API re-fetch
@@ -74,10 +89,34 @@ export async function loadRecommendations(): Promise<void> {
       account_ids: accountIDs.length > 0 ? accountIDs : undefined,
     };
 
-    const [data, accounts] = await Promise.all([
+    const [data, accounts, cfgResponse] = await Promise.all([
       api.getRecommendations(filters) as unknown as RecommendationsResponse,
-      api.listAccounts().catch(() => [])
+      api.listAccounts().catch(() => []),
+      // issue #223: fetch GlobalConfig so per-cell variant selection and
+      // bulk-toolbar defaults reflect the operator's configured preference.
+      // Failure is siloed — a missing/unreachable config endpoint must not
+      // block the recommendations load; we fall back to the module defaults.
+      api.getConfig().catch(() => null),
     ]);
+    // Populate the module-level GlobalConfig cache (issue #223).
+    if (cfgResponse?.global) {
+      const g = cfgResponse.global;
+      const t = g.default_term;
+      if (t === 1 || t === 3) cachedGlobalDefaultTerm = t;
+      const validPayments: CompatPayment[] = ['all-upfront', 'partial-upfront', 'no-upfront', 'monthly'];
+      if (g.default_payment && (validPayments as string[]).includes(g.default_payment)) {
+        cachedGlobalDefaultPayment = g.default_payment as CompatPayment;
+      }
+      // Seed the bulk-toolbar default with the resolved value so that
+      // loadBulkPurchaseState()'s first-visit fallback uses it.
+      // BulkPurchasePayment is a subset of CompatPayment ('upfront' is
+      // Azure-only and not a valid bulk-toolbar value); skip the seed
+      // if the global default is outside that subset.
+      const validBulkPayments: BulkPurchasePayment[] = ['all-upfront', 'partial-upfront', 'no-upfront', 'monthly'];
+      if ((validBulkPayments as string[]).includes(cachedGlobalDefaultPayment)) {
+        defaultBulkPurchaseState.payment = cachedGlobalDefaultPayment as BulkPurchasePayment;
+      }
+    }
     accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
     state.setRecommendations((data.recommendations || []) as unknown as api.Recommendation[]);
     state.clearSelectedRecommendations();
@@ -156,39 +195,56 @@ function cellKey(rec: LocalRecommendation): string {
   return `${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.service}|${rec.region}|${rec.resource_type}|${rec.engine ?? ''}`;
 }
 
-// pickBestVariantPerCell collapses a list of recs to one rec per cell,
-// choosing the variant with the highest effective monthly savings.
+// pickBestVariantPerCell collapses a list of recs to one rec per cell.
 //
-// Effective savings amortizes the upfront cost across the term:
+// issue #223: tiebreaker is "matches resolved GlobalConfig.DefaultTerm +
+// DefaultPayment". If no variant in a cell matches the configured defaults,
+// fall back to the variant with the highest effective monthly savings
+// (the original #224 behaviour).
+//
+// Effective savings (fallback metric) amortizes the upfront cost across
+// the term:
 //   effective = savings - (upfront_cost / (term * 12))
 //
-// Two `(savings, upfront_cost, term)` tuples that look identical on raw
-// `savings` can score very differently on the amortized number — e.g. a
-// 3yr all-upfront commitment with a large lump-sum upfront has a much
-// lower effective monthly savings than a no-upfront variant with the
-// same headline savings. Picking by amortization picks the variant
-// that's actually best for the operator's wallet over the term.
-//
-// Used by issue #224's `select-all` handler. Sibling issue #223 will
-// replace this tiebreaker with "matches resolved GlobalConfig.DefaultTerm
-// + DefaultPayment" once that lands; until then, amortized savings is
-// the right deterministic default.
-function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): LocalRecommendation[] {
-  const byCell = new Map<string, LocalRecommendation>();
+// Exported so unit tests can exercise it directly.
+export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): LocalRecommendation[] {
+  // Group recs by cell key.
+  const groups = new Map<string, LocalRecommendation[]>();
+  for (const r of recs) {
+    const k = cellKey(r);
+    const group = groups.get(k);
+    if (group) {
+      group.push(r);
+    } else {
+      groups.set(k, [r]);
+    }
+  }
+
   const effective = (r: LocalRecommendation): number => {
     // Defensive clamp: if a rec arrives with term=0 from a malformed
     // fixture, treat it as 1yr so the division doesn't blow up.
     const monthsInTerm = Math.max(12, (r.term || 1) * 12);
     return r.savings - (r.upfront_cost / monthsInTerm);
   };
-  for (const r of recs) {
-    const k = cellKey(r);
-    const existing = byCell.get(k);
-    if (!existing || effective(r) > effective(existing)) {
-      byCell.set(k, r);
+
+  const result: LocalRecommendation[] = [];
+  for (const group of groups.values()) {
+    // Prefer the variant matching the operator's configured defaults.
+    const configMatch = group.find(
+      (r) => r.term === cachedGlobalDefaultTerm && r.payment === cachedGlobalDefaultPayment,
+    );
+    if (configMatch) {
+      result.push(configMatch);
+      continue;
     }
+    // No config-matching variant in this cell: fall back to highest effective savings.
+    let best = group[0]!;
+    for (let i = 1; i < group.length; i++) {
+      if (effective(group[i]!) > effective(best)) best = group[i]!;
+    }
+    result.push(best);
   }
-  return Array.from(byCell.values());
+  return result;
 }
 
 const SORT_HEADER_LABELS: Record<string, string> = {
@@ -1283,7 +1339,9 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
     // Explicit field-pick rather than spread-and-omit — avoids leaking a
     // legacy `term` value into the returned object even at runtime.
     return {
-      payment: parsed.payment || 'all-upfront',
+      // issue #223: fall back to resolved GlobalConfig.DefaultPayment rather
+      // than the literal 'all-upfront' when localStorage has no stored value.
+      payment: (parsed.payment || cachedGlobalDefaultPayment) as BulkPurchasePayment,
       capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
     };
   } catch {
@@ -2099,8 +2157,13 @@ function resolvePerRecPaymentSeed(
   // Defensive fallback: rec is missing/has-unsupported payment AND no
   // matching override. paymentOptionsFor always returns at least one
   // option for the (provider, service, term) cells the engine emits.
+  // issue #223: prefer GlobalConfig.DefaultPayment over the first option
+  // so the fallback is consistent with the operator's configured preference.
   const options = paymentOptionsFor(provider, rec.service, term);
-  return { payment: (options[0] ?? 'all-upfront') as CompatPayment, source: 'fallback' };
+  const preferred = (options as string[]).includes(cachedGlobalDefaultPayment)
+    ? cachedGlobalDefaultPayment
+    : (options[0] ?? 'all-upfront') as CompatPayment;
+  return { payment: preferred, source: 'fallback' };
 }
 
 /**
