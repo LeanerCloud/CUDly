@@ -38,6 +38,7 @@ jest.mock('../state', () => ({
   getCurrentAccountIDs: jest.fn().mockReturnValue([]),
   setCurrentAccountIDs: jest.fn(),
   getRecommendations: jest.fn().mockReturnValue([]),
+  getRecommendationByID: jest.fn().mockReturnValue(undefined),
   setRecommendations: jest.fn(),
   getSelectedRecommendationIDs: jest.fn().mockReturnValue(new Set()),
   clearSelectedRecommendations: jest.fn(),
@@ -389,6 +390,7 @@ describe('Recommendations Module', () => {
         regions: []
       });
       (state.getRecommendations as jest.Mock).mockReturnValue(allRecs); // full set in state
+      (state as unknown as { getRecommendationByID: jest.Mock }).getRecommendationByID.mockImplementation((id: string) => allRecs.find((r) => r.id === id));
       // Simulate: 1yr is already selected in state.
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rec-1yr']));
 
@@ -417,6 +419,7 @@ describe('Recommendations Module', () => {
         recommendations: mockRecs,
         regions: []
       });
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(mockRecs);
 
       await loadRecommendations();
 
@@ -445,6 +448,7 @@ describe('Recommendations Module', () => {
         recommendations: mockRecs,
         regions: []
       });
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(mockRecs);
 
       await loadRecommendations();
 
@@ -2182,6 +2186,7 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
     expect(recs).toHaveLength(18);
 
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
     await loadRecommendations();
 
     const selectAll = document.getElementById('select-all-recs') as HTMLInputElement;
@@ -2212,6 +2217,7 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
       { id: 'middle',      provider: 'aws', cloud_account_id: 'acct-1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', engine: '', count: 1, term: 3, savings: 600,  upfront_cost: 7200 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
     await loadRecommendations();
 
     const selectAll = document.getElementById('select-all-recs') as HTMLInputElement;

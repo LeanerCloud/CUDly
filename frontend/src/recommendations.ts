@@ -178,7 +178,7 @@ function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): LocalReco
   const effective = (r: LocalRecommendation): number => {
     // Defensive clamp: if a rec arrives with term=0 from a malformed
     // fixture, treat it as 1yr so the division doesn't blow up.
-    const monthsInTerm = Math.max(1, r.term || 1) * 12;
+    const monthsInTerm = Math.max(12, (r.term || 1) * 12);
     return r.savings - (r.upfront_cost / monthsInTerm);
   };
   for (const r of recs) {
