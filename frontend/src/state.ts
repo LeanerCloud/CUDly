@@ -15,7 +15,8 @@ export interface RecommendationsSort {
 // Typo-safety: misspellings at call sites become compile errors.
 export type RecommendationsColumnId =
   | 'provider' | 'account' | 'service' | 'resource_type' | 'region'
-  | 'count' | 'term' | 'savings' | 'upfront_cost';
+  | 'count' | 'term' | 'savings' | 'upfront_cost'
+  | 'monthly_cost' | 'effective_savings_pct';
 
 export type RecommendationsColumnFilter =
   | { kind: 'set'; values: string[] }   // categorical — values always string-form
