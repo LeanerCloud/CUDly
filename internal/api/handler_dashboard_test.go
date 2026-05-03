@@ -139,6 +139,51 @@ func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.
 
 func float64Ptr(f float64) *float64 { return &f }
 
+// Issue #201 — a global ServiceConfig with Coverage=0 (the float64 zero-value,
+// meaning "not configured") must NOT silence the dashboard headline. The fix is
+// in resolveCoverageByAccountKey: zero-coverage entries are omitted from the map
+// so scaledSavings falls through to full savings.
+func TestHandler_getDashboardSummary_ZeroCoverageInServiceConfigFallsThroughToFull(t *testing.T) {
+	ctx := context.Background()
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+	// No AccountServiceOverride — only a global ServiceConfig with Coverage=0.
+	store := &dashboardOverrideStore{
+		MockConfigStore: mockStore,
+		overrides:       map[string]*config.AccountServiceOverride{}, // no overrides
+	}
+
+	acctA := "acct-A"
+	recommendations := []config.RecommendationRecord{
+		{Provider: "aws", Service: "rds", Savings: 200.0, CloudAccountID: &acctA},
+	}
+
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	// Global ServiceConfig has Coverage=0 (zero-value — operator never set it).
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(&config.ServiceConfig{
+		Provider: "aws", Service: "rds", Enabled: true, Coverage: 0,
+	}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{
+		auth:      mockAuth,
+		scheduler: mockScheduler,
+		config:    store,
+	}
+
+	result, err := handler.getDashboardSummary(ctx, req, map[string]string{"provider": "aws"})
+	require.NoError(t, err)
+
+	// Before the fix, Coverage=0 was inserted into the map and scaledSavings
+	// returned $0. After the fix, the zero entry is omitted and the full $200
+	// is returned.
+	assert.InDelta(t, 200.0, result.PotentialMonthlySavings, 0.001,
+		"Coverage=0 (unset zero-value) must not silence savings (issue #201)")
+	assert.InDelta(t, 200.0, result.ByService["rds"].PotentialSavings, 0.001)
+}
+
 // summarizeRecommendationsWithCoverage table-driven unit tests cover the
 // scaling math in isolation from the handler / store / auth dependencies.
 func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
