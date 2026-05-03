@@ -371,6 +371,43 @@ describe('Recommendations Module', () => {
       expect(calledIds).not.toContain('rec-azure-sub2');
     });
 
+    // Issue #224: when a sibling variant is selected but currently hidden by a
+    // column filter (e.g. user filtered to 3yr, but 1yr sibling is still
+    // selected in state), checking a 3yr sibling must evict the hidden 1yr
+    // selection. The fix iterates state.getRecommendations() (full loaded set)
+    // rather than the filtered `recommendations` array rendered in the DOM.
+    test('checking a visible variant evicts a same-cell sibling hidden by filter', async () => {
+      const allRecs = [
+        { id: 'rec-1yr', provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 0 },
+        { id: 'rec-3yr', provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 300, upfront_cost: 0 },
+      ];
+      // Simulate: API returns all recs, but only the 3yr one is visible (1yr is
+      // hidden by filter). state.getRecommendations() returns the full set.
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: [allRecs[1]], // only 3yr visible in rendered list
+        regions: []
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs); // full set in state
+      // Simulate: 1yr is already selected in state.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rec-1yr']));
+
+      await loadRecommendations();
+
+      // Tick the 3yr checkbox.
+      const cb = document.querySelector<HTMLInputElement>('input[data-rec-id="rec-3yr"]');
+      expect(cb).not.toBeNull();
+      cb!.checked = true;
+      cb!.dispatchEvent(new Event('change'));
+
+      // The hidden 1yr sibling must be evicted.
+      const removeCalls = (state.removeSelectedRecommendation as jest.Mock).mock.calls.map(c => c[0]);
+      expect(removeCalls).toContain('rec-1yr');
+      // And the 3yr rec is added.
+      const addCalls = (state.addSelectedRecommendation as jest.Mock).mock.calls.map(c => c[0]);
+      expect(addCalls).toContain('rec-3yr');
+    });
+
     test('purchase button opens modal for that recommendation', async () => {
       const mockRecs = [
         { id: 'rec-11', provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 }
@@ -2062,6 +2099,8 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
       { id: 'cellA-3y-noup',   provider: 'aws', cloud_account_id: 'acct-1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', engine: '', count: 1, term: 3, savings: 200, upfront_cost: 0 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    // state.getRecommendations() is the full loaded set (used by the sibling-eviction loop).
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
     // Pretend variant A is already selected (the "user previously checked it" state).
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cellA-1y-allup']));
     await loadRecommendations();
@@ -2092,6 +2131,7 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
       { id: 'cellY-1y',  provider: 'aws', cloud_account_id: 'acct-1', service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', engine: 'mysql', count: 1, term: 1, savings: 200, upfront_cost: 1000 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
     // Pretend cellY is already selected.
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cellY-1y']));
     await loadRecommendations();
