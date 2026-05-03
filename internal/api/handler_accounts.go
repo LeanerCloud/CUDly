@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -1055,12 +1056,9 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 // budget (limit 10). No business logic lives here that isn't otherwise
 // described in setPlanAccounts' doc comment.
 func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID string, accountIDs []string) error {
-	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	plan, err := h.getPlanForAccountProviderValidation(ctx, planID)
 	if err != nil {
-		return fmt.Errorf("accounts: failed to get plan: %w", err)
-	}
-	if plan == nil {
-		return NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
+		return err
 	}
 
 	expected := config.DerivePlanProviders(plan)
@@ -1096,6 +1094,20 @@ func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID strin
 			m.Name, m.Provider, expected)
 	}
 	return NewClientError(400, "plan provider mismatch: "+strings.Join(parts, "; "))
+}
+
+func (h *Handler) getPlanForAccountProviderValidation(ctx context.Context, planID string) (*config.PurchasePlan, error) {
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
+		}
+		return nil, fmt.Errorf("accounts: failed to get plan: %w", err)
+	}
+	if plan == nil {
+		return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
+	}
+	return plan, nil
 }
 
 // setPlanAccounts handles PUT /api/plans/:id/accounts.
@@ -1134,6 +1146,9 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 	}
 
 	if err := h.config.SetPlanAccounts(ctx, id, body.AccountIDs); err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, NewClientError(404, err.Error())
+		}
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 

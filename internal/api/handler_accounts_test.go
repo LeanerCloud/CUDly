@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/accounts"
@@ -606,6 +607,32 @@ func TestSetPlanAccounts_ValidHappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, result)
 	assert.Equal(t, []string{awsAcct209}, capturedIDs, "SetPlanAccounts should be called with the validated IDs")
+}
+
+func TestSetPlanAccounts_StoreNotFoundAfterValidationMapsTo404(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return awsPlan209(), nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-aws", Provider: "aws"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		return fmt.Errorf("%w: account %s", config.ErrNotFound, awsAcct209)
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + awsAcct209 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 404, ce.code)
+	assert.Contains(t, ce.Error(), awsAcct209)
 }
 
 func TestSetPlanAccounts_PlanNotFound(t *testing.T) {

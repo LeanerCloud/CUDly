@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -446,7 +447,7 @@ func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*Pu
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("purchase plan not found: %s", planID)
+			return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
 		}
 		return nil, fmt.Errorf("failed to get purchase plan: %w", err)
 	}
@@ -1952,13 +1953,12 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 }
 
 func (s *PostgresStore) validatePlanAccountProvidersTx(ctx context.Context, tx pgx.Tx, planID string, accountIDs []string) error {
-	if len(accountIDs) == 0 {
-		return nil
-	}
-
 	services, err := s.getPlanServicesForShareTx(ctx, tx, planID)
 	if err != nil {
 		return err
+	}
+	if len(accountIDs) == 0 {
+		return nil
 	}
 	expected := DerivePlanProviders(&PurchasePlan{Services: services})
 	if len(expected) == 0 {
@@ -1989,8 +1989,8 @@ func (s *PostgresStore) getPlanServicesForShareTx(ctx context.Context, tx pgx.Tx
 		WHERE id = $1
 		FOR SHARE
 	`, planID).Scan(&servicesJSON); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("plan not found: %s", planID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: plan %s", ErrNotFound, planID)
 		}
 		return nil, fmt.Errorf("failed to get plan services: %w", err)
 	}
@@ -2022,8 +2022,8 @@ func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context,
 			WHERE id = $1
 			FOR SHARE
 		`, accountID).Scan(&name, &provider); err != nil {
-			if err == pgx.ErrNoRows {
-				return nil, fmt.Errorf("account not found: %s", accountID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("%w: account %s", ErrNotFound, accountID)
 			}
 			return nil, fmt.Errorf("failed to get account %s: %w", accountID, err)
 		}
