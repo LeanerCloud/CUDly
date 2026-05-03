@@ -246,6 +246,23 @@ func buildRecommendationFilter(filter RecommendationFilter) (string, []any) {
 	if filter.Region != "" {
 		add("region = $%d", filter.Region)
 	}
+	// AccountIDs filter semantics (issue #211):
+	//
+	//   account_ids param  | cloud_account_id row | Result
+	//   -------------------|----------------------|--------------------------------
+	//   absent (nil/empty) | any (incl. NULL)     | row included — no WHERE clause
+	//   non-empty          | NULL                 | row excluded — SQL: NULL =
+	//                      |                      |   ANY(array) evaluates to NULL,
+	//                      |                      |   not TRUE; legacy ambient rows
+	//                      |                      |   are NOT "in any account"
+	//   non-empty          | matches one of IDs   | row included
+	//   non-empty          | doesn't match        | row excluded
+	//
+	// Note: the fifth case — non-empty account_ids containing a disabled
+	// account's ID — is enforced at the session layer in
+	// handler_recommendations.go::filterRecommendationsByAllowedAccounts,
+	// which prunes recs by the caller's allowed-account list AFTER this SQL
+	// filter runs. It is not visible here.
 	if len(filter.AccountIDs) > 0 {
 		add("cloud_account_id = ANY($%d)", filter.AccountIDs)
 	}

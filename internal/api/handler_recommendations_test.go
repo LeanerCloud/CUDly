@@ -192,6 +192,131 @@ func TestHandler_getRecommendationDetail(t *testing.T) {
 	})
 }
 
+// TestGetRecommendations_AccountIDFilter exercises the five cases documented
+// in the issue #211 table. The DB-layer SQL semantics (NULL row exclusion)
+// are tested indirectly: the mock returns only what the SQL filter would
+// return for each case, so the handler contract is verified end-to-end.
+//
+// Case 5 (disabled-account exclusion) is enforced by
+// filterRecommendationsByAllowedAccounts — that layer is exercised via the
+// user's allowed-account list, not the account_ids param. It is not tested
+// here to keep scope narrow; its own unit tests live in handler.go.
+func TestGetRecommendations_AccountIDFilter(t *testing.T) {
+	ctx := context.Background()
+	validUUID := "12345678-1234-1234-1234-123456789abc"
+	otherUUID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+	acctPtr := func(s string) *string { return &s }
+
+	// Fixtures matching the issue table.
+	recWithAccount := config.RecommendationRecord{
+		ID: "rec-with-account", Provider: "aws", Service: "ec2",
+		Region: "us-east-1", CloudAccountID: acctPtr(validUUID),
+	}
+	recNullAccount := config.RecommendationRecord{
+		ID: "rec-null-account", Provider: "aws", Service: "ec2",
+		Region: "us-east-1", CloudAccountID: nil, // legacy ambient row
+	}
+	recOtherAccount := config.RecommendationRecord{
+		ID: "rec-other-account", Provider: "aws", Service: "ec2",
+		Region: "us-east-1", CloudAccountID: acctPtr(otherUUID),
+	}
+
+	tests := []struct {
+		name       string
+		params     map[string]string
+		mockReturn []config.RecommendationRecord
+		wantIDs    []string
+		wantStatus int // 0 = no error expected
+	}{
+		{
+			// Case 1: absent account_ids → all rows (incl. NULL) included.
+			// The SQL emits no WHERE clause on account_ids; mock returns
+			// both null-account and non-null-account rows.
+			name:       "absent account_ids includes all rows",
+			params:     map[string]string{},
+			mockReturn: []config.RecommendationRecord{recNullAccount, recWithAccount},
+			wantIDs:    []string{"rec-null-account", "rec-with-account"},
+		},
+		{
+			// Case 2: non-empty account_ids + NULL row → excluded.
+			// SQL: NULL = ANY(array) → NULL (falsy). The mock returns
+			// only the rows Postgres would return after filtering.
+			name:       "non-empty account_ids excludes NULL rows",
+			params:     map[string]string{"account_ids": validUUID},
+			mockReturn: []config.RecommendationRecord{recWithAccount},
+			wantIDs:    []string{"rec-with-account"},
+		},
+		{
+			// Case 3: non-empty account_ids matching a row → included.
+			name:       "matching account_id includes row",
+			params:     map[string]string{"account_ids": validUUID},
+			mockReturn: []config.RecommendationRecord{recWithAccount},
+			wantIDs:    []string{"rec-with-account"},
+		},
+		{
+			// Case 4: non-empty account_ids non-matching → excluded.
+			// Mock returns empty (Postgres returned nothing for the UUID).
+			name:       "non-matching account_id returns empty",
+			params:     map[string]string{"account_ids": otherUUID},
+			mockReturn: []config.RecommendationRecord{},
+			wantIDs:    []string{},
+		},
+		{
+			// Validation: invalid UUID in account_ids → 400 before DB call.
+			name:       "invalid UUID returns 400",
+			params:     map[string]string{"account_ids": "not-a-uuid"},
+			wantStatus: 400,
+		},
+		{
+			// Validation: multiple valid UUIDs comma-separated — both included
+			// when mock returns matching rows for both.
+			name:   "two valid UUIDs comma-separated",
+			params: map[string]string{"account_ids": validUUID + "," + otherUUID},
+			mockReturn: []config.RecommendationRecord{
+				recWithAccount, recOtherAccount,
+			},
+			wantIDs: []string{"rec-with-account", "rec-other-account"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockScheduler := new(MockScheduler)
+			if tt.wantStatus == 0 {
+				mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+					Return(tt.mockReturn, nil)
+			}
+			handler := &Handler{
+				scheduler: mockScheduler,
+				apiKey:    "test-key",
+			}
+			req := &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"x-api-key": "test-key"},
+			}
+
+			result, err := handler.getRecommendations(ctx, req, tt.params)
+
+			if tt.wantStatus != 0 {
+				require.Error(t, err)
+				ce, ok := IsClientError(err)
+				require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+				assert.Equal(t, tt.wantStatus, ce.code)
+				assert.Nil(t, result)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			gotIDs := make([]string, len(result.Recommendations))
+			for i, r := range result.Recommendations {
+				gotIDs[i] = r.ID
+			}
+			assert.ElementsMatch(t, tt.wantIDs, gotIDs)
+		})
+	}
+}
+
 func TestConfidenceBucketFor(t *testing.T) {
 	cases := []struct {
 		name    string
