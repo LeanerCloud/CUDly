@@ -6,27 +6,44 @@ package config
 // replaced wholesale when non-empty in the override.
 //
 // If override is nil the global is returned unchanged (no copy is made).
+// If global is nil but override is non-nil, a baseline ServiceConfig is synthesised
+// with safe defaults (Enabled: true, Provider/Service from the override context via
+// the provider and service parameters) and the override is merged into it. This
+// lets a per-account override take effect even when no global ServiceConfig row
+// exists for that (provider, service) pair.
+// If both are nil, nil is returned.
 // When merging, slice fields from the global are copied to avoid callers mutating
 // the global's underlying arrays through the resolved config.
-func ResolveServiceConfig(global *ServiceConfig, override *AccountServiceOverride) *ServiceConfig {
+func ResolveServiceConfig(provider, service string, global *ServiceConfig, override *AccountServiceOverride) *ServiceConfig {
 	if override == nil {
-		return global
+		return global // may be nil; callers that check for nil entry handle this correctly
+	}
+
+	baseline := global
+	if baseline == nil {
+		// No global row — synthesise a safe default so the override can be applied.
+		// Enabled defaults to true (consistent with "service is on unless told otherwise").
+		baseline = &ServiceConfig{
+			Provider: provider,
+			Service:  service,
+			Enabled:  true,
+		}
 	}
 
 	resolved := &ServiceConfig{
-		Provider:       global.Provider,
-		Service:        global.Service,
-		Enabled:        global.Enabled,
-		Term:           global.Term,
-		Payment:        global.Payment,
-		Coverage:       global.Coverage,
-		RampSchedule:   global.RampSchedule,
-		IncludeEngines: copyStrSlice(global.IncludeEngines),
-		ExcludeEngines: copyStrSlice(global.ExcludeEngines),
-		IncludeRegions: copyStrSlice(global.IncludeRegions),
-		ExcludeRegions: copyStrSlice(global.ExcludeRegions),
-		IncludeTypes:   copyStrSlice(global.IncludeTypes),
-		ExcludeTypes:   copyStrSlice(global.ExcludeTypes),
+		Provider:       baseline.Provider,
+		Service:        baseline.Service,
+		Enabled:        baseline.Enabled,
+		Term:           baseline.Term,
+		Payment:        baseline.Payment,
+		Coverage:       baseline.Coverage,
+		RampSchedule:   baseline.RampSchedule,
+		IncludeEngines: copyStrSlice(baseline.IncludeEngines),
+		ExcludeEngines: copyStrSlice(baseline.ExcludeEngines),
+		IncludeRegions: copyStrSlice(baseline.IncludeRegions),
+		ExcludeRegions: copyStrSlice(baseline.ExcludeRegions),
+		IncludeTypes:   copyStrSlice(baseline.IncludeTypes),
+		ExcludeTypes:   copyStrSlice(baseline.ExcludeTypes),
 	}
 
 	applyScalarOverrides(resolved, override)

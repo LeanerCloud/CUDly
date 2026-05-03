@@ -16,7 +16,7 @@ func TestResolveServiceConfig_NilOverride(t *testing.T) {
 		Provider: "aws", Service: "ec2",
 		Enabled: true, Term: 3, Payment: "all_upfront", Coverage: 80.0,
 	}
-	result := ResolveServiceConfig(global, nil)
+	result := ResolveServiceConfig("aws", "ec2", global, nil)
 	assert.Same(t, global, result, "nil override should return the global pointer unchanged")
 }
 
@@ -46,7 +46,7 @@ func TestResolveServiceConfig_AllFieldsOverridden(t *testing.T) {
 		ExcludeTypes:   []string{"r5.large"},
 	}
 
-	result := ResolveServiceConfig(global, override)
+	result := ResolveServiceConfig("aws", "ec2", global, override)
 
 	assert.False(t, result.Enabled)
 	assert.Equal(t, 1, result.Term)
@@ -74,7 +74,7 @@ func TestResolveServiceConfig_SparseOverride(t *testing.T) {
 		Term: intPtr(1), // only override Term
 	}
 
-	result := ResolveServiceConfig(global, override)
+	result := ResolveServiceConfig("aws", "rds", global, override)
 
 	assert.Equal(t, 1, result.Term)
 	assert.True(t, result.Enabled)                                // inherited
@@ -89,7 +89,7 @@ func TestResolveServiceConfig_EmptySliceDoesNotOverride(t *testing.T) {
 		IncludeRegions: []string{}, // empty — should NOT override
 	}
 
-	result := ResolveServiceConfig(global, override)
+	result := ResolveServiceConfig("aws", "rds", global, override)
 	assert.Equal(t, []string{"us-east-1"}, result.IncludeRegions)
 }
 
@@ -97,7 +97,31 @@ func TestResolveServiceConfig_DoesNotMutateGlobal(t *testing.T) {
 	global := &ServiceConfig{Term: 3}
 	override := &AccountServiceOverride{Term: intPtr(1)}
 
-	result := ResolveServiceConfig(global, override)
+	result := ResolveServiceConfig("aws", "ec2", global, override)
 	assert.Equal(t, 1, result.Term)
 	assert.Equal(t, 3, global.Term, "global must not be mutated")
+}
+
+// TestResolveServiceConfig_NilGlobalWithOverride verifies that a per-account override
+// takes effect even when no global ServiceConfig row exists.
+func TestResolveServiceConfig_NilGlobalWithOverride(t *testing.T) {
+	override := &AccountServiceOverride{
+		Enabled:  boolPtr(false),
+		Coverage: float64Ptr(60.0),
+	}
+
+	result := ResolveServiceConfig("aws", "rds", nil, override)
+
+	assert.NotNil(t, result)
+	assert.Equal(t, "aws", result.Provider, "Provider taken from parameters")
+	assert.Equal(t, "rds", result.Service, "Service taken from parameters")
+	assert.False(t, result.Enabled, "override Enabled=false applied against synthesised baseline")
+	assert.Equal(t, 60.0, result.Coverage, "override Coverage applied")
+}
+
+// TestResolveServiceConfig_BothNil verifies that nil is returned when both
+// global and override are nil.
+func TestResolveServiceConfig_BothNil(t *testing.T) {
+	result := ResolveServiceConfig("aws", "rds", nil, nil)
+	assert.Nil(t, result)
 }
