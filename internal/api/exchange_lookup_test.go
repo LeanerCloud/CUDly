@@ -3,12 +3,25 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// failingRoundTripper is an http.RoundTripper that fails every request
+// with a fixed error. Used to inject an STS GetCallerIdentity failure
+// into a Handler's pre-seeded aws.Config without dialling the network
+// or relying on real AWS credentials.
+type failingRoundTripper struct{ err error }
+
+func (f failingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return nil, f.err
+}
 
 // fakeRecsLister captures the filter passed to ListStoredRecommendations
 // so tests can assert region / account / provider scoping landed in the
@@ -176,6 +189,72 @@ func TestPurchaseRecLookupFromStore_ThreeYearTerm(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, int64(3*365*24*60*60), got[0].TermSeconds,
 		"3-year rec must serialise to 3 × 31_536_000s for the term-match guard")
+}
+
+// TestResolveAWSCloudAccountID_FailsClosedOnSTSError pins the
+// multi-tenant safety contract introduced by commit f44b06567: when
+// STS GetCallerIdentity fails (transient AWS error, denied IAM perm,
+// expired token), resolveAWSCloudAccountID MUST propagate the error
+// rather than returning ("", nil) — the latter would have
+// purchaseRecLookupFromStore skip the AccountIDs filter and serve up
+// another tenant's recs to the caller.
+//
+// Mock injection strategy: pre-seal h.awsCfg with an aws.Config whose
+// HTTPClient fails every request. CUDLY_SOURCE_CLOUD=aws forces
+// resolveAWSCallerIdentity past its non-AWS short-circuit, so STS
+// GetCallerIdentity is the next (and only) HTTP call — guaranteed
+// to fail via the transport stub. Static credentials + an explicit
+// region are required because the SDK signs the request before
+// invoking the transport; without them the SDK errors with
+// MissingRegion / NoCredentialProviders before the failing transport
+// runs and the test would pass for the wrong reason.
+//
+// Asserts BOTH the error wraps the production fix's identifying
+// prefix ("resolve source aws account for reshape scope") AND that
+// ListCloudAccounts was never invoked — proving the fail-closed
+// branch aborted the resolver before the DB read. Reverting the
+// f44b06567 fix (changing the STS-error branch back to `return "",
+// nil`) makes this test fail loudly.
+func TestResolveAWSCloudAccountID_FailsClosedOnSTSError(t *testing.T) {
+	// Force resolveAWSCallerIdentity past its sourceCloud()!="aws"
+	// short-circuit so STS is actually invoked.
+	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
+
+	// MockConfigStore with a ListCloudAccountsFn sentinel: if the
+	// resolver ever reaches the DB read, the flag flips to true and
+	// the test fails. The fail-closed branch must abort BEFORE this
+	// point.
+	var listCloudAccountsCalled bool
+	mockStore := &MockConfigStore{
+		ListCloudAccountsFn: func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+			listCloudAccountsCalled = true
+			return nil, nil
+		},
+	}
+
+	stsErr := errors.New("simulated sts get-caller-identity failure")
+	h := &Handler{config: mockStore}
+	// Pre-seal awsCfgOnce so resolveAWSCallerIdentity skips
+	// LoadDefaultConfig and uses our injected config directly.
+	h.awsCfgOnce.Do(func() {
+		h.awsCfg = aws.Config{
+			Region: "us-east-1",
+			// Static dummy creds so the SDK's signer doesn't probe
+			// IMDS / shared-config files before sending the (doomed)
+			// HTTP request through the failing transport.
+			Credentials: credentials.NewStaticCredentialsProvider("AKIA-test", "test-secret", ""),
+			HTTPClient:  &http.Client{Transport: failingRoundTripper{err: stsErr}},
+		}
+	})
+
+	id, err := h.resolveAWSCloudAccountID(context.Background())
+	require.Error(t, err, "STS failure must propagate — fail-closed contract for multi-tenant scope filter")
+	assert.Empty(t, id, "fail-closed sentinel: empty account ID with non-nil error")
+	assert.Contains(t, err.Error(), "resolve source aws account for reshape scope",
+		"error must wrap the resolver's production prefix so the cause stays attributable")
+	assert.False(t, listCloudAccountsCalled,
+		"ListCloudAccounts must NOT be invoked after an STS error — the resolver must short-circuit "+
+			"before the DB read or the unscoped query path could leak another tenant's recs")
 }
 
 // TestSplitInstanceType pins the local instance-type parser used by
