@@ -119,10 +119,11 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // coverageByKey via config.AccountConfigKey(account, provider, service).
 // Pass coverageByKey=nil to disable scaling (every rec counts fully).
 //
-// Recs without a CloudAccountID, recs whose triple has no entry in the
-// map, and recs with a recorded coverage of zero (treated as "no
-// scaling configured") all count at full weight — this matches the
-// pre-#196 behaviour for un-configured accounts.
+// Recs without a CloudAccountID and recs whose triple has no entry in the
+// map all count at full weight — this matches the pre-#196 behaviour for
+// un-configured accounts. Zero-coverage configs are excluded from the map
+// by resolveCoverageByAccountKey (issue #201) so they also fall through to
+// full weight rather than silently zeroing the headline.
 //
 // Coverage > 100 is capped at 100 so a misconfigured override cannot
 // inflate the headline "potential savings" beyond the raw rec total.
@@ -170,6 +171,13 @@ func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]flo
 // coverage% for every (account, provider, service) triple represented in
 // recs. Lookup errors degrade gracefully to a nil map (no scaling applied
 // → un-overridden behaviour).
+//
+// Entries with a resolved coverage of zero are omitted from the map.
+// ServiceConfig.Coverage is a float64 whose zero-value means "not configured",
+// so including a zero entry would silently scale that account's savings to $0
+// even though the operator never set an explicit coverage cap (issue #201).
+// When an entry is absent, scaledSavings falls through to full savings,
+// matching the pre-#196 behaviour for un-configured accounts.
 func (h *Handler) resolveCoverageByAccountKey(ctx context.Context, recs []config.RecommendationRecord) map[string]float64 {
 	if len(recs) == 0 {
 		return nil
@@ -184,7 +192,16 @@ func (h *Handler) resolveCoverageByAccountKey(ctx context.Context, recs []config
 	}
 	out := make(map[string]float64, len(resolved))
 	for k, cfg := range resolved {
+		if cfg.Coverage == 0 {
+			// Zero is the float64 zero-value, meaning "not configured".
+			// Omit the entry so scaledSavings returns full savings
+			// rather than silently zeroing the dashboard headline.
+			continue
+		}
 		out[k] = cfg.Coverage
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
