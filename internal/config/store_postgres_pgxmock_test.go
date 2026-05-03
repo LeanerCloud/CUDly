@@ -1195,6 +1195,7 @@ func TestPGXMock_SetPlanAccounts_Empty(t *testing.T) {
 
 	err = store.SetPlanAccounts(ctx, "plan-1", []string{})
 	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPGXMock_SetPlanAccounts_EmptyMissingPlanReturnsNotFound(t *testing.T) {
