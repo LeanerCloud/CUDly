@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -1039,34 +1038,6 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 	return nil, nil
 }
 
-// derivePlanProviders extracts the distinct set of providers a plan
-// targets by parsing the keys of plan.Services (format "provider/service",
-// e.g. "aws/ec2" — produced by buildServiceConfig). Returns a sorted slice
-// for stable error messages.
-// An empty result means the plan has no parseable services — production
-// plans always carry at least one (frontend enforces this), so an empty
-// return is a defensive case that signals to skip provider validation.
-func derivePlanProviders(plan *config.PurchasePlan) []string {
-	if plan == nil {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(plan.Services))
-	for k := range plan.Services {
-		// Keys are "provider/service"; skip malformed keys rather than guess.
-		p, _, ok := strings.Cut(k, "/")
-		if !ok || p == "" {
-			continue
-		}
-		seen[p] = struct{}{}
-	}
-	out := make([]string, 0, len(seen))
-	for p := range seen {
-		out = append(out, p)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // validatePlanAccountProviders enforces the issue-#209 / spec E-4 rule
 // that every account assigned to a plan must have its provider match
 // one of the plan's derived providers. Returns:
@@ -1092,7 +1063,7 @@ func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID strin
 		return NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
 	}
 
-	expected := derivePlanProviders(plan)
+	expected := config.DerivePlanProviders(plan)
 	if len(expected) == 0 {
 		return nil
 	}
