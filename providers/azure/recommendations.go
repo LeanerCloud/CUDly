@@ -9,11 +9,13 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/advisor/armadvisor"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/cosmosdb"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
 )
 
@@ -55,53 +57,116 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 // blank on the client — converters must populate Region from the response data
 // (see known_issues/10_azure_provider.md CRITICAL "Recommendation converters
 // ignore the API response entirely" for the matching converter work).
+//
+// All five service calls run concurrently under errgroup. Each goroutine captures
+// its own error and returns nil to the group so that a single service failure
+// does not cancel sibling calls. Results are appended in a deterministic order
+// (compute → database → cache → cosmosdb → advisor) after all goroutines finish.
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	allRecommendations := make([]common.Recommendation, 0)
+	var (
+		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs []common.Recommendation
+		computeErr, dbErr, cacheErr, cosmosErr, advisorErr      error
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
 
 	// Compute (VM) recommendations — subscription-wide.
 	if shouldIncludeService(params, common.ServiceCompute) {
-		computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
-		computeRecs, err := computeClient.GetRecommendations(ctx, params)
-		if err != nil {
-			logging.Warnf("Azure compute recommendations: %v", err)
-		} else {
-			allRecommendations = append(allRecommendations, computeRecs...)
-		}
+		g.Go(func() error {
+			computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
+			computeRecs, computeErr = computeClient.GetRecommendations(gctx, params)
+			return nil // error isolation: never propagate to errgroup
+		})
 	}
 
 	// Database (SQL) recommendations — subscription-wide.
 	if shouldIncludeService(params, common.ServiceRelationalDB) {
-		dbClient := database.NewClient(r.cred, r.subscriptionID, "")
-		dbRecs, err := dbClient.GetRecommendations(ctx, params)
-		if err != nil {
-			logging.Warnf("Azure database recommendations: %v", err)
-		} else {
-			allRecommendations = append(allRecommendations, dbRecs...)
-		}
+		g.Go(func() error {
+			dbClient := database.NewClient(r.cred, r.subscriptionID, "")
+			dbRecs, dbErr = dbClient.GetRecommendations(gctx, params)
+			return nil
+		})
 	}
 
 	// Cache (Redis) recommendations — subscription-wide.
 	if shouldIncludeService(params, common.ServiceCache) {
-		cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
-		cacheRecs, err := cacheClient.GetRecommendations(ctx, params)
-		if err != nil {
-			logging.Warnf("Azure cache recommendations: %v", err)
-		} else {
-			allRecommendations = append(allRecommendations, cacheRecs...)
-		}
+		g.Go(func() error {
+			cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
+			cacheRecs, cacheErr = cacheClient.GetRecommendations(gctx, params)
+			return nil
+		})
+	}
+
+	// CosmosDB (NoSQL) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceNoSQL) {
+		g.Go(func() error {
+			cosmosClient := cosmosdb.NewClient(r.cred, r.subscriptionID, "")
+			cosmosRecs, cosmosErr = cosmosClient.GetRecommendations(gctx, params)
+			return nil
+		})
 	}
 
 	// Azure Advisor adds cross-cutting cost recommendations independent of the
 	// per-service Reservation API. Failures here are non-fatal — the per-service
 	// results above are still useful on their own.
-	advisorRecs, err := r.getAdvisorRecommendations(ctx, params)
-	if err != nil {
-		logging.Errorf("Failed to get Azure Advisor recommendations: %v", err)
-	} else {
-		allRecommendations = append(allRecommendations, advisorRecs...)
+	g.Go(func() error {
+		advisorRecs, advisorErr = r.getAdvisorRecommendations(gctx, params)
+		return nil
+	})
+
+	// Wait for all goroutines. g.Wait() always returns nil because every
+	// goroutine returns nil — errors are captured in per-service variables
+	// above. After Wait, propagate ctx cancellation so callers can distinguish
+	// "all five services completed (with possibly per-service errors)" from
+	// "the parent ctx was canceled mid-fan-out". Without this check the
+	// CHECK could swallow a deadline exceeded that the caller expected to
+	// see.
+	_ = g.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	return allRecommendations, nil
+	return mergeServiceResults(serviceResult{"compute", computeRecs, computeErr},
+		serviceResult{"database", dbRecs, dbErr},
+		serviceResult{"cache", cacheRecs, cacheErr},
+		serviceResult{"cosmosdb", cosmosRecs, cosmosErr},
+		serviceResult{"advisor", advisorRecs, advisorErr}), nil
+}
+
+// serviceResult bundles a per-service collection outcome for the deterministic
+// merge in mergeServiceResults. Extracted into a helper so GetRecommendations
+// stays under the cyclomatic-complexity gate after the post-Wait ctx.Err()
+// propagation was added.
+type serviceResult struct {
+	name string
+	recs []common.Recommendation
+	err  error
+}
+
+// mergeServiceResults logs per-service errors (matches the previous sequential
+// behaviour where each error was logged inline via logging.Warnf) and appends
+// successful results in the order the slice is passed — callers must preserve
+// the canonical compute → database → cache → cosmosdb → advisor order so that
+// order-sensitive consumers remain stable. The advisor entry's error is logged
+// via logging.Errorf to match the pre-parallelisation severity.
+func mergeServiceResults(results ...serviceResult) []common.Recommendation {
+	total := 0
+	for _, r := range results {
+		total += len(r.recs)
+	}
+	out := make([]common.Recommendation, 0, total)
+	for _, r := range results {
+		if r.err != nil {
+			if r.name == "advisor" {
+				logging.Errorf("Failed to get Azure Advisor recommendations: %v", r.err)
+			} else {
+				logging.Warnf("Azure %s recommendations: %v", r.name, r.err)
+			}
+			continue
+		}
+		out = append(out, r.recs...)
+	}
+	return out
 }
 
 // GetRecommendationsForService retrieves Azure reservation recommendations for a specific service
