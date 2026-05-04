@@ -13,6 +13,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/cloudsql"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/computeengine"
@@ -154,8 +155,22 @@ func (r *RecommendationsClientAdapter) collectRegion(ctx context.Context, params
 
 	g, gctx := errgroup.WithContext(ctx)
 
+	// Per-(region, service) goroutines are leaves — they issue the actual
+	// Recommender API call. Acquire bounds aggregate concurrent IO across
+	// the whole recommendations-collection fan-out tree at the shared
+	// semaphore's cap (CUDLY_MAX_PARALLELISM, default 20); Release returns
+	// the slot. Without this bound the per-region fan-out (cap 10) ×
+	// per-service sub-fan-out (2) × accounts × providers can produce
+	// hundreds of concurrent gRPC clients that exhaust Lambda memory. If
+	// no semaphore is on ctx (CLI tools, unit tests), Acquire/Release are
+	// no-ops. See pkg/concurrency.
 	if shouldIncludeService(params, common.ServiceCompute) {
 		g.Go(func() error {
+			if err := concurrency.Acquire(gctx); err != nil {
+				computeErr = err
+				return nil
+			}
+			defer concurrency.Release(gctx)
 			client, err := computeengine.NewClient(gctx, r.projectID, region, r.clientOpts...)
 			if err != nil {
 				computeErr = err
@@ -167,6 +182,11 @@ func (r *RecommendationsClientAdapter) collectRegion(ctx context.Context, params
 	}
 	if shouldIncludeService(params, common.ServiceRelationalDB) {
 		g.Go(func() error {
+			if err := concurrency.Acquire(gctx); err != nil {
+				sqlErr = err
+				return nil
+			}
+			defer concurrency.Release(gctx)
 			client, err := cloudsql.NewClient(gctx, r.projectID, region, r.clientOpts...)
 			if err != nil {
 				sqlErr = err

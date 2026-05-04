@@ -19,11 +19,13 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	azureprovider "github.com/LeanerCloud/CUDly/providers/azure"
 	gcpprovider "github.com/LeanerCloud/CUDly/providers/gcp"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 // SchedulerConfig holds configuration for the scheduler
@@ -167,6 +169,22 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	if err != nil {
 		return nil, err
 	}
+
+	// Attach a shared semaphore to ctx so every leaf goroutine in the
+	// recommendations-collection fan-out tree (AWS service, Azure service,
+	// GCP region×service) acquires one slot before issuing its cloud-API
+	// call and releases it after. This bounds aggregate concurrent IO across
+	// the whole tree at CUDLY_MAX_PARALLELISM (default 20) regardless of how
+	// nested the dispatch is — without it, peak concurrency multiplies
+	// through the nested fan-outs and can exhaust Lambda memory before work
+	// completes (observed with a 512 MB function in dev). Intermediate
+	// dispatchers (provider, account, GCP region) do NOT acquire — they only
+	// launch sub-goroutines — so no goroutine can deadlock by holding a
+	// permit while waiting for sub-permits.
+	maxParallelism := concurrency.MaxParallelismFromEnv()
+	sem := semaphore.NewWeighted(int64(maxParallelism))
+	ctx = concurrency.WithSharedSemaphore(ctx, sem)
+	logging.Infof("Recommendations collection: aggregate parallelism cap = %d", maxParallelism)
 
 	// Collect recommendations from each enabled provider concurrently, tracking
 	// per-provider outcomes so persistence can scope stale-row eviction to
