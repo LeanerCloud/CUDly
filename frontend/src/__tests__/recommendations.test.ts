@@ -529,7 +529,8 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const summary = document.getElementById('recommendations-action-summary');
-      expect(summary?.textContent).toContain('1 selected of 1 visible');
+      // issues #225/#226: summary text now uses "cells visible" (cell-grouped count).
+      expect(summary?.textContent).toContain('1 selected of 1 cells visible');
       // Old bulk-toolbar surface is gone.
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
@@ -539,7 +540,8 @@ describe('Recommendations Module', () => {
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue(twoRecs);
       await loadRecommendations();
       const summary = document.getElementById('recommendations-action-summary');
-      expect(summary?.textContent).toMatch(/All \d+ visible/);
+      // issues #225/#226: summary text now uses "cells visible" (cell-grouped count).
+      expect(summary?.textContent).toMatch(/All \d+ cells visible/);
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
@@ -1526,9 +1528,14 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
   });
 
   test('multi-term selection produces multiple fan-out buckets', async () => {
+    // Two different resource types (different cells) with different terms.
+    // issues #225/#226: resolvePurchaseTarget now uses pickBestVariantPerCell
+    // for the default (no-selection) target — each cell contributes one rec.
+    // Use different resource_type so each rec is its own cell (no grouping),
+    // ensuring both are selected as the default target and trigger fan-out.
     const mixed = [
       { id: 'a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 'b', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: mixed, regions: [] });
     (state.getRecommendations as jest.Mock).mockReturnValue(mixed);
@@ -1604,9 +1611,12 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
   };
 
   test('(a) single-account bucket with matching override → bucket payment seeded from override', async () => {
+    // issues #225/#226: resolvePurchaseTarget uses pickBestVariantPerCell for the
+    // default path. Use different resource_type values so each rec is its own cell,
+    // ensuring both appear in the default target and trigger fan-out.
     const recs = [
       { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
     ];
     setupMixedTermRecs(recs);
     // Override pins payment=partial-upfront for AWS EC2 on this
@@ -1641,9 +1651,10 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
   });
 
   test('(b) single-account bucket with NO matching override → bucket payment seeded from toolbar', async () => {
+    // issues #225/#226: use different resource_type so each rec is its own cell.
     const recs = [
       { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
     ];
     setupMixedTermRecs(recs);
     // Account exists but has overrides for a DIFFERENT service — the
@@ -1677,10 +1688,15 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     // but different cloud_account_ids. resolveBucketPaymentSeed must
     // return toolbar (the documented multi-account fallback).
     // Pair with a third 3yr rec to force multi-bucket fan-out.
+    //
+    // issues #225/#226: resolvePurchaseTarget uses pickBestVariantPerCell so
+    // each rec must be in its own cell. Recs 'a' and 'b' differ by account
+    // (already distinct cells). Rec 'c' gets a different resource_type so it
+    // doesn't collapse into the same cell as rec 'a' (same account-a).
     const recs = [
       { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
       { id: 'b', provider: 'aws', cloud_account_id: 'test-account-b', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 600 },
-      { id: 'c', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+      { id: 'c', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 'r5.large', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
     ];
     setupMixedTermRecs(recs);
     // Both accounts have ec2 overrides — the multi-account bucket
@@ -1713,9 +1729,10 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
   });
 
   test('(d) user-edited Payment dropdown is reflected in module state', async () => {
+    // issues #225/#226: use different resource_type so each rec is its own cell.
     const recs = [
       { id: 'a', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
-      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
+      { id: 'b', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
     ];
     setupMixedTermRecs(recs);
 

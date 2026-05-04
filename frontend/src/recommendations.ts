@@ -1465,6 +1465,14 @@ function providerDisplayName(provider: string): string {
   }
 }
 
+// CR #253 finding: whitelist provider for CSS class injection.
+// rec.provider comes from the API and is injected into class attributes via
+// template literals. A non-whitelisted value falls back to '' (no badge class).
+function providerBadgeClass(provider: string): string {
+  const n = provider.toLowerCase();
+  return n === 'aws' || n === 'azure' || n === 'gcp' ? n : '';
+}
+
 // Columns that get the per-column header filter button. Order matches the
 // table column order (excluding the leading checkbox column, which is
 // neither sortable nor filterable).
@@ -1490,7 +1498,7 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
     <td class="checkbox-col">
       <input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">
     </td>
-    <td><span class="provider-badge ${rec.provider}">${rec.provider.toUpperCase()}</span></td>
+    <td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
     <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${badge}</td>
@@ -1570,7 +1578,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
     rows.push(`
   <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
     <td class="checkbox-col"></td>
-    <td><span class="provider-badge ${rep.provider}">${rep.provider.toUpperCase()}</span></td>
+    <td><span class="provider-badge ${providerBadgeClass(rep.provider)}">${escapeHtml(providerDisplayName(rep.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
     <td colspan="${TABLE_COL_COUNT - 4}" class="rec-cell-summary-content">
@@ -1808,11 +1816,24 @@ function mountBottomActionBox(): HTMLElement | null {
 // Resolve the action target: selected ∩ visible if a selection exists,
 // else all visible. "Visible" is the post-filter set tracked in module
 // state via setVisibleRecommendations.
+//
+// CR #253: when no rows are manually selected, fall back to one variant per
+// cell (pickBestVariantPerCell) rather than all visible variants. With the
+// grouped table, a collapsed 2-variant cell counts as "1 visible cell" to
+// the user but "2 visible recs" to the flat visible list — submitting both
+// would create 2 conflicting reservations for the same resource, violating
+// the one-variant-per-cell contract from #224.
 function resolvePurchaseTarget(): LocalRecommendation[] {
   const visible = state.getVisibleRecommendations() as unknown as LocalRecommendation[];
   const selected = state.getSelectedRecommendationIDs();
   const intersection = visible.filter((r) => selected.has(r.id));
-  return intersection.length > 0 ? intersection : visible;
+  // Selection path: use the explicit user selection (radio enforcement from
+  // #224 already caps at one per cell).
+  if (intersection.length > 0) return intersection;
+  // Default (no selection): pick the best variant per cell so the purchase
+  // target is exactly one rec per physical resource, matching what the user
+  // sees in the grouped collapsed table.
+  return pickBestVariantPerCell(visible);
 }
 
 // updateBottomActionBox refreshes labels and disabled state on every
@@ -1830,6 +1851,14 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     0,
   );
 
+  // CR #253: for the default (no-selection) target count, use the number of
+  // cells (distinct physical resources) rather than the flat variant count,
+  // since resolvePurchaseTarget() now applies pickBestVariantPerCell when no
+  // rows are selected. The user sees one row per cell in the collapsed table.
+  const visibleCellCount = selectedVisibleCount > 0
+    ? selectedVisibleCount
+    : pickBestVariantPerCell(visible).length;
+
   const summary = document.getElementById('recommendations-action-summary');
   if (summary) {
     if (loadedCount === 0) {
@@ -1837,15 +1866,15 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     } else if (visibleCount === 0) {
       summary.textContent = '(0 visible — adjust filters)';
     } else if (selectedVisibleCount > 0) {
-      summary.textContent = `(${selectedVisibleCount} selected of ${visibleCount} visible)`;
+      summary.textContent = `(${selectedVisibleCount} selected of ${visibleCellCount} cells visible)`;
     } else {
-      summary.textContent = `(All ${visibleCount} visible — no selection)`;
+      summary.textContent = `(All ${visibleCellCount} cells visible — no selection)`;
     }
   }
 
   const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement | null;
   const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement | null;
-  const targetCount = selectedVisibleCount > 0 ? selectedVisibleCount : visibleCount;
+  const targetCount = visibleCellCount;
   const empty = targetCount === 0;
   const targetIsSelection = selectedVisibleCount > 0;
 
