@@ -26,6 +26,14 @@ let currentPurchaseRecommendations: LocalRecommendation[] = [];
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
 
+// issues #225 + #226: expand/collapse state for cell grouping.
+// Contains the cellKey strings of cells the user has explicitly expanded.
+// Cleared on page load / full refresh; survives per-column filter/sort re-renders.
+const expandedCells = new Set<string>();
+// Last computed group keys for the visible filtered set — used by the
+// Expand-All button handler to populate expandedCells without re-computing.
+let lastVisibleGroupKeys: string[] = [];
+
 // issue #223: resolved GlobalConfig defaults, seeded on page load by
 // loadRecommendations(). Initial values mirror the historical hardcoded
 // defaults so the module is usable before the first API round-trip.
@@ -39,6 +47,15 @@ let cachedGlobalDefaultTerm: 1 | 3 = 1;
 export function seedGlobalDefaults(term: 1 | 3, payment: CompatPayment): void {
   cachedGlobalDefaultTerm = term;
   cachedGlobalDefaultPayment = payment;
+}
+
+/**
+ * Reset cell expand/collapse state. Exported for testing only — not part of
+ * the public API. Call in beforeEach to ensure tests don't share state.
+ */
+export function resetExpandedCells(): void {
+  expandedCells.clear();
+  lastVisibleGroupKeys = [];
 }
 
 // populateRecommendationsAccountFilter / populateRegionFilter / the legacy
@@ -205,6 +222,153 @@ function cellKey(rec: LocalRecommendation): string {
   return `${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.service}|${rec.region}|${rec.resource_type}|${rec.engine ?? ''}`;
 }
 
+// issues #225 + #226: cell-grouping helpers.
+
+/**
+ * Group a flat recommendation list by physical-resource cell.
+ * Returns a Map preserving insertion order of first-seen cell keys.
+ * Exported for tests.
+ */
+export function groupRecsByCell(recs: readonly LocalRecommendation[]): Map<string, LocalRecommendation[]> {
+  const groups = new Map<string, LocalRecommendation[]>();
+  for (const r of recs) {
+    const k = cellKey(r);
+    const g = groups.get(k);
+    if (g) {
+      g.push(r);
+    } else {
+      groups.set(k, [r]);
+    }
+  }
+  return groups;
+}
+
+/** Summary metrics for a single cell's variants. Exported for tests. */
+export interface CellRangeSummary {
+  savingsMin: number;
+  savingsMax: number;
+  upfrontMin: number;
+  upfrontMax: number;
+  termMin: number;
+  termMax: number;
+}
+
+/**
+ * Compute the min/max envelope across all variants of a cell.
+ * Returns zeroed summary for an empty array (defensive; should not occur).
+ * Exported for tests.
+ */
+export function cellSummary(variants: readonly LocalRecommendation[]): CellRangeSummary {
+  if (variants.length === 0) {
+    return { savingsMin: 0, savingsMax: 0, upfrontMin: 0, upfrontMax: 0, termMin: 0, termMax: 0 };
+  }
+  let savingsMin = variants[0]!.savings;
+  let savingsMax = variants[0]!.savings;
+  let upfrontMin = variants[0]!.upfront_cost;
+  let upfrontMax = variants[0]!.upfront_cost;
+  let termMin = variants[0]!.term;
+  let termMax = variants[0]!.term;
+  for (let i = 1; i < variants.length; i++) {
+    const v = variants[i]!;
+    if (v.savings < savingsMin) savingsMin = v.savings;
+    if (v.savings > savingsMax) savingsMax = v.savings;
+    if (v.upfront_cost < upfrontMin) upfrontMin = v.upfront_cost;
+    if (v.upfront_cost > upfrontMax) upfrontMax = v.upfront_cost;
+    if (v.term < termMin) termMin = v.term;
+    if (v.term > termMax) termMax = v.term;
+  }
+  return { savingsMin, savingsMax, upfrontMin, upfrontMax, termMin, termMax };
+}
+
+/**
+ * Compute the page-level savings range by summing per-cell min/max savings.
+ *   overallMin = sum of savingsMin per cell
+ *   overallMax = sum of savingsMax per cell
+ * Exported for tests.
+ */
+export function pageLevelRange(groups: Map<string, LocalRecommendation[]>): { savingsMin: number; savingsMax: number; cellCount: number } {
+  let savingsMin = 0;
+  let savingsMax = 0;
+  for (const variants of groups.values()) {
+    const s = cellSummary(variants);
+    savingsMin += s.savingsMin;
+    savingsMax += s.savingsMax;
+  }
+  return { savingsMin, savingsMax, cellCount: groups.size };
+}
+
+// Fixed payment ordering for within-cell variant sort.
+const PAYMENT_ORDER: Record<string, number> = {
+  'no-upfront': 0,
+  'partial-upfront': 1,
+  'all-upfront': 2,
+  monthly: 3,
+};
+
+/** Sort variants within a cell: term ASC, then payment in fixed order. */
+function sortVariantsInCell(variants: LocalRecommendation[]): LocalRecommendation[] {
+  return variants.slice().sort((a, b) => {
+    const termDiff = a.term - b.term;
+    if (termDiff !== 0) return termDiff;
+    const pa = PAYMENT_ORDER[a.payment ?? ''] ?? 99;
+    const pb = PAYMENT_ORDER[b.payment ?? ''] ?? 99;
+    return pa - pb;
+  });
+}
+
+/**
+ * Return cell keys in the active sort order.
+ * For numeric sort columns: use selected-variant savings if one is selected;
+ *   else use max savings across the cell's variants.
+ * For string sort columns: all variants in a cell share the same value for
+ *   provider/account/service/region/resource_type (they are part of cellKey),
+ *   so use the first variant.
+ */
+function groupsInSortOrder(
+  groups: Map<string, LocalRecommendation[]>,
+  sort: { column: string; direction: 'asc' | 'desc' },
+  selectedRecs: ReadonlySet<string>,
+): string[] {
+  const direction = sort.direction === 'asc' ? 1 : -1;
+  const numericKey = SORTABLE_NUMERIC_COLUMNS[sort.column];
+  const stringKey = SORTABLE_STRING_COLUMNS[sort.column];
+
+  const keys = Array.from(groups.keys());
+  return keys.slice().sort((ka, kb) => {
+    const va = groups.get(ka)!;
+    const vb = groups.get(kb)!;
+
+    if (numericKey) {
+      // Use selected variant's value if one is selected in this cell.
+      const selectedA = va.find((r) => selectedRecs.has(r.id));
+      const selectedB = vb.find((r) => selectedRecs.has(r.id));
+      const scoreA = selectedA ? numericKey(selectedA) : Math.max(...va.map(numericKey));
+      const scoreB = selectedB ? numericKey(selectedB) : Math.max(...vb.map(numericKey));
+      return (scoreA - scoreB) * direction;
+    }
+    if (stringKey) {
+      const strA = va[0] ? stringKey(va[0]) : '';
+      const strB = vb[0] ? stringKey(vb[0]) : '';
+      return strA.localeCompare(strB) * direction;
+    }
+    return 0;
+  });
+}
+
+/** Format a savings range, collapsing "$X – $X" to "$X". */
+function formatSavingsRange(min: number, max: number): string {
+  const lo = formatCurrency(min);
+  const hi = formatCurrency(max);
+  return lo === hi ? lo : `${lo} – ${hi}`;
+}
+
+/** Format a term range, collapsing "1yr – 1yr" to "1yr". */
+function formatTermRange(min: number, max: number): string {
+  const lo = formatTerm(min);
+  const hi = formatTerm(max);
+  return lo === hi ? lo : `${lo} – ${hi}`;
+}
+
 /**
  * Computes effective monthly savings by amortizing the upfront cost over the
  * term. Assumes rec.savings is the on-demand vs. discounted recurring delta
@@ -329,20 +493,9 @@ function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'
     : '<span class="sort-indicator active" aria-hidden="true">\u25BC</span>';
 }
 
-function sortedRecommendations(recs: LocalRecommendation[]): LocalRecommendation[] {
-  const sort = state.getRecommendationsSort();
-  const direction = sort.direction === 'asc' ? 1 : -1;
-  const numericKey = SORTABLE_NUMERIC_COLUMNS[sort.column];
-  if (numericKey) {
-    // slice() clones so we don't mutate the caller's array.
-    return recs.slice().sort((a, b) => (numericKey(a) - numericKey(b)) * direction);
-  }
-  const stringKey = SORTABLE_STRING_COLUMNS[sort.column];
-  if (stringKey) {
-    return recs.slice().sort((a, b) => stringKey(a).localeCompare(stringKey(b)) * direction);
-  }
-  return recs;
-}
+// sortedRecommendations was removed in issues #225/#226: group-level sorting
+// via groupsInSortOrder() supersedes the flat-list sort. The same
+// SORTABLE_NUMERIC_COLUMNS / SORTABLE_STRING_COLUMNS maps are reused there.
 
 // Numeric filter expression parser. Grammar:
 //   - empty/whitespace      -> match-all
@@ -1017,19 +1170,50 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   const activeCount = Object.keys(filters).length;
   if (activeCount === 0) {
     if (badge) badge.remove();
+  } else {
+    if (!badge) {
+      badge = document.createElement('button');
+      badge.type = 'button';
+      badge.className = 'clear-filters';
+      badge.addEventListener('click', () => {
+        state.clearAllRecommendationsColumnFilters();
+        rerenderRecommendations();
+      });
+      bar.insertBefore(badge, live);
+    }
+    badge.textContent = `Clear filters (${activeCount})`;
+  }
+
+  // issues #225 + #226: Expand-All toggle button. Only render when there
+  // are multi-variant cells to expand (lastVisibleGroupKeys has entries).
+  // The button label flips between "Expand all" and "Collapse all"
+  // depending on whether all known groups are currently expanded.
+  let expandAllBtn = bar.querySelector<HTMLButtonElement>('.expand-all-toggle');
+  const multiVariantGroups = lastVisibleGroupKeys.length > 0;
+  if (!multiVariantGroups) {
+    if (expandAllBtn) expandAllBtn.remove();
     return;
   }
-  if (!badge) {
-    badge = document.createElement('button');
-    badge.type = 'button';
-    badge.className = 'clear-filters';
-    badge.addEventListener('click', () => {
-      state.clearAllRecommendationsColumnFilters();
+  if (!expandAllBtn) {
+    expandAllBtn = document.createElement('button');
+    expandAllBtn.type = 'button';
+    expandAllBtn.className = 'expand-all-toggle';
+    bar.appendChild(expandAllBtn);
+    expandAllBtn.addEventListener('click', () => {
+      const allExpanded = lastVisibleGroupKeys.every((k) => expandedCells.has(k));
+      if (allExpanded) {
+        // Collapse all: clear every key that belongs to the current visible set.
+        for (const k of lastVisibleGroupKeys) expandedCells.delete(k);
+      } else {
+        // Expand all: add every visible group key.
+        for (const k of lastVisibleGroupKeys) expandedCells.add(k);
+      }
       rerenderRecommendations();
     });
-    bar.insertBefore(badge, live);
   }
-  badge.textContent = `Clear filters (${activeCount})`;
+  // Update label to reflect current state.
+  const allExpanded = lastVisibleGroupKeys.every((k) => expandedCells.has(k));
+  expandAllBtn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
 }
 
 // renderBulkToolbar was the old "N selected / Add to plan / Clear" pill that
@@ -1289,19 +1473,125 @@ const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
   'count', 'term', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
 ];
 
+// Helper: render one variant row (a single LocalRecommendation) with optional
+// indentation styling for multi-variant cells.
+function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlySet<string>, isNested: boolean): string {
+  const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
+  const isSelected = selectedRecs.has(rec.id);
+  const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '\u2014';
+  const badge = renderSuppressionBadge(rec);
+  const recId = escapeHtml(rec.id);
+  const pct = effectiveSavingsPct(rec);
+  const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
+  const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
+  const nestedClass = isNested ? ' rec-variant-row' : '';
+  return `
+  <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
+    <td class="checkbox-col">
+      <input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">
+    </td>
+    <td><span class="provider-badge ${rec.provider}">${rec.provider.toUpperCase()}</span></td>
+    <td>${escapeHtml(accountName)}</td>
+    <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
+    <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${badge}</td>
+    <td>${escapeHtml(rec.region)}</td>
+    <td>${rec.count}</td>
+    <td>${formatTerm(rec.term)}</td>
+    <td class="savings">${formatCurrency(rec.savings)}</td>
+    <td>${formatCurrency(rec.upfront_cost)}</td>
+    <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
+    <td${pctClass}>${pctText}</td>
+  </tr>`;
+}
+
+// The total column count for colspan on summary rows: checkbox col + 11 data cols = 12.
+const TABLE_COL_COUNT = 12;
+
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
-  const sorted = sortedRecommendations(recommendations);
   const filters = state.getRecommendationsColumnFilters();
   const filterBtn = (column: state.RecommendationsColumnId): string => {
     const active = filters[column] ? ' active' : '';
-    const label = filters[column] ? `Filter ${SORT_HEADER_LABELS[column]} — currently active` : `Filter ${SORT_HEADER_LABELS[column]}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">⛛</button>`;
+    const label = filters[column] ? `Filter ${SORT_HEADER_LABELS[column]} \u2014 currently active` : `Filter ${SORT_HEADER_LABELS[column]}`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
   };
   const sortHeader = (column: state.RecommendationsColumnId): string =>
     `<th class="sortable" data-sort="${column}" tabindex="0" role="button" aria-label="Sort by ${SORT_HEADER_LABELS[column]}"><span>${SORT_HEADER_LABELS[column]}</span>${sortIndicator(column, sort.column, sort.direction)}${filterBtn(column)}</th>`;
 
+  // issues #225 + #226: group by cell, sort groups, then render.
+  const groups = groupRecsByCell(recommendations);
+  const sortedKeys = groupsInSortOrder(groups, sort, selectedRecs);
+
+  // Update module-level group key cache for the Expand-All button.
+  // Only multi-variant cells count — single-variant cells render flat with no chevron.
+  lastVisibleGroupKeys = sortedKeys.filter((k) => (groups.get(k)?.length ?? 0) > 1);
+
+  // Page-level range banner (summed across all visible cells).
+  const plr = pageLevelRange(groups);
+  const bannerHtml = plr.cellCount > 0 && plr.savingsMax > 0
+    ? `<div class="rec-range-banner" role="status" aria-live="polite">Recommended range: <strong>${formatSavingsRange(plr.savingsMin, plr.savingsMax)}/mo</strong> across ${plr.cellCount} cell${plr.cellCount === 1 ? '' : 's'}</div>`
+    : '';
+
+  // Build tbody rows: grouped for multi-variant cells, flat for single-variant.
+  const rows: string[] = [];
+  for (const key of sortedKeys) {
+    const variants = groups.get(key)!;
+    if (variants.length === 1) {
+      // Single-variant: render flat, no group header, no indent.
+      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false));
+      continue;
+    }
+
+    // Multi-variant cell.
+    const isExpanded = expandedCells.has(key);
+    const summary = cellSummary(variants);
+    const rep = variants[0]!;
+    const accountName = rep.cloud_account_id ? (accountNamesCache.get(rep.cloud_account_id) || rep.cloud_account_id) : '\u2014';
+
+    // Selected variant in this cell (if any) — used to show selected values on summary row.
+    const selectedVariant = variants.find((r) => selectedRecs.has(r.id));
+
+    // Summary row savings display: selected variant value if one is selected;
+    // otherwise the range across all variants.
+    const savingsDisplay = selectedVariant
+      ? `${formatCurrency(selectedVariant.savings)}/mo <span class="rec-variants-count">(+${variants.length - 1} variants)</span>`
+      : `${formatSavingsRange(summary.savingsMin, summary.savingsMax)}/mo`;
+
+    const upfrontDisplay = selectedVariant
+      ? formatCurrency(selectedVariant.upfront_cost)
+      : formatSavingsRange(summary.upfrontMin, summary.upfrontMax);
+
+    const termDisplay = selectedVariant
+      ? formatTerm(selectedVariant.term)
+      : formatTermRange(summary.termMin, summary.termMax);
+
+    const chevron = isExpanded ? '\u25bc' : '\u25b6';
+
+    rows.push(`
+  <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
+    <td class="checkbox-col"></td>
+    <td><span class="provider-badge ${rep.provider}">${rep.provider.toUpperCase()}</span></td>
+    <td>${escapeHtml(accountName)}</td>
+    <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
+    <td colspan="${TABLE_COL_COUNT - 4}" class="rec-cell-summary-content">
+      <button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
+        ${chevron}
+      </button>
+      <span class="rec-cell-identity">${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''} &mdash; ${escapeHtml(rep.region)} &mdash; ${variants.length} variants</span>
+      <span class="rec-cell-range">${savingsDisplay} &middot; upfront: ${upfrontDisplay} &middot; term: ${termDisplay}</span>
+    </td>
+  </tr>`);
+
+    if (isExpanded) {
+      const sortedVariants = sortVariantsInCell(variants);
+      for (const v of sortedVariants) {
+        rows.push(buildVariantRowMarkup(v, selectedRecs, true));
+      }
+    }
+  }
+
   return `
+    ${bannerHtml}
     <table>
       <thead>
         <tr>
@@ -1312,33 +1602,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
         </tr>
       </thead>
       <tbody>
-        ${sorted.map((rec) => {
-          const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
-          const isSelected = selectedRecs.has(rec.id);
-          const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '\u2014';
-          const badge = renderSuppressionBadge(rec);
-          const recId = escapeHtml(rec.id);
-          const pct = effectiveSavingsPct(rec);
-          const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
-          const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
-          return `
-          <tr class="recommendation-row ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
-            <td class="checkbox-col">
-              <input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">
-            </td>
-            <td><span class="provider-badge ${rec.provider}">${rec.provider.toUpperCase()}</span></td>
-            <td>${escapeHtml(accountName)}</td>
-            <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
-            <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${badge}</td>
-            <td>${escapeHtml(rec.region)}</td>
-            <td>${rec.count}</td>
-            <td>${formatTerm(rec.term)}</td>
-            <td class="savings">${formatCurrency(rec.savings)}</td>
-            <td>${formatCurrency(rec.upfront_cost)}</td>
-            <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
-            <td${pctClass}>${pctText}</td>
-          </tr>`;
-        }).join('')}
+        ${rows.join('')}
       </tbody>
     </table>
   `;
@@ -2045,15 +2309,13 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   );
   state.setVisibleRecommendations(recommendations as unknown as readonly api.Recommendation[]);
 
-  // Filter status: Clear-filters badge + aria-live count. Mounted as a
-  // sibling above the table so it survives the container's innerHTML
-  // rewrite without losing aria-live announcements.
-  renderFilterStatusBar(loadedRecs?.length ?? 0, recommendations.length);
-
   // Mount once; update is per-render below.
   mountBottomActionBox();
 
   if (!recommendations || recommendations.length === 0) {
+    lastVisibleGroupKeys = [];
+    // Filter status bar renders even for the empty case (live-region count).
+    renderFilterStatusBar(loadedRecs?.length ?? 0, 0);
     container.innerHTML = '<p class="empty">No recommendations match these filters. Try clearing filters or refreshing.</p>';
     updateBottomActionBox(0, loadedRecs?.length ?? 0);
     return;
@@ -2062,9 +2324,18 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   const selectedIDs = state.getSelectedRecommendationIDs();
   // Dynamic table markup: every caller-provided value passes through
   // escapeHtml or is a number. The string is built in buildListMarkup.
+  // NOTE: buildListMarkup also populates lastVisibleGroupKeys, so it MUST
+  // run before renderFilterStatusBar (which reads it for the Expand-All button).
   container.innerHTML = buildListMarkup(recommendations, selectedIDs);
 
+  // Filter status: Clear-filters badge + aria-live count + Expand-All toggle.
+  // Rendered AFTER buildListMarkup so lastVisibleGroupKeys is populated.
+  // Mounted as a sibling above the table so it survives the container's
+  // innerHTML rewrite without losing aria-live announcements.
+  renderFilterStatusBar(loadedRecs?.length ?? 0, recommendations.length);
+
   updateBottomActionBox(recommendations.length, loadedRecs?.length ?? recommendations.length);
+
 
   // Per-column filter button: trigger opens the popover anchored to the
   // button. e.stopPropagation prevents the surrounding <th>'s sort handler
@@ -2166,10 +2437,26 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
     });
   });
 
+  // issues #225 + #226: chevron click toggles expand/collapse for a cell group.
+  container.querySelectorAll<HTMLButtonElement>('.rec-cell-chevron').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = btn.dataset['cellKey'] ?? '';
+      if (!key) return;
+      if (expandedCells.has(key)) {
+        expandedCells.delete(key);
+      } else {
+        expandedCells.add(key);
+      }
+      renderRecommendationsList(loadedRecs);
+    });
+  });
+
   // Row-click opens the detail drawer — skip clicks that originated on
   // the checkbox or any interactive child (anchors, buttons) so those
   // flow through to their own handlers without also triggering the
-  // drawer.
+  // drawer. Also skip summary rows (they represent a cell group, not
+  // a single rec, so have no detail to show).
   container.querySelectorAll<HTMLTableRowElement>('tr.recommendation-row').forEach((tr) => {
     tr.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;

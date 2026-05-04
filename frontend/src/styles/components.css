@@ -866,6 +866,84 @@ tr.recommendation-row:hover {
     background: #f8f9fb;
 }
 
+/* issues #225 + #226: cell-grouping UX */
+
+/* Expand-All toggle in the filter-status bar */
+.recommendations-filter-status .expand-all-toggle {
+    background: transparent;
+    border: 1px solid #d0d7de;
+    border-radius: 3px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+    color: #555;
+}
+.recommendations-filter-status .expand-all-toggle:hover {
+    border-color: #1a73e8;
+    color: #1a73e8;
+}
+
+/* Page-level range banner above the table */
+.rec-range-banner {
+    padding: 0.4rem 0.75rem;
+    margin-bottom: 0.5rem;
+    background: #e8f0fe;
+    border-radius: 4px;
+    font-size: 0.88em;
+    color: #444;
+}
+
+/* Cell summary row (collapsed state) */
+tr.rec-cell-summary-row {
+    background: #f3f6fb;
+    cursor: default;
+}
+tr.rec-cell-summary-row:hover {
+    background: #eaf0fb;
+}
+
+/* Summary row content cell: chevron + identity + range inline */
+.rec-cell-summary-content {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.rec-cell-chevron {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.8em;
+    color: #555;
+    padding: 0 0.25rem;
+    line-height: 1;
+}
+.rec-cell-chevron:hover {
+    color: #1a73e8;
+}
+.rec-cell-identity {
+    font-weight: 500;
+    font-size: 0.9em;
+}
+.rec-cell-range {
+    color: #666;
+    font-size: 0.85em;
+}
+.rec-variants-count {
+    color: #888;
+    font-size: 0.85em;
+}
+
+/* Variant rows nested under a cell summary (expanded state) */
+tr.rec-variant-row td:not(.checkbox-col) {
+    padding-left: 2rem;
+    background: #fafbfe;
+    font-size: 0.88em;
+}
+tr.rec-variant-row:hover td:not(.checkbox-col) {
+    background: #f0f4fc;
+}
+
 .detail-drawer-backdrop {
     position: fixed;
     inset: 0;

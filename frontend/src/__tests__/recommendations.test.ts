@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells } from '../recommendations';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -2114,6 +2114,12 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cellA-1y-allup']));
     await loadRecommendations();
 
+    // issues #225/#226: multi-variant cells are collapsed by default.
+    // Expand the cell first so the variant checkboxes are rendered.
+    const chevron = document.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+    expect(chevron).not.toBeNull();
+    chevron!.click();
+
     // Tick variant B in the same cell.
     const cbs = Array.from(document.querySelectorAll<HTMLInputElement>('tbody input[data-rec-id]'));
     const variantB = cbs.find((cb) => cb.dataset['recId'] === 'cellA-3y-noup');
@@ -2571,5 +2577,204 @@ describe('Monthly Cost + Effective % column rendering', () => {
     expect(state.setRecommendationsSort).toHaveBeenCalledWith(
       expect.objectContaining({ column: 'effective_savings_pct' }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issues #225 + #226: cell grouping with savings range and collapse/expand
+// ---------------------------------------------------------------------------
+
+/** Helper to build a minimal LocalRecommendation fixture. */
+const mkRec = (overrides: Partial<LocalRecommendation> = {}): LocalRecommendation => ({
+  id: 'rec-' + Math.random().toString(36).slice(2),
+  provider: 'aws',
+  service: 'ec2',
+  resource_type: 'm5.large',
+  region: 'us-east-1',
+  count: 3,
+  term: 1,
+  payment: 'no-upfront',
+  savings: 100,
+  upfront_cost: 0,
+  monthly_cost: 50,
+  ...overrides,
+} as unknown as LocalRecommendation);
+
+/** Two recs sharing the same cell key (same provider/account/service/region/resource_type/engine). */
+const sameCell = (savingsA: number, savingsB: number): LocalRecommendation[] => [
+  mkRec({ id: 'a1', savings: savingsA, term: 1, payment: 'no-upfront', upfront_cost: 0 }),
+  mkRec({ id: 'a2', savings: savingsB, term: 3, payment: 'all-upfront', upfront_cost: 1200 }),
+];
+
+describe('Issues #225 + #226: cell grouping with savings range and collapse/expand', () => {
+  describe('groupRecsByCell (pure helper)', () => {
+    test('groups two recs with the same cell key into one entry', () => {
+      const recs = sameCell(80, 120);
+      const groups = groupRecsByCell(recs);
+      expect(groups.size).toBe(1);
+      expect(groups.values().next().value).toHaveLength(2);
+    });
+
+    test('groups recs with different resource_type into separate cells', () => {
+      const rec1 = mkRec({ resource_type: 'm5.large' });
+      const rec2 = mkRec({ resource_type: 't3.medium' });
+      const groups = groupRecsByCell([rec1, rec2]);
+      expect(groups.size).toBe(2);
+    });
+  });
+
+  describe('cellSummary (pure helper)', () => {
+    test('computes min and max savings across variants', () => {
+      const recs = sameCell(80, 120);
+      const s = cellSummary(recs);
+      expect(s.savingsMin).toBe(80);
+      expect(s.savingsMax).toBe(120);
+    });
+
+    test('collapses to same value for a single-variant cell', () => {
+      const rec = mkRec({ savings: 55, upfront_cost: 0, term: 1 });
+      const s = cellSummary([rec]);
+      expect(s.savingsMin).toBe(55);
+      expect(s.savingsMax).toBe(55);
+      expect(s.termMin).toBe(1);
+      expect(s.termMax).toBe(1);
+    });
+
+    test('returns zeroed summary for empty input (defensive)', () => {
+      const s = cellSummary([]);
+      expect(s.savingsMin).toBe(0);
+      expect(s.savingsMax).toBe(0);
+    });
+  });
+
+  describe('pageLevelRange (pure helper)', () => {
+    test('sums per-cell min and max across two cells', () => {
+      const cell1 = sameCell(50, 100);  // min=50, max=100
+      const cell2 = [
+        mkRec({ id: 'b1', resource_type: 't3.small', savings: 30, term: 1, payment: 'no-upfront', upfront_cost: 0 }),
+        mkRec({ id: 'b2', resource_type: 't3.small', savings: 70, term: 3, payment: 'all-upfront', upfront_cost: 600 }),
+      ];
+      const groups = groupRecsByCell([...cell1, ...cell2]);
+      const plr = pageLevelRange(groups);
+      expect(plr.cellCount).toBe(2);
+      expect(plr.savingsMin).toBe(80);   // 50 + 30
+      expect(plr.savingsMax).toBe(170);  // 100 + 70
+    });
+
+    test('returns cellCount=0 and savings=0 for empty groups', () => {
+      const plr = pageLevelRange(new Map());
+      expect(plr.cellCount).toBe(0);
+      expect(plr.savingsMin).toBe(0);
+      expect(plr.savingsMax).toBe(0);
+    });
+  });
+
+  describe('DOM rendering (cell grouping integrated)', () => {
+    beforeEach(() => {
+      document.body.innerHTML = [
+        '<div id="recommendations-tab" class="tab-content active">',
+        '<div id="recommendations-summary"></div>',
+        '<div id="recommendations-list"></div>',
+        '</div>',
+        '<div id="purchase-modal" class="hidden">',
+        '<div id="purchase-details"></div>',
+        '</div>',
+      ].join('');
+      jest.clearAllMocks();
+      jest.useFakeTimers();
+      window.alert = jest.fn();
+      // Reset cell expand state so tests don't share module-level expandedCells.
+      resetExpandedCells();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    const multiVariantRecs = (): LocalRecommendation[] => [
+      mkRec({ id: 'mv-1', savings: 80,  term: 1, payment: 'no-upfront',   upfront_cost: 0 }),
+      mkRec({ id: 'mv-2', savings: 120, term: 3, payment: 'all-upfront',  upfront_cost: 1200 }),
+    ];
+
+    test('multi-variant cell renders a summary row, not two flat variant rows by default', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      // Summary row should be present
+      const summaryRow = document.querySelector('.rec-cell-summary-row');
+      expect(summaryRow).not.toBeNull();
+
+      // Variant rows should NOT be rendered (collapsed by default)
+      const variantRows = document.querySelectorAll('.rec-variant-row');
+      expect(variantRows.length).toBe(0);
+    });
+
+    test('clicking chevron expands the cell and shows variant rows', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      const chevron = document.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+      expect(chevron).not.toBeNull();
+      chevron!.click();
+
+      // After expand: variant rows should appear
+      const variantRows = document.querySelectorAll('.rec-variant-row');
+      expect(variantRows.length).toBe(2);
+    });
+
+    test('page-level range banner appears when multi-variant cells exist', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      const banner = document.querySelector('.rec-range-banner');
+      expect(banner).not.toBeNull();
+      expect(banner!.textContent).toMatch(/Recommended range/);
+    });
+
+    test('single-variant cell renders a flat row, no summary row', async () => {
+      const rec = mkRec({ id: 'solo', savings: 60 });
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: [rec] });
+      (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+      await loadRecommendations();
+
+      const summaryRow = document.querySelector('.rec-cell-summary-row');
+      expect(summaryRow).toBeNull();
+
+      // The flat row should exist as a regular recommendation-row
+      const rows = document.querySelectorAll('tr.recommendation-row');
+      expect(rows.length).toBe(1);
+    });
+
+    test('Expand all button appears in filter-status bar for multi-variant cells', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      const expandAllBtn = document.querySelector('.expand-all-toggle');
+      expect(expandAllBtn).not.toBeNull();
+      expect(expandAllBtn!.textContent).toMatch(/Expand all/);
+    });
+
+    test('Expand all expands all multi-variant cells', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      const expandAllBtn = document.querySelector<HTMLButtonElement>('.expand-all-toggle');
+      expect(expandAllBtn).not.toBeNull();
+      expandAllBtn!.click();
+
+      // After expand all: variant rows should be visible
+      const variantRows = document.querySelectorAll('.rec-variant-row');
+      expect(variantRows.length).toBe(2);
+    });
   });
 });
