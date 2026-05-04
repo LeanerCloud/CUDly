@@ -1,9 +1,4 @@
--- No rollback: truncated recommendation rows cannot be restored. The
--- scheduler will re-collect from cloud APIs on the next API read, which
--- restores the cache regardless of the migration direction. Setting
--- last_collected_at to NULL here would trigger another cold-start collect
--- on the next read, which is the correct behaviour after a rollback that
--- leaves the table empty.
-UPDATE recommendations_state
-   SET last_collected_at = NULL
- WHERE id = 1;
+-- No rollback for the payload rewrite: the original monthly_cost=0 values
+-- were themselves incorrect (stale pre-PR-#254 data). Reverting to 0
+-- would re-introduce the very bug this migration fixes. The correct
+-- monthly_cost values will be written on the next scheduled collection.
