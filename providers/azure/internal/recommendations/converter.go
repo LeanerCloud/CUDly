@@ -40,6 +40,18 @@ type ExtractedFields struct {
 	EstimatedSavings float64
 	Term             string
 	Scope            string
+	// RecurringMonthlyCost is the monthly recurring charge for this
+	// commitment. Azure Reservation recommendations are all all-upfront
+	// (a single payment, no recurring monthly charge), so this is always
+	// a pointer to 0.0 — meaning "no recurring charge" rather than
+	// "data not available" (which would be nil).
+	RecurringMonthlyCost *float64
+}
+
+// float64Ptr returns a pointer to the given float64 value. Used to
+// distinguish "explicitly zero" from "not provided" (nil) on pointer fields.
+func float64Ptr(v float64) *float64 {
+	return &v
 }
 
 // Extract reads the Azure reservation recommendation payload into
@@ -101,6 +113,10 @@ func extractLegacy(rec *armconsumption.LegacyReservationRecommendation) *Extract
 		// treat EstimatedSavings as lookback-period ≈ monthly.
 		out.EstimatedSavings = *props.NetSavings
 	}
+	// Azure Reservation recommendations are always all-upfront (single payment,
+	// no monthly recurring charge). Set to 0 (not nil) so the frontend renders
+	// "$0" rather than "—" (which would imply "data not available").
+	out.RecurringMonthlyCost = float64Ptr(0)
 	return out
 }
 
@@ -133,6 +149,10 @@ func extractModern(rec *armconsumption.ModernReservationRecommendation) *Extract
 	out.OnDemandCost = amountValue(props.CostWithNoReservedInstances)
 	out.CommitmentCost = amountValue(props.TotalCostWithReservedInstances)
 	out.EstimatedSavings = amountValue(props.NetSavings)
+	// Azure Reservation recommendations are always all-upfront (single payment,
+	// no monthly recurring charge). Set to 0 (not nil) so the frontend renders
+	// "$0" rather than "—" (which would imply "data not available").
+	out.RecurringMonthlyCost = float64Ptr(0)
 
 	return out
 }

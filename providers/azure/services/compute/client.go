@@ -729,20 +729,21 @@ func (c *ComputeClient) convertAzureVMRecommendation(ctx context.Context, azureR
 		}
 	}
 	return &common.Recommendation{
-		Provider:         common.ProviderAzure,
-		Service:          common.ServiceCompute,
-		Account:          c.subscriptionID,
-		Region:           f.Region,
-		ResourceType:     f.ResourceType,
-		Count:            f.Count,
-		OnDemandCost:     f.OnDemandCost,
-		CommitmentCost:   f.CommitmentCost,
-		EstimatedSavings: f.EstimatedSavings,
-		CommitmentType:   common.CommitmentReservedInstance,
-		Term:             f.Term,
-		PaymentOption:    "upfront",
-		Timestamp:        time.Now(),
-		Details:          details,
+		Provider:             common.ProviderAzure,
+		Service:              common.ServiceCompute,
+		Account:              c.subscriptionID,
+		Region:               f.Region,
+		ResourceType:         f.ResourceType,
+		Count:                f.Count,
+		OnDemandCost:         f.OnDemandCost,
+		CommitmentCost:       f.CommitmentCost,
+		EstimatedSavings:     f.EstimatedSavings,
+		RecurringMonthlyCost: f.RecurringMonthlyCost,
+		CommitmentType:       common.CommitmentReservedInstance,
+		Term:                 f.Term,
+		PaymentOption:        "upfront",
+		Timestamp:            time.Now(),
+		Details:              details,
 	}
 }
 

@@ -605,6 +605,11 @@ func TestComputeClient_ConvertAzureVMRecommendation_PopulatesAllFields(t *testin
 	assert.Equal(t, "3yr", out.Term)
 	assert.Equal(t, "upfront", out.PaymentOption)
 
+	// Azure reservations are all-upfront: RecurringMonthlyCost must be a
+	// non-nil pointer to 0 so the frontend shows "$0" not "—" (unknown).
+	require.NotNil(t, out.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil for Azure compute recs")
+	assert.InDelta(t, 0.0, *out.RecurringMonthlyCost, 1e-9)
+
 	// Details is populated from the payload's ResourceType (InstanceType
 	// only — Platform/Tenancy/Scope are deferred to batched enrichment).
 	require.NotNil(t, out.Details)

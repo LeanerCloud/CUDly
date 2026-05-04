@@ -138,6 +138,21 @@ func TestExtract_MissingCostsReadAsZero(t *testing.T) {
 	assert.InDelta(t, 0.0, f.EstimatedSavings, 1e-9)
 }
 
+func TestExtract_Legacy_RecurringMonthlyCostIsZeroPointer(t *testing.T) {
+	// Azure reservations are always all-upfront (single payment, no monthly
+	// recurring charge). RecurringMonthlyCost must be a non-nil pointer to 0
+	// so the frontend renders "$0" instead of "—" (which would mean unknown).
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		mocks.WithCosts(100, 70, 30),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	require.NotNil(t, f.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil for Azure reservations")
+	assert.InDelta(t, 0.0, *f.RecurringMonthlyCost, 1e-9)
+}
+
 // --- Modern (MCA billing account) ----------------------------------------
 
 func TestExtract_Modern_NilProperties(t *testing.T) {
@@ -208,4 +223,19 @@ func TestExtract_Modern_MissingCostAmountsReadAsZero(t *testing.T) {
 	assert.InDelta(t, 0.0, f.OnDemandCost, 1e-9)
 	assert.InDelta(t, 0.0, f.CommitmentCost, 1e-9)
 	assert.InDelta(t, 0.0, f.EstimatedSavings, 1e-9)
+}
+
+func TestExtract_Modern_RecurringMonthlyCostIsZeroPointer(t *testing.T) {
+	// Azure Reservation recommendations are always all-upfront regardless
+	// of billing account type. RecurringMonthlyCost must be a non-nil pointer
+	// to 0 for both Legacy and Modern response shapes.
+	rec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernRegion("westeurope"),
+		mocks.WithModernSKUName("Standard_D4s_v5"),
+		mocks.WithModernCosts(400, 260, 140),
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	require.NotNil(t, f.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil for Azure reservations")
+	assert.InDelta(t, 0.0, *f.RecurringMonthlyCost, 1e-9)
 }
