@@ -1176,7 +1176,11 @@ func TestScheduler_ListRecommendations_ColdStartSync(t *testing.T) {
 	// global config. Return no enabled providers so the collect is a
 	// no-op but still runs the persistence path.
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{EnabledProviders: []string{}}, nil)
-	mockStore.On("UpsertRecommendations", ctx, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	// UpsertRecommendations runs inside CollectRecommendations, after the
+	// shared-semaphore is attached to ctx; the wrapped ctx is what reaches
+	// the persistence layer. mock.Anything keeps the assertion resilient
+	// to that wrap.
+	mockStore.On("UpsertRecommendations", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
 		Return([]config.RecommendationRecord{}, nil)
 
@@ -1189,7 +1193,7 @@ func TestScheduler_ListRecommendations_ColdStartSync(t *testing.T) {
 	// CollectRecommendations, so seeing it prove the sync collect fired
 	// before the store read.
 	mockStore.AssertCalled(t, "GetGlobalConfig", ctx)
-	mockStore.AssertCalled(t, "UpsertRecommendations", ctx, mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertCalled(t, "UpsertRecommendations", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // fanOutPerAccount bounds parallel in-flight calls to
@@ -1718,7 +1722,11 @@ func TestScheduler_CollectRecommendations_WithSuccessfulRecs(t *testing.T) {
 	// contract test cover the cancellation path).
 	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
 	mockRecClient.On("GetAllRecommendations", mock.Anything).Return(recommendations, nil)
-	mockEmail.On("SendNewRecommendationsNotification", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	// SendNewRecommendationsNotification fires inside CollectRecommendations,
+	// after ctx has been wrapped via concurrency.WithSharedSemaphore — the
+	// wrapped ctx is what reaches the email sender. mock.Anything keeps the
+	// assertion resilient to that wrap.
+	mockEmail.On("SendNewRecommendationsNotification", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
 
 	scheduler := &Scheduler{
 		config:          mockStore,
@@ -1733,7 +1741,7 @@ func TestScheduler_CollectRecommendations_WithSuccessfulRecs(t *testing.T) {
 	assert.Equal(t, 1, result.Recommendations)
 	assert.Equal(t, 500.0, result.TotalSavings)
 
-	mockEmail.AssertCalled(t, "SendNewRecommendationsNotification", ctx, mock.AnythingOfType("email.NotificationData"))
+	mockEmail.AssertCalled(t, "SendNewRecommendationsNotification", mock.Anything, mock.AnythingOfType("email.NotificationData"))
 }
 
 // Test AWS recommendations fallback to GetRecommendations when GetAllRecommendations returns empty

@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 )
 
 // getSavingsPlansRecommendations fetches Savings Plans recommendations.
@@ -44,6 +45,9 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 			AccountScope:         types.AccountScopeLinked,
 		}
 
+		// Acquire/Release the shared semaphore (if any on ctx) around each
+		// individual SDK call so rate-limiter backoff waits don't tie up a
+		// permit while no request is actually in flight. See pkg/concurrency.
 		c.rateLimiter.Reset()
 		var result *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
 		var err error
@@ -53,7 +57,11 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 				return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 			}
 
+			if acqErr := concurrency.Acquire(ctx); acqErr != nil {
+				return nil, fmt.Errorf("concurrency acquire failed: %w", acqErr)
+			}
 			result, err = c.costExplorerClient.GetSavingsPlansPurchaseRecommendation(ctx, input)
+			concurrency.Release(ctx)
 			if !c.rateLimiter.ShouldRetry(err) {
 				break
 			}
