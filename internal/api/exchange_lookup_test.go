@@ -126,9 +126,9 @@ func TestPurchaseRecLookupFromStore_MapsFields(t *testing.T) {
 				Service:      "ec2",
 				Region:       "us-east-1",
 				ResourceType: "m6i.large",
-				Term:         1,   // 1 year term
-				UpfrontCost:  120, // 120 / 12 = 10/mo amortised
-				MonthlyCost:  20,  // + 20/mo recurring = 30
+				Term:         1,               // 1 year term
+				UpfrontCost:  120,             // 120 / 12 = 10/mo amortised
+				MonthlyCost:  aws.Float64(20), // + 20/mo recurring = 30
 			},
 			{
 				// Term=0 → no upfront amortisation; effective = MonthlyCost only.
@@ -139,7 +139,7 @@ func TestPurchaseRecLookupFromStore_MapsFields(t *testing.T) {
 				ResourceType: "c5.xlarge",
 				Term:         0,
 				UpfrontCost:  500, // ignored when Term == 0
-				MonthlyCost:  50,
+				MonthlyCost:  aws.Float64(50),
 			},
 		},
 	}
@@ -179,7 +179,7 @@ func TestPurchaseRecLookupFromStore_ThreeYearTerm(t *testing.T) {
 		out: []config.RecommendationRecord{
 			{
 				ID: "rec-3y", Provider: "aws", Service: "ec2", Region: "us-east-1",
-				ResourceType: "m5.large", Term: 3, MonthlyCost: 10,
+				ResourceType: "m5.large", Term: 3, MonthlyCost: aws.Float64(10),
 			},
 		},
 	}

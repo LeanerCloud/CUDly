@@ -268,7 +268,7 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 		Term:             rec.Term,
 		Payment:          rec.Payment,
 		UpfrontCost:      result.Cost,
-		MonthlyCost:      rec.MonthlyCost,
+		MonthlyCost:      derefFloat64(rec.MonthlyCost),
 		EstimatedSavings: rec.Savings,
 		PlanID:           exec.PlanID,
 		PlanName:         plan.Name,
@@ -467,4 +467,15 @@ func (m *Manager) getAWSAccountID(ctx context.Context) string {
 	}
 
 	return "unknown"
+}
+
+// derefFloat64 safely dereferences a *float64, returning 0 for nil.
+// Used when copying from RecommendationRecord.MonthlyCost (*float64)
+// into PurchaseHistoryRecord.MonthlyCost (float64), where nil means
+// "not provided" and maps to 0 in the history table.
+func derefFloat64(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

@@ -82,7 +82,11 @@ func recommendationToOffering(rec config.RecommendationRecord, currencyCode stri
 	if rec.Count > 0 {
 		count = float64(rec.Count)
 	}
-	monthly := rec.MonthlyCost / count
+	var monthlyCost float64
+	if rec.MonthlyCost != nil {
+		monthlyCost = *rec.MonthlyCost
+	}
+	monthly := monthlyCost / count
 	if rec.Term > 0 {
 		// rec.Term is in years; canonical AWS RI/SP amortisation uses
 		// 12 months per year regardless of leap years.

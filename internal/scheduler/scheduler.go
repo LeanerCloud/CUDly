@@ -878,7 +878,7 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			Term:         term,
 			Payment:      rec.PaymentOption,
 			UpfrontCost:  rec.CommitmentCost,
-			MonthlyCost:  0, // Cost Explorer doesn't always provide monthly breakdown
+			MonthlyCost:  rec.RecurringMonthlyCost, // nil when provider API didn't return a monthly breakdown
 			Savings:      rec.EstimatedSavings,
 			Selected:     true, // Default to selected
 			Purchased:    false,
