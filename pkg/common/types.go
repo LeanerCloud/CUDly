@@ -149,6 +149,12 @@ type Recommendation struct {
 	CommitmentCost    float64 `json:"commitment_cost" csv:"CommitmentCost"`
 	EstimatedSavings  float64 `json:"estimated_savings" csv:"EstimatedSavings"`
 	SavingsPercentage float64 `json:"savings_percentage" csv:"SavingsPercentage"`
+	// RecurringMonthlyCost is the recurring monthly charge for this commitment
+	// (i.e. the part the user pays every month after any upfront payment).
+	// nil means the provider API did not return a monthly breakdown — the
+	// frontend renders nil as "—" rather than "$0" to avoid misleading users.
+	// Populated by cloud parsers when the API exposes it; left nil otherwise.
+	RecurringMonthlyCost *float64 `json:"recurring_monthly_cost,omitempty" csv:"RecurringMonthlyCost"`
 
 	// Service-specific details (polymorphic)
 	Details ServiceDetails `json:"details,omitempty" csv:"-"`
