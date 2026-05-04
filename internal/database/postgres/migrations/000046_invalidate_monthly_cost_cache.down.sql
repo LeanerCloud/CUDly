@@ -1,0 +1,4 @@
+-- No rollback for the payload rewrite: the original monthly_cost=0 values
+-- were themselves incorrect (stale pre-PR-#254 data). Reverting to 0
+-- would re-introduce the very bug this migration fixes. The correct
+-- monthly_cost values will be written on the next scheduled collection.
