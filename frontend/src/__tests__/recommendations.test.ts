@@ -2413,8 +2413,21 @@ describe('effectiveSavingsPct', () => {
     expect(pct!).toBeCloseTo(-17.65, 1);
   });
 
-  test('undefined monthly_cost treated as 0', () => {
-    const pct = effectiveSavingsPct(mk({ savings: 100, upfront_cost: 0, monthly_cost: undefined, term: 1 }));
+  test('undefined/null monthly_cost returns null (data not provided — cannot compute effective %)', () => {
+    // monthly_cost null/undefined means the provider API did not return a monthly
+    // recurring breakdown. Without it we cannot reconstruct on_demand_monthly,
+    // so effectiveSavingsPct must return null rather than collapsing the
+    // denominator to savings alone (which produced the misleading 100% rows in #252).
+    expect(effectiveSavingsPct(mk({ savings: 100, upfront_cost: 0, monthly_cost: undefined, term: 1 }))).toBeNull();
+    expect(effectiveSavingsPct(mk({ savings: 100, upfront_cost: 0, monthly_cost: null, term: 1 }))).toBeNull();
+  });
+
+  test('monthly_cost=0 (real all-upfront) is treated as known data, not missing', () => {
+    // A literal 0 means the backend explicitly reported zero recurring cost
+    // (e.g. an all-upfront commitment). effectiveSavingsPct SHOULD compute a
+    // result in this case, because on_demand_monthly = 0 + savings + amortized.
+    const pct = effectiveSavingsPct(mk({ savings: 100, upfront_cost: 0, monthly_cost: 0, term: 1 }));
+    // onDemand = 0 + 100 + 0 = 100; effective = 100/100 * 100 = 100%
     expect(pct).not.toBeNull();
     expect(pct!).toBeCloseTo(100, 1);
   });

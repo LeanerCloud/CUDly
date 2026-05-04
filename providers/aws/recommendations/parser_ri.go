@@ -116,7 +116,7 @@ func (c *Client) parseCostInformation(details *types.ReservationPurchaseRecommen
 	return estimatedSavings, savingsPercent, nil
 }
 
-// parseAWSCostDetails extracts upfront and on-demand cost from AWS details
+// parseAWSCostDetails extracts upfront, on-demand, and recurring monthly cost from AWS details.
 func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) {
 	if details.UpfrontCost != nil {
 		if upfront, err := strconv.ParseFloat(*details.UpfrontCost, 64); err == nil {
@@ -126,6 +126,13 @@ func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.
 	if details.EstimatedMonthlyOnDemandCost != nil {
 		if onDemand, err := strconv.ParseFloat(*details.EstimatedMonthlyOnDemandCost, 64); err == nil {
 			rec.OnDemandCost = onDemand
+		}
+	}
+	// RecurringStandardMonthlyCost is the recurring charge per month for this RI.
+	// It is distinct from CommitmentCost (upfront) and EstimatedMonthlySavingsAmount.
+	if details.RecurringStandardMonthlyCost != nil {
+		if monthly, err := strconv.ParseFloat(*details.RecurringStandardMonthlyCost, 64); err == nil {
+			rec.RecurringMonthlyCost = &monthly
 		}
 	}
 }

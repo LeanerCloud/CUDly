@@ -35,7 +35,7 @@ func awsRec(id, service, region, resourceType string, savings float64) config.Re
 		ResourceType: resourceType,
 		Savings:      savings,
 		UpfrontCost:  100.0,
-		MonthlyCost:  50.0,
+		MonthlyCost:  float64Ptr(50.0),
 		Count:        1,
 		Term:         12,
 		Payment:      "no-upfront",
@@ -365,3 +365,5 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 	assert.True(t, ambientFound, "ambient row must remain in DB after partial registered-only collect")
 	assert.True(t, registeredFound, "registered row must be upserted")
 }
+
+func float64Ptr(f float64) *float64 { return &f }

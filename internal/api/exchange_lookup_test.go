@@ -126,9 +126,9 @@ func TestPurchaseRecLookupFromStore_MapsFields(t *testing.T) {
 				Service:      "ec2",
 				Region:       "us-east-1",
 				ResourceType: "m6i.large",
-				Term:         1,   // 1 year term
-				UpfrontCost:  120, // 120 / 12 = 10/mo amortised
-				MonthlyCost:  20,  // + 20/mo recurring = 30
+				Term:         1,               // 1 year term
+				UpfrontCost:  120,             // 120 / 12 = 10/mo amortised
+				MonthlyCost:  aws.Float64(20), // + 20/mo recurring = 30
 			},
 			{
 				// Term=0 → no upfront amortisation; effective = MonthlyCost only.
@@ -139,7 +139,7 @@ func TestPurchaseRecLookupFromStore_MapsFields(t *testing.T) {
 				ResourceType: "c5.xlarge",
 				Term:         0,
 				UpfrontCost:  500, // ignored when Term == 0
-				MonthlyCost:  50,
+				MonthlyCost:  aws.Float64(50),
 			},
 		},
 	}
@@ -179,7 +179,7 @@ func TestPurchaseRecLookupFromStore_ThreeYearTerm(t *testing.T) {
 		out: []config.RecommendationRecord{
 			{
 				ID: "rec-3y", Provider: "aws", Service: "ec2", Region: "us-east-1",
-				ResourceType: "m5.large", Term: 3, MonthlyCost: 10,
+				ResourceType: "m5.large", Term: 3, MonthlyCost: aws.Float64(10),
 			},
 		},
 	}
@@ -189,6 +189,35 @@ func TestPurchaseRecLookupFromStore_ThreeYearTerm(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, int64(3*365*24*60*60), got[0].TermSeconds,
 		"3-year rec must serialise to 3 × 31_536_000s for the term-match guard")
+}
+
+// TestPurchaseRecLookupFromStore_NilMonthlyCost pins the nil-path: when
+// MonthlyCost is nil (provider didn't expose a monthly breakdown) the lookup
+// must not panic and must compute EffectiveMonthlyCost from amortised upfront
+// alone.
+func TestPurchaseRecLookupFromStore_NilMonthlyCost(t *testing.T) {
+	t.Parallel()
+	store := &fakeRecsLister{
+		out: []config.RecommendationRecord{
+			{
+				ID:           "rec-nil-monthly",
+				Provider:     "aws",
+				Service:      "ec2",
+				Region:       "us-east-1",
+				ResourceType: "m5.large",
+				Term:         1, // 1 year: 120 / 12 = 10/mo amortised
+				UpfrontCost:  120,
+				MonthlyCost:  nil, // provider API didn't return monthly breakdown
+			},
+		},
+	}
+	lookup := purchaseRecLookupFromStore(store, "")
+	got, err := lookup(context.Background(), "us-east-1", "USD")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	// No recurring monthly charge (nil → 0), so effective cost = amortised upfront only.
+	assert.InDelta(t, 10.0, got[0].EffectiveMonthlyCost, 0.001,
+		"nil MonthlyCost + 120 upfront / 12mo = 10/mo effective")
 }
 
 // TestResolveAWSCloudAccountID_FailsClosedOnSTSError pins the

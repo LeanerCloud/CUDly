@@ -299,7 +299,7 @@ func TestRecommendationRecord_Fields(t *testing.T) {
 		Term:         3,
 		Payment:      "all-upfront",
 		UpfrontCost:  1500.00,
-		MonthlyCost:  0,
+		MonthlyCost:  nil,
 		Savings:      200.00,
 		Selected:     true,
 		Purchased:    false,
@@ -315,7 +315,7 @@ func TestRecommendationRecord_Fields(t *testing.T) {
 	assert.Equal(t, 3, rec.Term)
 	assert.Equal(t, "all-upfront", rec.Payment)
 	assert.Equal(t, 1500.00, rec.UpfrontCost)
-	assert.Equal(t, float64(0), rec.MonthlyCost)
+	assert.Nil(t, rec.MonthlyCost, "MonthlyCost should be nil when not provided")
 	assert.Equal(t, 200.00, rec.Savings)
 	assert.True(t, rec.Selected)
 	assert.False(t, rec.Purchased)

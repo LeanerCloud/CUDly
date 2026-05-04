@@ -55,7 +55,8 @@ export interface Recommendation {
   term: number;
   payment: string;
   upfront_cost: number;
-  monthly_cost: number;
+  // null when the provider API did not return a monthly recurring breakdown.
+  monthly_cost: number | null;
   savings: number;
   selected: boolean;
   purchased: boolean;

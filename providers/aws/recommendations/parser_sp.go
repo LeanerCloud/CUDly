@@ -116,6 +116,9 @@ func parseOptionalFloat(field string, s *string) float64 {
 	return val
 }
 
+// hoursPerMonth is the standard AWS billing constant for monthly cost calculations.
+const hoursPerMonth = 730.0
+
 func (c *Client) parseSavingsPlanDetail(
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
 	params common.RecommendationParams,
@@ -143,18 +146,42 @@ func (c *Client) parseSavingsPlanDetail(
 		accountID = aws.ToString(detail.AccountId)
 	}
 
+	// RecurringMonthlyCost is the portion of the SP commitment that appears
+	// on monthly bills (i.e. excludes upfront payments).
+	//
+	//   - all-upfront: recurring = 0 (everything was paid upfront; monthly
+	//     bills show no further charge). Use explicit 0, not nil, so the
+	//     frontend can distinguish "known-zero" from "data not provided".
+	//   - partial-upfront / no-upfront: recurring ≈ HourlyCommitmentToPurchase
+	//     × 730. For partial-upfront this slightly over-counts (it includes the
+	//     amortised upfront portion), but AWS CE does not expose the recurring-
+	//     only hourly rate directly, so this is the best available approximation.
+	//   - nil: HourlyCommitmentToPurchase was absent from the API response
+	//     (should not happen for well-formed CE responses, but handled defensively).
+	var recurringMonthlyCost *float64
+	if detail.HourlyCommitmentToPurchase != nil {
+		if params.PaymentOption == "all-upfront" {
+			zero := 0.0
+			recurringMonthlyCost = &zero
+		} else {
+			monthly := hourlyCommitment * hoursPerMonth
+			recurringMonthlyCost = &monthly
+		}
+	}
+
 	return &common.Recommendation{
-		Provider:          common.ProviderAWS,
-		Service:           serviceSlugForPlanType(planType),
-		PaymentOption:     params.PaymentOption,
-		Term:              params.Term,
-		CommitmentType:    common.CommitmentSavingsPlan,
-		Count:             1,
-		EstimatedSavings:  monthlySavings,
-		SavingsPercentage: savingsPercent,
-		CommitmentCost:    upfrontCost,
-		Timestamp:         time.Now(),
-		Account:           accountID,
+		Provider:             common.ProviderAWS,
+		Service:              serviceSlugForPlanType(planType),
+		PaymentOption:        params.PaymentOption,
+		Term:                 params.Term,
+		CommitmentType:       common.CommitmentSavingsPlan,
+		Count:                1,
+		EstimatedSavings:     monthlySavings,
+		SavingsPercentage:    savingsPercent,
+		CommitmentCost:       upfrontCost,
+		RecurringMonthlyCost: recurringMonthlyCost,
+		Timestamp:            time.Now(),
+		Account:              accountID,
 		Details: &common.SavingsPlanDetails{
 			PlanType:         planTypeStr,
 			HourlyCommitment: hourlyCommitment,

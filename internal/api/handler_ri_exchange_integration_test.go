@@ -125,9 +125,9 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	// m5.2xlarge must NOT appear despite being a different size —
 	// same-family RIs aren't valid Convertible exchange targets.
 	seedRecsForRegion(ctx, t, store, "us-east-1", []config.RecommendationRecord{
-		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.2xlarge", Term: 1, MonthlyCost: 40},
-		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: 50},
-		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "r5.large", Term: 1, MonthlyCost: 60},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.2xlarge", Term: 1, MonthlyCost: aws.Float64(40)},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: aws.Float64(50)},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "r5.large", Term: 1, MonthlyCost: aws.Float64(60)},
 	})
 
 	ec2Fake := &fakeReshapeEC2{
@@ -189,7 +189,7 @@ func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 	defer cleanup()
 
 	seedRecsForRegion(ctx, t, store, "us-east-1", []config.RecommendationRecord{
-		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: 40},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: aws.Float64(40)},
 	})
 
 	ec2Fake := &fakeReshapeEC2{
@@ -315,7 +315,7 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 			Region:         "us-east-1",
 			ResourceType:   "c5.large",
 			Term:           1,
-			MonthlyCost:    50,
+			MonthlyCost:    aws.Float64(50),
 			CloudAccountID: &accountAID,
 		},
 		{
@@ -324,7 +324,7 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 			Region:         "us-east-1",
 			ResourceType:   "r5.large",
 			Term:           1,
-			MonthlyCost:    60,
+			MonthlyCost:    aws.Float64(60),
 			CloudAccountID: &accountBID,
 		},
 	}), "seeding scoped recommendations failed")

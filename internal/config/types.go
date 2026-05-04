@@ -226,23 +226,28 @@ type PurchaseExecution struct {
 
 // RecommendationRecord stores a recommendation with purchase status
 type RecommendationRecord struct {
-	ID             string  `json:"id" dynamodbav:"id"`
-	Provider       string  `json:"provider" dynamodbav:"provider"`
-	Service        string  `json:"service" dynamodbav:"service"`
-	Region         string  `json:"region" dynamodbav:"region"`
-	ResourceType   string  `json:"resource_type" dynamodbav:"resource_type"`
-	Engine         string  `json:"engine,omitempty" dynamodbav:"engine,omitempty"`
-	Count          int     `json:"count" dynamodbav:"count"`
-	Term           int     `json:"term" dynamodbav:"term"`
-	Payment        string  `json:"payment" dynamodbav:"payment"`
-	UpfrontCost    float64 `json:"upfront_cost" dynamodbav:"upfront_cost"`
-	MonthlyCost    float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
-	Savings        float64 `json:"savings" dynamodbav:"savings"`
-	Selected       bool    `json:"selected" dynamodbav:"selected"`
-	Purchased      bool    `json:"purchased" dynamodbav:"purchased"`
-	PurchaseID     string  `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
-	Error          string  `json:"error,omitempty" dynamodbav:"error,omitempty"`
-	CloudAccountID *string `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
+	ID           string  `json:"id" dynamodbav:"id"`
+	Provider     string  `json:"provider" dynamodbav:"provider"`
+	Service      string  `json:"service" dynamodbav:"service"`
+	Region       string  `json:"region" dynamodbav:"region"`
+	ResourceType string  `json:"resource_type" dynamodbav:"resource_type"`
+	Engine       string  `json:"engine,omitempty" dynamodbav:"engine,omitempty"`
+	Count        int     `json:"count" dynamodbav:"count"`
+	Term         int     `json:"term" dynamodbav:"term"`
+	Payment      string  `json:"payment" dynamodbav:"payment"`
+	UpfrontCost  float64 `json:"upfront_cost" dynamodbav:"upfront_cost"`
+	// MonthlyCost is nil when the provider API did not return a monthly
+	// recurring breakdown (rendered as "—" in the UI, not "$0").
+	// Backward-compatible with DynamoDB: existing items with a numeric 0
+	// attribute unmarshal as a pointer to 0.0; absent attributes unmarshal
+	// as nil. No migration needed.
+	MonthlyCost    *float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
+	Savings        float64  `json:"savings" dynamodbav:"savings"`
+	Selected       bool     `json:"selected" dynamodbav:"selected"`
+	Purchased      bool     `json:"purchased" dynamodbav:"purchased"`
+	PurchaseID     string   `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
+	Error          string   `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	CloudAccountID *string  `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 	// SuppressedCount is the cumulative count already committed against
 	// this recommendation's 6-tuple (account, provider, service, region,
 	// resource_type, engine) within the active grace window. The

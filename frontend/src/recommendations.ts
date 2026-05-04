@@ -169,8 +169,12 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
 const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => number> = {
   savings: (r) => r.savings,
   upfront_cost: (r) => r.upfront_cost,
-  monthly_cost: (r) => r.monthly_cost ?? 0,
-  // effectiveSavingsPct returns null for term=0 / on_demand=0 edge cases.
+  // null monthly_cost means "data not provided by the provider API".
+  // Use POSITIVE_INFINITY so unknown rows sort to the bottom in ascending
+  // order (de-emphasised) and don't conflate with rows that have an explicit
+  // $0 recurring charge (e.g. all-upfront commitments).
+  monthly_cost: (r) => r.monthly_cost ?? Number.POSITIVE_INFINITY,
+  // effectiveSavingsPct returns null for term=0 / on_demand=0 / null monthly_cost.
   // POSITIVE_INFINITY places null rows at the bottom in ascending order and
   // at the top in descending — the least surprising behaviour for a savings
   // column where "no data" rows should be de-emphasised.
@@ -234,10 +238,15 @@ export function effectiveMonthlySavings(r: LocalRecommendation): number {
 export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // Per acceptance criteria: term=0 is a data anomaly — render as em-dash.
   if (!r.term) return null;
+  // monthly_cost === null means the provider API did not return a recurring
+  // monthly breakdown. We cannot reconstruct on_demand_monthly without it,
+  // so the formula is underdetermined — render as em-dash rather than
+  // collapsing the denominator to savings alone (which produces 100% / neg%).
+  if (r.monthly_cost == null) return null;
   const monthsInTerm = r.term * 12;
   const amortized = r.upfront_cost / monthsInTerm;
   const effectiveSavings = r.savings - amortized;
-  const onDemand = (r.monthly_cost ?? 0) + r.savings + amortized;
+  const onDemand = r.monthly_cost + r.savings + amortized;
   if (onDemand === 0) return null;
   return (effectiveSavings / onDemand) * 100;
 }
@@ -449,7 +458,9 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     case 'count':                return r.count ?? 0;
     case 'savings':              return r.savings ?? 0;
     case 'upfront_cost':         return r.upfront_cost ?? 0;
-    case 'monthly_cost':         return r.monthly_cost ?? 0;
+    // Return NaN for null monthly_cost so numeric filter predicates (e.g. "= 0")
+    // don't match rows where the provider simply didn't report a monthly cost.
+    case 'monthly_cost':         return r.monthly_cost ?? Number.NaN;
     // Return NaN for null effective_savings_pct so any numeric predicate
     // returns false rather than coincidentally matching 0.
     case 'effective_savings_pct': return effectiveSavingsPct(r) ?? Number.NaN;
@@ -1324,7 +1335,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
             <td>${formatTerm(rec.term)}</td>
             <td class="savings">${formatCurrency(rec.savings)}</td>
             <td>${formatCurrency(rec.upfront_cost)}</td>
-            <td>${formatCurrency(rec.monthly_cost ?? 0)}</td>
+            <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
             <td${pctClass}>${pctText}</td>
           </tr>`;
         }).join('')}
@@ -1628,7 +1639,7 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
       ...r,
       count: newCount,
       upfront_cost: r.upfront_cost * ratio,
-      monthly_cost: (r.monthly_cost ?? 0) * ratio,
+      monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
       savings: r.savings * ratio,
     });
   }
