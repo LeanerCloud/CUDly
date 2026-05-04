@@ -191,6 +191,35 @@ func TestPurchaseRecLookupFromStore_ThreeYearTerm(t *testing.T) {
 		"3-year rec must serialise to 3 × 31_536_000s for the term-match guard")
 }
 
+// TestPurchaseRecLookupFromStore_NilMonthlyCost pins the nil-path: when
+// MonthlyCost is nil (provider didn't expose a monthly breakdown) the lookup
+// must not panic and must compute EffectiveMonthlyCost from amortised upfront
+// alone.
+func TestPurchaseRecLookupFromStore_NilMonthlyCost(t *testing.T) {
+	t.Parallel()
+	store := &fakeRecsLister{
+		out: []config.RecommendationRecord{
+			{
+				ID:           "rec-nil-monthly",
+				Provider:     "aws",
+				Service:      "ec2",
+				Region:       "us-east-1",
+				ResourceType: "m5.large",
+				Term:         1, // 1 year: 120 / 12 = 10/mo amortised
+				UpfrontCost:  120,
+				MonthlyCost:  nil, // provider API didn't return monthly breakdown
+			},
+		},
+	}
+	lookup := purchaseRecLookupFromStore(store, "")
+	got, err := lookup(context.Background(), "us-east-1", "USD")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	// No recurring monthly charge (nil → 0), so effective cost = amortised upfront only.
+	assert.InDelta(t, 10.0, got[0].EffectiveMonthlyCost, 0.001,
+		"nil MonthlyCost + 120 upfront / 12mo = 10/mo effective")
+}
+
 // TestResolveAWSCloudAccountID_FailsClosedOnSTSError pins the
 // multi-tenant safety contract introduced by commit f44b06567: when
 // STS GetCallerIdentity fails (transient AWS error, denied IAM perm,

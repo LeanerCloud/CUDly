@@ -146,18 +146,27 @@ func (c *Client) parseSavingsPlanDetail(
 		accountID = aws.ToString(detail.AccountId)
 	}
 
-	// RecurringMonthlyCost for a Savings Plan is the hourly commitment rate
-	// multiplied by the standard 730 hours/month billing constant. This is
-	// non-nil only when HourlyCommitmentToPurchase is present in the API
-	// response; for all-upfront SPs the field is present but the value is
-	// the full amortised hourly rate (there is no additional recurring
-	// charge after upfront — the "recurring" is already captured in upfront).
-	// We populate it regardless of payment option so the frontend can display
-	// the amortised monthly equivalent for all payment variants.
+	// RecurringMonthlyCost is the portion of the SP commitment that appears
+	// on monthly bills (i.e. excludes upfront payments).
+	//
+	//   - all-upfront: recurring = 0 (everything was paid upfront; monthly
+	//     bills show no further charge). Use explicit 0, not nil, so the
+	//     frontend can distinguish "known-zero" from "data not provided".
+	//   - partial-upfront / no-upfront: recurring ≈ HourlyCommitmentToPurchase
+	//     × 730. For partial-upfront this slightly over-counts (it includes the
+	//     amortised upfront portion), but AWS CE does not expose the recurring-
+	//     only hourly rate directly, so this is the best available approximation.
+	//   - nil: HourlyCommitmentToPurchase was absent from the API response
+	//     (should not happen for well-formed CE responses, but handled defensively).
 	var recurringMonthlyCost *float64
 	if detail.HourlyCommitmentToPurchase != nil {
-		monthly := hourlyCommitment * hoursPerMonth
-		recurringMonthlyCost = &monthly
+		if params.PaymentOption == "all-upfront" {
+			zero := 0.0
+			recurringMonthlyCost = &zero
+		} else {
+			monthly := hourlyCommitment * hoursPerMonth
+			recurringMonthlyCost = &monthly
+		}
 	}
 
 	return &common.Recommendation{
