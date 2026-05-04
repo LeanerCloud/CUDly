@@ -139,10 +139,27 @@ func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error
 		return fmt.Errorf("failed to build Lambda client: %w", err)
 	}
 
-	// This payload matches the detectLambdaEventType "scheduled" branch in
-	// internal/server/lambda.go: `scheduledEvent.Action != ""` → "scheduled".
-	// HandleScheduledTask then dispatches to TaskCollectRecommendations.
-	payload, _ := json.Marshal(map[string]string{"event": "scheduled_recommendations"})
+	// Payload shape matches internal/server/handler.go::ScheduledEvent + its
+	// ParseScheduledEvent dispatch table: the Action field selects the
+	// scheduled-task type. "collect_recommendations" maps to
+	// TaskCollectRecommendations, which is what we want to fire.
+	//
+	// The previous payload `{"event":"scheduled_recommendations"}` had no
+	// matching field in ScheduledEvent at all — Action unmarshalled as ""
+	// and ParseScheduledEvent rejected the event with "unknown scheduled
+	// task action: \"\"". Verified in the deployed Lambda log
+	// `/aws/lambda/cudly-dev-426fc8af-api` request 3befb380-6d46-... — the
+	// async self-invoke was firing successfully but the receiving Lambda
+	// was rejecting every invocation, so collection never actually ran.
+	//
+	// Source = "aws.events" so detectLambdaEventType in
+	// internal/server/lambda.go (which checks Source == "aws.events" ||
+	// Action != "") classifies this consistently with EventBridge cron
+	// deliveries that already exercise this code path.
+	payload, _ := json.Marshal(map[string]string{
+		"source": "aws.events",
+		"action": "collect_recommendations",
+	})
 
 	_, err = invoker.Invoke(ctx, &lambda.InvokeInput{
 		FunctionName:   aws.String(functionARN),
