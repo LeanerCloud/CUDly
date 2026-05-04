@@ -168,33 +168,23 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 		return nil, err
 	}
 
-	// Collect recommendations from each enabled provider, tracking per-provider
-	// outcomes so persistence can scope stale-row eviction to (provider, account)
-	// pairs that actually ran. A partial collection (e.g. one of three Azure
-	// subscriptions failed) preserves the failed pairs' previous-cycle rows
-	// instead of wiping the whole provider's slice.
-	var allRecommendations []config.RecommendationRecord
-	var totalSavings float64
-	var successfulProviders []string
-	var successfulCollects []config.SuccessfulCollect
-	failedProviders := map[string]string{}
-
-	for _, providerName := range globalCfg.EnabledProviders {
-		logging.Infof("Collecting recommendations from %s...", providerName)
-
-		recs, succeededAccountIDs, err := s.collectProviderRecommendations(ctx, providerName, globalCfg)
-		if err != nil {
-			logging.Errorf("Failed to collect %s recommendations: %v", providerName, err)
-			failedProviders[providerName] = err.Error()
-			continue
-		}
-		successfulProviders = append(successfulProviders, providerName)
-		successfulCollects = append(successfulCollects, expandSuccessfulCollects(providerName, succeededAccountIDs)...)
-
-		for _, rec := range recs {
-			totalSavings += rec.Savings
-		}
-		allRecommendations = append(allRecommendations, recs...)
+	// Collect recommendations from each enabled provider concurrently, tracking
+	// per-provider outcomes so persistence can scope stale-row eviction to
+	// (provider, account) pairs that actually ran. A partial collection (e.g.
+	// one of three Azure subscriptions failed) preserves the failed pairs'
+	// previous-cycle rows instead of wiping the whole provider's slice.
+	//
+	// Provider-level fan-out under errgroup. Each goroutine returns nil to the
+	// group so a single provider's failure does not cancel siblings — matches
+	// the previous loop's `continue`-on-error behaviour. Per-provider results
+	// are written into a map under a single mutex; the merge then walks
+	// EnabledProviders in config order so successfulProviders ordering is
+	// deterministic regardless of goroutine completion order. After Wait, ctx
+	// cancellation is propagated. No concurrency cap — the universe is at
+	// most 3 providers.
+	allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, err := s.collectAllProviders(ctx, globalCfg)
+	if err != nil {
+		return nil, err
 	}
 
 	logging.Infof("Collected %d recommendations with $%.2f/month potential savings",
@@ -254,6 +244,95 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 // On any failure (including partial), the collection error is additionally
 // recorded in recommendations_state so the frontend banner renders while
 // the user still sees the valid rows we managed to upsert.
+// providerOutcome bundles a single provider's collection outcome for the
+// deterministic merge in collectAllProviders. Only one of recs/err is
+// meaningful per outcome — err != nil means the provider failed entirely
+// (mirrors the pre-fan-out `continue` branch); err == nil means the provider
+// succeeded (possibly partially — partial-account-failure semantics live in
+// fanOutPerAccount, not here).
+type providerOutcome struct {
+	recs                []config.RecommendationRecord
+	succeededAccountIDs []string
+	err                 error
+}
+
+// collectAllProviders fans out provider collection (AWS / Azure / GCP) under
+// errgroup. Each goroutine returns nil so a single provider's error does not
+// cancel siblings; per-provider results are written into a map under a single
+// mutex. After Wait, ctx cancellation is propagated. The merge then walks
+// EnabledProviders in config order so successfulProviders / successfulCollects
+// / allRecommendations ordering is deterministic regardless of goroutine
+// completion order — keeps existing tests stable. No concurrency cap; the
+// universe is at most 3 providers.
+//
+// Extracted from CollectRecommendations to keep that function under the
+// project's gocyclo gate (.golangci.yml min-complexity: 15) after the
+// errgroup + post-Wait ctx.Err() block was added.
+func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.GlobalConfig) (
+	allRecommendations []config.RecommendationRecord,
+	totalSavings float64,
+	successfulProviders []string,
+	successfulCollects []config.SuccessfulCollect,
+	failedProviders map[string]string,
+	err error,
+) {
+	failedProviders = map[string]string{}
+
+	var (
+		mu       sync.Mutex
+		outcomes = make(map[string]providerOutcome, len(globalCfg.EnabledProviders))
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	for _, providerName := range globalCfg.EnabledProviders {
+		providerName := providerName // capture per-iteration
+		g.Go(func() error {
+			logging.Infof("Collecting recommendations from %s...", providerName)
+			recs, succeededAccountIDs, perr := s.collectProviderRecommendations(gctx, providerName, globalCfg)
+			mu.Lock()
+			outcomes[providerName] = providerOutcome{
+				recs:                recs,
+				succeededAccountIDs: succeededAccountIDs,
+				err:                 perr,
+			}
+			mu.Unlock()
+			return nil // error isolation: per-provider failures don't cancel siblings
+		})
+	}
+
+	// Wait for all goroutines. g.Wait() always returns nil because every
+	// goroutine returns nil. After Wait, propagate ctx cancellation so
+	// callers can distinguish "all providers completed" from "the parent
+	// ctx was canceled mid-fan-out".
+	_ = g.Wait()
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, 0, nil, nil, nil, cerr
+	}
+
+	// Deterministic merge: walk EnabledProviders in config order so
+	// successfulProviders ordering is independent of goroutine completion
+	// order — keeps existing tests stable.
+	for _, providerName := range globalCfg.EnabledProviders {
+		out, ok := outcomes[providerName]
+		if !ok {
+			continue
+		}
+		if out.err != nil {
+			logging.Errorf("Failed to collect %s recommendations: %v", providerName, out.err)
+			failedProviders[providerName] = out.err.Error()
+			continue
+		}
+		successfulProviders = append(successfulProviders, providerName)
+		successfulCollects = append(successfulCollects, expandSuccessfulCollects(providerName, out.succeededAccountIDs)...)
+		for _, rec := range out.recs {
+			totalSavings += rec.Savings
+		}
+		allRecommendations = append(allRecommendations, out.recs...)
+	}
+	return allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, nil
+}
+
 // clearCollectionStartedBestEffort clears last_collection_started_at on the
 // scheduler's exit path. Best-effort — a failure here is logged but does not
 // prevent returning the collection result. Extracted so CollectRecommendations

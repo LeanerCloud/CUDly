@@ -519,3 +519,39 @@ func TestGetRecommendations_ContextCancellation(t *testing.T) {
 	assert.Nil(t, recs)
 	assert.Contains(t, err.Error(), "rate limiter wait failed")
 }
+
+// TestGetAllRecommendations_PropagatesContextCancellation pins the contract
+// that GetAllRecommendations propagates ctx.Err() to its caller after the
+// errgroup Wait() — the parent context being cancelled or its deadline
+// exceeding must surface as an error rather than being swallowed by the
+// per-service error-isolation goroutines (which all return nil to the
+// errgroup so a single per-service failure does not cancel siblings).
+//
+// Without the explicit `if err := ctx.Err(); err != nil { return nil, err }`
+// after `g.Wait()`, callers that wrap GetAllRecommendations with a deadline
+// could see "all services finished cleanly" even when the deadline expired
+// mid-fan-out (because every goroutine returned nil from its closure).
+//
+// Mirrors providers/azure/recommendations_test.go's
+// TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancellation.
+func TestGetAllRecommendations_PropagatesContextCancellation(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		riError: newThrottleError(),
+	}
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	// Cancel the context BEFORE the call so we don't depend on race-y
+	// timing inside the SDK clients. The Cost Explorer calls inside the
+	// goroutines observe the cancelled gctx (derived from ctx via
+	// errgroup.WithContext) and either short-circuit or return cancelled
+	// errors; either way, our post-Wait ctx.Err() check returns
+	// context.Canceled.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	recs, err := client.GetAllRecommendations(ctx)
+	require.Error(t, err, "expected context.Canceled to propagate from GetAllRecommendations")
+	assert.ErrorIs(t, err, context.Canceled,
+		"GetAllRecommendations must propagate the parent ctx error after g.Wait()")
+	assert.Nil(t, recs)
+}
