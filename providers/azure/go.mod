@@ -1,8 +1,6 @@
 module github.com/LeanerCloud/CUDly/providers/azure
 
-go 1.23.0
-
-toolchain go1.24.4
+go 1.25.0
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.18.1
@@ -18,6 +16,7 @@ require (
 	github.com/LeanerCloud/CUDly/pkg v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/sync v0.20.0
 )
 
 require (
