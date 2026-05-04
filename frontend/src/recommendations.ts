@@ -1813,27 +1813,22 @@ function mountBottomActionBox(): HTMLElement | null {
   return box;
 }
 
-// Resolve the action target: selected ∩ visible if a selection exists,
-// else all visible. "Visible" is the post-filter set tracked in module
-// state via setVisibleRecommendations.
+// Resolve the action target: selected ∩ visible. Returns an empty slice when
+// no rows are selected — the action buttons are disabled in that state by
+// updateBottomActionBox (closes #273), so callers should never reach this
+// helper without a selection. The empty-return is defence-in-depth: if a
+// caller bypasses the disabled UI (programmatic invocation, future code path,
+// regression on the gating), no purchase happens.
 //
-// CR #253: when no rows are manually selected, fall back to one variant per
-// cell (pickBestVariantPerCell) rather than all visible variants. With the
-// grouped table, a collapsed 2-variant cell counts as "1 visible cell" to
-// the user but "2 visible recs" to the flat visible list — submitting both
-// would create 2 conflicting reservations for the same resource, violating
-// the one-variant-per-cell contract from #224.
+// Historical context: prior to #273 this fell back to
+// pickBestVariantPerCell(visible) when no rows were selected, so misclicking
+// a "Purchase visible" button could trigger an irreversible bulk purchase.
+// The fallback was removed because Refresh and filter changes silently
+// mutate the visible set, making the no-selection path structurally unsafe.
 function resolvePurchaseTarget(): LocalRecommendation[] {
   const visible = state.getVisibleRecommendations() as unknown as LocalRecommendation[];
   const selected = state.getSelectedRecommendationIDs();
-  const intersection = visible.filter((r) => selected.has(r.id));
-  // Selection path: use the explicit user selection (radio enforcement from
-  // #224 already caps at one per cell).
-  if (intersection.length > 0) return intersection;
-  // Default (no selection): pick the best variant per cell so the purchase
-  // target is exactly one rec per physical resource, matching what the user
-  // sees in the grouped collapsed table.
-  return pickBestVariantPerCell(visible);
+  return visible.filter((r) => selected.has(r.id));
 }
 
 // updateBottomActionBox refreshes labels and disabled state on every
@@ -1851,14 +1846,11 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     0,
   );
 
-  // CR #253: for the default (no-selection) target count, use the number of
-  // cells (distinct physical resources) rather than the flat variant count,
-  // since resolvePurchaseTarget() now applies pickBestVariantPerCell when no
-  // rows are selected. The user sees one row per cell in the collapsed table.
-  const visibleCellCount = selectedVisibleCount > 0
-    ? selectedVisibleCount
-    : pickBestVariantPerCell(visible).length;
-
+  // Action buttons require an explicit selection (closes #273): a misclick
+  // on "Purchase visible" / "Plan from visible" with no checkboxes ticked
+  // could trigger an irreversible bulk purchase across every visible row,
+  // and the visible set silently changes when the user clicks Refresh or
+  // adjusts filters. Only the "selected" form of the action buttons remains.
   const summary = document.getElementById('recommendations-action-summary');
   if (summary) {
     if (loadedCount === 0) {
@@ -1866,43 +1858,38 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     } else if (visibleCount === 0) {
       summary.textContent = '(0 visible — adjust filters)';
     } else if (selectedVisibleCount > 0) {
-      summary.textContent = `(${selectedVisibleCount} selected of ${visibleCellCount} cells visible)`;
+      summary.textContent = `(${selectedVisibleCount} selected)`;
     } else {
-      summary.textContent = `(All ${visibleCellCount} cells visible — no selection)`;
+      summary.textContent = '(Select cells to act on)';
     }
   }
 
   const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement | null;
   const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement | null;
-  const targetCount = visibleCellCount;
-  const empty = targetCount === 0;
-  const targetIsSelection = selectedVisibleCount > 0;
+  const hasSelection = selectedVisibleCount > 0;
+  const disabledTooltip = loadedCount === 0
+    ? 'No recommendations loaded'
+    : visibleCount === 0
+      ? 'No rows visible — adjust filters'
+      : 'Select at least one cell to enable';
 
   if (purchaseBtn) {
-    purchaseBtn.disabled = empty;
-    purchaseBtn.textContent = empty
-      ? 'Purchase'
-      : targetIsSelection
-        ? `Purchase ${targetCount} selected`
-        : `Purchase ${targetCount} visible`;
-    purchaseBtn.title = empty
-      ? (loadedCount === 0
-          ? 'No recommendations loaded'
-          : 'No rows visible — adjust filters')
-      : 'Buy these reservations now (one-off, processed immediately)';
+    purchaseBtn.disabled = !hasSelection;
+    purchaseBtn.textContent = hasSelection
+      ? `Purchase ${selectedVisibleCount} selected`
+      : 'Purchase';
+    purchaseBtn.title = hasSelection
+      ? 'Buy these reservations now (one-off, processed immediately)'
+      : disabledTooltip;
   }
   if (planBtn) {
-    planBtn.disabled = empty;
-    planBtn.textContent = empty
-      ? 'Create Plan'
-      : targetIsSelection
-        ? `Plan from ${targetCount} selected`
-        : `Plan from ${targetCount} visible`;
-    planBtn.title = empty
-      ? (loadedCount === 0
-          ? 'No recommendations loaded'
-          : 'No rows visible — adjust filters')
-      : 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
+    planBtn.disabled = !hasSelection;
+    planBtn.textContent = hasSelection
+      ? `Plan from ${selectedVisibleCount} selected`
+      : 'Create Plan';
+    planBtn.title = hasSelection
+      ? 'Schedule a recurring plan that will purchase these recommendations on a defined cadence'
+      : disabledTooltip;
   }
 }
 
