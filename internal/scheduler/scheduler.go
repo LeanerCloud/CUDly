@@ -139,8 +139,21 @@ func cacheTTLFromEnv() time.Duration {
 // CollectRecommendations fetches recommendations from all configured cloud providers.
 // Persists results to the recommendations cache so read handlers can serve
 // from SQL instead of re-fetching live.
+//
+// Bookkeeping: always clears last_collection_started_at on exit (success or
+// failure) so the frontend polling loop can detect completion. The scheduler
+// is invoked either by the cron EventBridge rule or by an async self-invoke
+// from the POST /api/recommendations/refresh handler. In the async case,
+// MarkCollectionStarted has already set last_collection_started_at; the
+// cron case leaves it NULL (no async-invoke bookkeeping for cron runs, which
+// are expected and not user-triggered).
 func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult, error) {
 	logging.Info("Collecting recommendations from cloud providers...")
+
+	// Always clear last_collection_started_at on exit so the frontend knows
+	// the collection has finished. Extracted into a helper to keep this
+	// function under the cyclomatic-complexity gate.
+	defer s.clearCollectionStartedBestEffort(ctx)
 
 	// Get global config
 	globalCfg, err := s.config.GetGlobalConfig(ctx)
@@ -234,6 +247,16 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 // On any failure (including partial), the collection error is additionally
 // recorded in recommendations_state so the frontend banner renders while
 // the user still sees the valid rows we managed to upsert.
+// clearCollectionStartedBestEffort clears last_collection_started_at on the
+// scheduler's exit path. Best-effort — a failure here is logged but does not
+// prevent returning the collection result. Extracted so CollectRecommendations
+// stays under the cyclomatic-complexity gate.
+func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context) {
+	if err := s.config.ClearCollectionStarted(ctx); err != nil {
+		logging.Errorf("failed to clear collection started: %v", err)
+	}
+}
+
 func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string) {
 	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects); err != nil {
 		logging.Errorf("Failed to persist recommendations: %v", err)

@@ -505,6 +505,12 @@ func (m *MockConfigStore) GetRecommendationsFreshness(_ context.Context) (*confi
 func (m *MockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
 	return nil
 }
+func (m *MockConfigStore) MarkCollectionStarted(_ context.Context) (bool, error) {
+	return true, nil
+}
+func (m *MockConfigStore) ClearCollectionStarted(_ context.Context) error {
+	return nil
+}
 func (m *MockConfigStore) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
 	return nil, nil
 }

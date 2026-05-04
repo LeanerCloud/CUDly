@@ -307,37 +307,84 @@ func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter Re
 
 // GetRecommendationsFreshness returns the singleton freshness row. The
 // table is seeded with id=1 by the migration so a row always exists;
-// LastCollectedAt and LastCollectionError can be NULL.
+// LastCollectedAt, LastCollectionError, and LastCollectionStartedAt can be NULL.
 func (s *PostgresStore) GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error) {
 	var (
-		lastCollectedAt     *time.Time
-		lastCollectionError *string
+		lastCollectedAt         *time.Time
+		lastCollectionError     *string
+		lastCollectionStartedAt *time.Time
 	)
 	err := s.db.QueryRow(ctx, `
-		SELECT last_collected_at, last_collection_error
+		SELECT last_collected_at, last_collection_error, last_collection_started_at
 		  FROM recommendations_state
 		 WHERE id = 1
-	`).Scan(&lastCollectedAt, &lastCollectionError)
+	`).Scan(&lastCollectedAt, &lastCollectionError, &lastCollectionStartedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read recommendations_state: %w", err)
 	}
 	return &RecommendationsFreshness{
-		LastCollectedAt:     lastCollectedAt,
-		LastCollectionError: lastCollectionError,
+		LastCollectedAt:         lastCollectedAt,
+		LastCollectionError:     lastCollectionError,
+		LastCollectionStartedAt: lastCollectionStartedAt,
 	}, nil
 }
 
 // SetRecommendationsCollectionError records the most recent collection's
-// error message without touching last_collected_at. Used by the scheduler
-// when a collect fails partially or fully so the frontend banner surfaces
-// the issue while existing cached rows stay visible.
+// error message without touching last_collected_at. Also clears
+// last_collection_started_at so the frontend knows the collection has
+// finished (with an error). Used by the scheduler when a collect fails
+// partially or fully so the frontend banner surfaces the issue while
+// existing cached rows stay visible.
 func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
 	if _, err := s.db.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collection_error = $1
+		   SET last_collection_error       = $1,
+		       last_collection_started_at  = NULL
 		 WHERE id = 1
 	`, errMsg); err != nil {
 		return fmt.Errorf("failed to set collection error: %w", err)
+	}
+	return nil
+}
+
+// MarkCollectionStarted atomically sets last_collection_started_at = NOW()
+// only when no in-flight collection is currently running. The WHERE clause
+// treats a started_at older than 5 minutes as stale (the scheduler Lambda
+// must have crashed) so a new collection can proceed rather than being
+// permanently blocked.
+//
+// Returns true when this caller won the race (rowsAffected == 1) and should
+// proceed with the async invoke. Returns false when another collection is
+// already in flight (rowsAffected == 0), signalling the handler to return
+// 409 Conflict.
+func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE recommendations_state
+		   SET last_collection_started_at = NOW()
+		 WHERE id = 1
+		   AND (
+		           last_collection_started_at IS NULL
+		        OR last_collection_started_at < NOW() - INTERVAL '5 minutes'
+		       )
+	`)
+	if err != nil {
+		return false, fmt.Errorf("failed to mark collection started: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ClearCollectionStarted clears last_collection_started_at so the frontend
+// knows an async collection has finished. Called by the scheduler on both
+// success and failure paths. On the success path, last_collected_at and
+// last_collection_error are updated by UpsertRecommendations/ReplaceRecommendations,
+// so this method only touches started_at.
+func (s *PostgresStore) ClearCollectionStarted(ctx context.Context) error {
+	if _, err := s.db.Exec(ctx, `
+		UPDATE recommendations_state
+		   SET last_collection_started_at = NULL
+		 WHERE id = 1
+	`); err != nil {
+		return fmt.Errorf("failed to clear collection started: %w", err)
 	}
 	return nil
 }

@@ -339,7 +339,7 @@ func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.Lamb
 }
 
 func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.scheduler.CollectRecommendations(ctx)
+	return r.h.postRefreshRecommendations(ctx, req)
 }
 
 func (r *Router) getRecommendationsFreshnessHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

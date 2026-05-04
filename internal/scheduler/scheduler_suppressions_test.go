@@ -31,6 +31,12 @@ func (m *mockSuppressionStore) GetRecommendationsFreshness(_ context.Context) (*
 	now := time.Now()
 	return &config.RecommendationsFreshness{LastCollectedAt: &now}, nil
 }
+func (m *mockSuppressionStore) MarkCollectionStarted(_ context.Context) (bool, error) {
+	return true, nil
+}
+func (m *mockSuppressionStore) ClearCollectionStarted(_ context.Context) error {
+	return nil
+}
 
 // GetServiceConfig / GetAccountServiceOverride: required by the override
 // helper that runs inside ListRecommendations after the suppression pass

@@ -489,14 +489,21 @@ func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
 	mockAuth := new(MockAuthService)
+	mockStore := new(MockConfigStore)
 
 	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockScheduler.On("CollectRecommendations", mock.Anything).Return(&scheduler.CollectResult{Recommendations: 0, TotalSavings: 0}, nil)
+	// Synchronous fallback path (SCHEDULER_LAMBDA_ARN unset in tests): the
+	// handler reads freshness, marks collection started, runs CollectRecommendations,
+	// then re-reads freshness for the response body.
+	mockStore.On("GetRecommendationsFreshness", mock.Anything).
+		Return(&config.RecommendationsFreshness{}, nil)
+	mockStore.On("MarkCollectionStarted", mock.Anything).Return(true, nil)
 
-	handler := &Handler{scheduler: mockScheduler, auth: mockAuth, apiKey: "test-key"}
+	handler := &Handler{config: mockStore, scheduler: mockScheduler, auth: mockAuth, apiKey: "test-key"}
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
@@ -515,7 +522,10 @@ func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 
 	resp, err := handler.HandleRequest(ctx, req)
 	require.NoError(t, err)
-	assert.Equal(t, 200, resp.StatusCode)
+	// 202 in async (Lambda) mode; handler degrades to a synchronous collect
+	// when SCHEDULER_LAMBDA_ARN is unset (the test default), which still
+	// returns 200 because the response is fully populated by the time we reply.
+	assert.Contains(t, []int{200, 202}, resp.StatusCode)
 }
 
 func TestHandler_HandleRequest_ListPlans(t *testing.T) {

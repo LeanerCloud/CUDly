@@ -99,6 +99,16 @@ type StoreInterface interface {
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
+	// MarkCollectionStarted atomically sets last_collection_started_at = now
+	// only when no in-flight collection is running (last_collection_started_at IS NULL
+	// OR older than 5 minutes). Returns true when this caller won the race and
+	// should proceed with the async invoke; false when another collection is
+	// already in flight and the caller should return 409.
+	MarkCollectionStarted(ctx context.Context) (bool, error)
+	// ClearCollectionStarted clears last_collection_started_at. Called by the
+	// scheduler at the end of every CollectRecommendations run, whether it
+	// succeeded or failed, so the UI knows the collection has finished.
+	ClearCollectionStarted(ctx context.Context) error
 
 	// RI utilization cache. Postgres-backed TTL cache for Cost Explorer
 	// GetReservationUtilization; shared across Lambda containers so

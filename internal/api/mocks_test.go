@@ -389,6 +389,19 @@ func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context,
 	}
 	return m.Called(ctx, errMsg).Error(0)
 }
+func (m *MockConfigStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
+	if !m.hasRecExpectation("MarkCollectionStarted") {
+		return true, nil
+	}
+	args := m.Called(ctx)
+	return args.Bool(0), args.Error(1)
+}
+func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context) error {
+	if !m.hasRecExpectation("ClearCollectionStarted") {
+		return nil
+	}
+	return m.Called(ctx).Error(0)
+}
 func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
 	if !m.hasRecExpectation("GetRIUtilizationCache") {
 		return nil, nil

@@ -85,6 +85,11 @@ type Handler struct {
 	// via the credentials resolved for the org-root account.
 	discoverOrgFn func(context.Context, aws.Config) (*accounts.OrgDiscoveryResult, error)
 
+	// lambdaInvoker is the async-invoke client used by postRefreshRecommendations
+	// and triggerColdStartCollect. In production it is constructed lazily from the
+	// cached awsCfg. Tests inject a stub to avoid live Lambda calls.
+	lambdaInvoker LambdaInvokerInterface
+
 	// commitmentOpts discovers which AWS (term, payment) combinations
 	// each service actually sells and validates saves against that data.
 	// Nil is valid: the endpoint returns unavailable and save-side
