@@ -116,6 +116,9 @@ func parseOptionalFloat(field string, s *string) float64 {
 	return val
 }
 
+// hoursPerMonth is the standard AWS billing constant for monthly cost calculations.
+const hoursPerMonth = 730.0
+
 func (c *Client) parseSavingsPlanDetail(
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
 	params common.RecommendationParams,
@@ -143,18 +146,33 @@ func (c *Client) parseSavingsPlanDetail(
 		accountID = aws.ToString(detail.AccountId)
 	}
 
+	// RecurringMonthlyCost for a Savings Plan is the hourly commitment rate
+	// multiplied by the standard 730 hours/month billing constant. This is
+	// non-nil only when HourlyCommitmentToPurchase is present in the API
+	// response; for all-upfront SPs the field is present but the value is
+	// the full amortised hourly rate (there is no additional recurring
+	// charge after upfront — the "recurring" is already captured in upfront).
+	// We populate it regardless of payment option so the frontend can display
+	// the amortised monthly equivalent for all payment variants.
+	var recurringMonthlyCost *float64
+	if detail.HourlyCommitmentToPurchase != nil {
+		monthly := hourlyCommitment * hoursPerMonth
+		recurringMonthlyCost = &monthly
+	}
+
 	return &common.Recommendation{
-		Provider:          common.ProviderAWS,
-		Service:           serviceSlugForPlanType(planType),
-		PaymentOption:     params.PaymentOption,
-		Term:              params.Term,
-		CommitmentType:    common.CommitmentSavingsPlan,
-		Count:             1,
-		EstimatedSavings:  monthlySavings,
-		SavingsPercentage: savingsPercent,
-		CommitmentCost:    upfrontCost,
-		Timestamp:         time.Now(),
-		Account:           accountID,
+		Provider:             common.ProviderAWS,
+		Service:              serviceSlugForPlanType(planType),
+		PaymentOption:        params.PaymentOption,
+		Term:                 params.Term,
+		CommitmentType:       common.CommitmentSavingsPlan,
+		Count:                1,
+		EstimatedSavings:     monthlySavings,
+		SavingsPercentage:    savingsPercent,
+		CommitmentCost:       upfrontCost,
+		RecurringMonthlyCost: recurringMonthlyCost,
+		Timestamp:            time.Now(),
+		Account:              accountID,
 		Details: &common.SavingsPlanDetails{
 			PlanType:         planTypeStr,
 			HourlyCommitment: hourlyCommitment,
