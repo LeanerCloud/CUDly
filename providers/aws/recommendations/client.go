@@ -71,7 +71,12 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 		AccountScope:         types.AccountScopeLinked,
 	}
 
-	// Implement rate limiting with exponential backoff
+	// Implement rate limiting with exponential backoff. The shared semaphore
+	// (if any) on ctx bounds aggregate concurrent Cost Explorer requests; we
+	// Acquire/Release around the SDK call itself rather than around the whole
+	// service sweep so a goroutine waiting on rate-limiter backoff or
+	// processing a response doesn't monopolise a permit while no request is
+	// in flight. See pkg/concurrency.
 	var result *costexplorer.GetReservationPurchaseRecommendationOutput
 	var err error
 
@@ -81,7 +86,11 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
+		if acqErr := concurrency.Acquire(ctx); acqErr != nil {
+			return nil, fmt.Errorf("concurrency acquire failed: %w", acqErr)
+		}
 		result, err = c.costExplorerClient.GetReservationPurchaseRecommendation(ctx, input)
+		concurrency.Release(ctx)
 		if !c.rateLimiter.ShouldRetry(err) {
 			break
 		}
@@ -193,54 +202,32 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 
 	g, gctx := errgroup.WithContext(ctx)
 
-	// Each per-service goroutine is a leaf — it issues the actual Cost
-	// Explorer call. Acquire bounds aggregate concurrent IO across the
-	// whole recommendations-collection fan-out tree at the shared
-	// semaphore's cap (CUDLY_MAX_PARALLELISM, default 20); Release returns
-	// the slot. If no semaphore is on ctx (CLI tools, unit tests),
-	// Acquire/Release are no-ops. See pkg/concurrency.
+	// Per-service goroutines launch the inner (term, payment) sweep for each
+	// AWS service. They do NOT acquire the shared semaphore at this level —
+	// each service sweep makes 6 inner Cost Explorer calls (2 terms × 3
+	// payment options) plus retries with rate-limiter backoff, so holding a
+	// permit across the whole sweep would tie up a slot during waits when
+	// no request is actually in flight. The Acquire/Release boundary lives
+	// inside GetRecommendations (around the individual CE SDK call), which
+	// frees slots during backoffs and gives the cap its full effective
+	// throughput. See pkg/concurrency.
 	g.Go(func() error {
-		if err := concurrency.Acquire(gctx); err != nil {
-			ec2Err = err
-			return nil
-		}
-		defer concurrency.Release(gctx)
 		ec2Recs, ec2Err = c.GetRecommendationsForService(gctx, common.ServiceEC2)
 		return nil
 	})
 	g.Go(func() error {
-		if err := concurrency.Acquire(gctx); err != nil {
-			rdsErr = err
-			return nil
-		}
-		defer concurrency.Release(gctx)
 		rdsRecs, rdsErr = c.GetRecommendationsForService(gctx, common.ServiceRDS)
 		return nil
 	})
 	g.Go(func() error {
-		if err := concurrency.Acquire(gctx); err != nil {
-			cacheErr = err
-			return nil
-		}
-		defer concurrency.Release(gctx)
 		cacheRecs, cacheErr = c.GetRecommendationsForService(gctx, common.ServiceElastiCache)
 		return nil
 	})
 	g.Go(func() error {
-		if err := concurrency.Acquire(gctx); err != nil {
-			osErr = err
-			return nil
-		}
-		defer concurrency.Release(gctx)
 		osRecs, osErr = c.GetRecommendationsForService(gctx, common.ServiceOpenSearch)
 		return nil
 	})
 	g.Go(func() error {
-		if err := concurrency.Acquire(gctx); err != nil {
-			redshiftErr = err
-			return nil
-		}
-		defer concurrency.Release(gctx)
 		redshiftRecs, redshiftErr = c.GetRecommendationsForService(gctx, common.ServiceRedshift)
 		return nil
 	})

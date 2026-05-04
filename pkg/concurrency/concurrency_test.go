@@ -79,13 +79,25 @@ func TestSharedSemaphore_BoundsConcurrency(t *testing.T) {
 		}
 	}
 
+	// Workers must never call require.* / FailNow on a non-test goroutine —
+	// testify's contract is that those land on the test's own goroutine
+	// (otherwise the failure mechanism uses runtime.Goexit on the worker
+	// instead of stopping the test, which can hang or skip cleanup). Each
+	// worker captures its Acquire result on a buffered channel and the main
+	// goroutine asserts after wg.Wait(). Release is only deferred on a
+	// successful Acquire — the documented pairing contract.
 	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines)
 	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			require.NoError(t, Acquire(ctx))
+			if err := Acquire(ctx); err != nil {
+				errCh <- err
+				return
+			}
 			defer Release(ctx)
+			errCh <- nil
 			cur := inflight.Add(1)
 			updatePeak(cur)
 			time.Sleep(2 * time.Millisecond) // make overlap observable
@@ -93,6 +105,10 @@ func TestSharedSemaphore_BoundsConcurrency(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
 
 	assert.LessOrEqual(t, peak.Load(), int32(cap),
 		"peak concurrent in-flight goroutines must not exceed semaphore cap")
