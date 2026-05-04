@@ -300,9 +300,14 @@ type RecommendationFilter struct {
 // the frontend. LastCollectedAt is nil on a cold start.
 // LastCollectionError is non-nil when the most recent collect attempt
 // partially or fully failed.
+// LastCollectionStartedAt is non-nil while an async collect is in flight;
+// the scheduler clears it on completion (success or failure). A value older
+// than 5 minutes means the scheduler crashed mid-run — the refresh handler
+// treats it as stale and allows a new collection.
 type RecommendationsFreshness struct {
-	LastCollectedAt     *time.Time `json:"last_collected_at"`
-	LastCollectionError *string    `json:"last_collection_error"`
+	LastCollectedAt         *time.Time `json:"last_collected_at"`
+	LastCollectionError     *string    `json:"last_collection_error"`
+	LastCollectionStartedAt *time.Time `json:"last_collection_started_at"`
 }
 
 // SuccessfulCollect identifies a (provider, account) pair whose collection

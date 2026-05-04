@@ -192,7 +192,34 @@ export async function renderFreshness(
         timeout: null,
       });
       try {
-        await refreshAPI();
+        const refreshResp = await refreshAPI();
+        // Async-refresh path (#257): the POST returns 202 + started_at
+        // immediately; the actual collection runs in a self-invoked Lambda.
+        // Poll /freshness every 5 s until last_collection_started_at clears
+        // (success/failure both clear it) or until a 10-min safety cap.
+        // In sync (HTTP/dev) mode the started_at is already cleared by the
+        // time the POST returns, so the first poll exits the loop.
+        // Pre-#257 callers receive a response without started_at; treat
+        // that as "synchronous, already done" so we still re-render once.
+        const startedAt = refreshResp.started_at
+          ? new Date(refreshResp.started_at).getTime()
+          : Date.now();
+        const cap = Date.now() + 10 * 60 * 1000;
+        const pollIntervalMs = 5_000;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const f = await getRecommendationsFreshness();
+          // Treat undefined the same as null — pre-#257 fixtures and tests
+          // omit last_collection_started_at, and the polling loop exits
+          // immediately in those cases (matching the previous sync behaviour).
+          const settled =
+            !f.last_collection_started_at ||
+            (f.last_collected_at !== null &&
+              new Date(f.last_collected_at).getTime() >= startedAt);
+          if (settled) break;
+          if (Date.now() > cap) break; // 10-min safety cap; UI clears, banner stays
+          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+        }
         await onRefresh();
         await renderFreshness(containerID, onRefresh);
         inFlight.dismiss();

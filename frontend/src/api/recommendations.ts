@@ -21,22 +21,27 @@ export async function getRecommendations(filters: RecommendationFilters = {}): P
 }
 
 /**
- * Refresh recommendations.
+ * POST /api/recommendations/refresh response.
  *
- * Backend returns `scheduler.CollectResult`:
- *   { recommendations: int, total_savings: float64,
- *     successful_providers: string[], failed_providers: {[k]: string} }
- *
- * The previous `{ message: string }` declaration had no overlap with
- * the actual response — same bug class as issue #9. The current sole
- * caller (`recommendations.ts:refreshRecommendations`) only awaits
- * the promise without dereferencing fields, so the wrong type was
- * benign in practice; tightening it now so a future caller doesn't
- * read `response.message` and see undefined.
+ * The backend handler (#257) returns 202 in async (Lambda) mode and 200 in
+ * synchronous-collect (HTTP/dev) mode, but the response body shape is the
+ * same in both: started_at marks when MarkCollectionStarted ran, and
+ * last_collected_at is the previous successful-collect timestamp (null on
+ * the first ever collection). The frontend uses these to drive a polling
+ * loop that waits for last_collected_at to advance past started_at before
+ * declaring the refresh complete.
  */
 export interface RefreshRecommendationsResult {
-  recommendations: number;
-  total_savings: number;
+  // Optional in the TS view (backend always sets them) so pre-#257 fixtures
+  // and mocks that omit these fields still type-check during the transition.
+  started_at?: string;
+  last_collected_at?: string | null;
+  // Pre-#257 fields kept optional so legacy fixtures/mocks still type-check.
+  // The current backend handler does not return them — present here purely
+  // for transitional compatibility and removed once existing tests are
+  // refreshed in a follow-up.
+  recommendations?: number;
+  total_savings?: number;
   successful_providers?: string[];
   failed_providers?: Record<string, string>;
 }
@@ -46,15 +51,25 @@ export async function refreshRecommendations(): Promise<RefreshRecommendationsRe
 }
 
 /**
- * Recommendations cache freshness payload. `last_collected_at` is null
- * on a cold start (cache never populated). `last_collection_error` is
- * non-null when the most recent collect attempt partially or fully
- * failed — the frontend renders a warning banner in that case, while
- * still showing the older cached rows.
+ * Recommendations cache freshness payload.
+ *
+ * - last_collected_at: null on a cold start (cache never populated)
+ * - last_collection_error: non-null when the most recent collect attempt
+ *   partially or fully failed — the frontend renders a warning banner
+ *   in that case, while still showing the older cached rows.
+ * - last_collection_started_at: non-null while a collection is in flight
+ *   (async-invoked scheduler running). The polling loop watches this and
+ *   last_collected_at to detect completion.
  */
 export interface RecommendationsFreshness {
   last_collected_at: string | null;
   last_collection_error: string | null;
+  // Optional in the TypeScript view for backwards compatibility with
+  // pre-#257 fixtures and mocks. The backend always emits the field
+  // (json:"last_collection_started_at"), but downstream readers must
+  // tolerate `undefined` for legacy callsites that haven't been updated
+  // and treat undefined the same as null.
+  last_collection_started_at?: string | null;
 }
 
 /**

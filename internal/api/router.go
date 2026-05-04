@@ -89,7 +89,12 @@ func (r *Router) registerRoutes() {
 		// below — extractParams strips both ends to recover the id.
 		{ExactPath: "/api/recommendations", Method: "GET", Handler: r.getRecommendationsHandler},
 		{ExactPath: "/api/recommendations/freshness", Method: "GET", Handler: r.getRecommendationsFreshnessHandler},
-		{ExactPath: "/api/recommendations/refresh", Method: "POST", Handler: r.refreshRecommendationsHandler},
+		// AuthUser: any signed-in user can trigger refresh; the handler
+		// then enforces requirePermission(view, recommendations) so
+		// users without that permission are rejected at the handler
+		// (admin-only would block view-only roles that legitimately
+		// need to refresh the data they're allowed to see).
+		{ExactPath: "/api/recommendations/refresh", Method: "POST", Handler: r.refreshRecommendationsHandler, Auth: AuthUser},
 		{PathPrefix: "/api/recommendations/", PathSuffix: "/detail", Method: "GET", Handler: r.getRecommendationDetailHandler},
 
 		// Purchase plans endpoints
@@ -339,7 +344,7 @@ func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.Lamb
 }
 
 func (r *Router) refreshRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.scheduler.CollectRecommendations(ctx)
+	return r.h.postRefreshRecommendations(ctx, req)
 }
 
 func (r *Router) getRecommendationsFreshnessHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

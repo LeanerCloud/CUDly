@@ -487,16 +487,25 @@ func TestHandler_HandleRequest_GetRecommendations(t *testing.T) {
 
 func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 	ctx := context.Background()
+	// Pin the synchronous-fallback branch deterministically. The async branch
+	// requires SCHEDULER_LAMBDA_ARN + a real lambda.Client mock and is covered
+	// by handler-level integration tests that inject lambdaInvoker directly.
+	t.Setenv("SCHEDULER_LAMBDA_ARN", "")
+
 	mockScheduler := new(MockScheduler)
 	mockAuth := new(MockAuthService)
+	mockStore := new(MockConfigStore)
 
 	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockScheduler.On("CollectRecommendations", mock.Anything).Return(&scheduler.CollectResult{Recommendations: 0, TotalSavings: 0}, nil)
+	mockStore.On("GetRecommendationsFreshness", mock.Anything).
+		Return(&config.RecommendationsFreshness{}, nil)
+	mockStore.On("MarkCollectionStarted", mock.Anything).Return(true, nil)
 
-	handler := &Handler{scheduler: mockScheduler, auth: mockAuth, apiKey: "test-key"}
+	handler := &Handler{config: mockStore, scheduler: mockScheduler, auth: mockAuth, apiKey: "test-key"}
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
@@ -515,7 +524,9 @@ func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 
 	resp, err := handler.HandleRequest(ctx, req)
 	require.NoError(t, err)
+	// Sync-fallback path returns the response body fully populated, so 200.
 	assert.Equal(t, 200, resp.StatusCode)
+	mockScheduler.AssertCalled(t, "CollectRecommendations", mock.Anything)
 }
 
 func TestHandler_HandleRequest_ListPlans(t *testing.T) {
