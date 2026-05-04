@@ -138,7 +138,7 @@ export async function loadRecommendations(): Promise<void> {
     state.setRecommendations((data.recommendations || []) as unknown as api.Recommendation[]);
     state.clearSelectedRecommendations();
 
-    renderRecommendationsSummary(data.summary || {});
+    renderRecommendationsSummary(data.summary || {}, data.recommendations || []);
     renderRecommendationsList(data.recommendations || []);
 
     // Freshness indicator reflects the last collection timestamp; refreshed
@@ -155,9 +155,26 @@ export async function loadRecommendations(): Promise<void> {
   }
 }
 
-function renderRecommendationsSummary(summary: RecommendationsSummary): void {
+function renderRecommendationsSummary(
+  summary: RecommendationsSummary,
+  recommendations: readonly LocalRecommendation[],
+): void {
   const container = document.getElementById('recommendations-summary');
   if (!container) return;
+
+  // Potential Monthly Savings is computed from the same source as the
+  // "Recommended range" banner under the table (closes #272). The previous
+  // implementation rendered `summary.total_monthly_savings` from the API —
+  // a flat sum across every (term, payment) variant of every cell — so a
+  // typical 12-cell page with 2 terms × 3 payments per cell showed up to
+  // ~6× the achievable savings (the user can only buy one variant per
+  // cell). pageLevelRange sums per-cell min/max and stays consistent with
+  // the banner.
+  const groups = groupRecsByCell(recommendations);
+  const plr = pageLevelRange(groups);
+  const savingsText = plr.cellCount > 0 && plr.savingsMax > 0
+    ? formatSavingsRange(plr.savingsMin, plr.savingsMax)
+    : formatCurrency(0);
 
   container.innerHTML = `
     <div class="card">
@@ -166,7 +183,7 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
     </div>
     <div class="card">
       <h3>Potential Monthly Savings</h3>
-      <p class="value savings">${formatCurrency(summary.total_monthly_savings)}</p>
+      <p class="value savings">${savingsText}</p>
     </div>
     <div class="card">
       <h3>Total Upfront Cost</h3>
