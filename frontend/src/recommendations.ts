@@ -234,10 +234,15 @@ export function effectiveMonthlySavings(r: LocalRecommendation): number {
 export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // Per acceptance criteria: term=0 is a data anomaly — render as em-dash.
   if (!r.term) return null;
+  // monthly_cost === null means the provider API did not return a recurring
+  // monthly breakdown. We cannot reconstruct on_demand_monthly without it,
+  // so the formula is underdetermined — render as em-dash rather than
+  // collapsing the denominator to savings alone (which produces 100% / neg%).
+  if (r.monthly_cost == null) return null;
   const monthsInTerm = r.term * 12;
   const amortized = r.upfront_cost / monthsInTerm;
   const effectiveSavings = r.savings - amortized;
-  const onDemand = (r.monthly_cost ?? 0) + r.savings + amortized;
+  const onDemand = r.monthly_cost + r.savings + amortized;
   if (onDemand === 0) return null;
   return (effectiveSavings / onDemand) * 100;
 }
@@ -1324,7 +1329,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
             <td>${formatTerm(rec.term)}</td>
             <td class="savings">${formatCurrency(rec.savings)}</td>
             <td>${formatCurrency(rec.upfront_cost)}</td>
-            <td>${formatCurrency(rec.monthly_cost ?? 0)}</td>
+            <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
             <td${pctClass}>${pctText}</td>
           </tr>`;
         }).join('')}
@@ -1628,7 +1633,7 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
       ...r,
       count: newCount,
       upfront_cost: r.upfront_cost * ratio,
-      monthly_cost: (r.monthly_cost ?? 0) * ratio,
+      monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
       savings: r.savings * ratio,
     });
   }
