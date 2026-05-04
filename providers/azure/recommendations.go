@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
@@ -70,48 +71,67 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 
 	g, gctx := errgroup.WithContext(ctx)
 
+	// Each per-service goroutine is a leaf — it issues the actual ARM /
+	// pricing-API call. The shared semaphore on gctx (set by the scheduler)
+	// bounds aggregate concurrent IO across the whole recommendations-
+	// collection fan-out tree at CUDLY_MAX_PARALLELISM (default 20). If no
+	// semaphore is attached (CLI tools, unit tests), Acquire/Release are
+	// no-ops. See pkg/concurrency.
+	//
+	// goService extracts the Acquire/Release boilerplate so each per-
+	// service block stays a single g.Go call — keeps GetRecommendations
+	// under the project's gocyclo gate (the per-service `if Acquire {…}`
+	// branches counted toward this function's cyclomatic complexity
+	// before extraction).
+	goService := func(errOut *error, fn func()) {
+		g.Go(func() error {
+			if err := concurrency.Acquire(gctx); err != nil {
+				*errOut = err
+				return nil
+			}
+			defer concurrency.Release(gctx)
+			fn()
+			return nil // error isolation: never propagate to errgroup
+		})
+	}
+
 	// Compute (VM) recommendations — subscription-wide.
 	if shouldIncludeService(params, common.ServiceCompute) {
-		g.Go(func() error {
+		goService(&computeErr, func() {
 			computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
 			computeRecs, computeErr = computeClient.GetRecommendations(gctx, params)
-			return nil // error isolation: never propagate to errgroup
 		})
 	}
 
 	// Database (SQL) recommendations — subscription-wide.
 	if shouldIncludeService(params, common.ServiceRelationalDB) {
-		g.Go(func() error {
+		goService(&dbErr, func() {
 			dbClient := database.NewClient(r.cred, r.subscriptionID, "")
 			dbRecs, dbErr = dbClient.GetRecommendations(gctx, params)
-			return nil
 		})
 	}
 
 	// Cache (Redis) recommendations — subscription-wide.
 	if shouldIncludeService(params, common.ServiceCache) {
-		g.Go(func() error {
+		goService(&cacheErr, func() {
 			cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
 			cacheRecs, cacheErr = cacheClient.GetRecommendations(gctx, params)
-			return nil
 		})
 	}
 
 	// CosmosDB (NoSQL) recommendations — subscription-wide.
 	if shouldIncludeService(params, common.ServiceNoSQL) {
-		g.Go(func() error {
+		goService(&cosmosErr, func() {
 			cosmosClient := cosmosdb.NewClient(r.cred, r.subscriptionID, "")
 			cosmosRecs, cosmosErr = cosmosClient.GetRecommendations(gctx, params)
-			return nil
 		})
 	}
 
 	// Azure Advisor adds cross-cutting cost recommendations independent of the
 	// per-service Reservation API. Failures here are non-fatal — the per-service
 	// results above are still useful on their own.
-	g.Go(func() error {
+	goService(&advisorErr, func() {
 		advisorRecs, advisorErr = r.getAdvisorRecommendations(gctx, params)
-		return nil
 	})
 
 	// Wait for all goroutines. g.Wait() always returns nil because every

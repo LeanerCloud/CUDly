@@ -1,8 +1,6 @@
 module github.com/LeanerCloud/CUDly/providers/gcp
 
-go 1.23
-
-toolchain go1.24.4
+go 1.25.0
 
 require (
 	cloud.google.com/go/compute v1.23.3
@@ -14,7 +12,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.12.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/oauth2 v0.16.0
-	golang.org/x/sync v0.6.0
+	golang.org/x/sync v0.20.0
 	google.golang.org/api v0.160.0
 	google.golang.org/genproto v0.0.0-20240116215550-a9fa1716bcac
 	google.golang.org/grpc v1.61.0

@@ -1,8 +1,6 @@
 module github.com/LeanerCloud/CUDly/pkg
 
-go 1.23
-
-toolchain go1.24.4
+go 1.25.0
 
 // This module contains shared types, provider interfaces, and the exchange package.
 // The exchange package has AWS SDK dependencies for RI exchange operations.
@@ -12,7 +10,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.26.2
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.251.2
 	github.com/aws/aws-sdk-go-v2/service/sts v1.26.6
+	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/sync v0.20.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -27,8 +28,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.21.5 // indirect
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

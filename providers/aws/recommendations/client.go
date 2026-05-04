@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
@@ -192,23 +193,54 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 
 	g, gctx := errgroup.WithContext(ctx)
 
+	// Each per-service goroutine is a leaf — it issues the actual Cost
+	// Explorer call. Acquire bounds aggregate concurrent IO across the
+	// whole recommendations-collection fan-out tree at the shared
+	// semaphore's cap (CUDLY_MAX_PARALLELISM, default 20); Release returns
+	// the slot. If no semaphore is on ctx (CLI tools, unit tests),
+	// Acquire/Release are no-ops. See pkg/concurrency.
 	g.Go(func() error {
+		if err := concurrency.Acquire(gctx); err != nil {
+			ec2Err = err
+			return nil
+		}
+		defer concurrency.Release(gctx)
 		ec2Recs, ec2Err = c.GetRecommendationsForService(gctx, common.ServiceEC2)
 		return nil
 	})
 	g.Go(func() error {
+		if err := concurrency.Acquire(gctx); err != nil {
+			rdsErr = err
+			return nil
+		}
+		defer concurrency.Release(gctx)
 		rdsRecs, rdsErr = c.GetRecommendationsForService(gctx, common.ServiceRDS)
 		return nil
 	})
 	g.Go(func() error {
+		if err := concurrency.Acquire(gctx); err != nil {
+			cacheErr = err
+			return nil
+		}
+		defer concurrency.Release(gctx)
 		cacheRecs, cacheErr = c.GetRecommendationsForService(gctx, common.ServiceElastiCache)
 		return nil
 	})
 	g.Go(func() error {
+		if err := concurrency.Acquire(gctx); err != nil {
+			osErr = err
+			return nil
+		}
+		defer concurrency.Release(gctx)
 		osRecs, osErr = c.GetRecommendationsForService(gctx, common.ServiceOpenSearch)
 		return nil
 	})
 	g.Go(func() error {
+		if err := concurrency.Acquire(gctx); err != nil {
+			redshiftErr = err
+			return nil
+		}
+		defer concurrency.Release(gctx)
 		redshiftRecs, redshiftErr = c.GetRecommendationsForService(gctx, common.ServiceRedshift)
 		return nil
 	})
