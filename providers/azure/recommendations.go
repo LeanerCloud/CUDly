@@ -114,48 +114,59 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		return nil
 	})
 
-	// Wait for all goroutines. g.Wait() always returns nil because every goroutine
-	// returns nil — errors are captured in per-service variables above.
+	// Wait for all goroutines. g.Wait() always returns nil because every
+	// goroutine returns nil — errors are captured in per-service variables
+	// above. After Wait, propagate ctx cancellation so callers can distinguish
+	// "all five services completed (with possibly per-service errors)" from
+	// "the parent ctx was canceled mid-fan-out". Without this check the
+	// CHECK could swallow a deadline exceeded that the caller expected to
+	// see.
 	_ = g.Wait()
-
-	// Log per-service errors (matches previous sequential behaviour). Append
-	// results in the same deterministic order as the original sequential code
-	// (compute → database → cache → cosmosdb → advisor) so that any
-	// order-sensitive callers remain stable.
-	allRecommendations := make([]common.Recommendation, 0,
-		len(computeRecs)+len(dbRecs)+len(cacheRecs)+len(cosmosRecs)+len(advisorRecs))
-
-	if computeErr != nil {
-		logging.Warnf("Azure compute recommendations: %v", computeErr)
-	} else {
-		allRecommendations = append(allRecommendations, computeRecs...)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	if dbErr != nil {
-		logging.Warnf("Azure database recommendations: %v", dbErr)
-	} else {
-		allRecommendations = append(allRecommendations, dbRecs...)
-	}
+	return mergeServiceResults(serviceResult{"compute", computeRecs, computeErr},
+		serviceResult{"database", dbRecs, dbErr},
+		serviceResult{"cache", cacheRecs, cacheErr},
+		serviceResult{"cosmosdb", cosmosRecs, cosmosErr},
+		serviceResult{"advisor", advisorRecs, advisorErr}), nil
+}
 
-	if cacheErr != nil {
-		logging.Warnf("Azure cache recommendations: %v", cacheErr)
-	} else {
-		allRecommendations = append(allRecommendations, cacheRecs...)
-	}
+// serviceResult bundles a per-service collection outcome for the deterministic
+// merge in mergeServiceResults. Extracted into a helper so GetRecommendations
+// stays under the cyclomatic-complexity gate after the post-Wait ctx.Err()
+// propagation was added.
+type serviceResult struct {
+	name string
+	recs []common.Recommendation
+	err  error
+}
 
-	if cosmosErr != nil {
-		logging.Warnf("Azure cosmosdb recommendations: %v", cosmosErr)
-	} else {
-		allRecommendations = append(allRecommendations, cosmosRecs...)
+// mergeServiceResults logs per-service errors (matches the previous sequential
+// behaviour where each error was logged inline via logging.Warnf) and appends
+// successful results in the order the slice is passed — callers must preserve
+// the canonical compute → database → cache → cosmosdb → advisor order so that
+// order-sensitive consumers remain stable. The advisor entry's error is logged
+// via logging.Errorf to match the pre-parallelisation severity.
+func mergeServiceResults(results ...serviceResult) []common.Recommendation {
+	total := 0
+	for _, r := range results {
+		total += len(r.recs)
 	}
-
-	if advisorErr != nil {
-		logging.Errorf("Failed to get Azure Advisor recommendations: %v", advisorErr)
-	} else {
-		allRecommendations = append(allRecommendations, advisorRecs...)
+	out := make([]common.Recommendation, 0, total)
+	for _, r := range results {
+		if r.err != nil {
+			if r.name == "advisor" {
+				logging.Errorf("Failed to get Azure Advisor recommendations: %v", r.err)
+			} else {
+				logging.Warnf("Azure %s recommendations: %v", r.name, r.err)
+			}
+			continue
+		}
+		out = append(out, r.recs...)
 	}
-
-	return allRecommendations, nil
+	return out
 }
 
 // GetRecommendationsForService retrieves Azure reservation recommendations for a specific service

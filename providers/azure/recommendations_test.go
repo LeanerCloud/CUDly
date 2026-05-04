@@ -216,6 +216,37 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 	_, _ = adapter.GetAllRecommendations(context.Background())
 }
 
+// TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancellation
+// pins the contract that GetRecommendations propagates ctx.Err() to its caller
+// after the errgroup Wait() — the parent context being cancelled or its
+// deadline exceeding must surface as an error rather than being swallowed by
+// the per-service error-isolation goroutines (which all return nil to the
+// errgroup so a single per-service failure does not cancel siblings).
+//
+// Without the explicit `if err := ctx.Err(); err != nil { return nil, err }`
+// after `g.Wait()`, callers that wrap GetRecommendations with a deadline could
+// see "all services finished cleanly" even when the deadline expired
+// mid-fan-out (because every goroutine returned nil from its closure).
+func TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancellation(t *testing.T) {
+	adapter := &RecommendationsClientAdapter{
+		cred:           &mockAzureTokenCredential{},
+		subscriptionID: "test-subscription",
+	}
+
+	// Cancel the context BEFORE the call so we don't depend on race-y timing
+	// inside the SDK clients. The Azure clients constructed inside the
+	// goroutines will observe the cancelled gctx (derived from the parent ctx
+	// via errgroup.WithContext) and either short-circuit or return cancelled
+	// errors; either way, our post-Wait ctx.Err() check returns context.Canceled.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := adapter.GetRecommendations(ctx, common.RecommendationParams{})
+	require.Error(t, err, "expected context.Canceled to propagate from GetRecommendations")
+	assert.ErrorIs(t, err, context.Canceled,
+		"GetRecommendations must propagate the parent ctx error after g.Wait()")
+}
+
 func TestExtractServiceType(t *testing.T) {
 	tests := []struct {
 		name          string
