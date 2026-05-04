@@ -13,6 +13,15 @@ terraform {
 }
 
 # ==============================================
+# Data sources
+# ==============================================
+
+# Used to compose this Lambda's own ARN for the SCHEDULER_LAMBDA_ARN env var
+# without creating a self-reference cycle on aws_lambda_function.main.
+data "aws_partition" "current" {}
+data "aws_caller_identity" "current" {}
+
+# ==============================================
 # Lambda Function
 # ==============================================
 
@@ -67,6 +76,12 @@ resource "aws_lambda_function" "main" {
         # plaintext never lives in Lambda env or Terraform state.
         SCHEDULED_TASK_AUTH_MODE   = "bearer"
         SCHEDULED_TASK_SECRET_NAME = var.scheduled_task_secret_name
+        # Self-ARN for the async refresh path (#257). Empty in environments
+        # that haven't applied this Terraform yet — the handler degrades to
+        # a synchronous collect when the var is absent. Using a derived
+        # function_name + account_id ARN avoids the self-reference cycle
+        # that aws_lambda_function.main.arn would create here.
+        SCHEDULER_LAMBDA_ARN = "arn:${data.aws_partition.current.partition}:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-api"
       },
       var.additional_env_vars
     )
@@ -381,6 +396,30 @@ resource "aws_iam_role_policy" "cross_account_sts" {
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
         Resource = "arn:aws:iam::*:role/${var.cross_account_role_name_prefix}*"
+      }
+    ]
+  })
+}
+
+# lambda:InvokeFunction on the API Lambda's own ARN — used by the
+# async-refresh path in handler_recommendations_refresh.go to fire-and-forget
+# self-invoke the scheduler-task code path with InvocationType=Event so the
+# user-facing /api/recommendations/refresh request returns immediately
+# instead of blocking on a 60s+ provider fan-out (closes #257).
+#
+# Scope: the policy intentionally constrains Resource to this Lambda's own
+# ARN so the role cannot invoke arbitrary functions in the account.
+resource "aws_iam_role_policy" "async_self_invoke" {
+  name_prefix = "${var.stack_name}-async-self-invoke-"
+  role        = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = aws_lambda_function.main.arn
       }
     ]
   })
