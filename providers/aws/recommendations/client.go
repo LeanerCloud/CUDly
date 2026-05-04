@@ -4,13 +4,14 @@ package recommendations
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
 // CostExplorerAPI defines the interface for Cost Explorer operations
@@ -169,38 +170,94 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 	return allRecs, nil
 }
 
-// GetAllRecommendations fetches recommendations for all supported services
+// GetAllRecommendations fetches recommendations for all supported services.
+//
+// All five service calls run concurrently under errgroup. Each goroutine
+// captures its own error in a closure-scoped variable and returns nil to the
+// group so a single per-service failure does not cancel its siblings (matching
+// the previous loop's `continue`-on-error tolerance). Results are merged in
+// the canonical order EC2 → RDS → ElastiCache → OpenSearch → Redshift after
+// all goroutines finish so order-sensitive consumers stay stable.
+//
+// Behaviour change vs the previous sequential loop: per-service errors are
+// now logged at WARN via mergeServiceResults — the previous loop swallowed
+// them silently with a bare `continue`, leaving operators no signal when a
+// single service was misbehaving. Mirrors the Azure parallelisation in
+// providers/azure/recommendations.go (closes #258, commit b10326c5).
 func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
-	services := []common.ServiceType{
-		common.ServiceEC2,
-		common.ServiceRDS,
-		common.ServiceElastiCache,
-		common.ServiceOpenSearch,
-		common.ServiceRedshift,
+	var (
+		ec2Recs, rdsRecs, cacheRecs, osRecs, redshiftRecs []common.Recommendation
+		ec2Err, rdsErr, cacheErr, osErr, redshiftErr      error
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		ec2Recs, ec2Err = c.GetRecommendationsForService(gctx, common.ServiceEC2)
+		return nil
+	})
+	g.Go(func() error {
+		rdsRecs, rdsErr = c.GetRecommendationsForService(gctx, common.ServiceRDS)
+		return nil
+	})
+	g.Go(func() error {
+		cacheRecs, cacheErr = c.GetRecommendationsForService(gctx, common.ServiceElastiCache)
+		return nil
+	})
+	g.Go(func() error {
+		osRecs, osErr = c.GetRecommendationsForService(gctx, common.ServiceOpenSearch)
+		return nil
+	})
+	g.Go(func() error {
+		redshiftRecs, redshiftErr = c.GetRecommendationsForService(gctx, common.ServiceRedshift)
+		return nil
+	})
+
+	// Wait for all goroutines. g.Wait() always returns nil because every
+	// goroutine returns nil — errors are captured per-service above. After
+	// Wait, propagate ctx cancellation so callers can distinguish "all five
+	// services completed (with possibly per-service errors)" from "the
+	// parent ctx was canceled mid-fan-out".
+	_ = g.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	allRecommendations := make([]common.Recommendation, 0)
+	return mergeServiceResults(
+		serviceResult{name: "EC2", recs: ec2Recs, err: ec2Err},
+		serviceResult{name: "RDS", recs: rdsRecs, err: rdsErr},
+		serviceResult{name: "ElastiCache", recs: cacheRecs, err: cacheErr},
+		serviceResult{name: "OpenSearch", recs: osRecs, err: osErr},
+		serviceResult{name: "Redshift", recs: redshiftRecs, err: redshiftErr},
+	), nil
+}
 
-	for _, service := range services {
-		recs, err := c.GetRecommendationsForService(ctx, service)
-		if err != nil {
-			// Same rationale as in GetRecommendationsForService: a
-			// canceled / deadline-exceeded ctx is not a recoverable
-			// per-service error — short-circuit instead of marching
-			// through the remaining services and silently swallowing
-			// the cancellation.
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
+// serviceResult bundles a per-service collection outcome for the deterministic
+// merge in mergeServiceResults. Extracted into a helper so GetAllRecommendations
+// stays under the gocyclo gate (.golangci.yml min-complexity: 15) after the
+// post-Wait ctx.Err() block was added.
+type serviceResult struct {
+	name string
+	recs []common.Recommendation
+	err  error
+}
+
+// mergeServiceResults logs per-service errors at WARN and appends successful
+// results in the order the slice is passed — callers must preserve the
+// canonical EC2 → RDS → ElastiCache → OpenSearch → Redshift order so that
+// order-sensitive consumers stay stable.
+func mergeServiceResults(results ...serviceResult) []common.Recommendation {
+	total := 0
+	for _, r := range results {
+		total += len(r.recs)
+	}
+	out := make([]common.Recommendation, 0, total)
+	for _, r := range results {
+		if r.err != nil {
+			logging.Warnf("AWS %s recommendations: %v", r.name, r.err)
 			continue
 		}
-		allRecommendations = append(allRecommendations, recs...)
-		select {
-		case <-time.After(100 * time.Millisecond):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		out = append(out, r.recs...)
 	}
-
-	return allRecommendations, nil
+	return out
 }
