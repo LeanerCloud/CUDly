@@ -151,9 +151,16 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	logging.Info("Collecting recommendations from cloud providers...")
 
 	// Always clear last_collection_started_at on exit so the frontend knows
-	// the collection has finished. Extracted into a helper to keep this
-	// function under the cyclomatic-complexity gate.
-	defer s.clearCollectionStartedBestEffort(ctx)
+	// the collection has finished. Use a fresh background context with a
+	// short timeout: the request ctx may already be canceled by the time
+	// the defer runs (e.g. caller deadline expired during a slow collect),
+	// which would cause ClearCollectionStarted to fail and leave the
+	// "in flight" marker until the 5-min auto-recovery window kicks in.
+	defer func() {
+		clearCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.clearCollectionStartedBestEffort(clearCtx)
+	}()
 
 	// Get global config
 	globalCfg, err := s.config.GetGlobalConfig(ctx)
