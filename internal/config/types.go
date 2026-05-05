@@ -241,8 +241,22 @@ type RecommendationRecord struct {
 	// Backward-compatible with DynamoDB: existing items with a numeric 0
 	// attribute unmarshal as a pointer to 0.0; absent attributes unmarshal
 	// as nil. No migration needed.
-	MonthlyCost    *float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
-	Savings        float64  `json:"savings" dynamodbav:"savings"`
+	MonthlyCost *float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
+	Savings     float64  `json:"savings" dynamodbav:"savings"`
+	// OnDemandCost is the canonical on-demand monthly baseline for the
+	// recommended commitment, sourced directly from the cloud provider
+	// (Azure `CostWithNoReservedInstances`, AWS Cost Explorer
+	// `EstimatedMonthlyOnDemandCost`). Persisted via the recommendations
+	// row's JSONB `payload` column — no DDL needed.
+	//
+	// nil means the provider API did not return a baseline; the frontend
+	// falls back to reconstructing on-demand from `monthly_cost + savings
+	// + amortized_upfront`. When non-nil, the frontend prefers the raw
+	// value over reconstruction so anomalies in the reconstructed
+	// denominator (e.g. Azure all-upfront recs where monthly_cost=$0
+	// collapses the denominator) don't inflate the displayed effective
+	// savings %. See #274.
+	OnDemandCost   *float64 `json:"on_demand_cost,omitempty" dynamodbav:"on_demand_cost,omitempty"`
 	Selected       bool     `json:"selected" dynamodbav:"selected"`
 	Purchased      bool     `json:"purchased" dynamodbav:"purchased"`
 	PurchaseID     string   `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
