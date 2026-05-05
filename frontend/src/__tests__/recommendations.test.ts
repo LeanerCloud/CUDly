@@ -3046,6 +3046,20 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(variantRows.length).toBe(0);
     });
 
+    test('chevron button lives inside td.checkbox-col of the summary row (closes #280)', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      const summaryRow = document.querySelector('.rec-cell-summary-row');
+      expect(summaryRow).not.toBeNull();
+      const checkboxCell = summaryRow!.querySelector('td.checkbox-col');
+      expect(checkboxCell).not.toBeNull();
+      const chevron = checkboxCell!.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+      expect(chevron).not.toBeNull();
+    });
+
     test('clicking chevron expands the cell and shows variant rows', async () => {
       const recs = multiVariantRecs();
       (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
@@ -3054,11 +3068,15 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
 
       const chevron = document.querySelector<HTMLButtonElement>('.rec-cell-chevron');
       expect(chevron).not.toBeNull();
+      // aria-expanded starts false (collapsed)
+      expect(chevron!.getAttribute('aria-expanded')).toBe('false');
       chevron!.click();
 
-      // After expand: variant rows should appear
+      // After expand: variant rows should appear and aria-expanded flips
       const variantRows = document.querySelectorAll('.rec-variant-row');
       expect(variantRows.length).toBe(2);
+      const updatedChevron = document.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+      expect(updatedChevron!.getAttribute('aria-expanded')).toBe('true');
     });
 
     test('page-level range banner is removed (closes #278) — savings card is the canonical surface', async () => {

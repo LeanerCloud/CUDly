@@ -1711,14 +1711,15 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
 
     rows.push(`
   <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
-    <td class="checkbox-col"></td>
+    <td class="checkbox-col">
+      <button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
+        ${chevron}
+      </button>
+    </td>
     <td><span class="provider-badge ${providerBadgeClass(rep.provider)}">${escapeHtml(providerDisplayName(rep.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
     <td colspan="${TABLE_COL_COUNT - 4}" class="rec-cell-summary-content">
-      <button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
-        ${chevron}
-      </button>
       <span class="rec-cell-identity">${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''} &mdash; ${escapeHtml(rep.region)} &mdash; ${variants.length} variants</span>
       <span class="rec-cell-range">${savingsDisplay} &middot; upfront: ${upfrontDisplay} &middot; term: ${termDisplay}</span>
     </td>
