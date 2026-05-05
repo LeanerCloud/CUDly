@@ -75,6 +75,13 @@ export interface LocalRecommendation {
   upfront_cost: number;
   // null = provider API did not return a monthly breakdown (renders as "—").
   monthly_cost?: number | null;
+  // Canonical on-demand monthly baseline straight from the cloud provider
+  // (Azure CostWithNoReservedInstances, AWS EstimatedMonthlyOnDemandCost).
+  // Optional/null when the provider didn't return a baseline; in that case
+  // effectiveSavingsPct reconstructs on-demand from
+  // `monthly_cost + savings + amortized_upfront`. When populated it's
+  // preferred — see #274.
+  on_demand_cost?: number | null;
   cloud_account_id?: string;
   // Populated by the scheduler when any active purchase_suppression
   // matches this rec's 6-tuple. The three fields drive the "recently

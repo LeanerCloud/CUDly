@@ -2454,6 +2454,80 @@ describe('effectiveSavingsPct', () => {
     expect(pct).not.toBeNull();
     expect(pct!).toBeCloseTo(100, 1);
   });
+
+  // #274: on_demand_cost (when populated by the provider) is used directly
+  // as the denominator instead of reconstructing it from
+  // monthly_cost + savings + amortized. The reconstruction collapses for
+  // Azure all-upfront recs where monthly_cost = $0 and inflates the % well
+  // past realistic ceilings.
+  describe('on_demand_cost preference (#274)', () => {
+    test('repro of the live Azure D11_v2 row with provider-supplied on_demand_cost', () => {
+      // Reconstructed (no on_demand_cost): savings=$29, upfront=$26,
+      // monthly=$0, term=1 → onDemand = 0 + 29 + 2.17 = $31.17 →
+      // pct ≈ 86% (the inflated value the user complained about).
+      // With provider-supplied on_demand_cost = $122.64 (the real Azure
+      // CostWithNoReservedInstances for 2 × Standard_D11_v2 in eastus),
+      // pct ≈ (29 - 2.17) / 122.64 = ~21.9% — within realistic 1-year
+      // RI savings.
+      const pctReconstructed = effectiveSavingsPct(
+        mk({ savings: 29, upfront_cost: 26, monthly_cost: 0, term: 1 }),
+      );
+      expect(pctReconstructed!).toBeGreaterThan(80);
+
+      const pctWithBaseline = effectiveSavingsPct(
+        mk({ savings: 29, upfront_cost: 26, monthly_cost: 0, term: 1, on_demand_cost: 122.64 }),
+      );
+      expect(pctWithBaseline).not.toBeNull();
+      expect(pctWithBaseline!).toBeCloseTo(21.88, 1);
+    });
+
+    test('on_demand_cost overrides reconstruction even when monthly_cost is non-zero', () => {
+      // Demonstrates the preference order: when both are present, the
+      // provider's on_demand_cost wins over the reconstructed value.
+      // Otherwise a stale/cached monthly_cost could override the canonical
+      // baseline silently.
+      const pct = effectiveSavingsPct(
+        mk({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1, on_demand_cost: 500 }),
+      );
+      // With baseline: pct = (100 - 0) / 500 * 100 = 20%
+      // Reconstruction would have given: pct = 100 / (50 + 100 + 0) * 100 = 66.7%
+      expect(pct).not.toBeNull();
+      expect(pct!).toBeCloseTo(20, 1);
+    });
+
+    test('on_demand_cost null/undefined falls back to reconstruction (back-compat)', () => {
+      // Pre-#274 cached recs have no on_demand_cost. The frontend
+      // reconstructs as before so older data still renders meaningful
+      // percentages while it gets refreshed.
+      const r = mk({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
+      delete (r as { on_demand_cost?: unknown }).on_demand_cost;
+      const pct = effectiveSavingsPct(r);
+      expect(pct).not.toBeNull();
+      expect(pct!).toBeCloseTo(66.67, 1);
+    });
+
+    test('on_demand_cost = 0 from the provider is treated as not-populated (falls back)', () => {
+      // The backend's convertRecommendations writes 0 → nil so this case
+      // is unlikely on a fresh refresh, but defence-in-depth: a literal 0
+      // baseline is impossible (the resource would be free), so the
+      // formula treats it the same as null.
+      const pct = effectiveSavingsPct(
+        mk({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1, on_demand_cost: 0 }),
+      );
+      expect(pct).not.toBeNull();
+      expect(pct!).toBeCloseTo(66.67, 1);
+    });
+
+    test('on_demand_cost populated rescues the missing-monthly_cost case', () => {
+      // Without on_demand_cost: monthly_cost === null returns null
+      // (denominator can't be reconstructed). With the provider baseline,
+      // the formula has everything it needs and returns a real value.
+      const r = mk({ savings: 100, upfront_cost: 0, monthly_cost: null, term: 1, on_demand_cost: 250 });
+      const pct = effectiveSavingsPct(r);
+      expect(pct).not.toBeNull();
+      expect(pct!).toBeCloseTo(40, 1);
+    });
+  });
 });
 
 describe('Monthly Cost + Effective % column rendering', () => {

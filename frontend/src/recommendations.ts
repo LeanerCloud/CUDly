@@ -389,11 +389,23 @@ export function effectiveMonthlySavings(r: LocalRecommendation): number {
  * monthly cost, amortizing the upfront cost over the term. Returns null when
  * the result would require division by zero (on_demand_monthly === 0).
  *
- * Formula (assumes rec.savings excludes upfront amortization — see
- * effectiveMonthlySavings for the semantics note):
+ * Denominator source (closes #274):
+ *   1. If `r.on_demand_cost` is populated (non-null, > 0), use it directly
+ *      — it's the canonical baseline straight from the cloud provider
+ *      (Azure CostWithNoReservedInstances, AWS
+ *      EstimatedMonthlyOnDemandCost).
+ *   2. Otherwise fall back to reconstructing from
+ *      `monthly_cost + savings + amortized_upfront`. This is what the
+ *      frontend always did before #274 plumbed `on_demand_cost` through;
+ *      it stays correct for cleanly-shaped data, but for Azure all-upfront
+ *      recs where `monthly_cost = $0` the reconstructed denominator
+ *      collapses to `savings + amortized` and inflates the percentage well
+ *      past realistic ceilings (~30% real → 86% shown).
+ *
+ * Formula (numerator unchanged — assumes rec.savings excludes upfront
+ * amortization, see effectiveMonthlySavings):
  *   amortized_upfront_per_month = upfront_cost / (term * 12)
  *   effective_monthly_savings   = savings - amortized_upfront_per_month
- *   on_demand_monthly           = monthly_cost + savings + amortized_upfront_per_month
  *   effective_savings_pct       = (effective_monthly_savings / on_demand_monthly) * 100
  *
  * A negative result is valid data — it flags a rec where the upfront cost
@@ -403,14 +415,18 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // Per acceptance criteria: term=0 is a data anomaly — render as em-dash.
   if (!r.term) return null;
   // monthly_cost === null means the provider API did not return a recurring
-  // monthly breakdown. We cannot reconstruct on_demand_monthly without it,
-  // so the formula is underdetermined — render as em-dash rather than
-  // collapsing the denominator to savings alone (which produces 100% / neg%).
-  if (r.monthly_cost == null) return null;
+  // monthly breakdown. Without it we can only compute the formula when the
+  // provider also gave us an explicit on_demand_cost; otherwise render as
+  // em-dash rather than collapsing the denominator to savings alone (which
+  // produces 100% / neg%).
+  const hasOnDemand = r.on_demand_cost != null && r.on_demand_cost > 0;
+  if (r.monthly_cost == null && !hasOnDemand) return null;
   const monthsInTerm = r.term * 12;
   const amortized = r.upfront_cost / monthsInTerm;
   const effectiveSavings = r.savings - amortized;
-  const onDemand = r.monthly_cost + r.savings + amortized;
+  const onDemand = hasOnDemand
+    ? (r.on_demand_cost as number)
+    : (r.monthly_cost as number) + r.savings + amortized;
   if (onDemand === 0) return null;
   return (effectiveSavings / onDemand) * 100;
 }

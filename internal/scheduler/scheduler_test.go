@@ -1432,6 +1432,45 @@ func TestScheduler_ConvertRecommendations_Empty(t *testing.T) {
 	assert.Len(t, records, 0)
 }
 
+// TestScheduler_ConvertRecommendations_OnDemandCost pins #274: the
+// canonical on-demand baseline must round-trip from common.Recommendation
+// through to the persisted RecommendationRecord so the frontend can use
+// it directly instead of reconstructing from monthly_cost + savings +
+// amortized (which collapses for Azure all-upfront recs where
+// monthly_cost = $0).
+func TestScheduler_ConvertRecommendations_OnDemandCost(t *testing.T) {
+	scheduler := &Scheduler{}
+
+	recommendations := []common.Recommendation{
+		// Provider populated OnDemandCost — must propagate as a non-nil pointer.
+		{
+			Provider: common.ProviderAzure, Service: common.ServiceCompute,
+			Region: "eastus", ResourceType: "Standard_D11_v2",
+			Count: 2, Term: "1yr", PaymentOption: "all-upfront",
+			OnDemandCost: 122.64, CommitmentCost: 1050.0, EstimatedSavings: 35.0,
+		},
+		// Provider returned 0 (not populated) — must round-trip as nil so the
+		// frontend's "is this populated?" branch stays accurate. A literal $0
+		// on-demand baseline is impossible (it would mean the resource is
+		// free, in which case there's nothing to recommend reserving).
+		{
+			Provider: common.ProviderAWS, Service: common.ServiceEC2,
+			Region: "us-east-1", ResourceType: "m5.large",
+			Count: 1, Term: "3yr", PaymentOption: "all-upfront",
+			OnDemandCost: 0, CommitmentCost: 1000.0, EstimatedSavings: 500.0,
+		},
+	}
+
+	records := scheduler.convertRecommendations(recommendations, "azure")
+	require.Len(t, records, 2)
+
+	require.NotNil(t, records[0].OnDemandCost)
+	assert.InDelta(t, 122.64, *records[0].OnDemandCost, 0.001)
+
+	assert.Nil(t, records[1].OnDemandCost,
+		"OnDemandCost=0 from the provider must round-trip as nil, not as a pointer to 0.0")
+}
+
 // TestScheduler_ConvertRecommendations_IDUniqueness pins issue #187 +
 // #188: the rec ID must include term, account, and engine — not just
 // (provider, service, region, resource_type, payment) — otherwise

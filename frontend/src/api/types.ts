@@ -58,6 +58,12 @@ export interface Recommendation {
   // null when the provider API did not return a monthly recurring breakdown.
   monthly_cost: number | null;
   savings: number;
+  // Canonical on-demand monthly baseline straight from the cloud provider
+  // (Azure CostWithNoReservedInstances, AWS EstimatedMonthlyOnDemandCost).
+  // Optional/null when the provider didn't return a baseline; in that case
+  // the frontend reconstructs on-demand from monthly_cost + savings +
+  // amortized_upfront. When populated it's preferred — see #274.
+  on_demand_cost?: number | null;
   selected: boolean;
   purchased: boolean;
   purchase_id?: string;

@@ -927,6 +927,21 @@ func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.Recommendations
 	}()
 }
 
+// nonZeroPtr returns &v when v > 0, else nil. Used by convertRecommendations
+// to pass the provider's on-demand baseline (rec.OnDemandCost) through as a
+// nullable pointer — a literal 0 from the provider means "not populated"
+// because every real on-demand baseline is non-zero. Always returning a
+// pointer would poison the frontend's "is this populated?" branch
+// (recommendations.ts::effectiveSavingsPct, see #274). Extracted to keep
+// convertRecommendations under the gocyclo gate (.golangci.yml
+// min-complexity: 15; pre-commit hook flags > 10).
+func nonZeroPtr(v float64) *float64 {
+	if v > 0 {
+		return &v
+	}
+	return nil
+}
+
 // convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice
 func (s *Scheduler) convertRecommendations(recs []common.Recommendation, providerName string) []config.RecommendationRecord {
 	records := make([]config.RecommendationRecord, 0, len(recs))
@@ -1007,7 +1022,8 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			UpfrontCost:  rec.CommitmentCost,
 			MonthlyCost:  rec.RecurringMonthlyCost, // nil when provider API didn't return a monthly breakdown
 			Savings:      rec.EstimatedSavings,
-			Selected:     true, // Default to selected
+			OnDemandCost: nonZeroPtr(rec.OnDemandCost), // nil when provider API didn't return a baseline; frontend falls back to reconstruction (#274)
+			Selected:     true,                         // Default to selected
 			Purchased:    false,
 		})
 	}
