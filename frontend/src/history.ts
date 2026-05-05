@@ -395,6 +395,24 @@ function shortExecID(id: string): string {
   return (id || '').replace(/^urn:.*?:/, '').slice(0, 8);
 }
 
+// sameRowActions returns the set of row-action buttons (Approve, Cancel,
+// future siblings) in the same table cell as `btn`. Used by the Approve
+// and Cancel click handlers to disable BOTH actions for the in-flight
+// row while the API request is pending — issue #286 + CR pass on
+// PR #299: clicking Approve disabled only Approve, leaving the
+// adjacent Cancel button live; a quick double-click could fire
+// conflicting requests on the same row before the reload completes.
+//
+// Falls back to `[btn]` when the button has no parent <td> (test
+// fixtures may render buttons without a wrapping cell).
+function sameRowActions(btn: HTMLButtonElement): HTMLButtonElement[] {
+  const cell = btn.closest('td') || btn.parentElement;
+  if (!cell) return [btn];
+  return Array.from(
+    cell.querySelectorAll<HTMLButtonElement>('.history-approve-btn, .history-cancel-btn'),
+  );
+}
+
 // renderActionCell returns the HTML for the Plan / action column on a
 // single history row. The column doubles as the per-row action surface
 // because pending / failed rows rarely have a meaningful plan_name (the
@@ -592,14 +610,22 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         destructive: false,
       });
       if (!ok) return;
-      btn.disabled = true;
+      // Issue #286 + CR pass: Approve and Cancel can render together on
+      // the same row, so disabling only the clicked button leaves the
+      // sibling clickable while we await the API. Disable BOTH on
+      // either click and re-enable both on failure — a successful
+      // approve triggers a full history reload that re-renders the
+      // row, so the row-action sibling state doesn't matter on the
+      // happy path.
+      const rowActions = sameRowActions(btn);
+      rowActions.forEach((b) => { b.disabled = true; });
       try {
         await api.approvePurchase(id);
       } catch (approveError) {
         console.error('Failed to approve pending purchase:', approveError);
         const err = approveError as Error;
         showToast({ message: `Failed to approve: ${err.message || 'unknown error'}`, kind: 'error' });
-        btn.disabled = false;
+        rowActions.forEach((b) => { b.disabled = false; });
         return;
       }
       showToast({ message: 'Purchase approved', kind: 'success', timeout: 5_000 });
@@ -622,14 +648,17 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         destructive: true,
       });
       if (!ok) return;
-      btn.disabled = true;
+      // Symmetric with the Approve handler above: disable both row
+      // actions while the API is in flight (CR pass on PR #299).
+      const rowActions = sameRowActions(btn);
+      rowActions.forEach((b) => { b.disabled = true; });
       try {
         await api.cancelPurchase(id);
       } catch (cancelError) {
         console.error('Failed to cancel pending purchase:', cancelError);
         const err = cancelError as Error;
         showToast({ message: `Failed to cancel: ${err.message || 'unknown error'}`, kind: 'error' });
-        btn.disabled = false;
+        rowActions.forEach((b) => { b.disabled = false; });
         return;
       }
       // Cancel succeeded — surface success regardless of whether the

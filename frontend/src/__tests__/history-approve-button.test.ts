@@ -258,4 +258,65 @@ describe('History inline Approve button (issue #286)', () => {
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
     expect(btn?.disabled).toBe(false);
   });
+
+  test('approve click disables BOTH Approve and Cancel for the row while in flight (CR pass)', async () => {
+    // Issue #286 + CR pass on PR #299: Approve and Cancel can render
+    // together. Clicking Approve should disable BOTH buttons until the
+    // request completes — otherwise a quick double-click could fire
+    // a conflicting Cancel on the same row before the reload runs.
+    (getCurrentUser as jest.Mock).mockReturnValue(REG_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    let resolveApprove: (() => void) | undefined;
+    (api.approvePurchase as jest.Mock).mockReturnValue(
+      new Promise<void>((r) => { resolveApprove = r; }),
+    );
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'exec-1', created_by_user_id: REG_USER.id })],
+    });
+
+    await loadHistory();
+    const approveBtn = document.querySelector<HTMLButtonElement>('.history-approve-btn');
+    const cancelBtn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
+    expect(approveBtn).not.toBeNull();
+    expect(cancelBtn).not.toBeNull();
+    expect(approveBtn?.disabled).toBe(false);
+    expect(cancelBtn?.disabled).toBe(false);
+
+    approveBtn?.click();
+    // Let the click handler reach the disable step (microtasks for the
+    // confirmDialog await chain).
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // While the API call is unresolved, BOTH buttons are disabled.
+    expect(approveBtn?.disabled).toBe(true);
+    expect(cancelBtn?.disabled).toBe(true);
+
+    // Resolve the in-flight promise + let the success path complete.
+    resolveApprove?.();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  test('approve API failure re-enables BOTH Approve and Cancel for the row (CR pass)', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(REG_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    (api.approvePurchase as jest.Mock).mockRejectedValue(new Error('boom'));
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'exec-1', created_by_user_id: REG_USER.id })],
+    });
+    console.error = jest.fn();
+
+    await loadHistory();
+    const approveBtn = document.querySelector<HTMLButtonElement>('.history-approve-btn');
+    const cancelBtn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
+    approveBtn?.click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // After the API rejects, BOTH buttons must be re-enabled.
+    expect(approveBtn?.disabled).toBe(false);
+    expect(cancelBtn?.disabled).toBe(false);
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+  });
 });

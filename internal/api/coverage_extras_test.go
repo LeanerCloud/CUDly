@@ -27,29 +27,35 @@ func TestHandler_approvePurchase_InvalidUUID(t *testing.T) {
 
 func TestHandler_approvePurchase_EmptyToken(t *testing.T) {
 	// After issue #286 the empty-token path is no longer a pre-flight 400 —
-	// approvePurchase now dispatches three ways:
-	//   - session-authed (needs a session matching approve-{any,own}),
-	//   - token-authed (legacy email link),
-	//   - session-authed fallback when token == "".
-	// With a zero-value Handler (no config / auth wiring), the call must
-	// fail somewhere — the exact error path depends on which dispatch
-	// branch fires first, but it MUST be a non-nil error so a malformed
-	// caller can't accidentally approve a purchase. Pin that contract
-	// without coupling to a specific branch, since the empty-token case
-	// no longer has a single canonical error message.
-	h := &Handler{}
+	// approvePurchase dispatches three ways (session-authed RBAC,
+	// token-authed legacy, session-authed fallback when token=="").
+	// The contract this test pins: a malformed caller (empty token + no
+	// session) must NOT silently succeed. We require an error AND
+	// we fail loudly on panic — CR pass on PR #299 flagged the prior
+	// `recover()` swallow as a false-green risk: a panic in any new
+	// dispatch branch could pass the test without ever asserting on
+	// `err`.
+	//
+	// Wire a minimal MockConfigStore that returns a clean "execution
+	// not found" error from GetExecutionByID so the dispatch reaches a
+	// proper NewClientError(404) instead of nil-deref'ing on h.config.
+	// (Pre-#286 the empty-token check short-circuited at the very top
+	// of approvePurchase, so a zero-Handler test was sufficient. The
+	// dispatch refactor moved that check after GetExecutionByID; the
+	// test surface adapts in step.)
+	ctx := context.Background()
 	execID := "11111111-1111-1111-1111-111111111111"
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(nil, errors.New("execution not found"))
+	h := &Handler{config: mockConfig}
+
 	defer func() {
-		// h.config is nil so GetExecutionByID may panic before the
-		// dispatch returns; that's still a non-success outcome and is
-		// what we want to assert (empty token + no session does not
-		// silently succeed).
-		_ = recover()
+		if r := recover(); r != nil {
+			t.Fatalf("approvePurchase should return an error for empty token + zero handler, not panic: %v", r)
+		}
 	}()
-	_, err := h.approvePurchase(context.Background(), nil, execID, "")
-	if err == nil {
-		t.Fatal("approvePurchase with empty token + zero handler must not return nil error")
-	}
+	_, err := h.approvePurchase(ctx, nil, execID, "")
+	require.Error(t, err, "approvePurchase with empty token + zero handler must fail")
 }
 
 func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
