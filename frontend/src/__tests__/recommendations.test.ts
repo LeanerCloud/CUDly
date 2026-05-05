@@ -327,6 +327,62 @@ describe('Recommendations Module', () => {
       expect(liveText()).toMatch(/^1 selected · Showing 2 of 2 recommendations$/);
     });
 
+    test('selection filtered out of view: cards and live line treat it as no selection (PR #283 CR)', async () => {
+      // 4 recs / 2 cells. The user has selected cell2's variant ('r3'), but
+      // then applies a column filter that hides cell2. The visible set is
+      // cell1 only (r1, r2). The selected row (r3) is NOT in the visible set.
+      //
+      // Expected behaviour:
+      //   - Summary cards reflect the visible (unselected-from-visible) set:
+      //     cell1 range $100–$150, title "Total Recommendations" not "Selected".
+      //   - Live status line reads "Showing 2 of 4 recommendations" — no
+      //     "1 selected" prefix, because r3 is hidden.
+      const allRecs = [
+        { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'r3', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'r4', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+      const visibleRecs = allRecs.filter((r) => r.service === 'ec2'); // cell1 only
+
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {}, recommendations: allRecs, regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs);
+      // Visible set is cell1 only — column filter hides rds rows.
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(visibleRecs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      // r3 is selected, but it is NOT in the visible set.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r3']));
+
+      await loadRecommendations();
+
+      const summary = document.getElementById('recommendations-summary');
+      const savingsCard = Array.from(summary?.querySelectorAll('.card') ?? [])
+        .find((c) => /Monthly Savings/.test(c.querySelector('h3')?.textContent ?? ''));
+      const savingsValue = savingsCard?.querySelector('.value')?.textContent ?? '';
+      const savingsTitle = savingsCard?.querySelector('h3')?.textContent ?? '';
+
+      // Cards reflect the visible set (cell1: $100–$150), not the hidden selection.
+      expect(savingsValue).toContain('$100');
+      expect(savingsValue).toContain('$150');
+      expect(savingsValue).not.toContain('$200');
+      // Title must not flip to "Selected …" since no visible row is selected.
+      expect(savingsTitle).toBe('Potential Monthly Savings');
+
+      // Live line must not prefix "1 selected" because r3 is hidden.
+      const liveText = document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText).not.toMatch(/selected/);
+      expect(liveText).toMatch(/Showing/);
+
+      // Reset mocks so this filter doesn't leak into subsequent tests.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    });
+
     test('renders recommendations list', async () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -3001,6 +3057,51 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(plr.cellCount).toBe(0);
       expect(plr.savingsMin).toBe(0);
       expect(plr.savingsMax).toBe(0);
+    });
+
+    test('paybackMonthsMin uses per-cell paired variants, not cross-extrema (PR #283 CR)', () => {
+      // Cell A has two variants:
+      //   v1: savings=50,  upfront=0    → ratio = 0     (best payback: 0 months)
+      //   v2: savings=200, upfront=300  → ratio = 1.5   (1.5 months)
+      //
+      // Cell B has two variants:
+      //   v3: savings=100, upfront=200  → ratio = 2     (2 months)
+      //   v4: savings=150, upfront=600  → ratio = 4     (4 months)
+      //
+      // Attainable min-payback selection: cell A picks v1 (ratio 0), cell B
+      // picks v3 (ratio 2). Total upfront=0+200=200, total savings=50+100=150.
+      // paybackMonthsMin = 200/150 ≈ 1.333...
+      //
+      // Cross-extrema (old code) would compute:
+      //   upfrontMin = 0 (from v1) + 200 (from v3) = 200
+      //   savingsMax = 200 (from v2) + 150 (from v4) = 350
+      //   paybackMonthsMin = 200/350 ≈ 0.571
+      // That's not attainable because it mixes upfront from v1 with savings
+      // from v2 (different variants of cell A).
+      //
+      // The new per-cell paired logic must produce 200/150 ≈ 1.333, not 0.571.
+      const cellA = [
+        mkRec({ id: 'a-v1', resource_type: 'm5.large',  savings:  50, upfront_cost:   0 }),
+        mkRec({ id: 'a-v2', resource_type: 'm5.large',  savings: 200, upfront_cost: 300 }),
+      ];
+      const cellB = [
+        mkRec({ id: 'b-v3', resource_type: 't3.medium', savings: 100, upfront_cost: 200 }),
+        mkRec({ id: 'b-v4', resource_type: 't3.medium', savings: 150, upfront_cost: 600 }),
+      ];
+      const groups = groupRecsByCell([...cellA, ...cellB]);
+      const plr = pageLevelRange(groups);
+
+      // Per-cell paired: best ratio for A is v1 (0/50=0), best for B is v3 (200/100=2).
+      // Combined: upfront=0+200=200, savings=50+100=150 → paybackMin=200/150≈1.333
+      expect(plr.paybackMonthsMin).toBeCloseTo(200 / 150, 5);
+
+      // Cross-extrema would give 200/350≈0.571 — must NOT be the result.
+      expect(plr.paybackMonthsMin).not.toBeCloseTo(200 / 350, 5);
+
+      // paybackMonthsMax: worst payback per cell. A picks v2 (300/200=1.5),
+      // B picks v4 (600/150=4). Combined: upfront=300+600=900, savings=200+150=350.
+      // paybackMax = 900/350 ≈ 2.571
+      expect(plr.paybackMonthsMax).toBeCloseTo(900 / 350, 5);
     });
   });
 

@@ -194,12 +194,17 @@ function renderRecommendationsSummary(
   // shape; it can be removed when the field is also dropped from
   // RecommendationsSummary.
   const selected = state.getSelectedRecommendationIDs();
-  const target: readonly LocalRecommendation[] = selected.size > 0
-    ? recommendations.filter((r) => selected.has(r.id))
+  // Narrow selection to visible rows only — if the user has ticked rows that
+  // are currently hidden by a column filter, those rows must not drive the
+  // summary cards (the cards should reflect what the user can actually see
+  // and act on). An empty visible-intersection means no effective selection.
+  const selectedVisible = recommendations.filter((r) => selected.has(r.id));
+  const target: readonly LocalRecommendation[] = selectedVisible.length > 0
+    ? selectedVisible
     : recommendations;
   const groups = groupRecsByCell(target);
   const plr = pageLevelRange(groups);
-  const isSelectionView = selected.size > 0 && plr.cellCount > 0;
+  const isSelectionView = selectedVisible.length > 0 && plr.cellCount > 0;
 
   const savingsText = plr.cellCount > 0 && plr.savingsMax > 0
     ? formatSavingsRange(plr.savingsMin, plr.savingsMax)
@@ -366,9 +371,21 @@ export interface PageLevelRange {
  *   upfrontMin       = sum of cellSummary.upfrontMin (matches the variant
  *                      whose savingsMin was contributed)
  *   upfrontMax       = sum of cellSummary.upfrontMax
- *   paybackMonthsMin = page-aggregate payback at the savingsMax end
- *                      (paying off faster) — i.e. upfrontMin / savingsMax.
- *   paybackMonthsMax = page-aggregate payback at the savingsMin end.
+ *   paybackMonthsMin = sum of per-cell best-payback variant upfronts /
+ *                      sum of their savings.  Each cell independently
+ *                      picks the variant with the lowest upfront/savings
+ *                      ratio. Using independent cross-extrema
+ *                      (upfrontMin / savingsMax) is NOT attainable when a
+ *                      cell's lowest-upfront variant ≠ its highest-savings
+ *                      variant — it would imply buying one impossible
+ *                      combination.  Full convolution (trying every
+ *                      cross-cell combination) is O(variants^cells) and
+ *                      impractical for pages with 30+ cells.  Per-cell
+ *                      paired choice is O(cells × variants) and produces
+ *                      bounds that match what a min-payback / max-payback
+ *                      per-cell selection would actually commit to.
+ *   paybackMonthsMax = same logic, each cell picks the worst-payback
+ *                      variant.
  *
  * Exported for tests.
  */
@@ -377,19 +394,48 @@ export function pageLevelRange(groups: Map<string, LocalRecommendation[]>): Page
   let savingsMax = 0;
   let upfrontMin = 0;
   let upfrontMax = 0;
+  // Payback accumulators: per-cell paired variant sums.
+  let paybackBestUpfront = 0;
+  let paybackBestSavings = 0;
+  let paybackWorstUpfront = 0;
+  let paybackWorstSavings = 0;
   for (const variants of groups.values()) {
     const s = cellSummary(variants);
     savingsMin += s.savingsMin;
     savingsMax += s.savingsMax;
     upfrontMin += s.upfrontMin;
     upfrontMax += s.upfrontMax;
+
+    // For payback: pick the variant with the best (lowest) payback ratio for
+    // the min-end, and the worst (highest) for the max-end. Treat savings ≤ 0
+    // as Infinity payback so zero-savings variants sort to the worst end.
+    let bestRatio = Infinity;
+    let bestUpfront = 0;
+    let bestSavings = 0;
+    let worstRatio = -Infinity;
+    let worstUpfront = 0;
+    let worstSavings = 0;
+    for (const v of variants) {
+      const ratio = v.savings > 0 ? v.upfront_cost / v.savings : Infinity;
+      if (ratio < bestRatio) {
+        bestRatio = ratio;
+        bestUpfront = v.upfront_cost;
+        bestSavings = v.savings;
+      }
+      if (ratio > worstRatio) {
+        worstRatio = ratio;
+        worstUpfront = v.upfront_cost;
+        worstSavings = v.savings;
+      }
+    }
+    paybackBestUpfront += bestUpfront;
+    paybackBestSavings += bestSavings;
+    paybackWorstUpfront += worstUpfront;
+    paybackWorstSavings += worstSavings;
   }
-  // Payback months: ratio is signed because the "fastest payback" comes
-  // from the max-savings / min-upfront end. Clamp to 0 when there's no
-  // savings at all (avoid Infinity / NaN). Negative-payback rows (where
-  // upfront amortization outweighs monthly savings) flow through naturally.
-  const paybackMonthsMin = savingsMax > 0 ? upfrontMin / savingsMax : 0;
-  const paybackMonthsMax = savingsMin > 0 ? upfrontMax / savingsMin : 0;
+  // Clamp to 0 when total savings is non-positive to avoid Infinity / NaN.
+  const paybackMonthsMin = paybackBestSavings > 0 ? paybackBestUpfront / paybackBestSavings : 0;
+  const paybackMonthsMax = paybackWorstSavings > 0 ? paybackWorstUpfront / paybackWorstSavings : 0;
   return {
     savingsMin, savingsMax,
     upfrontMin, upfrontMax,
@@ -1295,11 +1341,15 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   }
   // Always update the live region (even when no filters active) so the
   // spoken count reflects state after every render. #279: when the user
-  // has ticked ≥1 row, the line surfaces the selection count too — same
-  // narrowing source-of-truth as the summary cards above.
-  const selectedCount = state.getSelectedRecommendationIDs().size;
-  live.textContent = selectedCount > 0
-    ? `${selectedCount} selected · Showing ${visibleCount} of ${loadedCount} recommendations`
+  // has ticked ≥1 visible row, the line surfaces the selection count too —
+  // same narrowing source-of-truth as the summary cards. Selections that
+  // are filtered out of view are NOT counted here, matching the card
+  // narrowing behaviour (only selected ∩ visible drives the UI).
+  const selectedIDs = state.getSelectedRecommendationIDs();
+  const visibleRecs = state.getVisibleRecommendations();
+  const selectedVisibleCount = visibleRecs.filter((r) => selectedIDs.has(r.id)).length;
+  live.textContent = selectedVisibleCount > 0
+    ? `${selectedVisibleCount} selected · Showing ${visibleCount} of ${loadedCount} recommendations`
     : `Showing ${visibleCount} of ${loadedCount} recommendations`;
 
   const filters = state.getRecommendationsColumnFilters();
