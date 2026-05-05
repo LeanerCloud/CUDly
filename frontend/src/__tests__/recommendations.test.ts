@@ -25,6 +25,13 @@ jest.mock('../api', () => ({
 // Default resolution returns a benign empty payload so tests that
 // merely open + close the drawer (and don't care about the detail
 // fetch) don't trip on an undefined-promise return.
+//
+// Default freshness: fresh (1h ago) so pre-#284 tests that call
+// loadRecommendations() don't inadvertently trigger auto-refresh and
+// fire extra showToast() calls that would break existing assertions.
+// NOTE: ONE_HOUR_AGO can't be used here because jest.mock() factory
+// functions are hoisted before variable declarations. The date is
+// computed inline; the beforeEach block resets it via the mock handle.
 jest.mock('../api/recommendations', () => ({
   getRecommendationDetail: jest.fn().mockResolvedValue({
     id: 'rec-default',
@@ -32,7 +39,19 @@ jest.mock('../api/recommendations', () => ({
     confidence_bucket: 'low',
     provenance_note: '',
   }),
-  getRecommendationsFreshness: jest.fn().mockResolvedValue({ last_collected_at: null, last_collection_error: null }),
+  getRecommendationsFreshness: jest.fn().mockResolvedValue({
+    last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    last_collection_error: null,
+  }),
+  refreshRecommendations: jest.fn().mockResolvedValue({}),
+}));
+
+// Mock showToast so auto-refresh (#284) tests can assert on toast calls
+// without touching the DOM. Returns a dismiss handle per the ToastHandle
+// interface so callers that invoke handle.dismiss() don't crash.
+const mockShowToast = jest.fn<{ dismiss: () => void }, [unknown]>(() => ({ dismiss: jest.fn() }));
+jest.mock('../toast', () => ({
+  showToast: (opts: unknown) => mockShowToast(opts),
 }));
 
 // Mock state module
@@ -68,6 +87,7 @@ jest.mock('../utils', () => ({
 
 import * as api from '../api';
 import * as state from '../state';
+import * as recsApi from '../api/recommendations';
 
 describe('Recommendations Module', () => {
   beforeEach(() => {
@@ -85,6 +105,15 @@ describe('Recommendations Module', () => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     window.alert = jest.fn();
+
+    // Default freshness for pre-#284 tests: fresh (1h ago) → auto-refresh
+    // does NOT fire, so existing tests are unaffected by the new toast calls.
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+    (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({});
+    mockShowToast.mockReturnValue({ dismiss: jest.fn() });
   });
 
   afterEach(() => {
@@ -794,6 +823,105 @@ describe('Recommendations Module', () => {
 
         expect(recApi.getRecommendationDetail).toHaveBeenCalledTimes(1);
       });
+    });
+  });
+
+  describe('auto-refresh on page open (#284)', () => {
+    // Helper: set up the minimal DOM + api mock that loadRecommendations needs.
+    function mockGetRecs() {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: [],
+        regions: [],
+      });
+    }
+
+    test('cold cache (null last_collected_at) — refresh fires + in-flight toast shown', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+
+      await loadRecommendations();
+      // Flush microtasks so the async refreshRecommendations call runs.
+      await Promise.resolve();
+
+      expect(recsApi.refreshRecommendations).toHaveBeenCalledTimes(1);
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Refreshing recommendations…', kind: 'info' }),
+      );
+    });
+
+    test('stale cache (>24h ago) — refresh fires + in-flight toast shown', async () => {
+      mockGetRecs();
+      const twentyFiveHoursAgo = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: twentyFiveHoursAgo,
+        last_collection_error: null,
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+
+      expect(recsApi.refreshRecommendations).toHaveBeenCalledTimes(1);
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Refreshing recommendations…', kind: 'info' }),
+      );
+    });
+
+    test('fresh cache (<24h ago) — refresh does NOT fire + no toast', async () => {
+      mockGetRecs();
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: oneHourAgo,
+        last_collection_error: null,
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+
+      expect(recsApi.refreshRecommendations).not.toHaveBeenCalled();
+      expect(mockShowToast).not.toHaveBeenCalled();
+    });
+
+    test('cold cache + collection error — error toast surfaces the message', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: 'Provider X returned 403 Forbidden',
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('Provider X returned 403 Forbidden'),
+          kind: 'error',
+        }),
+      );
+    });
+
+    test('refresh failure — error toast shown with message', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockRejectedValue(new Error('Network timeout'));
+
+      await loadRecommendations();
+      // Two microtask ticks: one for the freshness call, one for the refresh rejection.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Recommendations refresh failed: Network timeout',
+          kind: 'error',
+        }),
+      );
     });
   });
 
