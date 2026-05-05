@@ -775,6 +775,9 @@ func (m *mockEmailSender) SendNotification(context.Context, string, string) erro
 func (m *mockEmailSender) SendToEmail(context.Context, string, string, string) error {
 	return nil
 }
+func (m *mockEmailSender) SendToEmailWithCCMultipart(context.Context, string, []string, string, string, string) error {
+	return nil
+}
 func (m *mockEmailSender) SendNewRecommendationsNotification(context.Context, email.NotificationData) error {
 	return nil
 }

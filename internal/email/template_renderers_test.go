@@ -247,3 +247,116 @@ func TestWelcomeUserData_Structure(t *testing.T) {
 	assert.Equal(t, "https://dashboard.example.com", data.DashboardURL)
 	assert.Equal(t, "admin", data.Role)
 }
+
+// Issue #287: extended approval-request plain-text template carries
+// per-rec Term/Payment/Upfront/AccountLabel + the requested-by header
+// + the cancellation-window note.
+func TestRenderPurchaseApprovalRequestEmail_NewContextFields_Issue287(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:           "https://dashboard.example.com",
+		ApprovalToken:          "tkn-abc",
+		ExecutionID:            "exec-123",
+		TotalUpfrontCost:       1234.56,
+		TotalSavings:           58.0,
+		RequestedByName:        "Cristi M",
+		RequestedByEmail:       "cristi@acme.com",
+		RequestedAt:            "2026-05-04T14:22:00Z",
+		CancellationWindowNote: "Test custom window note about AWS refund policy.",
+		AuthorizedApprovers:    []string{"approver@acme.com"},
+		Recommendations: []RecommendationSummary{{
+			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 8, Term: 3, Payment: "all-upfront", UpfrontCost: 1234.56,
+			MonthlySavings: 58.0, AccountLabel: "AWS 540659244915",
+		}},
+	}
+
+	body, err := RenderPurchaseApprovalRequestEmail(data)
+	require.NoError(t, err)
+
+	// Per-rec lines carry the new fields.
+	assert.Contains(t, body, "Term: 3yr")
+	assert.Contains(t, body, "Payment: all-upfront")
+	assert.Contains(t, body, "Upfront: $1234.56")
+	assert.Contains(t, body, "Account: AWS 540659244915")
+
+	// Requested-by header.
+	assert.Contains(t, body, "Cristi M")
+	assert.Contains(t, body, "cristi@acme.com")
+	assert.Contains(t, body, "2026-05-04T14:22:00Z")
+
+	// Custom cancellation-window note overrides the generic fallback.
+	assert.Contains(t, body, "Test custom window note about AWS refund policy.")
+	assert.NotContains(t, body, "Cancellation windows after approval are limited") // generic fallback absent
+
+	// Labeled URLs preserved (the urlquery output renders &amp; via html/template
+	// which is a preexisting cosmetic but functional URL form; assert the
+	// labels themselves, not the &/&amp; choice).
+	assert.Contains(t, body, "Approve: ")
+	assert.Contains(t, body, "Cancel:  ")
+	assert.Contains(t, body, "/purchases/approve/exec-123")
+	assert.Contains(t, body, "/purchases/cancel/exec-123")
+
+	// Authorized-approvers block survives.
+	assert.Contains(t, body, "Authorised approver(s)")
+	assert.Contains(t, body, "approver@acme.com")
+}
+
+// Issue #287: HTML half of the approval email carries inline-styled
+// approve/cancel anchors with the correct href, plus the rec summary
+// table and the requested-by line.
+func TestRenderPurchaseApprovalRequestEmailHTML_Issue287(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:     "https://dashboard.example.com",
+		ApprovalToken:    "tkn-abc",
+		ExecutionID:      "exec-123",
+		TotalUpfrontCost: 1234.56,
+		TotalSavings:     58.0,
+		RequestedByEmail: "cristi@acme.com",
+		Recommendations: []RecommendationSummary{{
+			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 8, Term: 3, Payment: "all-upfront", UpfrontCost: 1234.56,
+			MonthlySavings: 58.0, AccountLabel: "AWS 540659244915",
+		}},
+	}
+
+	html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+	require.NoError(t, err)
+
+	// Inline-styled approve + cancel anchors with the right hrefs.
+	assert.Contains(t, html, `href="https://dashboard.example.com/purchases/approve/exec-123?token=tkn-abc"`)
+	assert.Contains(t, html, `href="https://dashboard.example.com/purchases/cancel/exec-123?token=tkn-abc"`)
+	assert.Contains(t, html, "Approve this purchase")
+	assert.Contains(t, html, "Cancel this purchase")
+	// Inline style on at least one button (prove CSS classes aren't relied
+	// on — email clients often strip <style>; inline-style is the contract).
+	assert.Regexp(t, `<a[^>]*style="[^"]*background:#16a34a[^"]*"[^>]*>Approve this purchase</a>`, html)
+
+	// Rec table cells.
+	assert.Contains(t, html, "m5.large")
+	assert.Contains(t, html, "us-east-1")
+	assert.Contains(t, html, "3yr")
+	assert.Contains(t, html, "all-upfront")
+
+	// Summary block + requested-by line.
+	assert.Contains(t, html, "1234.56")
+	assert.Contains(t, html, "58.00")
+	assert.Contains(t, html, "cristi@acme.com")
+	assert.Contains(t, html, "Purchase Approval Required")
+
+	// Generic cancellation note fallback (no custom note set).
+	assert.Contains(t, html, "Cancellation windows after approval are limited")
+}
+
+// Issue #287: when AuthorizedApprovers is empty the HTML omits the
+// approver-warning block (legacy broadcast behaviour preserved).
+func TestRenderPurchaseApprovalRequestEmailHTML_NoApprovers(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:    "https://example.com",
+		ApprovalToken:   "tkn",
+		ExecutionID:     "exec-1",
+		Recommendations: []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
+	}
+	html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+	require.NoError(t, err)
+	assert.NotContains(t, html, "Authorised approver")
+}

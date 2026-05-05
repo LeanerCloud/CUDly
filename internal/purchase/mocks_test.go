@@ -536,6 +536,10 @@ func (m *MockEmailSender) SendToEmail(ctx context.Context, toEmail, subject, bod
 	return args.Error(0)
 }
 
+func (m *MockEmailSender) SendToEmailWithCCMultipart(_ context.Context, _ string, _ []string, _, _, _ string) error {
+	return nil
+}
+
 func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)

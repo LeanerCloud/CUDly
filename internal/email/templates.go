@@ -295,24 +295,131 @@ Summary:
 --------
 Total Upfront Cost: ${{printf "%.2f" .TotalUpfrontCost}}
 Estimated Monthly Savings: ${{printf "%.2f" .TotalSavings}}
-
+{{if .RequestedByEmail}}
+Requested by: {{if .RequestedByName}}{{.RequestedByName}} <{{.RequestedByEmail}}>{{else}}{{.RequestedByEmail}}{{end}}{{if .RequestedAt}} at {{.RequestedAt}}{{end}}
+{{end}}
 Commitments:
 {{range .Recommendations}}
 - {{.Count}}x {{.ResourceType}}{{if .Engine}} ({{.Engine}}){{end}} in {{.Region}}
-  Service: {{.Service}} | Est. Savings: ${{printf "%.2f" .MonthlySavings}}/month
+  Service: {{.Service}}{{if .AccountLabel}} | Account: {{.AccountLabel}}{{end}}{{if .Term}} | Term: {{.Term}}yr{{end}}{{if .Payment}} | Payment: {{.Payment}}{{end}}
+  Upfront: ${{printf "%.2f" .UpfrontCost}} | Est. Savings: ${{printf "%.2f" .MonthlySavings}}/month
 {{end}}
+Approve: {{.DashboardURL}}/purchases/approve/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
 
-To approve this purchase, click the link below:
-{{.DashboardURL}}/purchases/approve/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
-
-To cancel this purchase, click the link below:
-{{.DashboardURL}}/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
-
+Cancel:  {{.DashboardURL}}/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
+{{if .CancellationWindowNote}}
+{{.CancellationWindowNote}}
+{{else}}
+Note: cloud commitments are charged to your account once you approve.
+Cancellation windows after approval are limited and provider-dependent —
+see your cloud provider's billing console (e.g. AWS Account & Billing →
+Refund) for the current policy on the resource type you're approving.
+{{end}}
 Clicking a link will require you to sign in if you aren't already; the
 action is then recorded against your logged-in account.
 
 This is an automated message from CUDly. Do not share these links.
 `
+
+// purchaseApprovalRequestHTMLTemplate renders the same approval request
+// as the plain-text template above with inline-styled CTAs and a richer
+// summary table. CSS classes are NOT honoured by most email clients
+// (Outlook, mobile Gmail) — every visual rule lives in inline `style=""`
+// attributes on the elements themselves. Issue #287.
+const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>CUDly - Purchase Approval Required</title></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#1a202c;">
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f4f6f8;padding:24px 0;">
+<tr><td align="center">
+<table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+<tr><td style="padding:32px 32px 16px 32px;">
+<h1 style="margin:0;font-size:22px;color:#0f172a;">Purchase Approval Required</h1>
+<p style="margin:8px 0 0 0;color:#475569;font-size:14px;">A direct purchase of <strong>{{len .Recommendations}}</strong> commitment(s) has been submitted and requires approval.</p>
+</td></tr>
+
+{{if .AuthorizedApprovers}}
+<tr><td style="padding:0 32px 16px 32px;">
+<div style="background:#fef9c3;border-left:4px solid #facc15;padding:12px 16px;font-size:13px;color:#713f12;border-radius:4px;">
+<strong>Authorised approver(s):</strong>
+<ul style="margin:6px 0 0 18px;padding:0;">
+{{range .AuthorizedApprovers}}<li>{{.}}</li>
+{{end}}</ul>
+<p style="margin:6px 0 0 0;">Only the inbox(es) above can approve or cancel this purchase. Other recipients are CC'd for visibility — clicking from any other account will fail the authorisation check.</p>
+</div>
+</td></tr>
+{{end}}
+
+<tr><td style="padding:0 32px 8px 32px;">
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;font-size:14px;">
+<tr><td style="padding:6px 0;color:#64748b;width:180px;">Total Upfront Cost</td><td style="padding:6px 0;color:#0f172a;font-weight:600;">${{printf "%.2f" .TotalUpfrontCost}}</td></tr>
+<tr><td style="padding:6px 0;color:#64748b;">Estimated Monthly Savings</td><td style="padding:6px 0;color:#16a34a;font-weight:700;font-size:18px;">${{printf "%.2f" .TotalSavings}}</td></tr>
+{{if .RequestedByEmail}}<tr><td style="padding:6px 0;color:#64748b;">Requested by</td><td style="padding:6px 0;color:#0f172a;">{{if .RequestedByName}}{{.RequestedByName}} &lt;{{.RequestedByEmail}}&gt;{{else}}{{.RequestedByEmail}}{{end}}{{if .RequestedAt}} <span style="color:#94a3b8;">at {{.RequestedAt}}</span>{{end}}</td></tr>
+{{end}}
+</table>
+</td></tr>
+
+<tr><td style="padding:0 32px 16px 32px;">
+<h2 style="margin:16px 0 8px 0;font-size:15px;color:#334155;text-transform:uppercase;letter-spacing:0.04em;">Commitments</h2>
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;font-size:13px;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+<thead><tr style="background:#f1f5f9;">
+<th align="left" style="padding:10px 12px;color:#475569;font-weight:600;">Service / SKU</th>
+<th align="left" style="padding:10px 12px;color:#475569;font-weight:600;">Region</th>
+<th align="right" style="padding:10px 12px;color:#475569;font-weight:600;">Term · Payment</th>
+<th align="right" style="padding:10px 12px;color:#475569;font-weight:600;">Upfront</th>
+<th align="right" style="padding:10px 12px;color:#475569;font-weight:600;">Savings/mo</th>
+</tr></thead>
+<tbody>
+{{range .Recommendations}}<tr style="border-top:1px solid #e2e8f0;">
+<td style="padding:10px 12px;color:#0f172a;">{{.Count}}× {{.ResourceType}}{{if .Engine}} ({{.Engine}}){{end}}<div style="color:#94a3b8;font-size:11px;margin-top:2px;">{{.Service}}{{if .AccountLabel}} · {{.AccountLabel}}{{end}}</div></td>
+<td style="padding:10px 12px;color:#0f172a;">{{.Region}}</td>
+<td align="right" style="padding:10px 12px;color:#475569;">{{if .Term}}{{.Term}}yr{{end}}{{if .Payment}} · {{.Payment}}{{end}}</td>
+<td align="right" style="padding:10px 12px;color:#0f172a;">${{printf "%.2f" .UpfrontCost}}</td>
+<td align="right" style="padding:10px 12px;color:#16a34a;font-weight:600;">${{printf "%.2f" .MonthlySavings}}</td>
+</tr>
+{{end}}</tbody></table>
+</td></tr>
+
+<tr><td align="center" style="padding:8px 32px 4px 32px;">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr>
+<td style="padding-right:12px;"><a href="{{.DashboardURL}}/purchases/approve/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:12px 28px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:6px;">Approve this purchase</a></td>
+<td><a href="{{.DashboardURL}}/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:12px 28px;background:#ffffff;color:#dc2626;text-decoration:none;font-weight:600;font-size:14px;border-radius:6px;border:1px solid #dc2626;">Cancel this purchase</a></td>
+</tr></table>
+</td></tr>
+
+<tr><td style="padding:8px 32px 24px 32px;">
+<p style="margin:8px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">
+{{if .CancellationWindowNote}}{{.CancellationWindowNote}}{{else}}Cloud commitments are charged once you approve. Cancellation windows after approval are limited and provider-dependent — see your cloud provider's billing console (e.g. AWS Account &amp; Billing → Refund) for the current policy on the resource type you're approving.{{end}}
+</p>
+<p style="margin:8px 0 0 0;color:#94a3b8;font-size:11px;">Clicking a link will require you to sign in if you aren't already; the action is then recorded against your logged-in account.</p>
+</td></tr>
+
+<tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
+<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly. Do not share these links.</p>
+</td></tr>
+
+</table>
+</td></tr></table>
+</body></html>`
+
+// sendPurchaseApprovalRequestVia composes the plain-text + HTML approval-request
+// bodies and ships them through s.SendToEmailWithCCMultipart. HTML render
+// failures are non-fatal and degrade to single-part text so a template bug
+// never drops the approval email. Shared by Sender and SMTPSender — see
+// issue #287 / PR #298 dedup follow-up.
+func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, recipient, subject string, data NotificationData) error {
+	textBody, err := RenderPurchaseApprovalRequestEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
+	}
+	// HTML render failure is non-fatal: degrade to single-part text.
+	// SendToEmailWithCCMultipart already handles htmlBody=="" by delegating
+	// to the single-part path on each transport.
+	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
+	if htmlErr != nil {
+		htmlBody = ""
+	}
+	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)
+}
 
 // SendPurchaseApprovalRequest sends an email asking the user to approve a direct
 // purchase. Routes through SES SendEmail (not the SNS alerts topic) because the
@@ -333,13 +440,8 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	if !isValidFromEmail(s.fromEmail) {
 		return ErrNoFromEmail
 	}
-	body, err := RenderPurchaseApprovalRequestEmail(data)
-	if err != nil {
-		return fmt.Errorf("failed to render purchase approval request email: %w", err)
-	}
-
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
+	return sendPurchaseApprovalRequestVia(ctx, s, data.RecipientEmail, subject, data)
 }
 
 // ---------------------------------------------------------------------------

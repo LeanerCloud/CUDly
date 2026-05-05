@@ -74,9 +74,22 @@ func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, er
 	return renderTemplate("ri-exchange-completed", riExchangeCompletedTemplate, data)
 }
 
-// RenderPurchaseApprovalRequestEmail renders the purchase approval request email template
+// RenderPurchaseApprovalRequestEmail renders the plain-text purchase
+// approval request email template. Issue #287: this is the multipart
+// `text/plain` half — pair with RenderPurchaseApprovalRequestEmailHTML
+// for the styled HTML half.
 func RenderPurchaseApprovalRequestEmail(data NotificationData) (string, error) {
 	return renderTemplate("purchase-approval-request", purchaseApprovalRequestTemplate, data)
+}
+
+// RenderPurchaseApprovalRequestEmailHTML renders the HTML half of the
+// purchase approval request email. Inline-styled per email-client
+// constraints (Outlook etc. don't load external stylesheets reliably).
+// The plain-text half (RenderPurchaseApprovalRequestEmail) carries the
+// same content; receiving clients pick whichever they support via the
+// multipart/alternative wrapper assembled by the sender.
+func RenderPurchaseApprovalRequestEmailHTML(data NotificationData) (string, error) {
+	return renderTemplate("purchase-approval-request-html", purchaseApprovalRequestHTMLTemplate, data)
 }
 
 // RenderRegistrationReceivedEmail renders the admin notification for a new registration.

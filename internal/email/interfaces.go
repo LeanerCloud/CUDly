@@ -11,6 +11,7 @@ import (
 type SenderInterface interface {
 	SendNotification(ctx context.Context, subject, message string) error
 	SendToEmail(ctx context.Context, toEmail, subject, body string) error
+	SendToEmailWithCCMultipart(ctx context.Context, toEmail string, ccEmails []string, subject, textBody, htmlBody string) error
 	SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error
 	SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error
 	SendPurchaseConfirmation(ctx context.Context, data NotificationData) error

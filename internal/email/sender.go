@@ -179,6 +179,45 @@ func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string)
 	return s.SendToEmailWithCC(ctx, toEmail, nil, subject, body)
 }
 
+// SendToEmailWithCCMultipart is the multipart/alternative variant of
+// SendToEmailWithCC: callers pass both a plain-text body and an HTML body,
+// SES emits a multipart message, and the recipient's mail client picks
+// whichever rendering it supports. Mirrors SendToEmailWithCC for the To/Cc
+// dedupe + sandbox-recipient verification — the only delta is the email
+// content shape. htmlBody == "" degrades to a single-part text send so
+// callers that don't have an HTML body don't need a separate code path.
+func (s *Sender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string, ccEmails []string, subject, textBody, htmlBody string) error {
+	if htmlBody == "" {
+		return s.SendToEmailWithCC(ctx, toEmail, ccEmails, subject, textBody)
+	}
+	if s.fromEmail == "" {
+		logging.Debug("No from email configured, skipping direct email")
+		return nil
+	}
+	if s.sesClient == nil {
+		return fmt.Errorf("SES client not initialized")
+	}
+	if err := s.ensureSandboxRecipientVerified(ctx, toEmail); err != nil {
+		return err
+	}
+
+	cc := dedupeCCAgainstTo(toEmail, ccEmails)
+
+	input := buildSESSendEmailInputMultipart(s.fromEmail, toEmail, cc, subject, textBody, htmlBody)
+
+	_, err := s.sesClient.SendEmail(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to send email via SES: %w", err)
+	}
+
+	if len(cc) > 0 {
+		logging.Debugf("Sent multipart email to %s (cc %d): %s", redactEmail(toEmail), len(cc), subject)
+	} else {
+		logging.Debugf("Sent multipart email to %s: %s", redactEmail(toEmail), subject)
+	}
+	return nil
+}
+
 // SendToEmailWithCC sends an email with a primary To recipient plus optional
 // Cc recipients. The To recipient is treated as the authorised actor for the
 // message (verified in sandbox mode) and Cc recipients are informed of the
@@ -247,6 +286,41 @@ func (s *Sender) ensureSandboxRecipientVerified(ctx context.Context, toEmail str
 		return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent - please check inbox and click the verification link before trying again", toEmail)
 	}
 	return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent to %s - please check inbox and click the verification link, then try the password reset again", toEmail, toEmail)
+}
+
+// buildSESSendEmailInputMultipart constructs a sesv2.SendEmailInput with
+// both a plain-text and an HTML alternative body. SES handles the
+// multipart/alternative MIME assembly server-side when both Text and Html
+// fields are populated on types.Body.
+func buildSESSendEmailInputMultipart(fromEmail, toEmail string, cc []string, subject, textBody, htmlBody string) *sesv2.SendEmailInput {
+	destination := &types.Destination{
+		ToAddresses: []string{toEmail},
+	}
+	if len(cc) > 0 {
+		destination.CcAddresses = cc
+	}
+	return &sesv2.SendEmailInput{
+		Destination: destination,
+		Content: &types.EmailContent{
+			Simple: &types.Message{
+				Subject: &types.Content{
+					Charset: aws.String("UTF-8"),
+					Data:    aws.String(subject),
+				},
+				Body: &types.Body{
+					Text: &types.Content{
+						Charset: aws.String("UTF-8"),
+						Data:    aws.String(textBody),
+					},
+					Html: &types.Content{
+						Charset: aws.String("UTF-8"),
+						Data:    aws.String(htmlBody),
+					},
+				},
+			},
+		},
+		FromEmailAddress: aws.String(fromEmail),
+	}
 }
 
 // buildSESSendEmailInput constructs a sesv2.SendEmailInput with the
@@ -328,6 +402,25 @@ type NotificationData struct {
 	// isn't theirs to take. When empty the template omits the authorisation
 	// block (legacy broadcast behaviour).
 	AuthorizedApprovers []string
+	// RequestedByName is the human-readable display name (or email-local) of
+	// the user who submitted the purchase. Rendered in the approval-email
+	// summary block so approvers see who originated the request without
+	// having to cross-reference the dashboard. Empty falls back to
+	// RequestedByEmail.
+	RequestedByName string
+	// RequestedByEmail is the requester's email address. Used as a fallback
+	// for RequestedByName and as a context line in the approval-email
+	// summary. Empty omits the requested-by block entirely.
+	RequestedByEmail string
+	// RequestedAt is the ISO-8601 / RFC3339 timestamp the purchase request
+	// was submitted at. Empty omits the timestamp from the summary.
+	RequestedAt string
+	// CancellationWindowNote is the short text (e.g. "limited time after
+	// approval — see AWS Account & Billing → Refund") rendered below the
+	// approve/cancel buttons. Empty falls back to a generic note. Per-rec
+	// AWS cancellation windows differ; the call site is responsible for
+	// composing the right wording for the rec set.
+	CancellationWindowNote string
 }
 
 // RecommendationSummary is a simplified recommendation for email display
@@ -338,6 +431,18 @@ type RecommendationSummary struct {
 	Region         string
 	Count          int
 	MonthlySavings float64
+	// Term in years (1 or 3 for AWS RIs/SPs). Zero falls back to
+	// the prior shape (template hides the field).
+	Term int
+	// Payment is the payment-option string (all-upfront / partial-upfront
+	// / no-upfront / monthly). Empty falls back to the prior shape.
+	Payment string
+	// UpfrontCost is the per-rec upfront in dollars. Zero is rendered as
+	// "$0" so a no-upfront payment option visibly shows that fact.
+	UpfrontCost float64
+	// AccountLabel is a friendly per-rec account identifier (e.g.
+	// "AWS 540659244915 (acme-prod)"). Empty omits the line.
+	AccountLabel string
 }
 
 // RIExchangeNotificationData holds data for RI exchange email templates
