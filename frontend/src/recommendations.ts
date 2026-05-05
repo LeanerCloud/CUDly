@@ -146,10 +146,15 @@ async function triggerAutoRefreshIfStale(): Promise<void> {
     return;
   }
 
-  const isStale =
-    freshness.last_collected_at === null ||
-    Date.now() - new Date(freshness.last_collected_at).getTime() > STALE_THRESHOLD_MS;
+  const lastCollectedMs =
+    freshness.last_collected_at === null
+      ? null
+      : new Date(freshness.last_collected_at).getTime();
 
+  const isStale =
+    lastCollectedMs === null ||
+    !Number.isFinite(lastCollectedMs) ||
+    Date.now() - lastCollectedMs > STALE_THRESHOLD_MS;
   if (freshness.last_collection_error && isStale) {
     showToast({
       message: `Last recommendations collection had errors: ${freshness.last_collection_error}`,
