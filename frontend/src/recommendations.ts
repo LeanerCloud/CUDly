@@ -1998,21 +1998,39 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     0,
   );
 
-  // Action buttons require an explicit selection (closes #273): a misclick
-  // on "Purchase visible" / "Plan from visible" with no checkboxes ticked
-  // could trigger an irreversible bulk purchase across every visible row,
-  // and the visible set silently changes when the user clicks Refresh or
-  // adjusts filters. Only the "selected" form of the action buttons remains.
+  // Action-box summary line surfaces the *financial* impact of the
+  // current action target, not just selection counts (closes #281). The
+  // selected-vs-visible count is the least useful info at this point —
+  // the user can already see selection state from row checkboxes — and
+  // the action box is prime real estate for the dollar figures the user
+  // is about to authorise. Source-of-truth matches the summary cards
+  // above: selection ∩ visible if ≥1 selected, else the visible set.
+  const target: readonly LocalRecommendation[] = selectedVisibleCount > 0
+    ? visible.filter((r) => selected.has(r.id))
+    : visible;
+  const targetGroups = groupRecsByCell(target);
+  const targetRange = pageLevelRange(targetGroups);
+
   const summary = document.getElementById('recommendations-action-summary');
   if (summary) {
     if (loadedCount === 0) {
       summary.textContent = '(No recommendations loaded)';
     } else if (visibleCount === 0) {
       summary.textContent = '(0 visible — adjust filters)';
-    } else if (selectedVisibleCount > 0) {
-      summary.textContent = `(${selectedVisibleCount} selected)`;
-    } else {
+    } else if (selectedVisibleCount === 0) {
       summary.textContent = '(Select cells to act on)';
+    } else if (targetRange.cellCount > 0) {
+      const savingsText = targetRange.savingsMax > 0
+        ? formatSavingsRange(targetRange.savingsMin, targetRange.savingsMax)
+        : formatCurrency(0);
+      const upfrontText = targetRange.upfrontMax > 0
+        ? formatSavingsRange(targetRange.upfrontMin, targetRange.upfrontMax)
+        : formatCurrency(0);
+      const cellWord = targetRange.cellCount === 1 ? 'cell' : 'cells';
+      summary.textContent = `(${savingsText}/mo · ${upfrontText} upfront across ${targetRange.cellCount} ${cellWord})`;
+    } else {
+      // Shouldn't happen given the gating above, but defensive.
+      summary.textContent = `(${selectedVisibleCount} selected)`;
     }
   }
 

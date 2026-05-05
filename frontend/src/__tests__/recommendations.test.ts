@@ -729,9 +729,14 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const summary = document.getElementById('recommendations-action-summary');
-      // #273: summary text shows just the selection count (drops the
-      // "of N cells visible" suffix — the visible fallback is gone).
-      expect(summary?.textContent).toContain('1 selected');
+      // #281: summary text now surfaces the financial impact of the
+      // current action target (savings/mo + upfront across N cells)
+      // instead of just selection counts. The user can already see
+      // selection state from row checkboxes; the action box is prime
+      // real estate for the dollar figures they're authorising.
+      expect(summary?.textContent).toMatch(/\$100\/mo/);
+      expect(summary?.textContent).toMatch(/\$500 upfront/);
+      expect(summary?.textContent).toMatch(/1 cell\b/);
       // Old bulk-toolbar surface is gone.
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
