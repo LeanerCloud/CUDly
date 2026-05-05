@@ -423,21 +423,33 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   );
   const results = await Promise.allSettled(promises);
 
-  const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+  // Reclassify business-level email failures: a fulfilled POST that returns
+  // email_sent === false or status === 'failed' is not a true success —
+  // the approval email never went out (CR pass on PR #294 Finding 2).
+  const fulfilled = results.filter(
+    (r): r is PromiseFulfilledResult<api.PurchaseResult> => r.status === 'fulfilled',
+  );
+  const submissionFailures = fulfilled.filter(
+    (r) => r.value.email_sent === false || r.value.status === 'failed',
+  );
+  const succeeded = fulfilled.length - submissionFailures.length;
   const failed = results.length - succeeded;
   closePurchaseModal();
   clearFanOutBuckets();
   clearPurchaseModalRecommendations();
 
   if (failed === 0) {
-    // Collect the unique approval-recipient set from the fulfilled responses
-    // so the toast can name WHO received the requests (CR pass on PR #294 /
-    // issue #288). Multi-bucket purchases can route to different approvers
-    // when bucket-level account overrides set distinct contact emails;
-    // dedupe so the toast doesn't repeat the same address.
+    // Collect the unique approval-recipient set from truly-succeeded responses
+    // only (email_sent !== false and status !== 'failed') so the toast doesn't
+    // name a recipient whose email never arrived. Multi-bucket purchases can
+    // route to different approvers; dedupe so the toast is compact.
     const recipients = new Set<string>();
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value.approval_recipient) {
+    for (const r of fulfilled) {
+      if (
+        r.value.email_sent !== false &&
+        r.value.status !== 'failed' &&
+        r.value.approval_recipient
+      ) {
         recipients.add(r.value.approval_recipient);
       }
     }
@@ -456,9 +468,12 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
       timeout: 15_000,
     });
   } else {
-    const failureMsgs = results
-      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-      .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
+    const failureMsgs = [
+      ...results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason))),
+      ...submissionFailures.map((r) => r.value.email_reason || 'approval email did not send'),
+    ]
       .slice(0, 3)
       .join('; ');
     showToast({
