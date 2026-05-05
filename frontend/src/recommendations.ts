@@ -386,8 +386,8 @@ function groupsInSortOrder(
   });
 }
 
-/** Format a savings range, collapsing "$X – $X" to "$X". */
-function formatSavingsRange(min: number, max: number): string {
+/** Format a savings range, collapsing "$X – $X" to "$X". Exported for use in dashboard.ts. */
+export function formatSavingsRange(min: number, max: number): string {
   const lo = formatCurrency(min);
   const hi = formatCurrency(max);
   return lo === hi ? lo : `${lo} – ${hi}`;

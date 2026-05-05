@@ -7,10 +7,11 @@ import * as api from './api';
 import * as state from './state';
 import { formatCurrency, getDateParts, escapeHtml, populateAccountFilter } from './utils';
 import { renderFreshness } from './freshness';
-import type { DashboardSummary, UpcomingPurchase, ServiceSavings } from './types';
+import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommendation } from './types';
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
+import { groupRecsByCell, pageLevelRange, formatSavingsRange } from './recommendations';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -88,15 +89,39 @@ export function setupDashboardHandlers(): void {
 export async function loadDashboard(): Promise<void> {
   try {
     const currentProvider = state.getCurrentProvider();
-    const [summaryData, upcomingData] = await Promise.all([
-      api.getDashboardSummary(currentProvider, state.getCurrentAccountIDs()),
-      api.getUpcomingPurchases()
+    const currentAccountIDs = state.getCurrentAccountIDs();
+
+    // Fetch summary, upcoming, and recommendations concurrently.
+    // Recommendations are fetched here (frontend-only approach) because
+    // /api/dashboard/summary still returns a flat potential_monthly_savings
+    // which overcounts by summing every variant of every cell (~6x inflation).
+    // The recs endpoint is Postgres-cached and cheap; a future backend PR can
+    // move the range computation server-side if needed.
+    // Promise.allSettled ensures the dashboard still renders if any individual
+    // fetch fails -- each card falls back gracefully.
+    const [summaryResult, upcomingResult, recsResult] = await Promise.allSettled([
+      api.getDashboardSummary(currentProvider, currentAccountIDs),
+      api.getUpcomingPurchases(),
+      api.getRecommendations({ provider: currentProvider, account_ids: currentAccountIDs }),
     ]);
 
-    renderDashboardSummary(summaryData as DashboardSummary);
-    renderSavingsChart((summaryData as DashboardSummary).by_service || {});
-    renderUpcomingPurchases((upcomingData as { purchases?: UpcomingPurchase[] }).purchases || []);
-    // Load the savings-over-time widget independently — failure shouldn't
+    const summaryData = summaryResult.status === 'fulfilled' ? (summaryResult.value as DashboardSummary) : null;
+    const upcomingData = upcomingResult.status === 'fulfilled' ? (upcomingResult.value as { purchases?: UpcomingPurchase[] }) : null;
+    // api.Recommendation and LocalRecommendation are structurally identical
+    // except for provider: string vs provider: Provider. The provider values
+    // from the API are always the union members at runtime, so this cast is safe.
+    const recs = recsResult.status === 'fulfilled'
+      ? (recsResult.value as unknown as LocalRecommendation[])
+      : ([] as LocalRecommendation[]);
+
+    if (summaryResult.status === 'rejected') {
+      throw summaryResult.reason as Error;
+    }
+
+    renderDashboardSummary(summaryData!, recs);
+    renderSavingsChart(summaryData!.by_service || {});
+    renderUpcomingPurchases(upcomingData?.purchases || []);
+    // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
     void loadSavingsTrendChart();
 
@@ -113,9 +138,20 @@ export async function loadDashboard(): Promise<void> {
   }
 }
 
-function renderDashboardSummary(data: DashboardSummary): void {
+function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalRecommendation[]): void {
   const summary = document.getElementById('summary');
   if (!summary) return;
+
+  // Compute per-cell savings range from recs. pageLevelRange sums per-cell
+  // min/max savings (best and worst variant per physical resource cell),
+  // avoiding the ~6x inflation of summing every variant of every cell that
+  // the flat summary.potential_monthly_savings carries.
+  // Falls back to formatCurrency(0) when recs is empty or fetch failed.
+  const groups = groupRecsByCell(recs);
+  const range = pageLevelRange(groups);
+  const savingsDisplay = range.cellCount > 0
+    ? formatSavingsRange(range.savingsMin, range.savingsMax)
+    : formatCurrency(0);
 
   // When no recommendations and no commitments exist, "100% coverage" is
   // misleading — nothing is being tracked. Show a dash instead.
@@ -126,7 +162,7 @@ function renderDashboardSummary(data: DashboardSummary): void {
   summary.innerHTML = `
     <div class="card">
       <h3>Potential Monthly Savings</h3>
-      <p class="value savings">${formatCurrency(data.potential_monthly_savings)}</p>
+      <p class="value savings">${savingsDisplay}</p>
       <p class="detail">${data.total_recommendations || 0} recommendations</p>
     </div>
     <div class="card">
