@@ -311,6 +311,15 @@
                                     <input type="number" id="setting-notification-days" value="3" min="1" max="30">
                                 </div>
                             </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-recs-stale-hours">Recommendations Cache Stale Threshold (hours)</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1">
+                                </div>
+                            </div>
                         </fieldset>
 
                         <div class="settings-buttons">
@@ -358,6 +367,24 @@
                             </div>
                             <div class="setting-input">
                                 <input type="number" id="setting-default-coverage" value="80" min="0" max="100">
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="settings-category" id="purchasing-recommendations-lookback">
+                        <legend>Recommendations Lookback</legend>
+                        <p class="settings-help">Controls how far back AWS Cost Explorer looks when computing fresh recommendations. Must be 7, 30, or 60 days (AWS Cost Explorer API constraint). GCP CUD Recommender has no equivalent parameter and always uses its own internal window.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-recs-lookback-days"><span class="provider-badge aws">AWS</span> lookback period</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">AWS Cost Explorer LookbackPeriodInDays. A longer window smooths out utilisation spikes but may under-represent recent workload changes. Default: 7 days.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <select id="setting-recs-lookback-days">
+                                    <option value="7" selected>7 days</option>
+                                    <option value="30">30 days</option>
+                                    <option value="60">60 days</option>
+                                </select>
                             </div>
                         </div>
                     </fieldset>

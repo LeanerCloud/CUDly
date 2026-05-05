@@ -42,6 +42,39 @@ func (h *Handler) getConfig(ctx context.Context) (*ConfigResponse, error) {
 	}, nil
 }
 
+// preserveOmittedRecommendationFields merges persisted GlobalConfig values
+// for the two cycle-parameter fields when the request body omits them.
+// Without this merge, a partial PUT would silently zero out
+// RecommendationsCacheStaleHours / RecommendationsLookbackDays, which both
+// have meaningful 0-vs-omitted semantics that json.Unmarshal can't represent
+// directly. Errors from GetGlobalConfig fall through: the request body's
+// zero values then flow into Validate() which rejects out-of-range
+// lookback days, matching the pre-fix behaviour. Extracted from
+// updateConfig to keep that function under the cyclomatic-complexity gate
+// after the merge logic was added (PR #308 CodeRabbit pass-2 review).
+func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *config.GlobalConfig, body string) error {
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &present); err != nil {
+		return NewClientError(400, "invalid request body")
+	}
+	_, hasStale := present["recommendations_cache_stale_hours"]
+	_, hasLookback := present["recommendations_lookback_days"]
+	if hasStale && hasLookback {
+		return nil
+	}
+	existing, gcErr := h.config.GetGlobalConfig(ctx)
+	if gcErr != nil || existing == nil {
+		return nil
+	}
+	if !hasStale {
+		cfg.RecommendationsCacheStaleHours = existing.RecommendationsCacheStaleHours
+	}
+	if !hasLookback {
+		cfg.RecommendationsLookbackDays = existing.RecommendationsLookbackDays
+	}
+	return nil
+}
+
 func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*StatusResponse, error) {
 	// Require update:config permission
 	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
@@ -51,6 +84,10 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	var cfg config.GlobalConfig
 	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
 		return nil, NewClientError(400, "invalid request body")
+	}
+
+	if err := h.preserveOmittedRecommendationFields(ctx, &cfg, req.Body); err != nil {
+		return nil, err
 	}
 
 	// Validate the configuration

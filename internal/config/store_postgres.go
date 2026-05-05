@@ -49,7 +49,8 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		       ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
 		       ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
 		       auto_collect, collection_schedule, notification_days_before,
-		       grace_period_days
+		       grace_period_days,
+		       recommendations_cache_stale_hours, recommendations_lookback_days
 		FROM global_config
 		WHERE id = 1
 	`
@@ -76,6 +77,8 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		&config.CollectionSchedule,
 		&config.NotificationDaysBefore,
 		&gracePeriodJSON,
+		&config.RecommendationsCacheStaleHours,
+		&config.RecommendationsLookbackDays,
 	)
 
 	if err != nil {
@@ -95,6 +98,8 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 				AutoCollect:                    true,
 				CollectionSchedule:             "daily",
 				NotificationDaysBefore:         3,
+				RecommendationsCacheStaleHours: DefaultRecommendationsCacheStaleHours,
+				RecommendationsLookbackDays:    DefaultRecommendationsLookbackDays,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get global config: %w", err)
@@ -125,8 +130,9 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			ri_exchange_enabled, ri_exchange_mode, ri_exchange_utilization_threshold,
 			ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
 			auto_collect, collection_schedule, notification_days_before,
-			grace_period_days
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			grace_period_days,
+			recommendations_cache_stale_hours, recommendations_lookback_days
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -145,6 +151,8 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			collection_schedule = $15,
 			notification_days_before = $16,
 			grace_period_days = $17,
+			recommendations_cache_stale_hours = $18,
+			recommendations_lookback_days = $19,
 			updated_at = NOW()
 	`
 
@@ -156,6 +164,12 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 	riExchangeLookbackDays := config.RIExchangeLookbackDays
 	if riExchangeLookbackDays == 0 {
 		riExchangeLookbackDays = 30
+	}
+	recommendationsLookbackDays := config.RecommendationsLookbackDays
+	if recommendationsLookbackDays == 0 {
+		// Validate() treats 0 as "unset → use default". Mirror that here so
+		// the DB never stores 0, matching the ErrNoRows default path.
+		recommendationsLookbackDays = DefaultRecommendationsLookbackDays
 	}
 	riExchangeUtilizationThreshold := config.RIExchangeUtilizationThreshold
 	if riExchangeUtilizationThreshold == 0 {
@@ -192,6 +206,8 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		config.CollectionSchedule,
 		config.NotificationDaysBefore,
 		gracePeriodJSON,
+		config.RecommendationsCacheStaleHours,
+		recommendationsLookbackDays,
 	)
 
 	if err != nil {

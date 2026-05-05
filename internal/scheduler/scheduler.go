@@ -709,10 +709,14 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 		return nil, fmt.Errorf("failed to get %s recommendations: %w", providerName, err)
 	}
 	if len(recs) == 0 && globalCfg != nil {
+		lookbackDays := globalCfg.RecommendationsLookbackDays
+		if lookbackDays == 0 {
+			lookbackDays = config.DefaultRecommendationsLookbackDays
+		}
 		params := common.RecommendationParams{
 			Term:           fmt.Sprintf("%dyr", globalCfg.DefaultTerm),
 			PaymentOption:  globalCfg.DefaultPayment,
-			LookbackPeriod: "7d",
+			LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 		}
 		recs, _ = recClient.GetRecommendations(ctx, params)
 	}
@@ -783,8 +787,39 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 		logging.Errorf("failed to apply account overrides; returning un-filtered recs: %v", err)
 	}
 
-	s.maybeKickBackgroundRefresh(freshness)
+	// Background refresh is only attempted on non-Lambda runtimes; skip
+	// the DB config read entirely on Lambda so GetGlobalConfig is not called
+	// on the hot read path (Lambda has no persistent goroutines).
+	if !s.isLambda {
+		ttl, disabled := s.resolveEffectiveCacheTTL(ctx)
+		if disabled {
+			return recs, nil
+		}
+		s.maybeKickBackgroundRefresh(freshness, ttl)
+	}
 	return recs, nil
+}
+
+// resolveEffectiveCacheTTL returns the effective stale-while-revalidate TTL
+// and whether background auto-refresh has been explicitly disabled (value 0).
+// It prefers the DB-configured RecommendationsCacheStaleHours; falls back to
+// s.cacheTTL (env-var / compile-time default) when the DB read fails.
+func (s *Scheduler) resolveEffectiveCacheTTL(ctx context.Context) (ttl time.Duration, disabled bool) {
+	ttl = s.cacheTTL
+	globalCfg, gcErr := s.config.GetGlobalConfig(ctx)
+	if gcErr != nil || globalCfg == nil {
+		// DB read failed OR returned (nil, nil) — fall back to the env-var /
+		// default TTL with refresh enabled rather than panicking on the
+		// nil deref below. (nil, nil) is a defensive case; the Postgres
+		// store currently never returns it, but a future store impl or a
+		// test mock might.
+		return ttl, false
+	}
+	if globalCfg.RecommendationsCacheStaleHours == 0 {
+		// Explicit 0 = operator opted out of automatic background refresh.
+		return 0, true
+	}
+	return time.Duration(globalCfg.RecommendationsCacheStaleHours) * time.Hour, false
 }
 
 // suppressionKey is the 6-tuple used to match suppressions to recs.
@@ -892,7 +927,10 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 // single-flights concurrent callers so only one refresh fires per TTL
 // window. Recovers from panics so one bad collect can't crash the
 // long-lived process.
-func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.RecommendationsFreshness) {
+//
+// effectiveTTL is the caller-resolved stale threshold (from DB config
+// RecommendationsCacheStaleHours, or the env-var default if unconfigured).
+func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.RecommendationsFreshness, effectiveTTL time.Duration) {
 	if s.isLambda {
 		return
 	}
@@ -900,7 +938,7 @@ func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.Recommendations
 		// Just handled synchronously; nothing to backfill.
 		return
 	}
-	if time.Since(*freshness.LastCollectedAt) < s.cacheTTL {
+	if time.Since(*freshness.LastCollectedAt) < effectiveTTL {
 		return
 	}
 	if !s.collecting.CompareAndSwap(false, true) {
@@ -908,7 +946,7 @@ func (s *Scheduler) maybeKickBackgroundRefresh(freshness *config.Recommendations
 		return
 	}
 
-	logging.Infof("Recommendations cache is stale (age > %s); triggering background refresh", s.cacheTTL)
+	logging.Infof("Recommendations cache is stale (age > %s); triggering background refresh", effectiveTTL)
 	bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	go func() {
 		defer cancel()

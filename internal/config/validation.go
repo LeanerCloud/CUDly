@@ -45,7 +45,50 @@ func (c *GlobalConfig) Validate() error {
 	if err := c.validateGracePeriodDays(); err != nil {
 		return err
 	}
+	return c.validateRecommendationsFields()
+}
+
+// validateRecommendationsFields validates the recommendation-cycle parameters
+// added in #301 (cache-staleness threshold and AWS Cost Explorer lookback).
+// Extracted to keep Validate's cyclomatic complexity under the project limit.
+func (c *GlobalConfig) validateRecommendationsFields() error {
+	if err := c.validateRecommendationsCacheStaleHours(); err != nil {
+		return err
+	}
+	return c.validateRecommendationsLookbackDays()
+}
+
+// validateRecommendationsCacheStaleHours validates the stale-while-revalidate
+// cache age threshold. 0 disables background refresh; negative values are
+// rejected. Maximum is MaxRecommendationsCacheStaleHours (1 year).
+func (c *GlobalConfig) validateRecommendationsCacheStaleHours() error {
+	if c.RecommendationsCacheStaleHours < 0 || c.RecommendationsCacheStaleHours > MaxRecommendationsCacheStaleHours {
+		return fmt.Errorf("recommendations_cache_stale_hours must be between 0 and %d, got: %d (0 = disable auto-refresh)", MaxRecommendationsCacheStaleHours, c.RecommendationsCacheStaleHours)
+	}
 	return nil
+}
+
+// validateRecommendationsLookbackDays validates the AWS Cost Explorer lookback
+// window. Only the enum values {7, 30, 60} are accepted (LookbackPeriodInDays).
+// A value of 0 means "unset / use the backend default" and is always accepted;
+// this matches the zero-value of the Go int field when the DB row predates the
+// column (the migration adds DEFAULT 7, but in-memory structs constructed
+// without explicitly setting the field carry 0).
+func (c *GlobalConfig) validateRecommendationsLookbackDays() error {
+	if c.RecommendationsLookbackDays == 0 {
+		// Unset → backend defaults to DefaultRecommendationsLookbackDays.
+		return nil
+	}
+	for _, valid := range ValidRecommendationsLookbackDays {
+		if c.RecommendationsLookbackDays == valid {
+			return nil
+		}
+	}
+	validStrs := make([]string, len(ValidRecommendationsLookbackDays))
+	for i, v := range ValidRecommendationsLookbackDays {
+		validStrs[i] = fmt.Sprintf("%d", v)
+	}
+	return fmt.Errorf("recommendations_lookback_days must be one of [%s], got: %d", strings.Join(validStrs, ", "), c.RecommendationsLookbackDays)
 }
 
 // validateGracePeriodDays validates the per-provider grace-period map.

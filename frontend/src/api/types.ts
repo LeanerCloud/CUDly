@@ -164,6 +164,15 @@ export interface Config {
   ri_exchange_max_per_exchange_usd?: number;
   ri_exchange_max_daily_usd?: number;
   ri_exchange_lookback_days?: number;
+  // Age (hours) after which the recommendations cache triggers a background
+  // stale-while-revalidate refresh. 0 disables automatic background refresh;
+  // the cron scheduler and the manual Refresh button still work regardless.
+  // Valid range: 0–8760 (up to one year). Default: 24.
+  recommendations_cache_stale_hours?: number;
+  // AWS Cost Explorer lookback window (days) for fresh recommendations.
+  // Must be 7, 30, or 60 (AWS LookbackPeriodInDays enum). Default: 7.
+  // GCP CUD Recommender has no equivalent parameter; applies to AWS only.
+  recommendations_lookback_days?: number;
 }
 
 export interface ServiceConfig {

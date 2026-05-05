@@ -114,6 +114,8 @@ const TRACKED_FIELDS = [
   'setting-default-term', 'setting-default-payment', 'setting-default-coverage',
   // Per-provider grace-period inputs
   'setting-grace-aws', 'setting-grace-azure', 'setting-grace-gcp',
+  // Recommendations cycle params
+  'setting-recs-stale-hours', 'setting-recs-lookback-days',
   // Per-service fields
   ...SERVICE_FIELDS.map(f => f.termId),
   ...SERVICE_FIELDS.filter(f => f.paymentId !== null).map(f => f.paymentId as string),
@@ -2120,6 +2122,16 @@ export async function loadGlobalSettings(): Promise<void> {
       populateGraceInput('setting-grace-azure', gpMap['azure']);
       populateGraceInput('setting-grace-gcp', gpMap['gcp']);
 
+      // Recommendations cycle params
+      const staleHoursInput = byId<HTMLInputElement>('setting-recs-stale-hours');
+      if (staleHoursInput) {
+        staleHoursInput.value = String(data.global.recommendations_cache_stale_hours ?? 24);
+      }
+      const lookbackSelect = byId<HTMLSelectElement>('setting-recs-lookback-days');
+      if (lookbackSelect) {
+        lookbackSelect.value = String(data.global.recommendations_lookback_days ?? 7);
+      }
+
       // Update visibility based on loaded settings
       updateProviderSettingsVisibility();
       updateCollectionScheduleVisibility();
@@ -2288,6 +2300,17 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     gracePeriodDays[provider] = v.value;
   }
 
+  // Validate recommendations_cache_stale_hours before building the save payload.
+  // Use Number() so fractional input like "1.5" fails Number.isInteger instead of silently
+  // truncating to 1 as parseInt would.
+  const rawStaleHours = Number(byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24');
+  if (!Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
+    showToast({ message: 'Cache stale threshold must be a whole number between 0 and 8760 hours (0 = disable)', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+
   const settings: api.Config = {
     enabled_providers: enabledProviders,
     notification_email: byId<HTMLInputElement>('setting-notification-email')?.value || '',
@@ -2298,6 +2321,8 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     default_coverage: parseInt(byId<HTMLInputElement>('setting-default-coverage')?.value || '80', 10),
     notification_days_before: parseInt(byId<HTMLInputElement>('setting-notification-days')?.value || '3', 10),
     grace_period_days: gracePeriodDays,
+    recommendations_cache_stale_hours: rawStaleHours,
+    recommendations_lookback_days: parseInt(byId<HTMLSelectElement>('setting-recs-lookback-days')?.value || '7', 10),
   };
 
   try {
@@ -2379,6 +2404,11 @@ export async function resetSettings(): Promise<void> {
   populateGraceInput('setting-grace-aws', 7);
   populateGraceInput('setting-grace-azure', 7);
   populateGraceInput('setting-grace-gcp', 7);
+
+  const staleHoursInput = byId<HTMLInputElement>('setting-recs-stale-hours');
+  if (staleHoursInput) staleHoursInput.value = '24';
+  const lookbackSelect = byId<HTMLSelectElement>('setting-recs-lookback-days');
+  if (lookbackSelect) lookbackSelect.value = '7';
 }
 
 /**

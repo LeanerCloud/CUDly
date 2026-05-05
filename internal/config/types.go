@@ -35,6 +35,22 @@ type GlobalConfig struct {
 	RIExchangeMaxPerExchangeUSD    float64 `json:"ri_exchange_max_per_exchange_usd" dynamodbav:"ri_exchange_max_per_exchange_usd"`
 	RIExchangeMaxDailyUSD          float64 `json:"ri_exchange_max_daily_usd" dynamodbav:"ri_exchange_max_daily_usd"`
 	RIExchangeLookbackDays         int     `json:"ri_exchange_lookback_days" dynamodbav:"ri_exchange_lookback_days"`
+
+	// RecommendationsCacheStaleHours is the age (hours) at which the
+	// recommendations cache is considered stale and a background refresh
+	// fires automatically (stale-while-revalidate). 0 disables automatic
+	// background refresh; the cron scheduler and the manual Refresh button
+	// still work regardless. Valid range: 0–8760 (up to one year).
+	// Default: 24.
+	RecommendationsCacheStaleHours int `json:"recommendations_cache_stale_hours" db:"recommendations_cache_stale_hours"`
+
+	// RecommendationsLookbackDays is the AWS Cost Explorer lookback window
+	// (days) used when fetching fresh recommendations. Must be one of 7,
+	// 30, or 60 — the AWS Cost Explorer LookbackPeriodInDays enum.
+	// GCP CUD Recommender has no equivalent lookback parameter (fixed
+	// internally); this setting applies to AWS only.
+	// Default: 7.
+	RecommendationsLookbackDays int `json:"recommendations_lookback_days" db:"recommendations_lookback_days"`
 }
 
 // DefaultGracePeriodDays is the fallback window used when a provider
@@ -47,6 +63,22 @@ const DefaultGracePeriodDays = 7
 // net. The UI clamps input to [0, 30]; the DB isn't constrained, so a
 // rogue write through psql shouldn't be able to suppress recs for years.
 const MaxGracePeriodDays = 90
+
+// DefaultRecommendationsCacheStaleHours is the default age (hours) after
+// which the recommendations cache triggers a background refresh.
+const DefaultRecommendationsCacheStaleHours = 24
+
+// MaxRecommendationsCacheStaleHours is the maximum configurable stale
+// threshold: one year. Values above this are rejected at validation time.
+const MaxRecommendationsCacheStaleHours = 8760
+
+// DefaultRecommendationsLookbackDays is the default AWS Cost Explorer
+// lookback window when no explicit value is configured.
+const DefaultRecommendationsLookbackDays = 7
+
+// ValidRecommendationsLookbackDays lists the AWS Cost Explorer
+// LookbackPeriodInDays enum values. Other values are rejected.
+var ValidRecommendationsLookbackDays = []int{7, 30, 60}
 
 // GracePeriodFor returns the effective grace-period window (in days)
 // for the given provider slug ("aws", "azure", "gcp"). Returns the
