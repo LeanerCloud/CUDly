@@ -535,12 +535,16 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       // Bundle B: per-row Purchase buttons gone; the Purchase action lives
-      // in the sticky bottom action box at #bulk-purchase-btn. The button
-      // resolves its target via state.getVisibleRecommendations(), so the
-      // mock needs to return the loaded recs for the click to fire.
+      // in the sticky bottom action box at #bulk-purchase-btn. #273: the
+      // button is disabled until the user explicitly selects rows, so seed
+      // the selection mock with the rec's id before clicking — the test is
+      // asserting the modal-open flow, not the selection-gating UI.
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue(mockRecs);
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rec-11']));
+      await loadRecommendations(); // re-render so the button picks up the selection
       const purchaseBtn = document.querySelector('#bulk-purchase-btn') as HTMLButtonElement;
       expect(purchaseBtn).not.toBeNull();
+      expect(purchaseBtn.disabled).toBe(false);
       purchaseBtn.click();
       // Issue #111 (iii): openPurchaseModal is async; flush microtasks
       // so the modal-open call lands before we assert visibility.
@@ -636,19 +640,22 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const summary = document.getElementById('recommendations-action-summary');
-      // issues #225/#226: summary text now uses "cells visible" (cell-grouped count).
-      expect(summary?.textContent).toContain('1 selected of 1 cells visible');
+      // #273: summary text shows just the selection count (drops the
+      // "of N cells visible" suffix — the visible fallback is gone).
+      expect(summary?.textContent).toContain('1 selected');
       // Old bulk-toolbar surface is gone.
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
-    test('bottom action box shows "All N visible" when no row is selected (Bundle B)', async () => {
+    test('bottom action box prompts for selection when no row is selected (#273)', async () => {
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue(twoRecs);
       await loadRecommendations();
       const summary = document.getElementById('recommendations-action-summary');
-      // issues #225/#226: summary text now uses "cells visible" (cell-grouped count).
-      expect(summary?.textContent).toMatch(/All \d+ cells visible/);
+      // #273: action buttons require an explicit selection. Summary
+      // prompts the user instead of advertising a default-target count
+      // that would fire on misclick.
+      expect(summary?.textContent).toContain('Select cells to act on');
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
@@ -1576,18 +1583,47 @@ describe('Bundle B: sticky bottom action box', () => {
     expect(document.getElementById('bulk-purchase-term')).toBeNull();
   });
 
-  test('button labels reflect the action target', async () => {
+  test('button labels reflect the selection (#273)', async () => {
+    // No selection → buttons disabled, label is the static form. The
+    // disabled-state explanation lives on a sibling hint span linked via
+    // aria-describedby (CR follow-up): disabled <button> elements are
+    // non-focusable per HTML spec and don't reliably show title tooltips
+    // across browsers, so the sibling-element pattern is the
+    // discoverable channel for both mouse and keyboard users.
     await loadRecommendations();
     let purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
-    expect(purchaseBtn.textContent).toBe('Purchase 2 visible');
+    let planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement;
+    let hint = document.getElementById('recommendations-action-disabled-hint') as HTMLSpanElement;
+    expect(purchaseBtn.disabled).toBe(true);
+    expect(purchaseBtn.textContent).toBe('Purchase');
+    expect(purchaseBtn.hasAttribute('title')).toBe(false);
+    expect(purchaseBtn.getAttribute('aria-describedby')).toBe('recommendations-action-disabled-hint');
+    expect(planBtn.disabled).toBe(true);
+    expect(planBtn.textContent).toBe('Create Plan');
+    expect(planBtn.hasAttribute('title')).toBe(false);
+    expect(planBtn.getAttribute('aria-describedby')).toBe('recommendations-action-disabled-hint');
+    expect(hint.hidden).toBe(false);
+    expect(hint.textContent).toContain('Select at least one cell to enable');
+    expect(hint.getAttribute('aria-live')).toBe('polite');
 
+    // Selection populated → buttons enabled, label shows the selection
+    // count, hint hidden, aria-describedby cleared, title restored.
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1']));
     await loadRecommendations();
     purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement;
+    hint = document.getElementById('recommendations-action-disabled-hint') as HTMLSpanElement;
+    expect(purchaseBtn.disabled).toBe(false);
     expect(purchaseBtn.textContent).toBe('Purchase 1 selected');
+    expect(purchaseBtn.hasAttribute('aria-describedby')).toBe(false);
+    expect(purchaseBtn.title).toContain('Buy these reservations now');
+    expect(planBtn.disabled).toBe(false);
+    expect(planBtn.textContent).toBe('Plan from 1 selected');
+    expect(planBtn.hasAttribute('aria-describedby')).toBe(false);
+    expect(hint.hidden).toBe(true);
   });
 
-  test('buttons disabled when target is empty', async () => {
+  test('buttons disabled when no rows visible at all', async () => {
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: [], regions: [] });
     await loadRecommendations();
@@ -1636,10 +1672,10 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
 
   test('multi-term selection produces multiple fan-out buckets', async () => {
     // Two different resource types (different cells) with different terms.
-    // issues #225/#226: resolvePurchaseTarget now uses pickBestVariantPerCell
-    // for the default (no-selection) target — each cell contributes one rec.
-    // Use different resource_type so each rec is its own cell (no grouping),
-    // ensuring both are selected as the default target and trigger fan-out.
+    // #273: resolvePurchaseTarget no longer falls back to "all visible" when
+    // nothing is selected — the buttons are disabled in that state. Tests
+    // that exercise the post-Purchase fan-out must explicitly select the
+    // recs they want included in the target.
     const mixed = [
       { id: 'a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
       { id: 'b', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, savings: 200, upfront_cost: 800 },
@@ -1648,7 +1684,7 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
     (state.getRecommendations as jest.Mock).mockReturnValue(mixed);
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue(mixed);
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['a', 'b']));
 
     await loadRecommendations();
     const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
@@ -1714,7 +1750,14 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    // #273: action buttons now require an explicit selection. Each fan-out
+    // test in this suite is asserting bucket assembly, not the selection-
+    // gating UI, so seed the selection with every rec id to keep Purchase
+    // enabled and the click effective. The earlier
+    // "no-selection → default to visible" fallback path is gone.
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(
+      new Set(recs.map((r) => r.id as string)),
+    );
   };
 
   test('(a) single-account bucket with matching override → bucket payment seeded from override', async () => {
@@ -2085,7 +2128,7 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
@@ -2113,7 +2156,7 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
@@ -2151,7 +2194,7 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
@@ -2177,7 +2220,7 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     (state.getRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();

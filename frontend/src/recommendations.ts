@@ -1837,6 +1837,21 @@ function mountBottomActionBox(): HTMLElement | null {
   planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
   box.appendChild(planBtn);
 
+  // a11y hint for the disabled-button state (#273 CR follow-up).
+  // Disabled <button> elements are non-focusable per HTML spec and
+  // browsers don't reliably show their `title` tooltips, so a sibling
+  // hint with aria-describedby is the discoverable channel for both
+  // mouse and keyboard users. The element starts hidden; updateBottom-
+  // ActionBox toggles its visibility and links the buttons via
+  // aria-describedby when they're disabled.
+  const disabledHint = document.createElement('span');
+  disabledHint.id = 'recommendations-action-disabled-hint';
+  disabledHint.className = 'recommendations-action-disabled-hint';
+  disabledHint.setAttribute('role', 'status');
+  disabledHint.setAttribute('aria-live', 'polite');
+  disabledHint.hidden = true;
+  box.appendChild(disabledHint);
+
   const persist = (): void => {
     saveBulkPurchaseState({
       payment: paymentSelect.value as BulkPurchaseToolbarState['payment'],
@@ -1855,37 +1870,36 @@ function mountBottomActionBox(): HTMLElement | null {
   planBtn.addEventListener('click', () => {
     const target = resolvePurchaseTarget();
     if (target.length === 0) return;
-    // Plans-side savePlan reads state.getVisibleRecommendations() and
-    // intersects with state.getSelectedRecommendationIDs() — it'll see
-    // the same target as the Purchase button uses.
-    void openCreatePlanFromBottomBox();
+    // Pass the resolved target through to the plan modal as a snapshot
+    // (#273 CR follow-up). Without this, savePlan would re-derive the
+    // target from state.getVisibleRecommendations() / getSelectedRecommendation
+    // IDs() at Save time — racing Refresh, filter changes, and
+    // deselections that happen while the modal is open. The Purchase
+    // path already captures the target at click time via handleBulkPurchase
+    // Click(target); the Plan path now mirrors that.
+    void openCreatePlanFromBottomBox(target);
   });
 
   recsTab.appendChild(box);
   return box;
 }
 
-// Resolve the action target: selected ∩ visible if a selection exists,
-// else all visible. "Visible" is the post-filter set tracked in module
-// state via setVisibleRecommendations.
+// Resolve the action target: selected ∩ visible. Returns an empty slice when
+// no rows are selected — the action buttons are disabled in that state by
+// updateBottomActionBox (closes #273), so callers should never reach this
+// helper without a selection. The empty-return is defence-in-depth: if a
+// caller bypasses the disabled UI (programmatic invocation, future code path,
+// regression on the gating), no purchase happens.
 //
-// CR #253: when no rows are manually selected, fall back to one variant per
-// cell (pickBestVariantPerCell) rather than all visible variants. With the
-// grouped table, a collapsed 2-variant cell counts as "1 visible cell" to
-// the user but "2 visible recs" to the flat visible list — submitting both
-// would create 2 conflicting reservations for the same resource, violating
-// the one-variant-per-cell contract from #224.
+// Historical context: prior to #273 this fell back to
+// pickBestVariantPerCell(visible) when no rows were selected, so misclicking
+// a "Purchase visible" button could trigger an irreversible bulk purchase.
+// The fallback was removed because Refresh and filter changes silently
+// mutate the visible set, making the no-selection path structurally unsafe.
 function resolvePurchaseTarget(): LocalRecommendation[] {
   const visible = state.getVisibleRecommendations() as unknown as LocalRecommendation[];
   const selected = state.getSelectedRecommendationIDs();
-  const intersection = visible.filter((r) => selected.has(r.id));
-  // Selection path: use the explicit user selection (radio enforcement from
-  // #224 already caps at one per cell).
-  if (intersection.length > 0) return intersection;
-  // Default (no selection): pick the best variant per cell so the purchase
-  // target is exactly one rec per physical resource, matching what the user
-  // sees in the grouped collapsed table.
-  return pickBestVariantPerCell(visible);
+  return visible.filter((r) => selected.has(r.id));
 }
 
 // updateBottomActionBox refreshes labels and disabled state on every
@@ -1903,14 +1917,11 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     0,
   );
 
-  // CR #253: for the default (no-selection) target count, use the number of
-  // cells (distinct physical resources) rather than the flat variant count,
-  // since resolvePurchaseTarget() now applies pickBestVariantPerCell when no
-  // rows are selected. The user sees one row per cell in the collapsed table.
-  const visibleCellCount = selectedVisibleCount > 0
-    ? selectedVisibleCount
-    : pickBestVariantPerCell(visible).length;
-
+  // Action buttons require an explicit selection (closes #273): a misclick
+  // on "Purchase visible" / "Plan from visible" with no checkboxes ticked
+  // could trigger an irreversible bulk purchase across every visible row,
+  // and the visible set silently changes when the user clicks Refresh or
+  // adjusts filters. Only the "selected" form of the action buttons remains.
   const summary = document.getElementById('recommendations-action-summary');
   if (summary) {
     if (loadedCount === 0) {
@@ -1918,43 +1929,65 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     } else if (visibleCount === 0) {
       summary.textContent = '(0 visible — adjust filters)';
     } else if (selectedVisibleCount > 0) {
-      summary.textContent = `(${selectedVisibleCount} selected of ${visibleCellCount} cells visible)`;
+      summary.textContent = `(${selectedVisibleCount} selected)`;
     } else {
-      summary.textContent = `(All ${visibleCellCount} cells visible — no selection)`;
+      summary.textContent = '(Select cells to act on)';
     }
   }
 
   const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement | null;
   const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement | null;
-  const targetCount = visibleCellCount;
-  const empty = targetCount === 0;
-  const targetIsSelection = selectedVisibleCount > 0;
+  const disabledHint = document.getElementById('recommendations-action-disabled-hint');
+  const hasSelection = selectedVisibleCount > 0;
+  const disabledMessage = loadedCount === 0
+    ? 'No recommendations loaded'
+    : visibleCount === 0
+      ? 'No rows visible — adjust filters'
+      : 'Select at least one cell to enable';
+
+  // a11y: the disabled-state explanation lives on a sibling hint span,
+  // not on the buttons' `title` attribute. Disabled <button> elements are
+  // non-focusable per HTML spec and don't reliably surface `title`
+  // tooltips across browsers, so keyboard users would never see the
+  // hint and mouse users only sometimes would. The sibling element +
+  // aria-describedby pattern works for both. See #273 CR follow-up.
+  if (disabledHint) {
+    if (hasSelection) {
+      disabledHint.hidden = true;
+      disabledHint.textContent = '';
+    } else {
+      disabledHint.hidden = false;
+      disabledHint.textContent = disabledMessage;
+    }
+  }
 
   if (purchaseBtn) {
-    purchaseBtn.disabled = empty;
-    purchaseBtn.textContent = empty
-      ? 'Purchase'
-      : targetIsSelection
-        ? `Purchase ${targetCount} selected`
-        : `Purchase ${targetCount} visible`;
-    purchaseBtn.title = empty
-      ? (loadedCount === 0
-          ? 'No recommendations loaded'
-          : 'No rows visible — adjust filters')
-      : 'Buy these reservations now (one-off, processed immediately)';
+    purchaseBtn.disabled = !hasSelection;
+    purchaseBtn.textContent = hasSelection
+      ? `Purchase ${selectedVisibleCount} selected`
+      : 'Purchase';
+    if (hasSelection) {
+      purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
+      purchaseBtn.removeAttribute('aria-describedby');
+    } else {
+      // Drop the title — title on disabled buttons is unreliable; the
+      // sibling hint carries the message.
+      purchaseBtn.removeAttribute('title');
+      purchaseBtn.setAttribute('aria-describedby', 'recommendations-action-disabled-hint');
+    }
   }
   if (planBtn) {
-    planBtn.disabled = empty;
-    planBtn.textContent = empty
-      ? 'Create Plan'
-      : targetIsSelection
-        ? `Plan from ${targetCount} selected`
-        : `Plan from ${targetCount} visible`;
-    planBtn.title = empty
-      ? (loadedCount === 0
-          ? 'No recommendations loaded'
-          : 'No rows visible — adjust filters')
-      : 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
+    planBtn.disabled = !hasSelection;
+    planBtn.textContent = hasSelection
+      ? `Plan from ${selectedVisibleCount} selected`
+      : 'Create Plan';
+    if (hasSelection) {
+      planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
+      planBtn.removeAttribute('aria-describedby');
+    } else {
+      planBtn.removeAttribute('title');
+      planBtn.setAttribute('aria-describedby', 'recommendations-action-disabled-hint');
+    }
   }
 }
 
@@ -1962,9 +1995,14 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
 // savePlan reads state.getVisibleRecommendations() (Bundle B's plumbing
 // addition in Step 8c) so the plan only includes selected ∩ visible (or
 // all visible if no selection).
-async function openCreatePlanFromBottomBox(): Promise<void> {
+async function openCreatePlanFromBottomBox(snapshot: LocalRecommendation[]): Promise<void> {
   const { openCreatePlanModal } = await import('./plans');
-  openCreatePlanModal();
+  // Cast: api.Recommendation and LocalRecommendation share the persisted
+  // wire shape; the modal stores a copy and savePlan submits it as
+  // api.Recommendation[]. The snapshot was already passed through
+  // resolvePurchaseTarget() / Set membership, both of which treat the
+  // shape as opaque.
+  openCreatePlanModal(snapshot as unknown as readonly api.Recommendation[]);
 }
 
 function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {

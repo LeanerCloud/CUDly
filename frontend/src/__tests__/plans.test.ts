@@ -882,15 +882,20 @@ describe('Plans Module', () => {
       }));
     });
 
-    test('includes selected ∩ visible recommendations (Bundle B)', async () => {
-      // Bundle B: savePlan reads getVisibleRecommendations (post-filter set)
-      // so plans never include filtered-out rows. Selection is intersected
-      // with that visible list.
-      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rec-1', 'rec-2']));
-      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
+    test('includes the snapshot stamped by openCreatePlanModal (#273 CR)', async () => {
+      // #273 CR follow-up: savePlan now reads the snapshot stamped at
+      // Plan-button click time via openCreatePlanModal(snapshot), instead
+      // of re-deriving from getVisibleRecommendations() / getSelectedRec
+      // ommendationIDs() at Save time. State mutations between modal-open
+      // and modal-Save (Refresh, filter changes, deselections) can no
+      // longer change which recs are planned. The Purchase flow already
+      // captures the target at click time; the Plan flow now mirrors it.
+      const snapshot = [
         { id: 'rec-1', service: 'ec2' },
-        { id: 'rec-2', service: 'rds' }
-      ]);
+        { id: 'rec-2', service: 'rds' },
+      ] as unknown as readonly api.Recommendation[];
+      openCreatePlanModal(snapshot);
+
       (api.createPlan as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
@@ -902,12 +907,27 @@ describe('Plans Module', () => {
       expect(sentRecs.map((r: { id: string }) => r.id).sort()).toEqual(['rec-1', 'rec-2']);
     });
 
-    test('falls back to all visible when no selection (Bundle B)', async () => {
+    test('snapshot is immune to state mutations between modal-open and Save (#273 CR)', async () => {
+      // The race the snapshot closes: user clicks "Plan from N selected"
+      // → openCreatePlanModal stamps the snapshot → user toggles a
+      // checkbox / Refresh fires / a column filter is applied while the
+      // modal is open → user clicks Save. The Plan must reflect the
+      // user's intent at click time, NOT the (potentially narrower /
+      // wider / different) state at Save time.
+      const snapshotAtClickTime = [
+        { id: 'rec-1', service: 'ec2' },
+        { id: 'rec-2', service: 'rds' },
+      ] as unknown as readonly api.Recommendation[];
+      openCreatePlanModal(snapshotAtClickTime);
+
+      // Now simulate post-modal-open state mutations: deselection,
+      // refresh-replaced visible set, etc. None of these should affect
+      // the saved plan.
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
-        { id: 'rec-1', service: 'ec2' },
-        { id: 'rec-2', service: 'rds' }
+        { id: 'completely-different-rec', service: 'cache' },
       ]);
+
       (api.createPlan as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
@@ -916,16 +936,24 @@ describe('Plans Module', () => {
       await savePlan(event);
 
       const sentRecs = (api.createPlan as jest.Mock).mock.calls[0][0].recommendations;
+      // Must be the snapshot, NOT the post-mutation state.
       expect(sentRecs.map((r: { id: string }) => r.id).sort()).toEqual(['rec-1', 'rec-2']);
     });
 
-    test('plan does not include filtered-out recs (Bundle B)', async () => {
-      // Selection points at IDs that aren't in the visible set — they're
-      // filtered out, so the plan should silently ignore them.
-      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['stale-1']));
-      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
-        { id: 'rec-1', service: 'ec2' }
-      ]);
+    test('does NOT include any recs when no selection (#273 CR follow-up)', async () => {
+      // The Bundle B fallback to "all visible recs" was removed as part of
+      // the #273 CR loop: Refresh / filter changes silently mutate the
+      // visible set between the user clicking the Create-Plan-button and
+      // clicking Save in the modal, so a no-selection path is structurally
+      // unsafe. The bottom action box already disables the button in that
+      // state; this assertion is the defence-in-depth at the savePlan
+      // layer for any path that bypasses the disabled UI (programmatic
+      // calls, future code paths, regressions on the gating).
+      // Clear the snapshot cache that earlier tests in this describe stamped
+      // via openCreatePlanModal(snapshot). openNewPlanModal() resets it
+      // (the New-Plan-from-scratch path explicitly clears the cache so a
+      // subsequent New-Plan submit doesn't inherit a previous flow's recs).
+      openNewPlanModal();
       (api.createPlan as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
@@ -934,7 +962,23 @@ describe('Plans Module', () => {
       await savePlan(event);
 
       const sentRecs = (api.createPlan as jest.Mock).mock.calls[0][0].recommendations;
-      // selection had no intersection with visible → recommendations field empty/undefined.
+      expect(sentRecs == null || sentRecs.length === 0).toBe(true);
+    });
+
+    test('empty snapshot from openCreatePlanModal also produces no recs', async () => {
+      // Defence-in-depth: if a future caller passes an empty array as the
+      // snapshot (e.g. the resolvePurchaseTarget result captured at click
+      // time was empty for some reason), savePlan must still submit without
+      // a recommendations field, not blow up.
+      openCreatePlanModal([] as unknown as readonly api.Recommendation[]);
+      (api.createPlan as jest.Mock).mockResolvedValue({});
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await savePlan(event);
+
+      const sentRecs = (api.createPlan as jest.Mock).mock.calls[0][0].recommendations;
       expect(sentRecs == null || sentRecs.length === 0).toBe(true);
     });
 
@@ -1037,10 +1081,15 @@ describe('Plans Module', () => {
       expect(modal?.classList.contains('hidden')).toBe(false);
     });
 
-    test('sets "Create Purchase Plan" title when a selection exists', () => {
-      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set([0]));
-
-      openCreatePlanModal();
+    test('sets "Create Purchase Plan" title when a snapshot is passed', () => {
+      // #273 CR follow-up: title now keys off the snapshot the caller
+      // passes (the resolved-target captured at button-click time)
+      // rather than the live selection state, which would otherwise be
+      // racy between modal-open and modal-render.
+      const snapshot = [
+        { id: 'rec-x', service: 'ec2' },
+      ] as unknown as readonly api.Recommendation[];
+      openCreatePlanModal(snapshot);
 
       const title = document.getElementById('plan-modal-title');
       expect(title?.textContent).toBe('Create Purchase Plan');
