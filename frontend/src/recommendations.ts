@@ -1818,10 +1818,14 @@ function mountBottomActionBox(): HTMLElement | null {
   planBtn.addEventListener('click', () => {
     const target = resolvePurchaseTarget();
     if (target.length === 0) return;
-    // Plans-side savePlan reads state.getVisibleRecommendations() and
-    // intersects with state.getSelectedRecommendationIDs() — it'll see
-    // the same target as the Purchase button uses.
-    void openCreatePlanFromBottomBox();
+    // Pass the resolved target through to the plan modal as a snapshot
+    // (#273 CR follow-up). Without this, savePlan would re-derive the
+    // target from state.getVisibleRecommendations() / getSelectedRecommendation
+    // IDs() at Save time — racing Refresh, filter changes, and
+    // deselections that happen while the modal is open. The Purchase
+    // path already captures the target at click time via handleBulkPurchase
+    // Click(target); the Plan path now mirrors that.
+    void openCreatePlanFromBottomBox(target);
   });
 
   recsTab.appendChild(box);
@@ -1939,9 +1943,14 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
 // savePlan reads state.getVisibleRecommendations() (Bundle B's plumbing
 // addition in Step 8c) so the plan only includes selected ∩ visible (or
 // all visible if no selection).
-async function openCreatePlanFromBottomBox(): Promise<void> {
+async function openCreatePlanFromBottomBox(snapshot: LocalRecommendation[]): Promise<void> {
   const { openCreatePlanModal } = await import('./plans');
-  openCreatePlanModal();
+  // Cast: api.Recommendation and LocalRecommendation share the persisted
+  // wire shape; the modal stores a copy and savePlan submits it as
+  // api.Recommendation[]. The snapshot was already passed through
+  // resolvePurchaseTarget() / Set membership, both of which treat the
+  // shape as opaque.
+  openCreatePlanModal(snapshot as unknown as readonly api.Recommendation[]);
 }
 
 function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {

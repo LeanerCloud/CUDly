@@ -3,7 +3,6 @@
  */
 
 import * as api from './api';
-import * as state from './state';
 import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, populateAccountFilter } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
@@ -12,6 +11,17 @@ import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
+
+// pendingPlanRecommendations holds the resolved plan target captured at
+// "Plan from N selected" button-click time. The Plan flow used to re-derive
+// its target from state.getVisibleRecommendations() + getSelectedRecommendation
+// IDs() at savePlan time, but state mutations between modal-open and
+// modal-Save (Refresh, filter changes, deselections) could silently shrink
+// or replace the planned set. This snapshot is stamped by openCreatePlan-
+// Modal(snapshot) and consumed by savePlan; openNewPlanModal() clears it
+// (the New-Plan-from-scratch path has no pre-resolved target). See #273
+// CR follow-up.
+let pendingPlanRecommendations: api.Recommendation[] = [];
 
 /**
  * Load plans and planned purchases
@@ -549,20 +559,16 @@ export async function savePlan(e: Event): Promise<void> {
     plan.custom_interval_days = parseInt((document.getElementById('ramp-interval-days') as HTMLInputElement).value, 10);
   }
 
-  // Read from getVisibleRecommendations — the post-filter, post-sort set
-  // tracked by recommendations.ts on every render — and intersect with the
-  // explicit selection. Plans only include rows the user explicitly ticked
-  // (#273): the prior fallback to "all visible recs when nothing is
-  // selected" was structurally unsafe because Refresh / filter changes
-  // silently mutate the visible set between Create-Plan-button click and
-  // Save-modal click. The button itself is gated on selection in
-  // updateBottomActionBox, but we mirror the gating here as defence-in-
-  // depth so a programmatic / future-code-path caller bypassing the
-  // disabled UI still produces an empty plan rather than a runaway one.
-  const selectedIDs = state.getSelectedRecommendationIDs();
-  const visibleRecs = state.getVisibleRecommendations();
-  if (selectedIDs.size > 0) {
-    plan.recommendations = visibleRecs.filter((r) => selectedIDs.has(r.id)) as api.Recommendation[];
+  // Use the snapshot stamped at Plan-button click time (#273 CR follow-up).
+  // Reading state.getVisibleRecommendations() / getSelectedRecommendation
+  // IDs() here would re-derive the target at Save time — racing Refresh,
+  // filter changes, and deselections that happen while the modal is open.
+  // openCreatePlanModal(snapshot) freezes the Plan target the moment the
+  // user clicked "Plan from N selected"; we read it back here.
+  // openNewPlanModal() clears the snapshot for the New-Plan-from-scratch
+  // path (no pre-resolved target — plan submits without `recommendations`).
+  if (pendingPlanRecommendations.length > 0) {
+    plan.recommendations = [...pendingPlanRecommendations];
   }
 
   try {
@@ -596,6 +602,11 @@ export async function savePlan(e: Event): Promise<void> {
 export function closePlanModal(): void {
   const planModal = document.getElementById('plan-modal');
   if (planModal) closeModal(planModal);
+  // Invalidate the resolved-target snapshot stamped by openCreatePlanModal
+  // so a subsequent flow doesn't accidentally inherit it. The snapshot
+  // ties the plan to a specific button-click moment; once the modal
+  // closes — by Save, Cancel, or any other path — that moment is over.
+  pendingPlanRecommendations = [];
 }
 
 // Selected accounts for the plan modal
@@ -716,9 +727,16 @@ async function setupPlanAccountsSection(planId?: string): Promise<void> {
  * miss. Same UX as the dedicated "New Plan" button — the modal
  * always opens, and the user fills in provider/service from scratch.
  */
-export function openCreatePlanModal(): void {
+export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): void {
+  // Stamp the resolved-target snapshot from the caller so savePlan can
+  // consume it without re-deriving from global state at Save time. The
+  // Bottom Action Box passes the result of resolvePurchaseTarget(); a
+  // missing arg falls back to the legacy behaviour (no captured target,
+  // savePlan submits a plan without `recommendations`). See #273 CR.
+  pendingPlanRecommendations = snapshot ? [...snapshot] : [];
+
   const titleEl = document.getElementById('plan-modal-title');
-  const hasSelection = state.getSelectedRecommendationIDs().size > 0;
+  const hasSelection = pendingPlanRecommendations.length > 0;
   if (titleEl) {
     titleEl.textContent = hasSelection ? 'Create Purchase Plan' : 'New Purchase Plan';
   }
@@ -741,6 +759,12 @@ export function openCreatePlanModal(): void {
  * Open new plan modal (without pre-selected recommendations)
  */
 export function openNewPlanModal(): void {
+  // No pre-resolved target — this is the "New Plan from scratch" path.
+  // Clear any stale snapshot from a prior openCreatePlanModal call so a
+  // subsequent savePlan doesn't accidentally inherit a previous flow's
+  // recs. See #273 CR.
+  pendingPlanRecommendations = [];
+
   const titleEl = document.getElementById('plan-modal-title');
   if (titleEl) titleEl.textContent = 'New Purchase Plan';
   (document.getElementById('plan-id') as HTMLInputElement).value = '';
