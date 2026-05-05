@@ -170,42 +170,69 @@ export async function loadRecommendations(): Promise<void> {
 }
 
 function renderRecommendationsSummary(
-  summary: RecommendationsSummary,
+  _summary: RecommendationsSummary,
   recommendations: readonly LocalRecommendation[],
 ): void {
   const container = document.getElementById('recommendations-summary');
   if (!container) return;
 
-  // Potential Monthly Savings is computed from the same source as the
-  // "Recommended range" banner under the table (closes #272). The previous
-  // implementation rendered `summary.total_monthly_savings` from the API —
-  // a flat sum across every (term, payment) variant of every cell — so a
-  // typical 12-cell page with 2 terms × 3 payments per cell showed up to
-  // ~6× the achievable savings (the user can only buy one variant per
-  // cell). pageLevelRange sums per-cell min/max and stays consistent with
-  // the banner.
-  const groups = groupRecsByCell(recommendations);
+  // All four summary cards (Total Recommendations, Potential Monthly
+  // Savings, Total Upfront Cost, Payback Period) recompute client-side
+  // from the same source on every list rerender (closes #279). The API-
+  // derived `summary` is no longer read — it summed every (term, payment)
+  // variant of every cell and overstated achievable totals by ~6× on a
+  // typical fan-out, the same bug class #272 closed for the savings card
+  // alone. Now extended to the full header.
+  //
+  // Selection narrowing: when the user has ticked ≥1 checkbox visible in
+  // the table, the cards narrow to `selected ∩ visible`. Cleared selection
+  // → cards snap back to the full visible set. The cards therefore reflect
+  // exactly what a Purchase / Plan click would commit to.
+  //
+  // The unused `_summary` arg is retained so the call sites in
+  // loadRecommendations / renderRecommendationsList don't have to change
+  // shape; it can be removed when the field is also dropped from
+  // RecommendationsSummary.
+  const selected = state.getSelectedRecommendationIDs();
+  const target: readonly LocalRecommendation[] = selected.size > 0
+    ? recommendations.filter((r) => selected.has(r.id))
+    : recommendations;
+  const groups = groupRecsByCell(target);
   const plr = pageLevelRange(groups);
+  const isSelectionView = selected.size > 0 && plr.cellCount > 0;
+
   const savingsText = plr.cellCount > 0 && plr.savingsMax > 0
     ? formatSavingsRange(plr.savingsMin, plr.savingsMax)
     : formatCurrency(0);
+  const upfrontText = plr.cellCount > 0 && plr.upfrontMax > 0
+    ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
+    : formatCurrency(0);
+  const paybackText = plr.cellCount > 0 && plr.paybackMonthsMax > 0
+    ? formatPaybackRange(plr.paybackMonthsMin, plr.paybackMonthsMax)
+    : '0 months';
+  // Total Recommendations counts CELLS not variants — each cell is the
+  // user's actual decision unit.
+  const countLabel = isSelectionView ? 'Selected Recommendations' : 'Total Recommendations';
+  const savingsLabel = isSelectionView ? 'Selected Monthly Savings' : 'Potential Monthly Savings';
+  const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
+  const paybackLabel = 'Payback Period';
 
   container.innerHTML = `
     <div class="card">
-      <h3>Total Recommendations</h3>
-      <p class="value">${summary.total_count || 0}</p>
+      <h3>${countLabel}</h3>
+      <p class="value">${plr.cellCount}</p>
     </div>
     <div class="card">
-      <h3>Potential Monthly Savings</h3>
+      <h3>${savingsLabel}</h3>
       <p class="value savings">${savingsText}</p>
     </div>
     <div class="card">
-      <h3>Total Upfront Cost</h3>
-      <p class="value">${formatCurrency(summary.total_upfront_cost)}</p>
+      <h3>${upfrontLabel}</h3>
+      <p class="value">${upfrontText}</p>
     </div>
     <div class="card">
-      <h3>Payback Period</h3>
-      <p class="value">${summary.avg_payback_months ? summary.avg_payback_months.toFixed(1) : 0} months</p>
+      <h3>${paybackLabel}</h3>
+      <p class="value">${paybackText}</p>
     </div>
   `;
 }
@@ -311,21 +338,64 @@ export function cellSummary(variants: readonly LocalRecommendation[]): CellRange
   return { savingsMin, savingsMax, upfrontMin, upfrontMax, termMin, termMax };
 }
 
+/** Page-level totals for the summary header (closes #279). All ranges are
+ * the cell-by-cell min/max sums — the user buys at most one variant per
+ * cell, so the achievable totals are bounded by `sum(cell.{min,max})` not
+ * by `sum(every variant)`. */
+export interface PageLevelRange {
+  savingsMin: number;
+  savingsMax: number;
+  upfrontMin: number;
+  upfrontMax: number;
+  /** payback months at the min-savings end of the range; clamped to 0
+   * when both savings and upfront are 0 (nothing to pay back). */
+  paybackMonthsMin: number;
+  /** payback months at the max-savings end. */
+  paybackMonthsMax: number;
+  cellCount: number;
+}
+
 /**
- * Compute the page-level savings range by summing per-cell min/max savings.
- *   overallMin = sum of savingsMin per cell
- *   overallMax = sum of savingsMax per cell
+ * Compute the page-level summary by summing per-cell min/max envelopes.
+ * Used by both the summary cards and the (now-removed) banner; lives at
+ * module scope so dashboard.ts can reuse it for the cross-page parity in
+ * #279.
+ *
+ *   savingsMin       = sum of cellSummary.savingsMin
+ *   savingsMax       = sum of cellSummary.savingsMax
+ *   upfrontMin       = sum of cellSummary.upfrontMin (matches the variant
+ *                      whose savingsMin was contributed)
+ *   upfrontMax       = sum of cellSummary.upfrontMax
+ *   paybackMonthsMin = page-aggregate payback at the savingsMax end
+ *                      (paying off faster) — i.e. upfrontMin / savingsMax.
+ *   paybackMonthsMax = page-aggregate payback at the savingsMin end.
+ *
  * Exported for tests.
  */
-export function pageLevelRange(groups: Map<string, LocalRecommendation[]>): { savingsMin: number; savingsMax: number; cellCount: number } {
+export function pageLevelRange(groups: Map<string, LocalRecommendation[]>): PageLevelRange {
   let savingsMin = 0;
   let savingsMax = 0;
+  let upfrontMin = 0;
+  let upfrontMax = 0;
   for (const variants of groups.values()) {
     const s = cellSummary(variants);
     savingsMin += s.savingsMin;
     savingsMax += s.savingsMax;
+    upfrontMin += s.upfrontMin;
+    upfrontMax += s.upfrontMax;
   }
-  return { savingsMin, savingsMax, cellCount: groups.size };
+  // Payback months: ratio is signed because the "fastest payback" comes
+  // from the max-savings / min-upfront end. Clamp to 0 when there's no
+  // savings at all (avoid Infinity / NaN). Negative-payback rows (where
+  // upfront amortization outweighs monthly savings) flow through naturally.
+  const paybackMonthsMin = savingsMax > 0 ? upfrontMin / savingsMax : 0;
+  const paybackMonthsMax = savingsMin > 0 ? upfrontMax / savingsMin : 0;
+  return {
+    savingsMin, savingsMax,
+    upfrontMin, upfrontMax,
+    paybackMonthsMin, paybackMonthsMax,
+    cellCount: groups.size,
+  };
 }
 
 // Fixed payment ordering for within-cell variant sort.
@@ -391,6 +461,15 @@ function formatSavingsRange(min: number, max: number): string {
   const lo = formatCurrency(min);
   const hi = formatCurrency(max);
   return lo === hi ? lo : `${lo} – ${hi}`;
+}
+
+/** Format a payback-months range, collapsing identical endpoints to a
+ * single value and rounding to 1 decimal. Used by the Payback Period
+ * summary card after #279 broadened it to a range. */
+function formatPaybackRange(min: number, max: number): string {
+  const lo = min.toFixed(1);
+  const hi = max.toFixed(1);
+  return lo === hi ? `${lo} months` : `${lo} – ${hi} months`;
 }
 
 /** Format a term range, collapsing "1yr – 1yr" to "1yr". */
@@ -1215,8 +1294,13 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
     bar.appendChild(live);
   }
   // Always update the live region (even when no filters active) so the
-  // spoken count reflects state after every render.
-  live.textContent = `Showing ${visibleCount} of ${loadedCount} recommendations`;
+  // spoken count reflects state after every render. #279: when the user
+  // has ticked ≥1 row, the line surfaces the selection count too — same
+  // narrowing source-of-truth as the summary cards above.
+  const selectedCount = state.getSelectedRecommendationIDs().size;
+  live.textContent = selectedCount > 0
+    ? `${selectedCount} selected · Showing ${visibleCount} of ${loadedCount} recommendations`
+    : `Showing ${visibleCount} of ${loadedCount} recommendations`;
 
   const filters = state.getRecommendationsColumnFilters();
   const activeCount = Object.keys(filters).length;
@@ -1586,11 +1670,9 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
   // Only multi-variant cells count — single-variant cells render flat with no chevron.
   lastVisibleGroupKeys = sortedKeys.filter((k) => (groups.get(k)?.length ?? 0) > 1);
 
-  // Page-level range banner (summed across all visible cells).
-  const plr = pageLevelRange(groups);
-  const bannerHtml = plr.cellCount > 0 && plr.savingsMax > 0
-    ? `<div class="rec-range-banner" role="status" aria-live="polite">Recommended range: <strong>${formatSavingsRange(plr.savingsMin, plr.savingsMax)}/mo</strong> across ${plr.cellCount} cell${plr.cellCount === 1 ? '' : 's'}</div>`
-    : '';
+  // The "Recommended range" banner that used to live here was redundant
+  // with the Potential Monthly Savings card after #272 / #279 brought
+  // the same range to the summary header. Removed (closes #278).
 
   // Build tbody rows: grouped for multi-variant cells, flat for single-variant.
   const rows: string[] = [];
@@ -1651,7 +1733,6 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
   }
 
   return `
-    ${bannerHtml}
     <table>
       <thead>
         <tr>

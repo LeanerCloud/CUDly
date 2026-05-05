@@ -238,6 +238,95 @@ describe('Recommendations Module', () => {
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
     });
 
+    test('summary cards narrow to selection in real time (closes #279)', async () => {
+      // 4 recs / 2 cells. With no selection: cards reflect the full
+      // visible set (savings $300–$400, upfront $0–$3000). After ticking
+      // cell1's pricey variant, cards narrow to that single rec
+      // ($150 savings / $1000 upfront). Tick the second cell's cheap
+      // variant too: cards sum the two selected variants ($350 savings /
+      // $1000 upfront). Cards must update on every selection toggle —
+      // the selection-toggle handler triggers a list rerender, which
+      // calls renderRecommendationsSummary with the new selection.
+      const recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'cell2-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'cell2-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 700, total_upfront_cost: 3000, avg_payback_months: 2 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+
+      const cardValue = (titlePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => titlePattern.test(c.querySelector('h3')?.textContent ?? ''));
+        return card?.querySelector('.value')?.textContent ?? '';
+      };
+      const cardTitle = (valuePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => valuePattern.test(c.querySelector('.value')?.textContent ?? ''));
+        return card?.querySelector('h3')?.textContent ?? '';
+      };
+
+      // No selection: cards reflect the full visible set.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      await loadRecommendations();
+      expect(cardValue(/Recommendations/)).toBe('2'); // 2 cells, not 4 variants
+      expect(cardValue(/Monthly Savings/)).toMatch(/\$300\b/);
+      expect(cardValue(/Monthly Savings/)).toMatch(/\$400\b/);
+      expect(cardValue(/Upfront/)).toMatch(/\$0\b/);
+      expect(cardValue(/Upfront/)).toMatch(/\$3,?000\b/);
+      // Card titles reflect the "all visible" mode.
+      expect(cardTitle(/^2$/)).toBe('Total Recommendations');
+
+      // Tick one cell's pricey variant: cards narrow to that one rec.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cell1-pricey']));
+      await loadRecommendations();
+      expect(cardValue(/Recommendations/)).toBe('1');
+      // Single rec → range collapses to a single value.
+      expect(cardValue(/Monthly Savings/)).toMatch(/^\$150$/);
+      expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/);
+      // Title switches to "Selected ..." form.
+      expect(cardTitle(/^1$/)).toBe('Selected Recommendations');
+
+      // Tick a second cell: cards sum the two selected variants.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cell1-pricey', 'cell2-cheap']));
+      await loadRecommendations();
+      expect(cardValue(/Recommendations/)).toBe('2');
+      expect(cardValue(/Monthly Savings/)).toMatch(/^\$350$/); // 150 + 200
+      expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/); // 1000 + 0
+    });
+
+    test('"Showing X of Y" surfaces selection count (closes #279)', async () => {
+      const recs = [
+        { id: 'r1', provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+
+      // No selection: line just shows "Showing X of Y".
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      await loadRecommendations();
+      const liveText = (): string =>
+        document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText()).toMatch(/^Showing 2 of 2 recommendations$/);
+
+      // ≥1 selected: line prepends the selection count so the user has
+      // visible feedback that their selection is influencing the cards.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1']));
+      await loadRecommendations();
+      expect(liveText()).toMatch(/^1 selected · Showing 2 of 2 recommendations$/);
+    });
+
     test('renders recommendations list', async () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -2967,15 +3056,24 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(variantRows.length).toBe(2);
     });
 
-    test('page-level range banner appears when multi-variant cells exist', async () => {
+    test('page-level range banner is removed (closes #278) — savings card is the canonical surface', async () => {
+      // The "Recommended range" banner under the table was redundant with
+      // the Potential Monthly Savings card after #272 / #279 brought the
+      // same range to the summary header. Closing #278 removed the
+      // banner; the card is the single source of truth.
       const recs = multiVariantRecs();
       (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
       (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
       await loadRecommendations();
 
-      const banner = document.querySelector('.rec-range-banner');
-      expect(banner).not.toBeNull();
-      expect(banner!.textContent).toMatch(/Recommended range/);
+      // Banner gone.
+      expect(document.querySelector('.rec-range-banner')).toBeNull();
+      // Card carries the range.
+      const summary = document.getElementById('recommendations-summary');
+      const savingsCard = Array.from(summary?.querySelectorAll('.card') ?? [])
+        .find((c) => /Monthly Savings/.test(c.querySelector('h3')?.textContent ?? ''));
+      expect(savingsCard?.querySelector('.value.savings')?.textContent).toMatch(/\$\d/);
     });
 
     test('single-variant cell renders a flat row, no summary row', async () => {
