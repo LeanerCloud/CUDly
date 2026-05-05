@@ -275,11 +275,17 @@ async function handleExecutePurchase(): Promise<void> {
     return;
   }
 
+  // Default approval-required path: clicking sends an approval request to
+  // the configured approver(s) — it does NOT spend money. The actual
+  // upfront charge fires only after an approver clicks the email link.
+  // Issue #289 will introduce a session-permission branch where holders
+  // of `execute-any:purchases` can opt into direct execution; until that
+  // lands, every user is on this approval path.
   const ok = await confirmDialog({
-    title: `Execute ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'}?`,
-    body: 'This will spend real money on cloud commitments. Make sure the selection + terms + payment options are what you intend.',
-    confirmLabel: 'Execute purchases',
-    destructive: true,
+    title: `Send ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} for approval?`,
+    body: 'This will email an approval request to the configured approver. Cloud commitments are charged only after the approver clicks the link in that email.',
+    confirmLabel: 'Send for approval',
+    destructive: false,
   });
   if (!ok) return;
 
@@ -319,7 +325,7 @@ async function handleExecutePurchase(): Promise<void> {
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
     executeBtn.disabled = true;
-    executeBtn.textContent = 'Executing...';
+    executeBtn.textContent = 'Sending...';
   }
 
   try {
@@ -344,11 +350,11 @@ async function handleExecutePurchase(): Promise<void> {
     await loadDashboard();
   } catch (error) {
     const err = error as Error;
-    showToast({ message: `Failed to execute purchase: ${err.message}`, kind: 'error' });
+    showToast({ message: `Failed to send purchase for approval: ${err.message}`, kind: 'error' });
   } finally {
     if (executeBtn) {
       executeBtn.disabled = false;
-      executeBtn.textContent = 'Execute Purchase';
+      executeBtn.textContent = 'Send for Approval';
     }
   }
 }
@@ -363,18 +369,21 @@ async function handleExecutePurchase(): Promise<void> {
  * confirmDialog.
  */
 async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
+  // Same approval-required default as the single-purchase path: each
+  // bucket POSTs a request that triggers an approval email; the actual
+  // charges fire when each approver clicks the link in their email.
   const ok = await confirmDialog({
-    title: `Execute ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'}?`,
-    body: `This will submit ${buckets.length} separate purchase execution${buckets.length === 1 ? '' : 's'} and send ${buckets.length} approval email${buckets.length === 1 ? '' : 's'}. Each must be approved individually.`,
-    confirmLabel: 'Execute all',
-    destructive: true,
+    title: `Send ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'} for approval?`,
+    body: `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`,
+    confirmLabel: 'Send all for approval',
+    destructive: false,
   });
   if (!ok) return;
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
     executeBtn.disabled = true;
-    executeBtn.textContent = `Executing 0/${buckets.length}…`;
+    executeBtn.textContent = `Sending 0/${buckets.length}…`;
   }
 
   // Fire all POSTs in parallel via allSettled so one failure doesn't
@@ -430,7 +439,7 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
 
   if (executeBtn) {
     executeBtn.disabled = false;
-    executeBtn.textContent = 'Execute Purchase';
+    executeBtn.textContent = 'Send for Approval';
   }
 }
 
