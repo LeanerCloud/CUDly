@@ -564,7 +564,7 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	// `failed` so the user sees the reason in History; the linkage on
 	// the original row is unaffected (it points at the failed-again
 	// successor, which is exactly the audit trail we want).
-	emailSent, emailReason := h.sendPurchaseApprovalEmail(ctx, req, newExecution, failedExec.Recommendations, totalUpfront, totalSavings)
+	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, newExecution, failedExec.Recommendations, totalUpfront, totalSavings)
 	status := h.finalizePurchaseStatus(ctx, newExecution, emailSent, emailReason)
 
 	resp := map[string]any{
@@ -579,6 +579,9 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	}
 	if emailReason != "" {
 		resp["email_reason"] = emailReason
+	}
+	if recipient != "" {
+		resp["approval_recipient"] = recipient
 	}
 	return resp, nil
 }
@@ -1092,7 +1095,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	// best-effort and never blocks the response body; the returned
 	// email_sent / email_reason fields let the UI tell the user whether they
 	// should wait for an inbox or cancel/retry manually.
-	emailSent, emailReason := h.sendPurchaseApprovalEmail(ctx, req, execution, execReq.Recommendations, totalUpfront, totalSavings)
+	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, execution, execReq.Recommendations, totalUpfront, totalSavings)
 	status := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
 
 	message := "Purchase execution created and pending approval"
@@ -1111,24 +1114,33 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	if emailReason != "" {
 		resp["email_reason"] = emailReason
 	}
+	if recipient != "" {
+		resp["approval_recipient"] = recipient
+	}
 	return resp, nil
 }
 
 // sendPurchaseApprovalEmail sends an approval-request email for a newly created
 // execution and returns a structured outcome:
-//   - (true, "") on successful send
-//   - (false, "<reason>") on any preflight gate or send error
+//   - (true, "", recipient) on successful send
+//   - (false, "<reason>", "") on any preflight gate or send error
+//   - (false, "<reason>", recipient) when send failed AFTER recipient resolution
+//     (so the response can still surface who would have been notified)
+//
+// `recipient` is the resolved To address per `resolveApprovalRecipients` —
+// surfaced in the response so the post-submit toast can name the approver
+// per CR pass on PR #294 / issue #288.
 //
 // Errors are also logged at Errorf level so they show up in CloudWatch, but
 // the reason string is what the API response surfaces to the UI.
-func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) (bool, string) {
+func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, recs []config.RecommendationRecord, totalUpfront, totalSavings float64) (bool, string, string) {
 	if h.emailNotifier == nil {
-		return false, "email notifier not configured for this deployment"
+		return false, "email notifier not configured for this deployment", ""
 	}
 	globalCfg, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
 		logging.Errorf("Failed to load global config for approval email: %v", err)
-		return false, fmt.Sprintf("failed to load settings: %v", err)
+		return false, fmt.Sprintf("failed to load settings: %v", err), ""
 	}
 	globalNotify := ""
 	if globalCfg.NotificationEmail != nil {
@@ -1137,10 +1149,10 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 	to, cc, approvers, err := h.resolveApprovalRecipients(ctx, recs, globalNotify)
 	if err != nil {
 		logging.Errorf("Failed to resolve approval recipients: %v", err)
-		return false, fmt.Sprintf("failed to resolve recipients: %v", err)
+		return false, fmt.Sprintf("failed to resolve recipients: %v", err), ""
 	}
 	if to == "" {
-		return false, "no notification email set in Settings → General and no account contact emails configured"
+		return false, "no notification email set in Settings → General and no account contact emails configured", ""
 	}
 	summaries := make([]email.RecommendationSummary, 0, len(recs))
 	for _, rec := range recs {
@@ -1168,14 +1180,14 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		logging.Errorf("Failed to send purchase approval email: %v", err)
 		switch {
 		case errors.Is(err, email.ErrNoRecipient):
-			return false, "no notification email set in Settings → General"
+			return false, "no notification email set in Settings → General", ""
 		case errors.Is(err, email.ErrNoFromEmail):
-			return false, "FROM_EMAIL not configured for this deployment"
+			return false, "FROM_EMAIL not configured for this deployment", to
 		default:
-			return false, fmt.Sprintf("send failed: %v", err)
+			return false, fmt.Sprintf("send failed: %v", err), to
 		}
 	}
-	return true, ""
+	return true, "", to
 }
 
 // resolveDashboardURL returns the absolute base URL to embed in email

@@ -345,7 +345,19 @@ async function handleExecutePurchase(): Promise<void> {
         timeout: null,
       });
     } else {
-      showToast({ message: 'Purchase submitted — check your email to approve.', kind: 'success', timeout: 10_000 });
+      // Name the approver in the success toast so the user can confirm WHO
+      // received the request (CR pass on PR #294 / issue #288). The backend
+      // surfaces `approval_recipient` from `resolveApprovalRecipients`; the
+      // field may be absent on older deploys or when only the global notify
+      // mailbox is configured — fall back to the generic line in that case.
+      const recipient = result.approval_recipient;
+      showToast({
+        message: recipient
+          ? `Approval request sent to ${recipient}.`
+          : 'Purchase submitted — check your email to approve.',
+        kind: 'success',
+        timeout: 10_000,
+      });
     }
     await loadDashboard();
   } catch (error) {
@@ -418,8 +430,28 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   clearPurchaseModalRecommendations();
 
   if (failed === 0) {
+    // Collect the unique approval-recipient set from the fulfilled responses
+    // so the toast can name WHO received the requests (CR pass on PR #294 /
+    // issue #288). Multi-bucket purchases can route to different approvers
+    // when bucket-level account overrides set distinct contact emails;
+    // dedupe so the toast doesn't repeat the same address.
+    const recipients = new Set<string>();
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.approval_recipient) {
+        recipients.add(r.value.approval_recipient);
+      }
+    }
+    const noun = succeeded === 1 ? 'purchase' : 'purchases';
+    let message: string;
+    if (recipients.size === 0) {
+      message = `${succeeded} ${noun} submitted — check your email to approve each.`;
+    } else if (recipients.size === 1) {
+      message = `${succeeded} ${noun} sent for approval to ${[...recipients][0]}.`;
+    } else {
+      message = `${succeeded} ${noun} sent for approval to ${recipients.size} recipients (${[...recipients].sort().join(', ')}).`;
+    }
     showToast({
-      message: `${succeeded} purchase${succeeded === 1 ? '' : 's'} submitted — check your email to approve each.`,
+      message,
       kind: 'success',
       timeout: 15_000,
     });
