@@ -184,6 +184,8 @@ async function triggerAutoRefreshIfStale(): Promise<void> {
         kind: 'success',
         timeout: 5_000,
       });
+      // Reload UI data so users see fresh recommendations
+      return loadRecommendations();
     })
     .catch((err: unknown) => {
       inFlight.dismiss();
