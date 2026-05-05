@@ -383,6 +383,40 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 
 // ─── 5. GET /history/breakdown ───────────────────────────────────────────────
 
+// TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds is the positive
+// case for the breakdown endpoint: a scoped user requesting breakdown for
+// account A must reach the analytics client and receive results. This prevents
+// a regression that blocks all scoped users regardless of account.
+func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
+	ctx := context.Background()
+
+	expectedData := map[string]BreakdownValue{
+		"ec2": {PurchaseCount: 3, TotalSavings: 150.0},
+	}
+	mockClient := new(MockAnalyticsClient)
+	mockClient.On("QueryBreakdown", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything).
+		Return(expectedData, nil)
+
+	mockStore := new(MockConfigStore)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+
+	handler := &Handler{
+		auth:            scopedAuthMock(ctx),
+		analyticsClient: mockClient,
+		config:          mockStore,
+	}
+
+	result, err := handler.getHistoryBreakdown(ctx, scopedReq(), map[string]string{
+		"account_id": permsAccA,
+		"dimension":  "service",
+	})
+	require.NoError(t, err, "scoped user must be able to query breakdown for account-A")
+	require.NotNil(t, result)
+	mockClient.AssertCalled(t, "QueryBreakdown", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected mirrors the
 // analytics test for the breakdown endpoint which shares the same
 // validateAnalyticsAccountScope guard.
@@ -574,6 +608,64 @@ func TestPerAccountPerms_ExecutePurchase_UnattributedRecRejected400(t *testing.T
 		"unattributed recommendation must return 400 (not 403) for scoped users")
 
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution")
+}
+
+// TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted verifies that a
+// scoped user can execute a recommendation tagged to account A. The handler
+// should reach SavePurchaseExecution (no error), confirming the scope check
+// does not block in-scope requests.
+//
+// Note: the status in the response is "failed" because no emailNotifier is
+// wired in this test. That is the correct behaviour per the existing
+// TestHandler_executePurchase_Success test — "failed" means "saved but email
+// could not send", not that the scope check blocked it.
+func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+
+	handler := &Handler{
+		auth:   scopedAuthMock(ctx),
+		config: mockStore,
+	}
+
+	// Recommendation is tagged to account A — within the scoped user's allowed set.
+	body, err := json.Marshal(map[string]interface{}{
+		"recommendations": []map[string]interface{}{
+			{
+				"id":               "rec-a-exec",
+				"provider":         "aws",
+				"service":          "ec2",
+				"cloud_account_id": permsAccA,
+				"upfront_cost":     100.0,
+				"savings":          10.0,
+				// count intentionally 0 so buildSuppressions skips the row and
+				// CreateSuppressionTx is never called — matches the pattern in
+				// TestHandler_executePurchase_Success.
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	req := scopedReq()
+	req.Body = string(body)
+
+	result, err := handler.executePurchase(ctx, req)
+	require.NoError(t, err, "scoped user must be able to execute a purchase for account-A")
+	require.NotNil(t, result)
+
+	resultMap, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.NotEmpty(t, resultMap["execution_id"], "execution_id must be populated on success")
+	assert.Equal(t, 1, resultMap["recommendation_count"])
+
+	// SavePurchaseExecution must have been called (the scope check did not block).
+	mockStore.AssertCalled(t, "SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution"))
 }
 
 // ─── 8. Planned purchase access (requireExecutionAccess) ─────────────────────
