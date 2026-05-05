@@ -165,6 +165,12 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 	if riExchangeLookbackDays == 0 {
 		riExchangeLookbackDays = 30
 	}
+	recommendationsLookbackDays := config.RecommendationsLookbackDays
+	if recommendationsLookbackDays == 0 {
+		// Validate() treats 0 as "unset → use default". Mirror that here so
+		// the DB never stores 0, matching the ErrNoRows default path.
+		recommendationsLookbackDays = DefaultRecommendationsLookbackDays
+	}
 	riExchangeUtilizationThreshold := config.RIExchangeUtilizationThreshold
 	if riExchangeUtilizationThreshold == 0 {
 		riExchangeUtilizationThreshold = 95.0
@@ -201,7 +207,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		config.NotificationDaysBefore,
 		gracePeriodJSON,
 		config.RecommendationsCacheStaleHours,
-		config.RecommendationsLookbackDays,
+		recommendationsLookbackDays,
 	)
 
 	if err != nil {

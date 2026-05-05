@@ -73,6 +73,8 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 	assert.Equal(t, []string{"aws"}, cfg.EnabledProviders)
 	require.NotNil(t, cfg.NotificationEmail)
 	assert.Equal(t, "ops@example.com", *cfg.NotificationEmail)
+	assert.Equal(t, 24, cfg.RecommendationsCacheStaleHours)
+	assert.Equal(t, 7, cfg.RecommendationsLookbackDays)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -127,6 +129,8 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		// GracePeriodFor returns the default for every provider.
 		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("aws"))
 		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("azure"))
+		assert.Equal(t, 24, cfg.RecommendationsCacheStaleHours)
+		assert.Equal(t, 7, cfg.RecommendationsLookbackDays)
 	})
 
 	t.Run("populated json round-trips", func(t *testing.T) {

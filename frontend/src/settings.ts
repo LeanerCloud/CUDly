@@ -2301,9 +2301,11 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   }
 
   // Validate recommendations_cache_stale_hours before building the save payload.
-  const rawStaleHours = parseInt(byId<HTMLInputElement>('setting-recs-stale-hours')?.value || '24', 10);
-  if (!Number.isFinite(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
-    showToast({ message: 'Cache stale threshold must be between 0 and 8760 hours (0 = disable)', kind: 'error' });
+  // Use Number() so fractional input like "1.5" fails Number.isInteger instead of silently
+  // truncating to 1 as parseInt would.
+  const rawStaleHours = Number(byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24');
+  if (!Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
+    showToast({ message: 'Cache stale threshold must be a whole number between 0 and 8760 hours (0 = disable)', kind: 'error' });
     if (saveBtn) saveBtn.disabled = false;
     saveInFlight = false;
     return;
