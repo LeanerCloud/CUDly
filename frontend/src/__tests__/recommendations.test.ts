@@ -304,6 +304,125 @@ describe('Recommendations Module', () => {
       expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/); // 1000 + 0
     });
 
+    test('row checkbox change event updates summary cards in place (PR #283 CR pass-2)', async () => {
+      // Regression guard for the real DOM event path: verifies that dispatching
+      // a `change` event on a row checkbox updates summary cards WITHOUT a
+      // second loadRecommendations() call. The earlier mock-and-reload test
+      // above confirms the rendering math; this test confirms the event
+      // handler itself triggers renderRecommendationsList.
+      //
+      // Each rec is a DISTINCT cell (different resource_type) so they render as
+      // flat rows — not grouped summary rows — making their checkboxes directly
+      // queryable from the DOM. Multi-variant cells collapse into a summary row
+      // with a chevron button; variant-level checkboxes are only in the DOM when
+      // the cell is expanded.
+      //
+      // Mock coordination: addSelectedRecommendation / removeSelectedRecommendation
+      // mutate a shared Set so getSelectedRecommendationIDs reflects the toggle
+      // immediately — the same pattern used by checkboxes-evict-siblings tests.
+      const recs = [
+        { id: 'rec-a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 1000 },
+        { id: 'rec-b', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 350, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+
+      // Wire add/remove to a shared Set so getSelectedRecommendationIDs
+      // reflects in-flight selection state after every checkbox event.
+      const selectedIds = new Set<string>();
+      (state.getSelectedRecommendationIDs as jest.Mock).mockImplementation(() => new Set(selectedIds));
+      (state.addSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.add(id); });
+      (state.removeSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.delete(id); });
+      (state.clearSelectedRecommendations as jest.Mock).mockImplementation(() => { selectedIds.clear(); });
+
+      // Initial render: no selection, cards show full-set values.
+      await loadRecommendations();
+
+      const cardValue = (titlePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => titlePattern.test(c.querySelector('h3')?.textContent ?? ''));
+        return card?.querySelector('.value')?.textContent ?? '';
+      };
+
+      // Each rec is its own cell → 2 cells, each with 1 variant → range = single value.
+      expect(cardValue(/Recommendations/)).toBe('2');
+
+      // Fire the real DOM change event on rec-a's checkbox — do NOT
+      // call loadRecommendations() again. The handler inside recommendations.ts
+      // calls renderRecommendationsList() which updates the cards in place.
+      const checkbox = document.querySelector<HTMLInputElement>('input[data-rec-id="rec-a"]');
+      expect(checkbox).not.toBeNull();
+      checkbox!.checked = true;
+      checkbox!.dispatchEvent(new Event('change'));
+
+      // Cards must now reflect only rec-a ($150 savings / $1000 upfront).
+      expect(cardValue(/Monthly Savings/)).toMatch(/^\$150$/);
+      expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/);
+      // Recommendations card must show "1 selected".
+      expect(cardValue(/Recommendations/)).toBe('1');
+    });
+
+    test('select-all change event updates summary cards in place (PR #283 CR pass-2)', async () => {
+      // Verifies the select-all checkbox event path: after checking select-all,
+      // summary cards reflect the picked-best-per-cell selection WITHOUT a
+      // second loadRecommendations() call.
+      //
+      // pickBestVariantPerCell picks one variant per (provider, account, service,
+      // region, resource_type, engine) group — for these 2 cells it picks one
+      // from cell1 and one from cell2, so both cards must show 2 rows selected.
+      const recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'cell2-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'cell2-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 700, total_upfront_cost: 3000, avg_payback_months: 2 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+
+      // Wire add/remove/clear to a shared Set (same coordination pattern as the
+      // row-checkbox test above and the evict-siblings test).
+      const selectedIds = new Set<string>();
+      (state.getSelectedRecommendationIDs as jest.Mock).mockImplementation(() => new Set(selectedIds));
+      (state.addSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.add(id); });
+      (state.removeSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.delete(id); });
+      (state.clearSelectedRecommendations as jest.Mock).mockImplementation(() => { selectedIds.clear(); });
+
+      await loadRecommendations();
+
+      const cardValue = (titlePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => titlePattern.test(c.querySelector('h3')?.textContent ?? ''));
+        return card?.querySelector('.value')?.textContent ?? '';
+      };
+
+      // Fire the real select-all change event — do NOT call loadRecommendations().
+      const selectAll = document.getElementById('select-all-recs') as HTMLInputElement;
+      expect(selectAll).not.toBeNull();
+      selectAll.checked = true;
+      selectAll.dispatchEvent(new Event('change'));
+
+      // addSelectedRecommendation was called once per cell (pickBestVariantPerCell
+      // picks one per cell → 2 cells → 2 adds).
+      expect((state.addSelectedRecommendation as jest.Mock).mock.calls.length).toBe(2);
+
+      // Recommendations card shows "2" (2 selected cells, not 4 raw variants).
+      expect(cardValue(/Recommendations/)).toBe('2');
+    });
+
     test('"Showing X of Y" surfaces selection count (closes #279)', async () => {
       const recs = [
         { id: 'r1', provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 0 },
