@@ -746,15 +746,15 @@ describe('Recommendations Module', () => {
       });
     });
 
-    test('renders sortable column headers with indicators (Bundle B: 11 columns)', async () => {
+    test('renders sortable column headers with indicators (Bundle B + #282: 12 columns)', async () => {
       await loadRecommendations();
       const list = document.getElementById('recommendations-list');
-      // Bundle B: every data column is sortable. 11 sortable data columns:
-      // provider, account, service, resource_type, region, count, term,
+      // Bundle B + issue #282: every data column is sortable. 12 sortable data columns:
+      // provider, account, service, resource_type, region, count, term, payment,
       // savings, upfront_cost, monthly_cost, effective_savings_pct.
       // The leading checkbox column is not sortable.
       const sortables = list?.querySelectorAll('th.sortable');
-      expect(sortables?.length).toBe(11);
+      expect(sortables?.length).toBe(12);
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
@@ -765,6 +765,73 @@ describe('Recommendations Module', () => {
       const header = document.querySelector<HTMLTableCellElement>('th[data-sort="upfront_cost"]');
       header?.click();
       expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'desc' });
+    });
+
+    test('Payment column header renders and is sortable (#282)', async () => {
+      await loadRecommendations();
+      const list = document.getElementById('recommendations-list');
+      const paymentTh = list?.querySelector('th[data-sort="payment"]');
+      expect(paymentTh).not.toBeNull();
+      expect(paymentTh?.textContent).toContain('Payment');
+      // Clicking the Payment header should call setRecommendationsSort with 'payment'.
+      (paymentTh as HTMLElement)?.click();
+      expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'payment', direction: 'desc' });
+    });
+
+    test('Payment column cell renders human-readable labels (#282)', async () => {
+      const recs = [
+        { id: 'p1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.small',  region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront',     savings: 100, upfront_cost: 1000 },
+        { id: 'p2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment: 'partial-upfront', savings: 200, upfront_cost: 500 },
+        { id: 'p3', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-west-2', count: 1, term: 1, payment: 'no-upfront',      savings: 300, upfront_cost: 0 },
+        { id: 'p4', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.m5',     region: 'us-west-2', count: 1, term: 3, payment: 'monthly',         savings: 400, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      await loadRecommendations();
+
+      const rows = document.querySelectorAll('tr.recommendation-row');
+      const paymentCells = Array.from(rows).map((row) => {
+        // Payment column is the 9th <td> (0-indexed: 0=checkbox, 1=provider,
+        // 2=account, 3=service, 4=resource_type, 5=region, 6=count, 7=term, 8=payment)
+        return row.querySelectorAll('td')[8]?.textContent?.trim() ?? '';
+      });
+      expect(paymentCells).toContain('All Upfront');
+      expect(paymentCells).toContain('Partial Upfront');
+      expect(paymentCells).toContain('No Upfront');
+      expect(paymentCells).toContain('Monthly');
+      // Em-dash rendered for missing payment (no dedicated test rec here,
+      // but the helper returns '—' for undefined — covered by formatPayment unit test).
+    });
+
+    test('Payment column filter narrows visible rows (#282)', async () => {
+      const recs = [
+        { id: 'f1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.small',  region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 1000 },
+        { id: 'f2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront',  savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+      // Apply a payment filter so only the all-upfront rec is visible.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        payment: { kind: 'set', values: ['all-upfront'] },
+      });
+
+      await loadRecommendations();
+
+      const rows = document.querySelectorAll('tr.recommendation-row');
+      // Only the all-upfront rec should be rendered.
+      expect(rows.length).toBe(1);
+      // Payment cell text should be "All Upfront".
+      const paymentCell = rows[0]?.querySelectorAll('td')[8];
+      expect(paymentCell?.textContent?.trim()).toBe('All Upfront');
+
+      // Restore filter mock so it doesn't leak into subsequent tests.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
     });
 
     test('bottom action box selection summary reflects current selection (Bundle B)', async () => {
@@ -1398,7 +1465,7 @@ describe('Bundle B: column header filter triggers', () => {
     const buttons = document.querySelectorAll<HTMLButtonElement>('th .column-filter-btn[data-column]');
     const cols = Array.from(buttons).map((b) => b.dataset['column']);
     expect(cols.sort()).toEqual(
-      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
+      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'payment', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
     );
   });
 
@@ -1723,9 +1790,12 @@ describe('Bundle B: sticky bottom action box', () => {
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
   });
 
-  test('bottom box exposes Payment / Capacity % / Purchase / Create Plan; no Term selector', async () => {
+  test('bottom box no longer exposes the bulk Payment dropdown (#282)', async () => {
     await loadRecommendations();
-    expect(document.getElementById('bulk-purchase-payment')).not.toBeNull();
+    // Issue #282: global Payment dropdown removed — each rec carries its own
+    // payment_option from the API fan-out; a global override was misleading.
+    expect(document.getElementById('bulk-purchase-payment')).toBeNull();
+    // Other controls remain.
     expect(document.getElementById('bulk-purchase-capacity')).not.toBeNull();
     expect(document.getElementById('bulk-purchase-btn')).not.toBeNull();
     expect(document.getElementById('create-plan-btn')).not.toBeNull();

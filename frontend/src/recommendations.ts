@@ -131,15 +131,9 @@ export async function loadRecommendations(): Promise<void> {
       if (g.default_payment && (validPayments as string[]).includes(g.default_payment)) {
         cachedGlobalDefaultPayment = g.default_payment as CompatPayment;
       }
-      // Seed the bulk-toolbar default with the resolved value so that
-      // loadBulkPurchaseState()'s first-visit fallback uses it.
-      // BulkPurchasePayment is a subset of CompatPayment ('upfront' is
-      // Azure-only and not a valid bulk-toolbar value); skip the seed
-      // if the global default is outside that subset.
-      const validBulkPayments: BulkPurchasePayment[] = ['all-upfront', 'partial-upfront', 'no-upfront', 'monthly'];
-      if ((validBulkPayments as string[]).includes(cachedGlobalDefaultPayment)) {
-        defaultBulkPurchaseState.payment = cachedGlobalDefaultPayment as BulkPurchasePayment;
-      }
+      // cachedGlobalDefaultPayment is now read directly by loadBulkPurchaseState()
+      // (issue #282 dropped the toolbar dropdown; no longer need to seed
+      // defaultBulkPurchaseState — the module-level cache is the source of truth).
     }
     accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
     state.setRecommendations((data.recommendations || []) as unknown as api.Recommendation[]);
@@ -269,6 +263,7 @@ const SORTABLE_STRING_COLUMNS: Record<string, (r: LocalRecommendation) => string
   service: (r) => r.service ?? '',
   resource_type: (r) => r.resource_type ?? '',
   region: (r) => r.region ?? '',
+  payment: (r) => r.payment ?? '',
 };
 
 // cellKey identifies the physical-resource cell a rec belongs to.
@@ -652,6 +647,7 @@ const SORT_HEADER_LABELS: Record<string, string> = {
   region: 'Region',
   count: 'Count',
   term: 'Term',
+  payment: 'Payment',
   savings: 'Monthly Savings',
   upfront_cost: 'Upfront Cost',
   monthly_cost: 'Monthly Cost',
@@ -769,6 +765,7 @@ function categoricalCellValue(r: LocalRecommendation, col: state.Recommendations
     case 'resource_type':  return r.resource_type ?? '';
     case 'region':         return r.region ?? '';
     case 'term':           return r.term == null ? '' : String(r.term);
+    case 'payment':        return r.payment ?? '';
     // Numeric columns shouldn't reach this branch; return empty for type-safety.
     case 'count':
     case 'savings':
@@ -796,7 +793,8 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     case 'service':
     case 'resource_type':
     case 'region':
-    case 'term':          return Number.NaN;
+    case 'term':
+    case 'payment':       return Number.NaN;
   }
 }
 
@@ -1664,8 +1662,21 @@ function providerBadgeClass(provider: string): string {
 // neither sortable nor filterable).
 const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
   'provider', 'account', 'service', 'resource_type', 'region',
-  'count', 'term', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
+  'count', 'term', 'payment', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
 ];
+
+// Map raw payment_option values to display labels for the Payment column.
+const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
+  'all-upfront':     'All Upfront',
+  'partial-upfront': 'Partial Upfront',
+  'no-upfront':      'No Upfront',
+  'monthly':         'Monthly',
+};
+
+function formatPayment(payment: string | undefined): string {
+  if (!payment) return '\u2014';
+  return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
+}
 
 // Helper: render one variant row (a single LocalRecommendation) with optional
 // indentation styling for multi-variant cells.
@@ -1691,6 +1702,7 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
     <td>${escapeHtml(rec.region)}</td>
     <td>${rec.count}</td>
     <td>${formatTerm(rec.term)}</td>
+    <td>${formatPayment(rec.payment)}</td>
     <td class="savings">${formatCurrency(rec.savings)}</td>
     <td>${formatCurrency(rec.upfront_cost)}</td>
     <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
@@ -1698,8 +1710,8 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
   </tr>`;
 }
 
-// The total column count for colspan on summary rows: checkbox col + 11 data cols = 12.
-const TABLE_COL_COUNT = 12;
+// The total column count for colspan on summary rows: checkbox col + 12 data cols = 13.
+const TABLE_COL_COUNT = 13;
 
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
@@ -1835,9 +1847,13 @@ const BULK_PURCHASE_LS_KEY = 'cudly.recommendations.bulkPurchase.v1';
 // BulkPurchaseToolbarState used to carry a `term` field that overrode each
 // row's recommended term at API-call time. Bundle B drops it: each rec is
 // purchased with its own per-row term (see term-aware bucketing in
-// handleBulkPurchaseClick). loadBulkPurchaseState explicitly picks known
-// fields so any legacy `term` from older localStorage values is silently
-// ignored on read — no migration shim needed.
+// handleBulkPurchaseClick). Issue #282 drops the global Payment dropdown
+// from the toolbar: the `payment` field is kept internally (seeded from
+// GlobalConfig or 'all-upfront') so the fan-out modal's override/fallback
+// logic continues to work, but it is no longer exposed in the UI or
+// persisted to localStorage. loadBulkPurchaseState explicitly picks known
+// fields so any legacy `term` or `payment` from older localStorage values
+// is silently ignored on read — no migration shim needed.
 type BulkPurchasePayment = 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
 
 // Centralized bucket-level payment compatibility check. A bucket is
@@ -1869,11 +1885,11 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
     if (!raw) return { ...defaultBulkPurchaseState };
     const parsed = JSON.parse(raw) as Partial<BulkPurchaseToolbarState> & { term?: unknown };
     // Explicit field-pick rather than spread-and-omit — avoids leaking a
-    // legacy `term` value into the returned object even at runtime.
+    // legacy `term` or `payment` from older localStorage values at runtime.
+    // Payment is seeded from GlobalConfig only (issue #282 drops the toolbar
+    // dropdown; the field is internal-only, not persisted).
     return {
-      // issue #223: fall back to resolved GlobalConfig.DefaultPayment rather
-      // than the literal 'all-upfront' when localStorage has no stored value.
-      payment: (parsed.payment || cachedGlobalDefaultPayment) as BulkPurchasePayment,
+      payment: cachedGlobalDefaultPayment as BulkPurchasePayment,
       capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
     };
   } catch {
@@ -1883,7 +1899,9 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
 
 function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
   try {
-    localStorage.setItem(BULK_PURCHASE_LS_KEY, JSON.stringify(s));
+    // Only persist capacity — payment is dropped from the toolbar (issue #282)
+    // and is now session-only, seeded from GlobalConfig.
+    localStorage.setItem(BULK_PURCHASE_LS_KEY, JSON.stringify({ capacity: s.capacity }));
   } catch {
     // Private-browsing / quota-exceeded — non-fatal, just lose the
     // sticky choice. The bottom box still works in-session.
@@ -1897,11 +1915,15 @@ function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
 // leaving the input/select elements (and their in-progress values) alone.
 //
 // IDs preserved for backward compatibility:
-//   #bulk-purchase-payment  (Payment dropdown)
 //   #bulk-purchase-capacity (Capacity % input — read by app.ts:307)
 //   #bulk-purchase-btn      (Purchase one-off button)
 //   #create-plan-btn        (Create Purchase Plan button — relocated from
 //                            the old top filter bar)
+//
+// Issue #282: the bulk Payment dropdown (#bulk-purchase-payment) is removed.
+// Each rec carries its own payment_option from the API fan-out; the per-cell
+// radio enforcement caps purchase to one variant per cell. A global override
+// was misleading and is redundant.
 function mountBottomActionBox(): HTMLElement | null {
   const recsTab = document.getElementById('recommendations-tab');
   if (!recsTab) return null;
@@ -1922,21 +1944,6 @@ function mountBottomActionBox(): HTMLElement | null {
   summary.id = 'recommendations-action-summary';
   summary.className = 'recommendations-action-summary';
   box.appendChild(summary);
-
-  // Payment dropdown — preserved ID
-  const paymentLabel = document.createElement('label');
-  paymentLabel.textContent = 'Payment ';
-  const paymentSelect = document.createElement('select');
-  paymentSelect.id = 'bulk-purchase-payment';
-  [['all-upfront', 'All Upfront'], ['partial-upfront', 'Partial Upfront'], ['no-upfront', 'No Upfront'], ['monthly', 'Monthly']].forEach(([v, t]) => {
-    const opt = document.createElement('option');
-    opt.value = v as string;
-    opt.textContent = t as string;
-    if (v === tbState.payment) opt.selected = true;
-    paymentSelect.appendChild(opt);
-  });
-  paymentLabel.appendChild(paymentSelect);
-  box.appendChild(paymentLabel);
 
   // Capacity % input — preserved ID (app.ts:307 reads this)
   const capacityLabel = document.createElement('label');
@@ -1986,11 +1993,10 @@ function mountBottomActionBox(): HTMLElement | null {
 
   const persist = (): void => {
     saveBulkPurchaseState({
-      payment: paymentSelect.value as BulkPurchaseToolbarState['payment'],
+      payment: tbState.payment,
       capacity: Math.max(1, Math.min(100, parseInt(capacityInput.value, 10) || 100)),
     });
   };
-  paymentSelect.addEventListener('change', persist);
   capacityInput.addEventListener('change', persist);
 
   purchaseBtn.addEventListener('click', () => {
