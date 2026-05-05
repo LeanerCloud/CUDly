@@ -139,8 +139,10 @@ func TestPerAccountPerms_Recommendations_ListFilter(t *testing.T) {
 
 	// Regression anchor: if the filter is removed, account-B would appear.
 	for _, r := range result.Recommendations {
-		assert.NotEqual(t, permsAccB, r.CloudAccountID,
-			"account-B recommendation must not appear in scoped user's list")
+		if r.CloudAccountID != nil {
+			assert.NotEqual(t, permsAccB, *r.CloudAccountID,
+				"account-B recommendation must not appear in scoped user's list")
+		}
 	}
 }
 
@@ -379,6 +381,8 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 	})
 	require.NoError(t, err, "scoped user must be able to query analytics for account-A")
 	require.NotNil(t, result)
+	// Confirm the analytics backend was reached — not short-circuited.
+	mockClient.AssertCalled(t, "QueryHistory", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // ─── 5. GET /history/breakdown ───────────────────────────────────────────────
