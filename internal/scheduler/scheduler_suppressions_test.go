@@ -50,6 +50,15 @@ func (m *mockSuppressionStore) GetAccountServiceOverride(_ context.Context, _, _
 	return nil, nil
 }
 
+// GetGlobalConfig returns a default config so ListRecommendations can resolve
+// the effective stale TTL without panicking on the embedded MockConfigStore.
+func (m *mockSuppressionStore) GetGlobalConfig(_ context.Context) (*config.GlobalConfig, error) {
+	return &config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil
+}
+
 func strPtr(s string) *string { return &s }
 
 func TestApplySuppressions_SubtractsCount(t *testing.T) {

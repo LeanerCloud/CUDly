@@ -165,6 +165,87 @@ func TestGlobalConfig_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// Issue #301: RecommendationsCacheStaleHours validation
+		{
+			name: "stale hours zero is valid (disable auto-refresh)",
+			config: GlobalConfig{
+				DefaultTerm:                    3,
+				RecommendationsCacheStaleHours: 0,
+				RecommendationsLookbackDays:    7,
+			},
+			wantErr: false,
+		},
+		{
+			name: "stale hours at max (8760) is valid",
+			config: GlobalConfig{
+				DefaultTerm:                    3,
+				RecommendationsCacheStaleHours: MaxRecommendationsCacheStaleHours,
+				RecommendationsLookbackDays:    7,
+			},
+			wantErr: false,
+		},
+		{
+			name: "stale hours negative is invalid",
+			config: GlobalConfig{
+				DefaultTerm:                    3,
+				RecommendationsCacheStaleHours: -1,
+				RecommendationsLookbackDays:    7,
+			},
+			wantErr: true,
+			errMsg:  "recommendations_cache_stale_hours must be between 0",
+		},
+		{
+			name: "stale hours above max is invalid",
+			config: GlobalConfig{
+				DefaultTerm:                    3,
+				RecommendationsCacheStaleHours: MaxRecommendationsCacheStaleHours + 1,
+				RecommendationsLookbackDays:    7,
+			},
+			wantErr: true,
+			errMsg:  "recommendations_cache_stale_hours must be between 0",
+		},
+		// Issue #301: RecommendationsLookbackDays validation (AWS enum {7,30,60})
+		{
+			name: "lookback 7 is valid",
+			config: GlobalConfig{
+				DefaultTerm:                 3,
+				RecommendationsLookbackDays: 7,
+			},
+			wantErr: false,
+		},
+		{
+			name: "lookback 30 is valid",
+			config: GlobalConfig{
+				DefaultTerm:                 3,
+				RecommendationsLookbackDays: 30,
+			},
+			wantErr: false,
+		},
+		{
+			name: "lookback 60 is valid",
+			config: GlobalConfig{
+				DefaultTerm:                 3,
+				RecommendationsLookbackDays: 60,
+			},
+			wantErr: false,
+		},
+		{
+			name: "lookback 14 is invalid (not in AWS enum)",
+			config: GlobalConfig{
+				DefaultTerm:                 3,
+				RecommendationsLookbackDays: 14,
+			},
+			wantErr: true,
+			errMsg:  "recommendations_lookback_days must be one of",
+		},
+		{
+			name: "lookback 0 is valid (unset, uses backend default)",
+			config: GlobalConfig{
+				DefaultTerm:                 3,
+				RecommendationsLookbackDays: 0,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

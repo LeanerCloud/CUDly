@@ -55,6 +55,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"ri_exchange_max_per_exchange_usd", "ri_exchange_max_daily_usd", "ri_exchange_lookback_days",
 		"auto_collect", "collection_schedule", "notification_days_before",
 		"grace_period_days",
+		"recommendations_cache_stale_hours", "recommendations_lookback_days",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -63,6 +64,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		0.0, 0.0, 30,
 		true, "daily", 3,
 		"{}",
+		24, 7,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -99,6 +101,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"ri_exchange_max_per_exchange_usd", "ri_exchange_max_daily_usd", "ri_exchange_lookback_days",
 		"auto_collect", "collection_schedule", "notification_days_before",
 		"grace_period_days",
+		"recommendations_cache_stale_hours", "recommendations_lookback_days",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -108,6 +111,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			0.0, 0.0, 30,
 			true, "daily", 3,
 			graceJSON,
+			24, 7,
 		}
 	}
 

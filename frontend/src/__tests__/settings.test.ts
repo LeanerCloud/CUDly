@@ -75,6 +75,12 @@ describe('Settings Module', () => {
         </select>
         <input type="number" id="setting-default-coverage">
         <input type="number" id="setting-notification-days">
+        <input type="number" id="setting-recs-stale-hours" value="24">
+        <select id="setting-recs-lookback-days">
+          <option value="7" selected>7 days</option>
+          <option value="30">30 days</option>
+          <option value="60">60 days</option>
+        </select>
         <!-- AWS term/payment selects -->
         <select id="aws-ec2-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-rds-term"><option value="1">1</option><option value="3">3</option></select>
@@ -390,6 +396,44 @@ describe('Settings Module', () => {
       expect(formEl?.classList.contains('hidden')).toBe(false);
     });
 
+    // Issue #301: recommendations cycle params populated from API
+    test('populates recommendations_cache_stale_hours and recommendations_lookback_days', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: {
+          enabled_providers: ['aws'],
+          default_term: 3,
+          default_payment: 'all-upfront',
+          default_coverage: 80,
+          notification_days_before: 3,
+          recommendations_cache_stale_hours: 48,
+          recommendations_lookback_days: 30,
+        },
+      });
+
+      await loadGlobalSettings();
+
+      expect((document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value).toBe('48');
+      expect((document.getElementById('setting-recs-lookback-days') as HTMLSelectElement).value).toBe('30');
+    });
+
+    test('populates recommendations fields with defaults when absent from API response', async () => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: {
+          enabled_providers: ['aws'],
+          default_term: 3,
+          default_payment: 'all-upfront',
+          default_coverage: 80,
+          notification_days_before: 3,
+          // recommendations_cache_stale_hours and recommendations_lookback_days absent
+        },
+      });
+
+      await loadGlobalSettings();
+
+      expect((document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value).toBe('24');
+      expect((document.getElementById('setting-recs-lookback-days') as HTMLSelectElement).value).toBe('7');
+    });
+
     test('handles missing credentials config gracefully', async () => {
       (api.getConfig as jest.Mock).mockResolvedValue({
         global: {
@@ -474,6 +518,8 @@ describe('Settings Module', () => {
         // doesn't include the new inputs (older test harness setup).
         // The save helper reads missing elements as "empty" → default 7.
         grace_period_days: { aws: 7, azure: 7, gcp: 7 },
+        recommendations_cache_stale_hours: 24,
+        recommendations_lookback_days: 7,
       });
     });
 
@@ -584,6 +630,31 @@ describe('Settings Module', () => {
       // entries, net +2.
       expect(api.updateServiceConfig).toHaveBeenCalledTimes(18);
     });
+
+    // Issue #301: configurable recommendations cache-staleness threshold + lookback
+    test('sends recommendations_cache_stale_hours and recommendations_lookback_days', async () => {
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value = '48';
+      (document.getElementById('setting-recs-lookback-days') as HTMLSelectElement).value = '30';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      const call = (api.updateConfig as jest.Mock).mock.calls[0][0];
+      expect(call.recommendations_cache_stale_hours).toBe(48);
+      expect(call.recommendations_lookback_days).toBe(30);
+    });
+
+    test('rejects out-of-range recommendations_cache_stale_hours and does not call updateConfig', async () => {
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value = '9999';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      expect(api.updateConfig).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+    });
   }); // end saveGlobalSettings
 
   describe('resetSettings', () => {
@@ -623,6 +694,18 @@ describe('Settings Module', () => {
       expect((document.getElementById('setting-default-payment') as HTMLSelectElement).value).toBe('all-upfront');
       expect((document.getElementById('setting-default-coverage') as HTMLInputElement).value).toBe('80');
       expect((document.getElementById('setting-notification-days') as HTMLInputElement).value).toBe('3');
+    });
+
+    // Issue #301: recommendations cycle params reset to defaults
+    test('resets recommendations_cache_stale_hours to 24 and lookback to 7', async () => {
+      mockConfirmDialog.mockResolvedValueOnce(true);
+      (document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value = '48';
+      (document.getElementById('setting-recs-lookback-days') as HTMLSelectElement).value = '60';
+
+      await resetSettings();
+
+      expect((document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value).toBe('24');
+      expect((document.getElementById('setting-recs-lookback-days') as HTMLSelectElement).value).toBe('7');
     });
   });
 

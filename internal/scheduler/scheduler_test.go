@@ -1061,6 +1061,10 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
 	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
 		Return(cached, nil)
+	// Non-Lambda path resolves the effective stale TTL from the DB config.
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+	}, nil)
 
 	scheduler := &Scheduler{config: mockStore}
 
@@ -1088,6 +1092,10 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 	}
 	mockStore.On("ListStoredRecommendations", ctx, expected).
 		Return([]config.RecommendationRecord{}, nil)
+	// Non-Lambda path resolves effective stale TTL from DB config.
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+	}, nil)
 
 	scheduler := &Scheduler{config: mockStore}
 
@@ -1160,7 +1168,7 @@ func TestScheduler_ListRecommendations_StaleSingleFlight(t *testing.T) {
 	// Seed the flag as though a refresh is already in flight. The
 	// guard short-circuits and no new goroutine fires.
 	scheduler.collecting.Store(true)
-	scheduler.maybeKickBackgroundRefresh(freshness)
+	scheduler.maybeKickBackgroundRefresh(freshness, time.Nanosecond)
 	assert.True(t, scheduler.collecting.Load(), "in-flight flag must not be cleared by the guard path")
 	_ = ctx
 }
