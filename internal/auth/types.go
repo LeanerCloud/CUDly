@@ -325,6 +325,29 @@ const (
 	// somebody else's failed row.
 	ActionRetryOwn = "retry-own"
 	ActionRetryAny = "retry-any"
+	// ActionApproveOwn / ActionApproveAny gate the session-authed Approve
+	// button on pending Purchase History rows (issue #286). Mirror image
+	// of the cancel-{own,any} verbs above:
+	//
+	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//     both verbs.
+	//   * RoleUser — DefaultUserPermissions() adds approve-own:purchases.
+	//     Allows approving pending executions whose created_by_user_id
+	//     matches the session user. Legacy rows with NULL creator are
+	//     out of reach for non-admins via this verb; admins still
+	//     approve them via approve-any.
+	//   * RoleReadOnly — neither verb. Read-only users cannot approve.
+	//
+	// approve-any has no default non-admin grant; the constant exists so
+	// future operator roles can be granted broad approve rights without
+	// escalating to admin. Add it to a custom group's Permissions to
+	// enable that path.
+	//
+	// The legacy email-token approve path stays unchanged as an escape
+	// hatch and is gated by token possession + the per-account
+	// contact_email gate (PR #101), not these verbs.
+	ActionApproveOwn = "approve-own"
+	ActionApproveAny = "approve-any"
 )
 
 // Predefined resources
@@ -371,6 +394,14 @@ func DefaultUserPermissions() []Permission {
 		// and the retry-attempt counter on the chain to be below the
 		// soft-block threshold (overridable with ?force=true).
 		{Action: ActionRetryOwn, Resource: ResourcePurchases},
+		// approve-own:purchases — every authenticated user can approve
+		// pending purchase executions they created themselves (issue #286).
+		// The handler still requires the execution to be in an approvable
+		// state (pending/notified) and the creator UUID to match the
+		// session UserID before honouring the request. The legacy email-
+		// token approve path stays as an escape hatch for non-session
+		// approvers.
+		{Action: ActionApproveOwn, Resource: ResourcePurchases},
 	}
 }
 

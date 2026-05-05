@@ -255,8 +255,9 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 8 = 6 read/plan-author + cancel-own:purchases (issue #46) + retry-own:purchases (issue #47).
-		assert.Len(t, permissions, 8)
+		// 9 = 6 read/plan-author + cancel-own:purchases (issue #46) +
+		// retry-own:purchases (issue #47) + approve-own:purchases (issue #286).
+		assert.Len(t, permissions, 9)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -313,8 +314,9 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 8 user (incl. cancel-own (#46) + retry-own (#47):purchases) + 1 group1 + 1 group2 = 10
-		assert.Len(t, permissions, 10)
+		// 9 user (incl. cancel-own (#46) + retry-own (#47) +
+		// approve-own (#286):purchases) + 1 group1 + 1 group2 = 11
+		assert.Len(t, permissions, 11)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -351,8 +353,9 @@ func TestService_GetUserPermissions(t *testing.T) {
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
 		// Should have only user permissions, missing group is skipped.
-		// 8 = 6 read/plan-author + cancel-own:purchases (issue #46) + retry-own:purchases (issue #47).
-		assert.Len(t, permissions, 8)
+		// 9 = 6 read/plan-author + cancel-own:purchases (issue #46) +
+		// retry-own:purchases (issue #47) + approve-own:purchases (issue #286).
+		assert.Len(t, permissions, 9)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -429,8 +432,9 @@ func TestService_BuildAuthContext(t *testing.T) {
 		assert.Contains(t, authCtx.AllowedAccounts, "111111111111")
 		assert.Contains(t, authCtx.AllowedAccounts, "222222222222")
 		assert.Contains(t, authCtx.AllowedAccounts, "333333333333")
-		// 8 user perms (incl. cancel-own (#46) + retry-own (#47):purchases) + 1 group1 + 1 group2 = 10
-		assert.Len(t, authCtx.Permissions, 10)
+		// 9 user perms (incl. cancel-own (#46) + retry-own (#47) +
+		// approve-own (#286):purchases) + 1 group1 + 1 group2 = 11
+		assert.Len(t, authCtx.Permissions, 11)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -452,8 +456,10 @@ func TestService_BuildAuthContext(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, authCtx)
 		assert.Empty(t, authCtx.AllowedAccounts)
-		// 6 read/plan-author + cancel-own:purchases (issue #46) + retry-own:purchases (issue #47) = 8. Only role-based permissions.
-		assert.Len(t, authCtx.Permissions, 8)
+		// 6 read/plan-author + cancel-own:purchases (issue #46) +
+		// retry-own:purchases (issue #47) + approve-own:purchases
+		// (issue #286) = 9. Only role-based permissions.
+		assert.Len(t, authCtx.Permissions, 9)
 
 		mockStore.AssertExpectations(t)
 	})

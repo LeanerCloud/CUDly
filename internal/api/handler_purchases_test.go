@@ -50,6 +50,14 @@ func TestHandler_approvePurchase(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// After issue #286 the session-authed approve dispatch consults the
+	// approve-{any,own} verb matrix BEFORE falling through to the token
+	// branch. The session here is the approver's mailbox (no role / no
+	// UserID), so the verb checks must explicitly return false to drop
+	// into the legacy token-authed branch this test exercises. Mirrors
+	// the cancel test's `.Maybe()` pattern below.
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", approver).Return(nil)
@@ -117,6 +125,14 @@ func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	// Session belongs to someone who is NOT the authorised approver.
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "wrong@example.com"}, nil)
+	// After issue #286 the dispatch consults approve-{any,own} BEFORE
+	// the contact_email gate. The wrong@example.com session has neither
+	// verb, so the dispatch returns 403 from authorizeSessionApprove,
+	// `isPermissionDenied(err)` matches, and execution falls through to
+	// the token branch's authorizeApprovalAction — which is what
+	// produces the "not the authorised approver" error this test pins.
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 
@@ -166,6 +182,12 @@ func TestHandler_approvePurchase_RejectsMissingContactEmail(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: globalNotify}, nil)
+	// Issue #286 dispatch consults approve-{any,own} BEFORE the contact_email
+	// gate. globalNotify session has neither verb → 403 → fall through to
+	// token branch → authorizeApprovalAction surfaces the "no per-account
+	// contact email" error this test pins.
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 
@@ -228,6 +250,12 @@ func TestHandler_approvePurchase_AcceptsContactEmailSession(t *testing.T) {
 	// Session email matches the account contact email — global notify is
 	// NOT enough here because a contact email exists for the account.
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	// Issue #286: dispatch consults approve-{any,own} BEFORE the contact_email
+	// gate. The contact-email session has neither verb (no Role / no UserID)
+	// → 403 → fall through to token branch → authorizeApprovalAction matches
+	// the contact email and the legacy ApproveExecution path runs.
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contactEmail).Return(nil)
@@ -272,6 +300,12 @@ func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: globalNotify}, nil)
+	// Issue #286: dispatch consults approve-{any,own} BEFORE the
+	// contact_email gate. Returning false for both verbs lets the
+	// dispatch fall through to the token branch where the
+	// "not the authorised approver" check fires.
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 

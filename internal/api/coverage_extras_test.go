@@ -26,10 +26,36 @@ func TestHandler_approvePurchase_InvalidUUID(t *testing.T) {
 }
 
 func TestHandler_approvePurchase_EmptyToken(t *testing.T) {
-	h := &Handler{}
-	_, err := h.approvePurchase(context.Background(), nil, "11111111-1111-1111-1111-111111111111", "")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "approval token is required")
+	// After issue #286 the empty-token path is no longer a pre-flight 400 —
+	// approvePurchase dispatches three ways (session-authed RBAC,
+	// token-authed legacy, session-authed fallback when token=="").
+	// The contract this test pins: a malformed caller (empty token + no
+	// session) must NOT silently succeed. We require an error AND
+	// we fail loudly on panic — CR pass on PR #299 flagged the prior
+	// `recover()` swallow as a false-green risk: a panic in any new
+	// dispatch branch could pass the test without ever asserting on
+	// `err`.
+	//
+	// Wire a minimal MockConfigStore that returns a clean "execution
+	// not found" error from GetExecutionByID so the dispatch reaches a
+	// proper NewClientError(404) instead of nil-deref'ing on h.config.
+	// (Pre-#286 the empty-token check short-circuited at the very top
+	// of approvePurchase, so a zero-Handler test was sufficient. The
+	// dispatch refactor moved that check after GetExecutionByID; the
+	// test surface adapts in step.)
+	ctx := context.Background()
+	execID := "11111111-1111-1111-1111-111111111111"
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(nil, errors.New("execution not found"))
+	h := &Handler{config: mockConfig}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("approvePurchase should return an error for empty token + zero handler, not panic: %v", r)
+		}
+	}()
+	_, err := h.approvePurchase(ctx, nil, execID, "")
+	require.Error(t, err, "approvePurchase with empty token + zero handler must fail")
 }
 
 func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
@@ -59,6 +85,15 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// After issue #286, approvePurchase is session-first: with a Bearer
+	// header present the dispatch consults the approve-{any,own} RBAC
+	// matrix BEFORE falling through to the token branch. The session
+	// here is the approver's mailbox (no role / no UserID), so the verb
+	// checks must explicitly return false to drop into the legacy
+	// token-authed branch this test exercises. (Pre-#286 the dispatch
+	// went straight to the token branch and these mocks weren't needed.)
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil)
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveExecution", ctx, execID, "tok", approver).
