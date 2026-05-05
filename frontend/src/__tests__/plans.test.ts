@@ -902,7 +902,15 @@ describe('Plans Module', () => {
       expect(sentRecs.map((r: { id: string }) => r.id).sort()).toEqual(['rec-1', 'rec-2']);
     });
 
-    test('falls back to all visible when no selection (Bundle B)', async () => {
+    test('does NOT include any recs when no selection (#273 CR follow-up)', async () => {
+      // The Bundle B fallback to "all visible recs" was removed as part of
+      // the #273 CR loop: Refresh / filter changes silently mutate the
+      // visible set between the user clicking the Create-Plan-button and
+      // clicking Save in the modal, so a no-selection path is structurally
+      // unsafe. The bottom action box already disables the button in that
+      // state; this assertion is the defence-in-depth at the savePlan
+      // layer for any path that bypasses the disabled UI (programmatic
+      // calls, future code paths, regressions on the gating).
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue([
         { id: 'rec-1', service: 'ec2' },
@@ -916,7 +924,7 @@ describe('Plans Module', () => {
       await savePlan(event);
 
       const sentRecs = (api.createPlan as jest.Mock).mock.calls[0][0].recommendations;
-      expect(sentRecs.map((r: { id: string }) => r.id).sort()).toEqual(['rec-1', 'rec-2']);
+      expect(sentRecs == null || sentRecs.length === 0).toBe(true);
     });
 
     test('plan does not include filtered-out recs (Bundle B)', async () => {

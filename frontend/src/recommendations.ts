@@ -1785,6 +1785,21 @@ function mountBottomActionBox(): HTMLElement | null {
   planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
   box.appendChild(planBtn);
 
+  // a11y hint for the disabled-button state (#273 CR follow-up).
+  // Disabled <button> elements are non-focusable per HTML spec and
+  // browsers don't reliably show their `title` tooltips, so a sibling
+  // hint with aria-describedby is the discoverable channel for both
+  // mouse and keyboard users. The element starts hidden; updateBottom-
+  // ActionBox toggles its visibility and links the buttons via
+  // aria-describedby when they're disabled.
+  const disabledHint = document.createElement('span');
+  disabledHint.id = 'recommendations-action-disabled-hint';
+  disabledHint.className = 'recommendations-action-disabled-hint';
+  disabledHint.setAttribute('role', 'status');
+  disabledHint.setAttribute('aria-live', 'polite');
+  disabledHint.hidden = true;
+  box.appendChild(disabledHint);
+
   const persist = (): void => {
     saveBulkPurchaseState({
       payment: paymentSelect.value as BulkPurchaseToolbarState['payment'],
@@ -1866,30 +1881,57 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
 
   const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement | null;
   const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement | null;
+  const disabledHint = document.getElementById('recommendations-action-disabled-hint');
   const hasSelection = selectedVisibleCount > 0;
-  const disabledTooltip = loadedCount === 0
+  const disabledMessage = loadedCount === 0
     ? 'No recommendations loaded'
     : visibleCount === 0
       ? 'No rows visible — adjust filters'
       : 'Select at least one cell to enable';
+
+  // a11y: the disabled-state explanation lives on a sibling hint span,
+  // not on the buttons' `title` attribute. Disabled <button> elements are
+  // non-focusable per HTML spec and don't reliably surface `title`
+  // tooltips across browsers, so keyboard users would never see the
+  // hint and mouse users only sometimes would. The sibling element +
+  // aria-describedby pattern works for both. See #273 CR follow-up.
+  if (disabledHint) {
+    if (hasSelection) {
+      disabledHint.hidden = true;
+      disabledHint.textContent = '';
+    } else {
+      disabledHint.hidden = false;
+      disabledHint.textContent = disabledMessage;
+    }
+  }
 
   if (purchaseBtn) {
     purchaseBtn.disabled = !hasSelection;
     purchaseBtn.textContent = hasSelection
       ? `Purchase ${selectedVisibleCount} selected`
       : 'Purchase';
-    purchaseBtn.title = hasSelection
-      ? 'Buy these reservations now (one-off, processed immediately)'
-      : disabledTooltip;
+    if (hasSelection) {
+      purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
+      purchaseBtn.removeAttribute('aria-describedby');
+    } else {
+      // Drop the title — title on disabled buttons is unreliable; the
+      // sibling hint carries the message.
+      purchaseBtn.removeAttribute('title');
+      purchaseBtn.setAttribute('aria-describedby', 'recommendations-action-disabled-hint');
+    }
   }
   if (planBtn) {
     planBtn.disabled = !hasSelection;
     planBtn.textContent = hasSelection
       ? `Plan from ${selectedVisibleCount} selected`
       : 'Create Plan';
-    planBtn.title = hasSelection
-      ? 'Schedule a recurring plan that will purchase these recommendations on a defined cadence'
-      : disabledTooltip;
+    if (hasSelection) {
+      planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
+      planBtn.removeAttribute('aria-describedby');
+    } else {
+      planBtn.removeAttribute('title');
+      planBtn.setAttribute('aria-describedby', 'recommendations-action-disabled-hint');
+    }
   }
 }
 

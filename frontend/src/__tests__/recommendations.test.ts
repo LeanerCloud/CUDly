@@ -1477,30 +1477,43 @@ describe('Bundle B: sticky bottom action box', () => {
   });
 
   test('button labels reflect the selection (#273)', async () => {
-    // No selection → buttons disabled, label is the static form, tooltip
-    // prompts the user. The previous "Purchase N visible" fallback was
-    // removed because Refresh / filter changes silently mutate the
-    // visible set, making misclick irreversible.
+    // No selection → buttons disabled, label is the static form. The
+    // disabled-state explanation lives on a sibling hint span linked via
+    // aria-describedby (CR follow-up): disabled <button> elements are
+    // non-focusable per HTML spec and don't reliably show title tooltips
+    // across browsers, so the sibling-element pattern is the
+    // discoverable channel for both mouse and keyboard users.
     await loadRecommendations();
     let purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
     let planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement;
+    let hint = document.getElementById('recommendations-action-disabled-hint') as HTMLSpanElement;
     expect(purchaseBtn.disabled).toBe(true);
     expect(purchaseBtn.textContent).toBe('Purchase');
-    expect(purchaseBtn.title).toContain('Select at least one cell to enable');
+    expect(purchaseBtn.hasAttribute('title')).toBe(false);
+    expect(purchaseBtn.getAttribute('aria-describedby')).toBe('recommendations-action-disabled-hint');
     expect(planBtn.disabled).toBe(true);
     expect(planBtn.textContent).toBe('Create Plan');
-    expect(planBtn.title).toContain('Select at least one cell to enable');
+    expect(planBtn.hasAttribute('title')).toBe(false);
+    expect(planBtn.getAttribute('aria-describedby')).toBe('recommendations-action-disabled-hint');
+    expect(hint.hidden).toBe(false);
+    expect(hint.textContent).toContain('Select at least one cell to enable');
+    expect(hint.getAttribute('aria-live')).toBe('polite');
 
     // Selection populated → buttons enabled, label shows the selection
-    // count.
+    // count, hint hidden, aria-describedby cleared, title restored.
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1']));
     await loadRecommendations();
     purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
     planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement;
+    hint = document.getElementById('recommendations-action-disabled-hint') as HTMLSpanElement;
     expect(purchaseBtn.disabled).toBe(false);
     expect(purchaseBtn.textContent).toBe('Purchase 1 selected');
+    expect(purchaseBtn.hasAttribute('aria-describedby')).toBe(false);
+    expect(purchaseBtn.title).toContain('Buy these reservations now');
     expect(planBtn.disabled).toBe(false);
     expect(planBtn.textContent).toBe('Plan from 1 selected');
+    expect(planBtn.hasAttribute('aria-describedby')).toBe(false);
+    expect(hint.hidden).toBe(true);
   });
 
   test('buttons disabled when no rows visible at all', async () => {
