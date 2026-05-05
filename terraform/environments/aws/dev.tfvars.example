@@ -148,5 +148,7 @@ additional_env_vars = {}
 # When enabling, also set archera_aws_account_id to the value provided by
 # Archera during onboarding.
 
-enable_archera         = false
-# archera_aws_account_id = "123456789012"  # replace with Archera's account ID
+enable_archera                  = false
+enable_archera_purchase_actions = false  # keep false until purchase approval workflow is confirmed
+# archera_aws_account_id = "123456789012"                 # replace with Archera's AWS account ID
+# archera_external_id    = "replace-with-archera-extid"  # required when enable_archera = true

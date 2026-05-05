@@ -3,10 +3,11 @@
 # ==============================================
 #
 # When enable_archera = true, this block creates a cross-account IAM role
-# that Archera assumes to read commitment and cost data and to execute
-# Reserved Instance / Savings Plan purchases on behalf of the customer.
+# that Archera assumes to read commitment and cost data.  Purchase-execution
+# permissions are separately gated behind enable_archera_purchase_actions
+# so telemetry-only rollouts never accidentally include financial writes.
 #
-# PROVISONAL SCOPE — must be confirmed against Archera integration docs
+# PROVISIONAL SCOPE — must be confirmed against Archera integration docs
 # before flipping enable_archera = true in any tfvars.
 # TODO(@cristim): confirm Archera scope list against integration docs
 # before enabling.  Reference: https://archera.ai/docs (integration guide).
@@ -27,7 +28,7 @@ resource "aws_iam_role" "archera_integration" {
   count = var.enable_archera ? 1 : 0
 
   name        = local.archera_role_name
-  description = "Assumed by Archera SaaS to read cost data and execute RI/SP purchases (provisional — confirm scope before enabling)"
+  description = "Assumed by Archera SaaS to read cost data and (optionally) execute RI/SP purchases (provisional — confirm scope before enabling)"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -39,11 +40,12 @@ resource "aws_iam_role" "archera_integration" {
           AWS = "arn:aws:iam::${var.archera_aws_account_id}:root"
         }
         Action = "sts:AssumeRole"
-        # Optional: require ExternalId supplied by Archera during onboarding.
-        # Uncomment and set archera_external_id once confirmed with Archera.
-        # Condition = {
-        #   StringEquals = { "sts:ExternalId" = var.archera_external_id }
-        # }
+        # ExternalId prevents confused-deputy attacks — always required when
+        # trusting a third-party SaaS account.  Set archera_external_id to
+        # the value Archera provides during onboarding.
+        Condition = {
+          StringEquals = { "sts:ExternalId" = var.archera_external_id }
+        }
       },
     ]
   })
@@ -54,18 +56,16 @@ resource "aws_iam_role" "archera_integration" {
   })
 }
 
-# Least-privilege policy for Archera — PROVISIONAL.
-# Actions are split into read-only cost/commitment data (safe to enable
-# immediately) and purchase-execution (requires explicit confirmation with
-# Archera before enabling).
+# Read-only policy for Archera — PROVISIONAL.
+# Safe to attach at initial rollout (no financial writes).
 #
 # TODO(@cristim): narrow to the exact action list from Archera's onboarding
 # docs before setting enable_archera = true in any environment.
-resource "aws_iam_policy" "archera_integration" {
+resource "aws_iam_policy" "archera_read" {
   count = var.enable_archera ? 1 : 0
 
-  name        = "cudly-archera-integration"
-  description = "Provisional Archera integration policy — read commitment + cost data, execute RI/SP purchases"
+  name        = "cudly-archera-read"
+  description = "Provisional Archera read-only policy — cost Explorer + RI/SP telemetry (no purchase actions)"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -130,9 +130,38 @@ resource "aws_iam_policy" "archera_integration" {
         ]
         Resource = "*"
       },
+    ]
+  })
+
+  tags = merge(local.common_tags, {
+    Integration = "archera"
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "archera_read" {
+  count = var.enable_archera ? 1 : 0
+
+  role       = aws_iam_role.archera_integration[0].name
+  policy_arn = aws_iam_policy.archera_read[0].arn
+}
+
+# Purchase-execution policy for Archera — PROVISIONAL.
+# Gated behind enable_archera_purchase_actions (default false) so financial
+# writes are never included by accident at initial rollout.
+#
+# TODO(@cristim): enable only after confirming approval workflow with
+# Archera (i.e. Archera requires customer approval before purchases) and
+# only after enable_archera_purchase_actions is explicitly set to true.
+resource "aws_iam_policy" "archera_purchase" {
+  count = (var.enable_archera && var.enable_archera_purchase_actions) ? 1 : 0
+
+  name        = "cudly-archera-purchase"
+  description = "Provisional Archera purchase policy — RI/SP write actions (confirm with Archera before enabling)"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
       # ── Purchase-execution: Reserved Instances ────────────────────────────
-      # TODO(@cristim): enable only after confirming approval workflow with
-      # Archera (i.e. Archera requires customer approval before purchases).
       {
         Sid    = "ReservedInstancesPurchase"
         Effect = "Allow"
@@ -143,7 +172,6 @@ resource "aws_iam_policy" "archera_integration" {
         Resource = "*"
       },
       # ── Purchase-execution: Savings Plans ────────────────────────────────
-      # TODO(@cristim): same confirmation requirement as RI purchase above.
       {
         Sid    = "SavingsPlansPurchase"
         Effect = "Allow"
@@ -161,9 +189,9 @@ resource "aws_iam_policy" "archera_integration" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "archera_integration" {
-  count = var.enable_archera ? 1 : 0
+resource "aws_iam_role_policy_attachment" "archera_purchase" {
+  count = (var.enable_archera && var.enable_archera_purchase_actions) ? 1 : 0
 
   role       = aws_iam_role.archera_integration[0].name
-  policy_arn = aws_iam_policy.archera_integration[0].arn
+  policy_arn = aws_iam_policy.archera_purchase[0].arn
 }

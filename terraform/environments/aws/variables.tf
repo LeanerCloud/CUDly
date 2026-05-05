@@ -513,3 +513,37 @@ variable "archera_aws_account_id" {
   type        = string
   default     = ""
 }
+
+variable "archera_external_id" {
+  description = <<-EOT
+    ExternalId value that Archera's AWS principal must supply when assuming
+    the cudly-archera-integration role. This prevents confused-deputy attacks
+    and is required for all third-party cross-account integrations.
+    Provided by Archera during onboarding.
+    Only evaluated when enable_archera = true.
+
+    TODO(@cristim): obtain the ExternalId from Archera's onboarding docs
+    before enabling — do not leave this empty in production.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = !var.enable_archera || var.archera_external_id != ""
+    error_message = "archera_external_id must be set (non-empty) when enable_archera = true."
+  }
+}
+
+variable "enable_archera_purchase_actions" {
+  description = <<-EOT
+    When true (AND enable_archera = true), attaches a second IAM policy
+    (cudly-archera-purchase) that grants RI/SP purchase-execution permissions.
+    Keep false until the approval workflow with Archera is confirmed and the
+    scope list has been validated against Archera's integration docs.
+
+    Defaults to false so initial rollout is read-only.
+  EOT
+  type        = bool
+  default     = false
+}

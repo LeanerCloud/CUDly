@@ -553,4 +553,28 @@ variable "archera_azure_sp_object_id" {
   EOT
   type        = string
   default     = ""
+
+  validation {
+    condition = (
+      !var.enable_archera ||
+      (var.archera_azure_sp_object_id != "" &&
+        can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        var.archera_azure_sp_object_id))
+    ))
+    error_message = "archera_azure_sp_object_id must be a valid UUID when enable_archera = true."
+  }
+}
+
+variable "enable_archera_purchase_actions" {
+  description = <<-EOT
+    When true (AND enable_archera = true), adds the
+    "Microsoft.Capacity/reservationOrders/write" action to the Archera custom
+    RBAC role, enabling reservation purchase execution.
+    Keep false until the approval workflow with Archera is confirmed and the
+    scope list has been validated against Archera's integration docs.
+
+    Defaults to false so initial rollout is read-only.
+  EOT
+  type        = bool
+  default     = false
 }

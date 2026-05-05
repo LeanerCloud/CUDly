@@ -4,8 +4,9 @@
 #
 # When enable_archera = true, this block creates a custom RBAC role and
 # assigns it to Archera's service principal, granting least-privilege
-# access to read commitment and cost data and to purchase Reserved
-# Instances / Savings Plans on behalf of the customer.
+# read access to cost and commitment data.  Purchase-execution permissions
+# are separately gated behind enable_archera_purchase_actions so
+# telemetry-only rollouts never accidentally include financial writes.
 #
 # PROVISIONAL SCOPE — must be confirmed against Archera integration docs
 # before flipping enable_archera = true in any tfvars.
@@ -24,9 +25,10 @@ locals {
 }
 
 # Custom RBAC role for Archera — PROVISIONAL.
-# Actions are scoped to read-only cost management and RI/SP purchase
-# execution.  Do NOT grant broad Contributor or Cost Management Contributor
-# predefined roles — they include write permissions on resource deployments.
+# Actions are scoped to read-only cost management and, optionally,
+# reservation purchase execution via enable_archera_purchase_actions.
+# Do NOT grant broad Contributor or Cost Management Contributor predefined
+# roles — they include write permissions on resource deployments.
 #
 # TODO(@cristim): narrow to the exact action list from Archera's Azure
 # onboarding docs before setting enable_archera = true.
@@ -35,28 +37,33 @@ resource "azurerm_role_definition" "archera_integration" {
 
   name        = local.archera_role_name_azure
   scope       = "/subscriptions/${var.subscription_id}"
-  description = "Provisional Archera integration role — read cost data, read/purchase RIs and Savings Plans (confirm scope before enabling)"
+  description = "Provisional Archera integration role — read cost data, optionally purchase RIs (confirm scope before enabling)"
 
   permissions {
-    actions = [
-      # ── Read-only: Cost Management ──────────────────────────────────────
-      # Archera needs to read historical usage and costs to size commitments.
-      # TODO(@cristim): confirm whether Archera also needs
-      # Microsoft.Consumption/*/read — add if required by their docs.
-      "Microsoft.CostManagement/*/read",
-      "Microsoft.Consumption/*/read",
-      "Microsoft.Billing/*/read",
+    actions = concat(
+      [
+        # ── Read-only: Cost Management ──────────────────────────────────────
+        # Archera needs to read historical usage and costs to size commitments.
+        # TODO(@cristim): confirm whether Archera also needs
+        # Microsoft.Consumption/*/read — add if required by their docs.
+        "Microsoft.CostManagement/*/read",
+        "Microsoft.Consumption/*/read",
+        "Microsoft.Billing/*/read",
 
-      # ── Read-only: Reserved Instances ─────────────────────────────────
-      # Archera needs to see existing reservations to avoid over-purchasing.
-      "Microsoft.Capacity/reservations/read",
-      "Microsoft.Capacity/reservationOrders/read",
-
+        # ── Read-only: Reserved Instances ─────────────────────────────────
+        # Archera needs to see existing reservations to avoid over-purchasing.
+        "Microsoft.Capacity/reservations/read",
+        "Microsoft.Capacity/reservationOrders/read",
+      ],
       # ── Purchase-execution: Reserved Instances ────────────────────────
+      # Gated behind enable_archera_purchase_actions so financial writes
+      # are never included by accident at initial rollout.
       # TODO(@cristim): enable only after confirming approval workflow with
       # Archera (i.e. Archera requires customer approval before purchases).
-      "Microsoft.Capacity/reservationOrders/write",
-    ]
+      var.enable_archera_purchase_actions ? [
+        "Microsoft.Capacity/reservationOrders/write",
+      ] : []
+    )
     not_actions = []
   }
 

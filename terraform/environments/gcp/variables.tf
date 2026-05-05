@@ -503,4 +503,27 @@ variable "archera_gcp_service_account" {
   EOT
   type        = string
   default     = ""
+
+  validation {
+    condition = (
+      !var.enable_archera ||
+      (var.archera_gcp_service_account != "" &&
+      can(regex("^[^@]+@[^.]+\\.iam\\.gserviceaccount\\.com$", var.archera_gcp_service_account)))
+    )
+    error_message = "archera_gcp_service_account must be a valid service account email (user@project.iam.gserviceaccount.com) when enable_archera = true."
+  }
+}
+
+variable "enable_archera_purchase_actions" {
+  description = <<-EOT
+    When true (AND enable_archera = true), adds "recommender.commitments.create"
+    to the cudlyArcheraIntegration custom IAM role, enabling CUD purchase
+    execution.
+    Keep false until the approval workflow with Archera is confirmed and the
+    scope list has been validated against Archera's integration docs.
+
+    Defaults to false so initial rollout is read-only.
+  EOT
+  type        = bool
+  default     = false
 }

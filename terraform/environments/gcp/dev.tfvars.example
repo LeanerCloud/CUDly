@@ -114,5 +114,6 @@ admin_email = "admin@example.com"
 # When enabling, also set archera_gcp_service_account to the full service
 # account email that Archera provides during onboarding.
 
-enable_archera = false
-# archera_gcp_service_account = "archera-integration@archera-prod.iam.gserviceaccount.com"
+enable_archera                  = false
+enable_archera_purchase_actions = false  # keep false until purchase approval workflow is confirmed
+# archera_gcp_service_account = "archera-integration@archera-prod.iam.gserviceaccount.com"  # required when enable_archera = true
