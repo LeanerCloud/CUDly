@@ -723,6 +723,12 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+	// Issue #286: dispatch consults approve-{any,own} BEFORE the
+	// contact_email gate. Returning false for both verbs lets the
+	// dispatch fall through to the legacy token branch this test
+	// exercises.
+	mockAuth.On("HasPermissionAPI", mock.Anything, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveExecution", mock.Anything, execID, "token123", approver).Return(nil)

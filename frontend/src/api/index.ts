@@ -116,6 +116,7 @@ export {
   getPurchaseDetails,
   cancelPurchase,
   retryPurchase,
+  approvePurchase,
   getPlannedPurchases,
   pausePlannedPurchase,
   resumePlannedPurchase,

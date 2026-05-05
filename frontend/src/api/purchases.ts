@@ -42,6 +42,19 @@ export async function cancelPurchase(executionId: string): Promise<void> {
 }
 
 /**
+ * Approve a pending purchase via the session-authed dashboard route
+ * (issue #286). The same backend endpoint also accepts an email-link
+ * token for the legacy flow; this caller relies on the bearer-session
+ * auth from `apiRequest` and intentionally does not pass a token in
+ * the URL — the backend's session-first dispatch picks the correct
+ * auth path based on whether the session matches the
+ * approve-{any,own} RBAC matrix.
+ */
+export async function approvePurchase(executionId: string): Promise<void> {
+  return apiRequest<void>(`/purchases/approve/${executionId}`, { method: 'POST' });
+}
+
+/**
  * Retry a failed purchase execution (issue #47).
  *
  * The session-authed endpoint creates a new execution from the failed

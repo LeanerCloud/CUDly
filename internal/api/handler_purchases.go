@@ -268,9 +268,6 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
-	if token == "" {
-		return nil, NewClientError(400, "approval token is required")
-	}
 
 	execution, err := h.config.GetExecutionByID(ctx, execID)
 	if err != nil {
@@ -279,16 +276,117 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 	if execution == nil {
 		return nil, NewClientError(404, "execution not found")
 	}
-	actor, err := h.authorizeApprovalAction(ctx, req, execution)
+
+	// Three-mode dispatch — same shape as cancelPurchase (issue #46) and
+	// retryPurchase (issue #47):
+	//   1. Session present AND RBAC-authorized (admin / approve-any /
+	//      approve-own match) → session-authed approve, regardless of
+	//      whether a token is in the URL. Closes issue #286: an admin
+	//      logged into the dashboard can now approve from the History
+	//      view without round-tripping to the SES email.
+	//   2. token != "" → legacy email-link flow without a qualifying
+	//      session. authorizeApprovalAction enforces the per-account
+	//      contact_email gate from PR #101; the purchase service
+	//      validates the token itself before mutating state.
+	//   3. token == "" → session-authed dashboard Approve button.
+	//      approvePurchaseViaSession runs the approve-any /
+	//      approve-own RBAC matrix and rejects sessions without it.
+	if session := h.tryGetSession(ctx, req); session != nil {
+		switch err := h.authorizeSessionApprove(ctx, session, execution); {
+		case err == nil:
+			return h.approvePurchaseViaSession(ctx, req, execution)
+		case isPermissionDenied(err):
+			// Explicit 403 → fall through to the token branch so the
+			// contact_email gate gets a chance (a logged-in user without
+			// approve-* may still be the per-account contact recipient).
+		default:
+			// Transient failure — propagate instead of silently widening.
+			return nil, err
+		}
+	}
+
+	if token != "" {
+		actor, err := h.authorizeApprovalAction(ctx, req, execution)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.purchase.ApproveExecution(ctx, execID, token, actor); err != nil {
+			return nil, err
+		}
+		return map[string]string{"status": "approved"}, nil
+	}
+
+	return h.approvePurchaseViaSession(ctx, req, execution)
+}
+
+// approvePurchaseViaSession is the session-authed branch of approvePurchase.
+// Enforces the approve-any/approve-own RBAC matrix, validates the execution
+// is in an approvable state (pending|notified), flips the row to "approved"
+// and stamps session.Email onto ApprovedBy. Mirrors cancelPurchaseViaSession
+// minus the suppressions cleanup (approve doesn't drop suppressions —
+// suppressions persist through the approval and only clear on cancel/expiry).
+func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
+	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := h.purchase.ApproveExecution(ctx, execID, token, actor); err != nil {
+	if execution.Status != "pending" && execution.Status != "notified" {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be approved (status=%s)", execution.ExecutionID, execution.Status))
+	}
+
+	if err := h.authorizeSessionApprove(ctx, session, execution); err != nil {
 		return nil, err
 	}
 
+	// Flip status + stamp ApprovedBy. The optimistic-locking guard inside
+	// the tx (status IN ('pending','notified')) prevents a concurrent
+	// cancel from landing on top of us — if the status drifted, the
+	// UPDATE 0-rows the row count and we 409 cleanly.
+	execution.Status = "approved"
+	if session.Email != "" {
+		actor := session.Email
+		execution.ApprovedBy = &actor
+	}
+	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be approved: %v", execution.ExecutionID, err))
+	}
+
 	return map[string]string{"status": "approved"}, nil
+}
+
+// authorizeSessionApprove returns nil when the session is permitted to
+// approve the given execution under the approve-any / approve-own RBAC
+// rules added in issue #286. Returns a 403 ClientError otherwise.
+// Mirror of authorizeSessionCancel.
+func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	if session.Role == "admin" {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+
+	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if !hasOwn {
+		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
+	}
+
+	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		return NewClientError(403, "permission denied: cannot approve another user's pending purchase")
+	}
+	return nil
 }
 
 func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {

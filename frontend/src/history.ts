@@ -321,6 +321,33 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
   return p.created_by_user_id === user.id;
 }
 
+// canApprovePendingRow returns true when the current session is permitted
+// to approve the given pending history row via the inline Approve button
+// (issue #286). UX gate only — the backend authorizeSessionApprove in
+// internal/api/handler_purchases.go remains the security boundary; a
+// false-positive here surfaces as a 403 toast on click rather than a
+// successful approve.
+//
+// Heuristic mirrors canCancelPendingRow:
+//   * status must be "pending" or "notified";
+//   * admin → always yes;
+//   * non-admin matching the row's created_by_user_id → yes (approve-own);
+//   * legacy rows with NULL created_by_user_id → no (the email-token path
+//     remains the escape hatch).
+//
+// As with canCancelPendingRow, we don't surface the approve-any verb
+// because no default role grants it; if/when an operator role lands
+// with approve-any, broaden this check accordingly.
+function canApprovePendingRow(p: HistoryPurchase): boolean {
+  const status = (p.status || '').toLowerCase();
+  if (status !== 'pending' && status !== 'notified') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (!p.created_by_user_id) return false;
+  return p.created_by_user_id === user.id;
+}
+
 // canRetryFailedRow returns true when the current session is permitted
 // to retry the given failed history row via the inline Retry button
 // (issue #47). UX gate only — the backend authorizeSessionRetry in
@@ -382,10 +409,24 @@ function shortExecID(id: string): string {
 //   * any row with retry lineage    → inline ↻ Retried as / ↻ Retry of link
 //   * else                          → plan_name or "-"
 function renderActionCell(p: HistoryPurchase): string {
-  // Pending → Cancel takes precedence; we never show Retry on a non-
-  // failed row.
-  if (canCancelPendingRow(p) && p.purchase_id) {
-    return `<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`;
+  // Pending → render Approve + Cancel side-by-side when the session
+  // qualifies for both (the typical case after issue #286 — the same
+  // approve-own / cancel-own grant lives in DefaultUserPermissions).
+  // Each predicate is checked independently so a custom role with only
+  // one of the verbs renders just that button. Approve sits to the
+  // left as the affirmative action; Cancel keeps its existing class
+  // and styling so the cancel-button click handler keeps working.
+  if (p.purchase_id) {
+    const buttons: string[] = [];
+    if (canApprovePendingRow(p)) {
+      buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtml(p.purchase_id)}">Approve</button>`);
+    }
+    if (canCancelPendingRow(p)) {
+      buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`);
+    }
+    if (buttons.length > 0) {
+      return buttons.join(' ');
+    }
   }
 
   // Failed → either ops-hint (no retry possible), Retry (with optional
@@ -535,6 +576,41 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   // a "Failed to cancel" toast (the purchase IS cancelled), and the
   // user should see success-toast first so they don't think their
   // click was lost while we re-fetch the table.
+  // Wire the inline Approve button on pending rows the current session
+  // may approve (issue #286). One flow: confirmDialog → POST /approve
+  // (no token — bearer-session auth on apiRequest) → reload + toast.
+  // Backend may still 409 on a status race (concurrent cancel landed
+  // first); the catch surfaces the structured detail.
+  container.querySelectorAll<HTMLButtonElement>('.history-approve-btn[data-approve-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['approveId'];
+      if (!id) return;
+      const ok = await confirmDialog({
+        title: 'Approve this pending purchase?',
+        body: 'This authorises the purchase to execute. Cloud commitments will be charged once the executor picks up the approved row.',
+        confirmLabel: 'Approve purchase',
+        destructive: false,
+      });
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await api.approvePurchase(id);
+      } catch (approveError) {
+        console.error('Failed to approve pending purchase:', approveError);
+        const err = approveError as Error;
+        showToast({ message: `Failed to approve: ${err.message || 'unknown error'}`, kind: 'error' });
+        btn.disabled = false;
+        return;
+      }
+      showToast({ message: 'Purchase approved', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after approve:', reloadError);
+      }
+    });
+  });
+
   container.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset['cancelId'];
