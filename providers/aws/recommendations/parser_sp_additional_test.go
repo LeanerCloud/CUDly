@@ -302,3 +302,58 @@ func TestGetSavingsPlansRecommendations_EmptyFilters(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
+
+// TestParseSavingsPlanDetail_OnDemandCost pins #303: the canonical monthly
+// on-demand baseline must be computed from CurrentAverageHourlyOnDemandSpend
+// × 730 and surfaced as OnDemandCost so the frontend can use the provider-
+// supplied value instead of reconstructing from monthly_cost + savings +
+// amortized (which is inaccurate for SP rows where monthly_cost only reflects
+// the recurring charge, not the full on-demand baseline).
+func TestParseSavingsPlanDetail_OnDemandCost(t *testing.T) {
+	client := &Client{}
+
+	params := common.RecommendationParams{
+		PaymentOption:  "no-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "30d",
+	}
+
+	tests := []struct {
+		name         string
+		detail       *types.SavingsPlansPurchaseRecommendationDetail
+		wantOnDemand float64
+	}{
+		{
+			name: "on_demand_cost populated from CurrentAverageHourlyOnDemandSpend",
+			// CurrentAverageHourlyOnDemandSpend = $1.37/hr × 730 hr/mo = $1000.10/mo
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:        aws.String("1.00"),
+				EstimatedMonthlySavingsAmount:     aws.String("200.00"),
+				EstimatedSavingsPercentage:        aws.String("20.0"),
+				CurrentAverageHourlyOnDemandSpend: aws.String("1.3699"),
+			},
+			wantOnDemand: 1.3699 * hoursPerMonth,
+		},
+		{
+			name: "on_demand_cost is zero when CurrentAverageHourlyOnDemandSpend is absent",
+			// nil field → parseOptionalFloat returns 0 → 0 × 730 = 0.
+			// nonZeroPtr in convertRecommendations will turn 0 → nil so the
+			// frontend falls back to reconstruction as before #303.
+			detail: &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:    aws.String("1.00"),
+				EstimatedMonthlySavingsAmount: aws.String("200.00"),
+				EstimatedSavingsPercentage:    aws.String("20.0"),
+			},
+			wantOnDemand: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := client.parseSavingsPlanDetail(tt.detail, params, types.SupportedSavingsPlansTypeComputeSp)
+			require.NotNil(t, rec)
+			assert.InDelta(t, tt.wantOnDemand, rec.OnDemandCost, 0.001,
+				"OnDemandCost should equal CurrentAverageHourlyOnDemandSpend × 730")
+		})
+	}
+}
