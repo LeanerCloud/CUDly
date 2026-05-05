@@ -131,15 +131,9 @@ export async function loadRecommendations(): Promise<void> {
       if (g.default_payment && (validPayments as string[]).includes(g.default_payment)) {
         cachedGlobalDefaultPayment = g.default_payment as CompatPayment;
       }
-      // Seed the bulk-toolbar default with the resolved value so that
-      // loadBulkPurchaseState()'s first-visit fallback uses it.
-      // BulkPurchasePayment is a subset of CompatPayment ('upfront' is
-      // Azure-only and not a valid bulk-toolbar value); skip the seed
-      // if the global default is outside that subset.
-      const validBulkPayments: BulkPurchasePayment[] = ['all-upfront', 'partial-upfront', 'no-upfront', 'monthly'];
-      if ((validBulkPayments as string[]).includes(cachedGlobalDefaultPayment)) {
-        defaultBulkPurchaseState.payment = cachedGlobalDefaultPayment as BulkPurchasePayment;
-      }
+      // cachedGlobalDefaultPayment is now read directly by loadBulkPurchaseState()
+      // (issue #282 dropped the toolbar dropdown; no longer need to seed
+      // defaultBulkPurchaseState — the module-level cache is the source of truth).
     }
     accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
     state.setRecommendations((data.recommendations || []) as unknown as api.Recommendation[]);
@@ -170,42 +164,74 @@ export async function loadRecommendations(): Promise<void> {
 }
 
 function renderRecommendationsSummary(
-  summary: RecommendationsSummary,
+  _summary: RecommendationsSummary,
   recommendations: readonly LocalRecommendation[],
 ): void {
   const container = document.getElementById('recommendations-summary');
   if (!container) return;
 
-  // Potential Monthly Savings is computed from the same source as the
-  // "Recommended range" banner under the table (closes #272). The previous
-  // implementation rendered `summary.total_monthly_savings` from the API —
-  // a flat sum across every (term, payment) variant of every cell — so a
-  // typical 12-cell page with 2 terms × 3 payments per cell showed up to
-  // ~6× the achievable savings (the user can only buy one variant per
-  // cell). pageLevelRange sums per-cell min/max and stays consistent with
-  // the banner.
-  const groups = groupRecsByCell(recommendations);
+  // All four summary cards (Total Recommendations, Potential Monthly
+  // Savings, Total Upfront Cost, Payback Period) recompute client-side
+  // from the same source on every list rerender (closes #279). The API-
+  // derived `summary` is no longer read — it summed every (term, payment)
+  // variant of every cell and overstated achievable totals by ~6× on a
+  // typical fan-out, the same bug class #272 closed for the savings card
+  // alone. Now extended to the full header.
+  //
+  // Selection narrowing: when the user has ticked ≥1 checkbox visible in
+  // the table, the cards narrow to `selected ∩ visible`. Cleared selection
+  // → cards snap back to the full visible set. The cards therefore reflect
+  // exactly what a Purchase / Plan click would commit to.
+  //
+  // The unused `_summary` arg is retained so the call sites in
+  // loadRecommendations / renderRecommendationsList don't have to change
+  // shape; it can be removed when the field is also dropped from
+  // RecommendationsSummary.
+  const selected = state.getSelectedRecommendationIDs();
+  // Narrow selection to visible rows only — if the user has ticked rows that
+  // are currently hidden by a column filter, those rows must not drive the
+  // summary cards (the cards should reflect what the user can actually see
+  // and act on). An empty visible-intersection means no effective selection.
+  const selectedVisible = recommendations.filter((r) => selected.has(r.id));
+  const target: readonly LocalRecommendation[] = selectedVisible.length > 0
+    ? selectedVisible
+    : recommendations;
+  const groups = groupRecsByCell(target);
   const plr = pageLevelRange(groups);
+  const isSelectionView = selectedVisible.length > 0 && plr.cellCount > 0;
+
   const savingsText = plr.cellCount > 0 && plr.savingsMax > 0
     ? formatSavingsRange(plr.savingsMin, plr.savingsMax)
     : formatCurrency(0);
+  const upfrontText = plr.cellCount > 0 && plr.upfrontMax > 0
+    ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
+    : formatCurrency(0);
+  const paybackText = plr.cellCount > 0 && plr.paybackMonthsMax > 0
+    ? formatPaybackRange(plr.paybackMonthsMin, plr.paybackMonthsMax)
+    : '0 months';
+  // Total Recommendations counts CELLS not variants — each cell is the
+  // user's actual decision unit.
+  const countLabel = isSelectionView ? 'Selected Recommendations' : 'Total Recommendations';
+  const savingsLabel = isSelectionView ? 'Selected Monthly Savings' : 'Potential Monthly Savings';
+  const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
+  const paybackLabel = 'Payback Period';
 
   container.innerHTML = `
     <div class="card">
-      <h3>Total Recommendations</h3>
-      <p class="value">${summary.total_count || 0}</p>
+      <h3>${countLabel}</h3>
+      <p class="value">${plr.cellCount}</p>
     </div>
     <div class="card">
-      <h3>Potential Monthly Savings</h3>
+      <h3>${savingsLabel}</h3>
       <p class="value savings">${savingsText}</p>
     </div>
     <div class="card">
-      <h3>Total Upfront Cost</h3>
-      <p class="value">${formatCurrency(summary.total_upfront_cost)}</p>
+      <h3>${upfrontLabel}</h3>
+      <p class="value">${upfrontText}</p>
     </div>
     <div class="card">
-      <h3>Payback Period</h3>
-      <p class="value">${summary.avg_payback_months ? summary.avg_payback_months.toFixed(1) : 0} months</p>
+      <h3>${paybackLabel}</h3>
+      <p class="value">${paybackText}</p>
     </div>
   `;
 }
@@ -237,6 +263,7 @@ const SORTABLE_STRING_COLUMNS: Record<string, (r: LocalRecommendation) => string
   service: (r) => r.service ?? '',
   resource_type: (r) => r.resource_type ?? '',
   region: (r) => r.region ?? '',
+  payment: (r) => r.payment ?? '',
 };
 
 // cellKey identifies the physical-resource cell a rec belongs to.
@@ -311,21 +338,105 @@ export function cellSummary(variants: readonly LocalRecommendation[]): CellRange
   return { savingsMin, savingsMax, upfrontMin, upfrontMax, termMin, termMax };
 }
 
+/** Page-level totals for the summary header (closes #279). All ranges are
+ * the cell-by-cell min/max sums — the user buys at most one variant per
+ * cell, so the achievable totals are bounded by `sum(cell.{min,max})` not
+ * by `sum(every variant)`. */
+export interface PageLevelRange {
+  savingsMin: number;
+  savingsMax: number;
+  upfrontMin: number;
+  upfrontMax: number;
+  /** payback months at the min-savings end of the range; clamped to 0
+   * when both savings and upfront are 0 (nothing to pay back). */
+  paybackMonthsMin: number;
+  /** payback months at the max-savings end. */
+  paybackMonthsMax: number;
+  cellCount: number;
+}
+
 /**
- * Compute the page-level savings range by summing per-cell min/max savings.
- *   overallMin = sum of savingsMin per cell
- *   overallMax = sum of savingsMax per cell
+ * Compute the page-level summary by summing per-cell min/max envelopes.
+ * Used by both the summary cards and the (now-removed) banner; lives at
+ * module scope so dashboard.ts can reuse it for the cross-page parity in
+ * #279.
+ *
+ *   savingsMin       = sum of cellSummary.savingsMin
+ *   savingsMax       = sum of cellSummary.savingsMax
+ *   upfrontMin       = sum of cellSummary.upfrontMin (matches the variant
+ *                      whose savingsMin was contributed)
+ *   upfrontMax       = sum of cellSummary.upfrontMax
+ *   paybackMonthsMin = sum of per-cell best-payback variant upfronts /
+ *                      sum of their savings.  Each cell independently
+ *                      picks the variant with the lowest upfront/savings
+ *                      ratio. Using independent cross-extrema
+ *                      (upfrontMin / savingsMax) is NOT attainable when a
+ *                      cell's lowest-upfront variant ≠ its highest-savings
+ *                      variant — it would imply buying one impossible
+ *                      combination.  Full convolution (trying every
+ *                      cross-cell combination) is O(variants^cells) and
+ *                      impractical for pages with 30+ cells.  Per-cell
+ *                      paired choice is O(cells × variants) and produces
+ *                      bounds that match what a min-payback / max-payback
+ *                      per-cell selection would actually commit to.
+ *   paybackMonthsMax = same logic, each cell picks the worst-payback
+ *                      variant.
+ *
  * Exported for tests.
  */
-export function pageLevelRange(groups: Map<string, LocalRecommendation[]>): { savingsMin: number; savingsMax: number; cellCount: number } {
+export function pageLevelRange(groups: Map<string, LocalRecommendation[]>): PageLevelRange {
   let savingsMin = 0;
   let savingsMax = 0;
+  let upfrontMin = 0;
+  let upfrontMax = 0;
+  // Payback accumulators: per-cell paired variant sums.
+  let paybackBestUpfront = 0;
+  let paybackBestSavings = 0;
+  let paybackWorstUpfront = 0;
+  let paybackWorstSavings = 0;
   for (const variants of groups.values()) {
     const s = cellSummary(variants);
     savingsMin += s.savingsMin;
     savingsMax += s.savingsMax;
+    upfrontMin += s.upfrontMin;
+    upfrontMax += s.upfrontMax;
+
+    // For payback: pick the variant with the best (lowest) payback ratio for
+    // the min-end, and the worst (highest) for the max-end. Treat savings ≤ 0
+    // as Infinity payback so zero-savings variants sort to the worst end.
+    let bestRatio = Infinity;
+    let bestUpfront = 0;
+    let bestSavings = 0;
+    let worstRatio = -Infinity;
+    let worstUpfront = 0;
+    let worstSavings = 0;
+    for (const v of variants) {
+      const ratio = v.savings > 0 ? v.upfront_cost / v.savings : Infinity;
+      if (ratio < bestRatio) {
+        bestRatio = ratio;
+        bestUpfront = v.upfront_cost;
+        bestSavings = v.savings;
+      }
+      if (ratio > worstRatio) {
+        worstRatio = ratio;
+        worstUpfront = v.upfront_cost;
+        worstSavings = v.savings;
+      }
+    }
+    paybackBestUpfront += bestUpfront;
+    paybackBestSavings += bestSavings;
+    paybackWorstUpfront += worstUpfront;
+    paybackWorstSavings += worstSavings;
   }
-  return { savingsMin, savingsMax, cellCount: groups.size };
+  // Clamp to 0 when total savings is non-positive to avoid Infinity / NaN.
+  const paybackMonthsMin = paybackBestSavings > 0 ? paybackBestUpfront / paybackBestSavings : 0;
+  const paybackMonthsMax = paybackWorstSavings > 0 ? paybackWorstUpfront / paybackWorstSavings : 0;
+  return {
+    savingsMin, savingsMax,
+    upfrontMin, upfrontMax,
+    paybackMonthsMin, paybackMonthsMax,
+    cellCount: groups.size,
+  };
 }
 
 // Fixed payment ordering for within-cell variant sort.
@@ -391,6 +502,15 @@ function formatSavingsRange(min: number, max: number): string {
   const lo = formatCurrency(min);
   const hi = formatCurrency(max);
   return lo === hi ? lo : `${lo} – ${hi}`;
+}
+
+/** Format a payback-months range, collapsing identical endpoints to a
+ * single value and rounding to 1 decimal. Used by the Payback Period
+ * summary card after #279 broadened it to a range. */
+function formatPaybackRange(min: number, max: number): string {
+  const lo = min.toFixed(1);
+  const hi = max.toFixed(1);
+  return lo === hi ? `${lo} months` : `${lo} – ${hi} months`;
 }
 
 /** Format a term range, collapsing "1yr – 1yr" to "1yr". */
@@ -527,6 +647,7 @@ const SORT_HEADER_LABELS: Record<string, string> = {
   region: 'Region',
   count: 'Count',
   term: 'Term',
+  payment: 'Payment',
   savings: 'Monthly Savings',
   upfront_cost: 'Upfront Cost',
   monthly_cost: 'Monthly Cost',
@@ -644,6 +765,7 @@ function categoricalCellValue(r: LocalRecommendation, col: state.Recommendations
     case 'resource_type':  return r.resource_type ?? '';
     case 'region':         return r.region ?? '';
     case 'term':           return r.term == null ? '' : String(r.term);
+    case 'payment':        return r.payment ?? '';
     // Numeric columns shouldn't reach this branch; return empty for type-safety.
     case 'count':
     case 'savings':
@@ -671,7 +793,8 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     case 'service':
     case 'resource_type':
     case 'region':
-    case 'term':          return Number.NaN;
+    case 'term':
+    case 'payment':       return Number.NaN;
   }
 }
 
@@ -1215,8 +1338,17 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
     bar.appendChild(live);
   }
   // Always update the live region (even when no filters active) so the
-  // spoken count reflects state after every render.
-  live.textContent = `Showing ${visibleCount} of ${loadedCount} recommendations`;
+  // spoken count reflects state after every render. #279: when the user
+  // has ticked ≥1 visible row, the line surfaces the selection count too —
+  // same narrowing source-of-truth as the summary cards. Selections that
+  // are filtered out of view are NOT counted here, matching the card
+  // narrowing behaviour (only selected ∩ visible drives the UI).
+  const selectedIDs = state.getSelectedRecommendationIDs();
+  const visibleRecs = state.getVisibleRecommendations();
+  const selectedVisibleCount = visibleRecs.filter((r) => selectedIDs.has(r.id)).length;
+  live.textContent = selectedVisibleCount > 0
+    ? `${selectedVisibleCount} selected · Showing ${visibleCount} of ${loadedCount} recommendations`
+    : `Showing ${visibleCount} of ${loadedCount} recommendations`;
 
   const filters = state.getRecommendationsColumnFilters();
   const activeCount = Object.keys(filters).length;
@@ -1530,8 +1662,21 @@ function providerBadgeClass(provider: string): string {
 // neither sortable nor filterable).
 const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
   'provider', 'account', 'service', 'resource_type', 'region',
-  'count', 'term', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
+  'count', 'term', 'payment', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
 ];
+
+// Map raw payment_option values to display labels for the Payment column.
+const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
+  'all-upfront':     'All Upfront',
+  'partial-upfront': 'Partial Upfront',
+  'no-upfront':      'No Upfront',
+  'monthly':         'Monthly',
+};
+
+function formatPayment(payment: string | undefined): string {
+  if (!payment) return '\u2014';
+  return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
+}
 
 // Helper: render one variant row (a single LocalRecommendation) with optional
 // indentation styling for multi-variant cells.
@@ -1557,6 +1702,7 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
     <td>${escapeHtml(rec.region)}</td>
     <td>${rec.count}</td>
     <td>${formatTerm(rec.term)}</td>
+    <td>${formatPayment(rec.payment)}</td>
     <td class="savings">${formatCurrency(rec.savings)}</td>
     <td>${formatCurrency(rec.upfront_cost)}</td>
     <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
@@ -1564,8 +1710,8 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
   </tr>`;
 }
 
-// The total column count for colspan on summary rows: checkbox col + 11 data cols = 12.
-const TABLE_COL_COUNT = 12;
+// The total column count for colspan on summary rows: checkbox col + 12 data cols = 13.
+const TABLE_COL_COUNT = 13;
 
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
@@ -1586,11 +1732,9 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
   // Only multi-variant cells count — single-variant cells render flat with no chevron.
   lastVisibleGroupKeys = sortedKeys.filter((k) => (groups.get(k)?.length ?? 0) > 1);
 
-  // Page-level range banner (summed across all visible cells).
-  const plr = pageLevelRange(groups);
-  const bannerHtml = plr.cellCount > 0 && plr.savingsMax > 0
-    ? `<div class="rec-range-banner" role="status" aria-live="polite">Recommended range: <strong>${formatSavingsRange(plr.savingsMin, plr.savingsMax)}/mo</strong> across ${plr.cellCount} cell${plr.cellCount === 1 ? '' : 's'}</div>`
-    : '';
+  // The "Recommended range" banner that used to live here was redundant
+  // with the Potential Monthly Savings card after #272 / #279 brought
+  // the same range to the summary header. Removed (closes #278).
 
   // Build tbody rows: grouped for multi-variant cells, flat for single-variant.
   const rows: string[] = [];
@@ -1629,14 +1773,15 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
 
     rows.push(`
   <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
-    <td class="checkbox-col"></td>
+    <td class="checkbox-col">
+      <button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
+        ${chevron}
+      </button>
+    </td>
     <td><span class="provider-badge ${providerBadgeClass(rep.provider)}">${escapeHtml(providerDisplayName(rep.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
     <td colspan="${TABLE_COL_COUNT - 4}" class="rec-cell-summary-content">
-      <button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
-        ${chevron}
-      </button>
       <span class="rec-cell-identity">${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''} &mdash; ${escapeHtml(rep.region)} &mdash; ${variants.length} variants</span>
       <span class="rec-cell-range">${savingsDisplay} &middot; upfront: ${upfrontDisplay} &middot; term: ${termDisplay}</span>
     </td>
@@ -1651,7 +1796,6 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
   }
 
   return `
-    ${bannerHtml}
     <table>
       <thead>
         <tr>
@@ -1703,9 +1847,13 @@ const BULK_PURCHASE_LS_KEY = 'cudly.recommendations.bulkPurchase.v1';
 // BulkPurchaseToolbarState used to carry a `term` field that overrode each
 // row's recommended term at API-call time. Bundle B drops it: each rec is
 // purchased with its own per-row term (see term-aware bucketing in
-// handleBulkPurchaseClick). loadBulkPurchaseState explicitly picks known
-// fields so any legacy `term` from older localStorage values is silently
-// ignored on read — no migration shim needed.
+// handleBulkPurchaseClick). Issue #282 drops the global Payment dropdown
+// from the toolbar: the `payment` field is kept internally (seeded from
+// GlobalConfig or 'all-upfront') so the fan-out modal's override/fallback
+// logic continues to work, but it is no longer exposed in the UI or
+// persisted to localStorage. loadBulkPurchaseState explicitly picks known
+// fields so any legacy `term` or `payment` from older localStorage values
+// is silently ignored on read — no migration shim needed.
 type BulkPurchasePayment = 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
 
 // Centralized bucket-level payment compatibility check. A bucket is
@@ -1737,11 +1885,11 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
     if (!raw) return { ...defaultBulkPurchaseState };
     const parsed = JSON.parse(raw) as Partial<BulkPurchaseToolbarState> & { term?: unknown };
     // Explicit field-pick rather than spread-and-omit — avoids leaking a
-    // legacy `term` value into the returned object even at runtime.
+    // legacy `term` or `payment` from older localStorage values at runtime.
+    // Payment is seeded from GlobalConfig only (issue #282 drops the toolbar
+    // dropdown; the field is internal-only, not persisted).
     return {
-      // issue #223: fall back to resolved GlobalConfig.DefaultPayment rather
-      // than the literal 'all-upfront' when localStorage has no stored value.
-      payment: (parsed.payment || cachedGlobalDefaultPayment) as BulkPurchasePayment,
+      payment: cachedGlobalDefaultPayment as BulkPurchasePayment,
       capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
     };
   } catch {
@@ -1751,7 +1899,9 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
 
 function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
   try {
-    localStorage.setItem(BULK_PURCHASE_LS_KEY, JSON.stringify(s));
+    // Only persist capacity — payment is dropped from the toolbar (issue #282)
+    // and is now session-only, seeded from GlobalConfig.
+    localStorage.setItem(BULK_PURCHASE_LS_KEY, JSON.stringify({ capacity: s.capacity }));
   } catch {
     // Private-browsing / quota-exceeded — non-fatal, just lose the
     // sticky choice. The bottom box still works in-session.
@@ -1765,11 +1915,15 @@ function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
 // leaving the input/select elements (and their in-progress values) alone.
 //
 // IDs preserved for backward compatibility:
-//   #bulk-purchase-payment  (Payment dropdown)
 //   #bulk-purchase-capacity (Capacity % input — read by app.ts:307)
 //   #bulk-purchase-btn      (Purchase one-off button)
 //   #create-plan-btn        (Create Purchase Plan button — relocated from
 //                            the old top filter bar)
+//
+// Issue #282: the bulk Payment dropdown (#bulk-purchase-payment) is removed.
+// Each rec carries its own payment_option from the API fan-out; the per-cell
+// radio enforcement caps purchase to one variant per cell. A global override
+// was misleading and is redundant.
 function mountBottomActionBox(): HTMLElement | null {
   const recsTab = document.getElementById('recommendations-tab');
   if (!recsTab) return null;
@@ -1790,21 +1944,6 @@ function mountBottomActionBox(): HTMLElement | null {
   summary.id = 'recommendations-action-summary';
   summary.className = 'recommendations-action-summary';
   box.appendChild(summary);
-
-  // Payment dropdown — preserved ID
-  const paymentLabel = document.createElement('label');
-  paymentLabel.textContent = 'Payment ';
-  const paymentSelect = document.createElement('select');
-  paymentSelect.id = 'bulk-purchase-payment';
-  [['all-upfront', 'All Upfront'], ['partial-upfront', 'Partial Upfront'], ['no-upfront', 'No Upfront'], ['monthly', 'Monthly']].forEach(([v, t]) => {
-    const opt = document.createElement('option');
-    opt.value = v as string;
-    opt.textContent = t as string;
-    if (v === tbState.payment) opt.selected = true;
-    paymentSelect.appendChild(opt);
-  });
-  paymentLabel.appendChild(paymentSelect);
-  box.appendChild(paymentLabel);
 
   // Capacity % input — preserved ID (app.ts:307 reads this)
   const capacityLabel = document.createElement('label');
@@ -1854,11 +1993,10 @@ function mountBottomActionBox(): HTMLElement | null {
 
   const persist = (): void => {
     saveBulkPurchaseState({
-      payment: paymentSelect.value as BulkPurchaseToolbarState['payment'],
+      payment: tbState.payment,
       capacity: Math.max(1, Math.min(100, parseInt(capacityInput.value, 10) || 100)),
     });
   };
-  paymentSelect.addEventListener('change', persist);
   capacityInput.addEventListener('change', persist);
 
   purchaseBtn.addEventListener('click', () => {
@@ -1917,21 +2055,39 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     0,
   );
 
-  // Action buttons require an explicit selection (closes #273): a misclick
-  // on "Purchase visible" / "Plan from visible" with no checkboxes ticked
-  // could trigger an irreversible bulk purchase across every visible row,
-  // and the visible set silently changes when the user clicks Refresh or
-  // adjusts filters. Only the "selected" form of the action buttons remains.
+  // Action-box summary line surfaces the *financial* impact of the
+  // current action target, not just selection counts (closes #281). The
+  // selected-vs-visible count is the least useful info at this point —
+  // the user can already see selection state from row checkboxes — and
+  // the action box is prime real estate for the dollar figures the user
+  // is about to authorise. Source-of-truth matches the summary cards
+  // above: selection ∩ visible if ≥1 selected, else the visible set.
+  const target: readonly LocalRecommendation[] = selectedVisibleCount > 0
+    ? visible.filter((r) => selected.has(r.id))
+    : visible;
+  const targetGroups = groupRecsByCell(target);
+  const targetRange = pageLevelRange(targetGroups);
+
   const summary = document.getElementById('recommendations-action-summary');
   if (summary) {
     if (loadedCount === 0) {
       summary.textContent = '(No recommendations loaded)';
     } else if (visibleCount === 0) {
       summary.textContent = '(0 visible — adjust filters)';
-    } else if (selectedVisibleCount > 0) {
-      summary.textContent = `(${selectedVisibleCount} selected)`;
-    } else {
+    } else if (selectedVisibleCount === 0) {
       summary.textContent = '(Select cells to act on)';
+    } else if (targetRange.cellCount > 0) {
+      const savingsText = targetRange.savingsMax > 0
+        ? formatSavingsRange(targetRange.savingsMin, targetRange.savingsMax)
+        : formatCurrency(0);
+      const upfrontText = targetRange.upfrontMax > 0
+        ? formatSavingsRange(targetRange.upfrontMin, targetRange.upfrontMax)
+        : formatCurrency(0);
+      const cellWord = targetRange.cellCount === 1 ? 'cell' : 'cells';
+      summary.textContent = `(${savingsText}/mo · ${upfrontText} upfront across ${targetRange.cellCount} ${cellWord})`;
+    } else {
+      // Shouldn't happen given the gating above, but defensive.
+      summary.textContent = `(${selectedVisibleCount} selected)`;
     }
   }
 

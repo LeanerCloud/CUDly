@@ -238,6 +238,270 @@ describe('Recommendations Module', () => {
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
     });
 
+    test('summary cards narrow to selection in real time (closes #279)', async () => {
+      // 4 recs / 2 cells. With no selection: cards reflect the full
+      // visible set (savings $300–$400, upfront $0–$3000). After ticking
+      // cell1's pricey variant, cards narrow to that single rec
+      // ($150 savings / $1000 upfront). Tick the second cell's cheap
+      // variant too: cards sum the two selected variants ($350 savings /
+      // $1000 upfront). Cards must update on every selection toggle —
+      // the selection-toggle handler triggers a list rerender, which
+      // calls renderRecommendationsSummary with the new selection.
+      const recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'cell2-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'cell2-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 700, total_upfront_cost: 3000, avg_payback_months: 2 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+
+      const cardValue = (titlePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => titlePattern.test(c.querySelector('h3')?.textContent ?? ''));
+        return card?.querySelector('.value')?.textContent ?? '';
+      };
+      const cardTitle = (valuePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => valuePattern.test(c.querySelector('.value')?.textContent ?? ''));
+        return card?.querySelector('h3')?.textContent ?? '';
+      };
+
+      // No selection: cards reflect the full visible set.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      await loadRecommendations();
+      expect(cardValue(/Recommendations/)).toBe('2'); // 2 cells, not 4 variants
+      expect(cardValue(/Monthly Savings/)).toMatch(/\$300\b/);
+      expect(cardValue(/Monthly Savings/)).toMatch(/\$400\b/);
+      expect(cardValue(/Upfront/)).toMatch(/\$0\b/);
+      expect(cardValue(/Upfront/)).toMatch(/\$3,?000\b/);
+      // Card titles reflect the "all visible" mode.
+      expect(cardTitle(/^2$/)).toBe('Total Recommendations');
+
+      // Tick one cell's pricey variant: cards narrow to that one rec.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cell1-pricey']));
+      await loadRecommendations();
+      expect(cardValue(/Recommendations/)).toBe('1');
+      // Single rec → range collapses to a single value.
+      expect(cardValue(/Monthly Savings/)).toMatch(/^\$150$/);
+      expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/);
+      // Title switches to "Selected ..." form.
+      expect(cardTitle(/^1$/)).toBe('Selected Recommendations');
+
+      // Tick a second cell: cards sum the two selected variants.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cell1-pricey', 'cell2-cheap']));
+      await loadRecommendations();
+      expect(cardValue(/Recommendations/)).toBe('2');
+      expect(cardValue(/Monthly Savings/)).toMatch(/^\$350$/); // 150 + 200
+      expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/); // 1000 + 0
+    });
+
+    test('row checkbox change event updates summary cards in place (PR #283 CR pass-2)', async () => {
+      // Regression guard for the real DOM event path: verifies that dispatching
+      // a `change` event on a row checkbox updates summary cards WITHOUT a
+      // second loadRecommendations() call. The earlier mock-and-reload test
+      // above confirms the rendering math; this test confirms the event
+      // handler itself triggers renderRecommendationsList.
+      //
+      // Each rec is a DISTINCT cell (different resource_type) so they render as
+      // flat rows — not grouped summary rows — making their checkboxes directly
+      // queryable from the DOM. Multi-variant cells collapse into a summary row
+      // with a chevron button; variant-level checkboxes are only in the DOM when
+      // the cell is expanded.
+      //
+      // Mock coordination: addSelectedRecommendation / removeSelectedRecommendation
+      // mutate a shared Set so getSelectedRecommendationIDs reflects the toggle
+      // immediately — the same pattern used by checkboxes-evict-siblings tests.
+      const recs = [
+        { id: 'rec-a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 1000 },
+        { id: 'rec-b', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 350, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+
+      // Wire add/remove to a shared Set so getSelectedRecommendationIDs
+      // reflects in-flight selection state after every checkbox event.
+      const selectedIds = new Set<string>();
+      (state.getSelectedRecommendationIDs as jest.Mock).mockImplementation(() => new Set(selectedIds));
+      (state.addSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.add(id); });
+      (state.removeSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.delete(id); });
+      (state.clearSelectedRecommendations as jest.Mock).mockImplementation(() => { selectedIds.clear(); });
+
+      // Initial render: no selection, cards show full-set values.
+      await loadRecommendations();
+
+      const cardValue = (titlePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => titlePattern.test(c.querySelector('h3')?.textContent ?? ''));
+        return card?.querySelector('.value')?.textContent ?? '';
+      };
+
+      // Each rec is its own cell → 2 cells, each with 1 variant → range = single value.
+      expect(cardValue(/Recommendations/)).toBe('2');
+
+      // Fire the real DOM change event on rec-a's checkbox — do NOT
+      // call loadRecommendations() again. The handler inside recommendations.ts
+      // calls renderRecommendationsList() which updates the cards in place.
+      const checkbox = document.querySelector<HTMLInputElement>('input[data-rec-id="rec-a"]');
+      expect(checkbox).not.toBeNull();
+      checkbox!.checked = true;
+      checkbox!.dispatchEvent(new Event('change'));
+
+      // Cards must now reflect only rec-a ($150 savings / $1000 upfront).
+      expect(cardValue(/Monthly Savings/)).toMatch(/^\$150$/);
+      expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/);
+      // Recommendations card must show "1 selected".
+      expect(cardValue(/Recommendations/)).toBe('1');
+    });
+
+    test('select-all change event updates summary cards in place (PR #283 CR pass-2)', async () => {
+      // Verifies the select-all checkbox event path: after checking select-all,
+      // summary cards reflect the picked-best-per-cell selection WITHOUT a
+      // second loadRecommendations() call.
+      //
+      // pickBestVariantPerCell picks one variant per (provider, account, service,
+      // region, resource_type, engine) group — for these 2 cells it picks one
+      // from cell1 and one from cell2, so both cards must show 2 rows selected.
+      const recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'cell2-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'cell2-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 700, total_upfront_cost: 3000, avg_payback_months: 2 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+
+      // Wire add/remove/clear to a shared Set (same coordination pattern as the
+      // row-checkbox test above and the evict-siblings test).
+      const selectedIds = new Set<string>();
+      (state.getSelectedRecommendationIDs as jest.Mock).mockImplementation(() => new Set(selectedIds));
+      (state.addSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.add(id); });
+      (state.removeSelectedRecommendation as jest.Mock).mockImplementation((id: string) => { selectedIds.delete(id); });
+      (state.clearSelectedRecommendations as jest.Mock).mockImplementation(() => { selectedIds.clear(); });
+
+      await loadRecommendations();
+
+      const cardValue = (titlePattern: RegExp): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => titlePattern.test(c.querySelector('h3')?.textContent ?? ''));
+        return card?.querySelector('.value')?.textContent ?? '';
+      };
+
+      // Fire the real select-all change event — do NOT call loadRecommendations().
+      const selectAll = document.getElementById('select-all-recs') as HTMLInputElement;
+      expect(selectAll).not.toBeNull();
+      selectAll.checked = true;
+      selectAll.dispatchEvent(new Event('change'));
+
+      // addSelectedRecommendation was called once per cell (pickBestVariantPerCell
+      // picks one per cell → 2 cells → 2 adds).
+      expect((state.addSelectedRecommendation as jest.Mock).mock.calls.length).toBe(2);
+
+      // Recommendations card shows "2" (2 selected cells, not 4 raw variants).
+      expect(cardValue(/Recommendations/)).toBe('2');
+    });
+
+    test('"Showing X of Y" surfaces selection count (closes #279)', async () => {
+      const recs = [
+        { id: 'r1', provider: 'aws', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+
+      // No selection: line just shows "Showing X of Y".
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      await loadRecommendations();
+      const liveText = (): string =>
+        document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText()).toMatch(/^Showing 2 of 2 recommendations$/);
+
+      // ≥1 selected: line prepends the selection count so the user has
+      // visible feedback that their selection is influencing the cards.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1']));
+      await loadRecommendations();
+      expect(liveText()).toMatch(/^1 selected · Showing 2 of 2 recommendations$/);
+    });
+
+    test('selection filtered out of view: cards and live line treat it as no selection (PR #283 CR)', async () => {
+      // 4 recs / 2 cells. The user has selected cell2's variant ('r3'), but
+      // then applies a column filter that hides cell2. The visible set is
+      // cell1 only (r1, r2). The selected row (r3) is NOT in the visible set.
+      //
+      // Expected behaviour:
+      //   - Summary cards reflect the visible (unselected-from-visible) set:
+      //     cell1 range $100–$150, title "Total Recommendations" not "Selected".
+      //   - Live status line reads "Showing 2 of 4 recommendations" — no
+      //     "1 selected" prefix, because r3 is hidden.
+      const allRecs = [
+        { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'r3', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'r4', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+      const visibleRecs = allRecs.filter((r) => r.service === 'ec2'); // cell1 only
+
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {}, recommendations: allRecs, regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs);
+      // Visible set is cell1 only — column filter hides rds rows.
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(visibleRecs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      // r3 is selected, but it is NOT in the visible set.
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r3']));
+
+      await loadRecommendations();
+
+      const summary = document.getElementById('recommendations-summary');
+      const savingsCard = Array.from(summary?.querySelectorAll('.card') ?? [])
+        .find((c) => /Monthly Savings/.test(c.querySelector('h3')?.textContent ?? ''));
+      const savingsValue = savingsCard?.querySelector('.value')?.textContent ?? '';
+      const savingsTitle = savingsCard?.querySelector('h3')?.textContent ?? '';
+
+      // Cards reflect the visible set (cell1: $100–$150), not the hidden selection.
+      expect(savingsValue).toContain('$100');
+      expect(savingsValue).toContain('$150');
+      expect(savingsValue).not.toContain('$200');
+      // Title must not flip to "Selected …" since no visible row is selected.
+      expect(savingsTitle).toBe('Potential Monthly Savings');
+
+      // Live line must not prefix "1 selected" because r3 is hidden.
+      const liveText = document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText).not.toMatch(/selected/);
+      expect(liveText).toMatch(/Showing/);
+
+      // Reset mocks so this filter doesn't leak into subsequent tests.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    });
+
     test('renders recommendations list', async () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -601,15 +865,15 @@ describe('Recommendations Module', () => {
       });
     });
 
-    test('renders sortable column headers with indicators (Bundle B: 11 columns)', async () => {
+    test('renders sortable column headers with indicators (Bundle B + #282: 12 columns)', async () => {
       await loadRecommendations();
       const list = document.getElementById('recommendations-list');
-      // Bundle B: every data column is sortable. 11 sortable data columns:
-      // provider, account, service, resource_type, region, count, term,
+      // Bundle B + issue #282: every data column is sortable. 12 sortable data columns:
+      // provider, account, service, resource_type, region, count, term, payment,
       // savings, upfront_cost, monthly_cost, effective_savings_pct.
       // The leading checkbox column is not sortable.
       const sortables = list?.querySelectorAll('th.sortable');
-      expect(sortables?.length).toBe(11);
+      expect(sortables?.length).toBe(12);
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
@@ -620,6 +884,73 @@ describe('Recommendations Module', () => {
       const header = document.querySelector<HTMLTableCellElement>('th[data-sort="upfront_cost"]');
       header?.click();
       expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'desc' });
+    });
+
+    test('Payment column header renders and is sortable (#282)', async () => {
+      await loadRecommendations();
+      const list = document.getElementById('recommendations-list');
+      const paymentTh = list?.querySelector('th[data-sort="payment"]');
+      expect(paymentTh).not.toBeNull();
+      expect(paymentTh?.textContent).toContain('Payment');
+      // Clicking the Payment header should call setRecommendationsSort with 'payment'.
+      (paymentTh as HTMLElement)?.click();
+      expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'payment', direction: 'desc' });
+    });
+
+    test('Payment column cell renders human-readable labels (#282)', async () => {
+      const recs = [
+        { id: 'p1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.small',  region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront',     savings: 100, upfront_cost: 1000 },
+        { id: 'p2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment: 'partial-upfront', savings: 200, upfront_cost: 500 },
+        { id: 'p3', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-west-2', count: 1, term: 1, payment: 'no-upfront',      savings: 300, upfront_cost: 0 },
+        { id: 'p4', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.m5',     region: 'us-west-2', count: 1, term: 3, payment: 'monthly',         savings: 400, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+      await loadRecommendations();
+
+      const rows = document.querySelectorAll('tr.recommendation-row');
+      const paymentCells = Array.from(rows).map((row) => {
+        // Payment column is the 9th <td> (0-indexed: 0=checkbox, 1=provider,
+        // 2=account, 3=service, 4=resource_type, 5=region, 6=count, 7=term, 8=payment)
+        return row.querySelectorAll('td')[8]?.textContent?.trim() ?? '';
+      });
+      expect(paymentCells).toContain('All Upfront');
+      expect(paymentCells).toContain('Partial Upfront');
+      expect(paymentCells).toContain('No Upfront');
+      expect(paymentCells).toContain('Monthly');
+      // Em-dash rendered for missing payment (no dedicated test rec here,
+      // but the helper returns '—' for undefined — covered by formatPayment unit test).
+    });
+
+    test('Payment column filter narrows visible rows (#282)', async () => {
+      const recs = [
+        { id: 'f1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.small',  region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 1000 },
+        { id: 'f2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront',  savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+      // Apply a payment filter so only the all-upfront rec is visible.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        payment: { kind: 'set', values: ['all-upfront'] },
+      });
+
+      await loadRecommendations();
+
+      const rows = document.querySelectorAll('tr.recommendation-row');
+      // Only the all-upfront rec should be rendered.
+      expect(rows.length).toBe(1);
+      // Payment cell text should be "All Upfront".
+      const paymentCell = rows[0]?.querySelectorAll('td')[8];
+      expect(paymentCell?.textContent?.trim()).toBe('All Upfront');
+
+      // Restore filter mock so it doesn't leak into subsequent tests.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
     });
 
     test('bottom action box selection summary reflects current selection (Bundle B)', async () => {
@@ -640,9 +971,14 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const summary = document.getElementById('recommendations-action-summary');
-      // #273: summary text shows just the selection count (drops the
-      // "of N cells visible" suffix — the visible fallback is gone).
-      expect(summary?.textContent).toContain('1 selected');
+      // #281: summary text now surfaces the financial impact of the
+      // current action target (savings/mo + upfront across N cells)
+      // instead of just selection counts. The user can already see
+      // selection state from row checkboxes; the action box is prime
+      // real estate for the dollar figures they're authorising.
+      expect(summary?.textContent).toMatch(/\$100\/mo/);
+      expect(summary?.textContent).toMatch(/\$500 upfront/);
+      expect(summary?.textContent).toMatch(/1 cell\b/);
       // Old bulk-toolbar surface is gone.
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
@@ -1248,7 +1584,7 @@ describe('Bundle B: column header filter triggers', () => {
     const buttons = document.querySelectorAll<HTMLButtonElement>('th .column-filter-btn[data-column]');
     const cols = Array.from(buttons).map((b) => b.dataset['column']);
     expect(cols.sort()).toEqual(
-      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
+      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'payment', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
     );
   });
 
@@ -1573,9 +1909,12 @@ describe('Bundle B: sticky bottom action box', () => {
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
   });
 
-  test('bottom box exposes Payment / Capacity % / Purchase / Create Plan; no Term selector', async () => {
+  test('bottom box no longer exposes the bulk Payment dropdown (#282)', async () => {
     await loadRecommendations();
-    expect(document.getElementById('bulk-purchase-payment')).not.toBeNull();
+    // Issue #282: global Payment dropdown removed — each rec carries its own
+    // payment_option from the API fan-out; a global override was misleading.
+    expect(document.getElementById('bulk-purchase-payment')).toBeNull();
+    // Other controls remain.
     expect(document.getElementById('bulk-purchase-capacity')).not.toBeNull();
     expect(document.getElementById('bulk-purchase-btn')).not.toBeNull();
     expect(document.getElementById('create-plan-btn')).not.toBeNull();
@@ -2908,6 +3247,51 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(plr.savingsMin).toBe(0);
       expect(plr.savingsMax).toBe(0);
     });
+
+    test('paybackMonthsMin uses per-cell paired variants, not cross-extrema (PR #283 CR)', () => {
+      // Cell A has two variants:
+      //   v1: savings=50,  upfront=0    → ratio = 0     (best payback: 0 months)
+      //   v2: savings=200, upfront=300  → ratio = 1.5   (1.5 months)
+      //
+      // Cell B has two variants:
+      //   v3: savings=100, upfront=200  → ratio = 2     (2 months)
+      //   v4: savings=150, upfront=600  → ratio = 4     (4 months)
+      //
+      // Attainable min-payback selection: cell A picks v1 (ratio 0), cell B
+      // picks v3 (ratio 2). Total upfront=0+200=200, total savings=50+100=150.
+      // paybackMonthsMin = 200/150 ≈ 1.333...
+      //
+      // Cross-extrema (old code) would compute:
+      //   upfrontMin = 0 (from v1) + 200 (from v3) = 200
+      //   savingsMax = 200 (from v2) + 150 (from v4) = 350
+      //   paybackMonthsMin = 200/350 ≈ 0.571
+      // That's not attainable because it mixes upfront from v1 with savings
+      // from v2 (different variants of cell A).
+      //
+      // The new per-cell paired logic must produce 200/150 ≈ 1.333, not 0.571.
+      const cellA = [
+        mkRec({ id: 'a-v1', resource_type: 'm5.large',  savings:  50, upfront_cost:   0 }),
+        mkRec({ id: 'a-v2', resource_type: 'm5.large',  savings: 200, upfront_cost: 300 }),
+      ];
+      const cellB = [
+        mkRec({ id: 'b-v3', resource_type: 't3.medium', savings: 100, upfront_cost: 200 }),
+        mkRec({ id: 'b-v4', resource_type: 't3.medium', savings: 150, upfront_cost: 600 }),
+      ];
+      const groups = groupRecsByCell([...cellA, ...cellB]);
+      const plr = pageLevelRange(groups);
+
+      // Per-cell paired: best ratio for A is v1 (0/50=0), best for B is v3 (200/100=2).
+      // Combined: upfront=0+200=200, savings=50+100=150 → paybackMin=200/150≈1.333
+      expect(plr.paybackMonthsMin).toBeCloseTo(200 / 150, 5);
+
+      // Cross-extrema would give 200/350≈0.571 — must NOT be the result.
+      expect(plr.paybackMonthsMin).not.toBeCloseTo(200 / 350, 5);
+
+      // paybackMonthsMax: worst payback per cell. A picks v2 (300/200=1.5),
+      // B picks v4 (600/150=4). Combined: upfront=300+600=900, savings=200+150=350.
+      // paybackMax = 900/350 ≈ 2.571
+      expect(plr.paybackMonthsMax).toBeCloseTo(900 / 350, 5);
+    });
   });
 
   describe('DOM rendering (cell grouping integrated)', () => {
@@ -2952,6 +3336,20 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(variantRows.length).toBe(0);
     });
 
+    test('chevron button lives inside td.checkbox-col of the summary row (closes #280)', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      const summaryRow = document.querySelector('.rec-cell-summary-row');
+      expect(summaryRow).not.toBeNull();
+      const checkboxCell = summaryRow!.querySelector('td.checkbox-col');
+      expect(checkboxCell).not.toBeNull();
+      const chevron = checkboxCell!.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+      expect(chevron).not.toBeNull();
+    });
+
     test('clicking chevron expands the cell and shows variant rows', async () => {
       const recs = multiVariantRecs();
       (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
@@ -2960,22 +3358,35 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
 
       const chevron = document.querySelector<HTMLButtonElement>('.rec-cell-chevron');
       expect(chevron).not.toBeNull();
+      // aria-expanded starts false (collapsed)
+      expect(chevron!.getAttribute('aria-expanded')).toBe('false');
       chevron!.click();
 
-      // After expand: variant rows should appear
+      // After expand: variant rows should appear and aria-expanded flips
       const variantRows = document.querySelectorAll('.rec-variant-row');
       expect(variantRows.length).toBe(2);
+      const updatedChevron = document.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+      expect(updatedChevron!.getAttribute('aria-expanded')).toBe('true');
     });
 
-    test('page-level range banner appears when multi-variant cells exist', async () => {
+    test('page-level range banner is removed (closes #278) — savings card is the canonical surface', async () => {
+      // The "Recommended range" banner under the table was redundant with
+      // the Potential Monthly Savings card after #272 / #279 brought the
+      // same range to the summary header. Closing #278 removed the
+      // banner; the card is the single source of truth.
       const recs = multiVariantRecs();
       (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
       (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
       await loadRecommendations();
 
-      const banner = document.querySelector('.rec-range-banner');
-      expect(banner).not.toBeNull();
-      expect(banner!.textContent).toMatch(/Recommended range/);
+      // Banner gone.
+      expect(document.querySelector('.rec-range-banner')).toBeNull();
+      // Card carries the range.
+      const summary = document.getElementById('recommendations-summary');
+      const savingsCard = Array.from(summary?.querySelectorAll('.card') ?? [])
+        .find((c) => /Monthly Savings/.test(c.querySelector('h3')?.textContent ?? ''));
+      expect(savingsCard?.querySelector('.value.savings')?.textContent).toMatch(/\$\d/);
     });
 
     test('single-variant cell renders a flat row, no summary row', async () => {
