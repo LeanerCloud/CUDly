@@ -55,6 +55,8 @@ see no drift.
    ```hcl
    enable_archera             = true
    archera_azure_sp_object_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+   # Optional: only after the purchase approval workflow is confirmed
+   # enable_archera_purchase_actions = true
    ```
 
 3. Run `terraform plan` to review the custom role and role assignment that
@@ -66,5 +68,5 @@ When `enable_archera = true`:
 
 | Resource | Purpose |
 | --- | --- |
-| `azurerm_role_definition.archera_integration[0]` | Custom RBAC role with read-only cost management + RI purchase actions |
+| `azurerm_role_definition.archera_integration[0]` | Custom RBAC role with read-only cost access by default; adds RI purchase writes only when `enable_archera_purchase_actions = true` |
 | `azurerm_role_assignment.archera_integration[0]` | Assigns the custom role to Archera's service principal at subscription scope |

@@ -512,6 +512,14 @@ variable "archera_aws_account_id" {
   EOT
   type        = string
   default     = ""
+
+  validation {
+    condition = (
+      !var.enable_archera ||
+      can(regex("^\\d{12}$", trimspace(var.archera_aws_account_id)))
+    )
+    error_message = "archera_aws_account_id must be a 12-digit AWS account ID when enable_archera = true."
+  }
 }
 
 variable "archera_external_id" {

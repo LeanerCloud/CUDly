@@ -59,7 +59,10 @@ see no drift.
 
    ```hcl
    enable_archera         = true
-   archera_aws_account_id = "123456789012"  # Archera's account ID
+   archera_aws_account_id = "123456789012"           # Archera's account ID
+   archera_external_id    = "replace-with-archera-extid"
+   # Optional: only after the purchase approval workflow is confirmed
+   # enable_archera_purchase_actions = true
    ```
 
 3. Run `terraform plan` to review the cross-account IAM role and policy
@@ -72,5 +75,7 @@ When `enable_archera = true`:
 | Resource | Purpose |
 | --- | --- |
 | `aws_iam_role.archera_integration[0]` | Cross-account role trusted by Archera's AWS account |
-| `aws_iam_policy.archera_integration[0]` | Provisional least-privilege policy (read cost data + purchase RIs/SPs) |
-| `aws_iam_role_policy_attachment.archera_integration[0]` | Attaches the policy to the role |
+| `aws_iam_policy.archera_read[0]` | Provisional read-only policy for cost / commitment telemetry |
+| `aws_iam_role_policy_attachment.archera_read[0]` | Attaches the read-only policy to the role |
+| `aws_iam_policy.archera_purchase[0]` | Optional RI/SP purchase policy, created only when `enable_archera_purchase_actions = true` |
+| `aws_iam_role_policy_attachment.archera_purchase[0]` | Attaches the optional purchase policy to the role |
