@@ -87,6 +87,37 @@ func (s *SMTPSender) SendToEmail(ctx context.Context, toEmail, subject, body str
 	return s.SendToEmailWithCC(ctx, toEmail, nil, subject, body)
 }
 
+// SendToEmailWithCCMultipart sends a multipart/alternative message (plain-
+// text + HTML) via SMTP. htmlBody == "" degrades to a single-part text send
+// for backwards compatibility with callers that don't have an HTML body.
+func (s *SMTPSender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string, ccEmails []string, subject, textBody, htmlBody string) error {
+	if htmlBody == "" {
+		return s.SendToEmailWithCC(ctx, toEmail, ccEmails, subject, textBody)
+	}
+	if s.fromEmail == "" {
+		logging.Debug("No from email configured, skipping email")
+		return nil
+	}
+
+	toEmail = sanitizeHeader(toEmail)
+	subject = sanitizeHeader(subject)
+	sanitizedCC := sanitizeCCList(toEmail, ccEmails)
+
+	msg := s.buildSMTPMessageMultipart(toEmail, sanitizedCC, subject, textBody, htmlBody)
+	rcpts := append([]string{toEmail}, sanitizedCC...)
+
+	if err := s.dispatchSMTP(rcpts, msg); err != nil {
+		return err
+	}
+
+	if len(sanitizedCC) > 0 {
+		logging.Debugf("Sent multipart email via SMTP to %s (cc %d): %s", toEmail, len(sanitizedCC), subject)
+	} else {
+		logging.Debugf("Sent multipart email via SMTP to %s: %s", toEmail, subject)
+	}
+	return nil
+}
+
 // SendToEmailWithCC sends an email with To + optional Cc recipients via SMTP.
 // The Cc header is included in the message envelope so recipients see one
 // another, and the SMTP RCPT TO list carries every address so each inbox
@@ -130,6 +161,39 @@ func sanitizeCCList(toEmail string, ccEmails []string) []string {
 		out = append(out, sanitizeHeader(addr))
 	}
 	return out
+}
+
+// buildSMTPMessageMultipart assembles a multipart/alternative RFC-5322
+// message with both a plain-text and an HTML part. The boundary is a
+// fixed literal — small risk of body-content collision, mitigated by the
+// boundary's unlikely-to-occur shape. `cc` is already sanitized and
+// deduped by the caller.
+func (s *SMTPSender) buildSMTPMessageMultipart(toEmail string, cc []string, subject, textBody, htmlBody string) []byte {
+	const boundary = "cudly-mp-7e3b1c89af04d2"
+	from := s.fromEmail
+	if s.fromName != "" {
+		from = fmt.Sprintf("%s <%s>", sanitizeHeader(s.fromName), s.fromEmail)
+	}
+	headers := fmt.Sprintf("From: %s\r\nTo: %s\r\n", from, toEmail)
+	if len(cc) > 0 {
+		headers += fmt.Sprintf("Cc: %s\r\n", strings.Join(cc, ", "))
+	}
+	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"%s\"\r\n\r\n", subject, boundary)
+
+	var body strings.Builder
+	body.WriteString("--")
+	body.WriteString(boundary)
+	body.WriteString("\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
+	body.WriteString(textBody)
+	body.WriteString("\r\n--")
+	body.WriteString(boundary)
+	body.WriteString("\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
+	body.WriteString(htmlBody)
+	body.WriteString("\r\n--")
+	body.WriteString(boundary)
+	body.WriteString("--\r\n")
+
+	return []byte(headers + body.String())
 }
 
 // buildSMTPMessage assembles the RFC-5322 message bytes (headers + blank
@@ -325,11 +389,17 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 		return ErrNoRecipient
 	}
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	body, err := RenderPurchaseApprovalRequestEmail(data)
+	textBody, err := RenderPurchaseApprovalRequestEmail(data)
 	if err != nil {
-		return fmt.Errorf("failed to render purchase approval request email: %w", err)
+		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
 	}
-	return s.SendToEmailWithCC(ctx, recipient, data.CCEmails, subject, body)
+	// Issue #287: HTML half + multipart shipping. HTML failures fall back
+	// to single-part text so a template bug doesn't drop the email.
+	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
+	if htmlErr != nil {
+		htmlBody = ""
+	}
+	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)
 }
 
 // SendRegistrationReceivedNotification sends an email to CUDly administrators

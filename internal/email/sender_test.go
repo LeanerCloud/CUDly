@@ -797,3 +797,84 @@ func TestNewSenderWithContext_Success(t *testing.T) {
 	assert.NotNil(t, sender.snsClient)
 	assert.NotNil(t, sender.sesClient)
 }
+
+// Issue #287: SendPurchaseApprovalRequest now ships multipart/alternative
+// (text + HTML). Capture the SES SendEmailInput and assert both bodies
+// are populated with the expected substrings, and the From address is
+// the configured FROM_EMAIL (not a hardcoded literal).
+func TestSender_SendPurchaseApprovalRequest_Multipart_Issue287(t *testing.T) {
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+
+	var captured *sesv2.SendEmailInput
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*sesv2.SendEmailInput)
+		}).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-multipart")}, nil)
+
+	sender := NewSenderWithClients(nil, mockSES, SenderConfig{FromEmail: "noreply@example.com"})
+
+	data := NotificationData{
+		DashboardURL:     "https://dashboard.example.com",
+		ApprovalToken:    "tkn-abc",
+		ExecutionID:      "exec-123",
+		TotalUpfrontCost: 100.0,
+		TotalSavings:     10.0,
+		RecipientEmail:   "approver@acme.com",
+		RequestedByEmail: "cristi@acme.com",
+		Recommendations:  []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, Term: 3, Payment: "all-upfront"}},
+	}
+
+	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	require.NoError(t, err)
+	require.NotNil(t, captured, "SendEmail should have been called")
+
+	// Both halves populated.
+	require.NotNil(t, captured.Content.Simple.Body.Text)
+	require.NotNil(t, captured.Content.Simple.Body.Html, "HTML body must be present for multipart/alternative")
+
+	textBody := *captured.Content.Simple.Body.Text.Data
+	htmlBody := *captured.Content.Simple.Body.Html.Data
+
+	// Plain-text shape: includes labeled URLs, no HTML markup.
+	assert.Contains(t, textBody, "Approve: ")
+	assert.Contains(t, textBody, "Cancel: ")
+	assert.NotContains(t, textBody, "<a ", "plain-text body should not carry HTML anchors")
+
+	// HTML shape: includes inline-styled anchors.
+	assert.Contains(t, htmlBody, `href="https://dashboard.example.com/purchases/approve/exec-123?token=tkn-abc"`)
+	assert.Contains(t, htmlBody, "Approve this purchase")
+
+	// From is the configured value, not a hardcoded literal.
+	require.NotNil(t, captured.FromEmailAddress)
+	assert.Equal(t, "noreply@example.com", *captured.FromEmailAddress)
+
+	// To recipient is the data.RecipientEmail.
+	require.Len(t, captured.Destination.ToAddresses, 1)
+	assert.Equal(t, "approver@acme.com", captured.Destination.ToAddresses[0])
+}
+
+// Issue #287: SendToEmailWithCCMultipart with empty htmlBody falls back
+// to single-part text — the existing code path stays valid for callers
+// that haven't been upgraded.
+func TestSender_SendToEmailWithCCMultipart_FallsBackWhenHTMLEmpty_Issue287(t *testing.T) {
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+	var captured *sesv2.SendEmailInput
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*sesv2.SendEmailInput)
+		}).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-single")}, nil)
+
+	sender := NewSenderWithClients(nil, mockSES, SenderConfig{FromEmail: "noreply@example.com"})
+
+	err := sender.SendToEmailWithCCMultipart(context.Background(), "to@example.com", nil, "Subj", "plain body", "")
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.Content.Simple.Body.Text)
+	assert.Nil(t, captured.Content.Simple.Body.Html, "empty HTML body should NOT be sent as multipart")
+}

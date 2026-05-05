@@ -268,3 +268,27 @@ func TestNewSMTPSender_NoAuth(t *testing.T) {
 	assert.Empty(t, sender.username)
 	assert.Empty(t, sender.password)
 }
+
+// Issue #287: SMTP multipart message has Content-Type:
+// multipart/alternative + boundary, with both text/plain and text/html
+// parts inside. Build the message via the public SMTPSender path —
+// dispatchSMTP isn't invoked because we're testing the assembly only.
+func TestSMTPSender_BuildMultipartMessage_Issue287(t *testing.T) {
+	s := &SMTPSender{
+		fromEmail: "noreply@example.com",
+		fromName:  "CUDly notifications",
+	}
+	msg := s.buildSMTPMessageMultipart("to@example.com", []string{"cc@example.com"}, "Subj", "PLAIN-BODY-MARKER", "<p>HTML-BODY-MARKER</p>")
+	body := string(msg)
+
+	assert.Contains(t, body, "From: CUDly notifications <noreply@example.com>")
+	assert.Contains(t, body, "To: to@example.com")
+	assert.Contains(t, body, "Cc: cc@example.com")
+	assert.Contains(t, body, "Subject: Subj")
+	assert.Contains(t, body, "MIME-Version: 1.0")
+	assert.Contains(t, body, `Content-Type: multipart/alternative; boundary="cudly-mp-`)
+	assert.Contains(t, body, "Content-Type: text/plain; charset=UTF-8")
+	assert.Contains(t, body, "Content-Type: text/html; charset=UTF-8")
+	assert.Contains(t, body, "PLAIN-BODY-MARKER")
+	assert.Contains(t, body, "<p>HTML-BODY-MARKER</p>")
+}
