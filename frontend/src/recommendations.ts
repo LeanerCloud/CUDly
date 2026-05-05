@@ -5,8 +5,7 @@
 import * as api from './api';
 import * as state from './state';
 import { formatCurrency, formatTerm, escapeHtml } from './utils';
-import { renderFreshness } from './freshness';
-import { getRecommendationDetail, type RecommendationDetail } from './api/recommendations';
+import { getRecommendationDetail, getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
 import {
   isPaymentSupported,
@@ -41,6 +40,22 @@ let lastVisibleGroupKeys: string[] = [];
 // in sync with the per-cell banner range under the table).
 let lastRecommendationsSummary: RecommendationsSummary = {};
 
+// #284 (CR follow-up): guard against concurrent stale-load refreshes. If a
+// background refresh is already in flight, any subsequent stale detection
+// skips kicking off a second request (and duplicate toasts).
+let autoRefreshInFlight: Promise<void> | null = null;
+
+/**
+ * Freshness budget for auto-refresh (#284). If the last successful collection
+ * is older than this threshold (or there has never been one), loadRecommendations
+ * fires a background refresh automatically so the user sees up-to-date data
+ * without needing an explicit Refresh button.
+ *
+ * TODO: expose via the /api/public-info endpoint so operators can tune this
+ * without a frontend redeploy.
+ */
+export const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 // issue #223: resolved GlobalConfig defaults, seeded on page load by
 // loadRecommendations(). Initial values mirror the historical hardcoded
 // defaults so the module is usable before the first API round-trip.
@@ -63,6 +78,14 @@ export function seedGlobalDefaults(term: 1 | 3, payment: CompatPayment): void {
 export function resetExpandedCells(): void {
   expandedCells.clear();
   lastVisibleGroupKeys = [];
+}
+
+/**
+ * Reset the auto-refresh in-flight guard. Exported for testing only — not
+ * part of the public API. Call in beforeEach so dedup tests start clean.
+ */
+export function resetAutoRefreshInFlight(): void {
+  autoRefreshInFlight = null;
 }
 
 // populateRecommendationsAccountFilter / populateRegionFilter / the legacy
@@ -97,6 +120,90 @@ export function setupRecommendationsHandlers(): void {
   // listeners are attached per-render inside renderRecommendationsList,
   // and Provider/Account-driven API re-fetch is handled by their popover
   // commit hooks (see Bundle B follow-up).
+}
+
+/**
+ * Check freshness and fire a background refresh if the cache is stale or cold.
+ * Fire-and-forget: does not block the table render that already happened.
+ *
+ * Three toast stages:
+ *   1. In-flight: "Refreshing recommendations…" (sticky until resolved)
+ *   2. Success:   "Recommendations refreshed"
+ *   3. Failure:   "Recommendations refresh failed: <message>"
+ *
+ * If the freshness response itself carries a last_collection_error, that is
+ * surfaced as an error toast regardless of whether a new refresh fires (the
+ * freshness banner that previously showed this is being removed in #284).
+ */
+async function triggerAutoRefreshIfStale(): Promise<void> {
+  let freshness;
+  try {
+    freshness = await getRecommendationsFreshness();
+  } catch (err) {
+    // Network failures getting freshness are non-critical — the table is
+    // already rendered with the cached data; swallow silently.
+    console.error('Failed to fetch recommendations freshness:', err);
+    return;
+  }
+
+  const lastCollectedMs =
+    freshness.last_collected_at === null
+      ? null
+      : new Date(freshness.last_collected_at).getTime();
+
+  const isStale =
+    lastCollectedMs === null ||
+    !Number.isFinite(lastCollectedMs) ||
+    Date.now() - lastCollectedMs > STALE_THRESHOLD_MS;
+  if (freshness.last_collection_error && isStale) {
+    showToast({
+      message: `Last recommendations collection had errors: ${freshness.last_collection_error}`,
+      kind: 'error',
+    });
+  }
+
+  if (!isStale) return;
+
+  // Dedup: if a refresh is already in flight, don't start a second one.
+  if (autoRefreshInFlight) return;
+
+  const inFlight = showToast({
+    message: 'Refreshing recommendations…',
+    kind: 'info',
+    // No auto-dismiss timeout — the .then()/.catch() paths call
+    // inFlight.dismiss() explicitly, so the toast stays visible until the
+    // refresh actually settles (real refreshes can take 28 s+).
+    timeout: null,
+  });
+
+  autoRefreshInFlight = refreshRecommendationsAPI()
+    .then(() => {
+      inFlight.dismiss();
+      showToast({
+        message: 'Recommendations refreshed',
+        kind: 'success',
+        timeout: 5_000,
+      });
+      // Reload UI data so users see fresh recommendations
+      return loadRecommendations();
+    })
+    .catch((err: unknown) => {
+      inFlight.dismiss();
+      const message =
+        err instanceof Error
+          ? err.message
+          : err !== null && err !== undefined
+            ? String(err)
+            : 'unknown error';
+      console.error('Auto-refresh of recommendations failed:', err);
+      showToast({
+        message: `Recommendations refresh failed: ${message}`,
+        kind: 'error',
+      });
+    })
+    .finally(() => {
+      autoRefreshInFlight = null;
+    });
 }
 
 /**
@@ -149,10 +256,9 @@ export async function loadRecommendations(): Promise<void> {
     lastRecommendationsSummary = data.summary || {};
     renderRecommendationsList(data.recommendations || []);
 
-    // Freshness indicator reflects the last collection timestamp; refreshed
-    // on every load so provider/account switches + manual refreshes stay
-    // in sync with the cache state.
-    void renderFreshness('recommendations-freshness', loadRecommendations);
+    // Auto-refresh on page open (#284): check freshness and trigger an
+    // async background refresh if the cache is cold or older than 24h.
+    void triggerAutoRefreshIfStale();
   } catch (error) {
     console.error('Failed to load recommendations:', error);
     const list = document.getElementById('recommendations-list');
