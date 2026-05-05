@@ -131,6 +131,113 @@ describe('Recommendations Module', () => {
       expect(summary?.innerHTML).toContain('Payback Period');
     });
 
+    test('Potential Monthly Savings card mirrors page-level range, not the API sum (#272)', async () => {
+      // Two cells, two variants per cell. The cells share (provider, account,
+      // service, resource_type, region, term, engine) within each group; the
+      // variants differ by payment_option. The user can only buy one variant
+      // per cell, so the achievable monthly savings is bounded by:
+      //   min = sum of per-cell savingsMin = 100 + 200 = 300
+      //   max = sum of per-cell savingsMax = 150 + 250 = 400
+      // The API's total_monthly_savings sums all 4 variants (= 700), which
+      // overstates achievable savings by ~75% on this 2-cell page. The card
+      // must NOT render 700; it must render the range "$300 – $400".
+      const recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',     savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront',    savings: 150, upfront_cost: 1000 },
+        { id: 'cell2-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',     savings: 200, upfront_cost: 0 },
+        { id: 'cell2-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront',    savings: 250, upfront_cost: 2000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 700, total_upfront_cost: 3000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      // The summary card now reads the visible set via
+      // state.getVisibleRecommendations() (so it stays in sync with
+      // the banner under filter changes — see the next test for the
+      // filter-divergence case). On an unfiltered initial render the
+      // visible set equals the loaded set; mock it explicitly because
+      // setVisibleRecommendations() inside renderRecommendationsList
+      // is a no-op when state is mocked.
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+
+      await loadRecommendations();
+
+      const summary = document.getElementById('recommendations-summary');
+      const savingsCard = Array.from(summary?.querySelectorAll('.card') ?? [])
+        .find((c) => c.querySelector('h3')?.textContent === 'Potential Monthly Savings');
+      const value = savingsCard?.querySelector('.value.savings')?.textContent ?? '';
+      // The page-level range is $300 – $400/mo; the API's flat 700 must not
+      // appear on the card.
+      expect(value).toContain('$300');
+      expect(value).toContain('$400');
+      expect(value).not.toContain('$700');
+    });
+
+    test('savings card recomputes from visible set on filter change (#272 CR follow-up)', async () => {
+      // Same 4-rec / 2-cell setup as above. Initial render: card shows
+      // $300 – $400 (range across both cells). Then we apply a real
+      // column filter (service = "ec2") via the state mock so the
+      // applyColumnFilters() call inside renderRecommendationsList
+      // narrows the visible set to cell1's two variants, and trigger
+      // a rerender via a sortable-header click. The card MUST recompute
+      // to cell1's range ($100 – $150) — otherwise it stays pinned at
+      // the unfiltered $300 – $400 and diverges from the banner under
+      // the table, which is exactly the CR finding on #276 we're
+      // closing.
+      const allRecs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'cell2-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'cell2-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 700, total_upfront_cost: 3000, avg_payback_months: 1 },
+        recommendations: allRecs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(allRecs);
+      // No column filters initially — applyColumnFilters returns the input
+      // clone so all 4 recs reach the summary recompute.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+
+      await loadRecommendations();
+
+      const cardValue = (): string => {
+        const summary = document.getElementById('recommendations-summary');
+        const card = Array.from(summary?.querySelectorAll('.card') ?? [])
+          .find((c) => c.querySelector('h3')?.textContent === 'Potential Monthly Savings');
+        return card?.querySelector('.value.savings')?.textContent ?? '';
+      };
+      expect(cardValue()).toContain('$300');
+      expect(cardValue()).toContain('$400');
+
+      // Apply a real column filter restricting to service=ec2 (cell1
+      // only). renderRecommendationsList re-runs applyColumnFilters
+      // against the loaded set on every entry, so a sort-header click
+      // triggers the narrowing pipeline end-to-end.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      const sortableHeader = document.querySelector<HTMLTableCellElement>('th[data-sort="service"]');
+      sortableHeader?.click();
+
+      // Card must recompute to cell1's range ($100 – $150) — NOT stay
+      // pinned at the loaded-set range ($300 – $400).
+      expect(cardValue()).toContain('$100');
+      expect(cardValue()).toContain('$150');
+      expect(cardValue()).not.toContain('$300');
+      expect(cardValue()).not.toContain('$400');
+
+      // Restore the filter mock to empty so the leaked return value
+      // doesn't bleed into subsequent tests in this file. jest.clearAllMocks
+      // resets mock.calls but not .mockReturnValue, so we have to undo
+      // explicitly.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    });
+
     test('renders recommendations list', async () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},

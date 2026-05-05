@@ -34,6 +34,13 @@ const expandedCells = new Set<string>();
 // Expand-All button handler to populate expandedCells without re-computing.
 let lastVisibleGroupKeys: string[] = [];
 
+// #272 (CR follow-up): cache of the most-recent API-derived summary so
+// rerenders triggered by column-filter changes can keep total_count /
+// total_upfront_cost / avg_payback_months stable while the savings card
+// itself is recomputed client-side from the *visible* recs (so it stays
+// in sync with the per-cell banner range under the table).
+let lastRecommendationsSummary: RecommendationsSummary = {};
+
 // issue #223: resolved GlobalConfig defaults, seeded on page load by
 // loadRecommendations(). Initial values mirror the historical hardcoded
 // defaults so the module is usable before the first API round-trip.
@@ -138,7 +145,14 @@ export async function loadRecommendations(): Promise<void> {
     state.setRecommendations((data.recommendations || []) as unknown as api.Recommendation[]);
     state.clearSelectedRecommendations();
 
-    renderRecommendationsSummary(data.summary || {});
+    // Cache the API-derived summary so renderRecommendationsList can
+    // recompute the savings card from the visible (post-filter) set on
+    // every rerender — covers initial load, sort-header clicks, column-
+    // filter commits, and the Clear-filters badge. Otherwise an active
+    // filter would shrink the banner range under the table while leaving
+    // the card pinned to the unfiltered totals — the same divergence
+    // #272 was supposed to close.
+    lastRecommendationsSummary = data.summary || {};
     renderRecommendationsList(data.recommendations || []);
 
     // Freshness indicator reflects the last collection timestamp; refreshed
@@ -155,9 +169,26 @@ export async function loadRecommendations(): Promise<void> {
   }
 }
 
-function renderRecommendationsSummary(summary: RecommendationsSummary): void {
+function renderRecommendationsSummary(
+  summary: RecommendationsSummary,
+  recommendations: readonly LocalRecommendation[],
+): void {
   const container = document.getElementById('recommendations-summary');
   if (!container) return;
+
+  // Potential Monthly Savings is computed from the same source as the
+  // "Recommended range" banner under the table (closes #272). The previous
+  // implementation rendered `summary.total_monthly_savings` from the API —
+  // a flat sum across every (term, payment) variant of every cell — so a
+  // typical 12-cell page with 2 terms × 3 payments per cell showed up to
+  // ~6× the achievable savings (the user can only buy one variant per
+  // cell). pageLevelRange sums per-cell min/max and stays consistent with
+  // the banner.
+  const groups = groupRecsByCell(recommendations);
+  const plr = pageLevelRange(groups);
+  const savingsText = plr.cellCount > 0 && plr.savingsMax > 0
+    ? formatSavingsRange(plr.savingsMin, plr.savingsMax)
+    : formatCurrency(0);
 
   container.innerHTML = `
     <div class="card">
@@ -166,7 +197,7 @@ function renderRecommendationsSummary(summary: RecommendationsSummary): void {
     </div>
     <div class="card">
       <h3>Potential Monthly Savings</h3>
-      <p class="value savings">${formatCurrency(summary.total_monthly_savings)}</p>
+      <p class="value savings">${savingsText}</p>
     </div>
     <div class="card">
       <h3>Total Upfront Cost</h3>
@@ -1126,6 +1157,11 @@ function rebindOpenPopoverAnchor(): void {
 // rerenderRecommendations triggers a full re-render from the latest loaded
 // state. Used by popover commits and the Clear-filters badge so the table
 // reflects new column-filter state immediately.
+//
+// #272 (CR follow-up): the summary card is recomputed inside
+// renderRecommendationsList itself (against the post-filter visible set),
+// so this helper doesn't need to call renderRecommendationsSummary
+// separately — every entry to renderRecommendationsList covers it.
 function rerenderRecommendations(): void {
   const loaded = state.getRecommendations() as unknown as LocalRecommendation[];
   renderRecommendationsList(loaded);
@@ -2353,6 +2389,15 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
     state.getRecommendationsColumnFilters(),
   );
   state.setVisibleRecommendations(recommendations as unknown as readonly api.Recommendation[]);
+
+  // Keep the savings card in sync with the visible (post-filter) set on
+  // every list rerender so the card and the per-cell banner under the
+  // table never diverge (#272 CR follow-up). The cached
+  // lastRecommendationsSummary holds the API-derived counts (total_count,
+  // total_upfront_cost, avg_payback_months); the savings figure itself is
+  // recomputed from `recommendations` inside renderRecommendationsSummary
+  // via the same pageLevelRange the banner uses.
+  renderRecommendationsSummary(lastRecommendationsSummary, recommendations);
 
   // Mount once; update is per-render below.
   mountBottomActionBox();
