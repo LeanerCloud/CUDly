@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight } from '../recommendations';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -836,6 +836,11 @@ describe('Recommendations Module', () => {
       });
     }
 
+    beforeEach(() => {
+      // Reset the dedup guard so each test starts with no refresh in flight.
+      resetAutoRefreshInFlight();
+    });
+
     test('cold cache (null last_collected_at) — refresh fires + in-flight toast shown', async () => {
       mockGetRecs();
       (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
@@ -922,6 +927,56 @@ describe('Recommendations Module', () => {
           kind: 'error',
         }),
       );
+    });
+
+    test('dedup — concurrent stale loads fire refreshRecommendations only once', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+
+      // A pending promise that won't resolve until we call resolveRefresh().
+      let resolveRefresh!: () => void;
+      const pendingRefresh = new Promise<void>((r) => { resolveRefresh = r; });
+      (recsApi.refreshRecommendations as jest.Mock).mockReturnValue(pendingRefresh);
+
+      // Fire two stale loads without awaiting the first refresh to settle.
+      const first = loadRecommendations();
+      const second = loadRecommendations();
+
+      await first;
+      await second;
+      // Flush the microtasks that kick off triggerAutoRefreshIfStale.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Only one API call despite two stale-load triggers.
+      expect(recsApi.refreshRecommendations).toHaveBeenCalledTimes(1);
+
+      // Clean up: resolve the pending promise so no timers hang after the test.
+      resolveRefresh();
+      await pendingRefresh;
+    });
+
+    test('persistent in-flight toast — shown with timeout: null so it stays until settled', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+
+      // Find the in-flight "Refreshing…" toast call and confirm it has no
+      // auto-dismiss timeout so it outlives long-running refreshes.
+      const inFlightCall = mockShowToast.mock.calls.find(
+        ([opts]) => (opts as { message: string }).message === 'Refreshing recommendations…',
+      );
+      expect(inFlightCall).toBeDefined();
+      const inFlightOpts = inFlightCall![0] as { timeout?: number | null };
+      expect(inFlightOpts.timeout).toBeNull();
     });
   });
 

@@ -40,6 +40,11 @@ let lastVisibleGroupKeys: string[] = [];
 // in sync with the per-cell banner range under the table).
 let lastRecommendationsSummary: RecommendationsSummary = {};
 
+// #284 (CR follow-up): guard against concurrent stale-load refreshes. If a
+// background refresh is already in flight, any subsequent stale detection
+// skips kicking off a second request (and duplicate toasts).
+let autoRefreshInFlight: Promise<void> | null = null;
+
 /**
  * Freshness budget for auto-refresh (#284). If the last successful collection
  * is older than this threshold (or there has never been one), loadRecommendations
@@ -73,6 +78,14 @@ export function seedGlobalDefaults(term: 1 | 3, payment: CompatPayment): void {
 export function resetExpandedCells(): void {
   expandedCells.clear();
   lastVisibleGroupKeys = [];
+}
+
+/**
+ * Reset the auto-refresh in-flight guard. Exported for testing only — not
+ * part of the public API. Call in beforeEach so dedup tests start clean.
+ */
+export function resetAutoRefreshInFlight(): void {
+  autoRefreshInFlight = null;
 }
 
 // populateRecommendationsAccountFilter / populateRegionFilter / the legacy
@@ -146,13 +159,19 @@ async function triggerAutoRefreshIfStale(): Promise<void> {
 
   if (!isStale) return;
 
+  // Dedup: if a refresh is already in flight, don't start a second one.
+  if (autoRefreshInFlight) return;
+
   const inFlight = showToast({
     message: 'Refreshing recommendations…',
     kind: 'info',
-    timeout: 4_000,
+    // No auto-dismiss timeout — the .then()/.catch() paths call
+    // inFlight.dismiss() explicitly, so the toast stays visible until the
+    // refresh actually settles (real refreshes can take 28 s+).
+    timeout: null,
   });
 
-  void refreshRecommendationsAPI()
+  autoRefreshInFlight = refreshRecommendationsAPI()
     .then(() => {
       inFlight.dismiss();
       showToast({
@@ -174,6 +193,9 @@ async function triggerAutoRefreshIfStale(): Promise<void> {
         message: `Recommendations refresh failed: ${message}`,
         kind: 'error',
       });
+    })
+    .finally(() => {
+      autoRefreshInFlight = null;
     });
 }
 
