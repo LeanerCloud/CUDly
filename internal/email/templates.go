@@ -401,6 +401,26 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 </td></tr></table>
 </body></html>`
 
+// sendPurchaseApprovalRequestVia composes the plain-text + HTML approval-request
+// bodies and ships them through s.SendToEmailWithCCMultipart. HTML render
+// failures are non-fatal and degrade to single-part text so a template bug
+// never drops the approval email. Shared by Sender and SMTPSender — see
+// issue #287 / PR #298 dedup follow-up.
+func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, recipient, subject string, data NotificationData) error {
+	textBody, err := RenderPurchaseApprovalRequestEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
+	}
+	// HTML render failure is non-fatal: degrade to single-part text.
+	// SendToEmailWithCCMultipart already handles htmlBody=="" by delegating
+	// to the single-part path on each transport.
+	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
+	if htmlErr != nil {
+		htmlBody = ""
+	}
+	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)
+}
+
 // SendPurchaseApprovalRequest sends an email asking the user to approve a direct
 // purchase. Routes through SES SendEmail (not the SNS alerts topic) because the
 // approval URL carries a one-time token scoped to the submitter — broadcasting
@@ -420,21 +440,8 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	if !isValidFromEmail(s.fromEmail) {
 		return ErrNoFromEmail
 	}
-	textBody, err := RenderPurchaseApprovalRequestEmail(data)
-	if err != nil {
-		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
-	}
-	// Issue #287: render an HTML half too and ship the email as
-	// multipart/alternative. HTML render failure is non-fatal — fall back
-	// to single-part text so a template bug in the HTML half doesn't
-	// silently swallow approval emails.
-	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
-	if htmlErr != nil {
-		htmlBody = ""
-	}
-
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	return s.SendToEmailWithCCMultipart(ctx, data.RecipientEmail, data.CCEmails, subject, textBody, htmlBody)
+	return sendPurchaseApprovalRequestVia(ctx, s, data.RecipientEmail, subject, data)
 }
 
 // ---------------------------------------------------------------------------

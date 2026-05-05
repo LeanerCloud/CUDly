@@ -275,6 +275,9 @@ func (n *noopEmailSender) SendNotification(ctx context.Context, subject, message
 func (n *noopEmailSender) SendToEmail(ctx context.Context, toEmail, subject, body string) error {
 	return nil
 }
+func (n *noopEmailSender) SendToEmailWithCCMultipart(_ context.Context, _ string, _ []string, _, _, _ string) error {
+	return nil
+}
 func (n *noopEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error {
 	return nil
 }

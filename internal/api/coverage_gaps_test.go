@@ -789,6 +789,9 @@ type stubEmailNotifier struct{}
 
 func (s *stubEmailNotifier) SendNotification(_ context.Context, _, _ string) error { return nil }
 func (s *stubEmailNotifier) SendToEmail(_ context.Context, _, _, _ string) error   { return nil }
+func (s *stubEmailNotifier) SendToEmailWithCCMultipart(_ context.Context, _ string, _ []string, _, _, _ string) error {
+	return nil
+}
 func (s *stubEmailNotifier) SendNewRecommendationsNotification(_ context.Context, _ email.NotificationData) error {
 	return nil
 }

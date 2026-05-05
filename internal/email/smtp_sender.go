@@ -389,17 +389,7 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 		return ErrNoRecipient
 	}
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	textBody, err := RenderPurchaseApprovalRequestEmail(data)
-	if err != nil {
-		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
-	}
-	// Issue #287: HTML half + multipart shipping. HTML failures fall back
-	// to single-part text so a template bug doesn't drop the email.
-	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
-	if htmlErr != nil {
-		htmlBody = ""
-	}
-	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)
+	return sendPurchaseApprovalRequestVia(ctx, s, recipient, subject, data)
 }
 
 // SendRegistrationReceivedNotification sends an email to CUDly administrators
