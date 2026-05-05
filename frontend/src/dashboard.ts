@@ -110,9 +110,15 @@ export async function loadDashboard(): Promise<void> {
     // api.Recommendation and LocalRecommendation are structurally identical
     // except for provider: string vs provider: Provider. The provider values
     // from the API are always the union members at runtime, so this cast is safe.
-    const recs = recsResult.status === 'fulfilled'
-      ? (recsResult.value as unknown as LocalRecommendation[])
-      : ([] as LocalRecommendation[]);
+    // Defensive Array.isArray guard: apiRequest's catch block returns `null` when
+    // response.json() fails (HTTP 2xx with empty/non-JSON body), so the settled
+    // value may be null or a non-array shape even when status === 'fulfilled'.
+    // #304: that non-array value reaches groupRecsByCell which iterates via
+    // `for...of`, throwing "X is not iterable" and blanking the dashboard.
+    const rawRecs = recsResult.status === 'fulfilled' ? recsResult.value : null;
+    const recs: readonly LocalRecommendation[] = Array.isArray(rawRecs)
+      ? (rawRecs as unknown as LocalRecommendation[])
+      : [];
 
     if (summaryResult.status === 'rejected') {
       throw summaryResult.reason as Error;
@@ -147,11 +153,21 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   // avoiding the ~6x inflation of summing every variant of every cell that
   // the flat summary.potential_monthly_savings carries.
   // Falls back to formatCurrency(0) when recs is empty or fetch failed.
-  const groups = groupRecsByCell(recs);
-  const range = pageLevelRange(groups);
-  const savingsDisplay = range.cellCount > 0
-    ? formatSavingsRange(range.savingsMin, range.savingsMax)
-    : formatCurrency(0);
+  // Soft-fail (#304): wrap in try/catch so an unexpected non-iterable shape
+  // that slips past the Array.isArray guard in loadDashboard (e.g. if
+  // groupRecsByCell is called from a path that bypasses the guard) cannot
+  // blank the entire dashboard — the savings card degrades to $0 instead.
+  let savingsDisplay: string;
+  try {
+    const groups = groupRecsByCell(recs);
+    const range = pageLevelRange(groups);
+    savingsDisplay = range.cellCount > 0
+      ? formatSavingsRange(range.savingsMin, range.savingsMax)
+      : formatCurrency(0);
+  } catch (recErr) {
+    console.warn('Dashboard: failed to compute savings range from recommendations:', recErr);
+    savingsDisplay = formatCurrency(0);
+  }
 
   // When no recommendations and no commitments exist, "100% coverage" is
   // misleading — nothing is being tracked. Show a dash instead.

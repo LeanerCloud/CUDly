@@ -551,6 +551,90 @@ describe('Dashboard Module', () => {
       expect(savingsCard?.textContent).toContain('$300');
       expect(savingsCard?.textContent).toContain('$400');
     });
+
+    // #304: getRecommendations returns null (apiRequest catch-block fallback
+    // when response.json() fails on a 2xx with empty/non-JSON body). The
+    // Array.isArray guard in loadDashboard must coerce null → [] so
+    // groupRecsByCell never receives a non-iterable value.
+    test('#304: getRecommendations returning null does not throw "is not iterable"', async () => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue(null);
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 500,
+        total_recommendations: 2,
+        active_commitments: 1,
+        committed_monthly: 100,
+        current_coverage: 50,
+        target_coverage: 80,
+        ytd_savings: 200,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      // Must not throw.
+      await expect(loadDashboard()).resolves.toBeUndefined();
+
+      // The rest of the dashboard must still render.
+      const summary = document.getElementById('summary');
+      expect(summary?.innerHTML).toContain('Active Commitments');
+      expect(summary?.innerHTML).toContain('Current Coverage');
+      expect(summary?.innerHTML).toContain('YTD Savings');
+
+      // Savings card falls back to $0 when recs are absent.
+      const savingsCard = summary?.querySelector('.card');
+      expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
+      expect(savingsCard?.innerHTML).toContain('$0');
+    });
+
+    // #304: getRecommendations returns a non-array object (e.g. a wrapped
+    // envelope or unexpected backend shape). Same coercion requirement.
+    test('#304: getRecommendations returning a non-array object does not throw "is not iterable"', async () => {
+      // Simulate an unexpected envelope shape from the backend.
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ recommendations: [], total: 0 } as unknown);
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 400,
+        total_recommendations: 0,
+        active_commitments: 0,
+        committed_monthly: 0,
+        current_coverage: 0,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await expect(loadDashboard()).resolves.toBeUndefined();
+
+      const summary = document.getElementById('summary');
+      expect(summary?.innerHTML).toContain('Active Commitments');
+
+      // Savings card falls back to $0.
+      const savingsCard = summary?.querySelector('.card');
+      expect(savingsCard?.innerHTML).toContain('$0');
+    });
+
+    // #304: summaryData.by_service missing entirely (null/undefined from
+    // backend). renderSavingsChart receives `undefined || {}` = {} which
+    // is safe; verify no throw and the error banner does not appear.
+    test('#304: summaryData missing by_service field does not throw', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 0,
+        total_recommendations: 0,
+        active_commitments: 0,
+        committed_monthly: 0,
+        current_coverage: 0,
+        target_coverage: 80,
+        ytd_savings: 0,
+        // by_service intentionally omitted
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await expect(loadDashboard()).resolves.toBeUndefined();
+
+      const summary = document.getElementById('summary');
+      // The error banner must NOT appear.
+      expect(summary?.querySelector('.error')).toBeNull();
+      expect(summary?.innerHTML).toContain('Active Commitments');
+    });
   });
 
   describe('savings-trend chart', () => {
