@@ -99,6 +99,10 @@ describe('Recommendations Module', () => {
       </div>
       <div id="purchase-modal" class="hidden">
         <div id="purchase-details"></div>
+        <div class="modal-buttons">
+          <button type="button" id="close-purchase-modal-btn">Cancel</button>
+          <button type="button" id="execute-purchase-btn" class="primary">Send for Approval</button>
+        </div>
       </div>
     `;
 
@@ -1369,6 +1373,51 @@ describe('Recommendations Module', () => {
       document.body.replaceChildren();
 
       await expect(openPurchaseModal([])).resolves.not.toThrow();
+    });
+
+    // Issue #288: the primary action does NOT execute the purchase — it
+    // sends an approval-request email. Pin the post-fix label + body
+    // wording so a regression that reverts to the misleading "Execute
+    // Purchase" framing fails this suite.
+    describe('approval-required messaging (issue #288)', () => {
+      const baseRec = {
+        id: 'rec-288',
+        provider: 'aws' as const,
+        service: 'ec2',
+        resource_type: 't3.medium',
+        region: 'us-east-1',
+        count: 5,
+        term: 1,
+        savings: 100,
+        upfront_cost: 500,
+      };
+
+      test('primary button reads "Send for Approval", not "Execute Purchase"', async () => {
+        await openPurchaseModal([baseRec]);
+
+        const btn = document.getElementById('execute-purchase-btn');
+        expect(btn?.textContent).toBe('Send for Approval');
+        // Belt-and-braces: ensure no element on the rendered modal still
+        // carries the pre-#288 text — guards against a future template
+        // re-introducing the misleading wording somewhere new.
+        const modal = document.getElementById('purchase-modal');
+        expect(modal?.textContent).not.toContain('Execute Purchase');
+      });
+
+      test('modal body carries the approval-required explanation', async () => {
+        await openPurchaseModal([baseRec]);
+
+        const details = document.getElementById('purchase-details');
+        expect(details?.textContent).toContain('will email an approval request');
+      });
+
+      test('approval-required note renders with its dedicated class', async () => {
+        await openPurchaseModal([baseRec]);
+
+        const note = document.querySelector('#purchase-details .approval-required-note');
+        expect(note).not.toBeNull();
+        expect(note?.textContent).toMatch(/approval request/i);
+      });
     });
   });
 

@@ -202,6 +202,11 @@ export interface PurchaseResult {
   // History instead of waiting for an inbox.
   email_sent?: boolean;
   email_reason?: string;
+  // Resolved To address that received the approval email. Surfaced so the
+  // post-submit toast can name the approver ("Approval request sent to
+  // alice@acme.com") per the CR pass on PR #294 / issue #288. Absent when
+  // recipient resolution itself failed (no approvers configured).
+  approval_recipient?: string;
   results?: Array<{
     recommendation_id: string;
     status: string;

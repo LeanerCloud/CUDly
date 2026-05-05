@@ -275,11 +275,17 @@ async function handleExecutePurchase(): Promise<void> {
     return;
   }
 
+  // Default approval-required path: clicking sends an approval request to
+  // the configured approver(s) — it does NOT spend money. The actual
+  // upfront charge fires only after an approver clicks the email link.
+  // Issue #289 will introduce a session-permission branch where holders
+  // of `execute-any:purchases` can opt into direct execution; until that
+  // lands, every user is on this approval path.
   const ok = await confirmDialog({
-    title: `Execute ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'}?`,
-    body: 'This will spend real money on cloud commitments. Make sure the selection + terms + payment options are what you intend.',
-    confirmLabel: 'Execute purchases',
-    destructive: true,
+    title: `Send ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} for approval?`,
+    body: 'This will email an approval request to the configured approver. Cloud commitments are charged only after the approver clicks the link in that email.',
+    confirmLabel: 'Send for approval',
+    destructive: false,
   });
   if (!ok) return;
 
@@ -319,7 +325,7 @@ async function handleExecutePurchase(): Promise<void> {
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
     executeBtn.disabled = true;
-    executeBtn.textContent = 'Executing...';
+    executeBtn.textContent = 'Sending...';
   }
 
   try {
@@ -339,16 +345,28 @@ async function handleExecutePurchase(): Promise<void> {
         timeout: null,
       });
     } else {
-      showToast({ message: 'Purchase submitted — check your email to approve.', kind: 'success', timeout: 10_000 });
+      // Name the approver in the success toast so the user can confirm WHO
+      // received the request (CR pass on PR #294 / issue #288). The backend
+      // surfaces `approval_recipient` from `resolveApprovalRecipients`; the
+      // field may be absent on older deploys or when only the global notify
+      // mailbox is configured — fall back to the generic line in that case.
+      const recipient = result.approval_recipient;
+      showToast({
+        message: recipient
+          ? `Approval request sent to ${recipient}.`
+          : 'Purchase submitted — check your email to approve.',
+        kind: 'success',
+        timeout: 10_000,
+      });
     }
     await loadDashboard();
   } catch (error) {
     const err = error as Error;
-    showToast({ message: `Failed to execute purchase: ${err.message}`, kind: 'error' });
+    showToast({ message: `Failed to send purchase for approval: ${err.message}`, kind: 'error' });
   } finally {
     if (executeBtn) {
       executeBtn.disabled = false;
-      executeBtn.textContent = 'Execute Purchase';
+      executeBtn.textContent = 'Send for Approval';
     }
   }
 }
@@ -363,18 +381,21 @@ async function handleExecutePurchase(): Promise<void> {
  * confirmDialog.
  */
 async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
+  // Same approval-required default as the single-purchase path: each
+  // bucket POSTs a request that triggers an approval email; the actual
+  // charges fire when each approver clicks the link in their email.
   const ok = await confirmDialog({
-    title: `Execute ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'}?`,
-    body: `This will submit ${buckets.length} separate purchase execution${buckets.length === 1 ? '' : 's'} and send ${buckets.length} approval email${buckets.length === 1 ? '' : 's'}. Each must be approved individually.`,
-    confirmLabel: 'Execute all',
-    destructive: true,
+    title: `Send ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'} for approval?`,
+    body: `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`,
+    confirmLabel: 'Send all for approval',
+    destructive: false,
   });
   if (!ok) return;
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
     executeBtn.disabled = true;
-    executeBtn.textContent = `Executing 0/${buckets.length}…`;
+    executeBtn.textContent = `Sending 0/${buckets.length}…`;
   }
 
   // Fire all POSTs in parallel via allSettled so one failure doesn't
@@ -402,22 +423,57 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   );
   const results = await Promise.allSettled(promises);
 
-  const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+  // Reclassify business-level email failures: a fulfilled POST that returns
+  // email_sent === false or status === 'failed' is not a true success —
+  // the approval email never went out (CR pass on PR #294 Finding 2).
+  const fulfilled = results.filter(
+    (r): r is PromiseFulfilledResult<api.PurchaseResult> => r.status === 'fulfilled',
+  );
+  const submissionFailures = fulfilled.filter(
+    (r) => r.value.email_sent === false || r.value.status === 'failed',
+  );
+  const succeeded = fulfilled.length - submissionFailures.length;
   const failed = results.length - succeeded;
   closePurchaseModal();
   clearFanOutBuckets();
   clearPurchaseModalRecommendations();
 
   if (failed === 0) {
+    // Collect the unique approval-recipient set from truly-succeeded responses
+    // only (email_sent !== false and status !== 'failed') so the toast doesn't
+    // name a recipient whose email never arrived. Multi-bucket purchases can
+    // route to different approvers; dedupe so the toast is compact.
+    const recipients = new Set<string>();
+    for (const r of fulfilled) {
+      if (
+        r.value.email_sent !== false &&
+        r.value.status !== 'failed' &&
+        r.value.approval_recipient
+      ) {
+        recipients.add(r.value.approval_recipient);
+      }
+    }
+    const noun = succeeded === 1 ? 'purchase' : 'purchases';
+    let message: string;
+    if (recipients.size === 0) {
+      message = `${succeeded} ${noun} submitted — check your email to approve each.`;
+    } else if (recipients.size === 1) {
+      message = `${succeeded} ${noun} sent for approval to ${[...recipients][0]}.`;
+    } else {
+      message = `${succeeded} ${noun} sent for approval to ${recipients.size} recipients (${[...recipients].sort().join(', ')}).`;
+    }
     showToast({
-      message: `${succeeded} purchase${succeeded === 1 ? '' : 's'} submitted — check your email to approve each.`,
+      message,
       kind: 'success',
       timeout: 15_000,
     });
   } else {
-    const failureMsgs = results
-      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-      .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
+    const failureMsgs = [
+      ...results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason))),
+      ...submissionFailures.map((r) => r.value.email_reason || 'approval email did not send'),
+    ]
       .slice(0, 3)
       .join('; ');
     showToast({
@@ -430,7 +486,7 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
 
   if (executeBtn) {
     executeBtn.disabled = false;
-    executeBtn.textContent = 'Execute Purchase';
+    executeBtn.textContent = 'Send for Approval';
   }
 }
 

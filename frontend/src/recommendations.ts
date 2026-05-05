@@ -2343,7 +2343,7 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   }
 
   // Single-bucket happy path: open the preview modal + submit via the
-  // existing execute-purchase flow. The modal's "Execute Purchase" button
+  // existing approval-request flow. The modal's "Send for Approval" button
   // (wired in app.ts) picks up the recs via getPurchaseModalRecommendations.
   // openPurchaseModal is async (issue #111 (iii): per-rec override
   // prefetch); fire-and-forget — the modal is the user's surface.
@@ -2387,7 +2387,7 @@ export interface FanOutBucket {
   paymentSource: 'override' | 'toolbar';
 }
 
-// Fan-out modal state. app.ts's Execute Purchase click reads these
+// Fan-out modal state. app.ts's Send-for-Approval click reads these
 // via getFanOutBuckets() to fire one POST per bucket. Cleared when
 // the modal closes.
 let currentFanOutBuckets: FanOutBucket[] | null = null;
@@ -3003,6 +3003,20 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
   upfrontStrong.textContent = formatCurrency(totalUpfront);
   upfrontLine.appendChild(upfrontStrong);
   summary.appendChild(upfrontLine);
+
+  // Approval-required note: clicking the modal's primary button does NOT
+  // execute the purchase — it sends an approval-request email to the
+  // configured approver(s). The actual upfront charges fire only when an
+  // approver clicks the link in that email. Issue #288 closed the
+  // earlier "Execute Purchase" button-label gap that implied immediate
+  // execution; #289 will introduce a session-permission branch where
+  // holders of `execute-any:purchases` can opt into direct execution and
+  // this note will become conditional on the resolved auth path.
+  const approvalNote = document.createElement('p');
+  approvalNote.className = 'approval-required-note';
+  approvalNote.textContent =
+    'Submitting will email an approval request to the configured approver — commitments are charged only after the approver clicks the link in that email.';
+  summary.appendChild(approvalNote);
 
   container.appendChild(summary);
 

@@ -74,6 +74,10 @@ export interface RetryPurchaseResult {
   retry_attempt_n: number;
   email_sent?: boolean;
   email_reason?: string;
+  // Resolved To address that received the approval email; surfaced so
+  // the post-submit toast can name the approver per CR pass on PR #294.
+  // Absent when recipient resolution itself failed (no approvers configured).
+  approval_recipient?: string;
 }
 
 export async function retryPurchase(
