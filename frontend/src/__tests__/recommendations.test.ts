@@ -3248,6 +3248,55 @@ describe('effectiveSavingsPct', () => {
       expect(pct).not.toBeNull();
       expect(pct!).toBeCloseTo(40, 1);
     });
+
+    // #303: AWS RI and SP fixtures — the same on_demand_cost preference
+    // applies to AWS recommendations (previously only verified for Azure).
+    describe('AWS provider fixtures (#303)', () => {
+      test('AWS EC2 RI: on_demand_cost from EstimatedMonthlyOnDemandCost is used as denominator', () => {
+        // Real-world shape: 2 × m5.large 1yr partial-upfront.
+        // EstimatedMonthlyOnDemandCost = $150 (AWS CE field plumbed via
+        // parseAWSCostDetails → common.Recommendation.OnDemandCost).
+        // savings = $45, upfront = $120 → amortized = $10/mo.
+        // effectiveSavings = 45 - 10 = $35.
+        // pct = 35 / 150 × 100 ≈ 23.3%.
+        // Without on_demand_cost the reconstruction would give:
+        //   onDemand = 60 + 45 + 10 = $115 → pct ≈ 30.4% (wrong).
+        const pct = effectiveSavingsPct(
+          mk({ savings: 45, upfront_cost: 120, monthly_cost: 60, term: 1, on_demand_cost: 150 }),
+        );
+        expect(pct).not.toBeNull();
+        // pct = (45 - 10) / 150 × 100 = 23.33…
+        expect(pct!).toBeCloseTo(23.33, 1);
+      });
+
+      test('AWS Compute SP: on_demand_cost from CurrentAverageHourlyOnDemandSpend×730 is used as denominator', () => {
+        // SP rows carry monthly_cost = the recurring commitment charge, not
+        // the full on-demand baseline. Without on_demand_cost the
+        // reconstruction would over- or under-count the denominator.
+        // Here: savings=$200, monthly_cost=$800 (commitment), on_demand_cost=$1000.
+        // Reconstruction would give: onDemand = 800 + 200 + 0 = $1000 — same
+        // in this clean case, but diverges for partial-upfront SP where
+        // monthly_cost ≠ hourlyCommitment × 730.
+        // effectiveSavings = 200 - 0 = $200; pct = 200 / 1000 × 100 = 20%.
+        const pct = effectiveSavingsPct(
+          mk({ savings: 200, upfront_cost: 0, monthly_cost: 800, term: 1, on_demand_cost: 1000 }),
+        );
+        expect(pct).not.toBeNull();
+        expect(pct!).toBeCloseTo(20, 1);
+      });
+
+      test('AWS SP no-upfront with null monthly_cost: on_demand_cost alone is sufficient', () => {
+        // SP recommendation where the backend did not populate monthly_cost
+        // (e.g. all-upfront SP with recurring = $0 stored as nil).
+        // With on_demand_cost the formula is fully determined.
+        const pct = effectiveSavingsPct(
+          mk({ savings: 300, upfront_cost: 0, monthly_cost: null, term: 1, on_demand_cost: 1500 }),
+        );
+        expect(pct).not.toBeNull();
+        // effectiveSavings = 300 - 0 = 300; pct = 300 / 1500 × 100 = 20%
+        expect(pct!).toBeCloseTo(20, 1);
+      });
+    });
   });
 });
 

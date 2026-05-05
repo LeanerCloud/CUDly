@@ -136,6 +136,17 @@ func (c *Client) parseSavingsPlanDetail(
 	monthlySavings := parseOptionalFloat("EstimatedMonthlySavingsAmount", detail.EstimatedMonthlySavingsAmount)
 	savingsPercent := parseOptionalFloat("EstimatedSavingsPercentage", detail.EstimatedSavingsPercentage)
 	upfrontCost := parseOptionalFloat("UpfrontCost", detail.UpfrontCost)
+	// onDemandCost is the canonical monthly on-demand baseline for this SP
+	// recommendation. AWS Cost Explorer returns the average hourly on-demand
+	// spend over the lookback period in CurrentAverageHourlyOnDemandSpend;
+	// multiplying by hoursPerMonth gives the monthly equivalent, which is the
+	// denominator AWS uses internally when computing EstimatedSavingsPercentage.
+	// We surface it as OnDemandCost so the frontend can use the provider-
+	// supplied value directly instead of reconstructing from
+	// monthly_cost + savings + amortized (which is less accurate for SP rows
+	// where monthly_cost reflects only the no-upfront recurring charge, not
+	// the full on-demand baseline). See #303.
+	onDemandCost := parseOptionalFloat("CurrentAverageHourlyOnDemandSpend", detail.CurrentAverageHourlyOnDemandSpend) * hoursPerMonth
 
 	planTypeStr := string(planType)
 	switch planType {
@@ -187,6 +198,7 @@ func (c *Client) parseSavingsPlanDetail(
 		EstimatedSavings:     monthlySavings,
 		SavingsPercentage:    savingsPercent,
 		CommitmentCost:       upfrontCost,
+		OnDemandCost:         onDemandCost,
 		RecurringMonthlyCost: recurringMonthlyCost,
 		Timestamp:            time.Now(),
 		Account:              accountID,
