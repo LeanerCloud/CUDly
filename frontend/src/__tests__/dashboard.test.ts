@@ -25,6 +25,21 @@ jest.mock('chart.js', () => {
   };
 });
 
+// #293: mock the recommendations helpers imported by dashboard.ts so
+// tests can control the range computation without loading the full
+// recommendations module (which itself imports chart.js etc.).
+const mockGroupRecsByCell = jest.fn((recs: unknown[]) => new Map(recs.length ? [['cell-1', recs]] : []));
+const mockPageLevelRange = jest.fn((groups: Map<string, unknown[]>) => {
+  if (groups.size === 0) return { savingsMin: 0, savingsMax: 0, cellCount: 0 };
+  return { savingsMin: 300, savingsMax: 400, cellCount: groups.size };
+});
+const mockFormatSavingsRange = jest.fn((min: number, max: number) => min === max ? `$${min}` : `$${min} – $${max}`);
+jest.mock('../recommendations', () => ({
+  groupRecsByCell: (recs: unknown[]) => mockGroupRecsByCell(recs),
+  pageLevelRange: (groups: Map<string, unknown[]>) => mockPageLevelRange(groups),
+  formatSavingsRange: (min: number, max: number) => mockFormatSavingsRange(min, max),
+}));
+
 import { loadDashboard } from '../dashboard';
 import { Chart } from 'chart.js';
 
@@ -45,6 +60,10 @@ jest.mock('../api', () => ({
   deletePlan: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([]),
   getSavingsAnalytics: jest.fn().mockResolvedValue({ data_points: [] }),
+  // #293: dashboard fetches recs for per-cell savings range. Default to
+  // empty list so existing tests that don't care about the savings card
+  // value don't need to be updated.
+  getRecommendations: jest.fn().mockResolvedValue([]),
 }));
 import { loadSavingsTrendChart, setupSavingsTrendHandlers } from '../dashboard';
 
@@ -84,6 +103,15 @@ describe('Dashboard Module', () => {
     mockShowToast.mockClear();
     mockConfirmDialog.mockReset();
     mockConfirmDialog.mockImplementation(() => Promise.resolve(true));
+    // Re-initialize recommendation mocks after clearAllMocks().
+    mockGroupRecsByCell.mockImplementation((recs: unknown[]) => new Map(recs.length ? [['cell-1', recs]] : []));
+    mockPageLevelRange.mockImplementation((groups: Map<string, unknown[]>) => {
+      if (groups.size === 0) return { savingsMin: 0, savingsMax: 0, cellCount: 0 };
+      return { savingsMin: 300, savingsMax: 400, cellCount: groups.size };
+    });
+    mockFormatSavingsRange.mockImplementation((min: number, max: number) => min === max ? `$${min}` : `$${min} – $${max}`);
+    // Default: empty recs so existing tests are unaffected by the range.
+    (api.getRecommendations as jest.Mock).mockResolvedValue([]);
   });
 
   describe('loadDashboard', () => {
@@ -429,6 +457,99 @@ describe('Dashboard Module', () => {
         message: 'Failed to cancel purchase',
         kind: 'error',
       }));
+    });
+
+    // #293: Potential Monthly Savings card renders per-cell range, not
+    // the flat summary.potential_monthly_savings value.
+    test('Potential Monthly Savings card renders per-cell range (#293)', async () => {
+      // Two cells, four variants — flat sum would be 700 but per-cell range
+      // is $300 – $400. The mock helpers are already configured to return
+      // savingsMin=300, savingsMax=400 when recs is non-empty.
+      const mockRecs = [
+        { id: 'r1', provider: 'aws', service: 'ec2', region: 'us-east-1', resource_type: 't3.medium', term: 1, savings: 150, upfront_cost: 0, count: 1 },
+        { id: 'r2', provider: 'aws', service: 'ec2', region: 'us-east-1', resource_type: 't3.medium', term: 3, savings: 200, upfront_cost: 100, count: 1 },
+        { id: 'r3', provider: 'aws', service: 'rds', region: 'us-east-1', resource_type: 'db.t3.medium', term: 1, savings: 100, upfront_cost: 0, count: 1 },
+        { id: 'r4', provider: 'aws', service: 'rds', region: 'us-east-1', resource_type: 'db.t3.medium', term: 3, savings: 250, upfront_cost: 200, count: 1 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue(mockRecs);
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 700, // flat (overcounted) sum — must NOT appear
+        total_recommendations: 4,
+        active_commitments: 0,
+        committed_monthly: 0,
+        current_coverage: 0,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const savingsCard = document.querySelector('#summary .card');
+      expect(savingsCard?.textContent).toContain('$300');
+      expect(savingsCard?.textContent).toContain('$400');
+      // The overcounted flat sum must NOT appear in the savings card.
+      expect(savingsCard?.textContent).not.toContain('$700');
+    });
+
+    // #293: If getRecommendations rejects, other cards still render.
+    test('failure-isolation: rec fetch failure leaves other cards rendered (#293)', async () => {
+      (api.getRecommendations as jest.Mock).mockRejectedValue(new Error('Network error'));
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 500,
+        total_recommendations: 2,
+        active_commitments: 3,
+        committed_monthly: 200,
+        current_coverage: 60,
+        target_coverage: 80,
+        ytd_savings: 1000,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const summary = document.getElementById('summary');
+      // Other cards must still render normally.
+      expect(summary?.innerHTML).toContain('Active Commitments');
+      expect(summary?.innerHTML).toContain('Current Coverage');
+      expect(summary?.innerHTML).toContain('YTD Savings');
+      // Savings card must fall back to $0 (not throw or go blank).
+      const savingsCard = summary?.querySelector('.card');
+      expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
+      // mockPageLevelRange returns cellCount=0 for empty groups, so formatCurrency(0) = '$0'
+      expect(savingsCard?.innerHTML).toContain('$0');
+    });
+
+    // #293: summary.potential_monthly_savings is no longer the source for
+    // the savings card — the range from recs is used instead.
+    test('legacy summary.potential_monthly_savings is no longer read for the savings card (#293)', async () => {
+      // recs give $300 – $400 range (per mock); summary says $700.
+      const mockRecs = [
+        { id: 'r1', provider: 'aws', service: 'ec2', region: 'us-east-1', resource_type: 't3', term: 1, savings: 300, upfront_cost: 0, count: 1 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue(mockRecs);
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 700,
+        total_recommendations: 1,
+        active_commitments: 0,
+        committed_monthly: 0,
+        current_coverage: 0,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const savingsCard = document.querySelector('#summary .card');
+      // The savings card must NOT show the legacy flat sum.
+      expect(savingsCard?.textContent).not.toContain('$700');
+      // It must show the range from recs ($300 – $400 per mock).
+      expect(savingsCard?.textContent).toContain('$300');
+      expect(savingsCard?.textContent).toContain('$400');
     });
   });
 
