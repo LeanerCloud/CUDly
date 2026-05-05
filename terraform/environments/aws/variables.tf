@@ -479,3 +479,37 @@ variable "enable_docker_build" {
   type        = bool
   default     = true
 }
+
+# ==============================================
+# Archera Integration
+# ==============================================
+
+variable "enable_archera" {
+  description = <<-EOT
+    Enable the Archera commitment-optimisation integration. When true, creates
+    a cross-account IAM role (cudly-archera-integration) that Archera's AWS
+    account can assume to read cost data and execute RI/SP purchases.
+
+    Defaults to false — non-Archera customers see no drift.
+
+    IMPORTANT: the provisional scope list in archera.tf must be confirmed
+    against Archera's integration docs before setting this to true in any
+    environment. See TODO(@cristim) comments in archera.tf.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "archera_aws_account_id" {
+  description = <<-EOT
+    AWS account ID of the Archera SaaS platform that will assume the
+    cudly-archera-integration role. Obtained from Archera during onboarding.
+    Only evaluated when enable_archera = true.
+
+    Example: "926226587429"
+    TODO(@cristim): confirm the correct Archera AWS account ID from their
+    integration docs before enabling.
+  EOT
+  type        = string
+  default     = ""
+}

@@ -128,3 +128,14 @@ admin_email = "admin@example.com"
 #     --vault-name <your-vault-name> --name admin-password \
 #     --query value --output tsv
 # admin_password = "YourSecurePassword123!"
+
+# ==============================================
+# Archera Integration (default: disabled)
+# ==============================================
+# Set enable_archera = true ONLY after confirming the scope list in
+# archera.tf against Archera's integration docs (see TODO(@cristim) there).
+# When enabling, also set archera_azure_sp_object_id to the Object ID
+# (not Client ID) of the service principal Archera provides.
+
+enable_archera = false
+# archera_azure_sp_object_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

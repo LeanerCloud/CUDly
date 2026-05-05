@@ -521,3 +521,36 @@ variable "max_account_parallelism" {
   type        = number
   default     = 10
 }
+
+# ==============================================
+# Archera Integration
+# ==============================================
+
+variable "enable_archera" {
+  description = <<-EOT
+    Enable the Archera commitment-optimisation integration. When true, creates
+    a custom RBAC role (CUDly Archera Integration) and assigns it to
+    Archera's service principal at subscription scope.
+
+    Defaults to false — non-Archera customers see no drift.
+
+    IMPORTANT: the provisional scope list in archera.tf must be confirmed
+    against Archera's integration docs before setting this to true in any
+    environment. See TODO(@cristim) comments in archera.tf.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "archera_azure_sp_object_id" {
+  description = <<-EOT
+    Object ID (NOT the Application/Client ID) of the Archera service principal
+    in your Azure AD tenant. Provided by Archera during onboarding.
+    Only evaluated when enable_archera = true.
+
+    TODO(@cristim): obtain the correct Object ID from Archera's Azure
+    integration docs before enabling.
+  EOT
+  type        = string
+  default     = ""
+}

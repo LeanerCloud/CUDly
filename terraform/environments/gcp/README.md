@@ -219,3 +219,38 @@ Cloud Run reserves certain environment variable names (`PORT`, `K_SERVICE`, `K_R
 ### Docker build on Apple Silicon
 
 Cross-compilation from ARM (M1/M2/M3) to linux/amd64 is slower than native builds. The build module uses `--platform linux/amd64` and `--load` to build, load into local daemon, then push to GCR.
+
+## Archera Integration
+
+The Archera commitment-optimisation integration is gated behind the
+`enable_archera` tfvars flag (default: `false`) so non-Archera customers
+see no drift.
+
+### Enabling Archera
+
+> **IMPORTANT — scope confirmation required before enabling.**
+> The permission list in `archera.tf` is provisional. Confirm the exact
+> GCP IAM permissions required against [Archera's integration docs](https://archera.ai/docs)
+> and validate with `@cristim` before setting `enable_archera = true` in
+> any environment. See `TODO(@cristim)` comments in `archera.tf`.
+
+1. Obtain the Archera **GCP service account email** from Archera during
+   onboarding (e.g. `archera-integration@archera-prod.iam.gserviceaccount.com`).
+2. Set the following in your `*.tfvars`:
+
+   ```hcl
+   enable_archera              = true
+   archera_gcp_service_account = "archera-integration@archera-prod.iam.gserviceaccount.com"
+   ```
+
+3. Run `terraform plan` to review the custom IAM role and project IAM
+   member binding that will be created, then apply.
+
+### What gets created
+
+When `enable_archera = true`:
+
+| Resource | Purpose |
+| --- | --- |
+| `google_project_iam_custom_role.archera_integration[0]` | Custom role with read-only billing/cost + CUD purchase permissions |
+| `google_project_iam_member.archera_integration[0]` | Grants the custom role to Archera's service account at project scope |

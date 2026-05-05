@@ -469,3 +469,38 @@ variable "max_account_parallelism" {
   type        = number
   default     = 10
 }
+
+# ==============================================
+# Archera Integration
+# ==============================================
+
+variable "enable_archera" {
+  description = <<-EOT
+    Enable the Archera commitment-optimisation integration. When true, creates
+    a custom IAM role (cudlyArcheraIntegration) and grants it to Archera's
+    GCP service account at project scope.
+
+    Defaults to false — non-Archera customers see no drift.
+
+    IMPORTANT: the provisional scope list in archera.tf must be confirmed
+    against Archera's integration docs before setting this to true in any
+    environment. See TODO(@cristim) comments in archera.tf.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "archera_gcp_service_account" {
+  description = <<-EOT
+    Full service account email of the Archera GCP service account that will
+    be granted the cudlyArcheraIntegration custom role at project scope.
+    Provided by Archera during onboarding.
+    Only evaluated when enable_archera = true.
+
+    Example: "archera-integration@archera-prod.iam.gserviceaccount.com"
+    TODO(@cristim): confirm the correct service account email from Archera's
+    GCP integration docs before enabling.
+  EOT
+  type        = string
+  default     = ""
+}

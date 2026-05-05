@@ -105,3 +105,14 @@ admin_email = "admin@example.com"
 #   gcloud secrets versions access latest \
 #     --secret=<service-name>-admin-password --project=<project-id>
 # admin_password = "YourSecurePassword123!"
+
+# ==============================================
+# Archera Integration (default: disabled)
+# ==============================================
+# Set enable_archera = true ONLY after confirming the scope list in
+# archera.tf against Archera's integration docs (see TODO(@cristim) there).
+# When enabling, also set archera_gcp_service_account to the full service
+# account email that Archera provides during onboarding.
+
+enable_archera = false
+# archera_gcp_service_account = "archera-integration@archera-prod.iam.gserviceaccount.com"
