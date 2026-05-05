@@ -487,6 +487,9 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	// through to full savings (nil is treated as "not configured"
 	// by resolveCoverageByAccountKey — see issue #201).
 	mockStore.On("GetServiceConfig", ctx, "aws", "ec2").Return((*config.ServiceConfig)(nil), nil)
+	// Guard against future code paths that resolve service configs before filtering:
+	// stub rds so an unexpected GetServiceConfig call doesn't panic the test.
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return((*config.ServiceConfig)(nil), nil)
 	// calculateCommitmentMetrics calls GetPurchaseHistory for YTD/committed totals.
 	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -754,4 +757,6 @@ func TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds(t *testing.T
 	result, err := handler.pausePlannedPurchase(ctx, scopedReq(), executionID)
 	require.NoError(t, err, "scoped user must be able to pause an account-A execution")
 	require.NotNil(t, result)
+	assert.Equal(t, "paused", result.Status, "result must reflect the paused status")
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, executionID, mock.Anything, "paused")
 }
