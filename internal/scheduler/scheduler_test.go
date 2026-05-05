@@ -1073,6 +1073,43 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 	assert.Len(t, recs, 2)
 }
 
+// Pin the disable-sentinel contract: when GlobalConfig.RecommendationsCacheStaleHours
+// is 0, ListRecommendations must serve from cache (the existing behaviour) without
+// kicking off a background refresh — even when the cached row is older than any
+// hard-coded fallback TTL. The cache-staleness path should treat 0 as "auto-refresh
+// disabled" rather than "stale immediately". Regression guard for PR #308.
+func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	old := time.Now().Add(-72 * time.Hour) // older than any reasonable default TTL
+	cached := []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", Savings: 1},
+	}
+	mockStore.On("GetRecommendationsFreshness", ctx).
+		Return(&config.RecommendationsFreshness{LastCollectedAt: &old}, nil)
+	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
+		Return(cached, nil)
+	// Disable sentinel: 0 must NOT trigger a background refresh.
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: 0,
+	}, nil)
+
+	scheduler := &Scheduler{config: mockStore}
+
+	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+
+	// Asserting via mock expectations: MarkCollectionStarted is what the
+	// background-refresh path would call. When the sentinel is 0, no refresh
+	// fires, so MarkCollectionStarted MUST NOT be called (and absence of an
+	// `On(...)` expectation for it would cause testify-mock to panic if it
+	// were called — the Len assertion above is the primary check, this is the
+	// second-line guard).
+	mockStore.AssertNotCalled(t, "MarkCollectionStarted", mock.Anything)
+}
+
 // Filter pass-through: the handler-level RecommendationQueryParams fields
 // map into the DB-facing RecommendationFilter. The SQL pushdown semantics
 // themselves are covered by store_postgres_recommendations_test.go.

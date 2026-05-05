@@ -655,6 +655,35 @@ describe('Settings Module', () => {
       expect(api.updateConfig).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
     });
+
+    test('rejects fractional recommendations_cache_stale_hours and does not call updateConfig', async () => {
+      // Pin the Number.isInteger guard so a future refactor can't silently
+      // truncate fractional input via parseInt and accept it as valid.
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value = '1.5';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      expect(api.updateConfig).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+    });
+
+    test('accepts 0 for recommendations_cache_stale_hours (disable sentinel)', async () => {
+      // Preserve the documented "0 = disable automatic background refresh"
+      // semantic. The validator must NOT reject 0; updateConfig must be
+      // called with the literal 0 so the persisted GlobalConfig disables
+      // the stale-while-revalidate background refresh.
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value = '0';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      expect(api.updateConfig).toHaveBeenCalled();
+      const call = (api.updateConfig as jest.Mock).mock.calls[0][0];
+      expect(call.recommendations_cache_stale_hours).toBe(0);
+    });
   }); // end saveGlobalSettings
 
   describe('resetSettings', () => {

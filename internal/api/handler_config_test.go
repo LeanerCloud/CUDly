@@ -52,6 +52,14 @@ func TestHandler_updateConfig(t *testing.T) {
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 	// Mock ListServiceConfigs for propagation of global defaults
 	mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
+	// updateConfig now calls GetGlobalConfig when recommendations_cache_stale_hours
+	// or recommendations_lookback_days is omitted from the request body, so the
+	// existing persisted value can be preserved rather than zeroed out (PR #308
+	// CodeRabbit pass-2). The body in this test omits both fields.
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -367,6 +375,13 @@ func TestHandler_updateConfig_ValidationError(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	// updateConfig calls GetGlobalConfig before validation to preserve persisted
+	// values for fields omitted from the request body (PR #308 CR pass-2). The
+	// validation error fires after the merge, so the mock is still required.
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -397,6 +412,12 @@ func TestHandler_updateConfig_SaveError(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(assert.AnError)
+	// updateConfig calls GetGlobalConfig before save to preserve persisted
+	// values for fields omitted from the request body (PR #308 CR pass-2).
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -469,6 +490,12 @@ func TestHandler_updateConfig_WithPropagation(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
+	// updateConfig calls GetGlobalConfig before save to preserve persisted
+	// values for fields omitted from the request body (PR #308 CR pass-2).
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil)
 	mockStore.On("ListServiceConfigs", ctx).Return(serviceConfigs, nil)
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
 
@@ -506,6 +533,12 @@ func TestHandler_updateConfig_PropagationServiceSaveError(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
+	// updateConfig calls GetGlobalConfig before save to preserve persisted
+	// values for fields omitted from the request body (PR #308 CR pass-2).
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil)
 	mockStore.On("ListServiceConfigs", ctx).Return(serviceConfigs, nil)
 	// Simulate failure when saving service config during propagation
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(assert.AnError)
@@ -538,6 +571,12 @@ func TestHandler_updateConfig_PropagationListError(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
+	// updateConfig calls GetGlobalConfig before save to preserve persisted
+	// values for fields omitted from the request body (PR #308 CR pass-2).
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil)
 	// Simulate failure when listing service configs for propagation
 	mockStore.On("ListServiceConfigs", ctx).Return(nil, assert.AnError)
 

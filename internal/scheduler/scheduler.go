@@ -807,8 +807,12 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 func (s *Scheduler) resolveEffectiveCacheTTL(ctx context.Context) (ttl time.Duration, disabled bool) {
 	ttl = s.cacheTTL
 	globalCfg, gcErr := s.config.GetGlobalConfig(ctx)
-	if gcErr != nil {
-		// DB read failed — use the env-var / default TTL, refresh enabled.
+	if gcErr != nil || globalCfg == nil {
+		// DB read failed OR returned (nil, nil) — fall back to the env-var /
+		// default TTL with refresh enabled rather than panicking on the
+		// nil deref below. (nil, nil) is a defensive case; the Postgres
+		// store currently never returns it, but a future store impl or a
+		// test mock might.
 		return ttl, false
 	}
 	if globalCfg.RecommendationsCacheStaleHours == 0 {

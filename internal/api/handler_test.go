@@ -371,6 +371,12 @@ func TestHandler_HandleRequest_PutConfig(t *testing.T) {
 
 	mockStore.On("SaveGlobalConfig", mock.Anything, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 	mockStore.On("ListServiceConfigs", mock.Anything).Return([]config.ServiceConfig{}, nil)
+	// updateConfig calls GetGlobalConfig before save to preserve persisted
+	// values for fields omitted from the request body (PR #308 CR pass-2).
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{
+		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+	}, nil)
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
