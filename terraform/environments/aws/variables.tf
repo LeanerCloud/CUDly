@@ -479,3 +479,77 @@ variable "enable_docker_build" {
   type        = bool
   default     = true
 }
+
+# ==============================================
+# Archera Integration
+# ==============================================
+
+variable "enable_archera" {
+  description = <<-EOT
+    Enable the Archera commitment-optimisation integration. When true, creates
+    a cross-account IAM role (cudly-archera-integration) that Archera's AWS
+    account can assume to read cost data and execute RI/SP purchases.
+
+    Defaults to false — non-Archera customers see no drift.
+
+    IMPORTANT: the provisional scope list in archera.tf must be confirmed
+    against Archera's integration docs before setting this to true in any
+    environment. See TODO(@cristim) comments in archera.tf.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "archera_aws_account_id" {
+  description = <<-EOT
+    AWS account ID of the Archera SaaS platform that will assume the
+    cudly-archera-integration role. Obtained from Archera during onboarding.
+    Only evaluated when enable_archera = true.
+
+    Example: "926226587429"
+    TODO(@cristim): confirm the correct Archera AWS account ID from their
+    integration docs before enabling.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      !var.enable_archera ||
+      can(regex("^\\d{12}$", trimspace(var.archera_aws_account_id)))
+    )
+    error_message = "archera_aws_account_id must be a 12-digit AWS account ID when enable_archera = true."
+  }
+}
+
+variable "archera_external_id" {
+  description = <<-EOT
+    ExternalId value that Archera's AWS principal must supply when assuming
+    the cudly-archera-integration role. This prevents confused-deputy attacks
+    and is required for all third-party cross-account integrations.
+    Provided by Archera during onboarding.
+    Only evaluated when enable_archera = true.
+
+    TODO(@cristim): obtain the ExternalId from Archera's onboarding docs
+    before enabling — do not leave this empty in production.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = !var.enable_archera || var.archera_external_id != ""
+    error_message = "archera_external_id must be set (non-empty) when enable_archera = true."
+  }
+}
+
+variable "enable_archera_purchase_actions" {
+  description = <<-EOT
+    When true (AND enable_archera = true), attaches the cudly-archera-purchase
+    IAM policy to the Archera role, enabling RI/SP purchase execution.
+    Keep false until the approval workflow with Archera is confirmed and the
+    scope list has been validated against Archera's integration docs.
+  EOT
+  type        = bool
+  default     = false
+}

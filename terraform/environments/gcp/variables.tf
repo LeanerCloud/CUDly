@@ -469,3 +469,48 @@ variable "max_account_parallelism" {
   type        = number
   default     = 10
 }
+
+# ==============================================
+# Archera Integration
+# ==============================================
+
+variable "enable_archera" {
+  description = <<-EOT
+    Enable the Archera commitment-optimisation integration. When true, creates
+    a custom IAM role and binds it to Archera's GCP service account, granting
+    least-privilege read access to cost and commitment data.
+
+    Defaults to false — non-Archera customers see no drift.
+
+    IMPORTANT: the provisional scope list in iac/modules/archera/scope.gcp.yaml
+    must be confirmed against Archera's integration docs before setting this to
+    true in any environment. See TODO(@cristim) comments in archera.tf.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "archera_gcp_service_account" {
+  description = <<-EOT
+    Full email of the GCP service account Archera provides during onboarding,
+    e.g. archera-integration@archera-prod.iam.gserviceaccount.com.
+    Only evaluated when enable_archera = true.
+
+    TODO(@cristim): obtain the correct SA email from Archera's GCP integration
+    docs before enabling.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "enable_archera_purchase_actions" {
+  description = <<-EOT
+    When true (AND enable_archera = true), adds the
+    "recommender.commitments.create" permission to the Archera custom IAM role,
+    enabling CUD purchase execution.
+    Keep false until the approval workflow with Archera is confirmed and the
+    scope list has been validated against Archera's integration docs.
+  EOT
+  type        = bool
+  default     = false
+}
