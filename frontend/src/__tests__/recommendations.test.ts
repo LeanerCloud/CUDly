@@ -4334,6 +4334,61 @@ describe('Issue #319: table cells scale with period', () => {
     const rowHtml = rows[0]!.innerHTML;
     expect(rowHtml).toContain('—');
   });
+
+  // CR pass-1 nitpick: the existing #319 cases verify labels and formatted
+  // values, but they never prove that sort and filter accessors actually
+  // apply the period scale. A regression that reverts numericCellValue or
+  // SORTABLE_NUMERIC_COLUMNS.savings to raw monthly_cost would still pass
+  // every assertion above. The two tests below pin the scaled-numeric
+  // contract from both ends: ordering (sort) and inclusion (filter).
+  test('yearly sort orders savings cells by yearly-scaled value (asc)', async () => {
+    const recSmall = { ...mockRec, id: 'r-small', resource_type: 'small', savings: 100, monthly_cost: 100 };
+    const recLarge = { ...mockRec, id: 'r-large', resource_type: 'large', savings: 200, monthly_cost: 200 };
+    // Inputs are intentionally pre-sorted DESC so a no-op scale that
+    // preserves input order would fail this asc assertion.
+    (state.getCostPeriod as jest.Mock).mockReturnValue('yearly');
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'asc' });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [recLarge, recSmall],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([recLarge, recSmall]);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([recLarge, recSmall]);
+
+    await loadRecommendations();
+
+    const rows = Array.from(document.querySelectorAll('tr.recommendation-row'));
+    expect(rows).toHaveLength(2);
+    // Even though recLarge appears first in the input array, ascending
+    // savings sort (which routes through scaleCost) places r-small first.
+    expect(rows[0]?.textContent).toContain('small');
+    expect(rows[1]?.textContent).toContain('large');
+  });
+
+  test('hourly numeric filter compares the scaled (per-hour) savings, not the raw monthly value', async () => {
+    // Both recs would pass a ">0.75" filter against raw monthly_cost (360
+    // and 720 are both > 0.75). After hourly scaling (÷720), only r-high
+    // (1.0) passes; r-low (0.5) is filtered out. If numericCellValue were
+    // to drop the scaleCost call, this test would surface the regression.
+    const recLow  = { ...mockRec, id: 'r-low',  resource_type: 'low',  savings: 360, monthly_cost: 360 };
+    const recHigh = { ...mockRec, id: 'r-high', resource_type: 'high', savings: 720, monthly_cost: 720 };
+    (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      savings: { kind: 'expr', expr: '>0.75' },
+    });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [recLow, recHigh],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([recLow, recHigh]);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([recLow, recHigh]);
+
+    await loadRecommendations();
+
+    const rows = Array.from(document.querySelectorAll('tr.recommendation-row'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain('high');
+  });
 });
 
 describe('Issue #319: summary card label updates with period', () => {
@@ -4451,12 +4506,24 @@ describe('Issue #319: cost-period dropdown is rendered in the filter-status bar'
   });
 
   test('changing the dropdown calls setCostPeriod and triggers rerender', async () => {
+    // Seed a different return value for the post-change loadRecommendations()
+    // call so we can verify the rerender actually rebuilt headers/cells
+    // against the new period (not just that setCostPeriod was invoked).
+    // CR pass-1 nitpick: the previous version of this test would still pass
+    // if the change handler stopped rebuilding the DOM.
+    (state.getCostPeriod as jest.Mock)
+      .mockReturnValueOnce('monthly')
+      .mockReturnValue('hourly');
     await loadRecommendations();
     const select = document.querySelector<HTMLSelectElement>('#cost-period-select');
     expect(select).not.toBeNull();
     select!.value = 'hourly';
     select!.dispatchEvent(new Event('change'));
     expect(state.setCostPeriod).toHaveBeenCalledWith('hourly');
+    // The rerender should have rebuilt the savings column header to reflect
+    // the new hourly period — pin the DOM update so a future regression that
+    // stops invalidating the rendered tree fails this test.
+    expect(document.getElementById('recommendations-list')?.textContent).toContain('Savings / hr');
   });
 
   test('dropdown label text is accessible', async () => {
@@ -4522,7 +4589,14 @@ describe('Issue #319: localStorage persistence (state.ts getCostPeriod / setCost
     expect(getCostPeriodFn()).toBe('hourly');
   });
 
-  test('invalid value in localStorage falls back to in-memory default (monthly)', () => {
+  test('invalid value in localStorage falls back to static default, not prior in-memory state', () => {
+    // CR pass-1 nitpick: seed a non-default value first so this test fails if
+    // getCostPeriod() incorrectly leaks a stale in-memory cache instead of
+    // re-reading + validating localStorage on each call. Without the seed, a
+    // broken implementation that only reads localStorage on first call would
+    // still pass.
+    setCostPeriodFn('hourly');
+    expect(getCostPeriodFn()).toBe('hourly');
     localStorage.setItem('cudly.recs.costPeriod', 'invalid-value');
     expect(getCostPeriodFn()).toBe('monthly');
   });
