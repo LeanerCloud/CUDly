@@ -38,6 +38,7 @@ func writeYAML(t *testing.T, content string) string {
 }
 
 func TestLoad_Defaults(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load("", newFlags())
 	require.NoError(t, err)
 	assert.True(t, cfg.DryRun)
@@ -51,11 +52,13 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_MissingDefaultFile_NoError(t *testing.T) {
+	// NOT parallel: uses os.Chdir which mutates process-wide working directory.
 	// No ./cudly.yaml in temp dir; should silently use defaults
 	dir := t.TempDir()
-	orig, _ := os.Getwd()
+	orig, err := os.Getwd()
+	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { os.Chdir(orig) })
+	t.Cleanup(func() { require.NoError(t, os.Chdir(orig)) })
 
 	cfg, err := Load("", newFlags())
 	require.NoError(t, err)
@@ -63,12 +66,14 @@ func TestLoad_MissingDefaultFile_NoError(t *testing.T) {
 }
 
 func TestLoad_ExplicitMissingFile_Error(t *testing.T) {
+	t.Parallel()
 	_, err := Load("/nonexistent/path/cudly.yaml", newFlags())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config file not found")
 }
 
 func TestLoad_YAMLFile(t *testing.T) {
+	t.Parallel()
 	path := writeYAML(t, `
 scorer:
   min_savings_pct: 15
@@ -84,12 +89,14 @@ dry_run: false
 }
 
 func TestLoad_InvalidYAML_Error(t *testing.T) {
+	t.Parallel()
 	path := writeYAML(t, "dry_run: [not a bool")
 	_, err := Load(path, newFlags())
 	require.Error(t, err)
 }
 
 func TestLoad_EnvOverridesYAML(t *testing.T) {
+	// NOT parallel: uses t.Setenv (process-wide env mutation panics with t.Parallel).
 	path := writeYAML(t, "scorer:\n  min_savings_pct: 10\n")
 	t.Setenv("CUDLY_MIN_SAVINGS_PCT", "20")
 	cfg, err := Load(path, newFlags())
@@ -98,6 +105,7 @@ func TestLoad_EnvOverridesYAML(t *testing.T) {
 }
 
 func TestLoad_EnvVars(t *testing.T) {
+	// NOT parallel: uses t.Setenv (process-wide env mutation panics with t.Parallel).
 	t.Setenv("CUDLY_DRY_RUN", "false")
 	t.Setenv("CUDLY_AUTO_APPROVE", "true")
 	t.Setenv("CUDLY_AUDIT_LOG", "/tmp/my.jsonl")
@@ -126,6 +134,7 @@ func TestLoad_EnvVars(t *testing.T) {
 }
 
 func TestLoad_InvalidEnvVar_Error(t *testing.T) {
+	// NOT parallel: uses t.Setenv (process-wide env mutation panics with t.Parallel).
 	t.Setenv("CUDLY_MIN_SAVINGS_PCT", "abc")
 	_, err := Load("", newFlags())
 	require.Error(t, err)
@@ -133,6 +142,7 @@ func TestLoad_InvalidEnvVar_Error(t *testing.T) {
 }
 
 func TestLoad_InvalidDurationEnvVar_Error(t *testing.T) {
+	// NOT parallel: uses t.Setenv (process-wide env mutation panics with t.Parallel).
 	t.Setenv("CUDLY_IDEMPOTENCY_WINDOW", "notaduration")
 	_, err := Load("", newFlags())
 	require.Error(t, err)
@@ -140,6 +150,7 @@ func TestLoad_InvalidDurationEnvVar_Error(t *testing.T) {
 }
 
 func TestLoad_FlagOverridesEnvAndYAML(t *testing.T) {
+	// NOT parallel: uses t.Setenv (process-wide env mutation panics with t.Parallel).
 	path := writeYAML(t, "scorer:\n  min_savings_pct: 10\n")
 	t.Setenv("CUDLY_MIN_SAVINGS_PCT", "20")
 	fs := newFlags()
@@ -150,6 +161,7 @@ func TestLoad_FlagOverridesEnvAndYAML(t *testing.T) {
 }
 
 func TestLoad_DryRunAndPurchaseConflict(t *testing.T) {
+	t.Parallel()
 	fs := newFlags()
 	require.NoError(t, fs.Parse([]string{"--dry-run=true", "--purchase"}))
 	_, err := Load("", fs)
@@ -159,6 +171,7 @@ func TestLoad_DryRunAndPurchaseConflict(t *testing.T) {
 }
 
 func TestLoad_PurchaseFlagSetsDryRunFalse(t *testing.T) {
+	t.Parallel()
 	fs := newFlags()
 	require.NoError(t, fs.Parse([]string{"--purchase"}))
 	cfg, err := Load("", fs)
@@ -167,6 +180,7 @@ func TestLoad_PurchaseFlagSetsDryRunFalse(t *testing.T) {
 }
 
 func TestLoad_UnknownCloud_Error(t *testing.T) {
+	t.Parallel()
 	path := writeYAML(t, "enabled_clouds:\n  - oracle\n")
 	_, err := Load(path, newFlags())
 	require.Error(t, err)
@@ -174,6 +188,7 @@ func TestLoad_UnknownCloud_Error(t *testing.T) {
 }
 
 func TestLoad_NegativeThreshold_Error(t *testing.T) {
+	t.Parallel()
 	path := writeYAML(t, "scorer:\n  min_savings_pct: -5\n")
 	_, err := Load(path, newFlags())
 	require.Error(t, err)
@@ -181,6 +196,7 @@ func TestLoad_NegativeThreshold_Error(t *testing.T) {
 }
 
 func TestValidate_EmptyEnabledClouds_Error(t *testing.T) {
+	t.Parallel()
 	// validate() is called by Load; test it directly since empty clouds
 	// cannot be produced by env/YAML (empty overrides are ignored to protect defaults)
 	err := validate(Config{EnabledClouds: []string{}})
@@ -189,6 +205,7 @@ func TestValidate_EmptyEnabledClouds_Error(t *testing.T) {
 }
 
 func TestLoad_CUDLYCONFIGEnv(t *testing.T) {
+	// NOT parallel: uses t.Setenv (process-wide env mutation panics with t.Parallel).
 	path := writeYAML(t, "scorer:\n  min_savings_pct: 7\n")
 	t.Setenv("CUDLY_CONFIG", path)
 	cfg, err := Load("", newFlags())
@@ -197,6 +214,7 @@ func TestLoad_CUDLYCONFIGEnv(t *testing.T) {
 }
 
 func TestLoad_ArgPathTakesPrecedenceOverCUDLYCONFIG(t *testing.T) {
+	// NOT parallel: uses t.Setenv (process-wide env mutation panics with t.Parallel).
 	path1 := writeYAML(t, "scorer:\n  min_savings_pct: 5\n")
 	path2 := writeYAML(t, "scorer:\n  min_savings_pct: 99\n")
 	t.Setenv("CUDLY_CONFIG", path2)
@@ -206,6 +224,7 @@ func TestLoad_ArgPathTakesPrecedenceOverCUDLYCONFIG(t *testing.T) {
 }
 
 func TestLoad_YAMLRoundtrip(t *testing.T) {
+	t.Parallel()
 	content := `dry_run: false
 auto_approve: true
 audit_log: /tmp/audit.jsonl
