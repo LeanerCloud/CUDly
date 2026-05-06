@@ -2,6 +2,7 @@ package recommendations
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"strconv"
 	"time"
@@ -132,7 +133,7 @@ func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.
 		// will be 0 and the scheduler's nonZeroPtr will store nil, causing the
 		// frontend to fall back to the reconstruction formula. Log so operators
 		// can detect when the API field is missing. See #321.
-		fmt.Printf("Warning: EstimatedMonthlyOnDemandCost is nil for RI recommendation (service=%s, account=%s) — Effective %% will use reconstruction fallback\n", rec.Service, rec.Account)
+		log.Printf("WARNING: EstimatedMonthlyOnDemandCost is nil for RI recommendation (service=%s, account=%s) — Effective %% will use reconstruction fallback", rec.Service, rec.Account)
 	}
 	// RecurringStandardMonthlyCost is the recurring charge per month for this RI.
 	// It is distinct from CommitmentCost (upfront) and EstimatedMonthlySavingsAmount.
