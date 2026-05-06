@@ -8,7 +8,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Note on parallelism (issue #58):
+// The package exposes a mutable global `defaultLogger` plus `SetLevel` /
+// `SetLevelValue` mutators. Tests that swap out or mutate the global
+// (TestDefaultLogger, TestSetLevel, TestGetLevel, TestSetLevelValue,
+// TestGetDefaultLogger) MUST stay serial — running them in parallel with
+// each other or with anything that reads `defaultLogger` would race.
+// The remaining tests construct their own local *Logger and are safe to
+// parallelize.
+
 func TestParseLevel(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		input    string
 		expected Level
@@ -27,7 +38,9 @@ func TestParseLevel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture for parallel sub-test (defensive: pre-Go-1.22 toolchains)
 		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
 			result := ParseLevel(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -35,6 +48,8 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestLogger_LevelFiltering(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := New(Config{
 		Level:  "warn",
@@ -55,6 +70,8 @@ func TestLogger_LevelFiltering(t *testing.T) {
 }
 
 func TestLogger_Formatting(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := New(Config{
 		Level:  "debug",
@@ -69,6 +86,8 @@ func TestLogger_Formatting(t *testing.T) {
 }
 
 func TestLogger_With(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := New(Config{
 		Level:  "info",
@@ -84,6 +103,8 @@ func TestLogger_With(t *testing.T) {
 }
 
 func TestLogger_WithDoesNotModifyOriginal(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := New(Config{
 		Level:  "info",
@@ -97,6 +118,8 @@ func TestLogger_WithDoesNotModifyOriginal(t *testing.T) {
 	assert.NotContains(t, output, "key=value")
 }
 
+// TestDefaultLogger mutates the package-level `defaultLogger` global; left
+// SERIAL on purpose — see file-top note.
 func TestDefaultLogger(t *testing.T) {
 	// Test that default logger functions work
 	oldLogger := defaultLogger
@@ -125,6 +148,8 @@ func TestDefaultLogger(t *testing.T) {
 	assert.Contains(t, output, "test error")
 }
 
+// TestSetLevel mutates the package-level `defaultLogger` global; left
+// SERIAL on purpose — see file-top note.
 func TestSetLevel(t *testing.T) {
 	oldLogger := defaultLogger
 	defer func() { defaultLogger = oldLogger }()
@@ -154,6 +179,8 @@ func TestSetLevel(t *testing.T) {
 }
 
 func TestLoggerLevels(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		level    string
 		testFunc func(*Logger)
@@ -166,7 +193,9 @@ func TestLoggerLevels(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt // capture for parallel sub-test (defensive: pre-Go-1.22 toolchains)
 		t.Run(tt.level, func(t *testing.T) {
+			t.Parallel()
 			var buf bytes.Buffer
 			logger := New(Config{
 				Level:  "debug",
@@ -183,6 +212,8 @@ func TestLoggerLevels(t *testing.T) {
 }
 
 func TestLoggerOutput(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := New(Config{
 		Level:  "info",
@@ -197,6 +228,8 @@ func TestLoggerOutput(t *testing.T) {
 	assert.Contains(t, output, "Processing 5 items in region-1")
 }
 
+// TestGetLevel mutates the package-level `defaultLogger` global; left
+// SERIAL on purpose — see file-top note.
 func TestGetLevel(t *testing.T) {
 	oldLogger := defaultLogger
 	defer func() { defaultLogger = oldLogger }()
@@ -211,6 +244,8 @@ func TestGetLevel(t *testing.T) {
 	assert.Equal(t, LevelDebug, GetLevel())
 }
 
+// TestSetLevelValue mutates the package-level `defaultLogger` global; left
+// SERIAL on purpose — see file-top note.
 func TestSetLevelValue(t *testing.T) {
 	oldLogger := defaultLogger
 	defer func() { defaultLogger = oldLogger }()
@@ -226,6 +261,9 @@ func TestSetLevelValue(t *testing.T) {
 	assert.Equal(t, LevelDebug, GetLevel())
 }
 
+// TestGetDefaultLogger reads the package-level `defaultLogger` global; left
+// SERIAL on purpose so it cannot race with the mutating tests above —
+// see file-top note.
 func TestGetDefaultLogger(t *testing.T) {
 	logger := GetDefaultLogger()
 	assert.NotNil(t, logger)
@@ -233,6 +271,8 @@ func TestGetDefaultLogger(t *testing.T) {
 }
 
 func TestWith_ChainedCalls(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := New(Config{
 		Level:  "info",
