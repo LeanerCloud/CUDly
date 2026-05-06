@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -160,8 +161,16 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	// person who downloads the bundle IS the contact.
 	data.ContactEmail = session.Email
 	// include_archera is an opt-in flag: default false so existing downloads are
-	// byte-identical for users who don't tick the checkbox.
-	data.IncludeArchera = req.QueryStringParameters["include_archera"] == "true"
+	// byte-identical for users who don't tick the checkbox. Reject malformed values
+	// (anything other than "true", "false", "1", "0", or absent) with 400 so
+	// callers get a clear error instead of silently falling back to false.
+	if rawArchera, ok := req.QueryStringParameters["include_archera"]; ok {
+		parsed, parseErr := strconv.ParseBool(rawArchera)
+		if parseErr != nil {
+			return nil, NewClientError(400, fmt.Sprintf("include_archera must be a boolean value (true/false), got %q", rawArchera))
+		}
+		data.IncludeArchera = parsed
+	}
 
 	if formatNeedsZip(format) {
 		return h.buildZipResponse(data, target, source, format, "target")

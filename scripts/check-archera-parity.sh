@@ -101,8 +101,9 @@ extract_bicep_azure_actions() {
   # e.g. 'Microsoft.CostManagement/*/read' — but resource type declarations
   # like 'Microsoft.Authorization/roleDefinitions@2022-04-01' contain '@'.
   # Also exclude string-literal resource type uses (param names, type blocks).
-  grep -oE "'Microsoft\.[^']+'" "$file" \
-    | tr -d "'" \
+  # Handle both single-quoted (standard Bicep) and double-quoted string forms.
+  grep -oE "(['\"])Microsoft\.[^'\"]+\1" "$file" \
+    | sed "s/^['\"]//;s/['\"]$//" \
     | grep -vE '@|roleDefinitions$|roleAssignments$' \
     | sort -u
 }

@@ -538,8 +538,8 @@ variable "archera_external_id" {
   sensitive   = true
 
   validation {
-    condition     = !var.enable_archera || var.archera_external_id != ""
-    error_message = "archera_external_id must be set (non-empty) when enable_archera = true."
+    condition     = !var.enable_archera || trimspace(var.archera_external_id) != ""
+    error_message = "archera_external_id must be set (non-empty, non-whitespace) when enable_archera = true."
   }
 }
 

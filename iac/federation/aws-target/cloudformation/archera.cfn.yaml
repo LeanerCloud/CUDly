@@ -45,6 +45,22 @@ Parameters:
       policy for RI/SP write actions. Only enable after confirming Archera
       requires customer approval before executing purchases.
 
+Rules:
+  ArcheraAccountIdRequired:
+    Assertions:
+      - Assert:
+          !Or
+            - !Equals [!Ref EnableArchera, "false"]
+            - !Not [!Equals [!Ref ArcheraAwsAccountId, ""]]
+        AssertDescription: "ArcheraAwsAccountId must be set when EnableArchera is true."
+  ArcheraExternalIdRequired:
+    Assertions:
+      - Assert:
+          !Or
+            - !Equals [!Ref EnableArchera, "false"]
+            - !Not [!Equals [!Ref ArcheraExternalId, ""]]
+        AssertDescription: "ArcheraExternalId must be set when EnableArchera is true."
+
 Conditions:
   CreateArcheraResources: !Equals [!Ref EnableArchera, "true"]
   CreatePurchasePolicy: !And

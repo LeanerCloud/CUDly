@@ -4,7 +4,7 @@
  * DOM is built with createElement / replaceChildren to avoid innerHTML.
  * We mock the api module so no network calls are made.
  */
-import { initFederationPanel } from '../federation';
+import { initFederationPanel, _resetIncludeArcheraForTesting } from '../federation';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -56,6 +56,7 @@ function archeraCheckbox(): HTMLInputElement {
 
 describe('initFederationPanel — Archera checkbox', () => {
   beforeEach(() => {
+    _resetIncludeArcheraForTesting();
     buildFederationDOM();
     jest.clearAllMocks();
   });
@@ -101,6 +102,7 @@ describe('initFederationPanel — download without Archera (unchecked)', () => {
   };
 
   beforeEach(() => {
+    _resetIncludeArcheraForTesting();
     buildFederationDOM();
     jest.clearAllMocks();
     mockGetFederationIaC.mockResolvedValue(mockResponse);
@@ -148,6 +150,7 @@ describe('initFederationPanel — download with Archera (checked)', () => {
   };
 
   beforeEach(() => {
+    _resetIncludeArcheraForTesting();
     buildFederationDOM();
     jest.clearAllMocks();
     mockGetFederationIaC.mockResolvedValue(mockResponse);

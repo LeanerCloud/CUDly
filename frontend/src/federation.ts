@@ -18,6 +18,14 @@ import { getFederationIaC } from './api';
 
 let _includeArchera = false;
 
+/**
+ * Reset module-level state for testing. Not called in production code.
+ * @internal
+ */
+export function _resetIncludeArcheraForTesting(): void {
+  _includeArchera = false;
+}
+
 // ---------------------------------------------------------------------------
 // Download helper
 // ---------------------------------------------------------------------------
@@ -161,7 +169,9 @@ function buildArcheraCheckbox(containerEl: HTMLElement): HTMLInputElement {
   checkbox.type = 'checkbox';
   checkbox.id = 'federation-include-archera';
   checkbox.name = 'include_archera';
-  checkbox.checked = false; // default: off
+  // Reflect current module state so repeated renders stay in sync with
+  // the _includeArchera flag (e.g. hot-reload or SPA re-navigation).
+  checkbox.checked = _includeArchera;
   checkbox.addEventListener('change', () => {
     _includeArchera = checkbox.checked;
   });
@@ -301,6 +311,7 @@ export async function initFederationPanel(source: string): Promise<void> {
   // pill click, but the checkbox row is not).
   const archeraContainer = document.getElementById('federation-archera-options');
   if (archeraContainer) {
+    clearContainer(archeraContainer);
     buildArcheraCheckbox(archeraContainer);
   }
 

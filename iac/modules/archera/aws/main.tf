@@ -38,6 +38,13 @@ locals {
 resource "aws_iam_role" "archera_integration" {
   count = var.enable_archera ? 1 : 0
 
+  lifecycle {
+    precondition {
+      condition     = !var.enable_archera || (trimspace(var.archera_aws_account_id) != "" && trimspace(var.archera_external_id) != "")
+      error_message = "archera_aws_account_id and archera_external_id must both be non-empty when enable_archera = true."
+    }
+  }
+
   name        = local.archera_role_name
   description = "Assumed by Archera SaaS to read cost data and (optionally) execute RI/SP purchases (provisional — confirm scope before enabling)"
 

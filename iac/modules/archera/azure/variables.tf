@@ -18,6 +18,11 @@ variable "archera_azure_sp_object_id" {
   description = "Object ID of the service principal Archera provides during onboarding. NOT the Application/Client ID — use the Object ID from Azure Portal. Required when enable_archera = true."
   type        = string
   default     = ""
+
+  validation {
+    condition     = !var.enable_archera || trimspace(var.archera_azure_sp_object_id) != ""
+    error_message = "archera_azure_sp_object_id must be set (non-empty) when enable_archera = true."
+  }
 }
 
 variable "enable_archera_purchase_actions" {

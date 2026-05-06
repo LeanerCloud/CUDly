@@ -459,6 +459,7 @@ jobs:
       - terraform-validate
       - security-scan
       - e2e-tests
+      - archera-parity
     if: always()
 
     steps:

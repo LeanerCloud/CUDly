@@ -501,6 +501,15 @@ variable "archera_gcp_service_account" {
   EOT
   type        = string
   default     = ""
+
+  validation {
+    condition = (
+      !var.enable_archera ||
+      can(regex("^[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\\.iam\\.gserviceaccount\\.com$",
+      var.archera_gcp_service_account))
+    )
+    error_message = "archera_gcp_service_account must be a valid GCP service account email when enable_archera = true."
+  }
 }
 
 variable "enable_archera_purchase_actions" {

@@ -18,6 +18,11 @@ variable "archera_gcp_service_account" {
   description = "Full service account email of the SA Archera provides during onboarding, e.g. archera-integration@archera-prod.iam.gserviceaccount.com. Required when enable_archera = true."
   type        = string
   default     = ""
+
+  validation {
+    condition     = !var.enable_archera || can(regex("^[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\\.iam\\.gserviceaccount\\.com$", var.archera_gcp_service_account))
+    error_message = "archera_gcp_service_account must be a valid GCP service account email (e.g. name@project.iam.gserviceaccount.com) when enable_archera = true."
+  }
 }
 
 variable "enable_archera_purchase_actions" {
