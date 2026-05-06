@@ -261,6 +261,23 @@ jobs:
             fi
           done
 
+  # Archera permission parity check — ensures CFN / Bicep / ARM alternative
+  # deployment formats carry permission lists that match the canonical YAML
+  # source of truth (iac/modules/archera/scope.*.yaml), and that environment
+  # archera.tf files are thin module callers with no inline permission lists.
+  archera-parity:
+    name: Archera Permission Parity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install python3-yaml
+        run: sudo apt-get install -y python3-yaml
+
+      - name: Check Archera permission parity
+        run: bash scripts/check-archera-parity.sh
+
   # Security scanning
   security-scan:
     name: Security Scanning
