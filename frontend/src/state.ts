@@ -10,7 +10,7 @@ import type { Recommendation } from './api/types';
 export type RecommendationsColumnId =
   | 'provider' | 'account' | 'service' | 'resource_type' | 'region'
   | 'count' | 'term' | 'payment' | 'savings' | 'upfront_cost'
-  | 'monthly_cost' | 'effective_savings_pct';
+  | 'monthly_cost' | 'on_demand_monthly' | 'effective_savings_pct';
 
 // Every visible column is sortable, so the sort column type is exactly the
 // column id set. Aliasing here keeps the two in sync automatically — adding
