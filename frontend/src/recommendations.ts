@@ -22,6 +22,15 @@ import { openModal } from './modal';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
+// Tracks which row indices in currentPurchaseRecommendations the user
+// has kept included (checked). Initialised to all indices on modal open;
+// toggled by per-row checkboxes and the select-all header checkbox.
+// Cleared with currentPurchaseRecommendations on modal close.
+let checkedPurchaseIndices: Set<number> = new Set();
+// True once openPurchaseModal has been called and initialised the
+// checkedPurchaseIndices. Used by getPurchaseModalRecommendations to
+// distinguish "all deselected by user" from "modal never opened".
+let checkedPurchaseModalInitialised = false;
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
 
@@ -95,17 +104,33 @@ export function resetAutoRefreshInFlight(): void {
 // Region filtering is purely client-side via applyColumnFilters.
 
 /**
- * Get the recommendations currently loaded in the purchase modal
+ * Get the recommendations currently loaded in the purchase modal,
+ * filtered to only those rows the user has kept "included" (i.e., checked).
+ * Rows the user unchecked via the per-row checkbox are excluded from the
+ * returned set, so the execute-purchase code path automatically honours
+ * the user's per-row skip decisions without any callers needing to change.
+ *
+ * Returns all recs when the modal state is pre-#320 (checkedPurchaseModalInitialised
+ * is false), which can happen if a caller invokes this without opening the modal
+ * first (e.g. a legacy test fixture that sets currentPurchaseRecommendations
+ * directly). Once the modal opens, the filter is always authoritative.
  */
 export function getPurchaseModalRecommendations(): LocalRecommendation[] {
-  return [...currentPurchaseRecommendations];
+  if (!checkedPurchaseModalInitialised) {
+    // Pre-open / legacy path: no checkbox state initialised — return everything.
+    return [...currentPurchaseRecommendations];
+  }
+  return currentPurchaseRecommendations.filter((_, idx) => checkedPurchaseIndices.has(idx));
 }
 
 /**
- * Clear purchase modal recommendations (called when modal closes)
+ * Clear purchase modal recommendations and checked-indices state
+ * (called when modal closes).
  */
 export function clearPurchaseModalRecommendations(): void {
   currentPurchaseRecommendations = [];
+  checkedPurchaseIndices = new Set();
+  checkedPurchaseModalInitialised = false;
 }
 
 /**
@@ -2923,6 +2948,22 @@ function resolvePerRecPaymentSeed(
  * Open the single-bucket purchase modal with editable per-row Term and
  * Payment dropdowns (issue #111 sub-option (iii)).
  *
+ * Expanded by issue #320 to also show:
+ *   - Per-row "Include" checkboxes (all checked by default) with a
+ *     select-all/deselect-all header checkbox.
+ *   - Account, Upfront, Monthly Cost, Effective Savings, and Effective %
+ *     columns so the user can verify the full breakdown before committing.
+ *   - A live totals row that updates as checkboxes toggle.
+ *   - Execute Purchase disabled when no rows are checked.
+ *
+ * Only checked rows are submitted: `getPurchaseModalRecommendations()`
+ * filters by `checkedPurchaseIndices` so the existing execute-purchase
+ * code path in app.ts needs no changes.
+ *
+ * Modal shows monthly totals regardless of the page's cost-period selector
+ * — by design (the modal is a commit-decision context where monthly is
+ * canonical).
+ *
  * Defaults are seeded by resolvePerRecPaymentSeed:
  *   override → rec's own payment → paymentOptionsFor[0] fallback.
  *
@@ -2937,6 +2978,10 @@ function resolvePerRecPaymentSeed(
  */
 export async function openPurchaseModal(recommendations: LocalRecommendation[]): Promise<void> {
   currentPurchaseRecommendations = [...recommendations];
+  // Initialise all indices as checked (issue #320: all selected by default).
+  checkedPurchaseIndices = new Set(currentPurchaseRecommendations.map((_, i) => i));
+  checkedPurchaseModalInitialised = true;
+
   const container = document.getElementById('purchase-details');
   if (!container) return;
 
@@ -2972,38 +3017,6 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
 
   while (container.firstChild) container.removeChild(container.firstChild);
 
-  const totalSavings = currentPurchaseRecommendations.reduce((sum, r) => sum + (r.savings || 0), 0);
-  const totalUpfront = currentPurchaseRecommendations.reduce((sum, r) => sum + (r.upfront_cost || 0), 0);
-
-  // Summary section (DOM-built; no template-literal HTML interpolation).
-  const summary = document.createElement('div');
-  summary.className = 'form-section';
-  const summaryTitle = document.createElement('h3');
-  summaryTitle.textContent = 'Purchase Summary';
-  summary.appendChild(summaryTitle);
-
-  const countLine = document.createElement('p');
-  const countStrong = document.createElement('strong');
-  countStrong.textContent = String(currentPurchaseRecommendations.length);
-  countLine.appendChild(countStrong);
-  countLine.appendChild(document.createTextNode(' commitments to purchase'));
-  summary.appendChild(countLine);
-
-  const savingsLine = document.createElement('p');
-  savingsLine.appendChild(document.createTextNode('Estimated Monthly Savings: '));
-  const savingsStrong = document.createElement('strong');
-  savingsStrong.className = 'savings';
-  savingsStrong.textContent = formatCurrency(totalSavings);
-  savingsLine.appendChild(savingsStrong);
-  summary.appendChild(savingsLine);
-
-  const upfrontLine = document.createElement('p');
-  upfrontLine.appendChild(document.createTextNode('Total Upfront Cost: '));
-  const upfrontStrong = document.createElement('strong');
-  upfrontStrong.textContent = formatCurrency(totalUpfront);
-  upfrontLine.appendChild(upfrontStrong);
-  summary.appendChild(upfrontLine);
-
   // Approval-required note: clicking the modal's primary button does NOT
   // execute the purchase — it sends an approval-request email to the
   // configured approver(s). The actual upfront charges fire only when an
@@ -3016,21 +3029,36 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
   approvalNote.className = 'approval-required-note';
   approvalNote.textContent =
     'Submitting will email an approval request to the configured approver — commitments are charged only after the approver clicks the link in that email.';
-  summary.appendChild(approvalNote);
+  container.appendChild(approvalNote);
 
-  container.appendChild(summary);
-
-  // Commitments table with per-row Term and Payment selects.
+  // Commitments table with per-row Include checkboxes, Term, and Payment selects.
   const commitsSection = document.createElement('div');
-  commitsSection.className = 'form-section';
-  const commitsTitle = document.createElement('h3');
-  commitsTitle.textContent = 'Commitments';
-  commitsSection.appendChild(commitsTitle);
+  commitsSection.className = 'form-section purchase-modal-commits';
 
   const table = document.createElement('table');
+  table.className = 'purchase-modal-table';
+
+  // Table header: select-all checkbox + per-column labels.
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  for (const label of ['Service', 'Type', 'Region', 'Count', 'Term', 'Payment', 'Savings/mo']) {
+
+  // Select-all checkbox in the header (issue #320).
+  const selectAllTh = document.createElement('th');
+  const selectAllCb = document.createElement('input');
+  selectAllCb.type = 'checkbox';
+  selectAllCb.id = 'purchase-modal-select-all';
+  selectAllCb.checked = true; // all selected by default
+  selectAllCb.setAttribute('aria-label', 'Select all purchases');
+  selectAllCb.title = 'Select / deselect all';
+  selectAllTh.appendChild(selectAllCb);
+
+  const includeLabel = document.createElement('span');
+  includeLabel.className = 'purchase-modal-include-label';
+  includeLabel.textContent = 'Include';
+  selectAllTh.appendChild(includeLabel);
+  headRow.appendChild(selectAllTh);
+
+  for (const label of ['Account', 'Service / Type', 'Region', 'Count', 'Upfront', 'Monthly Cost', 'Eff. Savings', 'Eff. %', 'Term', 'Payment']) {
     const th = document.createElement('th');
     th.textContent = label;
     headRow.appendChild(th);
@@ -3043,11 +3071,185 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
     tbody.appendChild(renderPurchaseModalRow(i, seeds[i]!.source));
   }
   table.appendChild(tbody);
+
+  // Totals row in tfoot (issue #320: live totals updated on checkbox toggle).
+  const tfoot = document.createElement('tfoot');
+  const totalsRow = document.createElement('tr');
+  totalsRow.id = 'purchase-modal-totals-row';
+  totalsRow.className = 'purchase-modal-totals';
+  table.appendChild(tfoot);
+  tfoot.appendChild(totalsRow);
+
   commitsSection.appendChild(table);
   container.appendChild(commitsSection);
 
+  // Wire the select-all checkbox (must happen after tbody rows are in DOM
+  // so per-row checkboxes can be queried).
+  selectAllCb.addEventListener('change', () => {
+    const allIndices = currentPurchaseRecommendations.map((_, i) => i);
+    if (selectAllCb.checked) {
+      checkedPurchaseIndices = new Set(allIndices);
+    } else {
+      checkedPurchaseIndices = new Set();
+    }
+    // Sync each row's checkbox to the new state.
+    const rowCheckboxes = container.querySelectorAll<HTMLInputElement>('.purchase-modal-row-include');
+    rowCheckboxes.forEach((cb) => {
+      cb.checked = selectAllCb.checked;
+    });
+    updatePurchaseModalTotals(selectAllCb);
+  });
+
+  // Initial totals render and Execute button state.
+  updatePurchaseModalTotals(selectAllCb);
+
   const purchaseModal = document.getElementById('purchase-modal');
   if (purchaseModal) openModal(purchaseModal);
+}
+
+/**
+ * Updates the totals row and Execute button disabled state based on the
+ * current `checkedPurchaseIndices` set. Also syncs the select-all
+ * checkbox's indeterminate/checked/unchecked state.
+ *
+ * Called on modal open and on every per-row or select-all checkbox change.
+ *
+ * The `selectAllCb` parameter is the select-all header checkbox element,
+ * passed in so the live-update handler doesn't need to re-query it.
+ */
+function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
+  const totalsRow = document.getElementById('purchase-modal-totals-row');
+
+  // Compute totals over checked indices only.
+  let totalCount = 0;
+  let totalUpfront = 0;
+  let totalMonthlyCost = 0;
+  let totalEffSavings = 0;
+  // Weighted-average effective %: sum effective savings / sum on-demand monthly.
+  let weightedEffSavingsNum = 0; // numerator: sum of effectiveMonthlySavings per checked rec
+  let weightedEffSavingsDen = 0; // denominator: sum of on-demand monthly per checked rec
+  let hasMonthlyCostData = false;
+
+  for (const idx of checkedPurchaseIndices) {
+    const rec = currentPurchaseRecommendations[idx];
+    if (!rec) continue;
+    totalCount += rec.count;
+    totalUpfront += rec.upfront_cost;
+    if (rec.monthly_cost != null) {
+      totalMonthlyCost += rec.monthly_cost;
+      hasMonthlyCostData = true;
+      // Weighted-average effective % denominator: on_demand = monthly_cost + savings + amortized.
+      // Only include recs where term > 0 (effectiveSavingsPct returns null otherwise).
+      if (rec.term) {
+        const amortized = rec.upfront_cost / (rec.term * 12);
+        const effSav = rec.savings - amortized;
+        const onDemand = rec.monthly_cost + rec.savings + amortized;
+        weightedEffSavingsNum += effSav;
+        weightedEffSavingsDen += onDemand;
+      }
+    }
+    totalEffSavings += effectiveMonthlySavings(rec);
+  }
+
+  // Rebuild the totals row DOM. Clear first.
+  if (totalsRow) {
+    while (totalsRow.firstChild) totalsRow.removeChild(totalsRow.firstChild);
+
+    // Placeholder for the Include checkbox column.
+    const tdBlank = document.createElement('td');
+    tdBlank.textContent = '';
+    totalsRow.appendChild(tdBlank);
+
+    // Account column placeholder.
+    const tdTotalLabel = document.createElement('td');
+    const strong = document.createElement('strong');
+    strong.textContent = 'Totals';
+    tdTotalLabel.appendChild(strong);
+    totalsRow.appendChild(tdTotalLabel);
+
+    // Service / Type placeholder.
+    const tdBlank2 = document.createElement('td');
+    totalsRow.appendChild(tdBlank2);
+
+    // Region placeholder.
+    const tdBlank3 = document.createElement('td');
+    totalsRow.appendChild(tdBlank3);
+
+    // Count.
+    const tdCount = document.createElement('td');
+    tdCount.id = 'purchase-modal-total-count';
+    const countStrong = document.createElement('strong');
+    countStrong.textContent = String(totalCount);
+    tdCount.appendChild(countStrong);
+    totalsRow.appendChild(tdCount);
+
+    // Upfront.
+    const tdUpfront = document.createElement('td');
+    tdUpfront.id = 'purchase-modal-total-upfront';
+    const upfrontStrong = document.createElement('strong');
+    upfrontStrong.textContent = formatCurrency(totalUpfront);
+    tdUpfront.appendChild(upfrontStrong);
+    totalsRow.appendChild(tdUpfront);
+
+    // Monthly cost.
+    const tdMonthly = document.createElement('td');
+    tdMonthly.id = 'purchase-modal-total-monthly';
+    const monthlyStrong = document.createElement('strong');
+    monthlyStrong.textContent = hasMonthlyCostData ? formatCurrency(totalMonthlyCost) : '—';
+    tdMonthly.appendChild(monthlyStrong);
+    totalsRow.appendChild(tdMonthly);
+
+    // Effective savings.
+    const tdEffSav = document.createElement('td');
+    tdEffSav.id = 'purchase-modal-total-eff-savings';
+    tdEffSav.className = 'savings';
+    const effSavStrong = document.createElement('strong');
+    effSavStrong.textContent = formatCurrency(totalEffSavings);
+    tdEffSav.appendChild(effSavStrong);
+    totalsRow.appendChild(tdEffSav);
+
+    // Effective % (weighted average over on-demand monthly).
+    const tdEffPct = document.createElement('td');
+    tdEffPct.id = 'purchase-modal-total-eff-pct';
+    const effPctStrong = document.createElement('strong');
+    if (weightedEffSavingsDen > 0) {
+      const avgPct = (weightedEffSavingsNum / weightedEffSavingsDen) * 100;
+      effPctStrong.textContent = avgPct.toFixed(1) + '%';
+      if (avgPct < 0) tdEffPct.className = 'effective-pct-negative';
+    } else {
+      effPctStrong.textContent = '—';
+    }
+    tdEffPct.appendChild(effPctStrong);
+    totalsRow.appendChild(tdEffPct);
+
+    // Term and Payment column placeholders (editable per row, no aggregate).
+    const tdBlankTerm = document.createElement('td');
+    totalsRow.appendChild(tdBlankTerm);
+    const tdBlankPayment = document.createElement('td');
+    totalsRow.appendChild(tdBlankPayment);
+  }
+
+  // Update Execute button disabled state.
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn) {
+    const noneSelected = checkedPurchaseIndices.size === 0;
+    executeBtn.disabled = noneSelected;
+    executeBtn.title = noneSelected ? 'Select at least one purchase' : '';
+  }
+
+  // Sync select-all checkbox indeterminate/checked/unchecked state.
+  const total = currentPurchaseRecommendations.length;
+  const checked = checkedPurchaseIndices.size;
+  if (checked === 0) {
+    selectAllCb.checked = false;
+    selectAllCb.indeterminate = false;
+  } else if (checked === total) {
+    selectAllCb.checked = true;
+    selectAllCb.indeterminate = false;
+  } else {
+    selectAllCb.checked = false;
+    selectAllCb.indeterminate = true;
+  }
 }
 
 // renderPurchaseModalRow builds one editable <tr> for the per-row
@@ -3056,28 +3258,84 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
 // edits to other rows don't stale-close over an outdated array
 // reference. The modal does NOT re-render mid-edit; only the row's own
 // Payment <select> options are rebuilt on a Term change.
+//
+// Issue #320: adds Include checkbox (col 0), Account (col 1), and
+// Upfront/Monthly Cost/Eff. Savings/Eff. % columns before Term/Payment.
+// The checkbox change handler updates checkedPurchaseIndices and calls
+// updatePurchaseModalTotals so the live totals row and Execute button
+// state stay in sync.
 function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' | 'fallback'): HTMLTableRowElement {
   const rec = currentPurchaseRecommendations[idx]!;
   const tr = document.createElement('tr');
   tr.dataset['recIdx'] = String(idx);
 
-  const serviceCell = document.createElement('td');
-  serviceCell.textContent = rec.service;
-  tr.appendChild(serviceCell);
+  // Issue #320: Include checkbox (col 0).
+  const includeTd = document.createElement('td');
+  const includeCb = document.createElement('input');
+  includeCb.type = 'checkbox';
+  includeCb.className = 'purchase-modal-row-include';
+  includeCb.checked = checkedPurchaseIndices.has(idx);
+  includeCb.setAttribute('aria-label', `Include row ${idx + 1}`);
+  includeTd.appendChild(includeCb);
+  tr.appendChild(includeTd);
 
-  const typeCell = document.createElement('td');
-  typeCell.textContent = rec.resource_type;
-  tr.appendChild(typeCell);
+  // Account (col 1): display name from accountNamesCache, fallback to ID.
+  const accountTd = document.createElement('td');
+  const accountName = rec.cloud_account_id
+    ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id)
+    : '—';
+  accountTd.appendChild(document.createTextNode(accountName));
+  tr.appendChild(accountTd);
 
+  // Service / Type (col 2): service + resource_type combined.
+  const serviceTypeTd = document.createElement('td');
+  serviceTypeTd.appendChild(document.createTextNode(rec.service));
+  if (rec.resource_type) {
+    const typeSpan = document.createElement('span');
+    typeSpan.className = 'purchase-modal-resource-type';
+    typeSpan.appendChild(document.createTextNode(' / ' + rec.resource_type));
+    serviceTypeTd.appendChild(typeSpan);
+  }
+  tr.appendChild(serviceTypeTd);
+
+  // Region (col 3).
   const regionCell = document.createElement('td');
-  regionCell.textContent = rec.region;
+  regionCell.appendChild(document.createTextNode(rec.region));
   tr.appendChild(regionCell);
 
+  // Count (col 4).
   const countCell = document.createElement('td');
-  countCell.textContent = String(rec.count);
+  countCell.appendChild(document.createTextNode(String(rec.count)));
   tr.appendChild(countCell);
 
-  // Term select. AWS/Azure/GCP commitments universally support 1y and 3y;
+  // Upfront (col 5): upfront_cost is already the total for all count units.
+  const upfrontTd = document.createElement('td');
+  upfrontTd.appendChild(document.createTextNode(formatCurrency(rec.upfront_cost)));
+  tr.appendChild(upfrontTd);
+
+  // Monthly cost (col 6): null when provider API didn't return it.
+  const monthlyCostTd = document.createElement('td');
+  monthlyCostTd.appendChild(
+    document.createTextNode(rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'),
+  );
+  tr.appendChild(monthlyCostTd);
+
+  // Effective monthly savings (col 7): reuses effectiveMonthlySavings helper.
+  // savings and upfront_cost are already total-for-rec values, so the helper
+  // returns the aggregate effective savings for all count units.
+  const effSavTd = document.createElement('td');
+  effSavTd.className = 'savings';
+  effSavTd.appendChild(document.createTextNode(formatCurrency(effectiveMonthlySavings(rec))));
+  tr.appendChild(effSavTd);
+
+  // Effective % (col 8): reuses effectiveSavingsPct helper.
+  const effPctTd = document.createElement('td');
+  const pct = effectiveSavingsPct(rec);
+  if (pct !== null && pct < 0) effPctTd.className = 'effective-pct-negative';
+  effPctTd.appendChild(document.createTextNode(pct !== null ? pct.toFixed(1) + '%' : '—'));
+  tr.appendChild(effPctTd);
+
+  // Term select (col 9). AWS/Azure/GCP commitments universally support 1y and 3y;
   // on change we rederive Payment options for the new term and pick a
   // still-valid value if the current one becomes unsupported.
   const termCell = document.createElement('td');
@@ -3093,7 +3351,7 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
   termCell.appendChild(termSelect);
   tr.appendChild(termCell);
 
-  // Payment select. Options come from paymentOptionsFor (already
+  // Payment select (col 10). Options come from paymentOptionsFor (already
   // filtered to supported values for this provider/service/term cell),
   // so the user can never pick an unsupported combo through the UI.
   const paymentCell = document.createElement('td');
@@ -3109,10 +3367,18 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
   }
   tr.appendChild(paymentCell);
 
-  const savingsCell = document.createElement('td');
-  savingsCell.className = 'savings';
-  savingsCell.textContent = formatCurrency(rec.savings);
-  tr.appendChild(savingsCell);
+  // Issue #320: Include checkbox change handler.
+  // Must query the select-all checkbox from the DOM each time because
+  // the handler outlives the initial render call.
+  includeCb.addEventListener('change', () => {
+    if (includeCb.checked) {
+      checkedPurchaseIndices.add(idx);
+    } else {
+      checkedPurchaseIndices.delete(idx);
+    }
+    const selectAllCb = document.getElementById('purchase-modal-select-all') as HTMLInputElement | null;
+    if (selectAllCb) updatePurchaseModalTotals(selectAllCb);
+  });
 
   termSelect.addEventListener('change', () => {
     const live = currentPurchaseRecommendations[idx];
