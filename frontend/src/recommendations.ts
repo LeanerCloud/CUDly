@@ -4,6 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
+import type { CostPeriod } from './state';
 import { formatCurrency, formatTerm, escapeHtml } from './utils';
 import { getRecommendationDetail, getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI, type RecommendationDetail } from './api/recommendations';
 import { showToast } from './toast';
@@ -331,9 +332,13 @@ function renderRecommendationsSummary(
   const plr = pageLevelRange(groups);
   const isSelectionView = selectedVisible.length > 0 && plr.cellCount > 0;
 
+  // issue #319: scale savings by the active cost period.
+  const period = state.getCostPeriod();
+  const scaledSavingsMin = scaleCost(plr.savingsMin, period) ?? 0;
+  const scaledSavingsMax = scaleCost(plr.savingsMax, period) ?? 0;
   const savingsText = plr.cellCount > 0 && plr.savingsMax > 0
-    ? formatSavingsRange(plr.savingsMin, plr.savingsMax)
-    : formatCurrency(0);
+    ? formatScaledRange(scaledSavingsMin, scaledSavingsMax, period)
+    : formatCostForPeriod(0, period);
   const upfrontText = plr.cellCount > 0 && plr.upfrontMax > 0
     ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
     : formatCurrency(0);
@@ -343,7 +348,13 @@ function renderRecommendationsSummary(
   // Total Recommendations counts CELLS not variants — each cell is the
   // user's actual decision unit.
   const countLabel = isSelectionView ? 'Selected Recommendations' : 'Total Recommendations';
-  const savingsLabel = isSelectionView ? 'Selected Monthly Savings' : 'Potential Monthly Savings';
+  const savingsLabel = (() => {
+    if (period === 'monthly') {
+      return isSelectionView ? 'Selected Monthly Savings' : 'Potential Monthly Savings';
+    }
+    const sfx = periodSuffix(period);
+    return isSelectionView ? `Selected Savings ${sfx}` : `Potential Savings ${sfx}`;
+  })();
   const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
   const paybackLabel = 'Payback Period';
 
@@ -371,18 +382,35 @@ function renderRecommendationsSummary(
 // (subtraction-based sort); string columns return strings (localeCompare-based
 // sort). Bundle B extended this with the string columns so every visible data
 // column is sortable.
+//
+// issue #319: `savings` and `monthly_cost` extractors are now period-aware —
+// they scale by the active cost period so sort order reflects the displayed
+// value. POSITIVE_INFINITY sentinel for null values is preserved; scaling
+// Infinity by any finite factor still yields Infinity, so the "unknowns to
+// the bottom" behaviour is unchanged across periods.
 const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => number> = {
-  savings: (r) => r.savings,
+  savings: (r) => {
+    const period = state.getCostPeriod();
+    return scaleCost(r.savings, period) ?? Number.POSITIVE_INFINITY;
+  },
   upfront_cost: (r) => r.upfront_cost,
   // null monthly_cost means "data not provided by the provider API".
   // Use POSITIVE_INFINITY so unknown rows sort to the bottom in ascending
   // order (de-emphasised) and don't conflate with rows that have an explicit
   // $0 recurring charge (e.g. all-upfront commitments).
-  monthly_cost: (r) => r.monthly_cost ?? Number.POSITIVE_INFINITY,
+  monthly_cost: (r) => {
+    const period = state.getCostPeriod();
+    return scaleCost(r.monthly_cost, period) ?? Number.POSITIVE_INFINITY;
+  },
   // onDemandMonthly returns null for null monthly_cost or term=0.
   // POSITIVE_INFINITY places null rows at the bottom in ascending order and
-  // at the top in descending — consistent with monthly_cost.
-  on_demand_monthly: (r) => onDemandMonthly(r) ?? Number.POSITIVE_INFINITY,
+  // at the top in descending — consistent with monthly_cost. The base value
+  // is monthly; scale it to the selected display period so sorting matches
+  // what the user sees in the column.
+  on_demand_monthly: (r) => {
+    const period = state.getCostPeriod();
+    return scaleCost(onDemandMonthly(r), period) ?? Number.POSITIVE_INFINITY;
+  },
   // effectiveSavingsPct returns null for term=0 / on_demand=0 / null monthly_cost.
   // POSITIVE_INFINITY places null rows at the bottom in ascending order and
   // at the top in descending — the least surprising behaviour for a savings
@@ -644,6 +672,7 @@ export function formatSavingsRange(min: number, max: number): string {
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
+
 /** Format a payback-months range, collapsing identical endpoints to a
  * single value and rounding to 1 decimal. Used by the Payback Period
  * summary card after #279 broadened it to a range. */
@@ -742,6 +771,73 @@ export function onDemandMonthly(r: LocalRecommendation): number | null {
   return r.monthly_cost + r.savings + amortized;
 }
 
+// ---------------------------------------------------------------------------
+// Cost-period scaling (issue #319)
+// ---------------------------------------------------------------------------
+
+/** Conversion factors relative to a monthly base. */
+const PERIOD_FACTOR: Record<CostPeriod, number> = {
+  hourly:  1 / 720,   // 24 × 30 hrs/mo
+  daily:   1 / 30,
+  monthly: 1,
+  yearly:  12,
+};
+
+/**
+ * Scale a monthly cost value to the requested display period.
+ * Returns null when input is null or undefined (preserves "—" rendering).
+ * Exported for tests.
+ */
+export function scaleCost(monthly: number | null | undefined, period: CostPeriod): number | null {
+  if (monthly == null) return null;
+  return monthly * PERIOD_FACTOR[period];
+}
+
+/** Number of decimal places to use when formatting a scaled cost value. */
+const PERIOD_DECIMALS: Record<CostPeriod, number> = {
+  hourly:  4,
+  daily:   2,
+  monthly: 2,
+  yearly:  0,
+};
+
+/**
+ * Format a monthly cost value scaled to the requested display period.
+ * Returns "—" for null/undefined input.
+ * Uses period-appropriate decimal precision.
+ * Exported for tests.
+ */
+export function formatCostForPeriod(monthly: number | null | undefined, period: CostPeriod): string {
+  const scaled = scaleCost(monthly, period);
+  if (scaled === null) return '—';
+  // For the non-monthly periods use fixed-decimal formatting rather than
+  // formatCurrency (which always uses 2 decimals). Monthly keeps the
+  // existing formatCurrency behaviour for backward compatibility.
+  if (period === 'monthly') return formatCurrency(scaled);
+  return `$${scaled.toFixed(PERIOD_DECIMALS[period])}`;
+}
+
+/** Human-readable suffix label for a period (used in column headers). */
+export function periodSuffix(period: CostPeriod): string {
+  switch (period) {
+    case 'hourly':  return '/ hr';
+    case 'daily':   return '/ day';
+    case 'monthly': return '/ mo';
+    case 'yearly':  return '/ yr';
+  }
+}
+
+/**
+ * Format a period-scaled savings range using period-appropriate precision.
+ * Used for the summary cards and cell-level range displays (issue #319).
+ * Collapses "$X – $X" to "$X".
+ */
+function formatScaledRange(min: number, max: number, period: CostPeriod): string {
+  const lo = period === 'monthly' ? formatCurrency(min) : `$${min.toFixed(PERIOD_DECIMALS[period])}`;
+  const hi = period === 'monthly' ? formatCurrency(max) : `$${max.toFixed(PERIOD_DECIMALS[period])}`;
+  return lo === hi ? lo : `${lo} – ${hi}`;
+}
+
 // pickBestVariantPerCell collapses a list of recs to one rec per cell,
 // preferring the variant matching resolved GlobalConfig.DefaultTerm +
 // DefaultPayment, then falling back to the highest effective monthly savings.
@@ -799,7 +895,8 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
   return result;
 }
 
-const SORT_HEADER_LABELS: Record<string, string> = {
+// Static labels for columns whose header is period-invariant.
+const STATIC_COLUMN_LABELS: Record<string, string> = {
   provider: 'Provider',
   account: 'Account',
   service: 'Service',
@@ -808,12 +905,49 @@ const SORT_HEADER_LABELS: Record<string, string> = {
   count: 'Count',
   term: 'Term',
   payment: 'Payment',
-  savings: 'Monthly Savings',
   upfront_cost: 'Upfront Cost',
-  monthly_cost: 'Monthly Cost',
-  on_demand_monthly: 'On-Demand Monthly',
   effective_savings_pct: 'Effective %',
 };
+
+/**
+ * Return the human-readable column header for `column` given the active
+ * `period`. Cost-bearing columns (`savings`, `monthly_cost`,
+ * `on_demand_monthly`) update their label to reflect the active period;
+ * all other columns are period-invariant.
+ */
+function getColumnLabel(column: string, period: CostPeriod): string {
+  switch (column) {
+    case 'savings': {
+      const suffixes: Record<CostPeriod, string> = {
+        hourly: 'Savings / hr', daily: 'Savings / day', monthly: 'Monthly Savings', yearly: 'Savings / yr',
+      };
+      return suffixes[period];
+    }
+    case 'monthly_cost': {
+      const suffixes: Record<CostPeriod, string> = {
+        hourly: 'Cost / hr', daily: 'Cost / day', monthly: 'Monthly Cost', yearly: 'Cost / yr',
+      };
+      return suffixes[period];
+    }
+    case 'on_demand_monthly': {
+      // The base value is the reconstructed monthly on-demand baseline (#322);
+      // scale the label to the same period as the displayed cell value so the
+      // header stays consistent with the column's contents.
+      const suffixes: Record<CostPeriod, string> = {
+        hourly: 'On-Demand / hr', daily: 'On-Demand / day', monthly: 'On-Demand Monthly', yearly: 'On-Demand / yr',
+      };
+      return suffixes[period];
+    }
+    default:
+      return STATIC_COLUMN_LABELS[column] ?? column;
+  }
+}
+
+// Backward-compatible alias used by popover aria-labels and filter buttons.
+// These always show the current-period label.
+function columnLabel(column: string): string {
+  return getColumnLabel(column, state.getCostPeriod());
+}
 
 function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
   if (column !== active) return '<span class="sort-indicator" aria-hidden="true">\u2195</span>';
@@ -938,16 +1072,20 @@ function categoricalCellValue(r: LocalRecommendation, col: state.Recommendations
 }
 
 function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColumnId): number {
+  // issue #319: savings and monthly_cost filter predicates operate on the
+  // scaled (displayed) value so a "< $1" filter at hourly does the right thing.
+  const period = state.getCostPeriod();
   switch (col) {
     case 'count':                return r.count ?? 0;
-    case 'savings':              return r.savings ?? 0;
+    case 'savings':              return scaleCost(r.savings, period) ?? 0;
     case 'upfront_cost':         return r.upfront_cost ?? 0;
     // Return NaN for null monthly_cost so numeric filter predicates (e.g. "= 0")
     // don't match rows where the provider simply didn't report a monthly cost.
-    case 'monthly_cost':         return r.monthly_cost ?? Number.NaN;
+    case 'monthly_cost':         return scaleCost(r.monthly_cost, period) ?? Number.NaN;
     // Return NaN for null on_demand_monthly (null monthly_cost or term=0) so any
     // numeric predicate returns false rather than coincidentally matching 0.
-    case 'on_demand_monthly':    return onDemandMonthly(r) ?? Number.NaN;
+    // Scale to the active period so a numeric filter targets what the user sees.
+    case 'on_demand_monthly':    return scaleCost(onDemandMonthly(r), period) ?? Number.NaN;
     // Return NaN for null effective_savings_pct so any numeric predicate
     // returns false rather than coincidentally matching 0.
     case 'effective_savings_pct': return effectiveSavingsPct(r) ?? Number.NaN;
@@ -1087,7 +1225,7 @@ function buildPopoverContent(
   const heading = document.createElement('h3');
   heading.id = headingId;
   heading.className = 'column-filter-heading';
-  heading.textContent = `Filter ${SORT_HEADER_LABELS[column]}`;
+  heading.textContent = `Filter ${columnLabel(column)}`;
   popover.appendChild(heading);
 
   const checkboxes = new Map<string, HTMLInputElement>();
@@ -1537,32 +1675,89 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   // are multi-variant cells to expand (lastVisibleGroupKeys has entries).
   // The button label flips between "Expand all" and "Collapse all"
   // depending on whether all known groups are currently expanded.
+  // issues #225 + #226: Expand-All toggle. Only shown when multi-variant cells exist.
   let expandAllBtn = bar.querySelector<HTMLButtonElement>('.expand-all-toggle');
   const multiVariantGroups = lastVisibleGroupKeys.length > 0;
   if (!multiVariantGroups) {
     if (expandAllBtn) expandAllBtn.remove();
-    return;
+  } else {
+    if (!expandAllBtn) {
+      expandAllBtn = document.createElement('button');
+      expandAllBtn.type = 'button';
+      expandAllBtn.className = 'expand-all-toggle';
+      bar.appendChild(expandAllBtn);
+      expandAllBtn.addEventListener('click', () => {
+        const allExpanded = lastVisibleGroupKeys.every((k) => expandedCells.has(k));
+        if (allExpanded) {
+          // Collapse all: clear every key that belongs to the current visible set.
+          for (const k of lastVisibleGroupKeys) expandedCells.delete(k);
+        } else {
+          // Expand all: add every visible group key.
+          for (const k of lastVisibleGroupKeys) expandedCells.add(k);
+        }
+        rerenderRecommendations();
+      });
+    }
+    // Update label to reflect current state.
+    const allExpanded = lastVisibleGroupKeys.every((k) => expandedCells.has(k));
+    expandAllBtn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
   }
-  if (!expandAllBtn) {
-    expandAllBtn = document.createElement('button');
-    expandAllBtn.type = 'button';
-    expandAllBtn.className = 'expand-all-toggle';
-    bar.appendChild(expandAllBtn);
-    expandAllBtn.addEventListener('click', () => {
-      const allExpanded = lastVisibleGroupKeys.every((k) => expandedCells.has(k));
-      if (allExpanded) {
-        // Collapse all: clear every key that belongs to the current visible set.
-        for (const k of lastVisibleGroupKeys) expandedCells.delete(k);
-      } else {
-        // Expand all: add every visible group key.
-        for (const k of lastVisibleGroupKeys) expandedCells.add(k);
-      }
+
+  // issue #319: cost-period selector. Always mount regardless of group state.
+  mountCostPeriodSelector(bar);
+}
+
+/**
+ * Mount (or re-sync) the cost-period dropdown inside the filter-status bar.
+ * The dropdown is mounted once then kept in sync with state.getCostPeriod()
+ * on subsequent calls. Changing the dropdown triggers a rerenderRecommendations
+ * and persists the choice in localStorage.
+ */
+function mountCostPeriodSelector(bar: HTMLElement): void {
+  let wrapper = bar.querySelector<HTMLElement>('.cost-period-selector-wrapper');
+  if (!wrapper) {
+    wrapper = document.createElement('span');
+    wrapper.className = 'cost-period-selector-wrapper';
+
+    const label = document.createElement('label');
+    label.className = 'cost-period-selector-label';
+    label.htmlFor = 'cost-period-select';
+    label.textContent = 'Show costs: ';
+    wrapper.appendChild(label);
+
+    const select = document.createElement('select');
+    select.id = 'cost-period-select';
+    select.className = 'cost-period-select';
+    select.setAttribute('aria-label', 'Cost display period');
+
+    const options: Array<[CostPeriod, string]> = [
+      ['hourly', 'Hourly'],
+      ['daily', 'Daily'],
+      ['monthly', 'Monthly'],
+      ['yearly', 'Yearly'],
+    ];
+    for (const [value, text] of options) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = text;
+      select.appendChild(opt);
+    }
+
+    select.addEventListener('change', () => {
+      const newPeriod = select.value as CostPeriod;
+      state.setCostPeriod(newPeriod);
       rerenderRecommendations();
     });
+
+    wrapper.appendChild(select);
+    bar.appendChild(wrapper);
   }
-  // Update label to reflect current state.
-  const allExpanded = lastVisibleGroupKeys.every((k) => expandedCells.has(k));
-  expandAllBtn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
+
+  // Sync the selected option to the current period state (handles reload from localStorage).
+  const select = wrapper.querySelector<HTMLSelectElement>('.cost-period-select');
+  if (select) {
+    select.value = state.getCostPeriod();
+  }
 }
 
 // renderBulkToolbar was the old "N selected / Add to plan / Clear" pill that
@@ -1846,6 +2041,8 @@ function formatPayment(payment: string | undefined): string {
 // Helper: render one variant row (a single LocalRecommendation) with optional
 // indentation styling for multi-variant cells.
 function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlySet<string>, isNested: boolean): string {
+  // issue #319: savings + monthly_cost display values scale with the active period.
+  const period = state.getCostPeriod();
   const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
   const isSelected = selectedRecs.has(rec.id);
   const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '\u2014';
@@ -1854,8 +2051,9 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
   const pct = effectiveSavingsPct(rec);
   const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
-  const odm = onDemandMonthly(rec);
-  const odmText = odm != null ? formatCurrency(odm) : '\u2014';
+  // The base value is monthly; render via formatCostForPeriod so the
+  // displayed value scales with the active cost-period selector (#319).
+  const odmText = formatCostForPeriod(onDemandMonthly(rec), period);
   const nestedClass = isNested ? ' rec-variant-row' : '';
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
@@ -1870,27 +2068,32 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
     <td>${rec.count}</td>
     <td>${formatTerm(rec.term)}</td>
     <td>${formatPayment(rec.payment)}</td>
-    <td class="savings">${formatCurrency(rec.savings)}</td>
+    <td class="savings">${formatCostForPeriod(rec.savings, period)}</td>
     <td>${formatCurrency(rec.upfront_cost)}</td>
-    <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
+    <td>${formatCostForPeriod(rec.monthly_cost, period)}</td>
     <td>${odmText}</td>
     <td${pctClass}>${pctText}</td>
   </tr>`;
 }
 
-// The total column count for colspan on summary rows: checkbox col + 13 data cols = 14.
-const TABLE_COL_COUNT = 14;
+// The total column count for colspan on summary rows: checkbox col + 14 data cols = 15.
+// (PR #322 added the on-demand monthly column as a 14th data column.)
+const TABLE_COL_COUNT = 15;
 
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
   const filters = state.getRecommendationsColumnFilters();
+  const period = state.getCostPeriod();
   const filterBtn = (column: state.RecommendationsColumnId): string => {
     const active = filters[column] ? ' active' : '';
-    const label = filters[column] ? `Filter ${SORT_HEADER_LABELS[column]} \u2014 currently active` : `Filter ${SORT_HEADER_LABELS[column]}`;
+    const lbl = getColumnLabel(column, period);
+    const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
     return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
   };
-  const sortHeader = (column: state.RecommendationsColumnId): string =>
-    `<th class="sortable" data-sort="${column}" tabindex="0" role="button" aria-label="Sort by ${SORT_HEADER_LABELS[column]}"><span>${SORT_HEADER_LABELS[column]}</span>${sortIndicator(column, sort.column, sort.direction)}${filterBtn(column)}</th>`;
+  const sortHeader = (column: state.RecommendationsColumnId): string => {
+    const lbl = getColumnLabel(column, period);
+    return `<th class="sortable" data-sort="${column}" tabindex="0" role="button" aria-label="Sort by ${lbl}"><span>${lbl}</span>${sortIndicator(column, sort.column, sort.direction)}${filterBtn(column)}</th>`;
+  };
 
   // issues #225 + #226: group by cell, sort groups, then render.
   const groups = groupRecsByCell(recommendations);
@@ -1925,9 +2128,13 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
 
     // Summary row savings display: selected variant value if one is selected;
     // otherwise the range across all variants.
+    // issue #319: scale savings by the active period.
+    const sfxLabel = periodSuffix(period);
+    const scaledSavingsMin = scaleCost(summary.savingsMin, period) ?? summary.savingsMin;
+    const scaledSavingsMax = scaleCost(summary.savingsMax, period) ?? summary.savingsMax;
     const savingsDisplay = selectedVariant
-      ? `${formatCurrency(selectedVariant.savings)}/mo <span class="rec-variants-count">(+${variants.length - 1} variants)</span>`
-      : `${formatSavingsRange(summary.savingsMin, summary.savingsMax)}/mo`;
+      ? `${formatCostForPeriod(selectedVariant.savings, period)}${sfxLabel} <span class="rec-variants-count">(+${variants.length - 1} variants)</span>`
+      : `${formatScaledRange(scaledSavingsMin, scaledSavingsMax, period)}${sfxLabel}`;
 
     const upfrontDisplay = selectedVariant
       ? formatCurrency(selectedVariant.upfront_cost)
@@ -2616,9 +2823,11 @@ async function openFanOutModal(
     p.appendChild(strong);
     return p;
   };
+  // issue #319: scale total savings by the active cost period.
+  const fanOutPeriod = state.getCostPeriod();
   summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
   summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
-  summary.appendChild(totalLine('Total monthly savings', formatCurrency(totals.totalSavings), 'savings'));
+  summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
   container.appendChild(summary);
 
   for (const b of buckets) {
@@ -2729,9 +2938,11 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     }),
     { count: 0, upfront: 0, savings: 0 },
   );
+  // issue #319: scale bucket savings by the active cost period.
+  const bPeriod = state.getCostPeriod();
   const totals = document.createElement('p');
   totals.className = 'fanout-bucket-totals';
-  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${formatCurrency(bucketTotal.savings)} monthly savings`;
+  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
   section.appendChild(totals);
 
   return section;
