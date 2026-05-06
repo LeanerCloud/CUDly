@@ -895,19 +895,55 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
   return result;
 }
 
-// Static labels for columns whose header is period-invariant.
-const STATIC_COLUMN_LABELS: Record<string, string> = {
-  provider: 'Provider',
-  account: 'Account',
-  service: 'Service',
-  resource_type: 'Resource Type',
-  region: 'Region',
-  count: 'Count',
-  term: 'Term',
-  payment: 'Payment',
-  upfront_cost: 'Upfront Cost',
-  effective_savings_pct: 'Effective %',
-};
+// ---------------------------------------------------------------------------
+// COLUMN_DEFS — single source of truth for the recommendations table columns.
+//
+// Order here matches the rendered column order (left to right), excluding the
+// leading checkbox column which is always visible and never sortable/filterable.
+//
+// Both the table header (<th> generation) and the data rows (<td> generation)
+// derive from this array so adding a new column only requires one edit here.
+//
+// `kind` drives the column-filter popover: 'numeric' → text input with
+// comparison operators; 'categorical' → checkbox list of distinct values.
+//
+// `label` is the canonical (monthly-period) header. The 3 period-varying
+// cost columns (`savings`, `monthly_cost`, `on_demand_monthly`) are handled
+// separately by `getColumnLabel` per-period, so their entry here is only
+// used as the data-attribute / fallback label, not the rendered <th>.
+// ---------------------------------------------------------------------------
+export interface ColumnDef {
+  key: state.RecommendationsColumnId;
+  label: string;
+  kind: 'numeric' | 'categorical';
+}
+
+export const COLUMN_DEFS: readonly ColumnDef[] = [
+  { key: 'provider',              label: 'Provider',          kind: 'categorical' },
+  { key: 'account',               label: 'Account',           kind: 'categorical' },
+  { key: 'service',               label: 'Service',           kind: 'categorical' },
+  { key: 'resource_type',         label: 'Resource Type',     kind: 'categorical' },
+  { key: 'region',                label: 'Region',            kind: 'categorical' },
+  { key: 'count',                 label: 'Count',             kind: 'numeric'     },
+  { key: 'term',                  label: 'Term',              kind: 'categorical' },
+  { key: 'payment',               label: 'Payment',           kind: 'categorical' },
+  { key: 'savings',               label: 'Monthly Savings',   kind: 'numeric'     },
+  { key: 'upfront_cost',          label: 'Upfront Cost',      kind: 'numeric'     },
+  { key: 'monthly_cost',          label: 'Monthly Cost',      kind: 'numeric'     },
+  { key: 'on_demand_monthly',     label: 'On-Demand Monthly', kind: 'numeric'     },
+  { key: 'effective_savings_pct', label: 'Effective %',       kind: 'numeric'     },
+];
+
+// Static labels for columns whose header is period-invariant. Derived from
+// COLUMN_DEFS so the source-of-truth still drives what's displayed; the
+// 3 period-varying cost columns are filtered out and handled by
+// getColumnLabel's switch instead.
+const PERIOD_VARYING_COLUMNS = new Set<string>(['savings', 'monthly_cost', 'on_demand_monthly']);
+const STATIC_COLUMN_LABELS: Record<string, string> = Object.fromEntries(
+  COLUMN_DEFS
+    .filter((c) => !PERIOD_VARYING_COLUMNS.has(c.key))
+    .map((c) => [c.key, c.label]),
+);
 
 /**
  * Return the human-readable column header for `column` given the active
@@ -1116,9 +1152,11 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
 // when the input is document.activeElement (mid-typing protection).
 // ---------------------------------------------------------------------------
 
-const NUMERIC_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set([
-  'count', 'savings', 'upfront_cost', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
-]);
+// Derived from COLUMN_DEFS — numeric columns get a text-input filter; categoricals
+// get a checkbox-list filter.  Kept as a Set for O(1) membership tests.
+const NUMERIC_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set(
+  COLUMN_DEFS.filter((c) => c.kind === 'numeric').map((c) => c.key),
+);
 
 interface PopoverState {
   column: state.RecommendationsColumnId;
@@ -2018,13 +2056,6 @@ function providerBadgeClass(provider: string): string {
   return n === 'aws' || n === 'azure' || n === 'gcp' ? n : '';
 }
 
-// Columns that get the per-column header filter button. Order matches the
-// table column order (excluding the leading checkbox column, which is
-// neither sortable nor filterable).
-const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
-  'provider', 'account', 'service', 'resource_type', 'region',
-  'count', 'term', 'payment', 'savings', 'upfront_cost', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
-];
 
 // Map raw payment_option values to display labels for the Payment column.
 const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
@@ -2039,10 +2070,67 @@ function formatPayment(payment: string | undefined): string {
   return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
 }
 
+// renderColumnCell renders a single <td> for the given column key.
+// All column cell rendering is centralised here so buildVariantRowMarkup
+// can iterate over COLUMN_DEFS (or a visibility-filtered subset in
+// Commit 2) without knowing each column's HTML shape.
+function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommendation, ctx: {
+  accountName: string;
+  badge: string;
+  pct: number | null;
+  pctClass: string;
+  pctText: string;
+  period: CostPeriod;
+}): string {
+  switch (key) {
+    case 'provider':
+      return `<td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>`;
+    case 'account':
+      return `<td>${escapeHtml(ctx.accountName)}</td>`;
+    case 'service':
+      return `<td><span class="service-badge">${escapeHtml(rec.service)}</span></td>`;
+    case 'resource_type':
+      return `<td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${ctx.badge}</td>`;
+    case 'region':
+      return `<td>${escapeHtml(rec.region)}</td>`;
+    case 'count':
+      return `<td>${rec.count}</td>`;
+    case 'term':
+      return `<td>${formatTerm(rec.term)}</td>`;
+    case 'payment':
+      return `<td>${formatPayment(rec.payment)}</td>`;
+    case 'savings':
+      // issue #319: savings display value scales with the active cost period.
+      return `<td class="savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
+    case 'upfront_cost':
+      // upfront_cost is one-time, not recurring \u2014 period-invariant.
+      return `<td>${formatCurrency(rec.upfront_cost)}</td>`;
+    case 'monthly_cost':
+      // issue #319: monthly_cost display scales with period; null still renders as em-dash.
+      return `<td>${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
+    case 'on_demand_monthly':
+      // issue #319: on-demand baseline scales with period to stay consistent
+      // with the savings + monthly_cost columns.
+      return `<td>${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
+    case 'effective_savings_pct':
+      return `<td${ctx.pctClass}>${ctx.pctText}</td>`;
+  }
+}
+
 // Helper: render one variant row (a single LocalRecommendation) with optional
 // indentation styling for multi-variant cells.
-function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlySet<string>, isNested: boolean): string {
-  // issue #319: savings + monthly_cost display values scale with the active period.
+//
+// `cols` defaults to all COLUMN_DEFS; Commit 2 (column visibility) passes a
+// visibility-filtered subset so hidden columns are absent from the DOM.
+function buildVariantRowMarkup(
+  rec: LocalRecommendation,
+  selectedRecs: ReadonlySet<string>,
+  isNested: boolean,
+  cols: readonly ColumnDef[] = COLUMN_DEFS,
+): string {
+  // issue #319: cost-bearing cells scale with the active period; resolved
+  // once per row and threaded through ctx so renderColumnCell doesn't
+  // re-read state on every cell.
   const period = state.getCostPeriod();
   const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
   const isSelected = selectedRecs.has(rec.id);
@@ -2052,34 +2140,20 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
   const pct = effectiveSavingsPct(rec);
   const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
-  // The base value is monthly; render via formatCostForPeriod so the
-  // displayed value scales with the active cost-period selector (#319).
-  const odmText = formatCostForPeriod(onDemandMonthly(rec), period);
   const nestedClass = isNested ? ' rec-variant-row' : '';
+  const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
     <td class="checkbox-col">
       <input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">
     </td>
-    <td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>
-    <td>${escapeHtml(accountName)}</td>
-    <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
-    <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${badge}</td>
-    <td>${escapeHtml(rec.region)}</td>
-    <td>${rec.count}</td>
-    <td>${formatTerm(rec.term)}</td>
-    <td>${formatPayment(rec.payment)}</td>
-    <td class="savings">${formatCostForPeriod(rec.savings, period)}</td>
-    <td>${formatCurrency(rec.upfront_cost)}</td>
-    <td>${formatCostForPeriod(rec.monthly_cost, period)}</td>
-    <td>${odmText}</td>
-    <td${pctClass}>${pctText}</td>
+    ${cols.map((c) => renderColumnCell(c.key, rec, cellCtx)).join('')}
   </tr>`;
 }
 
-// The total column count for colspan on summary rows: checkbox col + 14 data cols = 15.
-// (PR #322 added the on-demand monthly column as a 14th data column.)
-const TABLE_COL_COUNT = 15;
+// The total column count for colspan on summary rows: checkbox col + N data cols.
+// Derived from COLUMN_DEFS so it automatically stays correct when columns are added/removed.
+const TABLE_COL_COUNT = 1 + COLUMN_DEFS.length;
 
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
@@ -2178,7 +2252,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
           <th class="checkbox-col">
             <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations">
           </th>
-          ${FILTERABLE_COLUMNS.map(sortHeader).join('')}
+          ${COLUMN_DEFS.map((c) => sortHeader(c.key)).join('')}
         </tr>
       </thead>
       <tbody>
