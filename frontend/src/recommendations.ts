@@ -3135,15 +3135,25 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     if (!rec) continue;
     totalCount += rec.count;
     totalUpfront += rec.upfront_cost;
-    if (rec.monthly_cost != null) {
-      totalMonthlyCost += rec.monthly_cost;
+    const monthlyCost = rec.monthly_cost;
+    if (monthlyCost != null) {
+      totalMonthlyCost += monthlyCost;
       hasMonthlyCostData = true;
-      // Weighted-average effective % denominator: on_demand = monthly_cost + savings + amortized.
-      // Only include recs where term > 0 (effectiveSavingsPct returns null otherwise).
-      if (rec.term) {
-        const amortized = rec.upfront_cost / (rec.term * 12);
-        const effSav = rec.savings - amortized;
-        const onDemand = rec.monthly_cost + rec.savings + amortized;
+    }
+    // Weighted-average effective % denominator should match effectiveSavingsPct:
+    // prefer provider-supplied on_demand_cost when present, otherwise fall back
+    // to the reconstructed monthly_cost + savings + amortized baseline.
+    // Include rows that only have on_demand_cost so they are not skipped.
+    if (rec.term) {
+      const amortized = rec.upfront_cost / (rec.term * 12);
+      const effSav = effectiveMonthlySavings(rec);
+      const hasOnDemand = rec.on_demand_cost != null && rec.on_demand_cost > 0;
+      const onDemand = hasOnDemand
+        ? rec.on_demand_cost
+        : monthlyCost != null
+          ? monthlyCost + rec.savings + amortized
+          : null;
+      if (onDemand != null && onDemand > 0) {
         weightedEffSavingsNum += effSav;
         weightedEffSavingsDen += onDemand;
       }

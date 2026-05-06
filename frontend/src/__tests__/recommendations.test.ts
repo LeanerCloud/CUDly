@@ -1428,7 +1428,7 @@ describe('Recommendations Module', () => {
     describe('per-row skip checkboxes (issue #320)', () => {
       const makeRec = (id: string, opts: Partial<{
         savings: number; upfront_cost: number; monthly_cost: number | null;
-        count: number; term: number;
+        on_demand_cost: number | null; count: number; term: number;
       }> = {}) => ({
         id,
         provider: 'aws' as const,
@@ -1440,6 +1440,7 @@ describe('Recommendations Module', () => {
         savings: opts.savings ?? 100,
         upfront_cost: opts.upfront_cost ?? 600,
         monthly_cost: opts.monthly_cost !== undefined ? opts.monthly_cost : 400,
+        on_demand_cost: opts.on_demand_cost !== undefined ? opts.on_demand_cost : null,
       });
 
       test('all rows are checked by default on modal open', async () => {
@@ -1571,6 +1572,17 @@ describe('Recommendations Module', () => {
         const upfrontCell = document.getElementById('purchase-modal-total-upfront');
         // formatCurrency is mocked as `$${val}` so total upfront = $400.
         expect(upfrontCell?.textContent).toContain('400');
+      });
+
+      test('totals row weighted effective % uses on_demand_cost when monthly_cost is null', async () => {
+        const recs = [
+          makeRec('ta', { savings: 100, upfront_cost: 0, monthly_cost: null, on_demand_cost: 200 }),
+          makeRec('tb', { savings: 100, upfront_cost: 0, monthly_cost: 50 }),
+        ];
+        await openPurchaseModal(recs);
+
+        const pctCell = document.getElementById('purchase-modal-total-eff-pct');
+        expect(pctCell?.textContent).toContain('57.1%');
       });
 
       test('clearPurchaseModalRecommendations also clears checked state', async () => {
