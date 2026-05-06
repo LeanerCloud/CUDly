@@ -883,6 +883,67 @@ tr.recommendation-row:hover {
     color: #1a73e8;
 }
 
+/* issue #318: "Columns ▾" button in the filter-status bar */
+.recommendations-filter-status .column-visibility-btn {
+    background: transparent;
+    border: 1px solid #d0d7de;
+    border-radius: 3px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+    color: #555;
+}
+.recommendations-filter-status .column-visibility-btn:hover {
+    border-color: #1a73e8;
+    color: #1a73e8;
+}
+.recommendations-filter-status .column-visibility-btn[aria-pressed="true"] {
+    background: #e8f0fe;
+    border-color: #a9c7f5;
+    color: #1a73e8;
+}
+
+/* Sort-hidden indicator */
+.recommendations-filter-status .sort-hidden-note {
+    font-size: 0.82em;
+    color: #888;
+    font-style: italic;
+}
+
+/* Column-visibility popover */
+.column-visibility-popover {
+    position: absolute;
+    z-index: 1200;
+    background: #fff;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+    padding: 0.6rem 0.75rem;
+    min-width: 180px;
+    max-height: 360px;
+    overflow-y: auto;
+}
+.column-visibility-popover .column-visibility-title {
+    margin: 0 0 0.4rem;
+    font-size: 0.8em;
+    font-weight: 600;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.column-visibility-popover .column-visibility-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    font-size: 0.88em;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.column-visibility-popover .column-visibility-row:hover {
+    color: #1a73e8;
+}
+
 /* Page-level range banner above the table */
 .rec-range-banner {
     padding: 0.4rem 0.75rem;

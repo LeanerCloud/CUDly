@@ -1649,6 +1649,149 @@ function ensureRecommendationsTabObserver(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Column-visibility popover (issue #318)
+//
+// Separate state from the column-filter popover (openPopover / outsideClickHandler
+// etc.) to avoid conflating the two interactions.  Shares the positionPopover()
+// helper for positioning.
+// ---------------------------------------------------------------------------
+
+interface VisibilityPopoverState {
+  el: HTMLDivElement;
+  checkboxes: Map<state.RecommendationsColumnId, HTMLInputElement>;
+}
+
+let openVisibilityPopover: VisibilityPopoverState | null = null;
+let visOutsideClickHandler: ((e: MouseEvent) => void) | null = null;
+let visEscKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function closeVisibilityPopover(): void {
+  if (!openVisibilityPopover) return;
+  openVisibilityPopover.el.remove();
+  openVisibilityPopover = null;
+  if (visOutsideClickHandler) {
+    document.removeEventListener('mousedown', visOutsideClickHandler);
+    visOutsideClickHandler = null;
+  }
+  if (visEscKeyHandler) {
+    document.removeEventListener('keydown', visEscKeyHandler);
+    visEscKeyHandler = null;
+  }
+}
+
+function openVisibilityPopover_(anchor: HTMLElement): void {
+  // Close any open filter popover when visibility popover opens (only one popover
+  // at a time keeps the UI from getting cluttered).
+  closePopover();
+
+  if (openVisibilityPopover) {
+    closeVisibilityPopover();
+    return; // toggle: second click on the button closes the popover
+  }
+
+  const popover = document.createElement('div');
+  popover.className = 'column-visibility-popover';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', 'Show/hide columns');
+  popover.style.display = 'none';
+  document.body.appendChild(popover);
+
+  const title = document.createElement('p');
+  title.className = 'column-visibility-title';
+  title.textContent = 'Show/hide columns';
+  popover.appendChild(title);
+
+  const hidden = state.getHiddenColumns();
+  const checkboxes = new Map<state.RecommendationsColumnId, HTMLInputElement>();
+
+  for (const col of TOGGLEABLE_COLUMNS) {
+    const row = document.createElement('label');
+    row.className = 'column-visibility-row';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !hidden.has(col.key);
+    cb.setAttribute('aria-label', col.label);
+    checkboxes.set(col.key, cb);
+
+    cb.addEventListener('change', () => {
+      const currentHidden = new Set(state.getHiddenColumns());
+      if (cb.checked) {
+        currentHidden.delete(col.key);
+      } else {
+        currentHidden.add(col.key);
+      }
+      state.setHiddenColumns(currentHidden);
+      saveColumnVisibility(currentHidden);
+      rerenderRecommendations();
+    });
+
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(' ' + col.label));
+    popover.appendChild(row);
+  }
+
+  openVisibilityPopover = { el: popover, checkboxes };
+  positionPopover(popover, anchor);
+
+  // Keyboard: Escape closes.
+  visEscKeyHandler = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      closeVisibilityPopover();
+      anchor.focus();
+    }
+  };
+  document.addEventListener('keydown', visEscKeyHandler);
+
+  // Click-outside closes.
+  visOutsideClickHandler = (e: MouseEvent): void => {
+    const target = e.target as Node;
+    if (!popover.contains(target) && !anchor.contains(target)) {
+      closeVisibilityPopover();
+    }
+  };
+  // Defer one tick so the current click event (which opened the popover) doesn't
+  // immediately close it via the click-outside handler.
+  setTimeout(() => {
+    document.addEventListener('mousedown', visOutsideClickHandler!);
+  }, 0);
+}
+
+// mountColumnsButton mounts the "Columns ▾" button in the filter-status bar once
+// and updates its label on subsequent calls to reflect hidden-column count.
+function mountColumnsButton(bar: HTMLElement): void {
+  let btn = bar.querySelector<HTMLButtonElement>('.column-visibility-btn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'column-visibility-btn';
+    bar.appendChild(btn);
+    btn.addEventListener('click', () => {
+      openVisibilityPopover_(btn!);
+    });
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openVisibilityPopover_(btn!);
+      }
+    });
+  }
+  // Update label to reflect hidden-column count.
+  const hiddenCount = state.getHiddenColumns().size;
+  btn.textContent = hiddenCount > 0 ? `Columns ▾ (${hiddenCount} hidden)` : 'Columns ▾';
+  btn.setAttribute('aria-pressed', hiddenCount > 0 ? 'true' : 'false');
+
+  // Re-sync checkboxes if the popover is open (in case a filter popover commit
+  // changed visible state while the popover was open — rare but possible).
+  if (openVisibilityPopover) {
+    const currentHidden = state.getHiddenColumns();
+    for (const [key, cb] of openVisibilityPopover.checkboxes) {
+      cb.checked = !currentHidden.has(key);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 // Render (or update) the filter-status bar: a "Clear filters (N)" button
 // when at least one column filter is active, plus an aria-live region
@@ -1744,6 +1887,29 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
 
   // issue #319: cost-period selector. Always mount regardless of group state.
   mountCostPeriodSelector(bar);
+
+  // issue #318: "Columns ▾" button — mount-once, always visible.
+  // Shows the column-visibility popover; label updates on re-render to
+  // reflect any active hidden-column count.
+  mountColumnsButton(bar);
+
+  // Sort-hidden indicator: show a note when the active sort column is hidden
+  // so users aren't confused by inexplicable row ordering (#318).
+  let sortHiddenNote = bar.querySelector<HTMLSpanElement>('.sort-hidden-note');
+  const sortCol = state.getRecommendationsSort().column;
+  const hidden = state.getHiddenColumns();
+  if (hidden.has(sortCol)) {
+    if (!sortHiddenNote) {
+      sortHiddenNote = document.createElement('span');
+      sortHiddenNote.className = 'sort-hidden-note';
+      bar.appendChild(sortHiddenNote);
+    }
+    // Use the period-aware label so the note mirrors the active period.
+    const hiddenLabel = getColumnLabel(sortCol, state.getCostPeriod());
+    sortHiddenNote.textContent = `(sorted by hidden column: ${hiddenLabel})`;
+  } else {
+    if (sortHiddenNote) sortHiddenNote.remove();
+  }
 }
 
 /**
@@ -2151,11 +2317,12 @@ function buildVariantRowMarkup(
   </tr>`;
 }
 
-// The total column count for colspan on summary rows: checkbox col + N data cols.
-// Derived from COLUMN_DEFS so it automatically stays correct when columns are added/removed.
-const TABLE_COL_COUNT = 1 + COLUMN_DEFS.length;
 
-function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
+function buildListMarkup(
+  recommendations: LocalRecommendation[],
+  selectedRecs: ReadonlySet<string>,
+  visibleCols: readonly ColumnDef[] = COLUMN_DEFS,
+): string {
   const sort = state.getRecommendationsSort();
   const filters = state.getRecommendationsColumnFilters();
   const period = state.getCostPeriod();
@@ -2182,13 +2349,19 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
   // with the Potential Monthly Savings card after #272 / #279 brought
   // the same range to the summary header. Removed (closes #278).
 
+  // Summary row colspan: the big cell covers resource_type (always shown) + all
+  // visible toggleable columns. The 3 fixed identity cells (provider, account,
+  // service) always render separately, so this colspan = 1 + visible toggleable count.
+  const visibleToggleableCols = visibleCols.filter((c) => TOGGLEABLE_COLUMN_KEYS.has(c.key));
+  const summaryColspan = 1 + visibleToggleableCols.length;
+
   // Build tbody rows: grouped for multi-variant cells, flat for single-variant.
   const rows: string[] = [];
   for (const key of sortedKeys) {
     const variants = groups.get(key)!;
     if (variants.length === 1) {
       // Single-variant: render flat, no group header, no indent.
-      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false));
+      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false, visibleCols));
       continue;
     }
 
@@ -2231,7 +2404,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
     <td><span class="provider-badge ${providerBadgeClass(rep.provider)}">${escapeHtml(providerDisplayName(rep.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
-    <td colspan="${TABLE_COL_COUNT - 4}" class="rec-cell-summary-content">
+    <td colspan="${summaryColspan}" class="rec-cell-summary-content">
       <span class="rec-cell-identity">${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''} &mdash; ${escapeHtml(rep.region)} &mdash; ${variants.length} variants</span>
       <span class="rec-cell-range">${savingsDisplay} &middot; upfront: ${upfrontDisplay} &middot; term: ${termDisplay}</span>
     </td>
@@ -2240,7 +2413,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
     if (isExpanded) {
       const sortedVariants = sortVariantsInCell(variants);
       for (const v of sortedVariants) {
-        rows.push(buildVariantRowMarkup(v, selectedRecs, true));
+        rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols));
       }
     }
   }
@@ -2252,7 +2425,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
           <th class="checkbox-col">
             <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations">
           </th>
-          ${COLUMN_DEFS.map((c) => sortHeader(c.key)).join('')}
+          ${visibleCols.map((c) => sortHeader(c.key)).join('')}
         </tr>
       </thead>
       <tbody>
@@ -2358,6 +2531,82 @@ function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Column visibility — localStorage persistence (issue #318)
+// ---------------------------------------------------------------------------
+
+// TOGGLEABLE_COLUMNS — the subset of COLUMN_DEFS whose visibility can be toggled.
+// Provider, Account, Service, and Resource Type are "cell identity anchors" on
+// multi-variant summary rows and are always visible in v1.
+export const TOGGLEABLE_COLUMNS: readonly ColumnDef[] = COLUMN_DEFS.filter(
+  (c) => !(['provider', 'account', 'service', 'resource_type'] as string[]).includes(c.key),
+);
+
+const TOGGLEABLE_COLUMN_KEYS = new Set<state.RecommendationsColumnId>(
+  TOGGLEABLE_COLUMNS.map((c) => c.key),
+);
+
+const COLUMN_VISIBILITY_LS_KEY = 'cudly.recs.columnVisibility.v1';
+const COLUMN_VISIBILITY_SCHEMA_VERSION = 1;
+
+interface ColumnVisibilitySchema {
+  schemaVersion: number;
+  hidden: string[];
+}
+
+/** Load hidden columns from localStorage. Returns empty set on any error. Exported for tests. */
+export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
+  try {
+    const raw = localStorage.getItem(COLUMN_VISIBILITY_LS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as Partial<ColumnVisibilitySchema>;
+    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set();
+    if (!Array.isArray(parsed.hidden)) return new Set();
+    // Whitelist: only accept known toggleable column keys so stale/unknown
+    // values from future versions are silently dropped.
+    const valid = parsed.hidden.filter(
+      (k): k is state.RecommendationsColumnId => TOGGLEABLE_COLUMN_KEYS.has(k as state.RecommendationsColumnId),
+    );
+    return new Set(valid);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Persist hidden columns to localStorage. Exported for tests. */
+export function saveColumnVisibility(hidden: ReadonlySet<state.RecommendationsColumnId>): void {
+  try {
+    const payload: ColumnVisibilitySchema = {
+      schemaVersion: COLUMN_VISIBILITY_SCHEMA_VERSION,
+      hidden: Array.from(hidden),
+    };
+    localStorage.setItem(COLUMN_VISIBILITY_LS_KEY, JSON.stringify(payload));
+  } catch {
+    // Private-browsing / quota-exceeded — non-fatal.
+  }
+}
+
+// Seed flag: set to true once column visibility is loaded from localStorage
+// on first render so subsequent renders don't overwrite in-session toggles.
+let columnVisibilitySeeded = false;
+
+/**
+ * Reset column-visibility seeded state. Exported for tests only — not part of
+ * the public API. Call in beforeEach to ensure tests don't share seeding state.
+ */
+export function resetColumnVisibilityState(): void {
+  columnVisibilitySeeded = false;
+  state.setHiddenColumns(new Set());
+}
+
+/** Returns the subset of COLUMN_DEFS that are currently visible. */
+function visibleColumns(): readonly ColumnDef[] {
+  const hidden = state.getHiddenColumns();
+  if (hidden.size === 0) return COLUMN_DEFS;
+  return COLUMN_DEFS.filter((c) => !hidden.has(c.key));
+}
+
+// ---------------------------------------------------------------------------
 // Mount-once-then-update lifecycle for the sticky bottom action box.
 // mountBottomActionBox builds the DOM (input/select/button identities) and
 // wires listeners exactly once. updateBottomActionBox refreshes only the
@@ -3027,6 +3276,14 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   const container = document.getElementById('recommendations-list');
   if (!container) return;
 
+  // Seed column visibility from localStorage on the first render.
+  // columnVisibilitySeeded stays true for the rest of the session so
+  // in-session toggles (via the "Columns ▾" popover) are not overwritten.
+  if (!columnVisibilitySeeded) {
+    state.setHiddenColumns(loadColumnVisibility());
+    columnVisibilitySeeded = true;
+  }
+
   // Pipeline:
   //   loaded -> applyColumnFilters -> visible
   //   state.setVisibleRecommendations(visible)   (read by plans.ts:savePlan)
@@ -3059,12 +3316,16 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
     return;
   }
 
+  // Compute the visible column set once per render — passed to buildListMarkup
+  // so header and row rendering use the same snapshot of column visibility state.
+  const visibleCols = visibleColumns();
+
   const selectedIDs = state.getSelectedRecommendationIDs();
   // Dynamic table markup: every caller-provided value passes through
   // escapeHtml or is a number. The string is built in buildListMarkup.
   // NOTE: buildListMarkup also populates lastVisibleGroupKeys, so it MUST
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
-  container.innerHTML = buildListMarkup(recommendations, selectedIDs);
+  container.innerHTML = buildListMarkup(recommendations, selectedIDs, visibleCols);
 
   // Filter status: Clear-filters badge + aria-live count + Expand-All toggle.
   // Rendered AFTER buildListMarkup so lastVisibleGroupKeys is populated.
