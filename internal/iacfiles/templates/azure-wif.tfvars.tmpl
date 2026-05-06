@@ -17,3 +17,16 @@ cudly_issuer_url = "{{.CUDlyAPIURL}}/oidc"
 cudly_api_url = "{{.CUDlyAPIURL}}"
 contact_email = "{{.ContactEmail}}"
 account_name  = "{{.AccountName}}"
+{{- if .IncludeArchera}}
+
+# --- Archera Insurance integration (PROVISIONAL — confirm scope before enabling) ---
+# See iac/federation/azure-target/terraform/archera.tf for resource details.
+enable_archera = true
+
+# Object ID of the service principal Archera provides during onboarding
+# (NOT the Application/Client ID — use the Object ID from Azure Portal).
+archera_azure_sp_object_id = "REPLACE_WITH_ARCHERA_AZURE_SP_OBJECT_ID"
+
+# Uncomment only after confirming Archera's approval workflow allows purchase actions.
+# enable_archera_purchase_actions = true
+{{- end}}

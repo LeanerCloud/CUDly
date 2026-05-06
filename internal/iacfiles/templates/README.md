@@ -32,7 +32,26 @@ TenantID            — Azure tenant ID (azure target or azure source)
 ProjectID           — GCP project ID (gcp target only)
 ServiceAccountEmail — GCP service account email (gcp target only)
 OIDCIssuerURI       — OIDC issuer URI for GCP WIF (gcp target + azure source)
+IncludeArchera      — bool; true when the operator ticks "Provision Archera Insurance
+                      permissions?" in the UI (or passes --include-archera from the CLI).
+                      Default false — bundle output is byte-identical to pre-Archera
+                      output when this field is false.
 ```
+
+### Archera opt-in (`IncludeArchera`)
+
+When `IncludeArchera` is `true`, each tfvars template appends an
+`enable_archera = true` block with cloud-specific Archera input variables
+(e.g. `archera_aws_account_id` / `archera_azure_sp_object_id` /
+`archera_gcp_service_account`).  The Bicep params template adds
+`enableArchera`, `archeraAzureSpObjectId`, and `enableArcheraPurchaseActions`
+parameters.  The CFN params JSON (produced by `buildCFParamsJSON` in the handler)
+adds `EnableArchera`, `ArcheraAwsAccountId`, `ArcheraExternalId`, and
+`EnableArcheraPurchaseActions`.
+
+The permission list rendered into the bundle is derived from PR #310
+(`terraform/environments/{aws,azure,gcp}/archera.tf`) and must stay in
+parity with it.  `scripts/check-archera-parity.sh` enforces this in CI.
 
 ## How output is generated
 

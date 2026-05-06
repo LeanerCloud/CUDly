@@ -20,3 +20,16 @@ source_service_account = "<SOURCE_SERVICE_ACCOUNT_EMAIL>"
 cudly_api_url = "{{.CUDlyAPIURL}}"
 contact_email = "{{.ContactEmail}}"
 account_name  = "{{.AccountName}}"
+{{- if .IncludeArchera}}
+
+# --- Archera Insurance integration (PROVISIONAL — confirm scope before enabling) ---
+# See iac/federation/gcp-sa-impersonation/terraform/archera.tf for resource details.
+enable_archera = true
+
+# Full service account email of the SA Archera provides during onboarding,
+# e.g. "archera-integration@archera-prod.iam.gserviceaccount.com".
+archera_gcp_service_account = "REPLACE_WITH_ARCHERA_GCP_SA_EMAIL"
+
+# Uncomment only after confirming Archera's approval workflow allows purchase actions.
+# enable_archera_purchase_actions = true
+{{- end}}

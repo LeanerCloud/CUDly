@@ -59,6 +59,11 @@
 //	go run scripts/generate-federation-iac.go \
 //	  --target aws --source gcp \
 //	  --account-name "prod" --account-id "123456789012" --output -
+//
+//	# Include Archera Insurance permission resources in the bundle
+//	go run scripts/generate-federation-iac.go \
+//	  --target aws --source gcp --format bundle --include-archera \
+//	  --account-name "prod-aws" --account-id "123456789012"
 
 package main
 
@@ -91,6 +96,9 @@ type iacData struct {
 	ProjectID           string
 	ServiceAccountEmail string
 	OIDCIssuerURI       string
+	// IncludeArchera controls whether Archera Insurance permission resources are
+	// included in the rendered output. Mirrors handler_federation.go:federationIaCData.
+	IncludeArchera bool
 }
 
 var slugRE = regexp.MustCompile(`[^a-z0-9]+`)
@@ -317,6 +325,7 @@ func main() {
 	outFile := flag.String("output", "", "Output file path; use '-' to print to stdout (default: derived filename in current directory)")
 	templDir := flag.String("templates-dir", "internal/iacfiles/templates", "Path to templates directory (run from repo root)")
 	modulesDir := flag.String("modules-dir", "iac/federation", "Path to Terraform modules directory (used by --format bundle)")
+	includeArchera := flag.Bool("include-archera", false, "Include Archera Insurance permission resources in the rendered output (default: false)")
 	flag.Parse()
 
 	if *target == "" || *source == "" || *accountName == "" || *accountID == "" {
@@ -333,7 +342,7 @@ func main() {
 		slug = slugify(*accountID)
 	}
 
-	data := iacData{AccountName: *accountName, AccountExternalID: *accountID, AccountSlug: slug, Source: *source}
+	data := iacData{AccountName: *accountName, AccountExternalID: *accountID, AccountSlug: slug, Source: *source, IncludeArchera: *includeArchera}
 	if !populateData(&data, *target, *source, *tenantID, *projectID, *saEmail) {
 		fmt.Fprintf(os.Stderr, "Error: --target must be aws, azure, or gcp (got %q)\n", *target)
 		os.Exit(1)

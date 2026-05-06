@@ -4,6 +4,15 @@
   "parameters": {
     "servicePrincipalObjectId": {
       "value": "<FROM_CLI_OUTPUT>"
-    }
+    }{{if .IncludeArchera}},
+    "enableArchera": {
+      "value": true
+    },
+    "archeraAzureSpObjectId": {
+      "value": "REPLACE_WITH_ARCHERA_AZURE_SP_OBJECT_ID"
+    },
+    "enableArcheraPurchaseActions": {
+      "value": false
+    }{{end}}
   }
 }

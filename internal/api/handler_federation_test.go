@@ -1123,6 +1123,171 @@ func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Archera opt-in flag tests (issue #314)
+// ---------------------------------------------------------------------------
+
+// TestGetFederationIaC_IncludeArchera_False_ByteIdentical verifies that
+// include_archera=false (or absent) produces output byte-identical to the
+// pre-Archera baseline — existing users are not affected.
+func TestGetFederationIaC_IncludeArchera_False_ByteIdentical(t *testing.T) {
+	cases := []struct {
+		name           string
+		target, source string
+		format         string
+		envCloud       string
+	}{
+		{"aws-wif-bundle", "aws", "gcp", "bundle", "gcp"},
+		{"azure-bundle", "azure", "aws", "bundle", "gcp"},
+		{"gcp-wif-bundle", "gcp", "aws", "bundle", "gcp"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CUDLY_SOURCE_CLOUD", tc.envCloud)
+			h := federationHandler()
+
+			resWithout, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+				"target": tc.target, "source": tc.source, "format": tc.format,
+			}))
+			require.NoError(t, err)
+
+			resFalse, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+				"target": tc.target, "source": tc.source, "format": tc.format, "include_archera": "false",
+			}))
+			require.NoError(t, err)
+
+			// Filenames and content must be identical regardless of explicit false vs. absent.
+			assert.Equal(t, resWithout.Filename, resFalse.Filename,
+				"filenames must be identical when include_archera is absent vs false")
+			assert.Equal(t, resWithout.Content, resFalse.Content,
+				"content must be identical when include_archera is absent vs false")
+		})
+	}
+}
+
+// TestGetFederationIaC_IncludeArchera_True_ContainsArcheraVars verifies that
+// include_archera=true causes Archera variables to appear in the rendered
+// tfvars output for each federation bundle format.
+func TestGetFederationIaC_IncludeArchera_True_ContainsArcheraVars(t *testing.T) {
+	cases := []struct {
+		name           string
+		target, source string
+		wantInTfvars   string
+		envCloud       string
+	}{
+		{"aws-wif", "aws", "gcp", "enable_archera = true", "gcp"},
+		{"aws-wif-archera-account", "aws", "gcp", "archera_aws_account_id", "gcp"},
+		{"azure-wif", "azure", "aws", "enable_archera = true", "gcp"},
+		{"azure-wif-sp", "azure", "aws", "archera_azure_sp_object_id", "gcp"},
+		{"gcp-wif", "gcp", "aws", "enable_archera = true", "gcp"},
+		{"gcp-wif-sa", "gcp", "aws", "archera_gcp_service_account", "gcp"},
+		{"gcp-sa-impersonation", "gcp", "gcp", "enable_archera = true", "gcp"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CUDLY_SOURCE_CLOUD", tc.envCloud)
+			h := federationHandler()
+
+			res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+				"target": tc.target, "source": tc.source, "format": "bundle", "include_archera": "true",
+			}))
+			require.NoError(t, err)
+
+			zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+			require.NoError(t, err)
+			zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+			require.NoError(t, err)
+
+			var tfvarsContent string
+			for _, f := range zr.File {
+				if strings.HasSuffix(f.Name, ".auto.tfvars") {
+					rc, err := f.Open()
+					require.NoError(t, err)
+					var buf bytes.Buffer
+					_, _ = buf.ReadFrom(rc)
+					rc.Close()
+					tfvarsContent = buf.String()
+					break
+				}
+			}
+			require.NotEmpty(t, tfvarsContent, "bundle must contain a .auto.tfvars file")
+			assert.Contains(t, tfvarsContent, tc.wantInTfvars,
+				"tfvars must contain Archera vars when include_archera=true")
+		})
+	}
+}
+
+// TestGetFederationIaC_IncludeArchera_True_CFNParams verifies that the CFN
+// params JSON includes Archera parameters when include_archera=true.
+func TestGetFederationIaC_IncludeArchera_True_CFNParams(t *testing.T) {
+	h := federationHandler()
+
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "aws", "source": "gcp", "format": "cfn", "include_archera": "true",
+	}))
+	require.NoError(t, err)
+
+	zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+	require.NoError(t, err)
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	require.NoError(t, err)
+
+	var paramsContent []byte
+	for _, f := range zr.File {
+		if strings.HasSuffix(f.Name, "-cf-params.json") {
+			rc, err := f.Open()
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			_, _ = buf.ReadFrom(rc)
+			rc.Close()
+			paramsContent = buf.Bytes()
+			break
+		}
+	}
+	require.NotNil(t, paramsContent, "cfn zip must contain a cf-params.json")
+	var params []map[string]string
+	require.NoError(t, json.Unmarshal(paramsContent, &params), "CF params must be valid JSON")
+
+	keys := make(map[string]bool)
+	for _, p := range params {
+		keys[p["ParameterKey"]] = true
+	}
+	assert.True(t, keys["EnableArchera"], "EnableArchera must be in CFN params when include_archera=true")
+	assert.True(t, keys["ArcheraAwsAccountId"], "ArcheraAwsAccountId must be in CFN params when include_archera=true")
+	assert.True(t, keys["ArcheraExternalId"], "ArcheraExternalId must be in CFN params when include_archera=true")
+}
+
+// TestGetFederationIaC_IncludeArchera_True_BicepParams verifies that the
+// Bicep params JSON includes Archera parameters when include_archera=true.
+func TestGetFederationIaC_IncludeArchera_True_BicepParams(t *testing.T) {
+	h := federationHandler()
+
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "azure", "source": "aws", "format": "bicep", "include_archera": "true",
+	}))
+	require.NoError(t, err)
+
+	files := unzipResponse(t, res)
+	require.Contains(t, files, "azure-wif-bicep-params.json")
+
+	var params map[string]any
+	require.NoError(t, json.Unmarshal(files["azure-wif-bicep-params.json"], &params),
+		"Bicep params must be valid JSON")
+	parameters, ok := params["parameters"].(map[string]any)
+	require.True(t, ok, "Bicep params must have a 'parameters' object")
+	assert.Contains(t, parameters, "enableArchera",
+		"enableArchera must be in Bicep params when include_archera=true")
+	assert.Contains(t, parameters, "archeraAzureSpObjectId",
+		"archeraAzureSpObjectId must be in Bicep params when include_archera=true")
+}
+
+// ---------------------------------------------------------------------------
+// TestValidateFederationTargetSource unit-tests the guard directly, covering
+// all self-source rejection and allow cases (issues #42 and #140).
+// ---------------------------------------------------------------------------
+
 // TestValidateFederationTargetSource unit-tests the guard directly, covering
 // all self-source rejection and allow cases (issues #42 and #140).
 func TestValidateFederationTargetSource(t *testing.T) {

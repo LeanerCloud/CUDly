@@ -41,6 +41,10 @@ type federationIaCData struct {
 	// ContactEmail is the email of the authenticated user who downloaded the bundle.
 	// Pre-filled from Session.Email — no manual entry required.
 	ContactEmail string
+	// IncludeArchera controls whether Archera Insurance permission resources are
+	// included in the rendered bundle. Default false — the download is byte-identical
+	// to the pre-Archera output when this flag is not set.
+	IncludeArchera bool
 }
 
 // FederationIaCResponse is returned by the /api/federation/iac endpoint.
@@ -155,6 +159,9 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	// for normal traffic. No env-var override, no admin-curated fallback: the
 	// person who downloads the bundle IS the contact.
 	data.ContactEmail = session.Email
+	// include_archera is an opt-in flag: default false so existing downloads are
+	// byte-identical for users who don't tick the checkbox.
+	data.IncludeArchera = req.QueryStringParameters["include_archera"] == "true"
 
 	if formatNeedsZip(format) {
 		return h.buildZipResponse(data, target, source, format, "target")
@@ -754,6 +761,7 @@ type cfParam struct {
 //
 // Dispatches on source: "aws" → cross-account params (SourceAccountID, ExternalID);
 // anything else → AWS WIF params (OIDC values).
+// When data.IncludeArchera is true, the Archera opt-in parameters are appended.
 func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 	var params []cfParam
 	if source == "aws" {
@@ -771,6 +779,16 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 			{ParameterKey: "OIDCAudience", ParameterValue: data.OIDCAudience},
 			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
 		}
+	}
+	if data.IncludeArchera {
+		// Archera opt-in parameters — PROVISIONAL (see iac/federation/aws-target/terraform/archera.tf).
+		// Values must be supplied by the operator during stack deployment.
+		params = append(params,
+			cfParam{ParameterKey: "EnableArchera", ParameterValue: "true"},
+			cfParam{ParameterKey: "ArcheraAwsAccountId", ParameterValue: "REPLACE_WITH_ARCHERA_AWS_ACCOUNT_ID"},
+			cfParam{ParameterKey: "ArcheraExternalId", ParameterValue: "REPLACE_WITH_ARCHERA_EXTERNAL_ID"},
+			cfParam{ParameterKey: "EnableArcheraPurchaseActions", ParameterValue: "false"},
+		)
 	}
 	out, err := json.MarshalIndent(params, "", "  ")
 	if err != nil {

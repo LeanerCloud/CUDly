@@ -18,3 +18,18 @@ role_name       = "CUDly-{{.AccountSlug}}"
 cudly_api_url = "{{.CUDlyAPIURL}}"
 contact_email = "{{.ContactEmail}}"
 account_name  = "{{.AccountName}}"
+{{- if .IncludeArchera}}
+
+# --- Archera Insurance integration (PROVISIONAL — confirm scope before enabling) ---
+# See iac/federation/aws-target/terraform/archera.tf for resource details.
+enable_archera = true
+
+# Archera's AWS account ID — obtain from your Archera onboarding documentation.
+archera_aws_account_id = "REPLACE_WITH_ARCHERA_AWS_ACCOUNT_ID"
+
+# External ID for confused-deputy protection — obtain from Archera during onboarding.
+archera_external_id = "REPLACE_WITH_ARCHERA_EXTERNAL_ID"
+
+# Uncomment only after confirming Archera's approval workflow allows purchase actions.
+# enable_archera_purchase_actions = true
+{{- end}}
