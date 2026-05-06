@@ -4519,6 +4519,7 @@ describe('Issue #319: cost-period dropdown is rendered in the filter-status bar'
     expect(select).not.toBeNull();
     select!.value = 'hourly';
     select!.dispatchEvent(new Event('change'));
+    await Promise.resolve();
     expect(state.setCostPeriod).toHaveBeenCalledWith('hourly');
     // The rerender should have rebuilt the savings column header to reflect
     // the new hourly period — pin the DOM update so a future regression that
