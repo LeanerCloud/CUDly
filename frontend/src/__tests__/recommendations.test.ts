@@ -1,7 +1,8 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix } from '../recommendations';
+import type { CostPeriod } from '../state';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -75,6 +76,10 @@ jest.mock('../state', () => ({
   clearAllRecommendationsColumnFilters: jest.fn(),
   getVisibleRecommendations: jest.fn().mockReturnValue([]),
   setVisibleRecommendations: jest.fn(),
+  // issue #319: cost-period selector. Default to 'monthly' so pre-#319 tests
+  // see unchanged behaviour (monthly is the identity factor).
+  getCostPeriod: jest.fn().mockReturnValue('monthly'),
+  setCostPeriod: jest.fn(),
 }));
 
 // Mock utils
@@ -4051,5 +4056,474 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       const variantRows = document.querySelectorAll('.rec-variant-row');
       expect(variantRows.length).toBe(2);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #319: cost-period selector tests
+// ---------------------------------------------------------------------------
+
+const DOM_FOR_319 = (
+  '<div id="recommendations-tab" class="tab-content active">'
+  + '<div id="recommendations-summary"></div>'
+  + '<div id="recommendations-list"></div>'
+  + '</div>'
+  + '<div id="purchase-modal" class="hidden">'
+  + '<div id="purchase-details"></div>'
+  + '<div class="modal-buttons">'
+  + '<button type="button" id="close-purchase-modal-btn">Cancel</button>'
+  + '<button type="button" id="execute-purchase-btn" class="primary">Send for Approval</button>'
+  + '</div></div>'
+);
+
+describe('Issue #319: scaleCost', () => {
+  test('monthly factor is 1 (identity)', () => {
+    expect(scaleCost(100, 'monthly')).toBe(100);
+  });
+
+  test('hourly factor is 1/720', () => {
+    expect(scaleCost(720, 'hourly')).toBeCloseTo(1.0);
+  });
+
+  test('daily factor is 1/30', () => {
+    expect(scaleCost(300, 'daily')).toBeCloseTo(10.0);
+  });
+
+  test('yearly factor is 12', () => {
+    expect(scaleCost(100, 'yearly')).toBeCloseTo(1200);
+  });
+
+  test('null input returns null', () => {
+    const periods: CostPeriod[] = ['hourly', 'daily', 'monthly', 'yearly'];
+    for (const p of periods) {
+      expect(scaleCost(null, p)).toBeNull();
+    }
+  });
+
+  test('undefined input returns null', () => {
+    const periods: CostPeriod[] = ['hourly', 'daily', 'monthly', 'yearly'];
+    for (const p of periods) {
+      expect(scaleCost(undefined, p)).toBeNull();
+    }
+  });
+
+  test('zero input returns 0 (not null)', () => {
+    expect(scaleCost(0, 'hourly')).toBe(0);
+  });
+});
+
+describe('Issue #319: formatCostForPeriod', () => {
+  test('monthly uses formatCurrency mock ($X)', () => {
+    // formatCurrency mock returns `$${val}` so for 100 → "$100"
+    expect(formatCostForPeriod(100, 'monthly')).toBe('$100');
+  });
+
+  test('hourly uses 4 decimal places', () => {
+    expect(formatCostForPeriod(720, 'hourly')).toMatch(/\$1\.0000/);
+  });
+
+  test('daily uses 2 decimal places', () => {
+    expect(formatCostForPeriod(300, 'daily')).toMatch(/\$10\.00/);
+  });
+
+  test('yearly uses 0 decimal places', () => {
+    expect(formatCostForPeriod(100, 'yearly')).toMatch(/\$1200$/);
+  });
+
+  test('null input returns em-dash for all periods', () => {
+    const periods: CostPeriod[] = ['hourly', 'daily', 'monthly', 'yearly'];
+    for (const p of periods) {
+      expect(formatCostForPeriod(null, p)).toBe('—');
+    }
+  });
+
+  test('undefined input returns em-dash for all periods', () => {
+    const periods: CostPeriod[] = ['hourly', 'daily', 'monthly', 'yearly'];
+    for (const p of periods) {
+      expect(formatCostForPeriod(undefined, p)).toBe('—');
+    }
+  });
+
+  test('zero input renders as $0 (not em-dash)', () => {
+    // hourly: $0.0000, daily: $0.00, monthly: $0, yearly: $0
+    expect(formatCostForPeriod(0, 'hourly')).toMatch(/\$0\.0000/);
+    expect(formatCostForPeriod(0, 'daily')).toMatch(/\$0\.00/);
+    expect(formatCostForPeriod(0, 'yearly')).toMatch(/\$0$/);
+  });
+});
+
+describe('Issue #319: periodSuffix', () => {
+  test('returns correct suffix for each period', () => {
+    expect(periodSuffix('hourly')).toBe('/ hr');
+    expect(periodSuffix('daily')).toBe('/ day');
+    expect(periodSuffix('monthly')).toBe('/ mo');
+    expect(periodSuffix('yearly')).toBe('/ yr');
+  });
+});
+
+describe('Issue #319: column header labels update with period', () => {
+  const mockRec = {
+    id: 'r1',
+    provider: 'aws' as const,
+    service: 'ec2',
+    resource_type: 'c5.large',
+    region: 'us-east-1',
+    count: 2,
+    term: 1,
+    payment: 'no-upfront',
+    savings: 500,
+    upfront_cost: 0,
+    monthly_cost: 300,
+    cloud_account_id: undefined,
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = DOM_FOR_319;
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [mockRec],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+  });
+
+  test('monthly period: headers show "Monthly Savings" and "Monthly Cost"', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    await loadRecommendations();
+    const headers = document.querySelectorAll('th.sortable span');
+    const labels = Array.from(headers).map((h) => h.textContent);
+    expect(labels).toContain('Monthly Savings');
+    expect(labels).toContain('Monthly Cost');
+  });
+
+  test('hourly period: headers show "Savings / hr" and "Cost / hr"', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
+    await loadRecommendations();
+    const headers = document.querySelectorAll('th.sortable span');
+    const labels = Array.from(headers).map((h) => h.textContent);
+    expect(labels).toContain('Savings / hr');
+    expect(labels).toContain('Cost / hr');
+  });
+
+  test('daily period: headers show "Savings / day" and "Cost / day"', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('daily');
+    await loadRecommendations();
+    const headers = document.querySelectorAll('th.sortable span');
+    const labels = Array.from(headers).map((h) => h.textContent);
+    expect(labels).toContain('Savings / day');
+    expect(labels).toContain('Cost / day');
+  });
+
+  test('yearly period: headers show "Savings / yr" and "Cost / yr"', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('yearly');
+    await loadRecommendations();
+    const headers = document.querySelectorAll('th.sortable span');
+    const labels = Array.from(headers).map((h) => h.textContent);
+    expect(labels).toContain('Savings / yr');
+    expect(labels).toContain('Cost / yr');
+  });
+
+  test('non-cost headers are period-invariant', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
+    await loadRecommendations();
+    const headers = document.querySelectorAll('th.sortable span');
+    const labels = Array.from(headers).map((h) => h.textContent);
+    expect(labels).toContain('Provider');
+    expect(labels).toContain('Term');
+    expect(labels).toContain('Upfront Cost');
+    expect(labels).toContain('Effective %');
+  });
+});
+
+describe('Issue #319: table cells scale with period', () => {
+  const mockRec = {
+    id: 'r1',
+    provider: 'aws' as const,
+    service: 'ec2',
+    resource_type: 'c5.large',
+    region: 'us-east-1',
+    count: 2,
+    term: 1,
+    payment: 'no-upfront',
+    savings: 720,
+    upfront_cost: 0,
+    monthly_cost: 720,
+    cloud_account_id: undefined,
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = DOM_FOR_319;
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [mockRec],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+  });
+
+  test('hourly: savings cell shows $1.0000', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
+    await loadRecommendations();
+    const rows = document.querySelectorAll('tr.recommendation-row');
+    expect(rows.length).toBeGreaterThan(0);
+    const savingsCell = rows[0]!.querySelector('.savings');
+    expect(savingsCell?.textContent).toMatch(/\$1\.0000/);
+  });
+
+  test('daily: savings cell shows $24.00', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('daily');
+    await loadRecommendations();
+    const rows = document.querySelectorAll('tr.recommendation-row');
+    const savingsCell = rows[0]!.querySelector('.savings');
+    expect(savingsCell?.textContent).toMatch(/\$24\.00/);
+  });
+
+  test('monthly: savings cell shows existing formatCurrency output', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    await loadRecommendations();
+    const rows = document.querySelectorAll('tr.recommendation-row');
+    const savingsCell = rows[0]!.querySelector('.savings');
+    // formatCurrency mock returns `$${val}` so for 720 it returns "$720"
+    expect(savingsCell?.textContent).toContain('720');
+  });
+
+  test('yearly: savings cell shows $8640', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('yearly');
+    await loadRecommendations();
+    const rows = document.querySelectorAll('tr.recommendation-row');
+    const savingsCell = rows[0]!.querySelector('.savings');
+    expect(savingsCell?.textContent).toMatch(/\$8640/);
+  });
+
+  test('upfront_cost is NOT scaled (period-invariant)', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
+    const recWithUpfront = { ...mockRec, upfront_cost: 1000 };
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [recWithUpfront],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([recWithUpfront]);
+    await loadRecommendations();
+    const rows = document.querySelectorAll('tr.recommendation-row');
+    // We just verify "1000" appears somewhere but "0.0014" (1000/720) does not
+    const rowText = rows[0]!.textContent ?? '';
+    expect(rowText).toContain('1000');
+    expect(rowText).not.toMatch(/0\.0014/);
+  });
+
+  test('null monthly_cost renders "—" regardless of period', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('yearly');
+    const recNullCost = { ...mockRec, monthly_cost: null };
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [recNullCost],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([recNullCost]);
+    await loadRecommendations();
+    const rows = document.querySelectorAll('tr.recommendation-row');
+    const rowHtml = rows[0]!.innerHTML;
+    expect(rowHtml).toContain('—');
+  });
+});
+
+describe('Issue #319: summary card label updates with period', () => {
+  const mockRec = {
+    id: 'r1',
+    provider: 'aws' as const,
+    service: 'ec2',
+    resource_type: 'c5.large',
+    region: 'us-east-1',
+    count: 1,
+    term: 1,
+    payment: 'no-upfront',
+    savings: 500,
+    upfront_cost: 0,
+    monthly_cost: 300,
+    cloud_account_id: undefined,
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = DOM_FOR_319;
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [mockRec],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+  });
+
+  test('monthly period: card says "Potential Monthly Savings"', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    await loadRecommendations();
+    const summary = document.getElementById('recommendations-summary');
+    expect(summary?.textContent).toContain('Potential Monthly Savings');
+  });
+
+  test('hourly period: card says "Potential Savings / hr"', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
+    await loadRecommendations();
+    const summary = document.getElementById('recommendations-summary');
+    expect(summary?.textContent).toContain('Potential Savings / hr');
+  });
+
+  test('yearly period: card says "Potential Savings / yr"', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('yearly');
+    await loadRecommendations();
+    const summary = document.getElementById('recommendations-summary');
+    expect(summary?.textContent).toContain('Potential Savings / yr');
+  });
+
+  test('Upfront Cost card is not affected by period', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
+    await loadRecommendations();
+    const summary = document.getElementById('recommendations-summary');
+    expect(summary?.textContent).toContain('Total Upfront Cost');
+  });
+});
+
+describe('Issue #319: cost-period dropdown is rendered in the filter-status bar', () => {
+  const mockRec = {
+    id: 'r1',
+    provider: 'aws' as const,
+    service: 'ec2',
+    resource_type: 'c5.large',
+    region: 'us-east-1',
+    count: 1,
+    term: 1,
+    payment: 'no-upfront',
+    savings: 500,
+    upfront_cost: 0,
+    monthly_cost: 300,
+    cloud_account_id: undefined,
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = DOM_FOR_319;
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [mockRec],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([mockRec]);
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+  });
+
+  test('cost-period dropdown is rendered after loadRecommendations', async () => {
+    await loadRecommendations();
+    const select = document.querySelector<HTMLSelectElement>('#cost-period-select');
+    expect(select).not.toBeNull();
+  });
+
+  test('dropdown has 4 options: Hourly, Daily, Monthly, Yearly', async () => {
+    await loadRecommendations();
+    const select = document.querySelector<HTMLSelectElement>('#cost-period-select');
+    const options = Array.from(select?.options ?? []).map((o) => o.textContent);
+    expect(options).toContain('Hourly');
+    expect(options).toContain('Daily');
+    expect(options).toContain('Monthly');
+    expect(options).toContain('Yearly');
+  });
+
+  test('dropdown selected value reflects getCostPeriod() result', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('yearly');
+    await loadRecommendations();
+    const select = document.querySelector<HTMLSelectElement>('#cost-period-select');
+    expect(select?.value).toBe('yearly');
+  });
+
+  test('changing the dropdown calls setCostPeriod and triggers rerender', async () => {
+    await loadRecommendations();
+    const select = document.querySelector<HTMLSelectElement>('#cost-period-select');
+    expect(select).not.toBeNull();
+    select!.value = 'hourly';
+    select!.dispatchEvent(new Event('change'));
+    expect(state.setCostPeriod).toHaveBeenCalledWith('hourly');
+  });
+
+  test('dropdown label text is accessible', async () => {
+    await loadRecommendations();
+    const label = document.querySelector('.cost-period-selector-label');
+    expect(label?.textContent).toContain('Show costs');
+  });
+});
+
+describe('Issue #319: localStorage persistence (state.ts getCostPeriod / setCostPeriod)', () => {
+  // These tests exercise the actual state module (not the mock).
+  // We import directly from the source rather than the mocked version.
+  // The global setup.ts replaces window.localStorage with a noop mock
+  // (getItem→null, setItem→undefined), so we install a Map-backed shim
+  // here to actually test persistence semantics, then reset it.
+  let getCostPeriodFn: () => string;
+  let setCostPeriodFn: (period: string) => void;
+
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    (localStorage.getItem as jest.Mock).mockImplementation(
+      (key: string) => (store.has(key) ? store.get(key)! : null)
+    );
+    (localStorage.setItem as jest.Mock).mockImplementation(
+      (key: string, value: string) => { store.set(key, value); }
+    );
+    (localStorage.removeItem as jest.Mock).mockImplementation(
+      (key: string) => { store.delete(key); }
+    );
+    (localStorage.clear as jest.Mock).mockImplementation(() => { store.clear(); });
+
+    // Use requireActual to bypass the jest.mock('../state') and get the real
+    // module. This lets us test the actual localStorage persistence logic.
+    const stateModule = jest.requireActual('../state') as typeof import('../state');
+    getCostPeriodFn = stateModule.getCostPeriod as () => string;
+    setCostPeriodFn = stateModule.setCostPeriod as (period: string) => void;
+    // Reset in-memory costPeriodMemory to the module default before each
+    // test, otherwise it survives the localStorage clear and the
+    // "invalid value falls back to default" test sees stale 'hourly' from
+    // the prior "setCostPeriod persists" test.
+    setCostPeriodFn('monthly');
+    store.clear();
+  });
+
+  afterEach(() => {
+    (localStorage.getItem as jest.Mock).mockReset().mockImplementation(() => null);
+    (localStorage.setItem as jest.Mock).mockReset().mockImplementation(() => undefined);
+    (localStorage.removeItem as jest.Mock).mockReset().mockImplementation(() => undefined);
+    (localStorage.clear as jest.Mock).mockReset().mockImplementation(() => undefined);
+  });
+
+  test('default period is monthly when localStorage is empty', () => {
+    expect(getCostPeriodFn()).toBe('monthly');
+  });
+
+  test('setCostPeriod persists to localStorage', () => {
+    setCostPeriodFn('hourly');
+    expect(localStorage.getItem('cudly.recs.costPeriod')).toBe('hourly');
+  });
+
+  test('getCostPeriod reads back the persisted value', () => {
+    localStorage.setItem('cudly.recs.costPeriod', 'hourly');
+    expect(getCostPeriodFn()).toBe('hourly');
+  });
+
+  test('invalid value in localStorage falls back to in-memory default (monthly)', () => {
+    localStorage.setItem('cudly.recs.costPeriod', 'invalid-value');
+    expect(getCostPeriodFn()).toBe('monthly');
   });
 });

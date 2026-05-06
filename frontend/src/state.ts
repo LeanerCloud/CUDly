@@ -157,3 +157,47 @@ export function getVisibleRecommendations(): readonly Recommendation[] {
 export function setVisibleRecommendations(recs: readonly Recommendation[]): void {
   visibleRecommendations = [...recs];
 }
+
+// ---------------------------------------------------------------------------
+// Cost-period selector (issue #319)
+// Persisted in localStorage('cudly.recs.costPeriod'). In-memory fallback
+// when localStorage is unavailable (private browsing, quota-exceeded).
+// ---------------------------------------------------------------------------
+
+export type CostPeriod = 'hourly' | 'daily' | 'monthly' | 'yearly';
+
+const COST_PERIOD_LS_KEY = 'cudly.recs.costPeriod';
+const VALID_PERIODS = new Set<string>(['hourly', 'daily', 'monthly', 'yearly']);
+
+// In-memory fallback; authoritative when localStorage is unavailable.
+let costPeriodMemory: CostPeriod = 'monthly';
+
+export function getCostPeriod(): CostPeriod {
+  try {
+    const raw = localStorage.getItem(COST_PERIOD_LS_KEY);
+    if (raw === null) {
+      // No prior write — return current in-memory state (default monthly on
+      // module load, last setCostPeriod() value otherwise).
+      return costPeriodMemory;
+    }
+    if (VALID_PERIODS.has(raw)) {
+      costPeriodMemory = raw as CostPeriod;
+      return raw as CostPeriod;
+    }
+    // Corrupted/invalid value persisted — fall back to the static default
+    // ('monthly') rather than whatever leaked into in-memory state.
+    return 'monthly';
+  } catch {
+    // localStorage unavailable (private browsing, iframe sandbox) — use memory.
+  }
+  return costPeriodMemory;
+}
+
+export function setCostPeriod(period: CostPeriod): void {
+  costPeriodMemory = period;
+  try {
+    localStorage.setItem(COST_PERIOD_LS_KEY, period);
+  } catch {
+    // Non-fatal; in-memory fallback remains correct for the session.
+  }
+}
