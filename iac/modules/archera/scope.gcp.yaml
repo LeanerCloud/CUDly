@@ -1,0 +1,33 @@
+# scope.gcp.yaml — Canonical Archera GCP permission list (single source of truth)
+#
+# This file is the authoritative definition of which GCP IAM permissions CUDly
+# provisions for the Archera Insurance integration.  All Terraform modules,
+# and parity-check scripts derive from this file.
+# Editing a permission here propagates everywhere automatically.
+#
+# PROVISIONAL SCOPE — must be confirmed against Archera integration docs
+# before flipping enable_archera = true in any tfvars.
+# TODO(@cristim): confirm Archera scope list against integration docs
+# before enabling.  Reference: https://archera.ai/docs (integration guide).
+#
+# Format:
+#   read_permissions:    granted whenever enable_archera = true
+#   purchase_permissions: granted ONLY when enable_archera_purchase_actions = true
+
+read_permissions:
+  # Billing / Cost data — read-only
+  - "billing.accounts.get"
+  - "billing.accounts.list"
+  - "billing.budgets.get"
+  - "billing.budgets.list"
+  # Recommender / Committed Use Discounts — read-only
+  - "recommender.commitmentUtilizationInsights.get"
+  - "recommender.commitmentUtilizationInsights.list"
+  - "recommender.commitments.get"
+  - "recommender.commitments.list"
+  # Resource Manager (project metadata)
+  - "resourcemanager.projects.get"
+
+purchase_permissions:
+  # Committed Use Discounts — purchase execution
+  - "recommender.commitments.create"

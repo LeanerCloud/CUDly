@@ -1,0 +1,51 @@
+# scope.aws.yaml — Canonical Archera AWS permission list (single source of truth)
+#
+# This file is the authoritative definition of which AWS IAM actions CUDly
+# provisions for the Archera Insurance integration.  All Terraform modules,
+# CloudFormation templates, and parity-check scripts derive from this file.
+# Editing an action here propagates everywhere automatically.
+#
+# PROVISIONAL SCOPE — must be confirmed against Archera integration docs
+# before flipping enable_archera = true in any tfvars.
+# TODO(@cristim): confirm Archera scope list against integration docs
+# before enabling.  Reference: https://archera.ai/docs (integration guide).
+#
+# Format:
+#   read_actions:    granted whenever enable_archera = true
+#   purchase_actions: granted ONLY when enable_archera_purchase_actions = true
+
+read_actions:
+  # Cost Explorer — read-only
+  - "ce:GetCostAndUsage"
+  - "ce:GetCostAndUsageWithResources"
+  - "ce:GetCostForecast"
+  - "ce:GetDimensionValues"
+  - "ce:GetReservationCoverage"
+  - "ce:GetReservationPurchaseRecommendation"
+  - "ce:GetReservationUtilization"
+  - "ce:GetRightsizingRecommendation"
+  - "ce:GetSavingsPlansCoverage"
+  - "ce:GetSavingsPlansUtilization"
+  - "ce:GetSavingsPlansUtilizationDetails"
+  - "ce:ListCostCategoryDefinitions"
+  # CUR / Cost and Usage Report
+  - "cur:DescribeReportDefinitions"
+  # Reserved Instances — read-only
+  - "ec2:DescribeReservedInstances"
+  - "ec2:DescribeReservedInstancesListings"
+  - "ec2:DescribeReservedInstancesModifications"
+  - "ec2:DescribeReservedInstancesOfferings"
+  - "ec2:DescribeInstanceTypeOfferings"
+  # Savings Plans — read-only
+  - "savingsplans:DescribeSavingsPlans"
+  - "savingsplans:DescribeSavingsPlansOfferings"
+  - "savingsplans:DescribeSavingsPlanRates"
+  - "savingsplans:ListTagsForResource"
+
+purchase_actions:
+  # Reserved Instances — purchase execution
+  - "ec2:PurchaseReservedInstancesOffering"
+  - "ec2:ModifyReservedInstances"
+  # Savings Plans — purchase execution
+  - "savingsplans:CreateSavingsPlan"
+  - "savingsplans:DeleteQueuedSavingsPlan"
