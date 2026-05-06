@@ -152,3 +152,49 @@
     margin-top: 0.75rem;
     margin-bottom: 0;
 }
+
+/* Issue #320: Purchase modal full-breakdown table.
+   The commits section scrolls independently so the modal's Cancel /
+   Execute buttons are always visible even with many rows. */
+.purchase-modal-commits {
+    max-height: 55vh;
+    overflow-y: auto;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+}
+
+/* Sticky header so column labels stay visible while the user scrolls. */
+.purchase-modal-table thead th {
+    position: sticky;
+    top: 0;
+    background: #f8f9fa;
+    z-index: 1;
+}
+
+/* Sticky totals footer. */
+.purchase-modal-table tfoot tr {
+    position: sticky;
+    bottom: 0;
+    background: #f0f4ff;
+    z-index: 1;
+}
+
+.purchase-modal-totals td {
+    border-top: 2px solid #c5d3f0;
+    font-size: 0.85rem;
+}
+
+/* "Include" label next to the select-all checkbox. */
+.purchase-modal-include-label {
+    display: block;
+    font-size: 0.8rem;
+    color: #555;
+    margin-top: 2px;
+}
+
+/* Resource type sub-text inside the Service / Type cell. */
+.purchase-modal-resource-type {
+    color: #666;
+    font-size: 0.85em;
+}
