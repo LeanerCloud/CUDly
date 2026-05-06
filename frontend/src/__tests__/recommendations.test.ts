@@ -3715,8 +3715,13 @@ describe('Monthly Cost + Effective % column rendering', () => {
     const headers = Array.from(document.querySelectorAll('th')).map((th) => th.textContent ?? '');
     expect(headers.some((h) => h.includes('On-Demand Monthly'))).toBe(true);
 
-    const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
-    expect(cells.some((c) => c === '$150')).toBe(true);
+    // Pin the specific on_demand_monthly cell by column index (not a scan of all tds).
+    const odmColIdx = Array.from(document.querySelectorAll('th'))
+      .findIndex((th) => th.getAttribute('data-sort') === 'on_demand_monthly');
+    const firstRowCells = Array.from(
+      document.querySelectorAll('tbody tr.recommendation-row td'),
+    );
+    expect(firstRowCells[odmColIdx]?.textContent).toBe('$150');
   });
 
   test('On-Demand Monthly column renders em-dash when monthly_cost is null', async () => {
@@ -3729,9 +3734,35 @@ describe('Monthly Cost + Effective % column rendering', () => {
     (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
     await loadRecommendations();
 
-    const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
-    // Multiple columns can render em-dash, but at least one must be present
-    expect(cells.filter((c) => c === '—').length).toBeGreaterThanOrEqual(1);
+    // Pin the specific on_demand_monthly cell (not a scan of all tds — Effective % also renders em-dash).
+    const odmColIdx = Array.from(document.querySelectorAll('th'))
+      .findIndex((th) => th.getAttribute('data-sort') === 'on_demand_monthly');
+    const firstRowCells = Array.from(
+      document.querySelectorAll('tbody tr.recommendation-row td'),
+    );
+    expect(firstRowCells[odmColIdx]?.textContent).toBe('—');
+  });
+
+  test('on_demand_monthly numeric filter: null monthly_cost row does not match = 0', async () => {
+    // When monthly_cost is null, on_demand_monthly returns null → NaN sentinel in numericCellValue.
+    // A filter expr "0" (equals zero) must NOT match such rows.
+    const nullRec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: null, term: 1 });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [nullRec],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([nullRec]);
+    // Apply a filter that would match $0 if NaN were treated as 0.
+    // Use mockReturnValueOnce so the override doesn't leak into subsequent tests.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValueOnce({
+      on_demand_monthly: { kind: 'expr', expr: '0' },
+    });
+    await loadRecommendations();
+
+    // Null-monthly_cost row should be filtered out; tbody should have no visible recommendation rows.
+    const rows = document.querySelectorAll('tbody tr.recommendation-row');
+    expect(rows.length).toBe(0);
   });
 
   test('sort header for on_demand_monthly is wired - clicking sets sort to on_demand_monthly', async () => {

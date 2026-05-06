@@ -621,6 +621,11 @@ function groupsInSortOrder(
       const selectedB = vb.find((r) => selectedRecs.has(r.id));
       const scoreA = selectedA ? numericKey(selectedA) : Math.max(...va.map(numericKey));
       const scoreB = selectedB ? numericKey(selectedB) : Math.max(...vb.map(numericKey));
+      // Nulls are encoded as POSITIVE_INFINITY. Always sort them last regardless
+      // of direction so "no data" rows are de-emphasised in both asc and desc.
+      const aNullish = scoreA === Number.POSITIVE_INFINITY;
+      const bNullish = scoreB === Number.POSITIVE_INFINITY;
+      if (aNullish !== bNullish) return aNullish ? 1 : -1;
       return (scoreA - scoreB) * direction;
     }
     if (stringKey) {
