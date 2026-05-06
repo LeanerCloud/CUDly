@@ -10,6 +10,7 @@ import (
 )
 
 func TestNewCredentialDetector(t *testing.T) {
+	t.Parallel()
 	detector := NewCredentialDetector()
 	require.NotNil(t, detector)
 	assert.NotNil(t, detector.providers)
@@ -17,6 +18,7 @@ func TestNewCredentialDetector(t *testing.T) {
 }
 
 func TestCredentialSource_Constants(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, CredentialSource("environment"), CredentialSourceEnvironment)
 	assert.Equal(t, CredentialSource("file"), CredentialSourceFile)
 	assert.Equal(t, CredentialSource("iam-role"), CredentialSourceIAMRole)
@@ -26,6 +28,7 @@ func TestCredentialSource_Constants(t *testing.T) {
 }
 
 func TestBaseCredentials_IsValid(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		creds    BaseCredentials
@@ -45,12 +48,14 @@ func TestBaseCredentials_IsValid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.creds.IsValid())
 		})
 	}
 }
 
 func TestBaseCredentials_GetType(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		creds    BaseCredentials
@@ -90,12 +95,14 @@ func TestBaseCredentials_GetType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.creds.GetType())
 		})
 	}
 }
 
 func TestBaseCredentials_Interface(t *testing.T) {
+	t.Parallel()
 	// Ensure BaseCredentials implements Credentials interface
 	var _ Credentials = BaseCredentials{}
 	var _ Credentials = &BaseCredentials{}
@@ -112,6 +119,7 @@ func TestBaseCredentials_Interface(t *testing.T) {
 }
 
 func TestCredentialDetector_Fields(t *testing.T) {
+	t.Parallel()
 	detector := &CredentialDetector{
 		providers: []Provider{
 			&MockProvider{name: "aws"},
@@ -141,6 +149,7 @@ func registerCredTestProvider(t *testing.T, name string, configured bool, creden
 }
 
 func TestDetectAvailableProviders_NoProviders(t *testing.T) {
+	t.Parallel()
 	// Make sure no test providers are configured
 	GetRegistry().Unregister("cred-detect-test-1")
 	GetRegistry().Unregister("cred-detect-test-2")
@@ -157,6 +166,7 @@ func TestDetectAvailableProviders_NoProviders(t *testing.T) {
 }
 
 func TestDetectAvailableProviders_WithValidProviders(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	testName := "cred-detect-test-valid"
@@ -179,6 +189,7 @@ func TestDetectAvailableProviders_WithValidProviders(t *testing.T) {
 }
 
 func TestDetectAvailableProviders_WithInvalidCredentials(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Register a provider with invalid credentials
@@ -204,6 +215,7 @@ func TestDetectAvailableProviders_WithInvalidCredentials(t *testing.T) {
 }
 
 func TestDetectProvider_Success(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	testName := "cred-detect-provider-success"
@@ -217,6 +229,7 @@ func TestDetectProvider_Success(t *testing.T) {
 }
 
 func TestDetectProvider_NotFound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	_, err := DetectProvider(ctx, "nonexistent-provider")
@@ -227,6 +240,7 @@ func TestDetectProvider_NotFound(t *testing.T) {
 }
 
 func TestDetectProvider_NotConfigured(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	testName := "cred-detect-provider-unconfigured"
@@ -239,6 +253,7 @@ func TestDetectProvider_NotConfigured(t *testing.T) {
 }
 
 func TestDetectProvider_InvalidCredentials(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	testName := "cred-detect-provider-invalid-creds"
@@ -251,6 +266,7 @@ func TestDetectProvider_InvalidCredentials(t *testing.T) {
 }
 
 func TestGetProvidersByNames_Success(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	testName1 := "cred-get-providers-1"
@@ -266,6 +282,7 @@ func TestGetProvidersByNames_Success(t *testing.T) {
 }
 
 func TestGetProvidersByNames_PartialSuccess(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	testName := "cred-get-providers-partial"
@@ -279,6 +296,7 @@ func TestGetProvidersByNames_PartialSuccess(t *testing.T) {
 }
 
 func TestGetProvidersByNames_AllFail(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Try to get providers that don't exist

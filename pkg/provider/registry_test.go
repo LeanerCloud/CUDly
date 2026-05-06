@@ -49,6 +49,7 @@ func (m *MockProvider) GetRecommendationsClient(ctx context.Context) (Recommenda
 }
 
 func TestNewRegistry(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 	require.NotNil(t, r)
 	assert.NotNil(t, r.providers)
@@ -56,6 +57,7 @@ func TestNewRegistry(t *testing.T) {
 }
 
 func TestRegistry_Register(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -73,6 +75,7 @@ func TestRegistry_Register(t *testing.T) {
 }
 
 func TestRegistry_GetProvider(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -98,6 +101,7 @@ func TestRegistry_GetProvider(t *testing.T) {
 }
 
 func TestRegistry_GetProvider_FactoryError(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -116,6 +120,7 @@ func TestRegistry_GetProvider_FactoryError(t *testing.T) {
 }
 
 func TestRegistry_GetProviderWithConfig(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -142,6 +147,7 @@ func TestRegistry_GetProviderWithConfig(t *testing.T) {
 }
 
 func TestRegistry_GetAllProviders(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory1 := func(config *ProviderConfig) (Provider, error) {
@@ -164,6 +170,7 @@ func TestRegistry_GetAllProviders(t *testing.T) {
 }
 
 func TestRegistry_GetProviderNames(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -182,6 +189,7 @@ func TestRegistry_GetProviderNames(t *testing.T) {
 }
 
 func TestRegistry_IsRegistered(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -195,6 +203,7 @@ func TestRegistry_IsRegistered(t *testing.T) {
 }
 
 func TestRegistry_Unregister(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -212,6 +221,7 @@ func TestRegistry_Unregister(t *testing.T) {
 }
 
 func TestProviderConfig_Struct(t *testing.T) {
+	t.Parallel()
 	config := ProviderConfig{
 		Name:           "aws",
 		Profile:        "production",
@@ -228,6 +238,7 @@ func TestProviderConfig_Struct(t *testing.T) {
 }
 
 func TestGetRegistry(t *testing.T) {
+	t.Parallel()
 	// GetRegistry should always return the same instance
 	registry1 := GetRegistry()
 	registry2 := GetRegistry()
@@ -238,6 +249,7 @@ func TestGetRegistry(t *testing.T) {
 }
 
 func TestRegisterProvider(t *testing.T) {
+	t.Parallel()
 	// Use a unique name to avoid conflicts with other tests
 	testName := "test-register-provider-unique"
 
