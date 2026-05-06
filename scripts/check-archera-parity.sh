@@ -186,7 +186,10 @@ check_env_thin_caller() {
 
   local inline_actions
   case "$cloud" in
-    aws)   inline_actions=$(grep -oE '"[a-z]+:[A-Za-z]+"' "$env_file" || true) ;;
+    # AWS service prefixes can contain digits (ec2, s3, ec2-instance-connect…).
+    # The previous [a-z]+: pattern missed any service whose name has a digit
+    # or dash, letting common inline grants slip past the thin-caller guard.
+    aws)   inline_actions=$(grep -oE '"[a-z][a-z0-9-]*:[A-Za-z]+"' "$env_file" || true) ;;
     azure) inline_actions=$(grep -oE '"Microsoft\.[^"]*"' "$env_file" || true) ;;
     gcp)   inline_actions=$(grep -oE '"[a-z]+\.[a-z]+\.[a-zA-Z]+"' "$env_file" || true) ;;
   esac

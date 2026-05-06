@@ -16,7 +16,10 @@
 #   }
 
 terraform {
-  required_version = ">= 1.5"
+  # Modules in this directory family use cross-variable validation (referencing
+  # other vars inside a validation block) — Terraform 1.9+. Pin all three
+  # sibling modules together so behaviour stays consistent.
+  required_version = ">= 1.9.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"

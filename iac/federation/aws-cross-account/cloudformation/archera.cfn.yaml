@@ -32,6 +32,11 @@ Parameters:
     Type: String
     Default: ""
     NoEcho: true
+    # Allow either empty (when EnableArchera = false) or any string with at
+    # least one non-whitespace char.  Whitespace-only values like "   " would
+    # otherwise produce a trust policy Archera cannot match during onboarding.
+    AllowedPattern: '^$|.*\S.*'
+    ConstraintDescription: ArcheraExternalId must be empty or contain non-whitespace characters.
     Description: >-
       External ID for confused-deputy protection on the Archera assume-role.
       Obtain from Archera during onboarding. Required when EnableArchera = true.

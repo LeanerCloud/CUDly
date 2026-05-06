@@ -181,7 +181,10 @@ function buildArcheraCheckbox(containerEl: HTMLElement): HTMLInputElement {
 
   // Tooltip via title attribute — accessible on keyboard focus and hover.
   label.title = ARCHERA_TOOLTIP;
-  label.setAttribute('aria-describedby', 'federation-archera-tooltip');
+  // aria-describedby goes on the focusable input so screen-reader users get
+  // the tooltip announced when they tab to the checkbox (not just when reading
+  // the label text).
+  checkbox.setAttribute('aria-describedby', 'federation-archera-tooltip');
 
   const tooltipSpan = document.createElement('span');
   tooltipSpan.id = 'federation-archera-tooltip';

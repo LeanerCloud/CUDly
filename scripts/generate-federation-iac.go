@@ -86,9 +86,13 @@ type iacData struct {
 	AccountExternalID string
 	AccountSlug       string
 	Source            string
+	// SourceAccountID is the AWS account where CUDly runs (resolved via STS
+	// at request time in the API; supplied as a flag here).
+	SourceAccountID string
 	// AWS WIF / cross-account
-	OIDCIssuerURL string
-	OIDCAudience  string
+	OIDCIssuerURL  string
+	OIDCIssuerHost string // OIDCIssuerURL without https:// prefix; used as IAM condition key
+	OIDCAudience   string
 	// Azure-specific
 	SubscriptionID string
 	TenantID       string
@@ -96,6 +100,11 @@ type iacData struct {
 	ProjectID           string
 	ServiceAccountEmail string
 	OIDCIssuerURI       string
+	// CUDlyAPIURL + ContactEmail are populated at API render time from the
+	// request context; AWS templates reference them in the auto-registration
+	// shell snippets so omitting them breaks AWS-target rendering.
+	CUDlyAPIURL  string
+	ContactEmail string
 	// IncludeArchera controls whether Archera Insurance permission resources are
 	// included in the rendered output. Mirrors handler_federation.go:federationIaCData.
 	IncludeArchera bool
@@ -292,6 +301,7 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail st
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, tenantID)
+		data.OIDCIssuerHost = strings.TrimPrefix(data.OIDCIssuerURL, "https://")
 		data.OIDCAudience = awsOIDCAudience(source)
 	case "azure":
 		data.SubscriptionID = data.AccountExternalID

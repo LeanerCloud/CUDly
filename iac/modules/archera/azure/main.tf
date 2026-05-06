@@ -7,7 +7,10 @@
 # edit that file to update permissions across all callers simultaneously.
 
 terraform {
-  required_version = ">= 1.5"
+  # variables.tf cross-references var.enable_archera inside another variable's
+  # validation block — Terraform 1.9+. Pin so the module fails fast on older
+  # versions rather than mid-plan.
+  required_version = ">= 1.9.0"
   required_providers {
     azurerm = {
       source = "hashicorp/azurerm"
