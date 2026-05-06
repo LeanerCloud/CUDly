@@ -1,0 +1,89 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_description": "CUDly — Archera Insurance integration (federation bundle, azure-target). Alternative deployment path for customers who prefer ARM over Terraform or Bicep. Permission list mirrors iac/modules/archera/scope.azure.yaml. PROVISIONAL — confirm scope with Archera before enabling."
+  },
+  "parameters": {
+    "enableArchera": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "When true, provision the Archera custom RBAC role and role assignment. Leave false unless enrolled with Archera."
+      }
+    },
+    "archeraAzureSpObjectId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Object ID of the service principal Archera provides during onboarding. NOT the Application/Client ID."
+      }
+    },
+    "enableArcheraPurchaseActions": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "When true (and enableArchera = true), include reservation write actions in the Archera custom role."
+      }
+    }
+  },
+  "variables": {
+    "readActions": [
+      "Microsoft.CostManagement/*/read",
+      "Microsoft.Consumption/*/read",
+      "Microsoft.Billing/*/read",
+      "Microsoft.Capacity/reservations/read",
+      "Microsoft.Capacity/reservationOrders/read"
+    ],
+    "purchaseActions": [
+      "Microsoft.Capacity/reservationOrders/write"
+    ],
+    "allActions": "[if(parameters('enableArcheraPurchaseActions'), concat(variables('readActions'), variables('purchaseActions')), variables('readActions'))]",
+    "roleDefName": "[guid(subscription().subscriptionId, 'cudly-archera-integration')]",
+    "roleAssignmentName": "[guid(subscription().subscriptionId, parameters('archeraAzureSpObjectId'), variables('roleDefName'))]"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('enableArchera')]",
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('roleDefName')]",
+      "properties": {
+        "roleName": "CUDly Archera Integration",
+        "description": "Archera integration role — read cost data, optionally purchase RIs. Provisional — confirm scope before enabling.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": "[variables('allActions')]",
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[subscription().id]"
+        ]
+      }
+    },
+    {
+      "condition": "[parameters('enableArchera')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('roleAssignmentName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Authorization/roleDefinitions', variables('roleDefName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleDefName'))]",
+        "principalId": "[parameters('archeraAzureSpObjectId')]",
+        "principalType": "ServicePrincipal"
+      }
+    }
+  ],
+  "outputs": {
+    "roleDefinitionId": {
+      "type": "string",
+      "value": "[if(parameters('enableArchera'), subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleDefName')), '')]"
+    }
+  }
+}

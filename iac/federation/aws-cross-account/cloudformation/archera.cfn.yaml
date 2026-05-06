@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  CUDly — Archera Insurance integration (federation bundle, aws-cross-account).
+  Creates a cross-account IAM role that Archera assumes to read cost and
+  commitment data, and optionally a purchase policy for RI/SP writes.
+  PROVISIONAL — confirm scope with Archera before enabling.
+  Permission list mirrors iac/modules/archera/scope.aws.yaml.
+
+# NOTE: this template is an alternative deployment path for customers who
+# prefer CloudFormation over Terraform.  The permission lists MUST stay in
+# sync with iac/modules/archera/scope.aws.yaml — the CI gate
+# scripts/check-archera-parity.sh enforces parity automatically.
+
+Parameters:
+  EnableArchera:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      Set to "true" to create the Archera cross-account role and read policy.
+      Leave false unless enrolled with Archera.
+
+  ArcheraAwsAccountId:
+    Type: String
+    Default: ""
+    Description: >-
+      Archera's 12-digit AWS account ID. Required when EnableArchera = true.
+    AllowedPattern: "^$|^[0-9]{12}$"
+    ConstraintDescription: Must be a 12-digit AWS account ID or empty.
+
+  ArcheraExternalId:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >-
+      External ID for confused-deputy protection on the Archera assume-role.
+      Obtain from Archera during onboarding. Required when EnableArchera = true.
+
+  EnableArcheraPurchaseActions:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      Set to "true" (with EnableArchera = "true") to also attach the purchase
+      policy for RI/SP write actions. Only enable after confirming Archera
+      requires customer approval before executing purchases.
+
+Conditions:
+  CreateArcheraResources: !Equals [!Ref EnableArchera, "true"]
+  CreatePurchasePolicy: !And
+    - !Condition CreateArcheraResources
+    - !Equals [!Ref EnableArcheraPurchaseActions, "true"]
+
+Resources:
+  ArcheraIntegrationRole:
+    Type: AWS::IAM::Role
+    Condition: CreateArcheraResources
+    Properties:
+      RoleName: cudly-archera-integration
+      Description: >-
+        Assumed by Archera SaaS to read cost data and (optionally) execute
+        RI/SP purchases. Provisional — confirm scope before enabling.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ArcheraAssumeRole
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${ArcheraAwsAccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                "sts:ExternalId": !Ref ArcheraExternalId
+      Tags:
+        - Key: Integration
+          Value: archera
+        - Key: Purpose
+          Value: commitment-optimisation
+        - Key: ManagedBy
+          Value: cudly-federation-bundle
+
+  ArcheraReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: CreateArcheraResources
+    Properties:
+      ManagedPolicyName: cudly-archera-read
+      Description: >-
+        Archera read-only policy — cost Explorer + RI/SP telemetry (no purchase
+        actions). Permission list mirrors iac/modules/archera/scope.aws.yaml.
+      Roles:
+        - !Ref ArcheraIntegrationRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # ── Read-only: Cost Explorer ────────────────────────────────────
+          - Sid: CostExplorerReadOnly
+            Effect: Allow
+            Action:
+              - ce:GetCostAndUsage
+              - ce:GetCostAndUsageWithResources
+              - ce:GetCostForecast
+              - ce:GetDimensionValues
+              - ce:GetReservationCoverage
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetReservationUtilization
+              - ce:GetRightsizingRecommendation
+              - ce:GetSavingsPlansCoverage
+              - ce:GetSavingsPlansUtilization
+              - ce:GetSavingsPlansUtilizationDetails
+              - ce:ListCostCategoryDefinitions
+            Resource: "*"
+          # ── Read-only: CUR ──────────────────────────────────────────────
+          - Sid: CURDescribe
+            Effect: Allow
+            Action:
+              - cur:DescribeReportDefinitions
+            Resource: "*"
+          # ── Read-only: Reserved Instances ───────────────────────────────
+          - Sid: ReservedInstancesRead
+            Effect: Allow
+            Action:
+              - ec2:DescribeReservedInstances
+              - ec2:DescribeReservedInstancesListings
+              - ec2:DescribeReservedInstancesModifications
+              - ec2:DescribeReservedInstancesOfferings
+              - ec2:DescribeInstanceTypeOfferings
+            Resource: "*"
+          # ── Read-only: Savings Plans ────────────────────────────────────
+          - Sid: SavingsPlansRead
+            Effect: Allow
+            Action:
+              - savingsplans:DescribeSavingsPlans
+              - savingsplans:DescribeSavingsPlansOfferings
+              - savingsplans:DescribeSavingsPlanRates
+              - savingsplans:ListTagsForResource
+            Resource: "*"
+
+  ArcheraPurchasePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: CreatePurchasePolicy
+    Properties:
+      ManagedPolicyName: cudly-archera-purchase
+      Description: >-
+        Archera purchase policy — RI/SP write actions. Only attach after
+        confirming Archera requires customer approval before purchases.
+        Permission list mirrors iac/modules/archera/scope.aws.yaml.
+      Roles:
+        - !Ref ArcheraIntegrationRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # ── Purchase: Reserved Instances ────────────────────────────────
+          - Sid: ReservedInstancesPurchase
+            Effect: Allow
+            Action:
+              - ec2:PurchaseReservedInstancesOffering
+              - ec2:ModifyReservedInstances
+            Resource: "*"
+          # ── Purchase: Savings Plans ─────────────────────────────────────
+          - Sid: SavingsPlansPurchase
+            Effect: Allow
+            Action:
+              - savingsplans:CreateSavingsPlan
+              - savingsplans:DeleteQueuedSavingsPlan
+            Resource: "*"
+
+Outputs:
+  ArcheraRoleArn:
+    Condition: CreateArcheraResources
+    Description: ARN of the Archera cross-account IAM role.
+    Value: !GetAtt ArcheraIntegrationRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ArcheraRoleArn"
