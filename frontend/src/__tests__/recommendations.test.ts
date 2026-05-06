@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight } from '../recommendations';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -898,15 +898,15 @@ describe('Recommendations Module', () => {
       });
     });
 
-    test('renders sortable column headers with indicators (Bundle B + #282: 12 columns)', async () => {
+    test('renders sortable column headers with indicators (Bundle B + #282 + #317: 13 columns)', async () => {
       await loadRecommendations();
       const list = document.getElementById('recommendations-list');
-      // Bundle B + issue #282: every data column is sortable. 12 sortable data columns:
+      // Bundle B + issue #282 + #317: every data column is sortable. 13 sortable data columns:
       // provider, account, service, resource_type, region, count, term, payment,
-      // savings, upfront_cost, monthly_cost, effective_savings_pct.
+      // savings, upfront_cost, monthly_cost, on_demand_monthly, effective_savings_pct.
       // The leading checkbox column is not sortable.
       const sortables = list?.querySelectorAll('th.sortable');
-      expect(sortables?.length).toBe(12);
+      expect(sortables?.length).toBe(13);
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
@@ -2009,7 +2009,7 @@ describe('Bundle B: column header filter triggers', () => {
     const buttons = document.querySelectorAll<HTMLButtonElement>('th .column-filter-btn[data-column]');
     const cols = Array.from(buttons).map((b) => b.dataset['column']);
     expect(cols.sort()).toEqual(
-      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'payment', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
+      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'on_demand_monthly', 'payment', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
     );
   });
 
@@ -3493,6 +3493,72 @@ describe('effectiveSavingsPct', () => {
   });
 });
 
+describe('onDemandMonthly', () => {
+  const mk = (overrides: Partial<LocalRecommendation>): LocalRecommendation => ({
+    id: 'r',
+    provider: 'aws',
+    service: 'ec2',
+    resource_type: 't3.medium',
+    region: 'us-east-1',
+    count: 1,
+    term: 1,
+    savings: 100,
+    upfront_cost: 0,
+    monthly_cost: 50,
+    ...overrides,
+  } as unknown as LocalRecommendation);
+
+  test('null monthly_cost returns null (data not provided)', () => {
+    expect(onDemandMonthly(mk({ monthly_cost: null }))).toBeNull();
+    expect(onDemandMonthly(mk({ monthly_cost: undefined }))).toBeNull();
+  });
+
+  test('term=0 returns null (anomaly — cannot amortize over zero months)', () => {
+    expect(onDemandMonthly(mk({ term: 0, monthly_cost: 50 }))).toBeNull();
+  });
+
+  test('no-upfront: on_demand_monthly = monthly_cost + savings', () => {
+    // upfront_cost = 0 → amortized = 0 → on_demand = 50 + 100 = 150
+    const odm = onDemandMonthly(mk({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 }));
+    expect(odm).not.toBeNull();
+    expect(odm!).toBeCloseTo(150, 2);
+  });
+
+  test('partial-upfront: on_demand_monthly includes amortized upfront', () => {
+    // upfront_cost = 600, term = 1 → amortized = 600/12 = 50/mo
+    // on_demand = 0 + 50 + 50 = 100
+    const odm = onDemandMonthly(mk({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1 }));
+    expect(odm).not.toBeNull();
+    expect(odm!).toBeCloseTo(100, 2);
+  });
+
+  test('3yr partial-upfront: on_demand_monthly amortizes upfront over 36 months', () => {
+    // upfront_cost = 7200, term = 3 → amortized = 7200/36 = 200/mo
+    // on_demand = 200 + 600 + 200 = 1000
+    const odm = onDemandMonthly(mk({ savings: 600, upfront_cost: 7200, monthly_cost: 200, term: 3 }));
+    expect(odm).not.toBeNull();
+    expect(odm!).toBeCloseTo(1000, 2);
+  });
+
+  test('monthly_cost=0 (all-upfront): on_demand_monthly = savings + amortized_upfront', () => {
+    // monthly_cost = 0 is valid known data (all-upfront commitment)
+    // upfront_cost = 1200, term = 1 → amortized = 100/mo
+    // on_demand = 0 + 200 + 100 = 300
+    const odm = onDemandMonthly(mk({ savings: 200, upfront_cost: 1200, monthly_cost: 0, term: 1 }));
+    expect(odm).not.toBeNull();
+    expect(odm!).toBeCloseTo(300, 2);
+  });
+
+  test('identity: on_demand_monthly = monthly_cost + savings + (upfront_cost / (term*12))', () => {
+    // The value must satisfy the documented formula exactly.
+    const r = mk({ savings: 120, upfront_cost: 3600, monthly_cost: 80, term: 3 });
+    const expected = 80 + 120 + (3600 / (3 * 12));  // = 80 + 120 + 100 = 300
+    const odm = onDemandMonthly(r);
+    expect(odm).not.toBeNull();
+    expect(odm!).toBeCloseTo(expected, 5);
+  });
+});
+
 describe('Monthly Cost + Effective % column rendering', () => {
   beforeEach(() => {
     document.body.innerHTML = [
@@ -3527,7 +3593,7 @@ describe('Monthly Cost + Effective % column rendering', () => {
     ...overrides,
   } as unknown as LocalRecommendation);
 
-  test('table header includes "Monthly Cost" and "Effective %" columns', async () => {
+  test('table header includes "Monthly Cost", "On-Demand Monthly", and "Effective %" columns', async () => {
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [baseRec()],
@@ -3538,6 +3604,7 @@ describe('Monthly Cost + Effective % column rendering', () => {
 
     const headers = Array.from(document.querySelectorAll('th')).map((th) => th.textContent ?? '');
     expect(headers.some((h) => h.includes('Monthly Cost'))).toBe(true);
+    expect(headers.some((h) => h.includes('On-Demand Monthly'))).toBe(true);
     expect(headers.some((h) => h.includes('Effective %'))).toBe(true);
   });
 
@@ -3630,6 +3697,57 @@ describe('Monthly Cost + Effective % column rendering', () => {
     header!.click();
     expect(state.setRecommendationsSort).toHaveBeenCalledWith(
       expect.objectContaining({ column: 'effective_savings_pct' }),
+    );
+  });
+
+  test('On-Demand Monthly column renders formatCurrency when monthly_cost is non-null', async () => {
+    // savings=100, upfront_cost=0, monthly_cost=50, term=1
+    // on_demand_monthly = 50 + 100 + 0 = 150 → formatCurrency → "$150"
+    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [rec],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    await loadRecommendations();
+
+    const headers = Array.from(document.querySelectorAll('th')).map((th) => th.textContent ?? '');
+    expect(headers.some((h) => h.includes('On-Demand Monthly'))).toBe(true);
+
+    const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
+    expect(cells.some((c) => c === '$150')).toBe(true);
+  });
+
+  test('On-Demand Monthly column renders em-dash when monthly_cost is null', async () => {
+    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: null, term: 1 });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [rec],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    await loadRecommendations();
+
+    const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
+    // Multiple columns can render em-dash, but at least one must be present
+    expect(cells.filter((c) => c === '—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('sort header for on_demand_monthly is wired - clicking sets sort to on_demand_monthly', async () => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [baseRec()],
+      regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([baseRec()]);
+    await loadRecommendations();
+
+    const header = document.querySelector<HTMLTableCellElement>('th[data-sort="on_demand_monthly"]');
+    expect(header).not.toBeNull();
+    header!.click();
+    expect(state.setRecommendationsSort).toHaveBeenCalledWith(
+      expect.objectContaining({ column: 'on_demand_monthly' }),
     );
   });
 });

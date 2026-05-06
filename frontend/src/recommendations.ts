@@ -379,6 +379,10 @@ const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => numbe
   // order (de-emphasised) and don't conflate with rows that have an explicit
   // $0 recurring charge (e.g. all-upfront commitments).
   monthly_cost: (r) => r.monthly_cost ?? Number.POSITIVE_INFINITY,
+  // onDemandMonthly returns null for null monthly_cost or term=0.
+  // POSITIVE_INFINITY places null rows at the bottom in ascending order and
+  // at the top in descending — consistent with monthly_cost.
+  on_demand_monthly: (r) => onDemandMonthly(r) ?? Number.POSITIVE_INFINITY,
   // effectiveSavingsPct returns null for term=0 / on_demand=0 / null monthly_cost.
   // POSITIVE_INFINITY places null rows at the bottom in ascending order and
   // at the top in descending — the least surprising behaviour for a savings
@@ -713,6 +717,26 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   return (effectiveSavings / onDemand) * 100;
 }
 
+/**
+ * Computes the equivalent on-demand monthly cost by reversing the savings
+ * formula: on_demand_monthly = monthly_cost + savings + (upfront_cost / (term * 12)).
+ * Returns null when monthly_cost is null (provider didn't return a recurring
+ * breakdown — same semantics as the Monthly Cost column and effectiveSavingsPct).
+ * Returns null when term is 0 (anomaly — cannot amortize over zero months).
+ *
+ * Note: this reconstruction uses only monthly_cost + savings + amortized_upfront.
+ * It does NOT use on_demand_cost even when available, because the column's
+ * purpose is to display the reconstructed denominator so users can verify the
+ * formula against the raw fields visible in the same row. For the authoritative
+ * on-demand baseline used in effectiveSavingsPct, see that function.
+ */
+export function onDemandMonthly(r: LocalRecommendation): number | null {
+  if (r.monthly_cost == null) return null;
+  if (!r.term) return null;
+  const amortized = r.upfront_cost / (r.term * 12);
+  return r.monthly_cost + r.savings + amortized;
+}
+
 // pickBestVariantPerCell collapses a list of recs to one rec per cell,
 // preferring the variant matching resolved GlobalConfig.DefaultTerm +
 // DefaultPayment, then falling back to the highest effective monthly savings.
@@ -782,6 +806,7 @@ const SORT_HEADER_LABELS: Record<string, string> = {
   savings: 'Monthly Savings',
   upfront_cost: 'Upfront Cost',
   monthly_cost: 'Monthly Cost',
+  on_demand_monthly: 'On-Demand Monthly',
   effective_savings_pct: 'Effective %',
 };
 
@@ -902,6 +927,7 @@ function categoricalCellValue(r: LocalRecommendation, col: state.Recommendations
     case 'savings':
     case 'upfront_cost':
     case 'monthly_cost':
+    case 'on_demand_monthly':
     case 'effective_savings_pct':   return '';
   }
 }
@@ -914,6 +940,9 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     // Return NaN for null monthly_cost so numeric filter predicates (e.g. "= 0")
     // don't match rows where the provider simply didn't report a monthly cost.
     case 'monthly_cost':         return r.monthly_cost ?? Number.NaN;
+    // Return NaN for null on_demand_monthly (null monthly_cost or term=0) so any
+    // numeric predicate returns false rather than coincidentally matching 0.
+    case 'on_demand_monthly':    return onDemandMonthly(r) ?? Number.NaN;
     // Return NaN for null effective_savings_pct so any numeric predicate
     // returns false rather than coincidentally matching 0.
     case 'effective_savings_pct': return effectiveSavingsPct(r) ?? Number.NaN;
@@ -944,7 +973,7 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
 // ---------------------------------------------------------------------------
 
 const NUMERIC_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set([
-  'count', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
+  'count', 'savings', 'upfront_cost', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
 ]);
 
 interface PopoverState {
@@ -1793,7 +1822,7 @@ function providerBadgeClass(provider: string): string {
 // neither sortable nor filterable).
 const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
   'provider', 'account', 'service', 'resource_type', 'region',
-  'count', 'term', 'payment', 'savings', 'upfront_cost', 'monthly_cost', 'effective_savings_pct',
+  'count', 'term', 'payment', 'savings', 'upfront_cost', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
 ];
 
 // Map raw payment_option values to display labels for the Payment column.
@@ -1820,6 +1849,8 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
   const pct = effectiveSavingsPct(rec);
   const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
+  const odm = onDemandMonthly(rec);
+  const odmText = odm != null ? formatCurrency(odm) : '\u2014';
   const nestedClass = isNested ? ' rec-variant-row' : '';
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
@@ -1837,12 +1868,13 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
     <td class="savings">${formatCurrency(rec.savings)}</td>
     <td>${formatCurrency(rec.upfront_cost)}</td>
     <td>${rec.monthly_cost != null ? formatCurrency(rec.monthly_cost) : '—'}</td>
+    <td>${odmText}</td>
     <td${pctClass}>${pctText}</td>
   </tr>`;
 }
 
-// The total column count for colspan on summary rows: checkbox col + 12 data cols = 13.
-const TABLE_COL_COUNT = 13;
+// The total column count for colspan on summary rows: checkbox col + 13 data cols = 14.
+const TABLE_COL_COUNT = 14;
 
 function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
   const sort = state.getRecommendationsSort();
