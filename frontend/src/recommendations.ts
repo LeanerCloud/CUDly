@@ -1754,8 +1754,11 @@ function openVisibilityPopover_(anchor: HTMLElement): void {
   };
   // Defer one tick so the current click event (which opened the popover) doesn't
   // immediately close it via the click-outside handler.
+  const handler = visOutsideClickHandler;
   setTimeout(() => {
-    document.addEventListener('mousedown', visOutsideClickHandler!);
+    if (handler) {
+      document.addEventListener('mousedown', handler);
+    }
   }, 0);
 }
 

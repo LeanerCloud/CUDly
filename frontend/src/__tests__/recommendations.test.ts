@@ -3940,6 +3940,8 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
         '</div>',
       ].join('');
       jest.clearAllMocks();
+      // Reset getHiddenColumns to return empty Set so tests don't inherit sticky values
+      (state.getHiddenColumns as jest.Mock).mockReturnValue(new Set());
       jest.useFakeTimers();
       window.alert = jest.fn();
       // Reset cell expand state so tests don't share module-level expandedCells.

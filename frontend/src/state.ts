@@ -215,5 +215,8 @@ export function getHiddenColumns(): ReadonlySet<RecommendationsColumnId> {
 }
 
 export function setHiddenColumns(hidden: ReadonlySet<RecommendationsColumnId>): void {
-  hiddenColumns = new Set(hidden);
+  // Filter out fixed anchor columns that must always remain visible
+  const fixedColumns: ReadonlySet<RecommendationsColumnId> = new Set(['provider', 'account', 'service', 'resource_type']);
+  const filtered = Array.from(hidden).filter((col) => !fixedColumns.has(col));
+  hiddenColumns = new Set(filtered);
 }
