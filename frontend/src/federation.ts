@@ -11,6 +11,14 @@
 import { getFederationIaC } from './api';
 
 // ---------------------------------------------------------------------------
+// Module-level state for the Archera opt-in checkbox.
+// The checkbox persists its checked state for the lifetime of the panel —
+// toggling it immediately affects the next download without a page reload.
+// ---------------------------------------------------------------------------
+
+let _includeArchera = false;
+
+// ---------------------------------------------------------------------------
 // Download helper
 // ---------------------------------------------------------------------------
 
@@ -126,6 +134,59 @@ function makeFormatButton(opt: FormatOption, target: string, source: string): HT
   return btn;
 }
 
+// ---------------------------------------------------------------------------
+// Archera checkbox
+// ---------------------------------------------------------------------------
+
+const ARCHERA_TOOLTIP =
+  'When enabled, the downloaded bundle additionally provisions a cross-account ' +
+  'role / service principal that grants the Archera commitment-insurance platform ' +
+  'read-only access to your cost data and (optionally) the right to purchase ' +
+  'reservations / savings plans on your behalf. This lets Archera underwrite ' +
+  'commitment-overuse insurance for your account. Leave unchecked if you\'re not ' +
+  'enrolled with Archera. Default: off.';
+
+/**
+ * Build the Archera opt-in checkbox row and append it to containerEl.
+ * Returns the checkbox element so callers can read its checked state.
+ */
+function buildArcheraCheckbox(containerEl: HTMLElement): HTMLInputElement {
+  const row = document.createElement('div');
+  row.className = 'federation-archera-row';
+
+  const label = document.createElement('label');
+  label.className = 'federation-archera-label';
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.id = 'federation-include-archera';
+  checkbox.name = 'include_archera';
+  checkbox.checked = false; // default: off
+  checkbox.addEventListener('change', () => {
+    _includeArchera = checkbox.checked;
+  });
+
+  const labelText = document.createElement('span');
+  labelText.textContent = 'Provision Archera Insurance permissions?';
+
+  // Tooltip via title attribute — accessible on keyboard focus and hover.
+  label.title = ARCHERA_TOOLTIP;
+  label.setAttribute('aria-describedby', 'federation-archera-tooltip');
+
+  const tooltipSpan = document.createElement('span');
+  tooltipSpan.id = 'federation-archera-tooltip';
+  tooltipSpan.className = 'federation-archera-tooltip sr-only';
+  tooltipSpan.textContent = ARCHERA_TOOLTIP;
+
+  label.appendChild(checkbox);
+  label.appendChild(labelText);
+  row.appendChild(label);
+  row.appendChild(tooltipSpan);
+  containerEl.appendChild(row);
+
+  return checkbox;
+}
+
 function buildFederationDownloads(target: string, source: string, containerID: string): void {
   const container = document.getElementById(containerID);
   if (!container) return;
@@ -148,7 +209,7 @@ function runDownload(btn: HTMLButtonElement, target: string, source: string, for
   btn.disabled = true;
   if (labelEl) labelEl.textContent = 'Loading…';
 
-  getFederationIaC(target, source, format)
+  getFederationIaC(target, source, format, _includeArchera)
     .then(res => {
       if (res.content_encoding === 'base64') {
         const binaryStr = atob(res.content);
@@ -233,6 +294,15 @@ function buildTargetCloudPills(
 export async function initFederationPanel(source: string): Promise<void> {
   const pillContainer = document.getElementById('federation-target-cloud-pills');
   if (!pillContainer) return;
+
+  // Render the Archera opt-in checkbox above the download buttons.
+  // The checkbox container is separate from the pills so it persists across
+  // target-cloud pill switches (the download button row is re-rendered on each
+  // pill click, but the checkbox row is not).
+  const archeraContainer = document.getElementById('federation-archera-options');
+  if (archeraContainer) {
+    buildArcheraCheckbox(archeraContainer);
+  }
 
   buildTargetCloudPills(pillContainer, target => {
     buildFederationDownloads(target, source, 'federation-setup-panel');

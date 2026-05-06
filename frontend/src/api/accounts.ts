@@ -200,8 +200,12 @@ export async function getFederationIaC(
   target: string,
   source: string,
   format: string,
+  includeArchera?: boolean,
 ): Promise<FederationIaCResponse> {
   const params = new URLSearchParams({ target, source, format });
+  if (includeArchera) {
+    params.set('include_archera', 'true');
+  }
   return apiRequest<FederationIaCResponse>(`/federation/iac?${params.toString()}`);
 }
 
