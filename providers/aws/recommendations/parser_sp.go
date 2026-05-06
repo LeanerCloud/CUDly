@@ -147,6 +147,13 @@ func (c *Client) parseSavingsPlanDetail(
 	// where monthly_cost reflects only the no-upfront recurring charge, not
 	// the full on-demand baseline). See #303.
 	onDemandCost := parseOptionalFloat("CurrentAverageHourlyOnDemandSpend", detail.CurrentAverageHourlyOnDemandSpend) * hoursPerMonth
+	if detail.CurrentAverageHourlyOnDemandSpend == nil {
+		// CurrentAverageHourlyOnDemandSpend absent from AWS CE response — onDemandCost
+		// will be 0 and the scheduler's nonZeroPtr will store nil, causing the
+		// frontend to fall back to the reconstruction formula. Log so operators
+		// can detect when the API field is missing. See #321.
+		log.Printf("WARNING: CurrentAverageHourlyOnDemandSpend is nil for SP recommendation (planType=%s, account=%s) — Effective %% will use reconstruction fallback", planType, aws.ToString(detail.AccountId))
+	}
 
 	planTypeStr := string(planType)
 	switch planType {
