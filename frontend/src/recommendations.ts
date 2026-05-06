@@ -1641,9 +1641,11 @@ function ensureRecommendationsTabObserver(): void {
   const tab = document.getElementById('recommendations-tab');
   if (!tab) return;
   recommendationsTabObserver = new MutationObserver(() => {
-    if (!tab.classList.contains('active') && openPopover) {
+    if (tab.classList.contains('active')) return;
+    if (openPopover) {
       closePopover();
     }
+    closeVisibilityPopover();
   });
   recommendationsTabObserver.observe(tab, { attributes: true, attributeFilter: ['class'] });
 }
@@ -2354,6 +2356,7 @@ function buildListMarkup(
   // service) always render separately, so this colspan = 1 + visible toggleable count.
   const visibleToggleableCols = visibleCols.filter((c) => TOGGLEABLE_COLUMN_KEYS.has(c.key));
   const summaryColspan = 1 + visibleToggleableCols.length;
+  const visibleKeys = new Set(visibleCols.map((c) => c.key));
 
   // Build tbody rows: grouped for multi-variant cells, flat for single-variant.
   const rows: string[] = [];
@@ -2393,6 +2396,24 @@ function buildListMarkup(
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = isExpanded ? '\u25bc' : '\u25b6';
+    const identityParts = [
+      `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
+    ];
+    if (visibleKeys.has('region')) {
+      identityParts.push(escapeHtml(rep.region));
+    }
+    identityParts.push(`${variants.length} variants`);
+
+    const rangeParts: string[] = [];
+    if (visibleKeys.has('savings')) {
+      rangeParts.push(savingsDisplay);
+    }
+    if (visibleKeys.has('upfront_cost')) {
+      rangeParts.push(`upfront: ${upfrontDisplay}`);
+    }
+    if (visibleKeys.has('term')) {
+      rangeParts.push(`term: ${termDisplay}`);
+    }
 
     rows.push(`
   <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
@@ -2405,8 +2426,8 @@ function buildListMarkup(
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
     <td colspan="${summaryColspan}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''} &mdash; ${escapeHtml(rep.region)} &mdash; ${variants.length} variants</span>
-      <span class="rec-cell-range">${savingsDisplay} &middot; upfront: ${upfrontDisplay} &middot; term: ${termDisplay}</span>
+      <span class="rec-cell-identity">${identityParts.join(' &mdash; ')}</span>
+      ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
     </td>
   </tr>`);
 

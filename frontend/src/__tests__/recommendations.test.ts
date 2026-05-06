@@ -3970,6 +3970,24 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(variantRows.length).toBe(0);
     });
 
+    test('multi-variant summary row omits hidden column values', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getHiddenColumns as jest.Mock).mockReturnValue(new Set(['region', 'savings', 'upfront_cost', 'term']));
+      await loadRecommendations();
+
+      const summaryContent = document.querySelector('.rec-cell-summary-content');
+      expect(summaryContent).not.toBeNull();
+      expect(summaryContent!.textContent).toContain('2 variants');
+      expect(summaryContent!.textContent).not.toContain('us-east-1');
+      expect(summaryContent!.textContent).not.toContain('$80');
+      expect(summaryContent!.textContent).not.toContain('$120');
+      expect(summaryContent!.textContent).not.toContain('upfront:');
+      expect(summaryContent!.textContent).not.toContain('term:');
+      expect(summaryContent!.querySelector('.rec-cell-range')).toBeNull();
+    });
+
     test('chevron button lives inside td.checkbox-col of the summary row (closes #280)', async () => {
       const recs = multiVariantRecs();
       (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });

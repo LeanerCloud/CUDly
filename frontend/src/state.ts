@@ -211,7 +211,7 @@ export function setCostPeriod(period: CostPeriod): void {
 let hiddenColumns: Set<RecommendationsColumnId> = new Set();
 
 export function getHiddenColumns(): ReadonlySet<RecommendationsColumnId> {
-  return hiddenColumns;
+  return new Set(hiddenColumns);
 }
 
 export function setHiddenColumns(hidden: ReadonlySet<RecommendationsColumnId>): void {
