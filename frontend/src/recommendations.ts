@@ -402,11 +402,11 @@ const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => numbe
     const period = state.getCostPeriod();
     return scaleCost(r.monthly_cost, period) ?? Number.POSITIVE_INFINITY;
   },
-  // onDemandMonthly returns null for null monthly_cost or term=0.
-  // POSITIVE_INFINITY places null rows at the bottom in ascending order and
-  // at the top in descending — consistent with monthly_cost. The base value
-  // is monthly; scale it to the selected display period so sorting matches
-  // what the user sees in the column.
+  // onDemandMonthly returns null when the provider didn't report
+  // on_demand_cost (or reported 0). POSITIVE_INFINITY is the null sentinel;
+  // groupsInSortOrder keeps nullish rows last in both ascending and descending
+  // sorts. The base value is monthly; scale it to the selected display period
+  // so sorting matches what the user sees in the column.
   on_demand_monthly: (r) => {
     const period = state.getCostPeriod();
     return scaleCost(onDemandMonthly(r), period) ?? Number.POSITIVE_INFINITY;
@@ -752,23 +752,23 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
 }
 
 /**
- * Computes the equivalent on-demand monthly cost by reversing the savings
- * formula: on_demand_monthly = monthly_cost + savings + (upfront_cost / (term * 12)).
- * Returns null when monthly_cost is null (provider didn't return a recurring
- * breakdown — same semantics as the Monthly Cost column and effectiveSavingsPct).
- * Returns null when term is 0 (anomaly — cannot amortize over zero months).
+ * Returns the provider-reported on-demand monthly cost (`r.on_demand_cost`)
+ * directly. Issue #330 — earlier behaviour reconstructed the value from
+ * `monthly_cost + savings + amortized_upfront`, which drifted from the
+ * provider's billed price for rounding edge cases (Azure all-upfront RIs,
+ * AWS Capacity Reservation discounts, partial-day proration). Aligning this
+ * with `effectiveSavingsPct`'s `hasOnDemand` branch makes the column show
+ * the same denominator the percentage column uses, so the two never disagree.
  *
- * Note: this reconstruction uses only monthly_cost + savings + amortized_upfront.
- * It does NOT use on_demand_cost even when available, because the column's
- * purpose is to display the reconstructed denominator so users can verify the
- * formula against the raw fields visible in the same row. For the authoritative
- * on-demand baseline used in effectiveSavingsPct, see that function.
+ * Returns `null` when `on_demand_cost` is missing, undefined, or `0` —
+ * cell renders `—` (same em-dash convention as the existing Monthly Cost
+ * column for null `monthly_cost`).
  */
 export function onDemandMonthly(r: LocalRecommendation): number | null {
-  if (r.monthly_cost == null) return null;
-  if (!r.term) return null;
-  const amortized = r.upfront_cost / (r.term * 12);
-  return r.monthly_cost + r.savings + amortized;
+  if (r.on_demand_cost != null && r.on_demand_cost > 0) {
+    return r.on_demand_cost;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
