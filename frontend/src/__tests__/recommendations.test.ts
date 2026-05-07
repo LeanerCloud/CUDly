@@ -3533,7 +3533,16 @@ describe('onDemandMonthly', () => {
     expect(onDemandMonthly(mk({ on_demand_cost: null }))).toBeNull();
   });
 
-  test('undefined / missing on_demand_cost returns null', () => {
+  test('explicit undefined on_demand_cost returns null', () => {
+    // TypeScript's strict mode lets callers pass `undefined` rather than
+    // omitting the field; assert that branch explicitly so a future
+    // `r.on_demand_cost > 0` guard regression doesn't accept undefined.
+    expect(onDemandMonthly(mk({ on_demand_cost: undefined }))).toBeNull();
+  });
+
+  test('missing on_demand_cost field returns null', () => {
+    // Distinct from the explicit-undefined case: the property never
+    // existed on the object (e.g. legacy cached recs from before #277).
     const r = mk({});
     delete (r as { on_demand_cost?: unknown }).on_demand_cost;
     expect(onDemandMonthly(r)).toBeNull();

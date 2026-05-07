@@ -1082,9 +1082,10 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     // Return NaN for null monthly_cost so numeric filter predicates (e.g. "= 0")
     // don't match rows where the provider simply didn't report a monthly cost.
     case 'monthly_cost':         return scaleCost(r.monthly_cost, period) ?? Number.NaN;
-    // Return NaN for null on_demand_monthly (null monthly_cost or term=0) so any
-    // numeric predicate returns false rather than coincidentally matching 0.
-    // Scale to the active period so a numeric filter targets what the user sees.
+    // Return NaN for null on_demand_monthly (missing or zero on_demand_cost — see
+    // onDemandMonthly() for the contract) so any numeric predicate returns false
+    // rather than coincidentally matching 0. Scale to the active period so a
+    // numeric filter targets what the user sees.
     case 'on_demand_monthly':    return scaleCost(onDemandMonthly(r), period) ?? Number.NaN;
     // Return NaN for null effective_savings_pct so any numeric predicate
     // returns false rather than coincidentally matching 0.
