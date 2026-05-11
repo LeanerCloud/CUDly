@@ -90,10 +90,16 @@ export function openArcheraPage(pageId: ArcheraPageId): void {
   const container = document.getElementById('archera-page-container');
   if (!container) return;
 
-  // Save the currently focused element so we can restore focus on close.
-  _previouslyFocused = document.activeElement instanceof HTMLElement
-    ? document.activeElement
-    : null;
+  // Capture the currently focused element only when the overlay is
+  // transitioning from hidden to visible, so that page-switch calls
+  // (A → B while already open) don't overwrite the original opener's
+  // focus reference. closeArcheraPage restores it and resets the variable.
+  const isCurrentlyHidden = container.classList.contains('hidden');
+  if (isCurrentlyHidden) {
+    _previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  }
 
   // Clear existing content via DOM methods (no innerHTML to avoid XSS lint).
   while (container.firstChild) container.removeChild(container.firstChild);

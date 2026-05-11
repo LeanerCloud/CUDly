@@ -1218,6 +1218,15 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	return resp, nil
 }
 
+// archeraEducationURL returns dashboardBase + "/archera-insurance", or "" when
+// dashboardBase is empty so email templates omit the block safely.
+func archeraEducationURL(dashboardBase string) string {
+	if dashboardBase == "" {
+		return ""
+	}
+	return dashboardBase + "/archera-insurance"
+}
+
 // sendPurchaseApprovalEmail sends an approval-request email for a newly created
 // execution and returns a structured outcome:
 //   - (true, "", recipient) on successful send
@@ -1274,8 +1283,8 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		RecipientEmail:      to,
 		CCEmails:            cc,
 		AuthorizedApprovers: approvers,
-		ArcheraEducationURL: dashboardBase + "/archera-insurance",
 	}
+	data.ArcheraEducationURL = archeraEducationURL(dashboardBase)
 	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
 		logging.Errorf("Failed to send purchase approval email: %v", err)
 		switch {
