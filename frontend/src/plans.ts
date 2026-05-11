@@ -11,6 +11,7 @@ import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
+import { renderArcheraCTA } from './archera';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -752,7 +753,10 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   void setupPlanAccountsSection();
 
   const planModal = document.getElementById('plan-modal');
-  if (planModal) openModal(planModal);
+  if (planModal) {
+    injectPlanModalCTA(planModal);
+    openModal(planModal);
+  }
 }
 
 /**
@@ -779,7 +783,30 @@ export function openNewPlanModal(): void {
   void setupPlanAccountsSection();
 
   const planModal = document.getElementById('plan-modal');
-  if (planModal) openModal(planModal);
+  if (planModal) {
+    injectPlanModalCTA(planModal);
+    openModal(planModal);
+  }
+}
+
+/**
+ * Inject the Archera Insurance CTA into the plan modal once.
+ *
+ * The plan modal is static HTML (not rebuilt on each open), so we guard
+ * with an id check to avoid inserting duplicate CTAs across repeated opens.
+ * The CTA is placed inside the form, directly before the .modal-buttons row,
+ * so it appears under the last form section and above Cancel / Save.
+ */
+function injectPlanModalCTA(planModal: HTMLElement): void {
+  if (planModal.querySelector('#archera-plan-cta')) return; // already injected
+
+  const form = planModal.querySelector<HTMLElement>('#plan-form');
+  const buttons = planModal.querySelector<HTMLElement>('.modal-buttons');
+  if (!form || !buttons) return;
+
+  const cta = renderArcheraCTA();
+  cta.id = 'archera-plan-cta';
+  form.insertBefore(cta, buttons);
 }
 
 /**

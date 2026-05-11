@@ -198,3 +198,148 @@
     color: #666;
     font-size: 0.85em;
 }
+
+/* -----------------------------------------------------------------------
+ * Archera Insurance CTA — unobtrusive small-text link shown in the
+ * Purchase modal and Plan-creation modal.
+ * ----------------------------------------------------------------------- */
+.archera-cta {
+    font-size: 0.82rem;
+    color: #888;
+    margin-top: 0.75rem;
+    margin-bottom: 0;
+    line-height: 1.4;
+}
+
+/* The inline link/button inside the CTA paragraph. Styled as a text link
+   so it does not compete visually with the modal's primary action button. */
+.archera-cta-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #1a73e8;
+    font-size: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    font-family: inherit;
+    line-height: inherit;
+}
+
+.archera-cta-link:hover {
+    color: #1557b0;
+    background: none;
+}
+
+/* -----------------------------------------------------------------------
+ * Archera education overlay (#archera-page-container).
+ * Full-viewport panel rendered on top of the existing content — not a
+ * modal (no dimmed backdrop) but a full overlay so the URL stays clean.
+ * ----------------------------------------------------------------------- */
+#archera-page-container {
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    z-index: 900;
+    overflow-y: auto;
+}
+
+.archera-page-inner {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+}
+
+.archera-page-inner h1 {
+    font-size: 1.6rem;
+    color: #333;
+    margin: 1rem 0 1.25rem;
+}
+
+.archera-page-inner h2 {
+    font-size: 1.1rem;
+    color: #444;
+    margin: 1.5rem 0 0.5rem;
+}
+
+.archera-page-lead {
+    font-size: 1rem;
+    color: #555;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+}
+
+.archera-page-inner section {
+    margin-bottom: 1.25rem;
+}
+
+.archera-page-inner ul,
+.archera-page-inner ol {
+    padding-left: 1.5rem;
+    color: #555;
+    line-height: 1.7;
+}
+
+.archera-steps {
+    margin-bottom: 1.25rem;
+}
+
+.archera-steps li {
+    margin-bottom: 0.5rem;
+}
+
+.archera-page-crosslink {
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+/* "Back" button in the overlay — plain text, no button chrome. */
+.archera-page-back {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #555;
+    font-size: 0.9rem;
+    cursor: pointer;
+    font-family: inherit;
+    text-decoration: underline;
+}
+
+.archera-page-back:hover {
+    color: #333;
+    background: none;
+}
+
+/* Signup CTA block at the bottom of each education page. */
+.archera-signup-block {
+    margin-top: 2rem;
+    padding: 1.25rem 1.5rem;
+    background: #f0f7ff;
+    border: 1px solid #b3d4fc;
+    border-radius: 6px;
+    text-align: center;
+}
+
+/* Primary signup link styled as a button for prominence. */
+.archera-signup-btn {
+    display: inline-block;
+    background: #1a73e8;
+    color: #fff;
+    text-decoration: none;
+    padding: 0.65rem 1.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.archera-signup-btn:hover {
+    background: #1557b0;
+    color: #fff;
+    text-decoration: none;
+}
+
+.archera-signup-note {
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: #888;
+}
