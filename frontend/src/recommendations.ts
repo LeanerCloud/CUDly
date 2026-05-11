@@ -1661,6 +1661,7 @@ function ensureRecommendationsTabObserver(): void {
 interface VisibilityPopoverState {
   el: HTMLDivElement;
   checkboxes: Map<state.RecommendationsColumnId, HTMLInputElement>;
+  trigger: HTMLElement;
 }
 
 let openVisibilityPopover: VisibilityPopoverState | null = null;
@@ -1669,7 +1670,9 @@ let visEscKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 
 function closeVisibilityPopover(): void {
   if (!openVisibilityPopover) return;
-  openVisibilityPopover.el.remove();
+  const { el, trigger } = openVisibilityPopover;
+  el.remove();
+  trigger.setAttribute('aria-expanded', 'false');
   openVisibilityPopover = null;
   if (visOutsideClickHandler) {
     document.removeEventListener('mousedown', visOutsideClickHandler);
@@ -1733,7 +1736,8 @@ function openVisibilityPopover_(anchor: HTMLElement): void {
     popover.appendChild(row);
   }
 
-  openVisibilityPopover = { el: popover, checkboxes };
+  openVisibilityPopover = { el: popover, checkboxes, trigger: anchor };
+  anchor.setAttribute('aria-expanded', 'true');
   positionPopover(popover, anchor);
 
   // Keyboard: Escape closes.
@@ -1770,6 +1774,8 @@ function mountColumnsButton(bar: HTMLElement): void {
     btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'column-visibility-btn';
+    btn.setAttribute('aria-haspopup', 'dialog');
+    btn.setAttribute('aria-expanded', 'false');
     bar.appendChild(btn);
     btn.addEventListener('click', () => {
       openVisibilityPopover_(btn!);
