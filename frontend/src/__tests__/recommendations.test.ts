@@ -4758,7 +4758,7 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).not.toContain('account');
       expect(keys).not.toContain('service');
       expect(keys).not.toContain('resource_type');
-      // All other 8 (including payment) should be toggleable
+      // All other 9 columns should be toggleable
       expect(keys).toContain('region');
       expect(keys).toContain('count');
       expect(keys).toContain('term');
@@ -4766,7 +4766,9 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).toContain('savings');
       expect(keys).toContain('upfront_cost');
       expect(keys).toContain('monthly_cost');
+      expect(keys).toContain('on_demand_monthly');
       expect(keys).toContain('effective_savings_pct');
+      expect(keys.length).toBe(9);
     });
   });
 });

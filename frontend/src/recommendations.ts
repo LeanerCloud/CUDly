@@ -1756,7 +1756,7 @@ function openVisibilityPopover_(anchor: HTMLElement): void {
   // immediately close it via the click-outside handler.
   const handler = visOutsideClickHandler;
   setTimeout(() => {
-    if (handler) {
+    if (handler && openVisibilityPopover && visOutsideClickHandler === handler) {
       document.addEventListener('mousedown', handler);
     }
   }, 0);
