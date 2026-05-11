@@ -263,9 +263,19 @@ func TestNewSenderFromEnvironment_EmailEnabled(t *testing.T) {
 			} else {
 				os.Unsetenv("EMAIL_ENABLED")
 			}
-		})
+	t.Run("unset_falls_through", func(t *testing.T) {
+		prev, hadPrev := os.LookupEnv("EMAIL_ENABLED")
 		os.Unsetenv("EMAIL_ENABLED")
+		t.Cleanup(func() {
+			if hadPrev {
+				_ = os.Setenv("EMAIL_ENABLED", prev)
+				return
+			}
+			os.Unsetenv("EMAIL_ENABLED")
+		})
 		aws(t)
+		ctx := context.Background()
+		sender, err := NewSenderFromEnvironment(ctx)
 		ctx := context.Background()
 		sender, err := NewSenderFromEnvironment(ctx)
 		require.NoError(t, err)
