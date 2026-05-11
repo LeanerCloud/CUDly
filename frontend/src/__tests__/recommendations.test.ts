@@ -3499,6 +3499,9 @@ describe('effectiveSavingsPct', () => {
 });
 
 describe('onDemandMonthly', () => {
+  // #330: onDemandMonthly returns the provider-supplied on_demand_cost
+  // directly. No reconstruction fallback — when the provider didn't
+  // populate on_demand_cost, the column renders an em-dash.
   const mk = (overrides: Partial<LocalRecommendation>): LocalRecommendation => ({
     id: 'r',
     provider: 'aws',
@@ -3513,54 +3516,52 @@ describe('onDemandMonthly', () => {
     ...overrides,
   } as unknown as LocalRecommendation);
 
-  test('null monthly_cost returns null (data not provided)', () => {
-    expect(onDemandMonthly(mk({ monthly_cost: null }))).toBeNull();
-    expect(onDemandMonthly(mk({ monthly_cost: undefined }))).toBeNull();
+  test('returns provider on_demand_cost directly when populated', () => {
+    // The function must return the raw provider value, not any reconstruction.
+    const odm = onDemandMonthly(mk({
+      on_demand_cost: 500,
+      savings: 100,
+      upfront_cost: 0,
+      monthly_cost: 50,
+      term: 1,
+    }));
+    expect(odm).toBe(500);
   });
 
-  test('term=0 returns null (anomaly — cannot amortize over zero months)', () => {
-    expect(onDemandMonthly(mk({ term: 0, monthly_cost: 50 }))).toBeNull();
+  test('null on_demand_cost returns null (no reconstruction fallback)', () => {
+    // Explicit null — common for legacy cached recs that pre-date #277/#312.
+    expect(onDemandMonthly(mk({ on_demand_cost: null }))).toBeNull();
   });
 
-  test('no-upfront: on_demand_monthly = monthly_cost + savings', () => {
-    // upfront_cost = 0 → amortized = 0 → on_demand = 50 + 100 = 150
-    const odm = onDemandMonthly(mk({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 }));
-    expect(odm).not.toBeNull();
-    expect(odm!).toBeCloseTo(150, 2);
+  test('explicit undefined on_demand_cost returns null', () => {
+    // TypeScript's strict mode lets callers pass `undefined` rather than
+    // omitting the field; assert that branch explicitly so a future
+    // `r.on_demand_cost > 0` guard regression doesn't accept undefined.
+    expect(onDemandMonthly(mk({ on_demand_cost: undefined }))).toBeNull();
   });
 
-  test('partial-upfront: on_demand_monthly includes amortized upfront', () => {
-    // upfront_cost = 600, term = 1 → amortized = 600/12 = 50/mo
-    // on_demand = 0 + 50 + 50 = 100
-    const odm = onDemandMonthly(mk({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1 }));
-    expect(odm).not.toBeNull();
-    expect(odm!).toBeCloseTo(100, 2);
+  test('missing on_demand_cost field returns null', () => {
+    // Distinct from the explicit-undefined case: the property never
+    // existed on the object (e.g. legacy cached recs from before #277).
+    const r = mk({});
+    delete (r as { on_demand_cost?: unknown }).on_demand_cost;
+    expect(onDemandMonthly(r)).toBeNull();
   });
 
-  test('3yr partial-upfront: on_demand_monthly amortizes upfront over 36 months', () => {
-    // upfront_cost = 7200, term = 3 → amortized = 7200/36 = 200/mo
-    // on_demand = 200 + 600 + 200 = 1000
-    const odm = onDemandMonthly(mk({ savings: 600, upfront_cost: 7200, monthly_cost: 200, term: 3 }));
-    expect(odm).not.toBeNull();
-    expect(odm!).toBeCloseTo(1000, 2);
+  test('on_demand_cost=0 returns null (provider treats 0 as not-populated)', () => {
+    // Same convention as the on_demand_cost preference branch in
+    // effectiveSavingsPct: zero means the provider didn't report it.
+    expect(onDemandMonthly(mk({ on_demand_cost: 0 }))).toBeNull();
   });
 
-  test('monthly_cost=0 (all-upfront): on_demand_monthly = savings + amortized_upfront', () => {
-    // monthly_cost = 0 is valid known data (all-upfront commitment)
-    // upfront_cost = 1200, term = 1 → amortized = 100/mo
-    // on_demand = 0 + 200 + 100 = 300
-    const odm = onDemandMonthly(mk({ savings: 200, upfront_cost: 1200, monthly_cost: 0, term: 1 }));
-    expect(odm).not.toBeNull();
-    expect(odm!).toBeCloseTo(300, 2);
-  });
-
-  test('identity: on_demand_monthly = monthly_cost + savings + (upfront_cost / (term*12))', () => {
-    // The value must satisfy the documented formula exactly.
-    const r = mk({ savings: 120, upfront_cost: 3600, monthly_cost: 80, term: 3 });
-    const expected = 80 + 120 + (3600 / (3 * 12));  // = 80 + 120 + 100 = 300
-    const odm = onDemandMonthly(r);
-    expect(odm).not.toBeNull();
-    expect(odm!).toBeCloseTo(expected, 5);
+  test('positive on_demand_cost wins regardless of monthly_cost / term / upfront', () => {
+    // Whatever the supporting fields say, the provider value is authoritative.
+    expect(onDemandMonthly(mk({
+      on_demand_cost: 1500,
+      monthly_cost: null,
+      term: 0,
+      upfront_cost: 99999,
+    }))).toBe(1500);
   });
 });
 
@@ -3705,10 +3706,9 @@ describe('Monthly Cost + Effective % column rendering', () => {
     );
   });
 
-  test('On-Demand Monthly column renders formatCurrency when monthly_cost is non-null', async () => {
-    // savings=100, upfront_cost=0, monthly_cost=50, term=1
-    // on_demand_monthly = 50 + 100 + 0 = 150 → formatCurrency → "$150"
-    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
+  test('On-Demand Monthly column renders formatCurrency from provider on_demand_cost (#330)', async () => {
+    // #330 — column shows the raw provider value, not a reconstruction.
+    const rec = baseRec({ on_demand_cost: 150, savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [rec],
@@ -3723,14 +3723,16 @@ describe('Monthly Cost + Effective % column rendering', () => {
     // Pin the specific on_demand_monthly cell by column index (not a scan of all tds).
     const odmColIdx = Array.from(document.querySelectorAll('th'))
       .findIndex((th) => th.getAttribute('data-sort') === 'on_demand_monthly');
+    expect(odmColIdx).toBeGreaterThanOrEqual(0);
     const firstRowCells = Array.from(
       document.querySelectorAll('tbody tr.recommendation-row td'),
     );
     expect(firstRowCells[odmColIdx]?.textContent).toBe('$150');
   });
 
-  test('On-Demand Monthly column renders em-dash when monthly_cost is null', async () => {
-    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: null, term: 1 });
+  test('On-Demand Monthly column renders em-dash when on_demand_cost is missing (#330)', async () => {
+    // #330 — without provider on_demand_cost, no reconstruction; cell is em-dash.
+    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [rec],
@@ -3748,10 +3750,11 @@ describe('Monthly Cost + Effective % column rendering', () => {
     expect(firstRowCells[odmColIdx]?.textContent).toBe('—');
   });
 
-  test('on_demand_monthly numeric filter: null monthly_cost row does not match = 0', async () => {
-    // When monthly_cost is null, on_demand_monthly returns null → NaN sentinel in numericCellValue.
-    // A filter expr "0" (equals zero) must NOT match such rows.
-    const nullRec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: null, term: 1 });
+  test('on_demand_monthly numeric filter: row with no on_demand_cost does not match = 0 (#330)', async () => {
+    // #330 — without provider on_demand_cost, onDemandMonthly returns null,
+    // which becomes a NaN sentinel in numericCellValue. A filter expr "0"
+    // (equals zero) must NOT match such rows.
+    const nullRec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [nullRec],
