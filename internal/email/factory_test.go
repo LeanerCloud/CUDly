@@ -209,6 +209,87 @@ func TestNewSenderFromEnvironment_UnsupportedProvider(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported email provider")
 }
 
+// TestNewSenderFromEnvironment_EmailEnabled covers the EMAIL_ENABLED
+// short-circuit added by issue #332. When EMAIL_ENABLED parses as
+// false the factory returns a NopSender and skips the provider
+// dispatch entirely; when it parses as true / is unset / is unparseable
+// the factory falls through to the normal SECRET_PROVIDER-based path.
+func TestNewSenderFromEnvironment_EmailEnabled(t *testing.T) {
+	// Provider env vars used by the fall-through path (SECRET_PROVIDER=aws).
+	// Kept stable across sub-tests; t.Setenv resets after each.
+	aws := func(t *testing.T) {
+		t.Setenv("SECRET_PROVIDER", "aws")
+		t.Setenv("SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:topic")
+		t.Setenv("FROM_EMAIL", "noreply@example.com")
+	}
+
+	// Cases where EMAIL_ENABLED parses as false → NopSender, regardless of
+	// what SECRET_PROVIDER says. We deliberately set SECRET_PROVIDER=env
+	// (an unsupported email backend) to prove the short-circuit fires
+	// BEFORE the dispatch — the test would error out otherwise.
+	for _, val := range []string{"false", "False", "FALSE", "0", "f", "F"} {
+		t.Run("disabled_"+val, func(t *testing.T) {
+			t.Setenv("EMAIL_ENABLED", val)
+			t.Setenv("SECRET_PROVIDER", "env")
+			ctx := context.Background()
+			sender, err := NewSenderFromEnvironment(ctx)
+			require.NoError(t, err)
+			require.NotNil(t, sender)
+			_, ok := sender.(*NopSender)
+			assert.True(t, ok, "Expected NopSender for EMAIL_ENABLED=%q, got %T", val, sender)
+		})
+	}
+
+	// Cases where EMAIL_ENABLED parses as true → fall through to AWS sender.
+	for _, val := range []string{"true", "True", "TRUE", "1", "t", "T"} {
+		t.Run("enabled_"+val, func(t *testing.T) {
+			t.Setenv("EMAIL_ENABLED", val)
+			aws(t)
+			ctx := context.Background()
+			sender, err := NewSenderFromEnvironment(ctx)
+			require.NoError(t, err)
+			require.NotNil(t, sender)
+			_, ok := sender.(*Sender)
+			assert.True(t, ok, "Expected AWS Sender for EMAIL_ENABLED=%q, got %T", val, sender)
+		})
+	}
+
+	// Unset / empty → factory takes the default-enabled path.
+	t.Run("unset_falls_through", func(t *testing.T) {
+		os.Unsetenv("EMAIL_ENABLED")
+		aws(t)
+		ctx := context.Background()
+		sender, err := NewSenderFromEnvironment(ctx)
+		require.NoError(t, err)
+		_, ok := sender.(*Sender)
+		assert.True(t, ok, "Expected AWS Sender when EMAIL_ENABLED is unset")
+	})
+
+	t.Run("empty_falls_through", func(t *testing.T) {
+		t.Setenv("EMAIL_ENABLED", "")
+		aws(t)
+		ctx := context.Background()
+		sender, err := NewSenderFromEnvironment(ctx)
+		require.NoError(t, err)
+		_, ok := sender.(*Sender)
+		assert.True(t, ok, "Expected AWS Sender when EMAIL_ENABLED is empty")
+	})
+
+	// Unparseable value: factory logs a warning and falls through to the
+	// default-enabled path rather than crashing. This protects an existing
+	// deployment that accidentally sets EMAIL_ENABLED=maybe — the misconfig
+	// is visible in logs but doesn't take the app down.
+	t.Run("unparseable_warns_and_falls_through", func(t *testing.T) {
+		t.Setenv("EMAIL_ENABLED", "maybe")
+		aws(t)
+		ctx := context.Background()
+		sender, err := NewSenderFromEnvironment(ctx)
+		require.NoError(t, err)
+		_, ok := sender.(*Sender)
+		assert.True(t, ok, "Expected AWS Sender for unparseable EMAIL_ENABLED")
+	})
+}
+
 // Test NewSenderWithConfig
 func TestNewSenderWithConfig_AWS(t *testing.T) {
 	cfg := FactoryConfig{
