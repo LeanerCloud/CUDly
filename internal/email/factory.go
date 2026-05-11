@@ -39,8 +39,16 @@ type FactoryConfig struct {
 }
 
 // NewSenderFromEnvironment creates an email sender based on environment variables
-// It auto-detects the cloud provider from SECRET_PROVIDER or CLOUD_PROVIDER env vars
+// It auto-detects the cloud provider from SECRET_PROVIDER or CLOUD_PROVIDER env vars.
+// When EMAIL_ENABLED=false (local dev / disabled deployments), returns a no-op
+// sender that logs invocations instead of failing on missing cloud creds — this
+// lets the rest of the application come up without a real SES/SNS/Azure/GCP setup.
 func NewSenderFromEnvironment(ctx context.Context) (SenderInterface, error) {
+	if os.Getenv("EMAIL_ENABLED") == "false" {
+		logging.Infof("Email sending is disabled (EMAIL_ENABLED=false); using no-op sender")
+		return NewNopSender(), nil
+	}
+
 	// Detect provider from environment
 	provider := os.Getenv("SECRET_PROVIDER")
 	if provider == "" {
