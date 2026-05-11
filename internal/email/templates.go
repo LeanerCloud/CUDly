@@ -3,6 +3,8 @@ package email
 import (
 	"context"
 	"fmt"
+
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
 // Email templates
@@ -416,6 +418,10 @@ func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, reci
 	// to the single-part path on each transport.
 	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
 	if htmlErr != nil {
+		// Surface the render failure for production diagnosis. We deliberately
+		// don't return — text-only delivery is the safer fallback than dropping
+		// the approval email entirely.
+		logging.Warnf("email: HTML approval-request render failed, falling back to text-only: %v", htmlErr)
 		htmlBody = ""
 	}
 	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)

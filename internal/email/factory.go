@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -38,9 +39,26 @@ type FactoryConfig struct {
 	AzureSMTPHost     string // Defaults to "smtp.azurecomm.net" if empty
 }
 
-// NewSenderFromEnvironment creates an email sender based on environment variables
-// It auto-detects the cloud provider from SECRET_PROVIDER or CLOUD_PROVIDER env vars
+// NewSenderFromEnvironment creates an email sender based on environment variables.
+// It auto-detects the cloud provider from SECRET_PROVIDER or CLOUD_PROVIDER env vars.
+// When EMAIL_ENABLED parses as false (local dev / disabled deployments), returns a
+// no-op sender that logs invocations instead of failing on missing cloud creds —
+// this lets the rest of the application come up without a real SES/SNS/Azure/GCP
+// setup. Unset / empty / unparseable values keep the default (email enabled) so
+// existing deployments that don't set the var are unaffected; an unparseable
+// value emits a warning so the misconfiguration is visible in logs.
 func NewSenderFromEnvironment(ctx context.Context) (SenderInterface, error) {
+	if v := os.Getenv("EMAIL_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		switch {
+		case err != nil:
+			logging.Warnf("email: EMAIL_ENABLED=%q is not a valid boolean; treating as enabled", v)
+		case !enabled:
+			logging.Infof("Email sending is disabled (EMAIL_ENABLED=%s); using no-op sender", v)
+			return NewNopSender(), nil
+		}
+	}
+
 	// Detect provider from environment
 	provider := os.Getenv("SECRET_PROVIDER")
 	if provider == "" {
