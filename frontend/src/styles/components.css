@@ -906,9 +906,8 @@ tr.recommendation-row:hover {
 /* Sort-hidden indicator */
 .recommendations-filter-status .sort-hidden-note {
     font-size: 0.82em;
-    color: `#666`;
+    color: #666;
     font-style: italic;
-}
 }
 
 /* Column-visibility popover */
