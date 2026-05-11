@@ -256,6 +256,14 @@ func TestNewSenderFromEnvironment_EmailEnabled(t *testing.T) {
 
 	// Unset / empty → factory takes the default-enabled path.
 	t.Run("unset_falls_through", func(t *testing.T) {
+		orig, hadOrig := os.LookupEnv("EMAIL_ENABLED")
+		t.Cleanup(func() {
+			if hadOrig {
+				os.Setenv("EMAIL_ENABLED", orig)
+			} else {
+				os.Unsetenv("EMAIL_ENABLED")
+			}
+		})
 		os.Unsetenv("EMAIL_ENABLED")
 		aws(t)
 		ctx := context.Background()
