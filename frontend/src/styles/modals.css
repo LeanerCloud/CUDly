@@ -239,7 +239,10 @@
     position: fixed;
     inset: 0;
     background: #fff;
-    z-index: 900;
+    /* 1100 sits above .modal/.modal-overlay (z-index: 1000) so the education
+       page renders on top of open modals, which is how the overlay gets
+       launched (user clicks the CTA link inside a modal). */
+    z-index: 1100;
     overflow-y: auto;
 }
 

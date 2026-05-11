@@ -287,11 +287,13 @@ func (m *Manager) sendPurchaseNotification(ctx context.Context, exec *config.Pur
 }
 
 func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, plan *config.PurchasePlan, totalSavings, totalUpfront float64) email.NotificationData {
+	dashboardBase := strings.TrimRight(m.dashboardURL, "/")
 	data := email.NotificationData{
-		DashboardURL:     m.dashboardURL,
-		TotalSavings:     totalSavings,
-		TotalUpfrontCost: totalUpfront,
-		PlanName:         plan.Name,
+		DashboardURL:        dashboardBase,
+		TotalSavings:        totalSavings,
+		TotalUpfrontCost:    totalUpfront,
+		PlanName:            plan.Name,
+		ArcheraEducationURL: dashboardBase + "/archera-insurance",
 	}
 
 	for _, rec := range exec.Recommendations {

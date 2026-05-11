@@ -24,39 +24,58 @@
 /** Canonical Archera signup URL with CUDly attribution. */
 export const ARCHERA_SIGNUP_URL = 'https://archera.ai/signup?mode=cudly';
 
+/**
+ * Frontend URL path for Page A (What is Archera Insurance?).
+ * Used as the `ArcheraEducationURL` in email templates so the link from
+ * the approval / confirmation email lands directly on this page.
+ * Must stay in sync with the path checked in handleArcheraDeeplink().
+ */
+export const ARCHERA_PAGE_A_PATH = '/archera-insurance';
+
+/**
+ * Frontend URL path for Page B (How the integration works).
+ * Must stay in sync with the path checked in handleArcheraDeeplink().
+ */
+export const ARCHERA_PAGE_B_PATH = '/archera-insurance/how-it-works';
+
 /** Page identifiers for the education overlay. */
 export type ArcheraPageId = 'what-is-archera' | 'how-it-works';
 
+/** Context for the CTA — controls the link text. */
+export type ArcheraCTAContext = 'purchase' | 'plan';
+
 /**
- * Return a small CTA paragraph element:
- *   "💡 Worried about committing? Archera Insurance underwrites
- *    commitment-overuse — learn how it works →"
+ * Module-scoped reference to the element that was focused when the overlay
+ * was last opened. Restored by closeArcheraPage so keyboard users return to
+ * their original position.
+ */
+let _previouslyFocused: HTMLElement | null = null;
+
+/**
+ * Return a small CTA paragraph element linking to the Archera Insurance
+ * education overlay.
  *
- * Clicking the button opens Page A (the "What is Archera Insurance?" overlay).
+ * - context 'purchase' (default): "Insure this commitment with Archera →"
+ * - context 'plan':               "Insure this plan with Archera →"
+ *
  * The element uses the `.archera-cta` CSS class for muted, non-pushy styling.
+ * Clicking opens the "What is Archera Insurance?" overlay (Page A).
+ *
+ * TODO(@cristim): final copy review — confirm exact CTA wording before merge.
  *
  * Exported for use in openPurchaseModal (recommendations.ts) and
  * openCreatePlanModal / openNewPlanModal (plans.ts).
  */
-export function renderArcheraCTA(): HTMLParagraphElement {
+export function renderArcheraCTA(context: ArcheraCTAContext = 'purchase'): HTMLParagraphElement {
   const p = document.createElement('p');
   p.className = 'archera-cta';
-
-  const icon = document.createElement('span');
-  icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = '💡 ';
-  p.appendChild(icon);
-
-  p.appendChild(
-    document.createTextNode(
-      'Worried about committing? Archera Insurance underwrites commitment-overuse — ',
-    ),
-  );
 
   const btn = document.createElement('button');
   btn.className = 'archera-cta-link';
   btn.type = 'button';
-  btn.textContent = 'learn how it works →';
+  // TODO(@cristim): final copy review
+  btn.textContent =
+    context === 'plan' ? 'Insure this plan with Archera →' : 'Insure this commitment with Archera →';
   btn.addEventListener('click', () => openArcheraPage('what-is-archera'));
   p.appendChild(btn);
 
@@ -70,6 +89,11 @@ export function renderArcheraCTA(): HTMLParagraphElement {
 export function openArcheraPage(pageId: ArcheraPageId): void {
   const container = document.getElementById('archera-page-container');
   if (!container) return;
+
+  // Save the currently focused element so we can restore focus on close.
+  _previouslyFocused = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
 
   // Clear existing content via DOM methods (no innerHTML to avoid XSS lint).
   while (container.firstChild) container.removeChild(container.firstChild);
@@ -97,6 +121,45 @@ export function closeArcheraPage(): void {
   if (!container) return;
   container.classList.add('hidden');
   while (container.firstChild) container.removeChild(container.firstChild);
+
+  // Restore focus to the element that was active before the overlay opened,
+  // provided it is still in the document and is focusable.
+  if (
+    _previouslyFocused !== null &&
+    document.contains(_previouslyFocused) &&
+    typeof _previouslyFocused.focus === 'function'
+  ) {
+    _previouslyFocused.focus();
+  }
+  _previouslyFocused = null;
+}
+
+/**
+ * Deep-link handler for Archera education page URLs.
+ *
+ * Called from app.ts `init()` after authentication, before normal tab
+ * routing. If the current URL path is `/archera-insurance` or
+ * `/archera-insurance/how-it-works`, opens the corresponding overlay.
+ * The normal tab routing then runs underneath (dashboard becomes active),
+ * so the user has a fully functional app behind the overlay.
+ *
+ * Returns true if the path matched and the overlay was opened, false
+ * if no match (caller can continue with normal routing as-is).
+ *
+ * The path constants ARCHERA_PAGE_A_PATH / ARCHERA_PAGE_B_PATH are the
+ * source of truth for the URLs used in email templates (ArcheraEducationURL).
+ */
+export function handleArcheraDeeplink(): boolean {
+  const path = window.location.pathname.replace(/\/+$/, '');
+  if (path === ARCHERA_PAGE_B_PATH) {
+    openArcheraPage('how-it-works');
+    return true;
+  }
+  if (path === ARCHERA_PAGE_A_PATH || path.startsWith(ARCHERA_PAGE_A_PATH + '/')) {
+    openArcheraPage('what-is-archera');
+    return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,14 +173,18 @@ function buildPageA(root: HTMLElement): void {
   h1.textContent = 'What is Archera Insurance?';
   root.appendChild(h1);
 
+  // Transparency disclosure — lead with this, don't bury it.
+  // TODO(@cristim): final disclosure copy — substance (no-gating + sponsorship) must stay.
+  appendDisclosureSection(root);
+
   // TODO(@cristim): final copy — review wording with Archera before publishing
   const intro = document.createElement('p');
   intro.className = 'archera-page-lead';
   intro.textContent =
     'Cloud commitment discounts (Reserved Instances, Savings Plans, CUDs) offer ' +
     'significant savings but require locking in capacity you may not fully use. ' +
-    'Archera Insurance lets you buy that commitment coverage while protecting yourself ' +
-    'against overcommitment — if your usage drops, Archera covers the gap.';
+    'Archera Insurance protects against that risk — if you end up using less than ' +
+    'you committed to, Archera covers the gap.';
   root.appendChild(intro);
 
   appendSection(root, 'How it works', [
@@ -171,6 +238,10 @@ function buildPageB(root: HTMLElement): void {
   const h1 = document.createElement('h1');
   h1.textContent = 'How the CUDly ↔ Archera integration works';
   root.appendChild(h1);
+
+  // Shorter transparency disclosure for users landing directly on Page B.
+  // TODO(@cristim): final disclosure copy — substance must stay.
+  appendDisclosureSection(root, true);
 
   // TODO(@cristim): final copy — verify step sequence with Archera team
   const intro = document.createElement('p');
@@ -264,6 +335,67 @@ function buildPageB(root: HTMLElement): void {
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Append the transparency disclosure block to the given parent element.
+ *
+ * @param root   - Parent element to append to.
+ * @param short  - If true, render the single-paragraph "Page B" version
+ *                 instead of the full two-paragraph "Page A" version.
+ *
+ * Two non-negotiable facts are always present:
+ *   1. CUDly is fully functional without Archera Insurance.
+ *   2. Archera sponsors CUDly's development with a fraction of their revenue.
+ *
+ * TODO(@cristim): final disclosure copy — the substance (no-gating + sponsorship)
+ *   must stay; only the exact wording is provisional.
+ */
+function appendDisclosureSection(root: HTMLElement, short = false): void {
+  const section = document.createElement('section');
+  section.className = 'archera-disclosure';
+
+  const h2 = document.createElement('h2');
+  h2.textContent = short ? 'Disclosure' : 'Why is CUDly telling me about this?';
+  section.appendChild(h2);
+
+  if (short) {
+    // One-paragraph version for Page B
+    const p = document.createElement('p');
+    p.textContent =
+      'CUDly works fully without Archera — every feature operates identically ' +
+      'whether or not you enroll. Archera sponsors CUDly\'s development with a ' +
+      'share of their insurance revenue.';
+    section.appendChild(p);
+  } else {
+    // Two-paragraph version for Page A
+    const p1 = document.createElement('p');
+    const strong1 = document.createElement('strong');
+    strong1.textContent = 'CUDly works fully without Archera Insurance.';
+    p1.appendChild(strong1);
+    p1.appendChild(
+      document.createTextNode(
+        ' Every feature — recommendations, scheduling, plans, the dashboard — ' +
+          'operates identically whether or not you enroll.',
+      ),
+    );
+    section.appendChild(p1);
+
+    const p2 = document.createElement('p');
+    const strong2 = document.createElement('strong');
+    strong2.textContent = 'Why surface this at all?';
+    p2.appendChild(strong2);
+    p2.appendChild(
+      document.createTextNode(
+        ' Archera sponsors CUDly\'s development with a share of their insurance revenue. ' +
+          'We surface the option because we think commitment-overuse insurance is genuinely ' +
+          'useful for some users, but you should know about the financial relationship.',
+      ),
+    );
+    section.appendChild(p2);
+  }
+
+  root.appendChild(section);
+}
 
 function buildBackButton(): HTMLButtonElement {
   const btn = document.createElement('button');

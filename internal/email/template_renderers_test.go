@@ -347,6 +347,95 @@ func TestRenderPurchaseApprovalRequestEmailHTML_Issue287(t *testing.T) {
 	assert.Contains(t, html, "Cancellation windows after approval are limited")
 }
 
+// Issue #314: when ArcheraEducationURL is set, the three purchase-flow
+// templates include an Archera mention with the 7-day enrollment window.
+
+func TestRenderPurchaseApprovalRequestEmail_ArcheraBlock(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:        "https://dashboard.example.com",
+		ApprovalToken:       "tkn-xyz",
+		ExecutionID:         "exec-314",
+		TotalUpfrontCost:    500.00,
+		TotalSavings:        50.00,
+		ArcheraEducationURL: "https://dashboard.example.com/archera-insurance",
+		Recommendations: []RecommendationSummary{{
+			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 1, MonthlySavings: 50.00,
+		}},
+	}
+
+	body, err := RenderPurchaseApprovalRequestEmail(data)
+	require.NoError(t, err)
+
+	assert.Contains(t, body, "Archera")
+	assert.Contains(t, body, "7 day") // template uses "7 days" in approval, "7-day" in confirmation
+	assert.Contains(t, body, "https://dashboard.example.com/archera-insurance")
+}
+
+func TestRenderPurchaseApprovalRequestEmail_NoArcheraBlock_WhenURLEmpty(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:     "https://dashboard.example.com",
+		ApprovalToken:    "tkn-xyz",
+		ExecutionID:      "exec-314b",
+		TotalUpfrontCost: 500.00,
+		TotalSavings:     50.00,
+		// ArcheraEducationURL intentionally empty
+		Recommendations: []RecommendationSummary{{
+			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 1, MonthlySavings: 50.00,
+		}},
+	}
+
+	body, err := RenderPurchaseApprovalRequestEmail(data)
+	require.NoError(t, err)
+
+	assert.NotContains(t, body, "Archera Insurance")
+	assert.NotContains(t, body, "archera-insurance")
+}
+
+func TestRenderPurchaseApprovalRequestEmailHTML_ArcheraBlock(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:        "https://dashboard.example.com",
+		ApprovalToken:       "tkn-xyz",
+		ExecutionID:         "exec-314",
+		TotalUpfrontCost:    500.00,
+		TotalSavings:        50.00,
+		ArcheraEducationURL: "https://dashboard.example.com/archera-insurance",
+		Recommendations: []RecommendationSummary{{
+			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 1, MonthlySavings: 50.00,
+		}},
+	}
+
+	html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+	require.NoError(t, err)
+
+	assert.Contains(t, html, "Archera")
+	assert.Contains(t, html, "7&nbsp;days") // HTML entity used in template for non-breaking space
+	assert.Contains(t, html, "https://dashboard.example.com/archera-insurance")
+}
+
+func TestRenderPurchaseConfirmationEmail_ArcheraBlock(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:        "https://dashboard.example.com",
+		TotalSavings:        1200.00,
+		TotalUpfrontCost:    4800.00,
+		ArcheraEducationURL: "https://dashboard.example.com/archera-insurance",
+		Recommendations: []RecommendationSummary{{
+			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 2, MonthlySavings: 600.00,
+		}},
+	}
+
+	body, err := RenderPurchaseConfirmationEmail(data)
+	require.NoError(t, err)
+
+	assert.Contains(t, body, "Archera")
+	assert.Contains(t, body, "7-day") // confirmation template uses "7-day enrollment window"
+	assert.Contains(t, body, "https://archera.ai/signup?mode=cudly")
+	assert.Contains(t, body, "https://dashboard.example.com/archera-insurance")
+}
+
 // Issue #287: when AuthorizedApprovers is empty the HTML omits the
 // approver-warning block (legacy broadcast behaviour preserved).
 func TestRenderPurchaseApprovalRequestEmailHTML_NoApprovers(t *testing.T) {

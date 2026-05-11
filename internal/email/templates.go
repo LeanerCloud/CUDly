@@ -76,7 +76,13 @@ Total Monthly Savings: ${{printf "%.2f" .TotalSavings}}
 
 View purchase history in the dashboard:
 {{.DashboardURL}}/history
-
+{{if .ArcheraEducationURL}}
+---
+Archera Insurance — 7-day enrollment window now active.
+Cover your commitments above if usage drops: Archera pays the difference.
+Learn more: {{.ArcheraEducationURL}}
+Sign up:    https://archera.ai/signup?mode=cudly
+{{end}}
 This is an automated message from CUDly.
 `
 
@@ -319,7 +325,12 @@ Refund) for the current policy on the resource type you're approving.
 {{end}}
 Clicking a link will require you to sign in if you aren't already; the
 action is then recorded against your logged-in account.
-
+{{if .ArcheraEducationURL}}
+---
+Archera Insurance: after approving, the buyer has 7 days from each purchase
+to enroll for commitment-overuse coverage.
+Learn more: {{.ArcheraEducationURL}}
+{{end}}
 This is an automated message from CUDly. Do not share these links.
 `
 
@@ -394,6 +405,15 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 </p>
 <p style="margin:8px 0 0 0;color:#94a3b8;font-size:11px;">Clicking a link will require you to sign in if you aren't already; the action is then recorded against your logged-in account.</p>
 </td></tr>
+
+{{if .ArcheraEducationURL}}
+<tr><td style="padding:8px 32px 16px 32px;border-top:1px solid #e2e8f0;">
+<p style="margin:0;color:#475569;font-size:12px;line-height:1.5;">
+<strong>Archera Insurance:</strong> after approving, the buyer has 7&nbsp;days from each purchase to enroll for commitment-overuse coverage.
+<a href="{{.ArcheraEducationURL}}" style="color:#0369a1;">Learn more →</a>
+</p>
+</td></tr>
+{{end}}
 
 <tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
 <p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly. Do not share these links.</p>

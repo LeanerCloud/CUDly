@@ -804,7 +804,7 @@ function injectPlanModalCTA(planModal: HTMLElement): void {
   const buttons = planModal.querySelector<HTMLElement>('.modal-buttons');
   if (!form || !buttons) return;
 
-  const cta = renderArcheraCTA();
+  const cta = renderArcheraCTA('plan');
   cta.id = 'archera-plan-cta';
   form.insertBefore(cta, buttons);
 }

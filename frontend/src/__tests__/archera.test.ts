@@ -17,7 +17,10 @@ import {
   renderArcheraCTA,
   openArcheraPage,
   closeArcheraPage,
+  handleArcheraDeeplink,
   ARCHERA_SIGNUP_URL,
+  ARCHERA_PAGE_A_PATH,
+  ARCHERA_PAGE_B_PATH,
 } from '../archera';
 import { openPurchaseModal } from '../recommendations';
 import { openCreatePlanModal, openNewPlanModal } from '../plans';
@@ -78,6 +81,18 @@ jest.mock('../commitmentOptions', () => ({
 jest.mock('../confirmDialog', () => ({
   confirmDialog: jest.fn(() => Promise.resolve(true)),
 }));
+
+// ---------------------------------------------------------------------------
+// Global DOM teardown — prevents stale-node collisions between test suites.
+// ---------------------------------------------------------------------------
+
+afterEach(() => {
+  ['archera-page-container', 'purchase-modal', 'plan-modal'].forEach(id => {
+    document.getElementById(id)?.remove();
+  });
+  // Also remove any loose .archera-cta elements appended directly to body.
+  document.querySelectorAll('.archera-cta').forEach(el => el.remove());
+});
 
 // ---------------------------------------------------------------------------
 // DOM setup helpers
@@ -176,18 +191,21 @@ describe('renderArcheraCTA', () => {
     expect(el.classList.contains('archera-cta')).toBe(true);
   });
 
-  it('contains the commitment-overuse CTA text', () => {
+  it('contains the "Insure this commitment with Archera" CTA text for default context', () => {
     const el = renderArcheraCTA();
-    expect(el.textContent).toContain('Worried about committing');
-    expect(el.textContent).toContain('Archera Insurance');
-    expect(el.textContent).toContain('commitment-overuse');
+    expect(el.textContent).toContain('Insure this commitment with Archera');
+  });
+
+  it('contains the "Insure this plan with Archera" CTA text for plan context', () => {
+    const el = renderArcheraCTA('plan');
+    expect(el.textContent).toContain('Insure this plan with Archera');
   });
 
   it('contains a button with discernible name to trigger the overlay', () => {
     const el = renderArcheraCTA();
     const btn = el.querySelector('button.archera-cta-link');
     expect(btn).not.toBeNull();
-    expect(btn!.textContent).toMatch(/learn how it works/i);
+    expect(btn!.textContent).toMatch(/Archera/i);
   });
 
   it('opens Page A when the CTA button is clicked', () => {
@@ -371,10 +389,11 @@ describe('openPurchaseModal — Archera CTA', () => {
     expect(cta).not.toBeNull();
   });
 
-  it('CTA text mentions Archera Insurance', async () => {
+  it('CTA text mentions Archera', async () => {
     await openPurchaseModal([]);
     const cta = document.querySelector('#purchase-details .archera-cta')!;
-    expect(cta.textContent).toContain('Archera Insurance');
+    expect(cta.textContent).toContain('Archera');
+    expect(cta.textContent).toContain('Insure this commitment');
   });
 
   it('CTA is re-rendered fresh on each modal open (no duplication)', async () => {
@@ -399,7 +418,8 @@ describe('openCreatePlanModal — Archera CTA', () => {
     openCreatePlanModal();
     const cta = document.getElementById('archera-plan-cta');
     expect(cta).not.toBeNull();
-    expect(cta!.textContent).toContain('Archera Insurance');
+    expect(cta!.textContent).toContain('Archera');
+    expect(cta!.textContent).toContain('Insure this plan');
   });
 
   it('CTA appears before .modal-buttons', () => {
@@ -431,7 +451,8 @@ describe('openNewPlanModal — Archera CTA', () => {
     openNewPlanModal();
     const cta = document.getElementById('archera-plan-cta');
     expect(cta).not.toBeNull();
-    expect(cta!.textContent).toContain('Archera Insurance');
+    expect(cta!.textContent).toContain('Archera');
+    expect(cta!.textContent).toContain('Insure this plan');
   });
 
   it('does not duplicate the CTA if opened multiple times', () => {
@@ -439,5 +460,102 @@ describe('openNewPlanModal — Archera CTA', () => {
     openNewPlanModal();
     const ctas = document.querySelectorAll('#plan-modal .archera-cta');
     expect(ctas.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Transparency disclosures — Page A and Page B
+// ---------------------------------------------------------------------------
+
+describe('transparency disclosures', () => {
+  beforeEach(() => {
+    buildArcheraContainer();
+  });
+
+  it('Page A contains "CUDly works fully without Archera" fact', () => {
+    openArcheraPage('what-is-archera');
+    const text = document.getElementById('archera-page-container')!.textContent!;
+    expect(text).toMatch(/fully without Archera/i);
+  });
+
+  it('Page A contains the Archera sponsorship fact', () => {
+    openArcheraPage('what-is-archera');
+    const text = document.getElementById('archera-page-container')!.textContent!;
+    expect(text).toMatch(/sponsors/i);
+    expect(text).toMatch(/revenue/i);
+  });
+
+  it('Page A disclosure heading reads "Why is CUDly telling me about this?"', () => {
+    openArcheraPage('what-is-archera');
+    const container = document.getElementById('archera-page-container')!;
+    const disclosure = container.querySelector('.archera-disclosure h2');
+    expect(disclosure?.textContent).toMatch(/Why is CUDly telling me about this/i);
+  });
+
+  it('Page B contains the "CUDly works fully without Archera" fact', () => {
+    openArcheraPage('how-it-works');
+    const text = document.getElementById('archera-page-container')!.textContent!;
+    expect(text).toMatch(/fully without Archera/i);
+  });
+
+  it('Page B contains the Archera sponsorship fact', () => {
+    openArcheraPage('how-it-works');
+    const text = document.getElementById('archera-page-container')!.textContent!;
+    expect(text).toMatch(/sponsors/i);
+  });
+
+  it('Page B disclosure heading reads "Disclosure"', () => {
+    openArcheraPage('how-it-works');
+    const container = document.getElementById('archera-page-container')!;
+    const disclosure = container.querySelector('.archera-disclosure h2');
+    expect(disclosure?.textContent).toBe('Disclosure');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleArcheraDeeplink
+// ---------------------------------------------------------------------------
+
+describe('handleArcheraDeeplink', () => {
+  beforeEach(() => {
+    buildArcheraContainer();
+  });
+
+  it('returns false and does not open overlay for a non-Archera path', () => {
+    Object.defineProperty(window, 'location', {
+      value: { pathname: '/dashboard' },
+      writable: true,
+      configurable: true,
+    });
+    const result = handleArcheraDeeplink();
+    expect(result).toBe(false);
+    const container = document.getElementById('archera-page-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('returns true and opens Page A for ARCHERA_PAGE_A_PATH', () => {
+    Object.defineProperty(window, 'location', {
+      value: { pathname: ARCHERA_PAGE_A_PATH },
+      writable: true,
+      configurable: true,
+    });
+    const result = handleArcheraDeeplink();
+    expect(result).toBe(true);
+    const container = document.getElementById('archera-page-container')!;
+    expect(container.classList.contains('hidden')).toBe(false);
+    expect(container.querySelector('h1')?.textContent).toBe('What is Archera Insurance?');
+  });
+
+  it('returns true and opens Page B for ARCHERA_PAGE_B_PATH', () => {
+    Object.defineProperty(window, 'location', {
+      value: { pathname: ARCHERA_PAGE_B_PATH },
+      writable: true,
+      configurable: true,
+    });
+    const result = handleArcheraDeeplink();
+    expect(result).toBe(true);
+    const container = document.getElementById('archera-page-container')!;
+    expect(container.classList.contains('hidden')).toBe(false);
+    expect(container.querySelector('h1')?.textContent).toContain('integration works');
   });
 });

@@ -1263,8 +1263,9 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 			MonthlySavings: rec.Savings,
 		})
 	}
+	dashboardBase := h.resolveDashboardURL(req)
 	data := email.NotificationData{
-		DashboardURL:        h.resolveDashboardURL(req),
+		DashboardURL:        dashboardBase,
 		ApprovalToken:       execution.ApprovalToken,
 		ExecutionID:         execution.ExecutionID,
 		TotalSavings:        totalSavings,
@@ -1273,6 +1274,7 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		RecipientEmail:      to,
 		CCEmails:            cc,
 		AuthorizedApprovers: approvers,
+		ArcheraEducationURL: dashboardBase + "/archera-insurance",
 	}
 	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
 		logging.Errorf("Failed to send purchase approval email: %v", err)
