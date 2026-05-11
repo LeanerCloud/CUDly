@@ -10,6 +10,13 @@ import (
 // It logs every invocation at debug level so local-dev / EMAIL_ENABLED=false
 // deployments can still trace where an email would have gone without
 // requiring real SES / SNS / Azure / GCP credentials.
+//
+// PII hygiene: logs only the method name and (for multi-recipient methods)
+// the recipient counts. We deliberately avoid logging email addresses,
+// subjects, or template-data payloads — even in dev, log files commonly
+// leak into shared environments (terminal scrollback, screen-shares,
+// support tickets), and addresses are sufficient identifying information
+// to require treating them as PII.
 type NopSender struct{}
 
 // NewNopSender constructs a no-op sender. Used when EMAIL_ENABLED=false.
@@ -18,18 +25,18 @@ func NewNopSender() *NopSender { return &NopSender{} }
 // Verify the no-op satisfies the full sender contract.
 var _ SenderInterface = (*NopSender)(nil)
 
-func (n *NopSender) SendNotification(_ context.Context, subject, _ string) error {
-	logging.Debugf("email/nop: SendNotification suppressed (subject=%q)", subject)
+func (n *NopSender) SendNotification(_ context.Context, _, _ string) error {
+	logging.Debugf("email/nop: SendNotification suppressed")
 	return nil
 }
 
-func (n *NopSender) SendToEmail(_ context.Context, toEmail, subject, _ string) error {
-	logging.Debugf("email/nop: SendToEmail suppressed (to=%q subject=%q)", toEmail, subject)
+func (n *NopSender) SendToEmail(_ context.Context, _, _, _ string) error {
+	logging.Debugf("email/nop: SendToEmail suppressed (to=1)")
 	return nil
 }
 
-func (n *NopSender) SendToEmailWithCCMultipart(_ context.Context, toEmail string, ccEmails []string, subject, _, _ string) error {
-	logging.Debugf("email/nop: SendToEmailWithCCMultipart suppressed (to=%q cc=%v subject=%q)", toEmail, ccEmails, subject)
+func (n *NopSender) SendToEmailWithCCMultipart(_ context.Context, _ string, ccEmails []string, _, _, _ string) error {
+	logging.Debugf("email/nop: SendToEmailWithCCMultipart suppressed (to=1 cc=%d)", len(ccEmails))
 	return nil
 }
 
@@ -53,13 +60,13 @@ func (n *NopSender) SendPurchaseFailedNotification(_ context.Context, _ Notifica
 	return nil
 }
 
-func (n *NopSender) SendPasswordResetEmail(_ context.Context, email, _ string) error {
-	logging.Debugf("email/nop: SendPasswordResetEmail suppressed (to=%q)", email)
+func (n *NopSender) SendPasswordResetEmail(_ context.Context, _, _ string) error {
+	logging.Debugf("email/nop: SendPasswordResetEmail suppressed")
 	return nil
 }
 
-func (n *NopSender) SendWelcomeEmail(_ context.Context, email, _, role string) error {
-	logging.Debugf("email/nop: SendWelcomeEmail suppressed (to=%q role=%q)", email, role)
+func (n *NopSender) SendWelcomeEmail(_ context.Context, _, _, role string) error {
+	logging.Debugf("email/nop: SendWelcomeEmail suppressed (role=%q)", role)
 	return nil
 }
 
@@ -83,7 +90,7 @@ func (n *NopSender) SendRegistrationReceivedNotification(_ context.Context, _ Re
 	return nil
 }
 
-func (n *NopSender) SendRegistrationDecisionNotification(_ context.Context, toEmail string, _ RegistrationDecisionData) error {
-	logging.Debugf("email/nop: SendRegistrationDecisionNotification suppressed (to=%q)", toEmail)
+func (n *NopSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ RegistrationDecisionData) error {
+	logging.Debugf("email/nop: SendRegistrationDecisionNotification suppressed")
 	return nil
 }
