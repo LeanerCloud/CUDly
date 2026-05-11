@@ -895,19 +895,55 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
   return result;
 }
 
-// Static labels for columns whose header is period-invariant.
-const STATIC_COLUMN_LABELS: Record<string, string> = {
-  provider: 'Provider',
-  account: 'Account',
-  service: 'Service',
-  resource_type: 'Resource Type',
-  region: 'Region',
-  count: 'Count',
-  term: 'Term',
-  payment: 'Payment',
-  upfront_cost: 'Upfront Cost',
-  effective_savings_pct: 'Effective %',
-};
+// ---------------------------------------------------------------------------
+// COLUMN_DEFS — single source of truth for the recommendations table columns.
+//
+// Order here matches the rendered column order (left to right), excluding the
+// leading checkbox column which is always visible and never sortable/filterable.
+//
+// Both the table header (<th> generation) and the data rows (<td> generation)
+// derive from this array so adding a new column only requires one edit here.
+//
+// `kind` drives the column-filter popover: 'numeric' → text input with
+// comparison operators; 'categorical' → checkbox list of distinct values.
+//
+// `label` is the canonical (monthly-period) header. The 3 period-varying
+// cost columns (`savings`, `monthly_cost`, `on_demand_monthly`) are handled
+// separately by `getColumnLabel` per-period, so their entry here is only
+// used as the data-attribute / fallback label, not the rendered <th>.
+// ---------------------------------------------------------------------------
+export interface ColumnDef {
+  key: state.RecommendationsColumnId;
+  label: string;
+  kind: 'numeric' | 'categorical';
+}
+
+export const COLUMN_DEFS: readonly ColumnDef[] = [
+  { key: 'provider',              label: 'Provider',          kind: 'categorical' },
+  { key: 'account',               label: 'Account',           kind: 'categorical' },
+  { key: 'service',               label: 'Service',           kind: 'categorical' },
+  { key: 'resource_type',         label: 'Resource Type',     kind: 'categorical' },
+  { key: 'region',                label: 'Region',            kind: 'categorical' },
+  { key: 'count',                 label: 'Count',             kind: 'numeric'     },
+  { key: 'term',                  label: 'Term',              kind: 'categorical' },
+  { key: 'payment',               label: 'Payment',           kind: 'categorical' },
+  { key: 'savings',               label: 'Monthly Savings',   kind: 'numeric'     },
+  { key: 'upfront_cost',          label: 'Upfront Cost',      kind: 'numeric'     },
+  { key: 'monthly_cost',          label: 'Monthly Cost',      kind: 'numeric'     },
+  { key: 'on_demand_monthly',     label: 'On-Demand Monthly', kind: 'numeric'     },
+  { key: 'effective_savings_pct', label: 'Effective %',       kind: 'numeric'     },
+];
+
+// Static labels for columns whose header is period-invariant. Derived from
+// COLUMN_DEFS so the source-of-truth still drives what's displayed; the
+// 3 period-varying cost columns are filtered out and handled by
+// getColumnLabel's switch instead.
+const PERIOD_VARYING_COLUMNS = new Set<string>(['savings', 'monthly_cost', 'on_demand_monthly']);
+const STATIC_COLUMN_LABELS: Record<string, string> = Object.fromEntries(
+  COLUMN_DEFS
+    .filter((c) => !PERIOD_VARYING_COLUMNS.has(c.key))
+    .map((c) => [c.key, c.label]),
+);
 
 /**
  * Return the human-readable column header for `column` given the active
@@ -1116,9 +1152,11 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
 // when the input is document.activeElement (mid-typing protection).
 // ---------------------------------------------------------------------------
 
-const NUMERIC_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set([
-  'count', 'savings', 'upfront_cost', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
-]);
+// Derived from COLUMN_DEFS — numeric columns get a text-input filter; categoricals
+// get a checkbox-list filter.  Kept as a Set for O(1) membership tests.
+const NUMERIC_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set(
+  COLUMN_DEFS.filter((c) => c.kind === 'numeric').map((c) => c.key),
+);
 
 interface PopoverState {
   column: state.RecommendationsColumnId;
@@ -1603,11 +1641,165 @@ function ensureRecommendationsTabObserver(): void {
   const tab = document.getElementById('recommendations-tab');
   if (!tab) return;
   recommendationsTabObserver = new MutationObserver(() => {
-    if (!tab.classList.contains('active') && openPopover) {
+    if (tab.classList.contains('active')) return;
+    if (openPopover) {
       closePopover();
     }
+    closeVisibilityPopover();
   });
   recommendationsTabObserver.observe(tab, { attributes: true, attributeFilter: ['class'] });
+}
+
+// ---------------------------------------------------------------------------
+// Column-visibility popover (issue #318)
+//
+// Separate state from the column-filter popover (openPopover / outsideClickHandler
+// etc.) to avoid conflating the two interactions.  Shares the positionPopover()
+// helper for positioning.
+// ---------------------------------------------------------------------------
+
+interface VisibilityPopoverState {
+  el: HTMLDivElement;
+  checkboxes: Map<state.RecommendationsColumnId, HTMLInputElement>;
+  trigger: HTMLElement;
+}
+
+let openVisibilityPopover: VisibilityPopoverState | null = null;
+let visOutsideClickHandler: ((e: MouseEvent) => void) | null = null;
+let visEscKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function closeVisibilityPopover(): void {
+  if (!openVisibilityPopover) return;
+  const { el, trigger } = openVisibilityPopover;
+  el.remove();
+  trigger.setAttribute('aria-expanded', 'false');
+  openVisibilityPopover = null;
+  if (visOutsideClickHandler) {
+    document.removeEventListener('mousedown', visOutsideClickHandler);
+    visOutsideClickHandler = null;
+  }
+  if (visEscKeyHandler) {
+    document.removeEventListener('keydown', visEscKeyHandler);
+    visEscKeyHandler = null;
+  }
+}
+
+function openVisibilityPopover_(anchor: HTMLElement): void {
+  // Close any open filter popover when visibility popover opens (only one popover
+  // at a time keeps the UI from getting cluttered).
+  closePopover();
+
+  if (openVisibilityPopover) {
+    closeVisibilityPopover();
+    return; // toggle: second click on the button closes the popover
+  }
+
+  const popover = document.createElement('div');
+  popover.className = 'column-visibility-popover';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', 'Show/hide columns');
+  popover.style.display = 'none';
+  document.body.appendChild(popover);
+
+  const title = document.createElement('p');
+  title.className = 'column-visibility-title';
+  title.textContent = 'Show/hide columns';
+  popover.appendChild(title);
+
+  const hidden = state.getHiddenColumns();
+  const checkboxes = new Map<state.RecommendationsColumnId, HTMLInputElement>();
+
+  for (const col of TOGGLEABLE_COLUMNS) {
+    const row = document.createElement('label');
+    row.className = 'column-visibility-row';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !hidden.has(col.key);
+    cb.setAttribute('aria-label', col.label);
+    checkboxes.set(col.key, cb);
+
+    cb.addEventListener('change', () => {
+      const currentHidden = new Set(state.getHiddenColumns());
+      if (cb.checked) {
+        currentHidden.delete(col.key);
+      } else {
+        currentHidden.add(col.key);
+      }
+      state.setHiddenColumns(currentHidden);
+      saveColumnVisibility(currentHidden);
+      rerenderRecommendations();
+    });
+
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(' ' + col.label));
+    popover.appendChild(row);
+  }
+
+  openVisibilityPopover = { el: popover, checkboxes, trigger: anchor };
+  anchor.setAttribute('aria-expanded', 'true');
+  positionPopover(popover, anchor);
+
+  // Keyboard: Escape closes.
+  visEscKeyHandler = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      closeVisibilityPopover();
+      anchor.focus();
+    }
+  };
+  document.addEventListener('keydown', visEscKeyHandler);
+
+  // Click-outside closes.
+  visOutsideClickHandler = (e: MouseEvent): void => {
+    const target = e.target as Node;
+    if (!popover.contains(target) && !anchor.contains(target)) {
+      closeVisibilityPopover();
+    }
+  };
+  // Defer one tick so the current click event (which opened the popover) doesn't
+  // immediately close it via the click-outside handler.
+  const handler = visOutsideClickHandler;
+  setTimeout(() => {
+    if (handler && openVisibilityPopover && visOutsideClickHandler === handler) {
+      document.addEventListener('mousedown', handler);
+    }
+  }, 0);
+}
+
+// mountColumnsButton mounts the "Columns ▾" button in the filter-status bar once
+// and updates its label on subsequent calls to reflect hidden-column count.
+function mountColumnsButton(bar: HTMLElement): void {
+  let btn = bar.querySelector<HTMLButtonElement>('.column-visibility-btn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'column-visibility-btn';
+    btn.setAttribute('aria-haspopup', 'dialog');
+    btn.setAttribute('aria-expanded', 'false');
+    bar.appendChild(btn);
+    btn.addEventListener('click', () => {
+      openVisibilityPopover_(btn!);
+    });
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openVisibilityPopover_(btn!);
+      }
+    });
+  }
+  // Update label to reflect hidden-column count.
+  const hiddenCount = state.getHiddenColumns().size;
+  btn.textContent = hiddenCount > 0 ? `Columns ▾ (${hiddenCount} hidden)` : 'Columns ▾';
+  btn.setAttribute('aria-pressed', hiddenCount > 0 ? 'true' : 'false');
+
+  // Re-sync checkboxes if the popover is open (in case a filter popover commit
+  // changed visible state while the popover was open — rare but possible).
+  if (openVisibilityPopover) {
+    const currentHidden = state.getHiddenColumns();
+    for (const [key, cb] of openVisibilityPopover.checkboxes) {
+      cb.checked = !currentHidden.has(key);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1706,6 +1898,29 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
 
   // issue #319: cost-period selector. Always mount regardless of group state.
   mountCostPeriodSelector(bar);
+
+  // issue #318: "Columns ▾" button — mount-once, always visible.
+  // Shows the column-visibility popover; label updates on re-render to
+  // reflect any active hidden-column count.
+  mountColumnsButton(bar);
+
+  // Sort-hidden indicator: show a note when the active sort column is hidden
+  // so users aren't confused by inexplicable row ordering (#318).
+  let sortHiddenNote = bar.querySelector<HTMLSpanElement>('.sort-hidden-note');
+  const sortCol = state.getRecommendationsSort().column;
+  const hidden = state.getHiddenColumns();
+  if (hidden.has(sortCol)) {
+    if (!sortHiddenNote) {
+      sortHiddenNote = document.createElement('span');
+      sortHiddenNote.className = 'sort-hidden-note';
+      bar.appendChild(sortHiddenNote);
+    }
+    // Use the period-aware label so the note mirrors the active period.
+    const hiddenLabel = getColumnLabel(sortCol, state.getCostPeriod());
+    sortHiddenNote.textContent = `(sorted by hidden column: ${hiddenLabel})`;
+  } else {
+    if (sortHiddenNote) sortHiddenNote.remove();
+  }
 }
 
 /**
@@ -2018,13 +2233,6 @@ function providerBadgeClass(provider: string): string {
   return n === 'aws' || n === 'azure' || n === 'gcp' ? n : '';
 }
 
-// Columns that get the per-column header filter button. Order matches the
-// table column order (excluding the leading checkbox column, which is
-// neither sortable nor filterable).
-const FILTERABLE_COLUMNS: readonly state.RecommendationsColumnId[] = [
-  'provider', 'account', 'service', 'resource_type', 'region',
-  'count', 'term', 'payment', 'savings', 'upfront_cost', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
-];
 
 // Map raw payment_option values to display labels for the Payment column.
 const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
@@ -2039,10 +2247,67 @@ function formatPayment(payment: string | undefined): string {
   return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
 }
 
+// renderColumnCell renders a single <td> for the given column key.
+// All column cell rendering is centralised here so buildVariantRowMarkup
+// can iterate over COLUMN_DEFS (or a visibility-filtered subset in
+// Commit 2) without knowing each column's HTML shape.
+function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommendation, ctx: {
+  accountName: string;
+  badge: string;
+  pct: number | null;
+  pctClass: string;
+  pctText: string;
+  period: CostPeriod;
+}): string {
+  switch (key) {
+    case 'provider':
+      return `<td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>`;
+    case 'account':
+      return `<td>${escapeHtml(ctx.accountName)}</td>`;
+    case 'service':
+      return `<td><span class="service-badge">${escapeHtml(rec.service)}</span></td>`;
+    case 'resource_type':
+      return `<td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${ctx.badge}</td>`;
+    case 'region':
+      return `<td>${escapeHtml(rec.region)}</td>`;
+    case 'count':
+      return `<td>${rec.count}</td>`;
+    case 'term':
+      return `<td>${formatTerm(rec.term)}</td>`;
+    case 'payment':
+      return `<td>${formatPayment(rec.payment)}</td>`;
+    case 'savings':
+      // issue #319: savings display value scales with the active cost period.
+      return `<td class="savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
+    case 'upfront_cost':
+      // upfront_cost is one-time, not recurring \u2014 period-invariant.
+      return `<td>${formatCurrency(rec.upfront_cost)}</td>`;
+    case 'monthly_cost':
+      // issue #319: monthly_cost display scales with period; null still renders as em-dash.
+      return `<td>${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
+    case 'on_demand_monthly':
+      // issue #319: on-demand baseline scales with period to stay consistent
+      // with the savings + monthly_cost columns.
+      return `<td>${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
+    case 'effective_savings_pct':
+      return `<td${ctx.pctClass}>${ctx.pctText}</td>`;
+  }
+}
+
 // Helper: render one variant row (a single LocalRecommendation) with optional
 // indentation styling for multi-variant cells.
-function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlySet<string>, isNested: boolean): string {
-  // issue #319: savings + monthly_cost display values scale with the active period.
+//
+// `cols` defaults to all COLUMN_DEFS; Commit 2 (column visibility) passes a
+// visibility-filtered subset so hidden columns are absent from the DOM.
+function buildVariantRowMarkup(
+  rec: LocalRecommendation,
+  selectedRecs: ReadonlySet<string>,
+  isNested: boolean,
+  cols: readonly ColumnDef[] = COLUMN_DEFS,
+): string {
+  // issue #319: cost-bearing cells scale with the active period; resolved
+  // once per row and threaded through ctx so renderColumnCell doesn't
+  // re-read state on every cell.
   const period = state.getCostPeriod();
   const savingsClass = rec.savings > 1000 ? 'high-savings' : rec.savings > 100 ? 'medium-savings' : '';
   const isSelected = selectedRecs.has(rec.id);
@@ -2052,36 +2317,23 @@ function buildVariantRowMarkup(rec: LocalRecommendation, selectedRecs: ReadonlyS
   const pct = effectiveSavingsPct(rec);
   const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
-  // The base value is monthly; render via formatCostForPeriod so the
-  // displayed value scales with the active cost-period selector (#319).
-  const odmText = formatCostForPeriod(onDemandMonthly(rec), period);
   const nestedClass = isNested ? ' rec-variant-row' : '';
+  const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
     <td class="checkbox-col">
       <input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">
     </td>
-    <td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>
-    <td>${escapeHtml(accountName)}</td>
-    <td><span class="service-badge">${escapeHtml(rec.service)}</span></td>
-    <td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${badge}</td>
-    <td>${escapeHtml(rec.region)}</td>
-    <td>${rec.count}</td>
-    <td>${formatTerm(rec.term)}</td>
-    <td>${formatPayment(rec.payment)}</td>
-    <td class="savings">${formatCostForPeriod(rec.savings, period)}</td>
-    <td>${formatCurrency(rec.upfront_cost)}</td>
-    <td>${formatCostForPeriod(rec.monthly_cost, period)}</td>
-    <td>${odmText}</td>
-    <td${pctClass}>${pctText}</td>
+    ${cols.map((c) => renderColumnCell(c.key, rec, cellCtx)).join('')}
   </tr>`;
 }
 
-// The total column count for colspan on summary rows: checkbox col + 14 data cols = 15.
-// (PR #322 added the on-demand monthly column as a 14th data column.)
-const TABLE_COL_COUNT = 15;
 
-function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: ReadonlySet<string>): string {
+function buildListMarkup(
+  recommendations: LocalRecommendation[],
+  selectedRecs: ReadonlySet<string>,
+  visibleCols: readonly ColumnDef[] = COLUMN_DEFS,
+): string {
   const sort = state.getRecommendationsSort();
   const filters = state.getRecommendationsColumnFilters();
   const period = state.getCostPeriod();
@@ -2108,13 +2360,20 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
   // with the Potential Monthly Savings card after #272 / #279 brought
   // the same range to the summary header. Removed (closes #278).
 
+  // Summary row colspan: the big cell covers resource_type (always shown) + all
+  // visible toggleable columns. The 3 fixed identity cells (provider, account,
+  // service) always render separately, so this colspan = 1 + visible toggleable count.
+  const visibleToggleableCols = visibleCols.filter((c) => TOGGLEABLE_COLUMN_KEYS.has(c.key));
+  const summaryColspan = 1 + visibleToggleableCols.length;
+  const visibleKeys = new Set(visibleCols.map((c) => c.key));
+
   // Build tbody rows: grouped for multi-variant cells, flat for single-variant.
   const rows: string[] = [];
   for (const key of sortedKeys) {
     const variants = groups.get(key)!;
     if (variants.length === 1) {
       // Single-variant: render flat, no group header, no indent.
-      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false));
+      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false, visibleCols));
       continue;
     }
 
@@ -2146,6 +2405,24 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = isExpanded ? '\u25bc' : '\u25b6';
+    const identityParts = [
+      `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
+    ];
+    if (visibleKeys.has('region')) {
+      identityParts.push(escapeHtml(rep.region));
+    }
+    identityParts.push(`${variants.length} variants`);
+
+    const rangeParts: string[] = [];
+    if (visibleKeys.has('savings')) {
+      rangeParts.push(savingsDisplay);
+    }
+    if (visibleKeys.has('upfront_cost')) {
+      rangeParts.push(`upfront: ${upfrontDisplay}`);
+    }
+    if (visibleKeys.has('term')) {
+      rangeParts.push(`term: ${termDisplay}`);
+    }
 
     rows.push(`
   <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
@@ -2157,16 +2434,16 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
     <td><span class="provider-badge ${providerBadgeClass(rep.provider)}">${escapeHtml(providerDisplayName(rep.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
-    <td colspan="${TABLE_COL_COUNT - 4}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''} &mdash; ${escapeHtml(rep.region)} &mdash; ${variants.length} variants</span>
-      <span class="rec-cell-range">${savingsDisplay} &middot; upfront: ${upfrontDisplay} &middot; term: ${termDisplay}</span>
+    <td colspan="${summaryColspan}" class="rec-cell-summary-content">
+      <span class="rec-cell-identity">${identityParts.join(' &mdash; ')}</span>
+      ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
     </td>
   </tr>`);
 
     if (isExpanded) {
       const sortedVariants = sortVariantsInCell(variants);
       for (const v of sortedVariants) {
-        rows.push(buildVariantRowMarkup(v, selectedRecs, true));
+        rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols));
       }
     }
   }
@@ -2178,7 +2455,7 @@ function buildListMarkup(recommendations: LocalRecommendation[], selectedRecs: R
           <th class="checkbox-col">
             <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations">
           </th>
-          ${FILTERABLE_COLUMNS.map(sortHeader).join('')}
+          ${visibleCols.map((c) => sortHeader(c.key)).join('')}
         </tr>
       </thead>
       <tbody>
@@ -2284,6 +2561,82 @@ function saveBulkPurchaseState(s: BulkPurchaseToolbarState): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Column visibility — localStorage persistence (issue #318)
+// ---------------------------------------------------------------------------
+
+// TOGGLEABLE_COLUMNS — the subset of COLUMN_DEFS whose visibility can be toggled.
+// Provider, Account, Service, and Resource Type are "cell identity anchors" on
+// multi-variant summary rows and are always visible in v1.
+export const TOGGLEABLE_COLUMNS: readonly ColumnDef[] = COLUMN_DEFS.filter(
+  (c) => !(['provider', 'account', 'service', 'resource_type'] as string[]).includes(c.key),
+);
+
+const TOGGLEABLE_COLUMN_KEYS = new Set<state.RecommendationsColumnId>(
+  TOGGLEABLE_COLUMNS.map((c) => c.key),
+);
+
+const COLUMN_VISIBILITY_LS_KEY = 'cudly.recs.columnVisibility.v1';
+const COLUMN_VISIBILITY_SCHEMA_VERSION = 1;
+
+interface ColumnVisibilitySchema {
+  schemaVersion: number;
+  hidden: string[];
+}
+
+/** Load hidden columns from localStorage. Returns empty set on any error. Exported for tests. */
+export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
+  try {
+    const raw = localStorage.getItem(COLUMN_VISIBILITY_LS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as Partial<ColumnVisibilitySchema>;
+    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set();
+    if (!Array.isArray(parsed.hidden)) return new Set();
+    // Whitelist: only accept known toggleable column keys so stale/unknown
+    // values from future versions are silently dropped.
+    const valid = parsed.hidden.filter(
+      (k): k is state.RecommendationsColumnId => TOGGLEABLE_COLUMN_KEYS.has(k as state.RecommendationsColumnId),
+    );
+    return new Set(valid);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Persist hidden columns to localStorage. Exported for tests. */
+export function saveColumnVisibility(hidden: ReadonlySet<state.RecommendationsColumnId>): void {
+  try {
+    const payload: ColumnVisibilitySchema = {
+      schemaVersion: COLUMN_VISIBILITY_SCHEMA_VERSION,
+      hidden: Array.from(hidden),
+    };
+    localStorage.setItem(COLUMN_VISIBILITY_LS_KEY, JSON.stringify(payload));
+  } catch {
+    // Private-browsing / quota-exceeded — non-fatal.
+  }
+}
+
+// Seed flag: set to true once column visibility is loaded from localStorage
+// on first render so subsequent renders don't overwrite in-session toggles.
+let columnVisibilitySeeded = false;
+
+/**
+ * Reset column-visibility seeded state. Exported for tests only — not part of
+ * the public API. Call in beforeEach to ensure tests don't share seeding state.
+ */
+export function resetColumnVisibilityState(): void {
+  columnVisibilitySeeded = false;
+  state.setHiddenColumns(new Set());
+}
+
+/** Returns the subset of COLUMN_DEFS that are currently visible. */
+function visibleColumns(): readonly ColumnDef[] {
+  const hidden = state.getHiddenColumns();
+  if (hidden.size === 0) return COLUMN_DEFS;
+  return COLUMN_DEFS.filter((c) => !hidden.has(c.key));
+}
+
+// ---------------------------------------------------------------------------
 // Mount-once-then-update lifecycle for the sticky bottom action box.
 // mountBottomActionBox builds the DOM (input/select/button identities) and
 // wires listeners exactly once. updateBottomActionBox refreshes only the
@@ -2953,6 +3306,14 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   const container = document.getElementById('recommendations-list');
   if (!container) return;
 
+  // Seed column visibility from localStorage on the first render.
+  // columnVisibilitySeeded stays true for the rest of the session so
+  // in-session toggles (via the "Columns ▾" popover) are not overwritten.
+  if (!columnVisibilitySeeded) {
+    state.setHiddenColumns(loadColumnVisibility());
+    columnVisibilitySeeded = true;
+  }
+
   // Pipeline:
   //   loaded -> applyColumnFilters -> visible
   //   state.setVisibleRecommendations(visible)   (read by plans.ts:savePlan)
@@ -2985,12 +3346,16 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
     return;
   }
 
+  // Compute the visible column set once per render — passed to buildListMarkup
+  // so header and row rendering use the same snapshot of column visibility state.
+  const visibleCols = visibleColumns();
+
   const selectedIDs = state.getSelectedRecommendationIDs();
   // Dynamic table markup: every caller-provided value passes through
   // escapeHtml or is a number. The string is built in buildListMarkup.
   // NOTE: buildListMarkup also populates lastVisibleGroupKeys, so it MUST
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
-  container.innerHTML = buildListMarkup(recommendations, selectedIDs);
+  container.innerHTML = buildListMarkup(recommendations, selectedIDs, visibleCols);
 
   // Filter status: Clear-filters badge + aria-live count + Expand-All toggle.
   // Rendered AFTER buildListMarkup so lastVisibleGroupKeys is populated.

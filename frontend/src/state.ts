@@ -201,3 +201,22 @@ export function setCostPeriod(period: CostPeriod): void {
     // Non-fatal; in-memory fallback remains correct for the session.
   }
 }
+
+// ---------------------------------------------------------------------------
+// Per-column visibility state (issue #318).
+// A column id in this set is HIDDEN; an absent id is visible (default visible).
+// In-memory only; the localStorage layer lives in recommendations.ts alongside
+// the other localStorage helpers (loadBulkPurchaseState / saveBulkPurchaseState).
+// ---------------------------------------------------------------------------
+let hiddenColumns: Set<RecommendationsColumnId> = new Set();
+
+export function getHiddenColumns(): ReadonlySet<RecommendationsColumnId> {
+  return new Set(hiddenColumns);
+}
+
+export function setHiddenColumns(hidden: ReadonlySet<RecommendationsColumnId>): void {
+  // Filter out fixed anchor columns that must always remain visible
+  const fixedColumns: ReadonlySet<RecommendationsColumnId> = new Set(['provider', 'account', 'service', 'resource_type']);
+  const filtered = Array.from(hidden).filter((col) => !fixedColumns.has(col));
+  hiddenColumns = new Set(filtered);
+}

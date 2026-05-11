@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, clearRecommendationDetailCache, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -80,6 +80,9 @@ jest.mock('../state', () => ({
   // see unchanged behaviour (monthly is the identity factor).
   getCostPeriod: jest.fn().mockReturnValue('monthly'),
   setCostPeriod: jest.fn(),
+  // issue #318: column visibility (default: all visible — empty hidden set)
+  getHiddenColumns: jest.fn().mockReturnValue(new Set()),
+  setHiddenColumns: jest.fn(),
 }));
 
 // Mock utils
@@ -3937,6 +3940,8 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
         '</div>',
       ].join('');
       jest.clearAllMocks();
+      // Reset getHiddenColumns to return empty Set so tests don't inherit sticky values
+      (state.getHiddenColumns as jest.Mock).mockReturnValue(new Set());
       jest.useFakeTimers();
       window.alert = jest.fn();
       // Reset cell expand state so tests don't share module-level expandedCells.
@@ -3965,6 +3970,24 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       // Variant rows should NOT be rendered (collapsed by default)
       const variantRows = document.querySelectorAll('.rec-variant-row');
       expect(variantRows.length).toBe(0);
+    });
+
+    test('multi-variant summary row omits hidden column values', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getHiddenColumns as jest.Mock).mockReturnValue(new Set(['region', 'savings', 'upfront_cost', 'term']));
+      await loadRecommendations();
+
+      const summaryContent = document.querySelector('.rec-cell-summary-content');
+      expect(summaryContent).not.toBeNull();
+      expect(summaryContent!.textContent).toContain('2 variants');
+      expect(summaryContent!.textContent).not.toContain('us-east-1');
+      expect(summaryContent!.textContent).not.toContain('$80');
+      expect(summaryContent!.textContent).not.toContain('$120');
+      expect(summaryContent!.textContent).not.toContain('upfront:');
+      expect(summaryContent!.textContent).not.toContain('term:');
+      expect(summaryContent!.querySelector('.rec-cell-range')).toBeNull();
     });
 
     test('chevron button lives inside td.checkbox-col of the summary row (closes #280)', async () => {
@@ -4603,5 +4626,149 @@ describe('Issue #319: localStorage persistence (state.ts getCostPeriod / setCost
     expect(getCostPeriodFn()).toBe('hourly');
     localStorage.setItem('cudly.recs.costPeriod', 'invalid-value');
     expect(getCostPeriodFn()).toBe('monthly');
+  });
+});
+
+// ============================================================================
+// Issue #318: Column visibility — localStorage persistence + toggle layer
+// ============================================================================
+import { localStorageMock } from './setup';
+
+describe('Column visibility (issue #318)', () => {
+  beforeEach(() => {
+    resetColumnVisibilityState();
+    // localStorageMock is cleared by jest.clearAllMocks() in the global beforeEach
+    // (setup.ts). Each test below configures the mock as needed.
+  });
+
+  // --- loadColumnVisibility ---
+
+  describe('loadColumnVisibility', () => {
+    test('returns empty set when localStorage key is absent', () => {
+      // Default mock: getItem returns null
+      const result = loadColumnVisibility();
+      expect(result.size).toBe(0);
+    });
+
+    test('returns empty set on JSON parse error', () => {
+      localStorageMock.getItem.mockReturnValue('{not valid json}');
+      const result = loadColumnVisibility();
+      expect(result.size).toBe(0);
+    });
+
+    test('returns empty set when schemaVersion is wrong', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 99, hidden: ['count'] }),
+      );
+      const result = loadColumnVisibility();
+      expect(result.size).toBe(0);
+    });
+
+    test('returns empty set when hidden is not an array', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, hidden: 'count' }),
+      );
+      const result = loadColumnVisibility();
+      expect(result.size).toBe(0);
+    });
+
+    test('returns the correct hidden set for valid JSON', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, hidden: ['count', 'term'] }),
+      );
+      const result = loadColumnVisibility();
+      expect(result.has('count')).toBe(true);
+      expect(result.has('term')).toBe(true);
+      expect(result.size).toBe(2);
+    });
+
+    test('silently drops unknown column keys (forward-compatibility)', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, hidden: ['count', 'future_column_not_yet_added'] }),
+      );
+      const result = loadColumnVisibility();
+      // 'count' is a known toggleable column; 'future_column_not_yet_added' is not
+      expect(result.has('count')).toBe(true);
+      expect(result.size).toBe(1);
+    });
+
+    test('silently drops fixed (non-toggleable) column keys', () => {
+      // provider/account/service/resource_type are fixed; should be ignored even if stored
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, hidden: ['provider', 'account', 'count'] }),
+      );
+      const result = loadColumnVisibility();
+      expect(result.has('provider')).toBe(false);
+      expect(result.has('account')).toBe(false);
+      expect(result.has('count')).toBe(true);
+      expect(result.size).toBe(1);
+    });
+  });
+
+  // --- saveColumnVisibility ---
+
+  describe('saveColumnVisibility', () => {
+    test('writes correct JSON shape to localStorage via setItem', () => {
+      const hidden = new Set<import('../state').RecommendationsColumnId>(['count', 'term']);
+      saveColumnVisibility(hidden);
+      expect(localStorageMock.setItem).toHaveBeenCalledWith(
+        'cudly.recs.columnVisibility.v1',
+        expect.stringContaining('"schemaVersion":1'),
+      );
+      const callArg = localStorageMock.setItem.mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(callArg);
+      expect(parsed.schemaVersion).toBe(1);
+      expect(parsed.hidden).toContain('count');
+      expect(parsed.hidden).toContain('term');
+      expect(parsed.hidden.length).toBe(2);
+    });
+
+    test('writes empty array for no hidden columns', () => {
+      saveColumnVisibility(new Set());
+      const callArg = localStorageMock.setItem.mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(callArg);
+      expect(parsed.hidden).toEqual([]);
+    });
+  });
+
+  // --- TOGGLEABLE_COLUMNS and COLUMN_DEFS ---
+
+  describe('COLUMN_DEFS and TOGGLEABLE_COLUMNS', () => {
+    test('COLUMN_DEFS contains all 13 column ids', () => {
+      const keys = COLUMN_DEFS.map((c) => c.key);
+      expect(keys).toContain('provider');
+      expect(keys).toContain('account');
+      expect(keys).toContain('service');
+      expect(keys).toContain('resource_type');
+      expect(keys).toContain('region');
+      expect(keys).toContain('count');
+      expect(keys).toContain('term');
+      expect(keys).toContain('payment');
+      expect(keys).toContain('savings');
+      expect(keys).toContain('upfront_cost');
+      expect(keys).toContain('monthly_cost');
+      expect(keys).toContain('on_demand_monthly');
+      expect(keys).toContain('effective_savings_pct');
+      expect(COLUMN_DEFS.length).toBe(13);
+    });
+
+    test('TOGGLEABLE_COLUMNS excludes fixed identity columns', () => {
+      const keys = TOGGLEABLE_COLUMNS.map((c) => c.key);
+      expect(keys).not.toContain('provider');
+      expect(keys).not.toContain('account');
+      expect(keys).not.toContain('service');
+      expect(keys).not.toContain('resource_type');
+      // All other 9 columns should be toggleable
+      expect(keys).toContain('region');
+      expect(keys).toContain('count');
+      expect(keys).toContain('term');
+      expect(keys).toContain('payment');
+      expect(keys).toContain('savings');
+      expect(keys).toContain('upfront_cost');
+      expect(keys).toContain('monthly_cost');
+      expect(keys).toContain('on_demand_monthly');
+      expect(keys).toContain('effective_savings_pct');
+      expect(keys.length).toBe(9);
+    });
   });
 });
