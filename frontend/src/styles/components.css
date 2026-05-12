@@ -1535,3 +1535,139 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-size: 0.85rem;
     margin-bottom: 0.5rem;
 }
+
+/* ---------------------------------------------------------------------------
+ * chip-select component (issue #344 T1) — pill trigger that opens a popover
+ * listbox. Replaces native <select> for filter use-cases where we want a
+ * compact custom menu pattern. Used by topbar-filters (T2) to host the
+ * shared provider + account filters.
+ * ------------------------------------------------------------------------- */
+
+.chip-select-root {
+    position: relative;
+    display: inline-block;
+}
+
+.chip-select {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-full);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-sm);
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+
+.chip-select:hover {
+    border-color: var(--cudly-primary);
+}
+
+.chip-select:focus-visible {
+    outline: none;
+    border-color: var(--cudly-primary);
+    box-shadow: 0 0 0 3px var(--cudly-info-bg);
+}
+
+.chip-select[aria-expanded="true"] {
+    border-color: var(--cudly-primary);
+    background: var(--cudly-info-bg);
+}
+
+.chip-select-label {
+    color: var(--cudly-text-muted);
+}
+
+.chip-select-value {
+    font-weight: var(--cudly-fw-medium);
+}
+
+.chip-select-caret {
+    transition: transform 0.15s ease;
+}
+
+.chip-select[aria-expanded="true"] .chip-select-caret {
+    transform: rotate(180deg);
+}
+
+/* The popover menu. Positioned absolutely below (or above) the trigger.
+ * Z-index sits above the topbar's sticky position so the menu doesn't
+ * get clipped at the page-content boundary. */
+.chip-select-menu {
+    position: absolute;
+    top: calc(100% + var(--cudly-sp-1));
+    left: 0;
+    min-width: 200px;
+    max-width: 320px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-lg);
+    z-index: 60;
+    padding: var(--cudly-sp-1);
+}
+
+.chip-select-menu.chip-select-menu-up {
+    top: auto;
+    bottom: calc(100% + var(--cudly-sp-1));
+}
+
+.chip-select-search {
+    width: 100%;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-sm);
+    font-size: var(--cudly-fs-sm);
+    margin-bottom: var(--cudly-sp-1);
+    box-sizing: border-box;
+}
+
+.chip-select-search:focus-visible {
+    outline: none;
+    border-color: var(--cudly-primary);
+    box-shadow: 0 0 0 2px var(--cudly-info-bg);
+}
+
+.chip-select-options {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.chip-select-option {
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border-radius: var(--cudly-r-sm);
+    cursor: pointer;
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-sm);
+    user-select: none;
+}
+
+.chip-select-option:hover,
+.chip-select-option.active {
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+.chip-select-option.current {
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.chip-select-option.current::after {
+    content: '✓';
+    float: right;
+    color: var(--cudly-primary);
+}
+
+.chip-select-empty {
+    padding: var(--cudly-sp-3);
+    text-align: center;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-style: italic;
+}
