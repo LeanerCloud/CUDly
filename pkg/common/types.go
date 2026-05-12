@@ -166,6 +166,17 @@ type Recommendation struct {
 	// Break-even in months (populated by cloud parsers where available; used by scorer filter)
 	BreakEvenMonths float64 `json:"break_even_months,omitempty" csv:"BreakEvenMonths"`
 
+	// Utilization signals — populated by cloud parsers when the API exposes them.
+	// Used by --target-utilization sizing (see cmd/helpers.go: ApplyTargetUtilization).
+	// AverageInstancesUsedPerHour is RI-only (zero for SPs and other commitment types).
+	// RecommendedUtilization is "what AWS projects for the full recommendation"
+	// (%). ProjectedUtilization / ProjectedCoverage are populated by the sizing
+	// step after we pick our own quantity.
+	AverageInstancesUsedPerHour float64 `json:"average_instances_used_per_hour,omitempty" csv:"AverageInstancesUsedPerHour"`
+	RecommendedUtilization      float64 `json:"recommended_utilization,omitempty" csv:"RecommendedUtilization"`
+	ProjectedUtilization        float64 `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
+	ProjectedCoverage           float64 `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
+
 	// RawRecommendation holds the original cloud API response bytes for audit/debugging.
 	// omitempty ensures nil is absent from JSON (not written as null).
 	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty" csv:"-"`
