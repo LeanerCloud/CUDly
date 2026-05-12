@@ -33,10 +33,15 @@ const (
 
 // Config holds all configuration for the RI helper tool
 type Config struct {
-	Providers              []string
-	Regions                []string
-	Services               []string
-	Coverage               float64
+	Providers []string
+	Regions   []string
+	Services  []string
+	Coverage  float64
+	// TargetUtilization, when > 0, switches sizing from coverage-% to
+	// "size the purchase so projected post-purchase utilization stays >=
+	// this %". Mutually exclusive with --coverage (target wins, with an
+	// info log). See cmd/helpers.go: ApplyTargetUtilization.
+	TargetUtilization      float64
 	ActualPurchase         bool
 	CSVOutput              string
 	CSVInput               string
@@ -92,6 +97,10 @@ func init() {
 	rootCmd.Flags().StringSliceVarP(&toolCfg.Services, "services", "s", []string{"rds"}, "Services to process (rds, elasticache, ec2, opensearch, redshift, memorydb, savingsplans)")
 	rootCmd.Flags().BoolVar(&toolCfg.AllServices, "all-services", false, "Process all supported services")
 	rootCmd.Flags().Float64VarP(&toolCfg.Coverage, "coverage", "c", 80.0, "Percentage of recommendations to purchase (0-100)")
+	rootCmd.Flags().Float64VarP(&toolCfg.TargetUtilization, "target-utilization", "u", 0,
+		"Target post-purchase utilization % (0-100). When >0, sizes recommendations "+
+			"so projected utilization stays >= target — higher target = fewer commitments "+
+			"bought (stricter waste ceiling). Overrides --coverage. Default 0 = disabled.")
 	rootCmd.Flags().BoolVar(&toolCfg.ActualPurchase, "purchase", false, "Actually purchase RIs instead of just printing the data")
 	rootCmd.Flags().StringVarP(&toolCfg.CSVOutput, "output", "o", "", "Output CSV file path (if not specified, auto-generates filename)")
 	rootCmd.Flags().StringVarP(&toolCfg.CSVInput, "input-csv", "i", "", "Input CSV file with recommendations to purchase")

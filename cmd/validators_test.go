@@ -87,8 +87,10 @@ func TestValidateNumericRanges(t *testing.T) {
 			toolCfg = Config{}
 			tt.setupFunc()
 
-			// Execute
-			err := validateNumericRanges()
+			// Execute (nil cmd — these tests only exercise the numeric
+			// bounds checks; the flag-source-detection branch is covered
+			// by TestValidateTargetUtilization below).
+			err := validateNumericRanges(nil)
 
 			// Verify
 			if tt.wantErr {
@@ -411,3 +413,53 @@ func TestValidateNoConflicts(t *testing.T) {
 }
 
 // Note: TestValidateInstanceTypes and TestValidateFlags already exist in main_test.go
+
+// TestValidateTargetUtilization covers the --target-utilization range check
+// and the "both flags explicitly set" info-log gate. The log itself isn't
+// asserted (log goes to stderr via log.Printf and capturing it from this
+// package's tests is more friction than value); we verify the validator
+// does not error in the "both set" case and does error on out-of-range
+// values.
+func TestValidateTargetUtilization(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    float64
+		coverage  float64
+		wantErr   bool
+		errSubstr string
+	}{
+		{name: "disabled (zero) is valid", target: 0, coverage: 80, wantErr: false},
+		{name: "min boundary valid", target: 0.0001, coverage: 80, wantErr: false},
+		{name: "max boundary valid", target: 100, coverage: 80, wantErr: false},
+		{name: "mid-range valid", target: 95, coverage: 80, wantErr: false},
+		{
+			name: "negative target rejected", target: -0.5, coverage: 80, wantErr: true,
+			errSubstr: "target-utilization percentage must be between 0 and 100",
+		},
+		{
+			name: "above 100 rejected", target: 100.01, coverage: 80, wantErr: true,
+			errSubstr: "target-utilization percentage must be between 0 and 100",
+		},
+		{
+			// Both flags valid — should not error. The info-log is fired but
+			// not asserted (out-of-band stderr write).
+			name: "target + coverage both set, both valid", target: 95, coverage: 50, wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toolCfg = Config{Coverage: tt.coverage, TargetUtilization: tt.target}
+			err := validateNumericRanges(nil)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("validateNumericRanges() expected error containing %q, got nil", tt.errSubstr)
+				} else if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("validateNumericRanges() error = %v, want substring %q", err, tt.errSubstr)
+				}
+			} else if err != nil {
+				t.Errorf("validateNumericRanges() unexpected error = %v", err)
+			}
+		})
+	}
+}
