@@ -185,11 +185,12 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 // commitments actually purchased), not the over-buy semantics that floor
 // produces; see the #338 review discussion for the redirect.
 //
-// RIs (existing-aware, per-pool):
+// RIs (existing-aware, per-pool, strict-target):
 //
 //	gap = (targetPct - ExistingCoveragePct) / 100
-//	n_target = ceil(AverageInstancesUsedPerHour * gap)
+//	n_target = floor(AverageInstancesUsedPerHour * gap)
 //	If gap <= 0 (existing already at/above target) → drop with INFO log.
+//	If n_target == 0 (gap too small to fit one RI) → drop with INFO log.
 //	If AverageInstancesUsedPerHour <= 0 → pass through (no signal); counted
 //	in the per-run skip summary.
 //	Projected coverage = ExistingCoveragePct + n_target/avg * 100 (total
@@ -202,14 +203,17 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 //	(region, instance_type, engine) — the per-engine fetcher in
 //	coverage.go avoids the cross-engine bleed that a per-pool aggregate
 //	would produce.
-//	Ceil (rather than floor) ensures any non-zero gap with non-zero
-//	demand buys at least 1 RI, matching AWS's recommendation shape and
-//	avoiding the "single-instance pool silently dropped" failure mode.
+//	Floor (rather than ceil or round) gives strict "at-most-target"
+//	sizing: small/odd pools under-cover rather than over-cover, matching
+//	the operator's intent when they set a target. Pools too small to
+//	approximate the target meaningfully (avg < ~5 for target=80%) should
+//	be filtered upstream via --min-pool-size; floor will drop them as
+//	zero-count otherwise.
 //
 //	Pools where CE reports 100% existing coverage but AWS still recommends
 //	new RIs (typical when existing RIs are near expiry) are dropped here —
-//	the existing coverage is honoured strictly. Surfacing expiring RIs is
-//	a separate concern tracked elsewhere.
+//	the existing coverage is honoured strictly. Use --rebuy-window-days to
+//	surface those replacements before the cliff.
 //
 // SPs:
 //
@@ -323,17 +327,19 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 			targetPct, rec.ExistingCoveragePct, rec.Service, rec.Region, rec.ResourceType)
 		return rec, false
 	}
-	// Ceil so any non-zero gap with non-zero demand buys at least 1 RI —
-	// AWS's recommendation list always proposes a count, and silently dropping
-	// single-instance pools was the worse failure mode than slight over-target
-	// on tiny pools. The pre-existing-coverage version of this branch used
-	// floor and silently skipped a third of the AWS-console recommendations.
-	nTarget := int(math.Ceil(avg * gapPct / 100.0))
+	// Floor so we never over-shoot the target on integer-arithmetic edges.
+	// Strict-target semantics: 80% means "at most 80% coverage", not "at
+	// least 80%". Floor under-covers small/odd pools (e.g. avg=2, target=80
+	// gives 1 RI = 50% rather than 2 RIs = 100%); pools too small to
+	// approximate target are best filtered out via --min-pool-size upstream.
+	nTarget := int(math.Floor(avg * gapPct / 100.0))
 
 	if nTarget == 0 {
-		// Defensive: math.Ceil on a positive product never returns 0, but a
-		// truncation or tiny-float edge case could. Drop with a log if it
-		// somehow happens.
+		// Floor produces zero when the gap is too small for even one RI on
+		// this pool's avg usage. Drop — buying 1 RI would over-shoot target
+		// and the strict-target intent prefers under-cover (run on-demand)
+		// over over-cover (idle commitment). Use --min-pool-size to filter
+		// these out earlier so they don't show up as drops in the log.
 		AppLogger.Printf("INFO: --target-coverage=%.1f%% sizes %s/%s/%s to 0 instances (avg used %.2f/hr, gap %.2f%% produces <1 RI); dropped recommendation\n",
 			targetPct, rec.Service, rec.Region, rec.ResourceType, avg, gapPct)
 		// Returning (_, false) with avg > 0 signals "drop, don't pass through".

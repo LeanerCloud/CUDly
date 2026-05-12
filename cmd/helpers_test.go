@@ -931,32 +931,33 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 		wantProjCovGTE float64 // we assert coverage >= this (handles the float clamping)
 	}{
 		{
-			// avg=8.5, target=95%, existing=0% (no signal).
-			// gap=95, n=ceil(8.5*0.95) = ceil(8.075) = 9.
-			// Projected util = 8.5/9 = 94.4.
-			name:         "RI: target 95 buys 9 (ceil rounds 8.075 up)",
+			// avg=8.5, target=95%, existing=0%. gap=95.
+			// n = floor(8.5 * 0.95) = floor(8.075) = 8.
+			// Projected util = 8.5/8 = 106.25 clamped to 100.
+			// Projected coverage = 8/8.5 = 94.1%, just under target.
+			name:         "RI: target 95 buys 8 (floor rounds 8.075 down)",
 			rec:          mkRI(10, 8.5, 0),
 			target:       95,
-			wantCount:    9,
-			wantProjUtil: 94.44,
+			wantCount:    8,
+			wantProjUtil: 100,
 		},
 		{
-			// avg=10, target=50%, existing=0%. gap=50. n=ceil(5)=5.
-			name:         "RI: target 50 under-buys to leave on-demand headroom",
+			// avg=10, target=50%, existing=0%. gap=50. n=floor(5)=5.
+			name:         "RI: target 50 covers exactly half",
 			rec:          mkRI(10, 10, 0),
 			target:       50,
 			wantCount:    5,
 			wantProjUtil: 100, // 10/5 clamped
 		},
 		{
-			// avg=0.4, target=50%, existing=0%. gap=50. n=ceil(0.2)=1.
-			// Tiny-pool case: ceil keeps the rec alive at 1 RI rather than
-			// dropping. Projected util = 0.4/1 = 40 (under 100, no clamp).
-			name:         "RI: tiny pool rounds up to 1 (ceil)",
-			rec:          mkRI(5, 0.4, 0),
-			target:       50,
-			wantCount:    1,
-			wantProjUtil: 40,
+			// avg=0.4, target=50%, existing=0%. gap=50. n=floor(0.2)=0 → drop.
+			// Tiny-pool case: floor drops rather than over-covering. Operators
+			// who want these pools kept use --min-pool-size to filter
+			// upstream OR accept the on-demand spend.
+			name:        "RI: tiny pool drops (floor rounds down to 0)",
+			rec:         mkRI(5, 0.4, 0),
+			target:      50,
+			wantDropped: true,
 		},
 		{
 			// avg=0 (no signal) → passed through unchanged, counted in skip summary.
@@ -967,13 +968,13 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 			wantProjUtil: 0, // never set in pass-through
 		},
 		{
-			// avg=4, target=80%, existing=0%. gap=80. n=ceil(3.2)=4.
-			// Projected coverage = 4/4 = 100, over target by ceil's rounding.
-			name:         "RI: target 80 covers 4 of 4 (ceil rounds 3.2 up)",
+			// avg=4, target=80%, existing=0%. gap=80. n=floor(3.2)=3.
+			// Projected coverage = 3/4 = 75, just under target (strict-target).
+			name:         "RI: target 80 covers 3 of 4 (floor rounds 3.2 down)",
 			rec:          mkRI(5, 4, 0),
 			target:       80,
-			wantCount:    4,
-			wantProjUtil: 100,
+			wantCount:    3,
+			wantProjUtil: 100, // 4/3 = 133 clamped
 		},
 	}
 
@@ -1019,14 +1020,14 @@ func TestApplyTargetCoverage_RI_CostScaling(t *testing.T) {
 		SavingsPercentage:           25,
 		AverageInstancesUsedPerHour: 8,
 	}
-	// target=80 → gap=80, n=ceil(8*0.8) = ceil(6.4) = 7 (rec.Count=10).
-	// Ratio = 7/10 = 0.7. Cost-bearing fields scale by 0.7.
+	// target=80 → gap=80, n=floor(8*0.8) = floor(6.4) = 6 (rec.Count=10).
+	// Ratio = 6/10 = 0.6. Cost-bearing fields scale by 0.6.
 	out := ApplyTargetCoverage([]common.Recommendation{rec}, 80)
 	require.Len(t, out, 1)
-	assert.Equal(t, 7, out[0].Count)
-	assert.InDelta(t, 700.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by Count/rec.Count")
-	assert.InDelta(t, 1400.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by Count/rec.Count")
-	assert.InDelta(t, 350.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by Count/rec.Count")
+	assert.Equal(t, 6, out[0].Count)
+	assert.InDelta(t, 600.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by Count/rec.Count")
+	assert.InDelta(t, 1200.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by Count/rec.Count")
+	assert.InDelta(t, 300.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by Count/rec.Count")
 	assert.Equal(t, 25.0, out[0].SavingsPercentage, "SavingsPercentage is invariant under count scaling")
 }
 
@@ -1091,17 +1092,15 @@ func TestApplyTargetCoverage_RI_ExistingCoverage(t *testing.T) {
 			wantDropped: true,
 		},
 		{
-			// avg=2, existing=70%, target=80%. gap=10. n=ceil(0.2)=1.
-			// Ceil keeps the rec alive even for tiny gaps. Total cov =
-			// 70 + 1/2*100 = 120 → clamped to 100.
-			name:         "Small gap rounds up to 1 RI",
-			rec:          mkRI(5, 2, 70),
-			target:       80,
-			wantCount:    1,
-			wantTotalCov: 100,
+			// avg=2, existing=70%, target=80%. gap=10. n=floor(0.2)=0 → drop.
+			// Strict-target: would over-shoot if we bought 1 RI, so drop.
+			name:        "Small gap rounds down to 0 → drop",
+			rec:         mkRI(5, 2, 70),
+			target:      80,
+			wantDropped: true,
 		},
 		{
-			// avg=10, existing=60%, target=70%. gap=10. n=ceil(1.0)=1.
+			// avg=10, existing=60%, target=70%. gap=10. n=floor(1.0)=1.
 			// Total cov = 60+10 = 70 (hits target exactly).
 			name:         "Small top-up to reach target",
 			rec:          mkRI(10, 10, 60),
@@ -1198,9 +1197,9 @@ func TestApplySizing(t *testing.T) {
 		cfg := Config{TargetCoverage: 80, Coverage: 100}
 		out := applySizing([]common.Recommendation{ri}, cfg, cfg.Coverage)
 		require.Len(t, out, 1)
-		// avg=8, target=80%, existing=0%. gap=80. n=ceil(8*0.8)=ceil(6.4)=7.
-		// ProjectedUtilization = 8/7 = 114 clamped to 100.
-		assert.Equal(t, 7, out[0].Count)
+		// avg=8, target=80%, existing=0%. gap=80. n=floor(8*0.8)=floor(6.4)=6.
+		// ProjectedUtilization = 8/6 = 133 clamped to 100.
+		assert.Equal(t, 6, out[0].Count)
 		assert.Equal(t, 100.0, out[0].ProjectedUtilization)
 	})
 
@@ -1216,9 +1215,9 @@ func TestApplySizing(t *testing.T) {
 }
 
 // TestApplyTargetCoverage_RI_Target100 covers the target == 100 boundary.
-// At target=100 (and existing=0), ceil(avg*1.0) = ceil(avg) — any non-zero
-// avg rounds up to at least 1. Fractional avg above an integer rounds up
-// to the next integer.
+// At target=100 (and existing=0), floor(avg*1.0) = floor(avg) — fractional
+// avg rounds DOWN to the nearest integer. Pools with avg<1 drop entirely
+// (strict-target: don't over-cover even at 100%).
 func TestApplyTargetCoverage_RI_Target100(t *testing.T) {
 	mkRI := func(count int, avg float64) common.Recommendation {
 		return common.Recommendation{
@@ -1237,13 +1236,14 @@ func TestApplyTargetCoverage_RI_Target100(t *testing.T) {
 		wantDropped bool
 		wantCount   int
 	}{
-		// avg=0.999 → ceil(0.999) = 1.
-		{name: "target 100, avg=0.999 → buy 1", rec: mkRI(5, 0.999), wantCount: 1},
-		// avg=1.0 → ceil(1.0) = 1.
+		// avg=0.999 → floor(0.999) = 0 → drop. Use --min-pool-size to
+		// filter such pools out explicitly upstream.
+		{name: "target 100, avg=0.999 → dropped (floor rounds to 0)", rec: mkRI(5, 0.999), wantDropped: true},
+		// avg=1.0 → floor(1.0) = 1.
 		{name: "target 100, avg=1.0 → buy 1", rec: mkRI(5, 1.0), wantCount: 1},
-		// avg=8.7 → ceil(8.7) = 9. Slightly over target but matches AWS rec.
-		{name: "target 100, avg=8.7 → buy 9 (ceil rounds up)", rec: mkRI(10, 8.7), wantCount: 9},
-		// avg=10.0 exactly → ceil(10) = 10.
+		// avg=8.7 → floor(8.7) = 8. Slightly under target (strict-target).
+		{name: "target 100, avg=8.7 → buy 8 (floor rounds down)", rec: mkRI(10, 8.7), wantCount: 8},
+		// avg=10.0 exactly → floor(10) = 10.
 		{name: "target 100, avg=10.0 → buy 10 (perfect match)", rec: mkRI(10, 10.0), wantCount: 10},
 	}
 

@@ -80,6 +80,13 @@ type Config struct {
 	// strict per-pool subtraction — existing coverage is fully trusted
 	// regardless of when it expires.
 	RebuyWindowDays int
+	// MinPoolSize, when > 0, drops RI recommendations for pools whose
+	// AverageInstancesUsedPerHour is below this threshold. Used to avoid
+	// the integer-arithmetic over-cover problem on tiny pools (avg < 5
+	// can't approximate target=80% without buying enough RIs to hit
+	// 100% coverage). Zero (default) keeps all pools. SPs and recs
+	// without a per-hour signal pass through unfiltered.
+	MinPoolSize float64
 }
 
 func main() {
@@ -147,6 +154,11 @@ func init() {
 		"When >0, treat existing RIs expiring within this many days as already "+
 			"uncovered, so --target-coverage sizes recommendations to replace them "+
 			"before they expire. Default 0 = trust existing coverage fully.")
+	rootCmd.Flags().Float64Var(&toolCfg.MinPoolSize, "min-pool-size", 0,
+		"When >0, drop RI recommendations for pools with AverageInstancesUsedPerHour "+
+			"below this threshold. Useful with --target-coverage to skip tiny pools "+
+			"that integer arithmetic forces above target (e.g. avg=1 cannot hit 80%%). "+
+			"Default 0 = no filter.")
 }
 
 // Package-level Config that cobra flags bind to
