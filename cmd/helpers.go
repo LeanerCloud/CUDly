@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -154,6 +155,217 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 		}
 	}
 	return result
+}
+
+// ApplyTargetUtilization sizes RI/SP recommendations so projected post-purchase
+// utilization stays >= targetPct. See ApplyCoverage for the alternative
+// coverage-based sizing; the two are dispatched via applySizing.
+//
+// Semantics inversion vs. intuition: higher targetPct means fewer commitments
+// bought (smaller waste ceiling), not more. The math is "utilization =
+// used/bought", so raising the target reduces the bought side.
+//
+// RIs:
+//
+//	n_target = floor(AverageInstancesUsedPerHour / (targetPct/100))
+//	capped at rec.Count (we never exceed AWS's recommended ceiling).
+//	If n_target == 0 → drop with explanatory INFO log (target unreachable).
+//	If AverageInstancesUsedPerHour <= 0 → pass through (no signal); counted
+//	in the per-run skip summary.
+//
+// SPs:
+//
+//	If RecommendedUtilization >= targetPct → no scaling (AWS already projects
+//	above target).
+//	Else ratio = RecommendedUtilization / targetPct (always < 1). Scale
+//	SavingsPlanDetails.HourlyCommitment and rec.EstimatedSavings — matching
+//	exactly the fields ApplyCoverage scales on the SP branch, so the two
+//	sizing modes stay structurally consistent.
+//	If RecommendedUtilization <= 0 → pass through; counted in skip summary.
+//
+// Recs of any other CommitmentType are passed through unmodified (warned
+// once per type per run).
+func ApplyTargetUtilization(recs []common.Recommendation, targetPct float64) []common.Recommendation {
+	if targetPct <= 0 || targetPct > 100 {
+		// Validation ensures we never get here in production, but be defensive
+		// so a buggy caller doesn't divide by zero.
+		AppLogger.Printf("WARNING: ApplyTargetUtilization called with targetPct=%.2f outside (0,100]; returning recs unchanged\n", targetPct)
+		return recs
+	}
+
+	target := targetPct / 100.0
+	result := make([]common.Recommendation, 0, len(recs))
+	var skipped int
+	unsupportedSeen := make(map[common.CommitmentType]bool)
+
+	for _, rec := range recs {
+		adjusted, kept, missingSignal := applyTargetUtilizationOne(rec, target, targetPct, unsupportedSeen)
+		if missingSignal {
+			skipped++
+		}
+		if kept {
+			result = append(result, adjusted)
+		}
+	}
+
+	if skipped > 0 {
+		AppLogger.Printf("INFO: --target-utilization=%.1f%% skipped %d of %d recommendations with no utilization signal (passed through unchanged)\n",
+			targetPct, skipped, len(recs))
+	}
+
+	return result
+}
+
+// applyTargetUtilizationOne dispatches a single recommendation through the
+// appropriate branch. Returns (rec, kept, missingSignal):
+//   - kept=true → caller appends `rec` (the adjusted or pass-through value).
+//   - kept=false → caller drops the rec (only the RI "target unreachable"
+//     branch returns this; an INFO log already fired).
+//   - missingSignal=true → counted toward the end-of-run skip summary.
+//
+// Split out of ApplyTargetUtilization to keep that function under gocyclo's
+// complexity threshold.
+func applyTargetUtilizationOne(rec common.Recommendation, target, targetPct float64, unsupportedSeen map[common.CommitmentType]bool) (common.Recommendation, bool, bool) {
+	switch {
+	case common.IsSavingsPlan(rec.Service):
+		adjusted, ok := applyTargetUtilizationSP(rec, targetPct)
+		if !ok {
+			// SP no-signal: pass through unchanged.
+			return rec, true, true
+		}
+		return adjusted, true, false
+	case rec.CommitmentType == common.CommitmentReservedInstance:
+		adjusted, ok := applyTargetUtilizationRI(rec, target, targetPct)
+		if !ok {
+			// Distinguish "no signal" (pass through, count in summary) from
+			// "target unreachable" (drop with already-fired INFO log).
+			if rec.AverageInstancesUsedPerHour <= 0 {
+				return rec, true, true
+			}
+			return rec, false, false
+		}
+		return adjusted, true, false
+	default:
+		if !unsupportedSeen[rec.CommitmentType] {
+			AppLogger.Printf("WARNING: --target-utilization not supported for CommitmentType=%q; passing recommendations through unchanged\n", rec.CommitmentType)
+			unsupportedSeen[rec.CommitmentType] = true
+		}
+		return rec, true, false
+	}
+}
+
+// applyTargetUtilizationRI is the RI branch of ApplyTargetUtilization. Returns
+// (adjusted, true) on success, (rec, false) when the rec should be passed
+// through unscaled (no signal) or dropped (target unreachable). Caller
+// distinguishes the two via rec.AverageInstancesUsedPerHour.
+func applyTargetUtilizationRI(rec common.Recommendation, target, targetPct float64) (common.Recommendation, bool) {
+	if rec.AverageInstancesUsedPerHour <= 0 {
+		// No signal — caller will pass through and count in the summary.
+		return rec, false
+	}
+
+	avg := rec.AverageInstancesUsedPerHour
+	uncappedTarget := int(math.Floor(avg / target))
+
+	// Cap at rec.Count: never buy more than AWS recommended.
+	nTarget := uncappedTarget
+	capped := false
+	if nTarget > rec.Count {
+		nTarget = rec.Count
+		capped = true
+	}
+
+	if nTarget == 0 {
+		// Target unreachable: even buying 1 instance would over-utilize beyond
+		// the user's target. Drop with explanatory log per issue #338 AC.
+		AppLogger.Printf("INFO: --target-utilization=%.1f%% unreachable for %s/%s/%s (avg used %.2f/hr requires <1 instance for target) — dropped recommendation\n",
+			targetPct, rec.Service, rec.Region, rec.ResourceType, avg)
+		// Returning (_, false) with avg > 0 signals "drop, don't pass through".
+		// applyTargetUtilizationRI's caller branches on
+		// rec.AverageInstancesUsedPerHour to distinguish drop vs no-signal.
+		return rec, false
+	}
+
+	if capped {
+		// Target was too lenient — AWS's ceiling binds before we reach the
+		// target's "buy this many" suggestion.
+		AppLogger.Printf("INFO: --target-utilization=%.1f%% would have recommended %d instances for %s/%s/%s but capped at AWS ceiling of %d\n",
+			targetPct, uncappedTarget, rec.Service, rec.Region, rec.ResourceType, nTarget)
+	}
+
+	adjusted := rec
+	adjusted.Count = nTarget
+
+	// Cost-scaling — mirror ApplyCoverage's RI branch (only Count is scaled
+	// implicitly via the new count; ApplyCoverage doesn't scale RI cost
+	// fields explicitly either, so we don't here).
+
+	// Projection metrics.
+	projUtil := avg / float64(nTarget) * 100.0
+	if projUtil > 100 {
+		projUtil = 100
+	}
+	projCov := float64(nTarget) / avg * 100.0
+	if projCov > 100 {
+		projCov = 100
+	}
+	adjusted.ProjectedUtilization = projUtil
+	adjusted.ProjectedCoverage = projCov
+	return adjusted, true
+}
+
+// applyTargetUtilizationSP is the SP branch of ApplyTargetUtilization. Returns
+// (adjusted, true) when the rec is kept, (rec, false) when it should be
+// skipped (caller passes through unscaled and counts in the skip summary).
+func applyTargetUtilizationSP(rec common.Recommendation, targetPct float64) (common.Recommendation, bool) {
+	if rec.RecommendedUtilization <= 0 {
+		return rec, false
+	}
+
+	adjusted := rec
+	if rec.RecommendedUtilization >= targetPct {
+		// AWS already projects at-or-above target — no scaling, but we do
+		// surface the projected utilization in the output.
+		adjusted.ProjectedUtilization = rec.RecommendedUtilization
+		// ProjectedCoverage is intentionally left at zero for SPs — see
+		// the package doc on the field; we don't have total-demand-$ from
+		// CE to compute SP coverage cleanly.
+		return adjusted, true
+	}
+
+	// AWS projects below target. Scale commitment down by ratio = recommended/target
+	// so projected utilization rises to exactly target.
+	ratio := rec.RecommendedUtilization / targetPct
+
+	// Only the SP fields that ApplyCoverage scales — HourlyCommitment (via
+	// the polymorphic Details copy) and EstimatedSavings. Do NOT touch
+	// CommitmentCost, OnDemandCost, or SavingsPercentage; ApplyCoverage
+	// doesn't either, and divergence would silently desync the two modes.
+	if details, ok := rec.Details.(*common.SavingsPlanDetails); ok {
+		newDetails := *details // copy
+		newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
+		adjusted.Details = &newDetails
+		adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
+	} else {
+		AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
+	}
+
+	adjusted.ProjectedUtilization = targetPct
+	// ProjectedCoverage left at zero for SPs (see above).
+	return adjusted, true
+}
+
+// applySizing chooses target-utilization or coverage sizing.
+//
+// coverage is the effective % to apply when target-utilization is unset
+// (the main path passes cfg.Coverage; the CSV path passes csvModeCoverage,
+// which substitutes the default 80% with 100% so CSV-driven counts aren't
+// silently dropped).
+func applySizing(recs []common.Recommendation, cfg Config, coverage float64) []common.Recommendation {
+	if cfg.TargetUtilization > 0 {
+		return ApplyTargetUtilization(recs, cfg.TargetUtilization)
+	}
+	return ApplyCoverage(recs, coverage)
 }
 
 // ApplyCountOverride overrides the count for all recommendations

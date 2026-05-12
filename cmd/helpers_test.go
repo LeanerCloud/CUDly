@@ -898,3 +898,210 @@ func TestAdjustRecommendationsForExisting_PartialCoverage(t *testing.T) {
 	assert.Empty(t, filtered)           // partial coverage stays in passed, not filtered
 	mockClient.AssertExpectations(t)
 }
+
+// TestApplyTargetUtilization covers the RI sizing branch of issue #338's
+// --target-utilization flag. Confirms: floor (not ceil) selection so we
+// hit "utilization >= target", AWS-ceiling cap, drop-when-unreachable,
+// no-signal pass-through, and projected utilization/coverage outputs.
+func TestApplyTargetUtilization_RI(t *testing.T) {
+	mkRI := func(count int, avg, recUtil float64) common.Recommendation {
+		return common.Recommendation{
+			Service:                     common.ServiceEC2,
+			Region:                      "us-east-1",
+			ResourceType:                "t3.medium",
+			Count:                       count,
+			CommitmentType:              common.CommitmentReservedInstance,
+			CommitmentCost:              1000,
+			OnDemandCost:                2000,
+			EstimatedSavings:            500,
+			AverageInstancesUsedPerHour: avg,
+			RecommendedUtilization:      recUtil,
+		}
+	}
+
+	tests := []struct {
+		name           string
+		rec            common.Recommendation
+		target         float64
+		wantDropped    bool
+		wantCount      int
+		wantProjUtil   float64 // 0 means "don't assert"
+		wantProjCovGTE float64 // we assert coverage >= this (handles the float clamping)
+	}{
+		{
+			// avg=8.5, target=95% → floor(8.5/0.95) = floor(8.94) = 8.
+			// projected utilization = 8.5/8 = 106.25 → clamped to 100.
+			name:         "RI: target 95 hits cap with non-integer avg",
+			rec:          mkRI(10, 8.5, 85),
+			target:       95,
+			wantCount:    8,
+			wantProjUtil: 100,
+		},
+		{
+			// avg=10, target=50% → floor(10/0.5) = 20. Capped at rec.Count=10
+			// (target too lenient). Cap log fires (not asserted here).
+			name:         "RI: target 50 hits AWS ceiling cap",
+			rec:          mkRI(10, 10, 90),
+			target:       50,
+			wantCount:    10,
+			wantProjUtil: 100, // 10/10 = 100
+		},
+		{
+			// avg=0.4, target=50% → floor(0.4/0.5) = 0 → drop with log.
+			name:        "RI: target unreachable → dropped",
+			rec:         mkRI(5, 0.4, 50),
+			target:      50,
+			wantDropped: true,
+		},
+		{
+			// avg=0 (no signal) → passed through unchanged, counted in skip summary.
+			name:         "RI: no signal → passed through unmodified",
+			rec:          mkRI(5, 0, 0),
+			target:       80,
+			wantCount:    5,
+			wantProjUtil: 0, // never set in pass-through
+		},
+		{
+			// avg=4, target=80% → floor(4/0.8) = 5. Capped at rec.Count=5
+			// (binding cap, no log fires because uncapped == cap).
+			// projected utilization = 4/5 = 80.
+			name:         "RI: target 80 hits target exactly",
+			rec:          mkRI(5, 4, 80),
+			target:       80,
+			wantCount:    5,
+			wantProjUtil: 80,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recs := []common.Recommendation{tt.rec}
+			out := ApplyTargetUtilization(recs, tt.target)
+			if tt.wantDropped {
+				if len(out) != 0 {
+					t.Fatalf("expected drop; got %d recs", len(out))
+				}
+				return
+			}
+			if len(out) != 1 {
+				t.Fatalf("expected 1 rec; got %d", len(out))
+			}
+			if out[0].Count != tt.wantCount {
+				t.Errorf("Count: got %d, want %d", out[0].Count, tt.wantCount)
+			}
+			if tt.wantProjUtil > 0 {
+				if math.Abs(out[0].ProjectedUtilization-tt.wantProjUtil) > 0.01 {
+					t.Errorf("ProjectedUtilization: got %.4f, want %.4f",
+						out[0].ProjectedUtilization, tt.wantProjUtil)
+				}
+			}
+		})
+	}
+}
+
+// TestApplyTargetUtilization_RI_CostScaling verifies cost fields are NOT
+// scaled when the count is adjusted (matching ApplyCoverage's RI branch,
+// which also leaves cost fields untouched). Divergence would silently
+// mis-cost the dry-run output relative to the coverage path.
+func TestApplyTargetUtilization_RI_CostScaling(t *testing.T) {
+	rec := common.Recommendation{
+		Service:                     common.ServiceEC2,
+		Count:                       10,
+		CommitmentType:              common.CommitmentReservedInstance,
+		CommitmentCost:              1000,
+		OnDemandCost:                2000,
+		EstimatedSavings:            500,
+		AverageInstancesUsedPerHour: 8,
+	}
+	// target=80 → floor(8/0.8) = 10 = rec.Count (no scaling). Cost fields
+	// must match the input exactly.
+	out := ApplyTargetUtilization([]common.Recommendation{rec}, 80)
+	require.Len(t, out, 1)
+	assert.Equal(t, 10, out[0].Count)
+	assert.Equal(t, 1000.0, out[0].CommitmentCost, "CommitmentCost should be untouched by RI branch")
+	assert.Equal(t, 2000.0, out[0].OnDemandCost, "OnDemandCost should be untouched by RI branch")
+	assert.Equal(t, 500.0, out[0].EstimatedSavings, "EstimatedSavings should be untouched by RI branch")
+}
+
+// TestApplyTargetUtilization_SP covers the SP sizing branch. SP sizing
+// scales only HourlyCommitment (inside SavingsPlanDetails) and
+// EstimatedSavings — matching exactly what ApplyCoverage scales for SPs.
+// CommitmentCost / OnDemandCost / SavingsPercentage must NOT change.
+func TestApplyTargetUtilization_SP(t *testing.T) {
+	mkSP := func(recUtil float64) common.Recommendation {
+		return common.Recommendation{
+			Service:                common.ServiceSavingsPlansCompute,
+			CommitmentType:         common.CommitmentSavingsPlan,
+			CommitmentCost:         1000,
+			OnDemandCost:           5000,
+			EstimatedSavings:       1500,
+			SavingsPercentage:      30,
+			RecommendedUtilization: recUtil,
+			Details:                &common.SavingsPlanDetails{HourlyCommitment: 2.0},
+		}
+	}
+
+	t.Run("AWS already above target — no scaling", func(t *testing.T) {
+		out := ApplyTargetUtilization([]common.Recommendation{mkSP(95)}, 80)
+		require.Len(t, out, 1)
+		assert.Equal(t, 2.0, out[0].Details.(*common.SavingsPlanDetails).HourlyCommitment)
+		assert.Equal(t, 1500.0, out[0].EstimatedSavings)
+		assert.Equal(t, 95.0, out[0].ProjectedUtilization)
+		assert.Equal(t, 0.0, out[0].ProjectedCoverage, "SPs intentionally leave ProjectedCoverage at zero")
+	})
+
+	t.Run("AWS below target — scale down", func(t *testing.T) {
+		// RecUtil=50, target=80 → ratio = 50/80 = 0.625.
+		// HourlyCommitment: 2.0 * 0.625 = 1.25
+		// EstimatedSavings: 1500 * 0.625 = 937.5
+		out := ApplyTargetUtilization([]common.Recommendation{mkSP(50)}, 80)
+		require.Len(t, out, 1)
+		details := out[0].Details.(*common.SavingsPlanDetails)
+		assert.InDelta(t, 1.25, details.HourlyCommitment, 0.001)
+		assert.InDelta(t, 937.5, out[0].EstimatedSavings, 0.001)
+		// CommitmentCost / OnDemandCost / SavingsPercentage MUST be unchanged.
+		assert.Equal(t, 1000.0, out[0].CommitmentCost, "CommitmentCost must not scale on SP branch (matches ApplyCoverage)")
+		assert.Equal(t, 5000.0, out[0].OnDemandCost, "OnDemandCost must not scale on SP branch (matches ApplyCoverage)")
+		assert.Equal(t, 30.0, out[0].SavingsPercentage, "SavingsPercentage must not scale on SP branch")
+		assert.Equal(t, 80.0, out[0].ProjectedUtilization)
+		assert.Equal(t, 0.0, out[0].ProjectedCoverage)
+	})
+
+	t.Run("no signal → passed through unchanged", func(t *testing.T) {
+		out := ApplyTargetUtilization([]common.Recommendation{mkSP(0)}, 80)
+		require.Len(t, out, 1)
+		// Original recommendation values intact.
+		assert.Equal(t, 2.0, out[0].Details.(*common.SavingsPlanDetails).HourlyCommitment)
+		assert.Equal(t, 1500.0, out[0].EstimatedSavings)
+		assert.Equal(t, 0.0, out[0].ProjectedUtilization)
+	})
+}
+
+// TestApplySizing checks the routing helper picks the right sizer based
+// on cfg.TargetUtilization being >0 vs ==0.
+func TestApplySizing(t *testing.T) {
+	ri := common.Recommendation{
+		Service:                     common.ServiceEC2,
+		Count:                       10,
+		CommitmentType:              common.CommitmentReservedInstance,
+		AverageInstancesUsedPerHour: 8,
+	}
+
+	t.Run("TargetUtilization > 0 → ApplyTargetUtilization", func(t *testing.T) {
+		cfg := Config{TargetUtilization: 80, Coverage: 100}
+		out := applySizing([]common.Recommendation{ri}, cfg, cfg.Coverage)
+		require.Len(t, out, 1)
+		// floor(8/0.8)=10, capped at rec.Count=10. ProjectedUtilization set.
+		assert.Equal(t, 80.0, out[0].ProjectedUtilization)
+	})
+
+	t.Run("TargetUtilization == 0 → ApplyCoverage", func(t *testing.T) {
+		cfg := Config{TargetUtilization: 0, Coverage: 50}
+		out := applySizing([]common.Recommendation{ri}, cfg, cfg.Coverage)
+		require.Len(t, out, 1)
+		// ApplyCoverage(50) on count=10 → 5. ProjectedUtilization NOT set
+		// (zero) because we took the coverage branch.
+		assert.Equal(t, 5, out[0].Count)
+		assert.Equal(t, 0.0, out[0].ProjectedUtilization)
+	})
+}
