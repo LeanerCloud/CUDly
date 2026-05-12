@@ -134,6 +134,30 @@ body {
     margin: var(--cudly-sp-3) 0;
 }
 
+/* Page hero (issue #340) — the prominent section title displayed at
+ * the top of each Plans / Purchases / Inventory / Admin tab. Bumps
+ * the existing h2 / h3 + description treatment to read as a page
+ * header instead of a card label. */
+.page-hero h1,
+.page-hero h2 {
+    font-size: var(--cudly-fs-2xl);
+    font-weight: var(--cudly-fw-bold);
+    color: var(--cudly-text);
+    line-height: var(--cudly-lh-tight);
+    margin-bottom: var(--cudly-sp-2);
+}
+
+.page-hero .page-hero-description {
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-md);
+    line-height: var(--cudly-lh-normal);
+    margin: 0;
+}
+
+.page-hero {
+    margin-bottom: var(--cudly-sp-5);
+}
+
 /* Empty-state card — used by placeholder sub-sections (Inventory Active
  * commitments / Coverage, etc.) and "no data yet" prompts. Needs a
  * surface background distinct from the page bg so it reads as a card,
