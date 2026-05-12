@@ -166,15 +166,17 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write header. ProjectedUtilization, ProjectedCoverage, and
-	// RecommendedUtilization appended for --target-coverage (#338);
-	// they print blank when zero so users on the coverage path don't see
-	// noise.
+	// Write header. ProjectedCoverage appended for --target-coverage (#338);
+	// it prints blank when zero so users on the coverage path don't see
+	// noise. ProjectedUtilization and RecommendedUtilization are NOT emitted
+	// because under under-buy sizing both land at ~100% on every row, which
+	// adds noise without information; the underlying fields stay on the
+	// Recommendation struct for internal use (SP no-signal guard, etc.).
 	header := []string{
 		"Service", "Region", "ResourceType", "Count", "Account", "AccountName",
 		"Term", "PaymentOption", "EstimatedSavings", "CommitmentID",
 		"Success", "Error", "Timestamp",
-		"ProjectedUtilization", "ProjectedCoverage", "RecommendedUtilization",
+		"ProjectedCoverage",
 	}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write CSV header: %w", err)
@@ -202,9 +204,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			fmt.Sprintf("%t", r.Success),
 			errStr,
 			r.Timestamp.Format(time.RFC3339),
-			formatPercentOrBlank(rec.ProjectedUtilization),
 			formatPercentOrBlank(rec.ProjectedCoverage),
-			formatPercentOrBlank(rec.RecommendedUtilization),
 		}
 		if err := writer.Write(row); err != nil {
 			return fmt.Errorf("failed to write CSV row: %w", err)

@@ -188,11 +188,13 @@ func TestWriteMultiServiceCSVReport(t *testing.T) {
 	}
 }
 
-// TestWriteMultiServiceCSVReport_UtilizationColumns confirms the three
-// utilization-related columns added for issue #338 are emitted with the
-// right "blank-when-zero" formatting (matches the "0 = unknown" convention
-// shared with the JSON-level omitempty tags).
-func TestWriteMultiServiceCSVReport_UtilizationColumns(t *testing.T) {
+// TestWriteMultiServiceCSVReport_CoverageColumn confirms the ProjectedCoverage
+// column added for --target-coverage (#338) is emitted with the "blank-when-zero"
+// formatting (matches the "0 = unknown" convention shared with the JSON-level
+// omitempty tags). The sibling ProjectedUtilization and RecommendedUtilization
+// fields are intentionally NOT emitted to CSV (both land at ~100% on every
+// under-buy row, so they add noise without information).
+func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	tmpDir := t.TempDir()
 	filepath := tmpDir + "/util.csv"
 
@@ -211,7 +213,7 @@ func TestWriteMultiServiceCSVReport_UtilizationColumns(t *testing.T) {
 			Success: true,
 		},
 		{
-			// All three utilization fields zero — should render as blank cells.
+			// All utilization fields zero — ProjectedCoverage cell should be blank.
 			Recommendation: common.Recommendation{
 				Service:      common.ServiceEC2,
 				Region:       "us-east-1",
@@ -230,38 +232,30 @@ func TestWriteMultiServiceCSVReport_UtilizationColumns(t *testing.T) {
 	require.NoError(t, err)
 	csvText := string(content)
 
-	// Header contains the new columns.
-	assert.Contains(t, csvText, "ProjectedUtilization")
+	// Header contains ProjectedCoverage but NOT the always-100% siblings.
 	assert.Contains(t, csvText, "ProjectedCoverage")
-	assert.Contains(t, csvText, "RecommendedUtilization")
+	assert.NotContains(t, csvText, "ProjectedUtilization", "column was removed; it's ~100% on every under-buy row")
+	assert.NotContains(t, csvText, "RecommendedUtilization", "column was removed; it's ~99-100% on every row")
 
-	// First data row (populated rec) has formatted values.
-	assert.Contains(t, csvText, "95.0", "ProjectedUtilization should render with one decimal")
+	// First data row (populated rec) has the coverage value formatted.
 	assert.Contains(t, csvText, "87.5", "ProjectedCoverage should render with one decimal")
-	assert.Contains(t, csvText, "80.0", "RecommendedUtilization should render with one decimal")
 
-	// Second data row (zero values) must end with empty cells for the three
-	// utilization columns: "...,t3-no-util...,,," — assert by counting the
-	// number of trailing commas before the newline. Parse with the stdlib
-	// csv reader to avoid string-matching fragility.
+	// Second data row (zero coverage) must end with an empty cell.
 	r := csv.NewReader(strings.NewReader(csvText))
 	rows, err := r.ReadAll()
 	require.NoError(t, err)
 	require.Len(t, rows, 3) // header + 2 data rows
-	// Find the 3 trailing utilization columns by index from the header.
 	header := rows[0]
-	idxProjUtil := -1
+	idxProjCov := -1
 	for i, h := range header {
-		if h == "ProjectedUtilization" {
-			idxProjUtil = i
+		if h == "ProjectedCoverage" {
+			idxProjCov = i
 			break
 		}
 	}
-	require.NotEqual(t, -1, idxProjUtil, "ProjectedUtilization column not found")
+	require.NotEqual(t, -1, idxProjCov, "ProjectedCoverage column not found")
 	zeroRow := rows[2]
-	assert.Equal(t, "", zeroRow[idxProjUtil], "zero ProjectedUtilization should be blank")
-	assert.Equal(t, "", zeroRow[idxProjUtil+1], "zero ProjectedCoverage should be blank")
-	assert.Equal(t, "", zeroRow[idxProjUtil+2], "zero RecommendedUtilization should be blank")
+	assert.Equal(t, "", zeroRow[idxProjCov], "zero ProjectedCoverage should be blank")
 }
 
 // Tests for loadRecommendationsFromCSV function
