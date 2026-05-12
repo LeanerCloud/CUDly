@@ -180,16 +180,17 @@
 /* ------------------------------------------------------------------------- */
 
 header {
-    background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%);
-    color: white;
-    padding: 1rem 2rem;
+    background: linear-gradient(135deg, var(--cudly-primary) 0%, var(--cudly-primary-hover) 100%);
+    color: var(--cudly-primary-fg);
+    padding: var(--cudly-sp-3) var(--cudly-sp-5);
     display: flex;
     justify-content: space-between;
     align-items: center;
 }
 
 header h1 {
-    font-size: 1.5rem;
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
 }
 
 #user-info {
@@ -212,11 +213,11 @@ header h1 {
 }
 
 #logout-btn {
-    padding: 0.4rem 0.8rem;
-    border-radius: 4px;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border-radius: var(--cudly-r-sm);
     border: 1px solid rgba(255,255,255,0.5);
     background: transparent;
-    color: white;
+    color: var(--cudly-primary-fg);
     cursor: pointer;
     font-size: 0.85rem;
     transition: background-color 0.2s, border-color 0.2s;
@@ -228,11 +229,11 @@ header h1 {
 }
 
 .header-link {
-    color: white;
+    color: var(--cudly-primary-fg);
     text-decoration: none;
-    padding: 0.4rem 0.8rem;
-    border-radius: 4px;
-    font-size: 0.85rem;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border-radius: var(--cudly-r-sm);
+    font-size: var(--cudly-fs-sm);
     transition: background-color 0.2s;
 }
 

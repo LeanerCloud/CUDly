@@ -19,6 +19,12 @@
     box-shadow: var(--cudly-shadow-sm);
     margin-bottom: 1rem;
     overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.plan-card:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--cudly-shadow-md);
 }
 
 .plan-header {
@@ -88,12 +94,18 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: white;
-    padding: 1rem 1.5rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    margin-bottom: 0.75rem;
-    border-left: 4px solid #1a73e8;
+    background: var(--cudly-surface);
+    padding: var(--cudly-sp-4) var(--cudly-sp-5);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
+    margin-bottom: var(--cudly-sp-3);
+    border-left: 4px solid var(--cudly-primary);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.upcoming-card:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--cudly-shadow-md);
 }
 
 .upcoming-info {
