@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/csv"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +186,82 @@ func TestWriteMultiServiceCSVReport(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWriteMultiServiceCSVReport_UtilizationColumns confirms the three
+// utilization-related columns added for issue #338 are emitted with the
+// right "blank-when-zero" formatting (matches the "0 = unknown" convention
+// shared with the JSON-level omitempty tags).
+func TestWriteMultiServiceCSVReport_UtilizationColumns(t *testing.T) {
+	tmpDir := t.TempDir()
+	filepath := tmpDir + "/util.csv"
+
+	results := []common.PurchaseResult{
+		{
+			Recommendation: common.Recommendation{
+				Service:                common.ServiceEC2,
+				Region:                 "us-east-1",
+				ResourceType:           "t3.medium",
+				Count:                  10,
+				Term:                   "1yr",
+				ProjectedUtilization:   95.0,
+				ProjectedCoverage:      87.5,
+				RecommendedUtilization: 80.0,
+			},
+			Success: true,
+		},
+		{
+			// All three utilization fields zero — should render as blank cells.
+			Recommendation: common.Recommendation{
+				Service:      common.ServiceEC2,
+				Region:       "us-east-1",
+				ResourceType: "m5.large",
+				Count:        5,
+				Term:         "1yr",
+			},
+			Success: true,
+		},
+	}
+
+	err := writeMultiServiceCSVReport(results, filepath)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath)
+	require.NoError(t, err)
+	csvText := string(content)
+
+	// Header contains the new columns.
+	assert.Contains(t, csvText, "ProjectedUtilization")
+	assert.Contains(t, csvText, "ProjectedCoverage")
+	assert.Contains(t, csvText, "RecommendedUtilization")
+
+	// First data row (populated rec) has formatted values.
+	assert.Contains(t, csvText, "95.0", "ProjectedUtilization should render with one decimal")
+	assert.Contains(t, csvText, "87.5", "ProjectedCoverage should render with one decimal")
+	assert.Contains(t, csvText, "80.0", "RecommendedUtilization should render with one decimal")
+
+	// Second data row (zero values) must end with empty cells for the three
+	// utilization columns: "...,t3-no-util...,,," — assert by counting the
+	// number of trailing commas before the newline. Parse with the stdlib
+	// csv reader to avoid string-matching fragility.
+	r := csv.NewReader(strings.NewReader(csvText))
+	rows, err := r.ReadAll()
+	require.NoError(t, err)
+	require.Len(t, rows, 3) // header + 2 data rows
+	// Find the 3 trailing utilization columns by index from the header.
+	header := rows[0]
+	idxProjUtil := -1
+	for i, h := range header {
+		if h == "ProjectedUtilization" {
+			idxProjUtil = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, idxProjUtil, "ProjectedUtilization column not found")
+	zeroRow := rows[2]
+	assert.Equal(t, "", zeroRow[idxProjUtil], "zero ProjectedUtilization should be blank")
+	assert.Equal(t, "", zeroRow[idxProjUtil+1], "zero ProjectedCoverage should be blank")
+	assert.Equal(t, "", zeroRow[idxProjUtil+2], "zero RecommendedUtilization should be blank")
 }
 
 // Tests for loadRecommendationsFromCSV function

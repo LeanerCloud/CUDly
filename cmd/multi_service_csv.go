@@ -166,11 +166,15 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write header
+	// Write header. ProjectedUtilization, ProjectedCoverage, and
+	// RecommendedUtilization appended for --target-utilization (#338);
+	// they print blank when zero so users on the coverage path don't see
+	// noise.
 	header := []string{
 		"Service", "Region", "ResourceType", "Count", "Account", "AccountName",
 		"Term", "PaymentOption", "EstimatedSavings", "CommitmentID",
 		"Success", "Error", "Timestamp",
+		"ProjectedUtilization", "ProjectedCoverage", "RecommendedUtilization",
 	}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write CSV header: %w", err)
@@ -198,6 +202,9 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			fmt.Sprintf("%t", r.Success),
 			errStr,
 			r.Timestamp.Format(time.RFC3339),
+			formatPercentOrBlank(rec.ProjectedUtilization),
+			formatPercentOrBlank(rec.ProjectedCoverage),
+			formatPercentOrBlank(rec.RecommendedUtilization),
 		}
 		if err := writer.Write(row); err != nil {
 			return fmt.Errorf("failed to write CSV row: %w", err)
@@ -205,4 +212,15 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	}
 
 	return nil
+}
+
+// formatPercentOrBlank renders a % value as "%.1f" when non-zero, "" otherwise.
+// Zero means "unknown / not applicable" — we don't want "0.0" in cells where
+// the metric simply wasn't computed (e.g. ProjectedCoverage for SP rows, or
+// any utilization field when --target-utilization wasn't used).
+func formatPercentOrBlank(v float64) string {
+	if v == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.1f", v)
 }
