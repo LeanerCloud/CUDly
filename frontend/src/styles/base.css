@@ -120,10 +120,18 @@ body {
     border-radius: 4px;
 }
 
+/* Inline empty state — used WITHIN a card or section that already has
+ * its own surface. Subtle muted pill so it reads as "this slot is
+ * empty" without competing with the card chrome around it. Standalone
+ * empty states (whole-page placeholders) use the heavier .empty-state
+ * card pattern below. */
 .empty {
     color: var(--cudly-text-muted);
-    padding: var(--cudly-sp-6);
+    padding: var(--cudly-sp-5) var(--cudly-sp-4);
     text-align: center;
+    background: var(--cudly-surface-muted);
+    border-radius: var(--cudly-r-md);
+    margin: var(--cudly-sp-3) 0;
 }
 
 /* Empty-state card — used by placeholder sub-sections (Inventory Active

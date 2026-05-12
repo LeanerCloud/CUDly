@@ -131,6 +131,17 @@
     color: var(--cudly-text);
 }
 
+/* Visible keyboard focus indicator on sidebar nav. Chrome's default
+ * `outline: auto` doesn't render reliably across the rounded buttons,
+ * so we draw an explicit 2px ring in the primary color with a 2px
+ * offset so it sits outside the button's bg. Only fires on
+ * :focus-visible so mouse-click users don't see the ring. */
+.app-sidebar-nav .tab-btn:focus-visible,
+.app-sidebar-toggle:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: 2px;
+}
+
 .app-sidebar-nav .tab-btn.active {
     background: var(--cudly-info-bg);
     color: var(--cudly-primary);

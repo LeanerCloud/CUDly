@@ -30,6 +30,15 @@
     font-weight: 600;
 }
 
+/* Visible keyboard focus on sub-tab buttons (Admin sub-tabs + Inventory
+ * sub-tabs). Without this, Chrome's default outline doesn't render on
+ * the borderless buttons, so keyboard users can't see where they are. */
+.sub-tab-btn:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: -2px;
+    border-radius: var(--cudly-r-sm);
+}
+
 /* Settings panel chrome (white bg, padding, radius, shadow) comes from the
  * .card class applied uniformly to #settings-section, #purchasing-panel,
  * #accounts-section, #users-section, and #apikeys-section. This keeps all
