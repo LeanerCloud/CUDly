@@ -43,4 +43,29 @@ describe('reflectDirtyState', () => {
     expect(one.classList.contains('dirty')).toBe(false);
     expect(two.classList.contains('dirty')).toBe(false);
   });
+
+  it('skips .settings-buttons nested inside #ri-exchange-automation-settings', () => {
+    // The RI Exchange fieldset renders its own save button; it must not
+    // receive the sticky-save-bar treatment that would create two stacked
+    // sticky bars. Regression guard for the exemption in reflectDirtyState().
+    const wrapper = document.createElement('div');
+    wrapper.id = 'ri-exchange-automation-settings';
+    const nested = document.createElement('div');
+    nested.className = 'settings-buttons';
+    wrapper.appendChild(nested);
+
+    const outside = document.createElement('div');
+    outside.className = 'settings-buttons';
+
+    document.body.append(wrapper, outside);
+
+    reflectDirtyState(true);
+    expect(nested.classList.contains('settings-savebar')).toBe(false);
+    expect(nested.classList.contains('dirty')).toBe(false);
+    expect(outside.classList.contains('settings-savebar')).toBe(true);
+    expect(outside.classList.contains('dirty')).toBe(true);
+
+    reflectDirtyState(false);
+    expect(outside.classList.contains('dirty')).toBe(false);
+  });
 });

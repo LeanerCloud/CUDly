@@ -250,13 +250,13 @@
 input.dirty,
 select.dirty {
     border-color: #f4a261 !important;
-    background-color: var(--cudly-surface)bf5 !important;
+    background-color: var(--cudly-warn-bg) !important;
     box-shadow: 0 0 0 2px rgba(244, 162, 97, 0.25);
 }
 
 /* Dirty highlight for checkbox containers */
 .setting-input.dirty {
-    background-color: var(--cudly-surface)bf5;
+    background-color: var(--cudly-warn-bg);
     border-radius: 4px;
     padding: 2px 8px;
     outline: 2px solid #f4a261;
@@ -418,7 +418,7 @@ select.dirty {
 
 .provider-disabled-banner {
     display: none;
-    background: var(--cudly-surface)3cd;
+    background: var(--cudly-warn-bg);
     color: #664d03;
     border: 1px solid #ffecb5;
     border-radius: 4px;
