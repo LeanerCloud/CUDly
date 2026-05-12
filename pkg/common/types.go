@@ -172,8 +172,12 @@ type Recommendation struct {
 	// RecommendedUtilization is "what AWS projects for the full recommendation"
 	// (%). ProjectedUtilization / ProjectedCoverage are populated by the sizing
 	// step after we pick our own quantity.
+	// RecommendedCount is AWS's pre-sizing count (mirrors Count before
+	// ApplyCoverage / ApplyTargetCoverage mutates Count); zero for SPs since
+	// the SP commitment is dollar-denominated rather than count-denominated.
 	AverageInstancesUsedPerHour float64 `json:"average_instances_used_per_hour,omitempty" csv:"AverageInstancesUsedPerHour"`
 	RecommendedUtilization      float64 `json:"recommended_utilization,omitempty" csv:"RecommendedUtilization"`
+	RecommendedCount            int     `json:"recommended_count,omitempty" csv:"RecommendedCount"`
 	ProjectedUtilization        float64 `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
 	ProjectedCoverage           float64 `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
 

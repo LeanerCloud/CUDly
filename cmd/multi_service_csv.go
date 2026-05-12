@@ -166,16 +166,18 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write header. ProjectedCoverage appended for --target-coverage (#338);
-	// it prints blank when zero so users on the coverage path don't see
-	// noise. ProjectedUtilization and RecommendedUtilization are NOT emitted
-	// because under under-buy sizing both land at ~100% on every row, which
-	// adds noise without information; the underlying fields stay on the
-	// Recommendation struct for internal use (SP no-signal guard, etc.).
+	// Write header. RecommendedCount shows AWS's pre-sizing count alongside
+	// Count (the post-sizing value); ProjectedCoverage shows where
+	// --target-coverage landed. Both render blank when zero so users on the
+	// straight --coverage path don't see noise. ProjectedUtilization and
+	// RecommendedUtilization are NOT emitted because under under-buy sizing
+	// both land at ~100% on every row, which adds noise without information;
+	// the underlying fields stay on the Recommendation struct for internal
+	// use (SP no-signal guard, etc.).
 	header := []string{
-		"Service", "Region", "ResourceType", "Count", "Account", "AccountName",
-		"Term", "PaymentOption", "EstimatedSavings", "CommitmentID",
-		"Success", "Error", "Timestamp",
+		"Service", "Region", "ResourceType", "Count", "RecommendedCount",
+		"Account", "AccountName", "Term", "PaymentOption", "EstimatedSavings",
+		"CommitmentID", "Success", "Error", "Timestamp",
 		"ProjectedCoverage",
 	}
 	if err := writer.Write(header); err != nil {
@@ -195,6 +197,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			rec.Region,
 			rec.ResourceType,
 			fmt.Sprintf("%d", rec.Count),
+			formatIntOrBlank(rec.RecommendedCount),
 			rec.Account,
 			rec.AccountName,
 			rec.Term,
@@ -212,6 +215,17 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	}
 
 	return nil
+}
+
+// formatIntOrBlank renders an int as its decimal string when non-zero, ""
+// otherwise. SP recommendations leave RecommendedCount at zero (SPs are
+// dollar-denominated, not count-denominated), so blanking matches the
+// "0 = unknown / not applicable" convention used elsewhere in the CSV.
+func formatIntOrBlank(v int) string {
+	if v == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", v)
 }
 
 // formatPercentOrBlank renders a % value as "%.1f" when non-zero, "" otherwise.

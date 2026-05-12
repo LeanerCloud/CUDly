@@ -45,12 +45,16 @@ func (c *Client) parseRecommendationDetail(details *types.ReservationPurchaseRec
 		Timestamp:      time.Now(),
 	}
 
-	// Parse recommended quantity
+	// Parse recommended quantity. RecommendedCount preserves AWS's pre-sizing
+	// count so the CSV can show what AWS proposed alongside what --coverage /
+	// --target-coverage chose; Count is the working value the sizing step
+	// mutates.
 	count, err := c.parseRecommendedQuantity(details)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse recommended quantity: %w", err)
 	}
 	rec.Count = count
+	rec.RecommendedCount = count
 
 	// Parse cost information
 	rec.EstimatedSavings, rec.SavingsPercentage, err = c.parseCostInformation(details)

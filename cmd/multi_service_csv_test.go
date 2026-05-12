@@ -189,11 +189,12 @@ func TestWriteMultiServiceCSVReport(t *testing.T) {
 }
 
 // TestWriteMultiServiceCSVReport_CoverageColumn confirms the ProjectedCoverage
-// column added for --target-coverage (#338) is emitted with the "blank-when-zero"
-// formatting (matches the "0 = unknown" convention shared with the JSON-level
-// omitempty tags). The sibling ProjectedUtilization and RecommendedUtilization
-// fields are intentionally NOT emitted to CSV (both land at ~100% on every
-// under-buy row, so they add noise without information).
+// and RecommendedCount columns added for --target-coverage (#338) are emitted
+// with the "blank-when-zero" formatting (matches the "0 = unknown" convention
+// shared with the JSON-level omitempty tags). The sibling ProjectedUtilization
+// and RecommendedUtilization fields are intentionally NOT emitted to CSV
+// (both land at ~100% on every under-buy row, so they add noise without
+// information).
 func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	tmpDir := t.TempDir()
 	filepath := tmpDir + "/util.csv"
@@ -204,7 +205,8 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 				Service:                common.ServiceEC2,
 				Region:                 "us-east-1",
 				ResourceType:           "t3.medium",
-				Count:                  10,
+				Count:                  7,  // post-sizing
+				RecommendedCount:       10, // AWS pre-sizing
 				Term:                   "1yr",
 				ProjectedUtilization:   95.0,
 				ProjectedCoverage:      87.5,
@@ -213,7 +215,9 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 			Success: true,
 		},
 		{
-			// All utilization fields zero — ProjectedCoverage cell should be blank.
+			// All sizing-related fields zero — ProjectedCoverage and
+			// RecommendedCount cells should both be blank (SP rec or a
+			// pre-target rec that never went through sizing).
 			Recommendation: common.Recommendation{
 				Service:      common.ServiceEC2,
 				Region:       "us-east-1",
@@ -232,30 +236,43 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	require.NoError(t, err)
 	csvText := string(content)
 
-	// Header contains ProjectedCoverage but NOT the always-100% siblings.
+	// Header contains ProjectedCoverage and RecommendedCount but NOT the
+	// always-100% utilization siblings.
 	assert.Contains(t, csvText, "ProjectedCoverage")
+	assert.Contains(t, csvText, "RecommendedCount")
 	assert.NotContains(t, csvText, "ProjectedUtilization", "column was removed; it's ~100% on every under-buy row")
 	assert.NotContains(t, csvText, "RecommendedUtilization", "column was removed; it's ~99-100% on every row")
 
-	// First data row (populated rec) has the coverage value formatted.
+	// First data row (populated rec) has the coverage and AWS-count values.
 	assert.Contains(t, csvText, "87.5", "ProjectedCoverage should render with one decimal")
 
-	// Second data row (zero coverage) must end with an empty cell.
 	r := csv.NewReader(strings.NewReader(csvText))
 	rows, err := r.ReadAll()
 	require.NoError(t, err)
 	require.Len(t, rows, 3) // header + 2 data rows
 	header := rows[0]
 	idxProjCov := -1
+	idxRecCount := -1
 	for i, h := range header {
-		if h == "ProjectedCoverage" {
+		switch h {
+		case "ProjectedCoverage":
 			idxProjCov = i
-			break
+		case "RecommendedCount":
+			idxRecCount = i
 		}
 	}
 	require.NotEqual(t, -1, idxProjCov, "ProjectedCoverage column not found")
+	require.NotEqual(t, -1, idxRecCount, "RecommendedCount column not found")
+
+	// Populated row: RecommendedCount=10 renders as "10", ProjectedCoverage=87.5 as "87.5".
+	populatedRow := rows[1]
+	assert.Equal(t, "10", populatedRow[idxRecCount], "RecommendedCount should render as decimal")
+	assert.Equal(t, "87.5", populatedRow[idxProjCov])
+
+	// Zero-fields row: both cells blank.
 	zeroRow := rows[2]
 	assert.Equal(t, "", zeroRow[idxProjCov], "zero ProjectedCoverage should be blank")
+	assert.Equal(t, "", zeroRow[idxRecCount], "zero RecommendedCount should be blank (SP rec or pre-sizing)")
 }
 
 // Tests for loadRecommendationsFromCSV function
