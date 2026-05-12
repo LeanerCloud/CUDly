@@ -679,6 +679,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+    attachSparkline('ytd', []);
     canvas.classList.add('hidden');
     if (empty) {
       empty.textContent = 'Savings history is not available yet.';
