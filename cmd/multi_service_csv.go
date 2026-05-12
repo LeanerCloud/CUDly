@@ -169,19 +169,22 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	// Write header. RecommendedCount shows AWS's pre-sizing count alongside
 	// Count (the post-sizing value); UpfrontPayment is rec.CommitmentCost,
 	// which ApplyCoverage / ApplyTargetCoverage now scale at sizing time so
-	// the value already reflects the sized purchase. ProjectedCoverage shows
-	// where --target-coverage landed. All three new columns render blank
-	// when zero so users on the straight --coverage path don't see noise.
-	// ProjectedUtilization and RecommendedUtilization are NOT emitted because
-	// under under-buy sizing both land at ~100% on every row, which adds
-	// noise without information; the underlying fields stay on the
-	// Recommendation struct for internal use (SP no-signal guard, etc.).
+	// the value already reflects the sized purchase. ExistingCoverage shows
+	// the % of demand already covered by commitments in the same pool (from
+	// CE GetReservationCoverage); ProjectedCoverage shows where the purchase
+	// landed (total coverage after adding the new RIs). All four optional
+	// columns render blank when zero so users on the straight --coverage
+	// path don't see noise. ProjectedUtilization and RecommendedUtilization
+	// are NOT emitted because under under-buy sizing both land at ~100% on
+	// every row, which adds noise without information; the underlying fields
+	// stay on the Recommendation struct for internal use (SP no-signal
+	// guard, etc.).
 	header := []string{
 		"Service", "Region", "ResourceType", "Count", "RecommendedCount",
 		"Account", "AccountName", "Term", "PaymentOption",
 		"UpfrontPayment", "EstimatedSavings",
 		"CommitmentID", "Success", "Error", "Timestamp",
-		"ProjectedCoverage",
+		"ExistingCoverage", "ProjectedCoverage",
 	}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write CSV header: %w", err)
@@ -211,6 +214,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			fmt.Sprintf("%t", r.Success),
 			errStr,
 			r.Timestamp.Format(time.RFC3339),
+			formatPercentOrBlank(rec.ExistingCoveragePct),
 			formatPercentOrBlank(rec.ProjectedCoverage),
 		}
 		if err := writer.Write(row); err != nil {

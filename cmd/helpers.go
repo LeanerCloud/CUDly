@@ -187,14 +187,18 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 //
 // RIs:
 //
-//	n_target = floor(AverageInstancesUsedPerHour * targetPct/100)
-//	If n_target == 0 → drop with explanatory INFO log (target too low to
-//	support even one RI for this rec).
+//	gap = (targetPct - ExistingCoveragePct) / 100
+//	n_target = floor(AverageInstancesUsedPerHour * gap)
+//	If gap <= 0 (existing already at/above target) → drop with INFO log.
+//	If n_target == 0 (gap too small to justify a single RI) → drop with INFO log.
 //	If AverageInstancesUsedPerHour <= 0 → pass through (no signal); counted
 //	in the per-run skip summary.
-//	Projected coverage = n_target/avg * 100 (clamps below targetPct slightly
-//	because of integer floor; e.g. avg=31.3 with target=70 gives n=21,
-//	cov=67%). Projected utilization = avg/n_target * 100 clamped to 100.
+//	Projected coverage = ExistingCoveragePct + n_target/avg * 100 (total
+//	coverage after the purchase, clamped to 100). Projected utilization =
+//	avg/n_target * 100 clamped to 100.
+//	ExistingCoveragePct is sourced from CE GetReservationCoverage in the
+//	same pool; zero means "no signal" and the formula falls back to the
+//	no-existing-commitments path.
 //
 // SPs:
 //
@@ -217,13 +221,12 @@ func ApplyTargetCoverage(recs []common.Recommendation, targetPct float64) []comm
 		return recs
 	}
 
-	target := targetPct / 100.0
 	result := make([]common.Recommendation, 0, len(recs))
 	var skipped int
 	unsupportedSeen := make(map[common.CommitmentType]bool)
 
 	for _, rec := range recs {
-		adjusted, kept, missingSignal := applyTargetCoverageOne(rec, target, targetPct, unsupportedSeen)
+		adjusted, kept, missingSignal := applyTargetCoverageOne(rec, targetPct, unsupportedSeen)
 		if missingSignal {
 			skipped++
 		}
@@ -249,7 +252,7 @@ func ApplyTargetCoverage(recs []common.Recommendation, targetPct float64) []comm
 //
 // Split out of ApplyTargetCoverage to keep that function under gocyclo's
 // complexity threshold.
-func applyTargetCoverageOne(rec common.Recommendation, target, targetPct float64, unsupportedSeen map[common.CommitmentType]bool) (common.Recommendation, bool, bool) {
+func applyTargetCoverageOne(rec common.Recommendation, targetPct float64, unsupportedSeen map[common.CommitmentType]bool) (common.Recommendation, bool, bool) {
 	switch {
 	case common.IsSavingsPlan(rec.Service):
 		adjusted, ok := applyTargetCoverageSP(rec, targetPct)
@@ -259,7 +262,7 @@ func applyTargetCoverageOne(rec common.Recommendation, target, targetPct float64
 		}
 		return adjusted, true, false
 	case rec.CommitmentType == common.CommitmentReservedInstance:
-		adjusted, ok := applyTargetCoverageRI(rec, target, targetPct)
+		adjusted, ok := applyTargetCoverageRI(rec, targetPct)
 		if !ok {
 			// Distinguish "no signal" (pass through, count in summary) from
 			// "target unreachable" (drop with already-fired INFO log).
@@ -282,26 +285,41 @@ func applyTargetCoverageOne(rec common.Recommendation, target, targetPct float64
 // (adjusted, true) on success, (rec, false) when the rec should be passed
 // through unscaled (no signal) or dropped (target unreachable). Caller
 // distinguishes the two via rec.AverageInstancesUsedPerHour.
-func applyTargetCoverageRI(rec common.Recommendation, target, targetPct float64) (common.Recommendation, bool) {
+func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common.Recommendation, bool) {
 	if rec.AverageInstancesUsedPerHour <= 0 {
 		// No signal — caller will pass through and count in the summary.
 		return rec, false
 	}
 
 	avg := rec.AverageInstancesUsedPerHour
-	// Under-buy sizing: leave (1 - target)% of historical demand on-demand.
-	// nTarget = floor(avg * target) is the integer RI count whose coverage is
-	// at-most targetPct against historical average usage. Using floor (rather
-	// than round) errs on the side of buying fewer RIs, which matches the
-	// flag's intent: deliberately leave headroom on-demand.
-	nTarget := int(math.Floor(avg * target))
+	// Under-buy sizing accounts for any existing commitments in the same pool:
+	// the count we still need is the coverage gap (target − existing) against
+	// historical demand. ExistingCoveragePct comes from CE GetReservationCoverage
+	// (populated upstream when available) and defaults to zero so recs without
+	// the fetched signal fall back to the no-existing-commitments path.
+	//
+	// Keep the subtraction in percentage units (subtract first, divide by 100
+	// after) so whole-percent values don't lose precision: 0.70 - 0.60 in
+	// float64 rounds to 0.0999... and floor(avg * that) silently rounds the
+	// count down by 1.
+	gapPct := targetPct - rec.ExistingCoveragePct
+	if gapPct <= 0 {
+		// Existing commitments already meet or exceed the target; no purchase
+		// needed in this pool. Drop with an info log so operators can see what
+		// the flag did. Returning (_, false) with avg > 0 signals "drop, don't
+		// pass through".
+		AppLogger.Printf("INFO: --target-coverage=%.1f%% already met by existing coverage %.1f%% for %s/%s/%s; dropped recommendation\n",
+			targetPct, rec.ExistingCoveragePct, rec.Service, rec.Region, rec.ResourceType)
+		return rec, false
+	}
+	nTarget := int(math.Floor(avg * gapPct / 100.0))
 
 	if nTarget == 0 {
-		// Target too low to justify even a single RI for this rec's avg
-		// usage (e.g. avg=0.5 with target=70% yields floor(0.35)=0). Drop
-		// with an explanatory log so operators can see what the flag did.
-		AppLogger.Printf("INFO: --target-coverage=%.1f%% sizes %s/%s/%s to 0 instances (avg used %.2f/hr, target produces <1 RI); dropped recommendation\n",
-			targetPct, rec.Service, rec.Region, rec.ResourceType, avg)
+		// Coverage gap too small to justify even a single RI for this pool's avg
+		// usage (e.g. avg=0.5 with target=70% yields floor(0.35)=0). Drop with
+		// an explanatory log so operators can see what the flag did.
+		AppLogger.Printf("INFO: --target-coverage=%.1f%% sizes %s/%s/%s to 0 instances (avg used %.2f/hr, gap %.2f%% produces <1 RI); dropped recommendation\n",
+			targetPct, rec.Service, rec.Region, rec.ResourceType, avg, gapPct)
 		// Returning (_, false) with avg > 0 signals "drop, don't pass through".
 		// applyTargetCoverageRI's caller branches on
 		// rec.AverageInstancesUsedPerHour to distinguish drop vs no-signal.
@@ -313,7 +331,9 @@ func applyTargetCoverageRI(rec common.Recommendation, target, targetPct float64)
 	// proposal. SavingsPercentage is invariant (savings vs on-demand ratio).
 	// rec.Count is the AWS pre-sizing count at this point (parser sets Count
 	// == RecommendedCount and we haven't mutated either yet), so dividing by
-	// it gives the correct scaling factor.
+	// it gives the correct scaling factor. AWS's rec.Count is sized to reach
+	// ~100% coverage net of existing commitments, so scaling by nTarget/rec.Count
+	// equivalently scales by gap/(1-existing_cov), which is the correct ratio.
 	ratio := float64(nTarget) / float64(rec.Count)
 	adjusted := rec
 	adjusted.Count = nTarget
@@ -321,12 +341,15 @@ func applyTargetCoverageRI(rec common.Recommendation, target, targetPct float64)
 	adjusted.OnDemandCost = rec.OnDemandCost * ratio
 	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
 
-	// Projection metrics.
+	// Projection metrics. ProjectedCoverage is TOTAL coverage (existing +
+	// new) so operators can see the figure they actually targeted.
+	// ProjectedUtilization stays at the per-purchase fill rate; under-buy
+	// keeps nTarget <= avg so it always clamps to 100%.
 	projUtil := avg / float64(nTarget) * 100.0
 	if projUtil > 100 {
 		projUtil = 100
 	}
-	projCov := float64(nTarget) / avg * 100.0
+	projCov := rec.ExistingCoveragePct + float64(nTarget)/avg*100.0
 	if projCov > 100 {
 		projCov = 100
 	}

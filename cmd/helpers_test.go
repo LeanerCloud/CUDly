@@ -1031,6 +1031,101 @@ func TestApplyTargetCoverage_RI_CostScaling(t *testing.T) {
 	assert.Equal(t, 25.0, out[0].SavingsPercentage, "SavingsPercentage is invariant under count scaling")
 }
 
+// TestApplyTargetCoverage_RI_ExistingCoverage covers the under-buy formula's
+// existing-commitment branch: gap = (target - existing_cov)/100, then
+// n_target = floor(avg * gap). Matches the worked example from the #338 design
+// thread (20 instances, 10 existing RIs at 50% coverage, target 80% → buy 6).
+func TestApplyTargetCoverage_RI_ExistingCoverage(t *testing.T) {
+	mkRI := func(count int, avg, existingCov float64) common.Recommendation {
+		return common.Recommendation{
+			Service:                     common.ServiceEC2,
+			Region:                      "us-east-1",
+			ResourceType:                "t3.medium",
+			Count:                       count,
+			RecommendedCount:            count,
+			CommitmentType:              common.CommitmentReservedInstance,
+			CommitmentCost:              1000,
+			OnDemandCost:                2000,
+			EstimatedSavings:            500,
+			AverageInstancesUsedPerHour: avg,
+			ExistingCoveragePct:         existingCov,
+		}
+	}
+
+	tests := []struct {
+		name         string
+		rec          common.Recommendation
+		target       float64
+		wantDropped  bool
+		wantCount    int
+		wantTotalCov float64 // ProjectedCoverage = existing + new contribution
+	}{
+		{
+			// User's worked example: 20 demand, 10 existing covering 50%, target 80%.
+			// gap = (80-50)/100 = 0.30. n = floor(20*0.30) = 6.
+			// Total coverage = 50 + 6/20*100 = 80.
+			name:         "User example: 50% existing, 80% target on avg=20 -> buy 6",
+			rec:          mkRI(10, 20, 50),
+			target:       80,
+			wantCount:    6,
+			wantTotalCov: 80,
+		},
+		{
+			// existing=0% degenerates to old behavior.
+			// gap = 0.70. n = floor(10*0.70) = 7. Total cov = 0+70 = 70.
+			name:         "Zero existing: degenerates to floor(avg*target)",
+			rec:          mkRI(10, 10, 0),
+			target:       70,
+			wantCount:    7,
+			wantTotalCov: 70,
+		},
+		{
+			// Already at target: drop.
+			name:        "Existing meets target exactly: drop",
+			rec:         mkRI(10, 10, 80),
+			target:      80,
+			wantDropped: true,
+		},
+		{
+			// Already over target: drop.
+			name:        "Existing exceeds target: drop",
+			rec:         mkRI(10, 10, 95),
+			target:      80,
+			wantDropped: true,
+		},
+		{
+			// Gap too small to justify even one RI:
+			// avg=2, existing=70%, target=80%, gap=0.10, n=floor(0.20)=0. Drop.
+			name:        "Gap too small for one RI: drop",
+			rec:         mkRI(5, 2, 70),
+			target:      80,
+			wantDropped: true,
+		},
+		{
+			// Near-target top-up: avg=10, existing=60%, target=70%, gap=0.10.
+			// n=floor(1.0)=1. Total cov = 60+10 = 70.
+			name:         "Small top-up to reach target",
+			rec:          mkRI(10, 10, 60),
+			target:       70,
+			wantCount:    1,
+			wantTotalCov: 70,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := ApplyTargetCoverage([]common.Recommendation{tt.rec}, tt.target)
+			if tt.wantDropped {
+				assert.Len(t, out, 0, "expected drop")
+				return
+			}
+			require.Len(t, out, 1)
+			assert.Equal(t, tt.wantCount, out[0].Count, "Count")
+			assert.InDelta(t, tt.wantTotalCov, out[0].ProjectedCoverage, 0.01, "ProjectedCoverage is TOTAL (existing + new)")
+		})
+	}
+}
+
 // TestApplyTargetCoverage_SP covers the SP sizing branch under under-buy
 // semantics: HourlyCommitment and EstimatedSavings scale by targetPct/100
 // regardless of AWS's projected utilization. CommitmentCost / OnDemandCost /

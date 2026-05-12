@@ -175,9 +175,15 @@ type Recommendation struct {
 	// RecommendedCount is AWS's pre-sizing count (mirrors Count before
 	// ApplyCoverage / ApplyTargetCoverage mutates Count); zero for SPs since
 	// the SP commitment is dollar-denominated rather than count-denominated.
+	// ExistingCoveragePct is the share of demand already covered by existing
+	// commitments in the same pool (from CE GetReservationCoverage /
+	// GetSavingsPlansCoverage). Zero = "no signal" (CE returned nothing for
+	// this pool, or the fetch step wasn't run); sizing then degenerates to
+	// the no-existing-commitments path. See cmd/helpers.go.
 	AverageInstancesUsedPerHour float64 `json:"average_instances_used_per_hour,omitempty" csv:"AverageInstancesUsedPerHour"`
 	RecommendedUtilization      float64 `json:"recommended_utilization,omitempty" csv:"RecommendedUtilization"`
 	RecommendedCount            int     `json:"recommended_count,omitempty" csv:"RecommendedCount"`
+	ExistingCoveragePct         float64 `json:"existing_coverage_pct,omitempty" csv:"ExistingCoveragePct"`
 	ProjectedUtilization        float64 `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
 	ProjectedCoverage           float64 `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
 
