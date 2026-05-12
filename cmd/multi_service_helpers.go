@@ -458,11 +458,16 @@ func applyRegionFilters(
 	return recs
 }
 
-// applyCoverageAndOverrides applies coverage percentage and count overrides
+// applyCoverageAndOverrides applies sizing (coverage % or target-utilization)
+// and count overrides. Sizing mode is selected by cfg.TargetUtilization: > 0
+// routes to ApplyTargetUtilization; otherwise the legacy ApplyCoverage path.
 func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config) []common.Recommendation {
-	// Apply coverage
-	filteredRecs := applyCommonCoverage(recs, cfg.Coverage)
-	AppLogger.Printf("  📈 Applying %.1f%% coverage: %d recommendations selected\n", cfg.Coverage, len(filteredRecs))
+	filteredRecs := applySizing(recs, cfg, cfg.Coverage)
+	if cfg.TargetUtilization > 0 {
+		AppLogger.Printf("  🎯 Applying %.1f%% target-utilization: %d recommendations selected\n", cfg.TargetUtilization, len(filteredRecs))
+	} else {
+		AppLogger.Printf("  📈 Applying %.1f%% coverage: %d recommendations selected\n", cfg.Coverage, len(filteredRecs))
+	}
 
 	// Apply count override if specified
 	if cfg.OverrideCount > 0 {
