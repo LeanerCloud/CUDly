@@ -247,8 +247,22 @@ func createServiceClient(service common.ServiceType, cfg aws.Config) provider.Se
 	}
 }
 
-// generatePurchaseID creates a descriptive purchase ID with UUID for uniqueness
-func generatePurchaseID(rec common.Recommendation, region string, _ int, isDryRun bool, coverage float64) string {
+// effectiveSizingPct returns the sizing % actually applied to recommendations:
+// cfg.TargetUtilization when set (>0), else cfg.Coverage. Use this when
+// emitting human-facing labels (purchase IDs, audit-log fields) so the label
+// reflects the value that drove the sizing, not the unused default.
+func effectiveSizingPct(cfg Config) float64 {
+	if cfg.TargetUtilization > 0 {
+		return cfg.TargetUtilization
+	}
+	return cfg.Coverage
+}
+
+// generatePurchaseID creates a descriptive purchase ID with UUID for uniqueness.
+// sizingPct is the percentage that actually drove the sizing decision (see
+// effectiveSizingPct); it appears in the ID as e.g. "80pct" purely for human
+// readability and audit traceability.
+func generatePurchaseID(rec common.Recommendation, region string, _ int, isDryRun bool, sizingPct float64) string {
 	// Generate a short UUID suffix (first 8 characters) for uniqueness
 	uuidSuffix := uuid.New().String()[:8]
 	timestamp := time.Now().Format("20060102-150405")
@@ -277,7 +291,7 @@ func generatePurchaseID(rec common.Recommendation, region string, _ int, isDryRu
 
 	// Add account name if available
 	accountName := sanitizeAccountName(rec.AccountName)
-	coveragePct := fmt.Sprintf("%.0fpct", coverage)
+	coveragePct := fmt.Sprintf("%.0fpct", sizingPct)
 	if accountName != "" {
 		if engine != "" {
 			return fmt.Sprintf("%s-%s-%s-%s-%s-%s-%dx-%s-%s-%s",

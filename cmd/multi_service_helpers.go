@@ -205,7 +205,7 @@ func createDryRunResult(rec common.Recommendation, region string, index int, cfg
 	return common.PurchaseResult{
 		Recommendation: rec,
 		Success:        true,
-		CommitmentID:   generatePurchaseID(rec, region, index, true, cfg.Coverage),
+		CommitmentID:   generatePurchaseID(rec, region, index, true, effectiveSizingPct(cfg)),
 		DryRun:         true,
 		Timestamp:      time.Now(),
 	}
@@ -218,7 +218,7 @@ func createCancelledResults(recs []common.Recommendation, region string, cfg Con
 		results[k] = common.PurchaseResult{
 			Recommendation: recs[k],
 			Success:        false,
-			CommitmentID:   generatePurchaseID(recs[k], region, k+1, false, cfg.Coverage),
+			CommitmentID:   generatePurchaseID(recs[k], region, k+1, false, effectiveSizingPct(cfg)),
 			Error:          fmt.Errorf("purchase cancelled by user"),
 			Timestamp:      time.Now(),
 		}
@@ -236,7 +236,7 @@ func executePurchase(ctx context.Context, rec common.Recommendation, region stri
 		result.Error = err
 	}
 	if result.CommitmentID == "" {
-		result.CommitmentID = generatePurchaseID(rec, region, index, false, cfg.Coverage)
+		result.CommitmentID = generatePurchaseID(rec, region, index, false, effectiveSizingPct(cfg))
 	}
 	return result
 }
