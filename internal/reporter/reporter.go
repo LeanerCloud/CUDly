@@ -82,6 +82,10 @@ func RenderExcluded(result scorer.ScoredResult) string {
 
 // RenderSummary returns a one-paragraph summary: total estimated savings and cost for
 // passed recommendations, plus count of filtered recommendations with a reason breakdown.
+//
+// EstimatedSavings is monthly: sourced from AWS's EstimatedMonthlySavingsAmount
+// (see providers/aws/recommendations/parser_ri.go). CommitmentCost is the
+// upfront portion (one-time), so the two figures are NOT on the same timescale.
 func RenderSummary(result scorer.ScoredResult) string {
 	var totalSavings, totalCost float64
 	for _, rec := range result.Passed {
@@ -90,7 +94,7 @@ func RenderSummary(result scorer.ScoredResult) string {
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Passed: %d recommendations — estimated savings $%.2f/yr, commitment cost $%.2f\n",
+	fmt.Fprintf(&sb, "Passed: %d recommendations — estimated savings $%.2f/mo, upfront commitment $%.2f\n",
 		len(result.Passed), totalSavings, totalCost)
 
 	if len(result.Filtered) > 0 {
