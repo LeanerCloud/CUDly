@@ -47,6 +47,23 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('close-group-duplicate-modal-btn')?.addEventListener('click', closeDuplicateGroupModal);
   document.getElementById('cancel-group-duplicate-btn')?.addEventListener('click', closeDuplicateGroupModal);
   document.getElementById('group-duplicate-form')?.addEventListener('submit', (e) => void saveDuplicateGroup(e));
+
+  // Sidebar collapse toggle (issue #340). Persisted in localStorage so the
+  // user's preference survives reloads.
+  const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
+  const sidebarToggle = document.querySelector<HTMLButtonElement>('.app-sidebar-toggle');
+  if (sidebar && sidebarToggle) {
+    const STORAGE_KEY = 'cudly_sidebar_collapsed';
+    if (localStorage.getItem(STORAGE_KEY) === '1') {
+      sidebar.classList.add('collapsed');
+      sidebarToggle.setAttribute('aria-expanded', 'false');
+    }
+    sidebarToggle.addEventListener('click', () => {
+      const isCollapsed = sidebar.classList.toggle('collapsed');
+      sidebarToggle.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+      localStorage.setItem(STORAGE_KEY, isCollapsed ? '1' : '0');
+    });
+  }
 });
 
 // Initialize on page load

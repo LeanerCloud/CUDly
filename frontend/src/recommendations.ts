@@ -1632,13 +1632,13 @@ function rerenderRecommendations(): void {
   renderRecommendationsList(loaded);
 }
 
-// Close the popover when the Recommendations tab loses .active, so the
+// Close the popover when the Opportunities tab loses .active, so the
 // detached popover doesn't float over other tabs' content. Wired via a
-// MutationObserver on the recommendations-tab element.
+// MutationObserver on the opportunities-tab element.
 let recommendationsTabObserver: MutationObserver | null = null;
 function ensureRecommendationsTabObserver(): void {
   if (recommendationsTabObserver) return;
-  const tab = document.getElementById('recommendations-tab');
+  const tab = document.getElementById('opportunities-tab');
   if (!tab) return;
   recommendationsTabObserver = new MutationObserver(() => {
     if (tab.classList.contains('active')) return;
@@ -1809,7 +1809,7 @@ function mountColumnsButton(bar: HTMLElement): void {
 // announcing visible vs loaded counts. Mounted above the table; survives
 // container.innerHTML rewrites because it lives outside #recommendations-list.
 function renderFilterStatusBar(loadedCount: number, visibleCount: number): void {
-  const recsTab = document.getElementById('recommendations-tab');
+  const recsTab = document.getElementById('opportunities-tab');
   const list = document.getElementById('recommendations-list');
   if (!recsTab || !list) return;
 
@@ -2654,7 +2654,7 @@ function visibleColumns(): readonly ColumnDef[] {
 // radio enforcement caps purchase to one variant per cell. A global override
 // was misleading and is redundant.
 function mountBottomActionBox(): HTMLElement | null {
-  const recsTab = document.getElementById('recommendations-tab');
+  const recsTab = document.getElementById('opportunities-tab');
   if (!recsTab) return null;
 
   let box = document.getElementById('recommendations-action-box');

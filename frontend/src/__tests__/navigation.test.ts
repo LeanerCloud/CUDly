@@ -41,17 +41,19 @@ describe('Navigation Module', () => {
     // Setup DOM with tabs
     document.body.innerHTML = `
       <div class="tabs">
-        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-        <button class="tab-btn" data-tab="recommendations">Recommendations</button>
+        <button class="tab-btn active" data-tab="home">Dashboard</button>
+        <button class="tab-btn" data-tab="opportunities">Recommendations</button>
         <button class="tab-btn" data-tab="plans">Plans</button>
-        <button class="tab-btn" data-tab="history">History</button>
-        <button class="tab-btn" data-tab="settings">Settings</button>
+        <button class="tab-btn" data-tab="purchases">History</button>
+        <button class="tab-btn" data-tab="inventory">Inventory &amp; Coverage</button>
+        <button class="tab-btn" data-tab="admin">Settings</button>
       </div>
-      <div id="dashboard-tab" class="tab-content active"></div>
-      <div id="recommendations-tab" class="tab-content"></div>
+      <div id="home-tab" class="tab-content active"></div>
+      <div id="opportunities-tab" class="tab-content"></div>
       <div id="plans-tab" class="tab-content"></div>
-      <div id="history-tab" class="tab-content"></div>
-      <div id="settings-tab" class="tab-content">
+      <div id="purchases-tab" class="tab-content"></div>
+      <div id="inventory-tab" class="tab-content"></div>
+      <div id="admin-tab" class="tab-content">
         <div class="settings-tabs">
           <button class="sub-tab-btn active" data-settings-tab="general">General</button>
           <button class="sub-tab-btn" data-settings-tab="purchasing">Purchasing</button>
@@ -72,18 +74,18 @@ describe('Navigation Module', () => {
 
   describe('switchTab', () => {
     test('switches to dashboard tab and loads dashboard', () => {
-      switchTab('dashboard');
+      switchTab('home');
 
       // Check button is active
-      const dashboardBtn = document.querySelector('[data-tab="dashboard"]');
+      const dashboardBtn = document.querySelector('[data-tab="home"]');
       expect(dashboardBtn?.classList.contains('active')).toBe(true);
 
       // Check other buttons are not active
-      const recsBtn = document.querySelector('[data-tab="recommendations"]');
+      const recsBtn = document.querySelector('[data-tab="opportunities"]');
       expect(recsBtn?.classList.contains('active')).toBe(false);
 
       // Check content is active
-      const dashboardContent = document.getElementById('dashboard-tab');
+      const dashboardContent = document.getElementById('home-tab');
       expect(dashboardContent?.classList.contains('active')).toBe(true);
 
       // Check loadDashboard was called
@@ -91,12 +93,12 @@ describe('Navigation Module', () => {
     });
 
     test('switches to recommendations tab and loads recommendations', () => {
-      switchTab('recommendations');
+      switchTab('opportunities');
 
-      const recsBtn = document.querySelector('[data-tab="recommendations"]');
+      const recsBtn = document.querySelector('[data-tab="opportunities"]');
       expect(recsBtn?.classList.contains('active')).toBe(true);
 
-      const recsContent = document.getElementById('recommendations-tab');
+      const recsContent = document.getElementById('opportunities-tab');
       expect(recsContent?.classList.contains('active')).toBe(true);
 
       expect(loadRecommendations).toHaveBeenCalled();
@@ -115,79 +117,93 @@ describe('Navigation Module', () => {
     });
 
     test('switches to history tab and initializes date range', () => {
-      switchTab('history');
+      switchTab('purchases');
 
-      const historyBtn = document.querySelector('[data-tab="history"]');
+      const historyBtn = document.querySelector('[data-tab="purchases"]');
       expect(historyBtn?.classList.contains('active')).toBe(true);
 
-      const historyContent = document.getElementById('history-tab');
+      const historyContent = document.getElementById('purchases-tab');
       expect(historyContent?.classList.contains('active')).toBe(true);
 
       expect(initHistoryDateRange).toHaveBeenCalled();
     });
 
     test('switches to settings tab and loads settings', () => {
-      switchTab('settings');
+      switchTab('admin');
 
-      const settingsBtn = document.querySelector('[data-tab="settings"]');
+      const settingsBtn = document.querySelector('[data-tab="admin"]');
       expect(settingsBtn?.classList.contains('active')).toBe(true);
 
-      const settingsContent = document.getElementById('settings-tab');
+      const settingsContent = document.getElementById('admin-tab');
       expect(settingsContent?.classList.contains('active')).toBe(true);
 
       expect(loadGlobalSettings).toHaveBeenCalled();
     });
 
+    test('switches to inventory tab', () => {
+      switchTab('inventory');
+
+      const inventoryBtn = document.querySelector('[data-tab="inventory"]');
+      expect(inventoryBtn?.classList.contains('active')).toBe(true);
+
+      const inventoryContent = document.getElementById('inventory-tab');
+      expect(inventoryContent?.classList.contains('active')).toBe(true);
+
+      // Other tabs must be deactivated
+      const homeBtn = document.querySelector('[data-tab="home"]');
+      expect(homeBtn?.classList.contains('active')).toBe(false);
+    });
+
     test('deactivates previously active tab', () => {
       // Dashboard is initially active
-      const dashboardBtn = document.querySelector('[data-tab="dashboard"]');
-      const dashboardContent = document.getElementById('dashboard-tab');
+      const dashboardBtn = document.querySelector('[data-tab="home"]');
+      const dashboardContent = document.getElementById('home-tab');
       expect(dashboardBtn?.classList.contains('active')).toBe(true);
       expect(dashboardContent?.classList.contains('active')).toBe(true);
 
       // Switch to recommendations
-      switchTab('recommendations');
+      switchTab('opportunities');
 
       // Dashboard should no longer be active
       expect(dashboardBtn?.classList.contains('active')).toBe(false);
       expect(dashboardContent?.classList.contains('active')).toBe(false);
 
       // Recommendations should be active
-      const recsBtn = document.querySelector('[data-tab="recommendations"]');
-      const recsContent = document.getElementById('recommendations-tab');
+      const recsBtn = document.querySelector('[data-tab="opportunities"]');
+      const recsContent = document.getElementById('opportunities-tab');
       expect(recsBtn?.classList.contains('active')).toBe(true);
       expect(recsContent?.classList.contains('active')).toBe(true);
     });
 
-    test('falls back to dashboard for unknown tab', () => {
-      // Unknown tab names are normalized to 'dashboard' rather than
+    test('falls back to home for unknown tab', () => {
+      // Unknown tab names are normalized to 'home' rather than
       // leaving the UI in a broken all-deactivated state.
       expect(() => switchTab('unknown-tab')).not.toThrow();
 
-      const dashboardBtn = document.querySelector('[data-tab="dashboard"]');
-      expect(dashboardBtn?.classList.contains('active')).toBe(true);
+      const homeBtn = document.querySelector('[data-tab="home"]');
+      expect(homeBtn?.classList.contains('active')).toBe(true);
       expect(loadDashboard).toHaveBeenCalled();
     });
 
     test('multiple tab switches work correctly', () => {
       // Switch through all tabs
-      switchTab('recommendations');
+      switchTab('opportunities');
       expect(loadRecommendations).toHaveBeenCalledTimes(1);
 
       switchTab('plans');
       expect(loadPlans).toHaveBeenCalledTimes(1);
 
-      switchTab('history');
+      switchTab('purchases');
       expect(initHistoryDateRange).toHaveBeenCalledTimes(1);
 
-      switchTab('settings');
+      switchTab('admin');
       expect(loadGlobalSettings).toHaveBeenCalledTimes(1);
 
-      switchTab('dashboard');
+      switchTab('home');
       expect(loadDashboard).toHaveBeenCalledTimes(1);
 
-      // Final state should have dashboard active
-      const dashboardBtn = document.querySelector('[data-tab="dashboard"]');
+      // Final state should have home active
+      const dashboardBtn = document.querySelector('[data-tab="home"]');
       expect(dashboardBtn?.classList.contains('active')).toBe(true);
     });
   });
@@ -275,6 +291,32 @@ describe('Navigation Module', () => {
   });
 
   describe('getSettingsSubTabFromPath', () => {
+    // Canonical /admin/* paths (issue #340 IA rename)
+    test('returns general for root admin path', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('general');
+    });
+
+    test('returns accounts for /admin/accounts', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin/accounts' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('accounts');
+    });
+
+    test('returns purchasing for /admin/purchasing', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin/purchasing' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('purchasing');
+    });
+
+    test('returns users for /admin/users', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin/users' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('users');
+    });
+
+    // Legacy /settings/* paths still work via LEGACY_PATH_REDIRECTS
     test('returns general for root settings path', () => {
       delete (window as unknown as Record<string, unknown>).location;
       (window as unknown as Record<string, unknown>).location = { pathname: '/settings' } as Location;

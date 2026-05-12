@@ -8,8 +8,85 @@
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
+/* ---------------------------------------------------------------------------
+ * KPI tile (issue #340 T6) — extends .card with sparkline slot + tightened
+ * design-token-driven typography. New .kpi-tile is additive so the existing
+ * .card styles still apply (preserves legacy behaviour where dashboard cards
+ * are referenced via `.card`).
+ * ------------------------------------------------------------------------- */
+.kpi-tile {
+    padding: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md);
+    border: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-sm);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+        "title title"
+        "value spark"
+        "detail spark";
+    gap: var(--cudly-sp-1) var(--cudly-sp-3);
+    align-items: end;
+}
+
+.card.kpi-tile h3 {
+    grid-area: title;
+    margin-bottom: 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    letter-spacing: 0.01em;
+}
+
+.kpi-tile-value {
+    grid-area: value;
+    font-size: var(--cudly-fs-2xl);
+    line-height: var(--cudly-lh-tight);
+    color: var(--cudly-text);
+    margin: 0;
+}
+
+.kpi-tile-value.savings {
+    color: var(--cudly-success);
+}
+
+.kpi-tile-detail {
+    grid-area: detail;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+    margin: 0;
+}
+
+.kpi-tile-spark {
+    grid-area: spark;
+    width: 80px;
+    height: 24px;
+    color: var(--cudly-primary);
+    opacity: 0.65;
+}
+
+/* Subtle hover-lift on KPI tiles + interactive cards so the action-
+ * center pattern feels alive. Matches the mock's elevated-card hover
+ * treatment. transform-only (no layout shift) so the grid stays put. */
+.kpi-tile {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.kpi-tile:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--cudly-shadow-md);
+}
+
+/* The .kpi-tile that decorates "Potential Monthly Savings" / "YTD Savings"
+ * cards picks up the savings hue for its sparkline so the visual hierarchy
+ * (green money values, blue trend lines) reads consistently. */
+.kpi-tile[data-kpi="savings"] .kpi-tile-spark,
+.kpi-tile[data-kpi="ytd"] .kpi-tile-spark {
+    color: var(--cudly-success);
+}
+
 .card h3 {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.875rem;
     margin-bottom: 0.5rem;
 }
@@ -21,13 +98,13 @@
 
 .card .monthly {
     font-size: 0.9rem;
-    color: #888;
+    color: var(--cudly-text-muted);
     margin-top: 0.25rem;
 }
 
 .card .detail {
     font-size: 0.85rem;
-    color: #888;
+    color: var(--cudly-text-muted);
     margin-top: 0.25rem;
 }
 
@@ -41,7 +118,7 @@ button {
     padding: 0.5rem 1rem;
     border: none;
     border-radius: 4px;
-    background: #666;
+    background: var(--cudly-text-muted);
     color: white;
     cursor: pointer;
     font-size: 0.875rem;
@@ -49,19 +126,19 @@ button {
 }
 
 button:hover {
-    background: #555;
+    background: var(--cudly-text-muted);
 }
 
 button.primary {
-    background: #1a73e8;
+    background: var(--cudly-primary);
 }
 
 button.primary:hover {
-    background: #1557b0;
+    background: var(--cudly-primary-hover);
 }
 
 button.success {
-    background: #34a853;
+    background: var(--cudly-success);
 }
 
 button.success:hover {
@@ -69,7 +146,7 @@ button.success:hover {
 }
 
 button.danger {
-    background: #ea4335;
+    background: var(--cudly-error);
 }
 
 button.danger:hover {
@@ -78,9 +155,9 @@ button.danger:hover {
 
 /* Secondary button style */
 .btn-secondary {
-    background: #f5f5f5;
-    color: #333;
-    border: 1px solid #ddd;
+    background: var(--cudly-bg);
+    color: var(--cudly-text);
+    border: 1px solid var(--cudly-border-strong);
 }
 
 .btn-secondary:hover {
@@ -93,7 +170,7 @@ button.danger:hover {
     padding: 0.5rem 1rem;
     border: none;
     border-radius: 4px;
-    background: #666;
+    background: var(--cudly-text-muted);
     color: white;
     cursor: pointer;
     font-size: 0.875rem;
@@ -101,16 +178,16 @@ button.danger:hover {
 }
 
 .btn:hover {
-    background: #555;
+    background: var(--cudly-text-muted);
 }
 
 .btn-small {
     padding: 0.25rem 0.5rem;
     font-size: 0.85rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     background: white;
-    color: #333;
+    color: var(--cudly-text);
     cursor: pointer;
     margin-right: 0.25rem;
 }
@@ -121,20 +198,20 @@ button.danger:hover {
 }
 
 .btn-small.primary {
-    background: #1a73e8;
+    background: var(--cudly-primary);
     color: white;
-    border-color: #1a73e8;
+    border-color: var(--cudly-primary);
 }
 
 .btn-small.primary:hover {
-    background: #1557b0;
-    border-color: #1557b0;
+    background: var(--cudly-primary-hover);
+    border-color: var(--cudly-primary-hover);
 }
 
 .btn-small.success {
-    background: #34a853;
+    background: var(--cudly-success);
     color: white;
-    border-color: #34a853;
+    border-color: var(--cudly-success);
 }
 
 .btn-small.success:hover {
@@ -143,9 +220,9 @@ button.danger:hover {
 }
 
 .btn-small.warning {
-    background: #fbbc04;
-    color: #333;
-    border-color: #fbbc04;
+    background: var(--cudly-warn);
+    color: var(--cudly-text);
+    border-color: var(--cudly-warn);
 }
 
 .btn-small.warning:hover {
@@ -154,13 +231,13 @@ button.danger:hover {
 }
 
 .btn-small.danger {
-    background: #fce8e6;
-    color: #c5221f;
-    border-color: #ea4335;
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
+    border-color: var(--cudly-error);
 }
 
 .btn-small.danger:hover {
-    background: #ea4335;
+    background: var(--cudly-error);
     color: white;
 }
 
@@ -170,37 +247,37 @@ button.danger:hover {
  * compose `.btn-small.primary` etc. .btn-secondary already existed.
  */
 .btn-primary {
-    background: #1a73e8;
+    background: var(--cudly-primary);
     color: white;
-    border: 1px solid #1a73e8;
+    border: 1px solid var(--cudly-primary);
 }
 
 .btn-primary:hover {
-    background: #1557b0;
-    border-color: #1557b0;
+    background: var(--cudly-primary-hover);
+    border-color: var(--cudly-primary-hover);
 }
 
 .btn-destructive {
-    background: #ea4335;
+    background: var(--cudly-error);
     color: white;
-    border: 1px solid #ea4335;
+    border: 1px solid var(--cudly-error);
 }
 
 .btn-destructive:hover {
-    background: #c5221f;
-    border-color: #c5221f;
+    background: var(--cudly-error-fg);
+    border-color: var(--cudly-error-fg);
 }
 
 .btn-tertiary {
     background: transparent;
-    color: #1a73e8;
+    color: var(--cudly-primary);
     border: none;
     text-decoration: none;
     padding: 0.5rem 0.75rem;
 }
 
 .btn-tertiary:hover {
-    background: #e8f0fe;
+    background: var(--cudly-info-bg);
     text-decoration: underline;
 }
 
@@ -224,7 +301,7 @@ button.danger:hover {
 
 .collection-error-icon {
     font-size: 1.2rem;
-    color: #b06000;
+    color: var(--cudly-warn-fg);
     line-height: 1.2;
 }
 
@@ -243,7 +320,7 @@ button.danger:hover {
 
 .collection-error-details summary {
     cursor: pointer;
-    color: #1a73e8;
+    color: var(--cudly-primary);
     text-decoration: underline;
     display: inline;
     list-style: none;
@@ -261,13 +338,13 @@ button.danger:hover {
     font-size: 0.8rem;
     white-space: pre-wrap;
     word-break: break-word;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .collection-error-dismiss {
     background: transparent;
     border: none;
-    color: #b06000;
+    color: var(--cudly-warn-fg);
     cursor: pointer;
     font-size: 1.2rem;
     line-height: 1;
@@ -303,7 +380,7 @@ button.danger:hover {
     padding: 0.75rem 1rem;
     background: white;
     border-radius: 6px;
-    border-left: 4px solid #888;
+    border-left: 4px solid var(--cudly-text-muted);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
     font-size: 0.9rem;
     color: #222;
@@ -316,10 +393,10 @@ button.danger:hover {
     transform: translateX(12px);
 }
 
-.toast--success { border-left-color: #1e8e3e; }
-.toast--info    { border-left-color: #1a73e8; }
-.toast--warning { border-left-color: #b06000; }
-.toast--error   { border-left-color: #c5221f; }
+.toast--success { border-left-color: var(--cudly-success-fg); }
+.toast--info    { border-left-color: var(--cudly-primary); }
+.toast--warning { border-left-color: var(--cudly-warn-fg); }
+.toast--error   { border-left-color: var(--cudly-error-fg); }
 
 .toast-icon {
     font-weight: bold;
@@ -327,10 +404,10 @@ button.danger:hover {
     line-height: 1.2;
 }
 
-.toast--success .toast-icon { color: #1e8e3e; }
-.toast--info    .toast-icon { color: #1a73e8; }
-.toast--warning .toast-icon { color: #b06000; }
-.toast--error   .toast-icon { color: #c5221f; }
+.toast--success .toast-icon { color: var(--cudly-success-fg); }
+.toast--info    .toast-icon { color: var(--cudly-primary); }
+.toast--warning .toast-icon { color: var(--cudly-warn-fg); }
+.toast--error   .toast-icon { color: var(--cudly-error-fg); }
 
 .toast-message {
     line-height: 1.35;
@@ -345,7 +422,7 @@ button.danger:hover {
 .toast-close {
     background: transparent;
     border: none;
-    color: #666;
+    color: var(--cudly-text-muted);
     cursor: pointer;
     padding: 0 0.25rem;
     font-size: 1.1rem;
@@ -388,7 +465,7 @@ button.danger:hover {
 .btn-download .download-icon {
     margin-right: 0.4rem;
     font-weight: bold;
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 /* Utilization colour pills with a paired glyph so meaning isn't carried
@@ -397,88 +474,6 @@ button.danger:hover {
 .util-green::before { content: '▲ '; }
 .util-yellow::before { content: '■ '; }
 .util-red::before { content: '▼ '; }
-
-/* Sticky sub-nav rail for long Settings panels. Rendered by
- * settings-subnav.ts into Purchasing / Accounts / Users & API Keys.
- *
- * Layout intent: the rail floats in the page's left gutter so the
- * panel's content width matches the General tab (no grid column
- * reservation). On viewports narrower than the floating-rail threshold
- * the rail collapses inline above the content.
- */
-.settings-layout {
-    position: relative;
-}
-
-.settings-layout-content {
-    /* Full width — the rail sits outside this wrapper on wide viewports. */
-    display: block;
-}
-
-.settings-subnav {
-    background: white;
-    border-right: 1px solid #e0e0e0;
-    padding: 1rem 1rem 1rem 0;
-    margin-bottom: 1rem;
-}
-
-@media (min-width: 1280px) {
-    /* Wide-enough viewports: pull the rail out of the content flow so
-     * content width matches the General tab. Float + sticky lets the
-     * rail stick to the top while leaving the content column at full
-     * width — the negative margin-left parks it outside the panel's
-     * box, in the page gutter. Main has `max-width: 1600px` + padding
-     * 2rem, so at 1280–1600px the rail lives inside that padding; at
-     * >1600px it's in the auto-centred page margin. Either way, it
-     * does not displace the card. */
-    .settings-layout > .settings-subnav {
-        position: sticky;
-        top: 80px;
-        float: left;
-        width: 200px;
-        margin-left: -220px;
-        max-height: calc(100vh - 100px);
-        overflow-y: auto;
-        margin-bottom: 0;
-        border-right: none;
-    }
-    .settings-layout-content {
-        min-width: 0;
-    }
-}
-
-.settings-subnav ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-
-.settings-subnav li {
-    margin-bottom: 0.25rem;
-}
-
-.settings-subnav a {
-    display: block;
-    padding: 0.5rem 0.75rem;
-    color: #555;
-    text-decoration: none;
-    border-radius: 4px;
-    font-size: 0.9rem;
-    border-left: 3px solid transparent;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.settings-subnav a:hover {
-    background: #f5f5f5;
-    color: #222;
-}
-
-.settings-subnav a.active {
-    background: #e8f0fe;
-    color: #1a73e8;
-    border-left-color: #1a73e8;
-    font-weight: 500;
-}
 
 /* Sticky save bar — the existing .settings-buttons row gets sticky
  * positioning at the bottom of the viewport and a visible shadow when
@@ -497,7 +492,7 @@ button.danger:hover {
 
 .settings-savebar.dirty {
     box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
-    border-top-color: #e0e0e0;
+    border-top-color: var(--cudly-border);
 }
 
 .settings-savebar.dirty::before {
@@ -521,7 +516,7 @@ button.danger:hover {
     display: inline-block;
     width: 8px;
     height: 8px;
-    background: #ea4335;
+    background: var(--cudly-error);
     border-radius: 50%;
     margin-left: 0.5rem;
     vertical-align: middle;
@@ -536,9 +531,9 @@ button.danger:hover {
 }
 
 .trend-range.active {
-    background: #1a73e8;
+    background: var(--cudly-primary);
     color: white;
-    border-color: #1a73e8;
+    border-color: var(--cudly-primary);
 }
 
 /* Accounts overview chips at the top of the Accounts sub-tab
@@ -553,9 +548,9 @@ button.danger:hover {
 
 .accounts-overview-chip {
     appearance: none;
-    border: 1px solid #d0d7de;
-    background: #fff;
-    color: #333;
+    border: 1px solid var(--cudly-border-strong);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
     padding: 0.5rem 0.85rem;
     border-radius: 8px;
     cursor: pointer;
@@ -568,19 +563,19 @@ button.danger:hover {
 }
 
 .accounts-overview-chip:hover {
-    background: #f5f7fa;
+    background: var(--cudly-bg);
     border-color: #4a90e2;
 }
 
 .accounts-overview-chip-count {
     font-size: 1.4rem;
     font-weight: 700;
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 .accounts-overview-chip-label {
     font-size: 0.85rem;
-    color: #555;
+    color: var(--cudly-text-muted);
 }
 
 /* Status-chip filter row above the accounts table (Q8 / audit P3 gap).
@@ -595,9 +590,9 @@ button.danger:hover {
 
 .status-chip {
     appearance: none;
-    border: 1px solid #d0d7de;
-    background: #fff;
-    color: #333;
+    border: 1px solid var(--cudly-border-strong);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
     padding: 0.3rem 0.75rem;
     border-radius: 999px;
     font-size: 0.85rem;
@@ -606,11 +601,11 @@ button.danger:hover {
 }
 
 .status-chip:hover {
-    background: #f5f7fa;
+    background: var(--cudly-bg);
 }
 
 .status-chip.active {
-    background: #e8f0fe;
+    background: var(--cudly-info-bg);
     border-color: #4a90e2;
     color: #1a56c4;
     font-weight: 600;
@@ -630,13 +625,13 @@ button.danger:hover {
 .accounts-table td {
     text-align: left;
     padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--cudly-border);
     vertical-align: middle;
 }
 
 .accounts-table th {
     font-size: 0.85rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-weight: 500;
     background: #fafafa;
 }
@@ -651,13 +646,13 @@ button.danger:hover {
 .account-actions-spacer {
     display: inline-block;
     width: 1.25rem;
-    border-left: 1px solid #e0e0e0;
+    border-left: 1px solid var(--cudly-border);
     height: 1.4rem;
     margin: 0 0.25rem;
 }
 
 .accounts-empty {
-    color: #888;
+    color: var(--cudly-text-muted);
     font-style: italic;
     margin: 0.5rem 0;
 }
@@ -677,20 +672,20 @@ button.danger:hover {
 }
 
 .freshness-badge--fresh {
-    background: #e6f4ea;
-    color: #1e8e3e;
+    background: var(--cudly-success-bg);
+    color: var(--cudly-success-fg);
     border: 1px solid #b7e1c1;
 }
 
 .freshness-badge--warn {
     background: #fef7e0;
-    color: #b06000;
+    color: var(--cudly-warn-fg);
     border: 1px solid #f9d68a;
 }
 
 .freshness-badge--stale {
-    background: #fce8e6;
-    color: #c5221f;
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
     border: 1px solid #f2b8b5;
 }
 
@@ -706,7 +701,7 @@ th.sortable {
 }
 
 th.sortable:hover {
-    background: #f5f5f5;
+    background: var(--cudly-bg);
 }
 
 th.sortable .sort-indicator {
@@ -716,7 +711,7 @@ th.sortable .sort-indicator {
 }
 
 th.sortable .sort-indicator.active {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 /* Per-column filter trigger button inside <th>. */
@@ -731,17 +726,17 @@ th .column-filter-btn {
     line-height: 1;
 }
 th .column-filter-btn:hover {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 th .column-filter-btn.active {
-    color: #1a73e8;
+    color: var(--cudly-primary);
     font-weight: 700;
 }
 
 /* Detached popover (lives in document.body, positioned absolutely). */
 .column-filter-popover {
-    background: #fff;
-    border: 1px solid #d0d7de;
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     padding: 0.75rem;
@@ -761,7 +756,7 @@ th .column-filter-btn.active {
     align-items: center;
     gap: 0.5rem;
     padding: 0.25rem 0;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--cudly-border);
     margin-bottom: 0.5rem;
     font-weight: 500;
 }
@@ -780,11 +775,11 @@ th .column-filter-btn.active {
     flex-direction: column;
     gap: 0.25rem;
     font-size: 0.85em;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 .column-filter-popover .column-filter-numeric-input {
     padding: 0.35rem 0.5rem;
-    border: 1px solid #d0d7de;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 3px;
     font-size: 0.9rem;
 }
@@ -797,13 +792,13 @@ th .column-filter-btn.active {
 .column-filter-popover .column-filter-footer {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
-    border-top: 1px solid #eee;
+    border-top: 1px solid var(--cudly-border);
     display: flex;
     justify-content: flex-end;
 }
 .column-filter-popover .column-filter-clear {
     background: transparent;
-    border: 1px solid #d0d7de;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 3px;
     padding: 0.3rem 0.6rem;
     font-size: 0.85em;
@@ -817,38 +812,72 @@ th .column-filter-btn.active {
     gap: 0.75rem;
     padding: 0.4rem 0;
     font-size: 0.85em;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 .recommendations-filter-status .clear-filters {
-    background: #e8f0fe;
+    background: var(--cudly-info-bg);
     border: 1px solid #a9c7f5;
     border-radius: 3px;
-    color: #1a73e8;
+    color: var(--cudly-primary);
     padding: 0.25rem 0.6rem;
     font-size: 0.85em;
     cursor: pointer;
 }
 
-/* Sticky bottom action box — Payment / Capacity % / Purchase / Create Plan. */
+/* Sticky bottom action box — Payment / Capacity % / Purchase / Create Plan.
+ *
+ * The mock UI (issue #340) hosts this in a right-side drawer ("Plan
+ * builder"). Pulling the existing sticky-bottom action-box into a side
+ * drawer would require non-trivial recommendations.ts changes; the
+ * pragmatic intermediate is to keep the sticky-bottom layout but pick
+ * up the design tokens so colors + spacing + radii sit in the same
+ * visual family as the rest of the action-center reskin. Drawer is
+ * tracked as a deferred sub-task in #340. */
 :root { --action-box-height: 80px; }
 .recommendations-action-box {
     position: sticky;
     bottom: 0;
     height: var(--action-box-height);
-    background: #fff;
-    border-top: 1px solid #d0d7de;
-    box-shadow: 0 -2px 8px rgba(0,0,0,0.08);
+    background: var(--cudly-surface);
+    border-top: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-md);
     z-index: 10;
-    padding: 0.75rem 1rem;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
     box-sizing: border-box;
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md) var(--cudly-r-md) 0 0;
 }
 .recommendations-action-box .recommendations-action-summary {
-    color: #555;
-    font-size: 0.9em;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
     margin-right: auto;
+}
+
+/* Context drawer placeholder (issue #340 T8) — class slot reserved for
+ * a future right-side "Plan builder" drawer that will host selected-rec
+ * summary + Purchase / Create Plan affordances. Today it's a stub that
+ * doesn't apply to any element; once the drawer ships, recommendations.ts
+ * will toggle this class on the new <aside>. Keeping the stub here keeps
+ * the design-token mapping in one place for the migration. */
+.context-drawer {
+    position: fixed;
+    top: var(--cudly-topbar-h);
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    background: var(--cudly-surface);
+    border-left: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-lg);
+    padding: var(--cudly-sp-5);
+    overflow-y: auto;
+    z-index: 20;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+}
+.context-drawer.open {
+    transform: translateX(0);
 }
 .recommendations-action-box label {
     display: flex;
@@ -871,42 +900,42 @@ tr.recommendation-row:hover {
 /* Expand-All toggle in the filter-status bar */
 .recommendations-filter-status .expand-all-toggle {
     background: transparent;
-    border: 1px solid #d0d7de;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 3px;
     padding: 0.25rem 0.6rem;
     font-size: 0.85em;
     cursor: pointer;
-    color: #555;
+    color: var(--cudly-text-muted);
 }
 .recommendations-filter-status .expand-all-toggle:hover {
-    border-color: #1a73e8;
-    color: #1a73e8;
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary);
 }
 
 /* issue #318: "Columns ▾" button in the filter-status bar */
 .recommendations-filter-status .column-visibility-btn {
     background: transparent;
-    border: 1px solid #d0d7de;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 3px;
     padding: 0.25rem 0.6rem;
     font-size: 0.85em;
     cursor: pointer;
-    color: #555;
+    color: var(--cudly-text-muted);
 }
 .recommendations-filter-status .column-visibility-btn:hover {
-    border-color: #1a73e8;
-    color: #1a73e8;
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary);
 }
 .recommendations-filter-status .column-visibility-btn[aria-pressed="true"] {
-    background: #e8f0fe;
+    background: var(--cudly-info-bg);
     border-color: #a9c7f5;
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 /* Sort-hidden indicator */
 .recommendations-filter-status .sort-hidden-note {
     font-size: 0.82em;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-style: italic;
 }
 
@@ -914,8 +943,8 @@ tr.recommendation-row:hover {
 .column-visibility-popover {
     position: absolute;
     z-index: 1200;
-    background: #fff;
-    border: 1px solid #d0d7de;
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 6px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.13);
     padding: 0.6rem 0.75rem;
@@ -941,14 +970,14 @@ tr.recommendation-row:hover {
     white-space: nowrap;
 }
 .column-visibility-popover .column-visibility-row:hover {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 /* Page-level range banner above the table */
 .rec-range-banner {
     padding: 0.4rem 0.75rem;
     margin-bottom: 0.5rem;
-    background: #e8f0fe;
+    background: var(--cudly-info-bg);
     border-radius: 4px;
     font-size: 0.88em;
     color: #444;
@@ -975,7 +1004,7 @@ tr.rec-cell-summary-row:hover {
     border: none;
     cursor: pointer;
     font-size: 1.2em;
-    color: #555;
+    color: var(--cudly-text-muted);
     padding: 4px;
     min-width: 24px;
     min-height: 24px;
@@ -985,18 +1014,18 @@ tr.rec-cell-summary-row:hover {
     justify-content: center;
 }
 .rec-cell-chevron:hover {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 .rec-cell-identity {
     font-weight: 500;
     font-size: 0.9em;
 }
 .rec-cell-range {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.85em;
 }
 .rec-variants-count {
-    color: #888;
+    color: var(--cudly-text-muted);
     font-size: 0.85em;
 }
 
@@ -1049,7 +1078,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .detail-drawer-fields dt {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.85rem;
 }
 
@@ -1060,7 +1089,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .detail-drawer-note {
-    color: #888;
+    color: var(--cudly-text-muted);
     font-size: 0.85rem;
     font-style: italic;
     margin: 1rem 0 0;
@@ -1096,12 +1125,12 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-size: 1.5rem;
     line-height: 1;
     cursor: pointer;
-    color: #666;
+    color: var(--cudly-text-muted);
     padding: 0 0.25rem;
 }
 
 .modal-confirm-close:hover {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 .modal-confirm-title {
@@ -1156,8 +1185,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
     font-size: 0.75rem;
-    background: #e8f0fe;
-    color: #1a73e8;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
 }
 
 /* Status badges */
@@ -1169,18 +1198,18 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .status-badge.active {
-    background: #e6f4ea;
+    background: var(--cudly-success-bg);
     color: #137333;
 }
 
 .status-badge.paused {
-    background: #fff3e0;
+    background: #ffe0b2;
     color: #e65100;
 }
 
 .status-badge.disabled {
-    background: #f5f5f5;
-    color: #666;
+    background: var(--cudly-bg);
+    color: var(--cudly-text-muted);
 }
 
 /* Cost chips: used in the reshape-alternatives cell and the exchange
@@ -1193,7 +1222,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     margin-right: 0.25rem;
     border-radius: 12px;
     background: #f0f2f5;
-    color: #333;
+    color: var(--cudly-text);
     font-size: 0.78rem;
     font-family: var(--mono-font, ui-monospace, monospace);
 }
@@ -1201,7 +1230,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 /* Running total under the modal's target rows. Muted emphasis — this
  * is advisory, final cost is the server-side quote. */
 .exchange-running-total {
-    color: #555;
+    color: var(--cudly-text-muted);
     font-style: italic;
     font-size: 0.9rem;
 }
@@ -1210,13 +1239,13 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .info-icon {
     display: inline-block;
     cursor: help;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.85rem;
     position: relative;
 }
 
 .info-icon:hover {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 .info-icon .tooltip-text {
@@ -1227,8 +1256,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     bottom: 125%;
     left: 50%;
     transform: translateX(-50%);
-    background-color: #333;
-    color: #fff;
+    background-color: var(--cudly-text);
+    color: var(--cudly-surface);
     padding: 0.75rem;
     border-radius: 6px;
     font-size: 0.8rem;
@@ -1249,7 +1278,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     transform: translateX(-50%);
     border-width: 6px;
     border-style: solid;
-    border-color: #333 transparent transparent transparent;
+    border-color: var(--cudly-text) transparent transparent transparent;
 }
 
 .info-icon:hover .tooltip-text {
@@ -1269,7 +1298,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     letter-spacing: 0.02em;
 }
 .confidence-high {
-    background: #e6f4ea;
+    background: var(--cudly-success-bg);
     color: #0f5132;
 }
 .confidence-medium {
@@ -1305,8 +1334,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-weight: 600;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    background: #e8f0fe;
-    color: #1a73e8;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
 }
 
 .badge-user {
@@ -1315,8 +1344,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-weight: 600;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    background: #f0f0f0;
-    color: #666;
+    background: var(--cudly-border);
+    color: var(--cudly-text-muted);
 }
 
 .badge-readonly {
@@ -1325,7 +1354,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-weight: 600;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    background: #f5f5f5;
+    background: var(--cudly-bg);
     color: #999;
 }
 
@@ -1344,7 +1373,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .badge-success {
-    background: #e6f4ea;
+    background: var(--cudly-success-bg);
     color: #137333;
 }
 
@@ -1354,18 +1383,18 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .badge-danger {
-    background: #fce8e6;
-    color: #c5221f;
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
 }
 
 .badge-muted {
-    background: #f0f0f0;
-    color: #666;
+    background: var(--cudly-border);
+    color: var(--cudly-text-muted);
 }
 
 .badge-info {
-    background: #e8f0fe;
-    color: #1a73e8;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
 }
 
 /* Subline rendered under the Pending badge in the Purchase History Status
@@ -1375,33 +1404,33 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .history-approver {
     margin-top: 0.35rem;
     font-size: 0.78rem;
-    color: #555;
+    color: var(--cudly-text-muted);
     line-height: 1.25;
 }
 
 .history-approver strong {
-    color: #333;
+    color: var(--cudly-text);
     font-weight: 600;
 }
 
 /* Purchase detail status badges */
 .status-badge.completed {
-    background: #e6f4ea;
+    background: var(--cudly-success-bg);
     color: #137333;
 }
 
 .status-badge.pending {
-    background: #e8f0fe;
-    color: #1a73e8;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
 }
 
 .status-badge.failed {
-    background: #fce8e6;
-    color: #c5221f;
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
 }
 
 .status-badge.running {
-    background: #fff3e0;
+    background: #ffe0b2;
     color: #e65100;
 }
 
@@ -1416,7 +1445,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .copy-btn:hover {
-    background: #e0e0e0;
+    background: var(--cudly-border);
 }
 
 .copy-btn .copy-icon {
@@ -1439,8 +1468,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 
 .input-with-copy input[type="text"] {
     flex: 1;
-    background: #f5f5f5;
-    color: #333;
+    background: var(--cudly-bg);
+    color: var(--cudly-text);
 }
 
 /* Inline JSON / code snippet (e.g. the auto-rendered AWS IAM trust
@@ -1449,13 +1478,13 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     flex: 1;
     margin: 0;
     padding: 0.5rem 0.75rem;
-    background: #f5f5f5;
-    border: 1px solid #ddd;
+    background: var(--cudly-bg);
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.85rem;
     line-height: 1.4;
-    color: #333;
+    color: var(--cudly-text);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 240px;
@@ -1479,7 +1508,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     display: flex;
     align-items: center;
     background: #f8f9fa;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--cudly-border);
     border-radius: 4px;
     padding: 0.5rem 0.75rem;
     gap: 0.5rem;
@@ -1489,7 +1518,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     flex: 1;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 0.85rem;
-    color: #333;
+    color: var(--cudly-text);
     background: none;
     padding: 0;
 }
@@ -1498,11 +1527,11 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .cli-alternative {
     margin-top: 1.5rem;
     padding-top: 1rem;
-    border-top: 1px solid #e0e0e0;
+    border-top: 1px solid var(--cudly-border);
 }
 
 .cli-alternative p {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.85rem;
     margin-bottom: 0.5rem;
 }
