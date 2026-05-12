@@ -18,6 +18,7 @@
     <title>CUDly - Cloud Commitment Optimizer</title>
 </head>
 <body>
+    <a href="#main-content" class="skip-to-main">Skip to main content</a>
     <div id="app" class="app-shell">
         <header class="app-topbar">
             <div class="app-topbar-brand">
@@ -66,7 +67,7 @@
                     </button>
                 </nav>
             </aside>
-            <main class="app-main">
+            <main class="app-main" id="main-content">
             <!-- Home Tab -->
             <div id="home-tab" class="tab-content active" role="tabpanel" aria-labelledby="home-tab-btn">
                 <section id="dashboard-controls">
@@ -129,7 +130,7 @@
 
             <!-- Purchase Plans Tab -->
             <div id="plans-tab" class="tab-content" role="tabpanel" aria-labelledby="plans-tab-btn">
-                <section id="plans-header" class="card">
+                <section id="plans-header" class="card page-hero">
                     <h2>Purchase Plans</h2>
                     <div class="controls-bar">
                         <div class="filter-group">
@@ -264,7 +265,7 @@
 
                 <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
                 <section id="inventory-ri-exchange">
-                    <section class="card">
+                    <section class="card page-hero">
                         <div class="section-header">
                             <h2>Convertible RI Exchange</h2>
                             <div class="section-header-actions">
@@ -302,9 +303,9 @@
                     <button class="sub-tab-btn admin-only" data-settings-tab="accounts" role="tab" aria-selected="false">Accounts &amp; onboarding</button>
                     <button class="sub-tab-btn admin-only" data-settings-tab="users" role="tab" aria-selected="false">Users, roles &amp; API keys</button>
                 </div>
-                <section id="settings-section" class="card">
+                <section id="settings-section" class="card page-hero">
                     <h2>Global Configuration</h2>
-                    <p class="settings-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
+                    <p class="settings-description page-hero-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
                     <div id="settings-loading" class="loading">Loading settings...</div>
                     <form id="global-settings-form" class="settings-form hidden">
                         <fieldset class="settings-category">

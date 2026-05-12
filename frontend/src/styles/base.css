@@ -275,3 +275,39 @@ body {
 .admin-only.visible {
     display: block;
 }
+
+/* Honour the user's OS-level reduced-motion preference (issue #340).
+ * Transitions and CSS animations get effectively disabled — duration
+ * collapses to 0.01ms so animation-end events still fire (some JS
+ * relies on those), but the visual motion is gone. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* Skip-to-main-content link (issue #340 — a11y). Hidden until the user
+ * tabs onto it; lands them past the topbar + sidebar in one keystroke. */
+.skip-to-main {
+    position: absolute;
+    top: var(--cudly-sp-2);
+    left: var(--cudly-sp-2);
+    background: var(--cudly-primary);
+    color: var(--cudly-primary-fg);
+    padding: var(--cudly-sp-2) var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md);
+    text-decoration: none;
+    font-weight: var(--cudly-fw-semibold);
+    z-index: 200;
+    transform: translateY(-200%);
+    transition: transform 0.15s ease;
+}
+
+.skip-to-main:focus {
+    transform: translateY(0);
+}

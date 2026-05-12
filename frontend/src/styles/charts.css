@@ -5,7 +5,7 @@
 
 .chart-section h3 {
     margin-bottom: 1rem;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .chart-section canvas {
@@ -41,23 +41,23 @@
 }
 
 .stat-card {
-    background: #f8f9fa;
-    padding: 1rem;
-    border-radius: 8px;
+    background: var(--cudly-surface-muted);
+    padding: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md);
     text-align: center;
 }
 
 .stat-card h4 {
-    font-size: 0.75rem;
-    color: #666;
-    margin-bottom: 0.5rem;
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+    margin-bottom: var(--cudly-sp-2);
     /* Labels render in sentence case from the HTML — matches the
      * Dashboard KPI cards. The ALL-CAPS treatment used to clash with
      * "Potential Monthly Savings" / "Active Commitments" elsewhere. */
 }
 
 .stat-value {
-    font-size: 1.5rem;
-    font-weight: bold;
-    color: #1a73e8;
+    font-size: var(--cudly-fs-xl);
+    font-weight: var(--cudly-fw-bold);
+    color: var(--cudly-primary);
 }
