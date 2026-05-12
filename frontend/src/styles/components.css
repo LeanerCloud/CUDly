@@ -499,7 +499,7 @@ button.danger:hover {
     content: 'Unsaved changes';
     display: inline-block;
     padding: 0.25rem 0.6rem;
-    background: var(--cudly-warn-bg);
+    background: #fff3cd;
     color: #856404;
     border-radius: 12px;
     font-size: 0.8rem;
@@ -1203,7 +1203,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .status-badge.paused {
-    background: var(--cudly-warn-bg);
+    background: #ffe0b2;
     color: #e65100;
 }
 
@@ -1302,7 +1302,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: #0f5132;
 }
 .confidence-medium {
-    background: var(--cudly-warn-bg);
+    background: #fff3cd;
     color: #7c5600;
 }
 .confidence-low {
@@ -1430,7 +1430,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .status-badge.running {
-    background: var(--cudly-warn-bg);
+    background: #ffe0b2;
     color: #e65100;
 }
 
