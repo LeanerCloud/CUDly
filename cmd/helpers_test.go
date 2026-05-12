@@ -1105,3 +1105,89 @@ func TestApplySizing(t *testing.T) {
 		assert.Equal(t, 0.0, out[0].ProjectedUtilization)
 	})
 }
+
+// TestApplyTargetUtilization_RI_Target100 covers the target == 100 boundary
+// (issue #338 AC: "target == 100 → only purchases with perfectly-matched
+// existing usage"). At target=100, floor(avg/1.0) = floor(avg) — so any rec
+// with avg < 1 drops, and a rec with avg >= 1 buys floor(avg) instances.
+func TestApplyTargetUtilization_RI_Target100(t *testing.T) {
+	mkRI := func(count int, avg float64) common.Recommendation {
+		return common.Recommendation{
+			Service:                     common.ServiceEC2,
+			Region:                      "us-east-1",
+			ResourceType:                "t3.medium",
+			Count:                       count,
+			CommitmentType:              common.CommitmentReservedInstance,
+			AverageInstancesUsedPerHour: avg,
+		}
+	}
+
+	tests := []struct {
+		name        string
+		rec         common.Recommendation
+		wantDropped bool
+		wantCount   int
+	}{
+		// avg=0.999 → floor(0.999/1.0) = 0 → dropped (target unreachable).
+		{name: "target 100, avg=0.999 → dropped", rec: mkRI(5, 0.999), wantDropped: true},
+		// avg=1.0 → floor(1.0/1.0) = 1 → buy 1. projected utilization = 100.
+		{name: "target 100, avg=1.0 → buy 1", rec: mkRI(5, 1.0), wantCount: 1},
+		// avg=8.7 → floor(8.7/1.0) = 8. projected utilization = 8.7/8 = 108.75 → clamped to 100.
+		{name: "target 100, avg=8.7 → buy 8 (clamped)", rec: mkRI(10, 8.7), wantCount: 8},
+		// avg=10.0 exactly → floor(10/1.0) = 10 (exact match). projected utilization = 100.
+		{name: "target 100, avg=10.0 → buy 10 (perfect match)", rec: mkRI(10, 10.0), wantCount: 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := ApplyTargetUtilization([]common.Recommendation{tt.rec}, 100)
+			if tt.wantDropped {
+				assert.Len(t, out, 0, "expected drop at target=100 for avg=%.3f", tt.rec.AverageInstancesUsedPerHour)
+				return
+			}
+			require.Len(t, out, 1)
+			assert.Equal(t, tt.wantCount, out[0].Count)
+		})
+	}
+}
+
+// TestApplyTargetUtilization_SP_NoSignalGuards covers the two SP no-signal
+// branches: RecommendedUtilization <= 0 (already covered by other tests) and
+// the new HourlyCommitment <= 0 guard (CE occasionally returns $0
+// placeholder recs).
+func TestApplyTargetUtilization_SP_NoSignalGuards(t *testing.T) {
+	t.Run("HourlyCommitment=0 with positive RecommendedUtilization → pass through unscaled", func(t *testing.T) {
+		rec := common.Recommendation{
+			Service:                common.ServiceSavingsPlansCompute,
+			CommitmentType:         common.CommitmentSavingsPlan,
+			EstimatedSavings:       1500,
+			RecommendedUtilization: 50,
+			Details:                &common.SavingsPlanDetails{HourlyCommitment: 0},
+		}
+		out := ApplyTargetUtilization([]common.Recommendation{rec}, 80)
+		require.Len(t, out, 1, "$0 SP rec should still be in output (pass-through)")
+		// Pass-through — projection fields must NOT be set, savings unchanged.
+		assert.Equal(t, 0.0, out[0].ProjectedUtilization, "ProjectedUtilization must NOT be set for $0-commitment pass-through")
+		assert.Equal(t, 1500.0, out[0].EstimatedSavings, "EstimatedSavings unchanged on pass-through")
+		assert.Equal(t, 0.0, out[0].Details.(*common.SavingsPlanDetails).HourlyCommitment, "HourlyCommitment unchanged")
+	})
+
+	t.Run("Details is wrong type → pass through unscaled, no projection metric set", func(t *testing.T) {
+		// Defensive case: SP rec with non-SP Details (a parser bug). The
+		// scaling can't proceed, and we MUST NOT set ProjectedUtilization
+		// to target% because the underlying cost fields aren't scaled —
+		// that would mislead the operator into thinking the rec was sized
+		// to the target when in fact it's the original unscaled commitment.
+		rec := common.Recommendation{
+			Service:                common.ServiceSavingsPlansCompute,
+			CommitmentType:         common.CommitmentSavingsPlan,
+			EstimatedSavings:       1500,
+			RecommendedUtilization: 50,
+			Details:                common.ComputeDetails{Platform: "Linux/UNIX"}, // wrong type
+		}
+		out := ApplyTargetUtilization([]common.Recommendation{rec}, 80)
+		require.Len(t, out, 1)
+		assert.Equal(t, 0.0, out[0].ProjectedUtilization, "must NOT set projection when scaling failed")
+		assert.Equal(t, 1500.0, out[0].EstimatedSavings, "EstimatedSavings must remain unscaled when scaling failed")
+	})
+}

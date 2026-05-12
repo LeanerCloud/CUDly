@@ -321,6 +321,14 @@ func applyTargetUtilizationSP(rec common.Recommendation, targetPct float64) (com
 	if rec.RecommendedUtilization <= 0 {
 		return rec, false
 	}
+	// Also treat a $0 HourlyCommitment as "no signal" — CE occasionally
+	// returns placeholder recs with zero commitment. Sizing such a rec
+	// would produce nonsense ($0 commitment * ratio = $0) while still
+	// claiming the target utilization is achieved, which is incoherent.
+	// Pass through unchanged and count in the skip summary.
+	if details, ok := rec.Details.(*common.SavingsPlanDetails); ok && details.HourlyCommitment <= 0 {
+		return rec, false
+	}
 
 	adjusted := rec
 	if rec.RecommendedUtilization >= targetPct {
@@ -341,15 +349,22 @@ func applyTargetUtilizationSP(rec common.Recommendation, targetPct float64) (com
 	// the polymorphic Details copy) and EstimatedSavings. Do NOT touch
 	// CommitmentCost, OnDemandCost, or SavingsPercentage; ApplyCoverage
 	// doesn't either, and divergence would silently desync the two modes.
-	if details, ok := rec.Details.(*common.SavingsPlanDetails); ok {
-		newDetails := *details // copy
-		newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
-		adjusted.Details = &newDetails
-		adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
-	} else {
+	//
+	// If Details isn't a *SavingsPlanDetails (defensive — should always be
+	// for SP recs), log a warning and pass through UNCHANGED — including
+	// leaving ProjectedUtilization at zero. Setting projected metrics on a
+	// rec whose commitment fields couldn't be scaled would produce a
+	// misleading row (utilization=target%, savings=full-unscaled), which
+	// is exactly the wrong signal to the user.
+	details, ok := rec.Details.(*common.SavingsPlanDetails)
+	if !ok {
 		AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
+		return rec, true
 	}
-
+	newDetails := *details // copy
+	newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
+	adjusted.Details = &newDetails
+	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
 	adjusted.ProjectedUtilization = targetPct
 	// ProjectedCoverage left at zero for SPs (see above).
 	return adjusted, true
