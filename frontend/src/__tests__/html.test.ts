@@ -79,8 +79,11 @@ describe('HTML Structure', () => {
     });
 
     test('has tab navigation', () => {
-      const tabs = document.querySelector('.tabs');
-      expect(tabs).toBeTruthy();
+      // After the issue #340 action-center reskin, primary nav lives in the
+      // sidebar's .app-sidebar-nav container instead of the old top
+      // .tabs horizontal strip.
+      const nav = document.querySelector('.app-sidebar-nav');
+      expect(nav).toBeTruthy();
     });
   });
 
