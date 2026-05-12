@@ -45,12 +45,14 @@ describe('Navigation Module', () => {
         <button class="tab-btn" data-tab="opportunities">Recommendations</button>
         <button class="tab-btn" data-tab="plans">Plans</button>
         <button class="tab-btn" data-tab="purchases">History</button>
+        <button class="tab-btn" data-tab="inventory">Inventory &amp; Coverage</button>
         <button class="tab-btn" data-tab="admin">Settings</button>
       </div>
       <div id="home-tab" class="tab-content active"></div>
       <div id="opportunities-tab" class="tab-content"></div>
       <div id="plans-tab" class="tab-content"></div>
       <div id="purchases-tab" class="tab-content"></div>
+      <div id="inventory-tab" class="tab-content"></div>
       <div id="admin-tab" class="tab-content">
         <div class="settings-tabs">
           <button class="sub-tab-btn active" data-settings-tab="general">General</button>
@@ -136,6 +138,20 @@ describe('Navigation Module', () => {
       expect(settingsContent?.classList.contains('active')).toBe(true);
 
       expect(loadGlobalSettings).toHaveBeenCalled();
+    });
+
+    test('switches to inventory tab', () => {
+      switchTab('inventory');
+
+      const inventoryBtn = document.querySelector('[data-tab="inventory"]');
+      expect(inventoryBtn?.classList.contains('active')).toBe(true);
+
+      const inventoryContent = document.getElementById('inventory-tab');
+      expect(inventoryContent?.classList.contains('active')).toBe(true);
+
+      // Other tabs must be deactivated
+      const homeBtn = document.querySelector('[data-tab="home"]');
+      expect(homeBtn?.classList.contains('active')).toBe(false);
     });
 
     test('deactivates previously active tab', () => {
@@ -292,6 +308,12 @@ describe('Navigation Module', () => {
       delete (window as unknown as Record<string, unknown>).location;
       (window as unknown as Record<string, unknown>).location = { pathname: '/admin/purchasing' } as Location;
       expect(getSettingsSubTabFromPath()).toBe('purchasing');
+    });
+
+    test('returns users for /admin/users', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin/users' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('users');
     });
 
     // Legacy /settings/* paths still work via LEGACY_PATH_REDIRECTS

@@ -248,7 +248,10 @@ function attachSparkline(key: string, values: readonly number[]): void {
   const svg = document.querySelector<SVGSVGElement>(`.kpi-tile-spark[data-spark-key="${key}"]`);
   if (!svg) return;
   while (svg.firstChild) svg.removeChild(svg.firstChild);
-  if (values.length < 2) return;
+  if (values.length < 2) {
+    svg.classList.add('hidden');
+    return;
+  }
   svg.classList.remove('hidden');
 
   const width = 80;
@@ -257,7 +260,10 @@ function attachSparkline(key: string, values: readonly number[]): void {
   svg.setAttribute('preserveAspectRatio', 'none');
 
   const points = sparklinePoints(values, width, height);
-  if (!points) return;
+  if (!points) {
+    svg.classList.add('hidden');
+    return;
+  }
 
   const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
   polyline.setAttribute('points', points);
@@ -613,6 +619,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
       canvas.classList.add('hidden');
       empty?.classList.remove('hidden');
+      attachSparkline('ytd', []);
       return;
     }
     canvas.classList.remove('hidden');
