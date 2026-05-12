@@ -213,6 +213,7 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 				ProjectedCoverage:      87.5,
 				ExistingCoveragePct:    20.0,
 				RecommendedUtilization: 80.0,
+				Details:                common.ComputeDetails{Platform: "Linux/UNIX"},
 			},
 			Success: true,
 		},
@@ -220,7 +221,8 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 			// All sizing-related fields zero — ProjectedCoverage and
 			// RecommendedCount cells should both be blank (SP rec or a
 			// pre-target rec that never went through sizing). UpfrontPayment
-			// is also blank when CommitmentCost is zero.
+			// is also blank when CommitmentCost is zero. No Details either,
+			// so the Engine column is blank.
 			Recommendation: common.Recommendation{
 				Service:      common.ServiceEC2,
 				Region:       "us-east-1",
@@ -256,7 +258,7 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 3) // header + 2 data rows
 	header := rows[0]
-	idxProjCov, idxRecCount, idxUpfront, idxExisting := -1, -1, -1, -1
+	idxProjCov, idxRecCount, idxUpfront, idxExisting, idxEngine := -1, -1, -1, -1, -1
 	for i, h := range header {
 		switch h {
 		case "ProjectedCoverage":
@@ -267,28 +269,56 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 			idxUpfront = i
 		case "ExistingCoverage":
 			idxExisting = i
+		case "Engine":
+			idxEngine = i
 		}
 	}
 	require.NotEqual(t, -1, idxProjCov, "ProjectedCoverage column not found")
 	require.NotEqual(t, -1, idxRecCount, "RecommendedCount column not found")
 	require.NotEqual(t, -1, idxUpfront, "UpfrontPayment column not found")
 	require.NotEqual(t, -1, idxExisting, "ExistingCoverage column not found")
+	require.NotEqual(t, -1, idxEngine, "Engine column not found")
 
 	// Populated row: RecommendedCount=10 renders as "10", UpfrontPayment
 	// emits CommitmentCost as-is (sizing already scaled it; see
-	// ApplyTargetCoverage), ProjectedCoverage=87.5 renders, ExistingCoverage=20.0.
+	// ApplyTargetCoverage), ProjectedCoverage=87.5 renders, ExistingCoverage=20.0,
+	// Engine pulled from ComputeDetails.Platform.
 	populatedRow := rows[1]
 	assert.Equal(t, "10", populatedRow[idxRecCount], "RecommendedCount should render as decimal")
 	assert.Equal(t, "700.00", populatedRow[idxUpfront], "UpfrontPayment should render rec.CommitmentCost as-is")
 	assert.Equal(t, "87.5", populatedRow[idxProjCov])
 	assert.Equal(t, "20.0", populatedRow[idxExisting], "ExistingCoverage should render with one decimal")
+	assert.Equal(t, "Linux/UNIX", populatedRow[idxEngine], "Engine should pull from ComputeDetails.Platform")
 
-	// Zero-fields row: all four optional cells blank.
+	// Zero-fields row: optional cells blank, Engine blank when Details is nil.
 	zeroRow := rows[2]
 	assert.Equal(t, "", zeroRow[idxProjCov], "zero ProjectedCoverage should be blank")
 	assert.Equal(t, "", zeroRow[idxRecCount], "zero RecommendedCount should be blank (SP rec or pre-sizing)")
 	assert.Equal(t, "", zeroRow[idxUpfront], "zero CommitmentCost should leave UpfrontPayment blank")
 	assert.Equal(t, "", zeroRow[idxExisting], "zero ExistingCoverage should be blank")
+	assert.Equal(t, "", zeroRow[idxEngine], "missing Details should leave Engine blank")
+}
+
+// TestExtractEngine covers the four cases the helper dispatches on:
+// DatabaseDetails (RDS engine), CacheDetails (ElastiCache engine),
+// ComputeDetails (EC2 platform), and unset/other Details (blank).
+func TestExtractEngine(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  common.Recommendation
+		want string
+	}{
+		{"DatabaseDetails -> Engine", common.Recommendation{Details: common.DatabaseDetails{Engine: "aurora-postgresql"}}, "aurora-postgresql"},
+		{"CacheDetails -> Engine", common.Recommendation{Details: common.CacheDetails{Engine: "redis"}}, "redis"},
+		{"ComputeDetails -> Platform", common.Recommendation{Details: common.ComputeDetails{Platform: "Linux/UNIX"}}, "Linux/UNIX"},
+		{"nil Details -> empty", common.Recommendation{}, ""},
+		{"SavingsPlanDetails -> empty", common.Recommendation{Details: &common.SavingsPlanDetails{HourlyCommitment: 1.0}}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractEngine(tt.rec))
+		})
+	}
 }
 
 // TestFormatCurrencyOrBlank locks the blank-when-zero behaviour for the

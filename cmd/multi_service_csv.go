@@ -180,7 +180,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	// stay on the Recommendation struct for internal use (SP no-signal
 	// guard, etc.).
 	header := []string{
-		"Service", "Region", "ResourceType", "Count", "RecommendedCount",
+		"Service", "Region", "ResourceType", "Engine", "Count", "RecommendedCount",
 		"Account", "AccountName", "Term", "PaymentOption",
 		"UpfrontPayment", "EstimatedSavings",
 		"CommitmentID", "Success", "Error", "Timestamp",
@@ -202,6 +202,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			string(rec.Service),
 			rec.Region,
 			rec.ResourceType,
+			extractEngine(rec),
 			fmt.Sprintf("%d", rec.Count),
 			formatIntOrBlank(rec.RecommendedCount),
 			rec.Account,
@@ -234,6 +235,23 @@ func formatIntOrBlank(v int) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", v)
+}
+
+// extractEngine returns the engine / platform string for a recommendation's
+// polymorphic Details: Engine for RDS / ElastiCache (DatabaseDetails,
+// CacheDetails), Platform for EC2 (ComputeDetails), empty for SP and other
+// commitment types that don't carry an engine field. Matches the dispatch
+// in generatePurchaseID so the CSV column and the dry-run ID never disagree.
+func extractEngine(rec common.Recommendation) string {
+	switch details := rec.Details.(type) {
+	case common.DatabaseDetails:
+		return details.Engine
+	case common.CacheDetails:
+		return details.Engine
+	case common.ComputeDetails:
+		return details.Platform
+	}
+	return ""
 }
 
 // formatCurrencyOrBlank renders a currency value as "%.2f" when non-zero,
