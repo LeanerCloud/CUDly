@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 )
@@ -346,6 +347,7 @@ func processRegionRecommendations(
 	engineData engineVersionData,
 	isDryRun bool,
 	cfg Config,
+	coverageMap recommendations.PoolCoverageMap,
 ) regionRecommendations {
 	result := regionRecommendations{
 		recommendations: make([]common.Recommendation, 0),
@@ -374,7 +376,7 @@ func processRegionRecommendations(
 	}
 
 	// Apply coverage and overrides
-	filteredRecs := applyCoverageAndOverrides(recs, cfg)
+	filteredRecs := applyCoverageAndOverrides(recs, cfg, coverageMap)
 
 	result.recommendations = filteredRecs
 
@@ -461,7 +463,12 @@ func applyRegionFilters(
 // applyCoverageAndOverrides applies sizing (coverage % or target-coverage)
 // and count overrides. Sizing mode is selected by cfg.TargetCoverage: > 0
 // routes to ApplyTargetCoverage; otherwise the legacy ApplyCoverage path.
-func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config) []common.Recommendation {
+// coverageMap (when non-nil) populates Recommendation.ExistingCoveragePct
+// before sizing so the under-buy formula can subtract pool coverage already
+// owned. Nil map = no-op; recs keep their default zero values and the
+// sizing path falls back to the no-existing-commitments formula.
+func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config, coverageMap recommendations.PoolCoverageMap) []common.Recommendation {
+	recommendations.ApplyCoverageMapToRecommendations(recs, coverageMap)
 	filteredRecs := applySizing(recs, cfg, cfg.Coverage)
 	if cfg.TargetCoverage > 0 {
 		AppLogger.Printf("  🎯 Applying %.1f%% target-coverage: %d recommendations selected\n", cfg.TargetCoverage, len(filteredRecs))
@@ -514,6 +521,8 @@ func checkDuplicatesAndApplyLimit(
 
 // fetchAndFilterRegionRecs fetches, filters, applies coverage, and deduplicates
 // recommendations for a single service+region. No purchases are made.
+// coverageMap (when non-nil) feeds existing-pool coverage into the sizing
+// step for --target-coverage.
 func fetchAndFilterRegionRecs(
 	ctx context.Context,
 	awsCfg aws.Config,
@@ -524,6 +533,7 @@ func fetchAndFilterRegionRecs(
 	regionIndex, totalRegions int,
 	engineData engineVersionData,
 	cfg Config,
+	coverageMap recommendations.PoolCoverageMap,
 ) []common.Recommendation {
 	AppLogger.Printf("\n  📍 [%d/%d] Region: %s\n", regionIndex, totalRegions, region)
 
@@ -541,7 +551,7 @@ func fetchAndFilterRegionRecs(
 		return nil
 	}
 
-	recs = applyCoverageAndOverrides(recs, cfg)
+	recs = applyCoverageAndOverrides(recs, cfg, coverageMap)
 
 	// Deduplication: skip recs matching recently-purchased commitments
 	regionalCfg := awsCfg.Copy()
@@ -554,7 +564,10 @@ func fetchAndFilterRegionRecs(
 	return recs
 }
 
-// fetchAllRecs collects recommendations from all services and regions without purchasing.
+// fetchAllRecs collects recommendations from all services and regions without
+// purchasing. coverageMap (when non-nil) populates Recommendation.ExistingCoveragePct
+// on each rec before sizing, so --target-coverage can subtract what's already
+// owned in the same pool.
 func fetchAllRecs(
 	ctx context.Context,
 	awsCfg aws.Config,
@@ -563,6 +576,7 @@ func fetchAllRecs(
 	servicesToProcess []common.ServiceType,
 	engineData engineVersionData,
 	cfg Config,
+	coverageMap recommendations.PoolCoverageMap,
 ) []common.Recommendation {
 	all := make([]common.Recommendation, 0)
 	for _, service := range servicesToProcess {
@@ -576,7 +590,7 @@ func fetchAllRecs(
 			continue
 		}
 		for i, region := range regions {
-			recs := fetchAndFilterRegionRecs(ctx, awsCfg, recClient, accountCache, service, region, i+1, len(regions), engineData, cfg)
+			recs := fetchAndFilterRegionRecs(ctx, awsCfg, recClient, accountCache, service, region, i+1, len(regions), engineData, cfg, coverageMap)
 			all = append(all, recs...)
 		}
 	}

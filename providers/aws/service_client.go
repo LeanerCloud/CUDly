@@ -164,6 +164,14 @@ func (r *RecommendationsClientAdapter) GetRIUtilization(ctx context.Context, loo
 	return r.client.GetRIUtilization(ctx, lookbackDays)
 }
 
+// GetRICoverageMap returns the per-pool RI coverage % over the last
+// lookbackDays days, keyed by "region:instance_type". Used by the
+// --target-coverage sizing path to subtract existing pool coverage from
+// the under-buy formula.
+func (r *RecommendationsClientAdapter) GetRICoverageMap(ctx context.Context, lookbackDays int) (recommendations.PoolCoverageMap, error) {
+	return r.client.GetRICoverageMap(ctx, lookbackDays)
+}
+
 // NewRecommendationsClientDirect creates a new recommendations client returning the concrete type
 // (needed for GetRIUtilization which is not part of the generic provider interface).
 func NewRecommendationsClientDirect(cfg aws.Config) *RecommendationsClientAdapter {

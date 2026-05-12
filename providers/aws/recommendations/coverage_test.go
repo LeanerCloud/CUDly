@@ -41,8 +41,8 @@ func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
 					Groups: []types.ReservationCoverageGroup{
 						{
 							Attributes: map[string]string{
-								"REGION":        "us-east-1",
-								"INSTANCE_TYPE": "db.r6g.large",
+								"region":       "us-east-1",
+								"instanceType": "db.r6g.large",
 							},
 							Coverage: &types.Coverage{
 								CoverageHours: &types.CoverageHours{
@@ -52,6 +52,9 @@ func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
 						},
 						{
 							// Mixed-case region from CE should normalise to lowercase.
+							// Also exercises the SCREAMING_SNAKE_CASE fallback path:
+							// CE returns camelCase keys in practice but our parser
+							// tolerates either form.
 							Attributes: map[string]string{
 								"REGION":        "EU-WEST-2",
 								"INSTANCE_TYPE": "db.r6g.large",
