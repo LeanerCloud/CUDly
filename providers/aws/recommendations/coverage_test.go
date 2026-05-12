@@ -83,7 +83,12 @@ func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
 
 	got, err := client.GetRICoverageMap(context.Background(), 30)
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.coverageCalls, "should make exactly one CE call for a single-page response")
+	// One call per non-RDS service in coverageServiceFilters (EC2,
+	// ElastiCache, OpenSearch, Redshift, MemoryDB = 5) + one per RDS
+	// engine in rdsCoverageEngines (MySQL/PostgreSQL/MariaDB/Oracle/
+	// SQL Server/Aurora MySQL/Aurora PostgreSQL = 7) = 12 single-page calls.
+	wantCalls := len(coverageServiceFilters) + len(rdsCoverageEngines)
+	assert.Equal(t, wantCalls, mock.coverageCalls, "one CE call per (service|RDS engine) filter combo")
 
 	assert.InDelta(t, 50.0, got[poolKey("us-east-1", "db.r6g.large")], 0.001)
 	assert.InDelta(t, 33.7, got[poolKey("eu-west-2", "db.r6g.large")], 0.001, "REGION attribute should be lowercased")
@@ -99,7 +104,8 @@ func TestGetRICoverageMap_LookbackDefault(t *testing.T) {
 
 	_, err := client.GetRICoverageMap(context.Background(), 0)
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.coverageCalls)
+	wantCalls := len(coverageServiceFilters) + len(rdsCoverageEngines)
+	assert.Equal(t, wantCalls, mock.coverageCalls)
 }
 
 // TestApplyCoverageMapToRecommendations covers the three cases: matched
@@ -137,4 +143,60 @@ func TestApplyCoverageMapToRecommendations(t *testing.T) {
 		ApplyCoverageMapToRecommendations(recs, cov)
 		assert.InDelta(t, 75.0, recs[0].ExistingCoveragePct, 0.001)
 	})
+
+	t.Run("RDS recs look up with engine-aware key", func(t *testing.T) {
+		// Same region + instance type, different engines, different
+		// existing coverage — the per-engine fetcher writes one entry per
+		// engine and the lookup must pick the right one. CE-side ("Aurora
+		// MySQL") and parser-side ("aurora-mysql") forms must collapse to
+		// the same key via normaliseRDSEngine.
+		recs := []common.Recommendation{
+			{
+				Service:      common.ServiceRDS,
+				Region:       "eu-west-2",
+				ResourceType: "db.r6g.large",
+				Details:      &common.DatabaseDetails{Engine: "aurora-mysql"},
+			},
+			{
+				Service:      common.ServiceRDS,
+				Region:       "eu-west-2",
+				ResourceType: "db.r6g.large",
+				Details:      &common.DatabaseDetails{Engine: "mysql"},
+			},
+		}
+		cov := PoolCoverageMap{
+			rdsPoolKey("eu-west-2", "db.r6g.large", "Aurora MySQL"): 98.5,
+			rdsPoolKey("eu-west-2", "db.r6g.large", "MySQL"):        0.0,
+		}
+		ApplyCoverageMapToRecommendations(recs, cov)
+		assert.InDelta(t, 98.5, recs[0].ExistingCoveragePct, 0.001, "aurora-mysql rec picks up Aurora MySQL coverage")
+		assert.Equal(t, 0.0, recs[1].ExistingCoveragePct, "MySQL rec sees only MySQL coverage, not Aurora's")
+	})
+}
+
+// TestNormaliseRDSEngine locks the canonicalisation of CE-side and
+// parser-side engine strings to the same lookup key. Without this both
+// producer (per-engine fetcher) and consumer (apply helper) would write
+// or read differently and miss the lookup entirely.
+func TestNormaliseRDSEngine(t *testing.T) {
+	cases := map[string]string{
+		// CE-side strings (human readable, mixed case, spaces).
+		"Aurora MySQL":      "auroramysql",
+		"Aurora PostgreSQL": "aurorapostgresql",
+		"MySQL":             "mysql",
+		"PostgreSQL":        "postgresql",
+		"SQL Server":        "sqlserver",
+		// Parser-side strings (lowercase, hyphenated).
+		"aurora-mysql":      "auroramysql",
+		"aurora-postgresql": "aurorapostgresql",
+		"postgres":          "postgres",
+		// Edge cases.
+		"":      "",
+		"MYSQL": "mysql",
+	}
+	for in, want := range cases {
+		t.Run(in, func(t *testing.T) {
+			assert.Equal(t, want, normaliseRDSEngine(in))
+		})
+	}
 }

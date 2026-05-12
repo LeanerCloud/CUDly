@@ -188,9 +188,8 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 // RIs:
 //
 //	gap = (targetPct - ExistingCoveragePct) / 100
-//	n_target = floor(AverageInstancesUsedPerHour * gap)
+//	n_target = ceil(AverageInstancesUsedPerHour * gap)
 //	If gap <= 0 (existing already at/above target) → drop with INFO log.
-//	If n_target == 0 (gap too small to justify a single RI) → drop with INFO log.
 //	If AverageInstancesUsedPerHour <= 0 → pass through (no signal); counted
 //	in the per-run skip summary.
 //	Projected coverage = ExistingCoveragePct + n_target/avg * 100 (total
@@ -198,7 +197,14 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 //	avg/n_target * 100 clamped to 100.
 //	ExistingCoveragePct is sourced from CE GetReservationCoverage in the
 //	same pool; zero means "no signal" and the formula falls back to the
-//	no-existing-commitments path.
+//	no-existing-commitments path. For RDS, the coverage lookup keys by
+//	(region, instance_type, engine) — the per-engine fetcher in
+//	coverage.go avoids the cross-engine bleed that floor + per-pool
+//	aggregate produced.
+//	Ceil (rather than floor or round) ensures any non-zero gap with
+//	non-zero demand buys at least 1 RI — AWS's recommendation list
+//	always proposes a count, and silently dropping single-instance pools
+//	was the worse failure mode than slight over-target on tiny pools.
 //
 // SPs:
 //
@@ -300,8 +306,8 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 	//
 	// Keep the subtraction in percentage units (subtract first, divide by 100
 	// after) so whole-percent values don't lose precision: 0.70 - 0.60 in
-	// float64 rounds to 0.0999... and floor(avg * that) silently rounds the
-	// count down by 1.
+	// float64 rounds to 0.0999... and ceil(avg * that) would silently round
+	// up by 1.
 	gapPct := targetPct - rec.ExistingCoveragePct
 	if gapPct <= 0 {
 		// Existing commitments already meet or exceed the target; no purchase
@@ -312,12 +318,19 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 			targetPct, rec.ExistingCoveragePct, rec.Service, rec.Region, rec.ResourceType)
 		return rec, false
 	}
-	nTarget := int(math.Floor(avg * gapPct / 100.0))
+	// Round up so any non-zero gap with non-zero demand buys at least 1 RI.
+	// Floor used to drop single-instance pools (avg=1, gap=80% → floor(0.8)=0)
+	// which made --target-coverage=80 silently skip a third of the AWS-console
+	// recommendation list. Ceil matches AWS's behaviour of recommending 1 RI
+	// for any non-empty pool; the slight over-target on small pools (avg=2,
+	// target=80% gives 2 RIs = 100% coverage) is acceptable — under-target
+	// silence was the worse failure mode.
+	nTarget := int(math.Ceil(avg * gapPct / 100.0))
 
 	if nTarget == 0 {
-		// Coverage gap too small to justify even a single RI for this pool's avg
-		// usage (e.g. avg=0.5 with target=70% yields floor(0.35)=0). Drop with
-		// an explanatory log so operators can see what the flag did.
+		// Defensive: math.Ceil on a positive product never returns 0, but a
+		// truncation or tiny-float edge case could. Drop with a log if it
+		// somehow happens.
 		AppLogger.Printf("INFO: --target-coverage=%.1f%% sizes %s/%s/%s to 0 instances (avg used %.2f/hr, gap %.2f%% produces <1 RI); dropped recommendation\n",
 			targetPct, rec.Service, rec.Region, rec.ResourceType, avg, gapPct)
 		// Returning (_, false) with avg > 0 signals "drop, don't pass through".
