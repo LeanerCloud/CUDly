@@ -1,8 +1,8 @@
 /* Tables styling */
 table {
     width: 100%;
-    background: white;
-    border-radius: 8px;
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-md);
     overflow: visible;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     border-collapse: collapse;
@@ -16,7 +16,7 @@ th, td {
 }
 
 th {
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     font-weight: 600;
 }
 
@@ -26,7 +26,7 @@ tr:hover {
 
 /* Recommendation row highlighting */
 tr.high-savings {
-    border-left: 3px solid #34a853;
+    border-left: 3px solid var(--cudly-success);
 }
 
 tr.medium-savings {
@@ -46,7 +46,7 @@ tr.medium-savings {
 #planned-purchases-header {
     margin-top: 2rem;
     padding-top: 2rem;
-    border-top: 1px solid #e0e0e0;
+    border-top: 1px solid var(--cudly-border);
 }
 
 #planned-purchases-header h2 {
@@ -62,8 +62,8 @@ tr.medium-savings {
 .planned-purchases-table {
     width: 100%;
     border-collapse: collapse;
-    background: white;
-    border-radius: 8px;
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-md);
     overflow: hidden;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
@@ -72,18 +72,18 @@ tr.medium-savings {
 .planned-purchases-table td {
     padding: 0.75rem 1rem;
     text-align: left;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 .planned-purchases-table th {
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     font-weight: 600;
     font-size: 0.85rem;
     color: #555;
 }
 
 .planned-purchases-table tbody tr:hover {
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
 }
 
 .planned-purchase-row .plan-name {
@@ -114,11 +114,11 @@ tr.medium-savings {
 }
 
 .status-completed {
-    color: #34a853;
+    color: var(--cudly-success);
 }
 
 .status-failed {
-    color: #ea4335;
+    color: var(--cudly-error);
 }
 
 .planned-purchases-table .status-badge {

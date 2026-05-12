@@ -3,7 +3,7 @@
 /* Base form element styles */
 select {
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-size: 0.9rem;
     background: white;
@@ -13,7 +13,7 @@ label {
     display: block;
     margin-bottom: 0.5rem;
     font-weight: 500;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 /* Controls Bar */
@@ -41,14 +41,14 @@ label {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.9rem;
 }
 
 .filter-group select,
 .filter-group input {
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-size: 0.9rem;
 }
@@ -74,13 +74,13 @@ label {
 .form-group textarea {
     width: 100%;
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
 }
 
 .form-help {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     margin-top: 0.25rem;
 }
 
@@ -143,7 +143,7 @@ input:checked + .slider:before {
 
 .form-section h3 {
     font-size: 1rem;
-    color: #1a73e8;
+    color: var(--cudly-primary);
     margin-bottom: 1rem;
 }
 
@@ -173,14 +173,14 @@ input:checked + .slider:before {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.9rem;
 }
 
 .date-range-picker input[type="date"],
 .date-range-picker select {
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-size: 0.9rem;
 }
@@ -197,14 +197,14 @@ input:checked + .slider:before {
     display: flex;
     flex-direction: column;
     padding: 1rem;
-    border: 2px solid #ddd;
+    border: 2px solid var(--cudly-border-strong);
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .ramp-option:hover {
-    border-color: #1a73e8;
+    border-color: var(--cudly-primary);
 }
 
 .ramp-option input[type="radio"] {
@@ -212,25 +212,25 @@ input:checked + .slider:before {
 }
 
 .ramp-option:has(input:checked) {
-    border-color: #1a73e8;
-    background: #e8f0fe;
+    border-color: var(--cudly-primary);
+    background: var(--cudly-info-bg);
 }
 
 .ramp-label {
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
     margin-bottom: 0.25rem;
 }
 
 .ramp-desc {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 #custom-ramp-config {
     margin-top: 1rem;
     padding: 1rem;
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     border-radius: 8px;
 }
 
@@ -245,7 +245,7 @@ input:checked + .slider:before {
 .password-input-wrapper input[type="text"] {
     width: 100%;
     padding: 0.5rem 2.5rem 0.5rem 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     margin-top: 0.25rem;
     font-size: 0.9rem;
@@ -263,16 +263,16 @@ input:checked + .slider:before {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #666;
+    color: var(--cudly-text-muted);
     transition: color 0.2s;
 }
 
 .toggle-password:hover {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 .toggle-password:focus {
-    outline: 2px solid #1a73e8;
+    outline: 2px solid var(--cudly-primary);
     outline-offset: 2px;
     border-radius: 4px;
 }
@@ -286,7 +286,7 @@ input:checked + .slider:before {
 .password-requirements {
     margin: 0.75rem 0 1rem 0;
     padding: 0.75rem;
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     border: 1px solid #dee2e6;
     border-radius: 4px;
     font-size: 0.875rem;
@@ -341,5 +341,5 @@ input:checked + .slider:before {
 }
 
 tr.selected {
-    background: #e8f0fe !important;
+    background: var(--cudly-info-bg) !important;
 }
