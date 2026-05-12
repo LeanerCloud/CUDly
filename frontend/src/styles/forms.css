@@ -159,7 +159,7 @@ label {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #ccc;
+    background-color: var(--cudly-border-strong);
     border-radius: 26px;
     transition: 0.3s;
 }
@@ -366,19 +366,19 @@ input:checked + .slider:before {
 }
 
 .requirement.unmet {
-    color: #6c757d;
+    color: var(--cudly-text-muted);
 }
 
 .requirement.unmet .req-icon {
-    color: #adb5bd;
+    color: var(--cudly-text-subtle);
 }
 
 .requirement.met {
-    color: #2e7d32;
+    color: var(--cudly-success-fg);
 }
 
 .requirement.met .req-icon {
-    color: #4caf50;
+    color: var(--cudly-success);
     background: var(--cudly-success-bg);
 }
 
