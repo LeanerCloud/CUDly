@@ -205,8 +205,9 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 				Service:                common.ServiceEC2,
 				Region:                 "us-east-1",
 				ResourceType:           "t3.medium",
-				Count:                  7,  // post-sizing
-				RecommendedCount:       10, // AWS pre-sizing
+				Count:                  7,    // post-sizing
+				RecommendedCount:       10,   // AWS pre-sizing
+				CommitmentCost:         1000, // AWS upfront for 10 RIs; pro-rates to 700 for 7.
 				Term:                   "1yr",
 				ProjectedUtilization:   95.0,
 				ProjectedCoverage:      87.5,
@@ -217,7 +218,8 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 		{
 			// All sizing-related fields zero — ProjectedCoverage and
 			// RecommendedCount cells should both be blank (SP rec or a
-			// pre-target rec that never went through sizing).
+			// pre-target rec that never went through sizing). UpfrontPayment
+			// is also blank when CommitmentCost is zero.
 			Recommendation: common.Recommendation{
 				Service:      common.ServiceEC2,
 				Region:       "us-east-1",
@@ -236,10 +238,11 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	require.NoError(t, err)
 	csvText := string(content)
 
-	// Header contains ProjectedCoverage and RecommendedCount but NOT the
-	// always-100% utilization siblings.
+	// Header contains ProjectedCoverage, RecommendedCount and UpfrontPayment
+	// but NOT the always-100% utilization siblings.
 	assert.Contains(t, csvText, "ProjectedCoverage")
 	assert.Contains(t, csvText, "RecommendedCount")
+	assert.Contains(t, csvText, "UpfrontPayment")
 	assert.NotContains(t, csvText, "ProjectedUtilization", "column was removed; it's ~100% on every under-buy row")
 	assert.NotContains(t, csvText, "RecommendedUtilization", "column was removed; it's ~99-100% on every row")
 
@@ -251,28 +254,70 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 3) // header + 2 data rows
 	header := rows[0]
-	idxProjCov := -1
-	idxRecCount := -1
+	idxProjCov, idxRecCount, idxUpfront := -1, -1, -1
 	for i, h := range header {
 		switch h {
 		case "ProjectedCoverage":
 			idxProjCov = i
 		case "RecommendedCount":
 			idxRecCount = i
+		case "UpfrontPayment":
+			idxUpfront = i
 		}
 	}
 	require.NotEqual(t, -1, idxProjCov, "ProjectedCoverage column not found")
 	require.NotEqual(t, -1, idxRecCount, "RecommendedCount column not found")
+	require.NotEqual(t, -1, idxUpfront, "UpfrontPayment column not found")
 
-	// Populated row: RecommendedCount=10 renders as "10", ProjectedCoverage=87.5 as "87.5".
+	// Populated row: RecommendedCount=10 renders as "10", UpfrontPayment
+	// pro-rates 1000 * 7/10 = 700.00, ProjectedCoverage=87.5 renders.
 	populatedRow := rows[1]
 	assert.Equal(t, "10", populatedRow[idxRecCount], "RecommendedCount should render as decimal")
+	assert.Equal(t, "700.00", populatedRow[idxUpfront], "UpfrontPayment should pro-rate CommitmentCost by Count/RecommendedCount")
 	assert.Equal(t, "87.5", populatedRow[idxProjCov])
 
-	// Zero-fields row: both cells blank.
+	// Zero-fields row: all three cells blank.
 	zeroRow := rows[2]
 	assert.Equal(t, "", zeroRow[idxProjCov], "zero ProjectedCoverage should be blank")
 	assert.Equal(t, "", zeroRow[idxRecCount], "zero RecommendedCount should be blank (SP rec or pre-sizing)")
+	assert.Equal(t, "", zeroRow[idxUpfront], "zero CommitmentCost should leave UpfrontPayment blank")
+}
+
+// TestFormatUpfrontForSizedCount locks the three branches: pro-rate when
+// Count != RecommendedCount, no scaling when they match, and pass-through
+// for SP recs (RecommendedCount == 0).
+func TestFormatUpfrontForSizedCount(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  common.Recommendation
+		want string
+	}{
+		{
+			name: "RI under-buy pro-rates upfront",
+			rec:  common.Recommendation{Count: 7, RecommendedCount: 10, CommitmentCost: 1000},
+			want: "700.00",
+		},
+		{
+			name: "RI sized at AWS rec emits CommitmentCost as-is",
+			rec:  common.Recommendation{Count: 10, RecommendedCount: 10, CommitmentCost: 1000},
+			want: "1000.00",
+		},
+		{
+			name: "SP (RecommendedCount=0) emits CommitmentCost as-is",
+			rec:  common.Recommendation{Count: 1, RecommendedCount: 0, CommitmentCost: 1234.56},
+			want: "1234.56",
+		},
+		{
+			name: "zero CommitmentCost blanks the cell",
+			rec:  common.Recommendation{Count: 5, RecommendedCount: 10, CommitmentCost: 0},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatUpfrontForSizedCount(tt.rec))
+		})
+	}
 }
 
 // Tests for loadRecommendationsFromCSV function

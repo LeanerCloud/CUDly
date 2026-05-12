@@ -167,16 +167,21 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	defer writer.Flush()
 
 	// Write header. RecommendedCount shows AWS's pre-sizing count alongside
-	// Count (the post-sizing value); ProjectedCoverage shows where
-	// --target-coverage landed. Both render blank when zero so users on the
-	// straight --coverage path don't see noise. ProjectedUtilization and
-	// RecommendedUtilization are NOT emitted because under under-buy sizing
-	// both land at ~100% on every row, which adds noise without information;
-	// the underlying fields stay on the Recommendation struct for internal
-	// use (SP no-signal guard, etc.).
+	// Count (the post-sizing value); UpfrontPayment shows the upfront we'd
+	// actually pay for Count instances (rec.CommitmentCost is AWS's upfront
+	// for RecommendedCount, so we pro-rate at render time — ApplyCoverage
+	// and ApplyTargetCoverage deliberately do not mutate the cost fields).
+	// ProjectedCoverage shows where --target-coverage landed. All three new
+	// columns render blank when zero so users on the straight --coverage
+	// path don't see noise. ProjectedUtilization and RecommendedUtilization
+	// are NOT emitted because under under-buy sizing both land at ~100% on
+	// every row, which adds noise without information; the underlying fields
+	// stay on the Recommendation struct for internal use (SP no-signal
+	// guard, etc.).
 	header := []string{
 		"Service", "Region", "ResourceType", "Count", "RecommendedCount",
-		"Account", "AccountName", "Term", "PaymentOption", "EstimatedSavings",
+		"Account", "AccountName", "Term", "PaymentOption",
+		"UpfrontPayment", "EstimatedSavings",
 		"CommitmentID", "Success", "Error", "Timestamp",
 		"ProjectedCoverage",
 	}
@@ -202,6 +207,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			rec.AccountName,
 			rec.Term,
 			rec.PaymentOption,
+			formatUpfrontForSizedCount(rec),
 			fmt.Sprintf("%.2f", rec.EstimatedSavings),
 			r.CommitmentID,
 			fmt.Sprintf("%t", r.Success),
@@ -226,6 +232,26 @@ func formatIntOrBlank(v int) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", v)
+}
+
+// formatUpfrontForSizedCount renders the upfront payment scaled to the
+// post-sizing Count. rec.CommitmentCost holds AWS's upfront for the
+// pre-sizing RecommendedCount; --coverage and --target-coverage shrink
+// Count without touching CommitmentCost, so rendering CommitmentCost
+// directly would over-state the upfront whenever Count < RecommendedCount.
+// Pro-rate by Count/RecommendedCount for RIs (RecommendedCount > 0). For
+// SPs (RecommendedCount == 0) emit CommitmentCost as-is — SP under-buy
+// sizing scales HourlyCommitment / EstimatedSavings but leaves the upfront
+// untouched, a pre-existing inconsistency tracked separately.
+func formatUpfrontForSizedCount(rec common.Recommendation) string {
+	if rec.CommitmentCost == 0 {
+		return ""
+	}
+	if rec.RecommendedCount > 0 && rec.Count != rec.RecommendedCount {
+		scaled := rec.CommitmentCost * float64(rec.Count) / float64(rec.RecommendedCount)
+		return fmt.Sprintf("%.2f", scaled)
+	}
+	return fmt.Sprintf("%.2f", rec.CommitmentCost)
 }
 
 // formatPercentOrBlank renders a % value as "%.1f" when non-zero, "" otherwise.
