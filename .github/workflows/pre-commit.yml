@@ -68,13 +68,30 @@ jobs:
             "https://raw.githubusercontent.com/terraform-linters/tflint/${TFLINT_VERSION}/install_linux.sh"
           bash /tmp/tflint-install.sh
 
+      # Cache the installed tool binaries (gosec, gocyclo). Keyed on the
+      # pinned version strings so a tool-version bump still triggers a
+      # fresh install. Both binaries land in ~/go/bin which setup-go@v6
+      # already adds to PATH. Restored BEFORE the install steps so the
+      # `if: cache-hit != 'true'` guards below can short-circuit them on
+      # cache-hit runs (the `go install` invocations cost ~3-5s each
+      # even when the module cache is warm; skipping them on cache-hit
+      # is worth the extra `if`).
+      - name: Cache Go-installed tools (gosec, gocyclo)
+        id: cache-go-tools
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: go-tools-${{ runner.os }}-gosec-v2.22.4-gocyclo-v0.6.0
+
       - name: Install gosec
+        if: steps.cache-go-tools.outputs.cache-hit != 'true'
         # Pinned to the same version ci.yml's `securego/gosec` Action uses,
         # so an upstream gosec release with rule changes can't silently
         # downgrade the gate between the two workflows.
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
 
       - name: Install gocyclo
+        if: steps.cache-go-tools.outputs.cache-hit != 'true'
         # Pinned to match ci.yml — security tool installs must not use
         # @latest; that's exactly the supply-chain weakness this PR is
         # closing for Dockerfile FROMs.
@@ -146,16 +163,6 @@ jobs:
           key: go-build-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             go-build-${{ runner.os }}-
-
-      # Cache the installed tool binaries (gosec, gocyclo). Keyed on the
-      # pinned version strings so a tool-version bump still triggers a
-      # fresh install. Both binaries land in ~/go/bin which setup-go@v6
-      # already adds to PATH.
-      - name: Cache Go-installed tools (gosec, gocyclo)
-        uses: actions/cache@v4
-        with:
-          path: ~/go/bin
-          key: go-tools-${{ runner.os }}-gosec-v2.22.4-gocyclo-v0.6.0
 
       - name: Install frontend deps
         run: |
