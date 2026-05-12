@@ -258,13 +258,13 @@ main {
 footer {
     margin-top: 2rem;
     padding: 1.5rem 2rem;
-    border-top: 1px solid #e0e0e0;
+    border-top: 1px solid var(--cudly-border);
     text-align: center;
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
 }
 
 footer a {
-    color: #1a73e8;
+    color: var(--cudly-primary);
     text-decoration: none;
     font-size: 0.9rem;
 }

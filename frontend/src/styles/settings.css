@@ -84,7 +84,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 .setting-row:last-child {
@@ -116,7 +116,7 @@
 .setting-input input[type="number"],
 .setting-input select {
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-size: 0.9rem;
     min-width: 200px;
@@ -232,7 +232,7 @@
 .service-default-card select {
     flex: 1;
     padding: 0.35rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-size: 0.85rem;
 }
@@ -250,13 +250,13 @@
 input.dirty,
 select.dirty {
     border-color: #f4a261 !important;
-    background-color: #fffbf5 !important;
+    background-color: var(--cudly-surface)bf5 !important;
     box-shadow: 0 0 0 2px rgba(244, 162, 97, 0.25);
 }
 
 /* Dirty highlight for checkbox containers */
 .setting-input.dirty {
-    background-color: #fffbf5;
+    background-color: var(--cudly-surface)bf5;
     border-radius: 4px;
     padding: 2px 8px;
     outline: 2px solid #f4a261;
@@ -274,7 +274,7 @@ select.dirty {
 
 .federation-hint {
     font-size: 0.85rem;
-    color: #555;
+    color: var(--cudly-text-muted);
     margin: 0 0 0.75rem;
 }
 
@@ -290,7 +290,7 @@ select.dirty {
     align-items: center;
     gap: 0.5rem;
     padding: 1rem 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 .target-cloud-row label {
@@ -316,8 +316,8 @@ select.dirty {
 
 .target-cloud-pills .target-cloud-pill[aria-pressed="true"],
 .target-cloud-pills .target-cloud-pill.selected {
-    background: #2e6bd9;
-    border-color: #2e6bd9;
+    background: var(--cudly-primary-hover);
+    border-color: var(--cudly-primary-hover);
     color: white;
 }
 
@@ -418,7 +418,7 @@ select.dirty {
 
 .provider-disabled-banner {
     display: none;
-    background: #fff3cd;
+    background: var(--cudly-surface)3cd;
     color: #664d03;
     border: 1px solid #ffecb5;
     border-radius: 4px;
@@ -455,7 +455,7 @@ select.dirty {
     font-size: 0.8rem;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    background: #e8f0fe;
+    background: var(--cudly-info-bg);
     color: var(--cudly-primary);
     margin: 0.15rem;
     font-family: monospace;
@@ -465,11 +465,11 @@ select.dirty {
     font-size: 0.8rem;
     padding: 0.15rem 0.4rem;
     border-radius: 10px;
-    background: #f0f0f0;
-    color: #555;
+    background: var(--cudly-border);
+    color: var(--cudly-text-muted);
     margin: 0.1rem;
 }
-.group-members { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #f0f0f0; }
+.group-members { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--cudly-border); }
 
 /* Permission matrix */
 .permission-matrix { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -567,7 +567,7 @@ select.dirty {
     max-height: 200px;
     overflow-y: auto;
     padding: 0.5rem;
-    background: #fff;
+    background: var(--cudly-surface);
     border: 1px solid var(--cudly-border);
     border-radius: 4px;
     margin-top: 0.5rem;

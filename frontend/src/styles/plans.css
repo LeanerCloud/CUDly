@@ -38,7 +38,7 @@
 
 .plan-header h3 {
     margin: 0;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .plan-status {
@@ -65,20 +65,20 @@
 
 .plan-detail-label {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     margin-bottom: 0.25rem;
 }
 
 .plan-detail-value {
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .plan-actions {
     display: flex;
     gap: 0.5rem;
     padding-top: 1rem;
-    border-top: 1px solid #eee;
+    border-top: 1px solid var(--cudly-border);
 }
 
 /* Upcoming purchases */
@@ -127,17 +127,17 @@
 
 .upcoming-date .month {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 .upcoming-details h4 {
     margin: 0 0 0.25rem 0;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .upcoming-details p {
     margin: 0;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.9rem;
 }
 
@@ -153,7 +153,7 @@
 
 .upcoming-savings .label {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 /* Ramp schedule options */
@@ -168,7 +168,7 @@
     display: flex;
     flex-direction: column;
     padding: 1rem;
-    border: 2px solid #ddd;
+    border: 2px solid var(--cudly-border-strong);
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.2s;
@@ -189,18 +189,18 @@
 
 .ramp-label {
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
     margin-bottom: 0.25rem;
 }
 
 .ramp-desc {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 #custom-ramp-config {
     margin-top: 1rem;
     padding: 1rem;
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     border-radius: 8px;
 }

@@ -126,7 +126,7 @@ button {
 }
 
 button:hover {
-    background: #555;
+    background: var(--cudly-text-muted);
 }
 
 button.primary {
@@ -138,7 +138,7 @@ button.primary:hover {
 }
 
 button.success {
-    background: #34a853;
+    background: var(--cudly-success);
 }
 
 button.success:hover {
@@ -157,7 +157,7 @@ button.danger:hover {
 .btn-secondary {
     background: var(--cudly-bg);
     color: var(--cudly-text);
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
 }
 
 .btn-secondary:hover {
@@ -178,13 +178,13 @@ button.danger:hover {
 }
 
 .btn:hover {
-    background: #555;
+    background: var(--cudly-text-muted);
 }
 
 .btn-small {
     padding: 0.25rem 0.5rem;
     font-size: 0.85rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     background: white;
     color: var(--cudly-text);
@@ -209,9 +209,9 @@ button.danger:hover {
 }
 
 .btn-small.success {
-    background: #34a853;
+    background: var(--cudly-success);
     color: white;
-    border-color: #34a853;
+    border-color: var(--cudly-success);
 }
 
 .btn-small.success:hover {
@@ -231,7 +231,7 @@ button.danger:hover {
 }
 
 .btn-small.danger {
-    background: #fce8e6;
+    background: var(--cudly-error-bg);
     color: var(--cudly-error-fg);
     border-color: var(--cudly-error);
 }
@@ -499,7 +499,7 @@ button.danger:hover {
     content: 'Unsaved changes';
     display: inline-block;
     padding: 0.25rem 0.6rem;
-    background: #fff3cd;
+    background: var(--cudly-surface)3cd;
     color: #856404;
     border-radius: 12px;
     font-size: 0.8rem;
@@ -549,7 +549,7 @@ button.danger:hover {
 .accounts-overview-chip {
     appearance: none;
     border: 1px solid var(--cudly-border-strong);
-    background: #fff;
+    background: var(--cudly-surface);
     color: var(--cudly-text);
     padding: 0.5rem 0.85rem;
     border-radius: 8px;
@@ -575,7 +575,7 @@ button.danger:hover {
 
 .accounts-overview-chip-label {
     font-size: 0.85rem;
-    color: #555;
+    color: var(--cudly-text-muted);
 }
 
 /* Status-chip filter row above the accounts table (Q8 / audit P3 gap).
@@ -591,7 +591,7 @@ button.danger:hover {
 .status-chip {
     appearance: none;
     border: 1px solid var(--cudly-border-strong);
-    background: #fff;
+    background: var(--cudly-surface);
     color: var(--cudly-text);
     padding: 0.3rem 0.75rem;
     border-radius: 999px;
@@ -625,7 +625,7 @@ button.danger:hover {
 .accounts-table td {
     text-align: left;
     padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--cudly-border);
     vertical-align: middle;
 }
 
@@ -684,7 +684,7 @@ button.danger:hover {
 }
 
 .freshness-badge--stale {
-    background: #fce8e6;
+    background: var(--cudly-error-bg);
     color: var(--cudly-error-fg);
     border: 1px solid #f2b8b5;
 }
@@ -735,7 +735,7 @@ th .column-filter-btn.active {
 
 /* Detached popover (lives in document.body, positioned absolutely). */
 .column-filter-popover {
-    background: #fff;
+    background: var(--cudly-surface);
     border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
@@ -756,7 +756,7 @@ th .column-filter-btn.active {
     align-items: center;
     gap: 0.5rem;
     padding: 0.25rem 0;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--cudly-border);
     margin-bottom: 0.5rem;
     font-weight: 500;
 }
@@ -792,7 +792,7 @@ th .column-filter-btn.active {
 .column-filter-popover .column-filter-footer {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
-    border-top: 1px solid #eee;
+    border-top: 1px solid var(--cudly-border);
     display: flex;
     justify-content: flex-end;
 }
@@ -905,7 +905,7 @@ tr.recommendation-row:hover {
     padding: 0.25rem 0.6rem;
     font-size: 0.85em;
     cursor: pointer;
-    color: #555;
+    color: var(--cudly-text-muted);
 }
 .recommendations-filter-status .expand-all-toggle:hover {
     border-color: var(--cudly-primary);
@@ -920,7 +920,7 @@ tr.recommendation-row:hover {
     padding: 0.25rem 0.6rem;
     font-size: 0.85em;
     cursor: pointer;
-    color: #555;
+    color: var(--cudly-text-muted);
 }
 .recommendations-filter-status .column-visibility-btn:hover {
     border-color: var(--cudly-primary);
@@ -943,7 +943,7 @@ tr.recommendation-row:hover {
 .column-visibility-popover {
     position: absolute;
     z-index: 1200;
-    background: #fff;
+    background: var(--cudly-surface);
     border: 1px solid var(--cudly-border-strong);
     border-radius: 6px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.13);
@@ -1004,7 +1004,7 @@ tr.rec-cell-summary-row:hover {
     border: none;
     cursor: pointer;
     font-size: 1.2em;
-    color: #555;
+    color: var(--cudly-text-muted);
     padding: 4px;
     min-width: 24px;
     min-height: 24px;
@@ -1203,7 +1203,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .status-badge.paused {
-    background: #fff3e0;
+    background: var(--cudly-surface)3e0;
     color: #e65100;
 }
 
@@ -1230,7 +1230,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 /* Running total under the modal's target rows. Muted emphasis — this
  * is advisory, final cost is the server-side quote. */
 .exchange-running-total {
-    color: #555;
+    color: var(--cudly-text-muted);
     font-style: italic;
     font-size: 0.9rem;
 }
@@ -1257,7 +1257,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     left: 50%;
     transform: translateX(-50%);
     background-color: var(--cudly-text);
-    color: #fff;
+    color: var(--cudly-surface);
     padding: 0.75rem;
     border-radius: 6px;
     font-size: 0.8rem;
@@ -1302,7 +1302,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: #0f5132;
 }
 .confidence-medium {
-    background: #fff3cd;
+    background: var(--cudly-surface)3cd;
     color: #7c5600;
 }
 .confidence-low {
@@ -1383,7 +1383,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .badge-danger {
-    background: #fce8e6;
+    background: var(--cudly-error-bg);
     color: var(--cudly-error-fg);
 }
 
@@ -1404,7 +1404,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .history-approver {
     margin-top: 0.35rem;
     font-size: 0.78rem;
-    color: #555;
+    color: var(--cudly-text-muted);
     line-height: 1.25;
 }
 
@@ -1425,12 +1425,12 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .status-badge.failed {
-    background: #fce8e6;
+    background: var(--cudly-error-bg);
     color: var(--cudly-error-fg);
 }
 
 .status-badge.running {
-    background: #fff3e0;
+    background: var(--cudly-surface)3e0;
     color: #e65100;
 }
 
@@ -1479,7 +1479,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     margin: 0;
     padding: 0.5rem 0.75rem;
     background: var(--cudly-bg);
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.85rem;
