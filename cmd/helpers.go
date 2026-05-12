@@ -113,7 +113,14 @@ func CalculateTotalInstances(recs []common.Recommendation) int {
 	return total
 }
 
-// ApplyCoverage applies coverage percentage to recommendations
+// ApplyCoverage applies coverage percentage to recommendations.
+//
+// All cost-bearing fields (CommitmentCost, OnDemandCost, EstimatedSavings,
+// and for SPs the SavingsPlanDetails.HourlyCommitment) scale by coverage/100
+// so the returned Recommendation represents the sized purchase rather than
+// AWS's pre-sized proposal. SavingsPercentage is invariant (savings vs
+// on-demand ratio) and stays unscaled. Pre-sizing values can still be
+// recovered: RecommendedCount holds AWS's pre-sized count for RIs.
 func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Recommendation {
 	if coverage >= 100 {
 		return recs
@@ -122,7 +129,7 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 		return []common.Recommendation{}
 	}
 
-	// Apply coverage by reducing counts (for RIs) or hourly commitment (for Savings Plans)
+	ratio := coverage / 100.0
 	result := make([]common.Recommendation, 0, len(recs))
 	for _, rec := range recs {
 		adjusted := rec
@@ -136,10 +143,11 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 		if common.IsSavingsPlan(rec.Service) {
 			if details, ok := rec.Details.(*common.SavingsPlanDetails); ok {
 				newDetails := *details // Copy the struct
-				newDetails.HourlyCommitment = newDetails.HourlyCommitment * coverage / 100
+				newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
 				adjusted.Details = &newDetails
-				// Also adjust the estimated savings proportionally
-				adjusted.EstimatedSavings = rec.EstimatedSavings * coverage / 100
+				adjusted.CommitmentCost = rec.CommitmentCost * ratio
+				adjusted.OnDemandCost = rec.OnDemandCost * ratio
+				adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
 			} else {
 				AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
 			}
@@ -147,10 +155,13 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 			continue
 		}
 
-		// For RIs, reduce the count
-		newCount := int(float64(rec.Count) * coverage / 100)
+		// For RIs, reduce the count and scale cost-bearing fields proportionally.
+		newCount := int(float64(rec.Count) * ratio)
 		if newCount > 0 {
 			adjusted.Count = newCount
+			adjusted.CommitmentCost = rec.CommitmentCost * ratio
+			adjusted.OnDemandCost = rec.OnDemandCost * ratio
+			adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
 			result = append(result, adjusted)
 		}
 	}
@@ -297,12 +308,18 @@ func applyTargetCoverageRI(rec common.Recommendation, target, targetPct float64)
 		return rec, false
 	}
 
+	// Cost-bearing fields scale by the ratio of sized-to-original count, so the
+	// returned rec represents the sized purchase rather than AWS's pre-sized
+	// proposal. SavingsPercentage is invariant (savings vs on-demand ratio).
+	// rec.Count is the AWS pre-sizing count at this point (parser sets Count
+	// == RecommendedCount and we haven't mutated either yet), so dividing by
+	// it gives the correct scaling factor.
+	ratio := float64(nTarget) / float64(rec.Count)
 	adjusted := rec
 	adjusted.Count = nTarget
-
-	// Cost-scaling — mirror ApplyCoverage's RI branch (only Count is scaled
-	// implicitly via the new count; ApplyCoverage doesn't scale RI cost
-	// fields explicitly either, so we don't here).
+	adjusted.CommitmentCost = rec.CommitmentCost * ratio
+	adjusted.OnDemandCost = rec.OnDemandCost * ratio
+	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
 
 	// Projection metrics.
 	projUtil := avg / float64(nTarget) * 100.0
@@ -334,13 +351,13 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 		return rec, false
 	}
 
-	// Under-buy: scale HourlyCommitment and EstimatedSavings by target/100
-	// against AWS's recommended commitment. This deliberately spends less than
-	// AWS suggested, leaving (100-target)% of the SP's projected workload on
-	// on-demand. RecommendedUtilization is consulted only as a no-signal guard
-	// above (a zero value means we can't sanity-check the result); the scaling
-	// itself uses targetPct directly rather than a recUtil/target ratio so the
-	// flag's intent is honoured even when AWS already projects above target.
+	// Under-buy: scale all cost-bearing fields by target/100 against AWS's
+	// recommended commitment. This deliberately spends less than AWS suggested,
+	// leaving (100-target)% of the SP's projected workload on on-demand.
+	// RecommendedUtilization is consulted only as a no-signal guard above (a
+	// zero value means we can't sanity-check the result); the scaling itself
+	// uses targetPct directly rather than a recUtil/target ratio so the flag's
+	// intent is honoured even when AWS already projects above target.
 	//
 	// If Details isn't a *SavingsPlanDetails (defensive — should always be
 	// for SP recs), log a warning and pass through UNCHANGED — including
@@ -357,6 +374,8 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 	newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
 	adjusted := rec
 	adjusted.Details = &newDetails
+	adjusted.CommitmentCost = rec.CommitmentCost * ratio
+	adjusted.OnDemandCost = rec.OnDemandCost * ratio
 	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
 	// Shrinking commitment raises projected utilization by 1/ratio
 	// (used is fixed = orig_commit * RecUtil, bought is orig_commit * ratio).

@@ -1005,10 +1005,11 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 	}
 }
 
-// TestApplyTargetCoverage_RI_CostScaling verifies RI cost fields are NOT
-// scaled when the count is adjusted (matching ApplyCoverage's RI branch,
-// which also leaves cost fields untouched). Divergence would silently
-// mis-cost the dry-run output relative to the coverage path.
+// TestApplyTargetCoverage_RI_CostScaling verifies RI cost-bearing fields
+// scale by the sized-to-original count ratio. SavingsPercentage is invariant.
+// The scaled values let downstream consumers (CSV writer, reporter, audit
+// log) trust rec.CommitmentCost / rec.EstimatedSavings as the sized purchase
+// rather than AWS's pre-sized proposal.
 func TestApplyTargetCoverage_RI_CostScaling(t *testing.T) {
 	rec := common.Recommendation{
 		Service:                     common.ServiceEC2,
@@ -1017,16 +1018,17 @@ func TestApplyTargetCoverage_RI_CostScaling(t *testing.T) {
 		CommitmentCost:              1000,
 		OnDemandCost:                2000,
 		EstimatedSavings:            500,
+		SavingsPercentage:           25,
 		AverageInstancesUsedPerHour: 8,
 	}
-	// target=80 → floor(8*0.8) = 6 (under-buy from rec.Count=10). Cost
-	// fields must match the input exactly; only Count changes.
+	// target=80 → floor(8*0.8) = 6 (under-buy from rec.Count=10). Ratio = 0.6.
 	out := ApplyTargetCoverage([]common.Recommendation{rec}, 80)
 	require.Len(t, out, 1)
 	assert.Equal(t, 6, out[0].Count)
-	assert.Equal(t, 1000.0, out[0].CommitmentCost, "CommitmentCost should be untouched by RI branch")
-	assert.Equal(t, 2000.0, out[0].OnDemandCost, "OnDemandCost should be untouched by RI branch")
-	assert.Equal(t, 500.0, out[0].EstimatedSavings, "EstimatedSavings should be untouched by RI branch")
+	assert.InDelta(t, 600.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by Count/rec.Count")
+	assert.InDelta(t, 1200.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by Count/rec.Count")
+	assert.InDelta(t, 300.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by Count/rec.Count")
+	assert.Equal(t, 25.0, out[0].SavingsPercentage, "SavingsPercentage is invariant under count scaling")
 }
 
 // TestApplyTargetCoverage_SP covers the SP sizing branch under under-buy
@@ -1049,30 +1051,31 @@ func TestApplyTargetCoverage_SP(t *testing.T) {
 
 	t.Run("AWS above target — still scales by target (under-buy)", func(t *testing.T) {
 		// RecUtil=95, target=80. Even though AWS projects above target, the
-		// flag's intent is "leave 20% headroom", so commitment shrinks to
-		// 80% of AWS rec. HourlyCommitment: 2.0 * 0.80 = 1.6, savings: 1500
-		// * 0.80 = 1200. Projected util = 95/0.80 = 118.75 clamped to 100.
+		// flag's intent is "leave 20% headroom", so the commitment shrinks
+		// to 80% of AWS rec. All cost-bearing fields scale by 0.8.
+		// Projected util = 95/0.80 = 118.75 clamped to 100.
 		out := ApplyTargetCoverage([]common.Recommendation{mkSP(95)}, 80)
 		require.Len(t, out, 1)
 		assert.InDelta(t, 1.6, out[0].Details.(*common.SavingsPlanDetails).HourlyCommitment, 0.001)
+		assert.InDelta(t, 800.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by target/100")
+		assert.InDelta(t, 4000.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by target/100")
 		assert.InDelta(t, 1200.0, out[0].EstimatedSavings, 0.001)
+		assert.Equal(t, 30.0, out[0].SavingsPercentage, "SavingsPercentage is invariant")
 		assert.InDelta(t, 100.0, out[0].ProjectedUtilization, 0.001, "RecUtil/ratio = 95/0.80 = 118.75 clamps to 100")
 		assert.Equal(t, 0.0, out[0].ProjectedCoverage, "SPs intentionally leave ProjectedCoverage at zero")
 	})
 
 	t.Run("AWS below target — scale down by target (under-buy)", func(t *testing.T) {
-		// RecUtil=50, target=80. Commitment shrinks to 80% of AWS rec.
-		// HourlyCommitment: 2.0 * 0.80 = 1.6, savings: 1500 * 0.80 = 1200.
+		// RecUtil=50, target=80. All cost-bearing fields shrink to 80%.
 		// Projected util = 50/0.80 = 62.5 (no clamp needed).
 		out := ApplyTargetCoverage([]common.Recommendation{mkSP(50)}, 80)
 		require.Len(t, out, 1)
 		details := out[0].Details.(*common.SavingsPlanDetails)
 		assert.InDelta(t, 1.6, details.HourlyCommitment, 0.001)
+		assert.InDelta(t, 800.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by target/100")
+		assert.InDelta(t, 4000.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by target/100")
 		assert.InDelta(t, 1200.0, out[0].EstimatedSavings, 0.001)
-		// CommitmentCost / OnDemandCost / SavingsPercentage MUST be unchanged.
-		assert.Equal(t, 1000.0, out[0].CommitmentCost, "CommitmentCost must not scale on SP branch (matches ApplyCoverage)")
-		assert.Equal(t, 5000.0, out[0].OnDemandCost, "OnDemandCost must not scale on SP branch (matches ApplyCoverage)")
-		assert.Equal(t, 30.0, out[0].SavingsPercentage, "SavingsPercentage must not scale on SP branch")
+		assert.Equal(t, 30.0, out[0].SavingsPercentage, "SavingsPercentage is invariant")
 		assert.InDelta(t, 62.5, out[0].ProjectedUtilization, 0.001, "RecUtil/ratio = 50/0.80 = 62.5")
 		assert.Equal(t, 0.0, out[0].ProjectedCoverage)
 	})

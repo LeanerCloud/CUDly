@@ -205,9 +205,9 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 				Service:                common.ServiceEC2,
 				Region:                 "us-east-1",
 				ResourceType:           "t3.medium",
-				Count:                  7,    // post-sizing
-				RecommendedCount:       10,   // AWS pre-sizing
-				CommitmentCost:         1000, // AWS upfront for 10 RIs; pro-rates to 700 for 7.
+				Count:                  7,   // post-sizing
+				RecommendedCount:       10,  // AWS pre-sizing
+				CommitmentCost:         700, // already scaled at sizing time
 				Term:                   "1yr",
 				ProjectedUtilization:   95.0,
 				ProjectedCoverage:      87.5,
@@ -270,10 +270,11 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	require.NotEqual(t, -1, idxUpfront, "UpfrontPayment column not found")
 
 	// Populated row: RecommendedCount=10 renders as "10", UpfrontPayment
-	// pro-rates 1000 * 7/10 = 700.00, ProjectedCoverage=87.5 renders.
+	// emits CommitmentCost as-is (sizing already scaled it; see
+	// ApplyTargetCoverage), ProjectedCoverage=87.5 renders.
 	populatedRow := rows[1]
 	assert.Equal(t, "10", populatedRow[idxRecCount], "RecommendedCount should render as decimal")
-	assert.Equal(t, "700.00", populatedRow[idxUpfront], "UpfrontPayment should pro-rate CommitmentCost by Count/RecommendedCount")
+	assert.Equal(t, "700.00", populatedRow[idxUpfront], "UpfrontPayment should render rec.CommitmentCost as-is")
 	assert.Equal(t, "87.5", populatedRow[idxProjCov])
 
 	// Zero-fields row: all three cells blank.
@@ -283,39 +284,23 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	assert.Equal(t, "", zeroRow[idxUpfront], "zero CommitmentCost should leave UpfrontPayment blank")
 }
 
-// TestFormatUpfrontForSizedCount locks the three branches: pro-rate when
-// Count != RecommendedCount, no scaling when they match, and pass-through
-// for SP recs (RecommendedCount == 0).
-func TestFormatUpfrontForSizedCount(t *testing.T) {
+// TestFormatCurrencyOrBlank locks the blank-when-zero behaviour for the
+// UpfrontPayment column. Non-zero renders with two decimals; zero renders
+// as an empty cell so users can distinguish "no upfront due" from "actual
+// $0 upfront", consistent with the rest of the optional CSV columns.
+func TestFormatCurrencyOrBlank(t *testing.T) {
 	tests := []struct {
 		name string
-		rec  common.Recommendation
+		in   float64
 		want string
 	}{
-		{
-			name: "RI under-buy pro-rates upfront",
-			rec:  common.Recommendation{Count: 7, RecommendedCount: 10, CommitmentCost: 1000},
-			want: "700.00",
-		},
-		{
-			name: "RI sized at AWS rec emits CommitmentCost as-is",
-			rec:  common.Recommendation{Count: 10, RecommendedCount: 10, CommitmentCost: 1000},
-			want: "1000.00",
-		},
-		{
-			name: "SP (RecommendedCount=0) emits CommitmentCost as-is",
-			rec:  common.Recommendation{Count: 1, RecommendedCount: 0, CommitmentCost: 1234.56},
-			want: "1234.56",
-		},
-		{
-			name: "zero CommitmentCost blanks the cell",
-			rec:  common.Recommendation{Count: 5, RecommendedCount: 10, CommitmentCost: 0},
-			want: "",
-		},
+		{"non-zero renders with two decimals", 1234.56, "1234.56"},
+		{"integer value gets .00", 700, "700.00"},
+		{"zero blanks the cell", 0, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatUpfrontForSizedCount(tt.rec))
+			assert.Equal(t, tt.want, formatCurrencyOrBlank(tt.in))
 		})
 	}
 }
