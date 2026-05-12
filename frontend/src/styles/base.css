@@ -1,8 +1,90 @@
 /* Base styles: Reset, body, typography */
+
+/* ---------------------------------------------------------------------------
+ * Design tokens (issue #340 — UI revamp)
+ *
+ * These CSS custom properties are the source of truth for the action-center
+ * design language. New components should consume tokens, not hex literals.
+ * Existing components keep their hardcoded colors during the reskin and are
+ * migrated section-by-section so the diff stays reviewable.
+ * ------------------------------------------------------------------------- */
+:root {
+    /* Brand */
+    --cudly-primary: #2563eb;       /* Blue accent used on top bar + primary CTAs */
+    --cudly-primary-hover: #1d4ed8;
+    --cudly-primary-fg: #ffffff;
+
+    /* Surfaces */
+    --cudly-bg: #f5f7fa;            /* App background — sits behind cards */
+    --cudly-surface: #ffffff;       /* Card / panel background */
+    --cudly-surface-muted: #f8f9fa; /* Subtle alt rows / empty-state background */
+    --cudly-border: #e5e7eb;        /* 1px hairline between cards / table rows */
+    --cudly-border-strong: #d1d5db; /* Slightly darker — form borders */
+
+    /* Text */
+    --cudly-text: #111827;          /* Primary text */
+    --cudly-text-muted: #6b7280;    /* Secondary / hint text */
+    --cudly-text-subtle: #9ca3af;   /* Placeholder / disabled labels */
+
+    /* Status (semantic) — keep existing palette to avoid surprise drift */
+    --cudly-success: #34a853;
+    --cudly-success-bg: #e8f5e9;
+    --cudly-warn: #fbbc04;
+    --cudly-warn-bg: #fff3e0;
+    --cudly-warn-fg: #e65100;
+    --cudly-error: #ea4335;
+    --cudly-error-bg: #fce8e6;
+    --cudly-error-fg: #c5221f;
+    --cudly-info: #2563eb;
+    --cudly-info-bg: #eff6ff;
+
+    /* Typography */
+    --cudly-font-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --cudly-fs-xs: 0.75rem;     /* 12px */
+    --cudly-fs-sm: 0.875rem;    /* 14px */
+    --cudly-fs-md: 1rem;        /* 16px */
+    --cudly-fs-lg: 1.125rem;    /* 18px */
+    --cudly-fs-xl: 1.375rem;    /* 22px — card title */
+    --cudly-fs-2xl: 1.75rem;    /* 28px — KPI value */
+    --cudly-fs-3xl: 2.25rem;    /* 36px — page hero */
+    --cudly-fw-regular: 400;
+    --cudly-fw-medium: 500;
+    --cudly-fw-semibold: 600;
+    --cudly-fw-bold: 700;
+    --cudly-lh-tight: 1.2;
+    --cudly-lh-normal: 1.5;
+
+    /* Spacing scale (4px base) */
+    --cudly-sp-1: 0.25rem;  /*  4px */
+    --cudly-sp-2: 0.5rem;   /*  8px */
+    --cudly-sp-3: 0.75rem;  /* 12px */
+    --cudly-sp-4: 1rem;     /* 16px */
+    --cudly-sp-5: 1.5rem;   /* 24px */
+    --cudly-sp-6: 2rem;     /* 32px */
+    --cudly-sp-7: 2.5rem;   /* 40px */
+    --cudly-sp-8: 3rem;     /* 48px */
+
+    /* Border radius */
+    --cudly-r-sm: 4px;
+    --cudly-r-md: 8px;
+    --cudly-r-lg: 12px;
+    --cudly-r-full: 9999px; /* Pills */
+
+    /* Elevation (subtle — match mocks) */
+    --cudly-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --cudly-shadow-md: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+    --cudly-shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.08);
+
+    /* Layout — used by the action-center shell (top bar + sidebar) */
+    --cudly-topbar-h: 56px;
+    --cudly-sidebar-w: 232px;
+    --cudly-sidebar-w-collapsed: 64px;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: var(--cudly-font-base);
     background: #f5f5f5;
 }
 
