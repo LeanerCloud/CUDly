@@ -301,7 +301,7 @@ button.danger:hover {
 
 .collection-error-icon {
     font-size: 1.2rem;
-    color: #b06000;
+    color: var(--cudly-warn-fg);
     line-height: 1.2;
 }
 
@@ -344,7 +344,7 @@ button.danger:hover {
 .collection-error-dismiss {
     background: transparent;
     border: none;
-    color: #b06000;
+    color: var(--cudly-warn-fg);
     cursor: pointer;
     font-size: 1.2rem;
     line-height: 1;
@@ -393,9 +393,9 @@ button.danger:hover {
     transform: translateX(12px);
 }
 
-.toast--success { border-left-color: #1e8e3e; }
+.toast--success { border-left-color: var(--cudly-success-fg); }
 .toast--info    { border-left-color: var(--cudly-primary); }
-.toast--warning { border-left-color: #b06000; }
+.toast--warning { border-left-color: var(--cudly-warn-fg); }
 .toast--error   { border-left-color: var(--cudly-error-fg); }
 
 .toast-icon {
@@ -404,9 +404,9 @@ button.danger:hover {
     line-height: 1.2;
 }
 
-.toast--success .toast-icon { color: #1e8e3e; }
+.toast--success .toast-icon { color: var(--cudly-success-fg); }
 .toast--info    .toast-icon { color: var(--cudly-primary); }
-.toast--warning .toast-icon { color: #b06000; }
+.toast--warning .toast-icon { color: var(--cudly-warn-fg); }
 .toast--error   .toast-icon { color: var(--cudly-error-fg); }
 
 .toast-message {
@@ -673,13 +673,13 @@ button.danger:hover {
 
 .freshness-badge--fresh {
     background: var(--cudly-success-bg);
-    color: #1e8e3e;
+    color: var(--cudly-success-fg);
     border: 1px solid #b7e1c1;
 }
 
 .freshness-badge--warn {
     background: #fef7e0;
-    color: #b06000;
+    color: var(--cudly-warn-fg);
     border: 1px solid #f9d68a;
 }
 
