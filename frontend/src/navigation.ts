@@ -11,7 +11,8 @@ import { renderSubNav } from './settings-subnav';
 import { loadUsers } from './users';
 import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
-import { loadRIExchange, loadAutomationSettings } from './riexchange';
+import { loadAutomationSettings } from './riexchange';
+import { loadInventory } from './inventory';
 import { isAdmin } from './auth';
 
 interface TabMeta {
@@ -23,21 +24,23 @@ const TABS: Record<string, TabMeta> = {
   opportunities: { title: 'CUDly — Opportunities' },
   plans: { title: 'CUDly — Plans' },
   purchases: { title: 'CUDly — Purchases' },
-  'ri-exchange': { title: 'CUDly — RI Exchange' },
+  inventory: { title: 'CUDly — Inventory & Coverage' },
   admin: { title: 'CUDly — Admin' },
 };
 
 /**
  * Legacy path → new tab name. Lets old bookmarks (/dashboard, /recommendations,
- * /history, /settings/...) keep resolving after the issue #340 IA rename.
- * Applied in applyTabFromPath(); we replaceState() to the canonical new URL
- * so the user's address bar reflects the current IA.
+ * /history, /settings/..., /ri-exchange) keep resolving after the issue #340
+ * IA rename + Inventory & Coverage umbrella fold-in. Applied in
+ * applyTabFromPath(); we replaceState() to the canonical new URL so the
+ * user's address bar reflects the current IA.
  */
 const LEGACY_PATH_REDIRECTS: Record<string, string> = {
   dashboard: 'home',
   recommendations: 'opportunities',
   history: 'purchases',
   settings: 'admin',
+  'ri-exchange': 'inventory',
 };
 
 const SETTINGS_SUBTABS: Record<string, { title: string }> = {
@@ -107,8 +110,8 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
     case 'admin':
       switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });
       break;
-    case 'ri-exchange':
-      void loadRIExchange();
+    case 'inventory':
+      loadInventory();
       break;
   }
 

@@ -1,5 +1,7 @@
-/* Settings sub-tab bar — mirrors main .tabs / .tab-btn style at smaller scale */
-.settings-tabs {
+/* Settings sub-tab bar — mirrors main .tabs / .tab-btn style at smaller scale.
+ * .inventory-subnav uses the same shape (issue #340 T4). */
+.settings-tabs,
+.inventory-subnav {
     display: flex;
     border-bottom: 2px solid #e0e0e0;
     margin-bottom: 1.5rem;
