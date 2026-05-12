@@ -78,10 +78,44 @@ View purchase history in the dashboard:
 {{.DashboardURL}}/history
 {{if .ArcheraEducationURL}}
 ---
-Archera Insurance — 7-day enrollment window now active.
-Cover your commitments above if usage drops: Archera pays the difference.
-Learn more: {{.ArcheraEducationURL}}
-Sign up:    https://archera.ai/signup?mode=cudly
+ARCHERA INSURANCE (optional, 7-day enrollment window now active)
+
+Archera Insurance covers the gap if your committed cloud capacity goes
+unused. Optional, set up on Archera's site, and doesn't affect the
+commitments you just bought.
+
+When it makes sense:
+  - You want the deepest discount tier (3-year) but aren't sure the
+    workload will still fit in 18 months, or you want to be covered in
+    case your usage drops.
+  - You're moving to a new service or region and historical utilisation
+    data is thin.
+
+How it works (7-day enrollment window from each purchase):
+  1. Sign up at Archera: create an account using the link below. The
+     CUDly signup link tells Archera you came from us; CUDly is
+     compensated for the referral, and the link unlocks a dedicated
+     onboarding path.
+  2. Archera starts ingesting cost data: once access is granted, the
+     insurance policy activates and covers any overcommitment from that
+     point forward.
+  3. Purchase commitments normally through CUDly: Archera tracks
+     utilisation independently and pays out on shortfalls per your
+     policy.
+
+Archera charges an insurance premium for the coverage you select, a
+separate fee paid to Archera. The cloud commitment you bought through
+CUDly is unaffected: same price, same billing.
+
+Full disclosure: Archera sponsors CUDly's development with a share of
+their insurance revenue; we surface the option because we think it's
+useful, but you should know about the financial relationship. Insurance
+terms, coverage, and pricing are set entirely by Archera. CUDly has no
+visibility into your Archera account or policy. Review Archera's terms
+of service and privacy policy before signing up.
+
+Sign up:   https://archera.ai/signup?mode=cudly
+Permalink: {{.ArcheraEducationURL}}
 {{end}}
 This is an automated message from CUDly.
 `
@@ -327,9 +361,44 @@ Clicking a link will require you to sign in if you aren't already; the
 action is then recorded against your logged-in account.
 {{if .ArcheraEducationURL}}
 ---
-Archera Insurance: after approving, the buyer has 7 days from each purchase
-to enroll for commitment-overuse coverage.
-Learn more: {{.ArcheraEducationURL}}
+ARCHERA INSURANCE (optional, 7-day enrollment window from each purchase)
+
+After approving, the buyer has 7 days from each purchase to enroll for
+commitment-overuse coverage. Archera Insurance covers the gap if their
+committed cloud capacity goes unused. Optional, set up on Archera's site,
+and doesn't affect the commitments submitted here.
+
+When it makes sense:
+  - The buyer wants the deepest discount tier (3-year) but isn't sure
+    the workload will still fit in 18 months, or wants to be covered in
+    case usage drops.
+  - They're moving to a new service or region and historical utilisation
+    data is thin.
+
+How it works (within the 7-day enrollment window from each purchase):
+  1. Sign up at Archera: create an account using the link below. The
+     CUDly signup link tells Archera the buyer came from us; CUDly is
+     compensated for the referral, and the link unlocks a dedicated
+     onboarding path.
+  2. Archera starts ingesting cost data: once access is granted, the
+     insurance policy activates and covers any overcommitment from that
+     point forward.
+  3. Continue purchasing commitments normally through CUDly: Archera
+     tracks utilisation independently and pays out on shortfalls per
+     the policy.
+
+Archera charges an insurance premium for the coverage selected, a
+separate fee paid to Archera. The cloud commitment purchased through
+CUDly is unaffected: same price, same billing.
+
+Full disclosure: Archera sponsors CUDly's development with a share of
+their insurance revenue; we surface the option because we think it's
+useful, but you should know about the financial relationship. Insurance
+terms, coverage, and pricing are set entirely by Archera. CUDly has no
+visibility into the buyer's Archera account or policy.
+
+Sign up:   https://archera.ai/signup?mode=cudly
+Permalink: {{.ArcheraEducationURL}}
 {{end}}
 This is an automated message from CUDly. Do not share these links.
 `
@@ -407,11 +476,30 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 </td></tr>
 
 {{if .ArcheraEducationURL}}
-<tr><td style="padding:8px 32px 16px 32px;border-top:1px solid #e2e8f0;">
-<p style="margin:0;color:#475569;font-size:12px;line-height:1.5;">
-<strong>Archera Insurance:</strong> after approving, the buyer has 7&nbsp;days from each purchase to enroll for commitment-overuse coverage.
-<a href="{{.ArcheraEducationURL}}" style="color:#0369a1;">Learn more →</a>
-</p>
+<tr><td style="padding:16px 32px;border-top:1px solid #e2e8f0;color:#334155;font-size:13px;line-height:1.55;">
+<h2 style="margin:0 0 8px 0;font-size:14px;color:#0369a1;text-transform:uppercase;letter-spacing:0.04em;">Archera Insurance</h2>
+<p style="margin:0 0 10px 0;color:#0f172a;font-weight:500;">Optional commitment-overuse coverage. After approving, the buyer has <strong>7&nbsp;days</strong> from each purchase to enroll.</p>
+<p style="margin:6px 0;">Archera Insurance covers the gap if their committed cloud capacity goes unused. Optional, set up on Archera's site, and doesn't affect the commitments submitted here.</p>
+
+<h3 style="margin:14px 0 6px 0;font-size:12px;color:#334155;text-transform:uppercase;letter-spacing:0.04em;">When it makes sense</h3>
+<ul style="margin:6px 0 10px 0;padding-left:22px;color:#475569;">
+<li style="margin-bottom:4px;">The buyer wants the deepest discount tier (3-year) but isn't sure the workload will still fit in 18 months, or wants to be covered in case usage drops.</li>
+<li style="margin-bottom:4px;">They're moving to a new service or region and historical utilisation data is thin.</li>
+</ul>
+
+<h3 style="margin:10px 0 6px 0;font-size:12px;color:#334155;text-transform:uppercase;letter-spacing:0.04em;">How it works <span style="font-weight:400;color:#64748b;text-transform:none;letter-spacing:0;">(7-day enrollment window from each purchase)</span></h3>
+<ol style="margin:6px 0 10px 0;padding-left:22px;color:#475569;">
+<li style="margin-bottom:4px;"><strong>Sign up at Archera:</strong> create an account using the link below. The CUDly signup link tells Archera the buyer came from us; CUDly is compensated for the referral, and the link unlocks a dedicated onboarding path.</li>
+<li style="margin-bottom:4px;"><strong>Archera starts ingesting cost data:</strong> once access is granted, the insurance policy activates and covers any overcommitment from that point forward.</li>
+<li style="margin-bottom:4px;"><strong>Continue purchasing commitments normally through CUDly:</strong> Archera tracks utilisation independently and pays out on shortfalls per the policy.</li>
+</ol>
+<p style="margin:6px 0;">Archera charges an insurance premium for the coverage selected, a separate fee paid to Archera. The cloud commitment purchased through CUDly is unaffected: same price, same billing.</p>
+
+<p style="margin:12px 0 4px;"><a href="https://archera.ai/signup?mode=cudly" style="display:inline-block;padding:10px 22px;background:#1a73e8;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;border-radius:6px;">Sign up at Archera &rarr;</a></p>
+
+<p style="color:#64748b;font-size:12px;font-style:italic;border-top:1px dashed #e2e8f0;padding-top:10px;margin-top:12px;"><strong>Full disclosure:</strong> Archera sponsors CUDly's development with a share of their insurance revenue; we surface the option because we think it's useful, but you should know about the financial relationship. Insurance terms, coverage, and pricing are set entirely by Archera. CUDly has no visibility into the buyer's Archera account or policy.</p>
+
+<p style="color:#64748b;font-size:11px;margin-top:8px;">Permalink: <a href="{{.ArcheraEducationURL}}" style="color:#0369a1;">{{.ArcheraEducationURL}}</a></p>
 </td></tr>
 {{end}}
 
