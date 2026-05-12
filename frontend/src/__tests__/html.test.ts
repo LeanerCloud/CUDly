@@ -90,14 +90,14 @@ describe('HTML Structure', () => {
       expect(tabs.length).toBeGreaterThan(0);
     });
 
-    test('has dashboard tab button', () => {
-      const dashboardTab = document.querySelector('[data-tab="dashboard"]');
-      expect(dashboardTab).toBeTruthy();
+    test('has home tab button', () => {
+      const homeTab = document.querySelector('[data-tab="home"]');
+      expect(homeTab).toBeTruthy();
     });
 
-    test('has recommendations tab button', () => {
-      const recsTab = document.querySelector('[data-tab="recommendations"]');
-      expect(recsTab).toBeTruthy();
+    test('has opportunities tab button', () => {
+      const opportunitiesTab = document.querySelector('[data-tab="opportunities"]');
+      expect(opportunitiesTab).toBeTruthy();
     });
 
     test('has plans tab button', () => {
@@ -105,14 +105,14 @@ describe('HTML Structure', () => {
       expect(plansTab).toBeTruthy();
     });
 
-    test('has history tab button', () => {
-      const historyTab = document.querySelector('[data-tab="history"]');
-      expect(historyTab).toBeTruthy();
+    test('has purchases tab button', () => {
+      const purchasesTab = document.querySelector('[data-tab="purchases"]');
+      expect(purchasesTab).toBeTruthy();
     });
 
-    test('has settings tab button', () => {
-      const settingsTab = document.querySelector('[data-tab="settings"]');
-      expect(settingsTab).toBeTruthy();
+    test('has admin tab button', () => {
+      const adminTab = document.querySelector('[data-tab="admin"]');
+      expect(adminTab).toBeTruthy();
     });
 
     test('has tab content for each tab', () => {
@@ -152,7 +152,7 @@ describe('HTML Structure', () => {
     // popovers driven by recommendations.ts:openColumnPopover. Negative-guard
     // tests below ensure no regression accidentally re-introduces them.
     test('legacy top filter bar is absent (Bundle B)', () => {
-      const recsTab = document.getElementById('recommendations-tab');
+      const recsTab = document.getElementById('opportunities-tab');
       expect(recsTab).toBeTruthy();
       expect(document.getElementById('recommendations-controls')).toBeNull();
       // .controls-bar still exists on other tabs (Dashboard, Plans, …).

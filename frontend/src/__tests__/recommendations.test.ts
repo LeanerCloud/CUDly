@@ -101,7 +101,7 @@ describe('Recommendations Module', () => {
   beforeEach(() => {
     // Reset DOM
     document.body.innerHTML = `
-      <div id="recommendations-tab" class="tab-content active">
+      <div id="opportunities-tab" class="tab-content active">
         <div id="recommendations-summary"></div>
         <div id="recommendations-list"></div>
       </div>
@@ -1983,7 +1983,7 @@ describe('Bundle B: column header filter triggers', () => {
     // Set up DOM (the top-level beforeEach belongs to a different describe).
     document.body.replaceChildren();
     const recsTab = document.createElement('div');
-    recsTab.id = 'recommendations-tab';
+    recsTab.id = 'opportunities-tab';
     recsTab.className = 'tab-content active';
     const summary = document.createElement('div');
     summary.id = 'recommendations-summary';
@@ -2324,7 +2324,7 @@ describe('Bundle B: sticky bottom action box', () => {
   beforeEach(() => {
     document.body.replaceChildren();
     const recsTab = document.createElement('div');
-    recsTab.id = 'recommendations-tab';
+    recsTab.id = 'opportunities-tab';
     recsTab.className = 'tab-content active';
     const summary = document.createElement('div');
     summary.id = 'recommendations-summary';
@@ -2423,7 +2423,7 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
   beforeEach(() => {
     document.body.replaceChildren();
     const recsTab = document.createElement('div');
-    recsTab.id = 'recommendations-tab';
+    recsTab.id = 'opportunities-tab';
     recsTab.className = 'tab-content active';
     const summary = document.createElement('div');
     summary.id = 'recommendations-summary';
@@ -2491,7 +2491,7 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
   beforeEach(() => {
     document.body.replaceChildren();
     const recsTab = document.createElement('div');
-    recsTab.id = 'recommendations-tab';
+    recsTab.id = 'opportunities-tab';
     recsTab.className = 'tab-content active';
     const summary = document.createElement('div');
     summary.id = 'recommendations-summary';
@@ -2861,7 +2861,7 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
   beforeEach(async () => {
     document.body.replaceChildren();
     const recsTab = document.createElement('div');
-    recsTab.id = 'recommendations-tab';
+    recsTab.id = 'opportunities-tab';
     recsTab.className = 'tab-content active';
     const summary = document.createElement('div');
     summary.id = 'recommendations-summary';
@@ -3021,7 +3021,7 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
   beforeEach(() => {
     document.body.replaceChildren();
     const recsTab = document.createElement('div');
-    recsTab.id = 'recommendations-tab';
+    recsTab.id = 'opportunities-tab';
     recsTab.className = 'tab-content active';
     const summary = document.createElement('div');
     summary.id = 'recommendations-summary';
@@ -3571,7 +3571,7 @@ describe('onDemandMonthly', () => {
 describe('Monthly Cost + Effective % column rendering', () => {
   beforeEach(() => {
     document.body.innerHTML = [
-      '<div id="recommendations-tab" class="tab-content active">',
+      '<div id="opportunities-tab" class="tab-content active">',
       '<div id="recommendations-summary"></div>',
       '<div id="recommendations-list"></div>',
       '</div>',
@@ -3931,7 +3931,7 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
   describe('DOM rendering (cell grouping integrated)', () => {
     beforeEach(() => {
       document.body.innerHTML = [
-        '<div id="recommendations-tab" class="tab-content active">',
+        '<div id="opportunities-tab" class="tab-content active">',
         '<div id="recommendations-summary"></div>',
         '<div id="recommendations-list"></div>',
         '</div>',
@@ -4090,7 +4090,7 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
 // ---------------------------------------------------------------------------
 
 const DOM_FOR_319 = (
-  '<div id="recommendations-tab" class="tab-content active">'
+  '<div id="opportunities-tab" class="tab-content active">'
   + '<div id="recommendations-summary"></div>'
   + '<div id="recommendations-list"></div>'
   + '</div>'

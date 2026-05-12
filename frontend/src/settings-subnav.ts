@@ -162,7 +162,7 @@ export function renderSubNav(subTab: string): void {
  * single bar. Filter nested ones out here.
  */
 export function reflectDirtyState(dirty: boolean): void {
-  const tabBtn = document.getElementById('settings-tab-btn');
+  const tabBtn = document.getElementById('admin-tab-btn');
   if (tabBtn) tabBtn.classList.toggle('has-unsaved', dirty);
   document.querySelectorAll('.settings-buttons').forEach((el) => {
     if (el.closest('#ri-exchange-automation-settings')) return;

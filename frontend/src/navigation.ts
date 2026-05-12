@@ -19,19 +19,32 @@ interface TabMeta {
 }
 
 const TABS: Record<string, TabMeta> = {
-  dashboard: { title: 'CUDly — Dashboard' },
-  recommendations: { title: 'CUDly — Recommendations' },
-  plans: { title: 'CUDly — Purchase Plans' },
-  history: { title: 'CUDly — Purchase History' },
+  home: { title: 'CUDly — Home' },
+  opportunities: { title: 'CUDly — Opportunities' },
+  plans: { title: 'CUDly — Plans' },
+  purchases: { title: 'CUDly — Purchases' },
   'ri-exchange': { title: 'CUDly — RI Exchange' },
-  settings: { title: 'CUDly — Settings' },
+  admin: { title: 'CUDly — Admin' },
+};
+
+/**
+ * Legacy path → new tab name. Lets old bookmarks (/dashboard, /recommendations,
+ * /history, /settings/...) keep resolving after the issue #340 IA rename.
+ * Applied in applyTabFromPath(); we replaceState() to the canonical new URL
+ * so the user's address bar reflects the current IA.
+ */
+const LEGACY_PATH_REDIRECTS: Record<string, string> = {
+  dashboard: 'home',
+  recommendations: 'opportunities',
+  history: 'purchases',
+  settings: 'admin',
 };
 
 const SETTINGS_SUBTABS: Record<string, { title: string }> = {
-  general:    { title: 'CUDly — Settings' },
-  purchasing: { title: 'CUDly — Purchasing' },
-  accounts:   { title: 'CUDly — Accounts' },
-  users:      { title: 'CUDly — Users & API Keys' },
+  general:    { title: 'CUDly — Admin · General' },
+  purchasing: { title: 'CUDly — Admin · Purchasing policies' },
+  accounts:   { title: 'CUDly — Admin · Accounts & onboarding' },
+  users:      { title: 'CUDly — Admin · Users, roles & API keys' },
 };
 
 const SECTION_MAP: Record<string, string[]> = {
@@ -54,14 +67,14 @@ interface SwitchTabOptions {
  * Switch between tabs
  */
 export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
-  if (!(tabName in TABS)) tabName = 'dashboard';
+  if (!(tabName in TABS)) tabName = 'home';
 
   const isSelfSwitch = tabName === currentTab;
 
   if (
     !opts.skipDirtyGuard &&
-    currentTab === 'settings' &&
-    tabName !== 'settings' &&
+    currentTab === 'admin' &&
+    tabName !== 'admin' &&
     isUnsavedChanges()
   ) {
     if (!confirm('You have unsaved settings changes. Leave without saving?')) return;
@@ -78,20 +91,20 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
   });
 
   switch (tabName) {
-    case 'dashboard':
+    case 'home':
       void loadDashboard();
       break;
-    case 'recommendations':
+    case 'opportunities':
       void loadRecommendations();
       break;
     case 'plans':
       void loadPlans();
       break;
-    case 'history':
+    case 'purchases':
       initHistoryDateRange();
       void loadSavingsHistory();
       break;
-    case 'settings':
+    case 'admin':
       switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });
       break;
     case 'ri-exchange':
@@ -101,15 +114,15 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
 
   if (isSelfSwitch) return;
 
-  if (tabName !== 'settings') {
+  if (tabName !== 'admin') {
     document.title = TABS[tabName]!.title;
   }
   currentTab = tabName;
 
   if (opts.push !== false) {
     historyId += 1;
-    const url = tabName === 'settings'
-      ? '/settings/' + (currentSettingsSubTab ?? 'general')
+    const url = tabName === 'admin'
+      ? '/admin/' + (currentSettingsSubTab ?? 'general')
       : '/' + tabName;
     window.history.pushState(
       { tab: tabName, id: historyId },
@@ -187,9 +200,9 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
   if (opts.push !== false) {
     historyId += 1;
     window.history.pushState(
-      { tab: 'settings', subTab, id: historyId },
+      { tab: 'admin', subTab, id: historyId },
       '',
-      '/settings/' + subTab + window.location.search + window.location.hash,
+      '/admin/' + subTab + window.location.search + window.location.hash,
     );
   }
 }
@@ -197,7 +210,11 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
 /**
  * Resolve the current URL to a known tab name. Normalizes case, leading/
  * trailing slashes, and sub-paths (only the first segment is matched).
- * Unknown or empty paths fall back to 'dashboard'.
+ * Unknown or empty paths fall back to 'home'.
+ *
+ * Pre-issue-#340 paths (/dashboard, /recommendations, /history, /settings)
+ * are resolved through LEGACY_PATH_REDIRECTS so old bookmarks still land
+ * on the intended section.
  */
 export function applyTabFromPath(): string {
   const segment = window.location.pathname
@@ -205,8 +222,9 @@ export function applyTabFromPath(): string {
     .replace(/\/+$/, '')
     .split('/')[0]
     ?.toLowerCase() ?? '';
-  if (segment === '') return 'dashboard';
-  return segment in TABS ? segment : 'dashboard';
+  if (segment === '') return 'home';
+  if (segment in LEGACY_PATH_REDIRECTS) return LEGACY_PATH_REDIRECTS[segment]!;
+  return segment in TABS ? segment : 'home';
 }
 
 /**
@@ -220,8 +238,8 @@ export function initRouter(): void {
     const delta = newId - historyId;
 
     if (
-      currentTab === 'settings' &&
-      target !== 'settings' &&
+      currentTab === 'admin' &&
+      target !== 'admin' &&
       isUnsavedChanges()
     ) {
       if (!confirm('You have unsaved settings changes. Leave without saving?')) {

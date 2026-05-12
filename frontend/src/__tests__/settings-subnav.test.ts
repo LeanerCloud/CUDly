@@ -203,9 +203,9 @@ describe('reflectDirtyState', () => {
     while (body.firstChild) body.removeChild(body.firstChild);
   });
 
-  it('adds .has-unsaved to the settings tab button when dirty', () => {
+  it('adds .has-unsaved to the admin tab button when dirty', () => {
     const tabBtn = document.createElement('button');
-    tabBtn.id = 'settings-tab-btn';
+    tabBtn.id = 'admin-tab-btn';
     document.body.appendChild(tabBtn);
 
     reflectDirtyState(true);
