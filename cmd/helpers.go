@@ -185,35 +185,31 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 // commitments actually purchased), not the over-buy semantics that floor
 // produces; see the #338 review discussion for the redirect.
 //
-// RIs (hybrid: AWS-scaled floor + existing-coverage subtraction):
+// RIs (existing-aware, per-pool):
 //
-//	awsScaled    = ceil(rec.Count * targetPct / 100)
-//	existingAware = ceil(avg * (targetPct - ExistingCoveragePct) / 100)
-//	                (only when the gap is positive; else 0)
-//	n_target      = max(awsScaled, existingAware)
-//
-//	The MAX keeps the AWS-scaled count as a floor so pools where CE
-//	coverage reports 100% but AWS still recommends new RIs (typical when
-//	existing RIs are near expiry, or when per-account vs org-wide
-//	averaging in CE under-counts a specific account's actual coverage)
-//	still get sized. The existing-aware branch wins when target exceeds
-//	AWS's implied target or when rec.Count is zero.
-//
+//	gap = (targetPct - ExistingCoveragePct) / 100
+//	n_target = ceil(AverageInstancesUsedPerHour * gap)
+//	If gap <= 0 (existing already at/above target) → drop with INFO log.
 //	If AverageInstancesUsedPerHour <= 0 → pass through (no signal); counted
 //	in the per-run skip summary.
-//	If both candidates are zero (no AWS rec + existing >= target) → drop
-//	with INFO log.
-//
 //	Projected coverage = ExistingCoveragePct + n_target/avg * 100 (total
 //	coverage after the purchase, clamped to 100). Projected utilization =
 //	avg/n_target * 100 clamped to 100.
+//
 //	ExistingCoveragePct is sourced from CE GetReservationCoverage in the
-//	same pool; zero means "no signal". For RDS the coverage lookup keys
-//	by (region, instance_type, engine) — the per-engine fetcher in
-//	coverage.go avoids the cross-engine bleed that the per-pool
-//	aggregate produced.
-//	Ceil (rather than floor or round) ensures any non-zero candidate
-//	rounds up to at least 1 RI, matching AWS's recommendation shape.
+//	same pool; zero means "no signal" and the formula falls back to the
+//	no-existing-commitments path. For RDS, the coverage lookup keys by
+//	(region, instance_type, engine) — the per-engine fetcher in
+//	coverage.go avoids the cross-engine bleed that a per-pool aggregate
+//	would produce.
+//	Ceil (rather than floor) ensures any non-zero gap with non-zero
+//	demand buys at least 1 RI, matching AWS's recommendation shape and
+//	avoiding the "single-instance pool silently dropped" failure mode.
+//
+//	Pools where CE reports 100% existing coverage but AWS still recommends
+//	new RIs (typical when existing RIs are near expiry) are dropped here —
+//	the existing coverage is honoured strictly. Surfacing expiring RIs is
+//	a separate concern tracked elsewhere.
 //
 // SPs:
 //
@@ -307,51 +303,39 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 	}
 
 	avg := rec.AverageInstancesUsedPerHour
-	// Hybrid sizing: take the MAX of two candidates so we never undershoot
-	// AWS's recommendation when CE-side existing-coverage data is missing
-	// signal (e.g. RIs about to expire, per-account vs org-wide averaging
-	// discrepancies, etc.).
+	// Under-buy sizing accounts for any existing commitments in the same pool:
+	// the count we still need is the coverage gap (target − existing) against
+	// historical demand. ExistingCoveragePct comes from CE GetReservationCoverage
+	// (populated upstream when available) and defaults to zero so recs without
+	// the fetched signal fall back to the no-existing-commitments path.
 	//
-	//   awsScaled    = ceil(rec.Count × targetPct/100)
-	//     Trusts AWS's rec.Count as the AWS-side optimal count. Scaling by
-	//     target/100 gives the user's chosen fraction of that, matching the
-	//     shape of a --coverage-style run.
-	//
-	//   existingAware = ceil(avg × gap/100) where gap = targetPct - existing
-	//     Subtracts existing pool coverage so we don't double-buy what's
-	//     already reserved. Honours target as a coverage target on demand.
-	//
-	// max(awsScaled, existingAware) always buys at least the AWS-scaled
-	// count, so pools where CE coverage looks 100%-covered but AWS still
-	// recommends new RIs (typical when existing RIs are near expiry) still
-	// get sized. When existing-aware would buy more (e.g. target above AWS's
-	// implied target, or rec.Count == 0), we honour that too.
-	//
-	// Keep the gap subtraction in percentage units before dividing by 100 so
-	// whole-percent values don't lose precision: 0.70 - 0.60 in float64
-	// rounds to 0.0999... and ceil(avg * that) would silently round up by 1.
-	awsScaled := 0
-	if rec.Count > 0 {
-		awsScaled = int(math.Ceil(float64(rec.Count) * targetPct / 100.0))
-	}
+	// Keep the subtraction in percentage units (subtract first, divide by 100
+	// after) so whole-percent values don't lose precision: 0.70 - 0.60 in
+	// float64 rounds to 0.0999... and ceil(avg * that) would silently round
+	// up by 1.
 	gapPct := targetPct - rec.ExistingCoveragePct
-	existingAware := 0
-	if gapPct > 0 {
-		// Ceil ensures any non-zero gap with non-zero demand buys at least 1 RI.
-		existingAware = int(math.Ceil(avg * gapPct / 100.0))
+	if gapPct <= 0 {
+		// Existing commitments already meet or exceed the target; no purchase
+		// needed in this pool. Drop with an info log so operators can see what
+		// the flag did. Returning (_, false) with avg > 0 signals "drop, don't
+		// pass through".
+		AppLogger.Printf("INFO: --target-coverage=%.1f%% already met by existing coverage %.1f%% for %s/%s/%s; dropped recommendation\n",
+			targetPct, rec.ExistingCoveragePct, rec.Service, rec.Region, rec.ResourceType)
+		return rec, false
 	}
-	nTarget := awsScaled
-	if existingAware > nTarget {
-		nTarget = existingAware
-	}
+	// Ceil so any non-zero gap with non-zero demand buys at least 1 RI —
+	// AWS's recommendation list always proposes a count, and silently dropping
+	// single-instance pools was the worse failure mode than slight over-target
+	// on tiny pools. The pre-existing-coverage version of this branch used
+	// floor and silently skipped a third of the AWS-console recommendations.
+	nTarget := int(math.Ceil(avg * gapPct / 100.0))
 
 	if nTarget == 0 {
-		// Both candidates produced zero: AWS didn't recommend (rec.Count==0)
-		// AND existing coverage already meets/exceeds target (gap <= 0).
-		// No purchase warranted in this pool. Drop with an info log so
-		// operators can see what the flag did.
-		AppLogger.Printf("INFO: --target-coverage=%.1f%% met for %s/%s/%s (rec.Count=0, existing=%.1f%%); dropped recommendation\n",
-			targetPct, rec.Service, rec.Region, rec.ResourceType, rec.ExistingCoveragePct)
+		// Defensive: math.Ceil on a positive product never returns 0, but a
+		// truncation or tiny-float edge case could. Drop with a log if it
+		// somehow happens.
+		AppLogger.Printf("INFO: --target-coverage=%.1f%% sizes %s/%s/%s to 0 instances (avg used %.2f/hr, gap %.2f%% produces <1 RI); dropped recommendation\n",
+			targetPct, rec.Service, rec.Region, rec.ResourceType, avg, gapPct)
 		// Returning (_, false) with avg > 0 signals "drop, don't pass through".
 		// applyTargetCoverageRI's caller branches on
 		// rec.AverageInstancesUsedPerHour to distinguish drop vs no-signal.

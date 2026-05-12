@@ -931,36 +931,32 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 		wantProjCovGTE float64 // we assert coverage >= this (handles the float clamping)
 	}{
 		{
-			// rec.Count=10, avg=8.5, target=95%.
-			// awsScaled = ceil(10*0.95) = 10. existingAware = ceil(8.5*0.95) = 9.
-			// max = 10. Projected util = 8.5/10 = 85.
-			name:         "RI: target 95 uses awsScaled floor (10 > 9)",
-			rec:          mkRI(10, 8.5, 85),
+			// avg=8.5, target=95%, existing=0% (no signal).
+			// gap=95, n=ceil(8.5*0.95) = ceil(8.075) = 9.
+			// Projected util = 8.5/9 = 94.4.
+			name:         "RI: target 95 buys 9 (ceil rounds 8.075 up)",
+			rec:          mkRI(10, 8.5, 0),
 			target:       95,
-			wantCount:    10,
-			wantProjUtil: 85.0,
+			wantCount:    9,
+			wantProjUtil: 94.44,
 		},
 		{
-			// rec.Count=10, avg=10, target=50%.
-			// awsScaled = ceil(10*0.5) = 5. existingAware = ceil(10*0.5) = 5.
-			// max = 5. Same count via either path.
-			name:         "RI: target 50 sizes to half AWS rec",
-			rec:          mkRI(10, 10, 90),
+			// avg=10, target=50%, existing=0%. gap=50. n=ceil(5)=5.
+			name:         "RI: target 50 under-buys to leave on-demand headroom",
+			rec:          mkRI(10, 10, 0),
 			target:       50,
 			wantCount:    5,
 			wantProjUtil: 100, // 10/5 clamped
 		},
 		{
-			// rec.Count=5, avg=0.4, target=50%.
-			// awsScaled = ceil(5*0.5) = 3. existingAware = ceil(0.4*0.5) = 1.
-			// max = 3. The AWS-scaled floor keeps the rec alive even on
-			// tiny-avg pools because the AWS rec list still recommends them.
-			// Projected util = 0.4/3 = 13.3 (under 100, no clamp).
-			name:         "RI: tiny pool gets awsScaled count, not just 1",
-			rec:          mkRI(5, 0.4, 50),
+			// avg=0.4, target=50%, existing=0%. gap=50. n=ceil(0.2)=1.
+			// Tiny-pool case: ceil keeps the rec alive at 1 RI rather than
+			// dropping. Projected util = 0.4/1 = 40 (under 100, no clamp).
+			name:         "RI: tiny pool rounds up to 1 (ceil)",
+			rec:          mkRI(5, 0.4, 0),
 			target:       50,
-			wantCount:    3,
-			wantProjUtil: 13.33,
+			wantCount:    1,
+			wantProjUtil: 40,
 		},
 		{
 			// avg=0 (no signal) → passed through unchanged, counted in skip summary.
@@ -971,14 +967,13 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 			wantProjUtil: 0, // never set in pass-through
 		},
 		{
-			// rec.Count=5, avg=4, target=80%.
-			// awsScaled = ceil(5*0.8) = 4. existingAware = ceil(4*0.8) = 4.
-			// max = 4.
-			name:         "RI: target 80 covers 4 of 5 AWS-recommended",
-			rec:          mkRI(5, 4, 80),
+			// avg=4, target=80%, existing=0%. gap=80. n=ceil(3.2)=4.
+			// Projected coverage = 4/4 = 100, over target by ceil's rounding.
+			name:         "RI: target 80 covers 4 of 4 (ceil rounds 3.2 up)",
+			rec:          mkRI(5, 4, 0),
 			target:       80,
 			wantCount:    4,
-			wantProjUtil: 100, // avg/n = 4/4 = 100
+			wantProjUtil: 100,
 		},
 	}
 
@@ -1024,14 +1019,14 @@ func TestApplyTargetCoverage_RI_CostScaling(t *testing.T) {
 		SavingsPercentage:           25,
 		AverageInstancesUsedPerHour: 8,
 	}
-	// target=80 → awsScaled = ceil(10*0.8) = 8. existingAware = ceil(8*0.8) = 7.
-	// max = 8. Ratio = 8/10 = 0.8. Cost-bearing fields scale by 0.8.
+	// target=80 → gap=80, n=ceil(8*0.8) = ceil(6.4) = 7 (rec.Count=10).
+	// Ratio = 7/10 = 0.7. Cost-bearing fields scale by 0.7.
 	out := ApplyTargetCoverage([]common.Recommendation{rec}, 80)
 	require.Len(t, out, 1)
-	assert.Equal(t, 8, out[0].Count)
-	assert.InDelta(t, 800.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by Count/rec.Count")
-	assert.InDelta(t, 1600.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by Count/rec.Count")
-	assert.InDelta(t, 400.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by Count/rec.Count")
+	assert.Equal(t, 7, out[0].Count)
+	assert.InDelta(t, 700.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by Count/rec.Count")
+	assert.InDelta(t, 1400.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by Count/rec.Count")
+	assert.InDelta(t, 350.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by Count/rec.Count")
 	assert.Equal(t, 25.0, out[0].SavingsPercentage, "SavingsPercentage is invariant under count scaling")
 }
 
@@ -1065,69 +1060,54 @@ func TestApplyTargetCoverage_RI_ExistingCoverage(t *testing.T) {
 		wantTotalCov float64 // ProjectedCoverage = existing + new contribution
 	}{
 		{
-			// User's worked example: rec.Count=10, avg=20, existing=50%, target=80%.
-			// awsScaled = ceil(10*0.8) = 8.
-			// existingAware = ceil(20*0.30) = 6.
-			// max = 8. AWS-scaled floor wins (the hybrid trade — slight
-			// over-target vs the strict 6-RI answer, in exchange for
-			// matching AWS's recommendation shape).
-			// Total cov = 50 + 8/20*100 = 90.
-			name:         "User example: hybrid uses awsScaled floor of 8",
+			// User's worked example: avg=20, existing=50%, target=80%.
+			// gap=30. n=ceil(20*0.30)=6. Total cov = 50 + 6/20*100 = 80.
+			name:         "User example: 50% existing, 80% target on avg=20 → buy 6",
 			rec:          mkRI(10, 20, 50),
 			target:       80,
-			wantCount:    8,
-			wantTotalCov: 90,
+			wantCount:    6,
+			wantTotalCov: 80,
 		},
 		{
-			// rec.Count=10, avg=10, existing=0%, target=70%.
-			// awsScaled = ceil(10*0.7) = 7. existingAware = ceil(10*0.7) = 7.
-			// max = 7. Both candidates agree when existing=0.
-			name:         "Zero existing: both candidates agree",
+			// existing=0%, target=70%, avg=10. gap=70. n=ceil(7)=7.
+			name:         "Zero existing: ceil(avg*target/100)",
 			rec:          mkRI(10, 10, 0),
 			target:       70,
 			wantCount:    7,
 			wantTotalCov: 70,
 		},
 		{
-			// rec.Count=10, avg=10, existing=80%, target=80%.
-			// awsScaled = ceil(10*0.8) = 8. existingAware = 0 (gap=0).
-			// max = 8. AWS still recommends so we still buy — hybrid keeps
-			// the rec alive (covers the RI-expiry case CE coverage doesn't
-			// see). Total cov = 80 + 8/10*100 = 160 clamped to 100.
-			name:         "Existing meets target: awsScaled floor still buys",
-			rec:          mkRI(10, 10, 80),
-			target:       80,
-			wantCount:    8,
-			wantTotalCov: 100,
+			// existing=80% meets target=80% → drop.
+			name:        "Existing meets target exactly: drop",
+			rec:         mkRI(10, 10, 80),
+			target:      80,
+			wantDropped: true,
 		},
 		{
-			// rec.Count=10, avg=10, existing=95%, target=80%.
-			// awsScaled = 8. existingAware = 0. max = 8.
-			name:         "Existing exceeds target: awsScaled floor still buys",
-			rec:          mkRI(10, 10, 95),
-			target:       80,
-			wantCount:    8,
-			wantTotalCov: 100,
+			// existing=95% exceeds target=80% → drop.
+			name:        "Existing exceeds target: drop",
+			rec:         mkRI(10, 10, 95),
+			target:      80,
+			wantDropped: true,
 		},
 		{
-			// rec.Count=5, avg=2, existing=70%, target=80%.
-			// awsScaled = ceil(5*0.8) = 4. existingAware = ceil(2*0.1) = 1.
-			// max = 4. Total cov = 70 + 4/2*100 = 270 clamped to 100.
-			name:         "Small gap: awsScaled floor of 4 wins over 1",
+			// avg=2, existing=70%, target=80%. gap=10. n=ceil(0.2)=1.
+			// Ceil keeps the rec alive even for tiny gaps. Total cov =
+			// 70 + 1/2*100 = 120 → clamped to 100.
+			name:         "Small gap rounds up to 1 RI",
 			rec:          mkRI(5, 2, 70),
 			target:       80,
-			wantCount:    4,
+			wantCount:    1,
 			wantTotalCov: 100,
 		},
 		{
-			// rec.Count=10, avg=10, existing=60%, target=70%.
-			// awsScaled = ceil(10*0.7) = 7. existingAware = ceil(10*0.1) = 1.
-			// max = 7. Total cov = 60 + 7/10*100 = 130 clamped to 100.
-			name:         "Small top-up: awsScaled floor of 7 wins over 1",
+			// avg=10, existing=60%, target=70%. gap=10. n=ceil(1.0)=1.
+			// Total cov = 60+10 = 70 (hits target exactly).
+			name:         "Small top-up to reach target",
 			rec:          mkRI(10, 10, 60),
 			target:       70,
-			wantCount:    7,
-			wantTotalCov: 100,
+			wantCount:    1,
+			wantTotalCov: 70,
 		},
 	}
 
@@ -1218,10 +1198,9 @@ func TestApplySizing(t *testing.T) {
 		cfg := Config{TargetCoverage: 80, Coverage: 100}
 		out := applySizing([]common.Recommendation{ri}, cfg, cfg.Coverage)
 		require.Len(t, out, 1)
-		// Hybrid: rec.Count=10, avg=8, target=80%.
-		// awsScaled = ceil(10*0.8) = 8. existingAware = ceil(8*0.8) = 7.
-		// max = 8. ProjectedUtilization = 8/8 = 100.
-		assert.Equal(t, 8, out[0].Count)
+		// avg=8, target=80%, existing=0%. gap=80. n=ceil(8*0.8)=ceil(6.4)=7.
+		// ProjectedUtilization = 8/7 = 114 clamped to 100.
+		assert.Equal(t, 7, out[0].Count)
 		assert.Equal(t, 100.0, out[0].ProjectedUtilization)
 	})
 
@@ -1237,10 +1216,9 @@ func TestApplySizing(t *testing.T) {
 }
 
 // TestApplyTargetCoverage_RI_Target100 covers the target == 100 boundary.
-// At target=100 (ratio=1.0), awsScaled = ceil(rec.Count*1.0) = rec.Count,
-// which becomes the floor — we always buy AWS's full recommended count.
-// The existingAware branch (ceil(avg*1.0)) only wins when avg > rec.Count,
-// which doesn't happen in practice (AWS sizes rec.Count >= avg).
+// At target=100 (and existing=0), ceil(avg*1.0) = ceil(avg) — any non-zero
+// avg rounds up to at least 1. Fractional avg above an integer rounds up
+// to the next integer.
 func TestApplyTargetCoverage_RI_Target100(t *testing.T) {
 	mkRI := func(count int, avg float64) common.Recommendation {
 		return common.Recommendation{
@@ -1259,14 +1237,14 @@ func TestApplyTargetCoverage_RI_Target100(t *testing.T) {
 		wantDropped bool
 		wantCount   int
 	}{
-		// rec.Count=5, avg=0.999. awsScaled=5, existingAware=1. max=5.
-		{name: "target 100, rec.Count=5 → awsScaled floor wins", rec: mkRI(5, 0.999), wantCount: 5},
-		// rec.Count=5, avg=1.0. awsScaled=5, existingAware=1. max=5.
-		{name: "target 100, avg=1 with rec.Count=5 → buy 5", rec: mkRI(5, 1.0), wantCount: 5},
-		// rec.Count=10, avg=8.7. awsScaled=10, existingAware=9. max=10.
-		{name: "target 100, rec.Count > avg → awsScaled wins", rec: mkRI(10, 8.7), wantCount: 10},
-		// rec.Count=10, avg=10. awsScaled=10, existingAware=10. max=10.
-		{name: "target 100, rec.Count == avg → match", rec: mkRI(10, 10.0), wantCount: 10},
+		// avg=0.999 → ceil(0.999) = 1.
+		{name: "target 100, avg=0.999 → buy 1", rec: mkRI(5, 0.999), wantCount: 1},
+		// avg=1.0 → ceil(1.0) = 1.
+		{name: "target 100, avg=1.0 → buy 1", rec: mkRI(5, 1.0), wantCount: 1},
+		// avg=8.7 → ceil(8.7) = 9. Slightly over target but matches AWS rec.
+		{name: "target 100, avg=8.7 → buy 9 (ceil rounds up)", rec: mkRI(10, 8.7), wantCount: 9},
+		// avg=10.0 exactly → ceil(10) = 10.
+		{name: "target 100, avg=10.0 → buy 10 (perfect match)", rec: mkRI(10, 10.0), wantCount: 10},
 	}
 
 	for _, tt := range tests {
