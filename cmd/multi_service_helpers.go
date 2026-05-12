@@ -375,8 +375,11 @@ func processRegionRecommendations(
 		return result
 	}
 
-	// Apply coverage and overrides
-	filteredRecs := applyCoverageAndOverrides(recs, cfg, coverageMap)
+	// Apply coverage and overrides. This legacy path (test-only) doesn't
+	// fetch expiring commitments — expiry-aware sizing only runs via the
+	// main pipeline in fetchAndFilterRegionRecs, which has access to the
+	// regional service client at the right moment.
+	filteredRecs := applyCoverageAndOverrides(recs, cfg, coverageMap, nil)
 
 	result.recommendations = filteredRecs
 
@@ -467,8 +470,19 @@ func applyRegionFilters(
 // before sizing so the under-buy formula can subtract pool coverage already
 // owned. Nil map = no-op; recs keep their default zero values and the
 // sizing path falls back to the no-existing-commitments formula.
-func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config, coverageMap recommendations.PoolCoverageMap) []common.Recommendation {
+//
+// expiringCommitments (when non-empty and cfg.RebuyWindowDays > 0) reduces
+// ExistingCoveragePct further by the share of pool demand attributable to
+// RIs expiring within the window, so --target-coverage recommends
+// replacements before the cliff. Doesn't run if either input is empty.
+func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config, coverageMap recommendations.PoolCoverageMap, expiringCommitments []common.Commitment) []common.Recommendation {
 	recommendations.ApplyCoverageMapToRecommendations(recs, coverageMap)
+	if cfg.RebuyWindowDays > 0 && len(expiringCommitments) > 0 {
+		n := recommendations.AdjustExistingCoverageForExpiringCommitments(recs, expiringCommitments, cfg.RebuyWindowDays)
+		if n > 0 {
+			AppLogger.Printf("  ⏰ Treating %d recs as partially uncovered (RIs expiring within %d days)\n", n, cfg.RebuyWindowDays)
+		}
+	}
 	filteredRecs := applySizing(recs, cfg, cfg.Coverage)
 	if cfg.TargetCoverage > 0 {
 		AppLogger.Printf("  🎯 Applying %.1f%% target-coverage: %d recommendations selected\n", cfg.TargetCoverage, len(filteredRecs))
@@ -551,12 +565,29 @@ func fetchAndFilterRegionRecs(
 		return nil
 	}
 
-	recs = applyCoverageAndOverrides(recs, cfg, coverageMap)
-
-	// Deduplication: skip recs matching recently-purchased commitments
+	// Build the regional service client once and reuse for both expiry-aware
+	// coverage adjustment and the downstream duplicate check.
 	regionalCfg := awsCfg.Copy()
 	regionalCfg.Region = region
 	serviceClient := createServiceClient(service, regionalCfg)
+
+	// Fetch existing commitments up front when --rebuy-window-days is set so
+	// the sizing step can deduct expiring RIs from ExistingCoveragePct.
+	// Best-effort: a failure here logs and continues; expiry adjustment
+	// becomes a no-op for this region.
+	var expiringCommitments []common.Commitment
+	if cfg.RebuyWindowDays > 0 && serviceClient != nil {
+		commits, err := serviceClient.GetExistingCommitments(ctx)
+		if err != nil {
+			AppLogger.Printf("  ⚠️  Could not fetch existing commitments for expiry check: %v\n", err)
+		} else {
+			expiringCommitments = commits
+		}
+	}
+
+	recs = applyCoverageAndOverrides(recs, cfg, coverageMap, expiringCommitments)
+
+	// Deduplication: skip recs matching recently-purchased commitments.
 	if serviceClient != nil {
 		recs = checkDuplicatesAndApplyLimit(ctx, recs, serviceClient, cfg)
 	}

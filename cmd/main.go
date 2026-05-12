@@ -74,6 +74,12 @@ type Config struct {
 	MinSavingsPct      float64
 	MaxBreakEvenMonths int
 	MinCount           int
+	// RebuyWindowDays, when > 0, treats existing RIs whose remaining term
+	// is at most this many days as already uncovered, so --target-coverage
+	// recommends replacements before they expire. Zero (default) keeps the
+	// strict per-pool subtraction — existing coverage is fully trusted
+	// regardless of when it expires.
+	RebuyWindowDays int
 }
 
 func main() {
@@ -137,6 +143,10 @@ func init() {
 	rootCmd.Flags().Float64Var(&toolCfg.MinSavingsPct, "min-savings-pct", 0, "Minimum savings percentage to include a recommendation (0 = no filter)")
 	rootCmd.Flags().IntVar(&toolCfg.MaxBreakEvenMonths, "max-break-even-months", 0, "Maximum break-even period in months (0 = no filter)")
 	rootCmd.Flags().IntVar(&toolCfg.MinCount, "min-count", 0, "Minimum instance count to include a recommendation (0 = no filter)")
+	rootCmd.Flags().IntVar(&toolCfg.RebuyWindowDays, "rebuy-window-days", 0,
+		"When >0, treat existing RIs expiring within this many days as already "+
+			"uncovered, so --target-coverage sizes recommendations to replace them "+
+			"before they expire. Default 0 = trust existing coverage fully.")
 }
 
 // Package-level Config that cobra flags bind to
