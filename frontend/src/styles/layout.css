@@ -76,15 +76,17 @@
     display: none;
 }
 
+/* Hamburger toggle uses the same padding + icon size as the .tab-btn rows
+ * below it, so its icon sits in the exact same column as each section's
+ * icon — the sidebar reads as a single column of glyphs. */
 .app-sidebar-toggle {
     background: transparent;
     border: none;
     color: var(--cudly-text-muted);
-    padding: var(--cudly-sp-2);
-    margin-left: var(--cudly-sp-1);
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
     margin-bottom: var(--cudly-sp-2);
     cursor: pointer;
-    border-radius: var(--cudly-r-sm);
+    border-radius: var(--cudly-r-md);
     display: inline-flex;
     align-items: center;
     align-self: flex-start;
