@@ -32,6 +32,11 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
+          # Cache the npm download cache keyed on the frontend lockfile.
+          # Saves ~30-40s per run vs an uncached `npm ci`. Same pattern
+          # already used in frontend-build-sentinel.yml.
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Set up Terraform
         # Required by the terraform_fmt + terraform_validate pre-commit hooks.
@@ -114,6 +119,43 @@ jobs:
 
       - name: Install pre-commit
         run: pip install 'pre-commit==4.0.1'
+
+      # Cache pre-commit's per-hook environments (Go, Python, Node, etc.
+      # virtualenvs it builds on first run). Keyed on the hook config
+      # because pre-commit will rebuild any env whose pinned rev changes.
+      # Saves ~30-60s per cache-hit run; safe because pre-commit verifies
+      # env integrity on use.
+      - name: Cache pre-commit environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-${{ runner.os }}-
+
+      # Cache the Go build cache so `go vet`, `gosec`, and any other
+      # Go-compiling hooks reuse compiled object files instead of
+      # rebuilding from source. setup-go@v6 caches ~/go/pkg/mod
+      # (modules) but NOT ~/.cache/go-build (compiled output) — this
+      # step covers the latter. Keyed on go.sum so a dep upgrade still
+      # invalidates the cache and gets clean builds.
+      - name: Cache Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-
+
+      # Cache the installed tool binaries (gosec, gocyclo). Keyed on the
+      # pinned version strings so a tool-version bump still triggers a
+      # fresh install. Both binaries land in ~/go/bin which setup-go@v6
+      # already adds to PATH.
+      - name: Cache Go-installed tools (gosec, gocyclo)
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: go-tools-${{ runner.os }}-gosec-v2.22.4-gocyclo-v0.6.0
 
       - name: Install frontend deps
         run: |
