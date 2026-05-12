@@ -275,6 +275,26 @@ describe('Navigation Module', () => {
   });
 
   describe('getSettingsSubTabFromPath', () => {
+    // Canonical /admin/* paths (issue #340 IA rename)
+    test('returns general for root admin path', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('general');
+    });
+
+    test('returns accounts for /admin/accounts', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin/accounts' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('accounts');
+    });
+
+    test('returns purchasing for /admin/purchasing', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/admin/purchasing' } as Location;
+      expect(getSettingsSubTabFromPath()).toBe('purchasing');
+    });
+
+    // Legacy /settings/* paths still work via LEGACY_PATH_REDIRECTS
     test('returns general for root settings path', () => {
       delete (window as unknown as Record<string, unknown>).location;
       (window as unknown as Record<string, unknown>).location = { pathname: '/settings' } as Location;

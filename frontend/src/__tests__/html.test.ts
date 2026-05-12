@@ -113,6 +113,11 @@ describe('HTML Structure', () => {
       expect(purchasesTab).toBeTruthy();
     });
 
+    test('has inventory tab button', () => {
+      const inventoryTab = document.querySelector('[data-tab="inventory"]');
+      expect(inventoryTab).toBeTruthy();
+    });
+
     test('has admin tab button', () => {
       const adminTab = document.querySelector('[data-tab="admin"]');
       expect(adminTab).toBeTruthy();

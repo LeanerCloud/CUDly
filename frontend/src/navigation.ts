@@ -160,7 +160,7 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
 
   const isSelfSwitch = subTab === currentSettingsSubTab;
 
-  document.querySelectorAll<HTMLButtonElement>('.sub-tab-btn').forEach(btn => {
+  document.querySelectorAll<HTMLButtonElement>('#admin-tab .sub-tab-btn').forEach(btn => {
     const isActive = btn.dataset['settingsTab'] === subTab;
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
@@ -221,7 +221,11 @@ export function applyTabFromPath(): string {
     .split('/')[0]
     ?.toLowerCase() ?? '';
   if (segment === '') return 'home';
-  if (segment in LEGACY_PATH_REDIRECTS) return LEGACY_PATH_REDIRECTS[segment]!;
+  if (segment in LEGACY_PATH_REDIRECTS) {
+    const canonical = LEGACY_PATH_REDIRECTS[segment]!;
+    window.history.replaceState(null, '', '/' + canonical + window.location.search + window.location.hash);
+    return canonical;
+  }
   return segment in TABS ? segment : 'home';
 }
 

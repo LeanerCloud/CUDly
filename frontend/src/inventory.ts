@@ -67,7 +67,9 @@ export function switchInventorySubSection(name: string): void {
  */
 function wireSubNavListeners(): void {
   if (listenersWired) return;
-  document.querySelectorAll<HTMLButtonElement>('#inventory-tab .sub-tab-btn').forEach((btn) => {
+  const buttons = document.querySelectorAll<HTMLButtonElement>('#inventory-tab .sub-tab-btn');
+  if (buttons.length === 0) return;
+  buttons.forEach((btn) => {
     btn.addEventListener('click', () => {
       const name = btn.dataset['invSubtab'] ?? DEFAULT_SUB_SECTION;
       switchInventorySubSection(name);

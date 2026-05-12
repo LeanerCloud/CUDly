@@ -209,7 +209,7 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     detailP.classList.add('detail', 'kpi-tile-detail');
     detailP.textContent = t.detail;
     const spark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    spark.classList.add('kpi-tile-spark');
+    spark.classList.add('kpi-tile-spark', 'hidden');
     spark.dataset['sparkKey'] = t.kpi;
     spark.setAttribute('aria-hidden', 'true');
     card.appendChild(h3);
@@ -249,6 +249,7 @@ function attachSparkline(key: string, values: readonly number[]): void {
   if (!svg) return;
   while (svg.firstChild) svg.removeChild(svg.firstChild);
   if (values.length < 2) return;
+  svg.classList.remove('hidden');
 
   const width = 80;
   const height = 24;
@@ -359,31 +360,79 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
     return;
   }
 
-  container.innerHTML = purchases.map(p => {
+  container.textContent = '';
+  for (const p of purchases) {
     const dateParts = getDateParts(p.scheduled_date);
-    return `
-      <div class="upcoming-card">
-        <div class="upcoming-info">
-          <div class="upcoming-date">
-            <div class="day">${dateParts.day}</div>
-            <div class="month">${dateParts.month}</div>
-          </div>
-          <div class="upcoming-details">
-            <h4>${escapeHtml(p.plan_name)}</h4>
-            <p><span class="provider-badge ${p.provider}">${p.provider.toUpperCase()}</span> ${escapeHtml(p.service)} - Step ${p.step_number} of ${p.total_steps}</p>
-          </div>
-        </div>
-        <div class="upcoming-savings">
-          <div class="amount">${formatCurrency(p.estimated_savings)}</div>
-          <div class="label">Est. monthly savings</div>
-        </div>
-        <div class="upcoming-actions">
-          <button data-action="view-purchase" data-id="${p.execution_id}">View Details</button>
-          <button data-action="cancel-purchase" data-id="${p.execution_id}" class="danger">Cancel</button>
-        </div>
-      </div>
-    `;
-  }).join('');
+
+    const card = document.createElement('div');
+    card.className = 'upcoming-card';
+
+    // Info block
+    const info = document.createElement('div');
+    info.className = 'upcoming-info';
+
+    const dateDiv = document.createElement('div');
+    dateDiv.className = 'upcoming-date';
+    const dayDiv = document.createElement('div');
+    dayDiv.className = 'day';
+    dayDiv.textContent = String(dateParts.day);
+    const monthDiv = document.createElement('div');
+    monthDiv.className = 'month';
+    monthDiv.textContent = dateParts.month;
+    dateDiv.appendChild(dayDiv);
+    dateDiv.appendChild(monthDiv);
+
+    const details = document.createElement('div');
+    details.className = 'upcoming-details';
+    const h4 = document.createElement('h4');
+    h4.textContent = p.plan_name;
+    const descP = document.createElement('p');
+    const badge = document.createElement('span');
+    badge.className = 'provider-badge';
+    // Whitelist provider to a CSS class — only alphanumeric + hyphen allowed
+    const safeProvider = /^[a-z0-9-]+$/i.test(p.provider) ? p.provider : 'unknown';
+    badge.classList.add(safeProvider);
+    badge.textContent = p.provider.toUpperCase();
+    descP.appendChild(badge);
+    descP.appendChild(document.createTextNode(` ${p.service} - Step ${p.step_number} of ${p.total_steps}`));
+    details.appendChild(h4);
+    details.appendChild(descP);
+
+    info.appendChild(dateDiv);
+    info.appendChild(details);
+
+    // Savings block
+    const savings = document.createElement('div');
+    savings.className = 'upcoming-savings';
+    const amountDiv = document.createElement('div');
+    amountDiv.className = 'amount';
+    amountDiv.textContent = formatCurrency(p.estimated_savings);
+    const labelDiv = document.createElement('div');
+    labelDiv.className = 'label';
+    labelDiv.textContent = 'Est. monthly savings';
+    savings.appendChild(amountDiv);
+    savings.appendChild(labelDiv);
+
+    // Actions block
+    const actions = document.createElement('div');
+    actions.className = 'upcoming-actions';
+    const viewBtn = document.createElement('button');
+    viewBtn.dataset['action'] = 'view-purchase';
+    viewBtn.dataset['id'] = String(p.execution_id);
+    viewBtn.textContent = 'View Details';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.dataset['action'] = 'cancel-purchase';
+    cancelBtn.dataset['id'] = String(p.execution_id);
+    cancelBtn.className = 'danger';
+    cancelBtn.textContent = 'Cancel';
+    actions.appendChild(viewBtn);
+    actions.appendChild(cancelBtn);
+
+    card.appendChild(info);
+    card.appendChild(savings);
+    card.appendChild(actions);
+    container.appendChild(card);
+  }
 
   // Add event listeners
   container.querySelectorAll<HTMLButtonElement>('[data-action="view-purchase"]').forEach(btn => {

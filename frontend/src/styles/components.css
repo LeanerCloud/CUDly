@@ -29,7 +29,7 @@
     align-items: end;
 }
 
-.kpi-tile h3 {
+.card.kpi-tile h3 {
     grid-area: title;
     margin-bottom: 0;
     color: var(--cudly-text-muted);
