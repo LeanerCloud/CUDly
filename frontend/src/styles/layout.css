@@ -32,7 +32,17 @@
 .app-topbar-brand {
     display: flex;
     align-items: center;
-    gap: var(--cudly-sp-3);
+    gap: var(--cudly-sp-2);
+}
+
+/* Cloud-shaped CUDly logomark in the topbar. Inline SVG inherits
+ * currentColor from the topbar text (white), so the icon reads cleanly
+ * on the blue gradient — the previous favicon-as-img was a tiny blue
+ * "C" on a blue gradient, hard to see. */
+.app-logo-mark {
+    display: inline-flex;
+    align-items: center;
+    color: var(--cudly-primary-fg);
 }
 
 .app-logo {
