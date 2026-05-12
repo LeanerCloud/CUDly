@@ -66,12 +66,36 @@ func (c *Client) parseRecommendationDetail(details *types.ReservationPurchaseRec
 	// Parse AWS-provided cost details
 	c.parseAWSCostDetails(rec, details)
 
+	// Parse RI utilization signals used by --target-utilization sizing
+	c.parseRIUtilizationSignals(rec, details)
+
 	// Parse service-specific details
 	if err := c.parseServiceSpecificDetails(rec, details, params.Service); err != nil {
 		return nil, err
 	}
 
 	return rec, nil
+}
+
+// parseRIUtilizationSignals populates AverageInstancesUsedPerHour and
+// RecommendedUtilization from the CE response. Both fields are *string in the
+// SDK; nil or unparseable values leave the destination at zero, which the
+// --target-utilization sizing path treats as "no signal" and skips.
+func (c *Client) parseRIUtilizationSignals(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) {
+	if details.AverageNumberOfInstancesUsedPerHour != nil {
+		if v, err := strconv.ParseFloat(*details.AverageNumberOfInstancesUsedPerHour, 64); err == nil {
+			rec.AverageInstancesUsedPerHour = v
+		} else {
+			log.Printf("WARNING: failed to parse AverageNumberOfInstancesUsedPerHour %q for RI recommendation (service=%s, account=%s): %v", *details.AverageNumberOfInstancesUsedPerHour, rec.Service, rec.Account, err)
+		}
+	}
+	if details.AverageUtilization != nil {
+		if v, err := strconv.ParseFloat(*details.AverageUtilization, 64); err == nil {
+			rec.RecommendedUtilization = v
+		} else {
+			log.Printf("WARNING: failed to parse AverageUtilization %q for RI recommendation (service=%s, account=%s): %v", *details.AverageUtilization, rec.Service, rec.Account, err)
+		}
+	}
 }
 
 // parseRecommendedQuantity extracts the recommended quantity from details
