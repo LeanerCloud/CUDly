@@ -47,6 +47,10 @@ func (m *mockCostExplorerAPI) GetReservationUtilization(ctx context.Context, par
 	return &costexplorer.GetReservationUtilizationOutput{}, nil
 }
 
+func (m *mockCostExplorerAPI) GetReservationCoverage(ctx context.Context, params *costexplorer.GetReservationCoverageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationCoverageOutput, error) {
+	return &costexplorer.GetReservationCoverageOutput{}, nil
+}
+
 func TestNewClient(t *testing.T) {
 	cfg := aws.Config{
 		Region: "us-west-2",
