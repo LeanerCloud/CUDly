@@ -8,6 +8,71 @@
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
+/* ---------------------------------------------------------------------------
+ * KPI tile (issue #340 T6) — extends .card with sparkline slot + tightened
+ * design-token-driven typography. New .kpi-tile is additive so the existing
+ * .card styles still apply (preserves legacy behaviour where dashboard cards
+ * are referenced via `.card`).
+ * ------------------------------------------------------------------------- */
+.kpi-tile {
+    padding: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md);
+    border: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-sm);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+        "title title"
+        "value spark"
+        "detail spark";
+    gap: var(--cudly-sp-1) var(--cudly-sp-3);
+    align-items: end;
+}
+
+.kpi-tile h3 {
+    grid-area: title;
+    margin-bottom: 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    letter-spacing: 0.01em;
+}
+
+.kpi-tile-value {
+    grid-area: value;
+    font-size: var(--cudly-fs-2xl);
+    line-height: var(--cudly-lh-tight);
+    color: var(--cudly-text);
+    margin: 0;
+}
+
+.kpi-tile-value.savings {
+    color: var(--cudly-success);
+}
+
+.kpi-tile-detail {
+    grid-area: detail;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+    margin: 0;
+}
+
+.kpi-tile-spark {
+    grid-area: spark;
+    width: 80px;
+    height: 24px;
+    color: var(--cudly-primary);
+    opacity: 0.65;
+}
+
+/* The .kpi-tile that decorates "Potential Monthly Savings" / "YTD Savings"
+ * cards picks up the savings hue for its sparkline so the visual hierarchy
+ * (green money values, blue trend lines) reads consistently. */
+.kpi-tile[data-kpi="savings"] .kpi-tile-spark,
+.kpi-tile[data-kpi="ytd"] .kpi-tile-spark {
+    color: var(--cudly-success);
+}
+
 .card h3 {
     color: #666;
     font-size: 0.875rem;

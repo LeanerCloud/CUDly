@@ -782,4 +782,68 @@ describe('Dashboard Module', () => {
       expect(callsAfter).toBeGreaterThan(0);
     });
   });
+
+  // KPI tile sparklines (issue #340 T6).
+  describe('sparkline helpers', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { __test__ } = require('../dashboard') as { __test__: {
+      sparklinePoints: (values: readonly number[], w: number, h: number) => string;
+      attachSparkline: (key: string, values: readonly number[]) => void;
+    } };
+
+    test('sparklinePoints normalizes values into the viewport', () => {
+      const pts = __test__.sparklinePoints([0, 50, 100], 80, 24);
+      const tokens = pts.split(' ');
+      expect(tokens).toHaveLength(3);
+      // First point: x=0, y=height (lowest value).
+      expect(tokens[0]).toBe('0.0,24.0');
+      // Last point: x=width, y=0 (highest value).
+      expect(tokens[2]).toBe('80.0,0.0');
+    });
+
+    test('sparklinePoints returns empty string for <2 values', () => {
+      expect(__test__.sparklinePoints([], 80, 24)).toBe('');
+      expect(__test__.sparklinePoints([42], 80, 24)).toBe('');
+    });
+
+    test('sparklinePoints handles flat series (all values equal)', () => {
+      const pts = __test__.sparklinePoints([5, 5, 5], 80, 24);
+      // Range collapses to 1 so y = height for all points (no division by 0).
+      expect(pts.split(' ')).toHaveLength(3);
+      expect(pts).not.toContain('NaN');
+    });
+
+    test('attachSparkline draws a polyline into the matching svg', () => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.classList.add('kpi-tile-spark');
+      svg.dataset['sparkKey'] = 'ytd';
+      document.body.appendChild(svg);
+
+      __test__.attachSparkline('ytd', [10, 20, 30]);
+
+      const polyline = svg.querySelector('polyline');
+      expect(polyline).toBeTruthy();
+      expect(polyline?.getAttribute('points')).toMatch(/\d+\.\d+,\d+\.\d+/);
+      expect(polyline?.getAttribute('stroke')).toBe('currentColor');
+
+      document.body.removeChild(svg);
+    });
+
+    test('attachSparkline no-ops when placeholder is missing', () => {
+      // No DOM, no throw.
+      expect(() => __test__.attachSparkline('nonexistent', [1, 2, 3])).not.toThrow();
+    });
+
+    test('attachSparkline no-ops with <2 values (silent skip)', () => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.classList.add('kpi-tile-spark');
+      svg.dataset['sparkKey'] = 'savings';
+      document.body.appendChild(svg);
+
+      __test__.attachSparkline('savings', [42]);
+
+      expect(svg.querySelector('polyline')).toBeNull();
+      document.body.removeChild(svg);
+    });
+  });
 });
