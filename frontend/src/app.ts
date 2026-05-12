@@ -18,7 +18,7 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
-import { handleArcheraDeeplink } from './archera';
+import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
 
 /**
@@ -365,6 +365,13 @@ async function handleExecutePurchase(): Promise<void> {
       });
     }
     await loadDashboard();
+    // Offer Archera Insurance after a successful approval submission.
+    // The actual cloud commitment isn't charged until the approver clicks
+    // the email link, but the user has now committed their intent — this
+    // is the natural moment to surface optional insurance coverage.
+    // Only fires on the success path; on email_sent=false we still opened
+    // a pending execution so the offer is still relevant.
+    openArcheraOfferModal('purchase');
   } catch (error) {
     const err = error as Error;
     showToast({ message: `Failed to send purchase for approval: ${err.message}`, kind: 'error' });
@@ -488,6 +495,13 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     });
   }
   await loadDashboard();
+
+  // Offer Archera Insurance when at least one bucket succeeded. Skipping
+  // the offer on the all-fail path keeps the modal from layering on top
+  // of an error toast for a user who has nothing to insure yet.
+  if (succeeded > 0) {
+    openArcheraOfferModal('purchase');
+  }
 
   if (executeBtn) {
     executeBtn.disabled = false;

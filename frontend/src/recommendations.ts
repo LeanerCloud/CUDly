@@ -20,7 +20,6 @@ import {
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 import { openModal } from './modal';
-import { renderArcheraCTA } from './archera';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
@@ -3280,10 +3279,6 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
   approvalNote.textContent =
     'Submitting will email an approval request to the configured approver — commitments are charged only after the approver clicks the link in that email.';
   container.appendChild(approvalNote);
-
-  // Archera Insurance CTA — shown below the approval note, above the
-  // commitments table. Non-blocking: clicking opens the education overlay.
-  container.appendChild(renderArcheraCTA());
 
   // Commitments table with per-row Include checkboxes, Term, and Payment selects.
   const commitsSection = document.createElement('div');

@@ -3,27 +3,25 @@
  *
  * Covers:
  *   - renderArcheraCTA: element structure, discernible name, click handler
- *   - openArcheraPage('what-is-archera'): Page A content, crosslink to B,
- *     signup link attributes, back button
- *   - openArcheraPage('how-it-works'): Page B content, crosslink to A,
- *     signup link attributes, back button
+ *   - openArcheraPage: education page content, signup link attributes, back button
  *   - closeArcheraPage: hides and clears the container
  *   - openPurchaseModal: CTA is rendered inside #purchase-details
  *   - openCreatePlanModal / openNewPlanModal: CTA is injected once into
  *     #plan-modal; re-opening does not duplicate it
+ *   - handleArcheraDeeplink: both legacy and current URL paths open the
+ *     single merged page
  */
 
 import {
-  renderArcheraCTA,
   openArcheraPage,
   closeArcheraPage,
+  openArcheraOfferModal,
+  closeArcheraOfferModal,
   handleArcheraDeeplink,
   ARCHERA_SIGNUP_URL,
   ARCHERA_PAGE_A_PATH,
   ARCHERA_PAGE_B_PATH,
 } from '../archera';
-import { openPurchaseModal } from '../recommendations';
-import { openCreatePlanModal, openNewPlanModal } from '../plans';
 
 // ---------------------------------------------------------------------------
 // Mocks required by recommendations.ts and plans.ts
@@ -83,15 +81,13 @@ jest.mock('../confirmDialog', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Global DOM teardown — prevents stale-node collisions between test suites.
+// Global DOM teardown: prevents stale-node collisions between test suites.
 // ---------------------------------------------------------------------------
 
 afterEach(() => {
-  ['archera-page-container', 'purchase-modal', 'plan-modal'].forEach(id => {
+  ['archera-page-container', 'archera-offer-modal-container'].forEach(id => {
     document.getElementById(id)?.remove();
   });
-  // Also remove any loose .archera-cta elements appended directly to body.
-  document.querySelectorAll('.archera-cta').forEach(el => el.remove());
 });
 
 // ---------------------------------------------------------------------------
@@ -106,152 +102,62 @@ function buildArcheraContainer(): void {
   document.body.appendChild(container);
 }
 
-/** Minimal DOM for openPurchaseModal: #purchase-details + #purchase-modal. */
-function buildPurchaseModalDOM(): void {
-  document.body.appendChild((() => {
-    const modal = document.createElement('div');
-    modal.id = 'purchase-modal';
-    modal.className = 'modal hidden';
-
-    const content = document.createElement('div');
-    content.className = 'modal-content modal-wide';
-
-    const details = document.createElement('div');
-    details.id = 'purchase-details';
-    content.appendChild(details);
-
-    const buttons = document.createElement('div');
-    buttons.className = 'modal-buttons';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.id = 'close-purchase-modal-btn';
-    cancelBtn.textContent = 'Cancel';
-    buttons.appendChild(cancelBtn);
-    const execBtn = document.createElement('button');
-    execBtn.id = 'execute-purchase-btn';
-    execBtn.textContent = 'Send for Approval';
-    buttons.appendChild(execBtn);
-    content.appendChild(buttons);
-
-    modal.appendChild(content);
-    return modal;
-  })());
-}
-
-/** Minimal DOM for plan modal tests. */
-function buildPlanModalDOM(): void {
-  const modal = document.createElement('div');
-  modal.id = 'plan-modal';
-  modal.className = 'modal hidden';
-  modal.setAttribute('role', 'dialog');
-  modal.setAttribute('aria-modal', 'true');
-
-  const content = document.createElement('div');
-  content.className = 'modal-content modal-wide';
-
-  const h2 = document.createElement('h2');
-  h2.id = 'plan-modal-title';
-  h2.textContent = 'Create Purchase Plan';
-  content.appendChild(h2);
-
-  const form = document.createElement('form');
-  form.id = 'plan-form';
-
-  // Required hidden input
-  const planId = document.createElement('input');
-  planId.type = 'hidden';
-  planId.id = 'plan-id';
-  form.appendChild(planId);
-
-  // Modal buttons (must exist so injectPlanModalCTA can find them)
-  const buttons = document.createElement('div');
-  buttons.className = 'modal-buttons';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.id = 'close-plan-modal-btn';
-  cancelBtn.textContent = 'Cancel';
-  buttons.appendChild(cancelBtn);
-  const saveBtn = document.createElement('button');
-  saveBtn.type = 'submit';
-  saveBtn.textContent = 'Save Plan';
-  buttons.appendChild(saveBtn);
-  form.appendChild(buttons);
-
-  content.appendChild(form);
-  modal.appendChild(content);
-  document.body.appendChild(modal);
+/** Minimal DOM structure used by the offer modal tests. */
+function buildArcheraOfferContainer(): void {
+  const container = document.createElement('div');
+  container.id = 'archera-offer-modal-container';
+  container.className = 'hidden';
+  document.body.appendChild(container);
 }
 
 // ---------------------------------------------------------------------------
-// renderArcheraCTA
+// Education overlay (single merged page)
 // ---------------------------------------------------------------------------
 
-describe('renderArcheraCTA', () => {
-  it('returns a <p> element with class archera-cta', () => {
-    const el = renderArcheraCTA();
-    expect(el.tagName).toBe('P');
-    expect(el.classList.contains('archera-cta')).toBe(true);
-  });
-
-  it('contains the "Insure this commitment with Archera" CTA text for default context', () => {
-    const el = renderArcheraCTA();
-    expect(el.textContent).toContain('Insure this commitment with Archera');
-  });
-
-  it('contains the "Insure this plan with Archera" CTA text for plan context', () => {
-    const el = renderArcheraCTA('plan');
-    expect(el.textContent).toContain('Insure this plan with Archera');
-  });
-
-  it('contains a button with discernible name to trigger the overlay', () => {
-    const el = renderArcheraCTA();
-    const btn = el.querySelector('button.archera-cta-link');
-    expect(btn).not.toBeNull();
-    expect(btn!.textContent).toMatch(/Archera/i);
-  });
-
-  it('opens Page A when the CTA button is clicked', () => {
-    buildArcheraContainer();
-    const el = renderArcheraCTA();
-    document.body.appendChild(el);
-
-    const btn = el.querySelector<HTMLButtonElement>('button.archera-cta-link')!;
-    btn.click();
-
-    const container = document.getElementById('archera-page-container')!;
-    expect(container.classList.contains('hidden')).toBe(false);
-    expect(container.textContent).toContain('What is Archera Insurance?');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Education overlay — Page A
-// ---------------------------------------------------------------------------
-
-describe('openArcheraPage("what-is-archera") — Page A', () => {
+describe('openArcheraPage', () => {
   beforeEach(() => {
     buildArcheraContainer();
   });
 
   it('makes #archera-page-container visible', () => {
-    openArcheraPage('what-is-archera');
+    openArcheraPage();
     const container = document.getElementById('archera-page-container')!;
     expect(container.classList.contains('hidden')).toBe(false);
   });
 
-  it('renders the Page A heading', () => {
-    openArcheraPage('what-is-archera');
+  it('renders the "Archera Insurance" heading', () => {
+    openArcheraPage();
     const h1 = document.querySelector('#archera-page-container h1');
-    expect(h1?.textContent).toBe('What is Archera Insurance?');
+    expect(h1?.textContent).toBe('Archera Insurance');
   });
 
-  it('contains a "How it works" section', () => {
-    openArcheraPage('what-is-archera');
+  it('contains a "How it works" section with a step list', () => {
+    openArcheraPage();
+    const container = document.getElementById('archera-page-container')!;
+    expect(container.textContent).toContain('How it works');
+    const ol = container.querySelector('ol.archera-steps');
+    expect(ol).not.toBeNull();
+    expect(ol!.querySelectorAll('li').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('contains a "When it makes sense" section', () => {
+    openArcheraPage();
     expect(document.getElementById('archera-page-container')!.textContent).toContain(
-      'How it works',
+      'When it makes sense',
     );
   });
 
+  it('contains the Full disclosure paragraph (merged from the old Disclaimers list)', () => {
+    openArcheraPage();
+    const text = document.getElementById('archera-page-container')!.textContent!;
+    expect(text).toContain('Full disclosure:');
+    // Key facts from the prior Disclaimers section still surface.
+    expect(text).toMatch(/Insurance terms.*set entirely by Archera/i);
+    expect(text).toMatch(/no visibility into your Archera/i);
+  });
+
   it('contains a signup link with correct href, target=_blank, and rel=noopener noreferrer', () => {
-    openArcheraPage('what-is-archera');
+    openArcheraPage();
     const link = document.querySelector<HTMLAnchorElement>(
       '#archera-page-container a.archera-signup-btn',
     );
@@ -261,28 +167,8 @@ describe('openArcheraPage("what-is-archera") — Page A', () => {
     expect(link!.rel).toBe('noopener noreferrer');
   });
 
-  it('has a cross-link button to Page B', () => {
-    openArcheraPage('what-is-archera');
-    const btns = document.querySelectorAll<HTMLButtonElement>(
-      '#archera-page-container button.archera-cta-link',
-    );
-    const toB = Array.from(btns).find(b => b.textContent?.includes('integration works'));
-    expect(toB).not.toBeUndefined();
-  });
-
-  it('clicking the cross-link navigates to Page B', () => {
-    openArcheraPage('what-is-archera');
-    const btns = document.querySelectorAll<HTMLButtonElement>(
-      '#archera-page-container button.archera-cta-link',
-    );
-    const toB = Array.from(btns).find(b => b.textContent?.includes('integration works'))!;
-    toB.click();
-    const h1 = document.querySelector('#archera-page-container h1');
-    expect(h1?.textContent).toContain('integration works');
-  });
-
   it('has a back button that closes the overlay', () => {
-    openArcheraPage('what-is-archera');
+    openArcheraPage();
     const back = document.querySelector<HTMLButtonElement>(
       '#archera-page-container .archera-page-back',
     )!;
@@ -291,69 +177,13 @@ describe('openArcheraPage("what-is-archera") — Page A', () => {
     const container = document.getElementById('archera-page-container')!;
     expect(container.classList.contains('hidden')).toBe(true);
   });
-});
 
-// ---------------------------------------------------------------------------
-// Education overlay — Page B
-// ---------------------------------------------------------------------------
-
-describe('openArcheraPage("how-it-works") — Page B', () => {
-  beforeEach(() => {
-    buildArcheraContainer();
-  });
-
-  it('renders the Page B heading', () => {
-    openArcheraPage('how-it-works');
-    const h1 = document.querySelector('#archera-page-container h1');
-    expect(h1?.textContent).toContain('integration works');
-  });
-
-  it('contains a step list', () => {
-    openArcheraPage('how-it-works');
-    const ol = document.querySelector('#archera-page-container ol.archera-steps');
-    expect(ol).not.toBeNull();
-    expect(ol!.querySelectorAll('li').length).toBeGreaterThanOrEqual(3);
-  });
-
-  it('contains a signup link with correct href, target=_blank, and rel=noopener noreferrer', () => {
-    openArcheraPage('how-it-works');
-    const link = document.querySelector<HTMLAnchorElement>(
-      '#archera-page-container a.archera-signup-btn',
-    );
-    expect(link).not.toBeNull();
-    expect(link!.href).toBe(ARCHERA_SIGNUP_URL);
-    expect(link!.target).toBe('_blank');
-    expect(link!.rel).toBe('noopener noreferrer');
-  });
-
-  it('has a cross-link button back to Page A', () => {
-    openArcheraPage('how-it-works');
-    const btns = document.querySelectorAll<HTMLButtonElement>(
-      '#archera-page-container button.archera-cta-link',
-    );
-    const toA = Array.from(btns).find(b => b.textContent?.includes('What is Archera'));
-    expect(toA).not.toBeUndefined();
-  });
-
-  it('clicking the cross-link navigates back to Page A', () => {
-    openArcheraPage('how-it-works');
-    const btns = document.querySelectorAll<HTMLButtonElement>(
-      '#archera-page-container button.archera-cta-link',
-    );
-    const toA = Array.from(btns).find(b => b.textContent?.includes('What is Archera'))!;
-    toA.click();
-    const h1 = document.querySelector('#archera-page-container h1');
-    expect(h1?.textContent).toBe('What is Archera Insurance?');
-  });
-
-  it('has a back button that closes the overlay', () => {
-    openArcheraPage('how-it-works');
-    const back = document.querySelector<HTMLButtonElement>(
-      '#archera-page-container .archera-page-back',
-    )!;
-    back.click();
+  it('re-rendering replaces content rather than stacking', () => {
+    openArcheraPage();
+    openArcheraPage();
     const container = document.getElementById('archera-page-container')!;
-    expect(container.classList.contains('hidden')).toBe(true);
+    const h1s = container.querySelectorAll('h1');
+    expect(h1s.length).toBe(1);
   });
 });
 
@@ -364,7 +194,7 @@ describe('openArcheraPage("how-it-works") — Page B', () => {
 describe('closeArcheraPage', () => {
   it('adds .hidden and clears content', () => {
     buildArcheraContainer();
-    openArcheraPage('what-is-archera');
+    openArcheraPage();
     closeArcheraPage();
     const container = document.getElementById('archera-page-container')!;
     expect(container.classList.contains('hidden')).toBe(true);
@@ -373,142 +203,161 @@ describe('closeArcheraPage', () => {
 });
 
 // ---------------------------------------------------------------------------
-// openPurchaseModal — CTA in purchase-details
+// openArcheraOfferModal (post-action small modal)
 // ---------------------------------------------------------------------------
 
-describe('openPurchaseModal — Archera CTA', () => {
+describe('openArcheraOfferModal', () => {
   beforeEach(() => {
-    buildPurchaseModalDOM();
+    buildArcheraOfferContainer();
     buildArcheraContainer();
   });
 
-  it('renders .archera-cta inside #purchase-details', async () => {
-    await openPurchaseModal([]);
-    const details = document.getElementById('purchase-details')!;
-    const cta = details.querySelector('.archera-cta');
-    expect(cta).not.toBeNull();
+  it('makes #archera-offer-modal-container visible', () => {
+    openArcheraOfferModal('purchase');
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(false);
   });
 
-  it('CTA text mentions Archera', async () => {
-    await openPurchaseModal([]);
-    const cta = document.querySelector('#purchase-details .archera-cta')!;
-    expect(cta.textContent).toContain('Archera');
-    expect(cta.textContent).toContain('Insure this commitment');
+  it('shows the purchase-context headline by default', () => {
+    openArcheraOfferModal();
+    const title = document.getElementById('archera-offer-title');
+    expect(title?.textContent).toMatch(/commitments?/i);
   });
 
-  it('CTA is re-rendered fresh on each modal open (no duplication)', async () => {
-    await openPurchaseModal([]);
-    await openPurchaseModal([]);
-    const ctas = document.querySelectorAll('#purchase-details .archera-cta');
-    expect(ctas.length).toBe(1);
+  it('shows the plan-context headline for context=plan', () => {
+    openArcheraOfferModal('plan');
+    const title = document.getElementById('archera-offer-title');
+    expect(title?.textContent).toMatch(/plan/i);
+  });
+
+  it('renders the disclosure line in the modal', () => {
+    openArcheraOfferModal('purchase');
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.textContent).toMatch(/sponsors/i);
+    expect(container.textContent).toMatch(/works fully without/i);
+  });
+
+  it('has a "Sign up at Archera" link with correct href, target=_blank, rel=noopener noreferrer', () => {
+    openArcheraOfferModal('purchase');
+    const link = document.querySelector<HTMLAnchorElement>(
+      '#archera-offer-modal-container a.archera-offer-signup',
+    );
+    expect(link).not.toBeNull();
+    expect(link!.href).toBe(ARCHERA_SIGNUP_URL);
+    expect(link!.target).toBe('_blank');
+    expect(link!.rel).toBe('noopener noreferrer');
+  });
+
+  it('has a "No thanks" button that closes the modal', () => {
+    openArcheraOfferModal('purchase');
+    const skip = document.querySelector<HTMLButtonElement>(
+      '#archera-offer-modal-container button.archera-offer-skip',
+    )!;
+    expect(skip.textContent).toMatch(/no thanks/i);
+    skip.click();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('outside-click on the backdrop closes the modal', () => {
+    openArcheraOfferModal('purchase');
+    const backdrop = document.querySelector<HTMLElement>(
+      '#archera-offer-modal-container .archera-offer-backdrop',
+    )!;
+    backdrop.click();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('ESC key closes the modal', () => {
+    openArcheraOfferModal('purchase');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('"Learn more" is a collapsed drop-down that expands inside the modal', () => {
+    openArcheraOfferModal('purchase');
+    const details = document.querySelector<HTMLDetailsElement>(
+      '#archera-offer-modal-container details.archera-offer-learnmore',
+    )!;
+    expect(details).not.toBeNull();
+    // Starts collapsed: open attribute absent, body content is not visible
+    // to assistive tech (jsdom doesn't compute layout, but the <details>
+    // semantic is what matters).
+    expect(details.open).toBe(false);
+    // Summary carries the discoverable label.
+    const summary = details.querySelector('summary');
+    expect(summary?.textContent).toMatch(/learn more/i);
+    // Expanding the details surfaces the full education body inline.
+    details.open = true;
+    const body = details.querySelector('.archera-offer-learnmore-body');
+    expect(body).not.toBeNull();
+    expect(body!.textContent).toContain('How it works');
+    expect(body!.textContent).toContain('When it makes sense');
+    expect(body!.textContent).toContain('Full disclosure:');
+    // The offer modal itself stays open — the drop-down is inline.
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(false);
+  });
+
+  it('re-opening replaces content rather than stacking', () => {
+    openArcheraOfferModal('purchase');
+    openArcheraOfferModal('plan');
+    const container = document.getElementById('archera-offer-modal-container')!;
+    const panels = container.querySelectorAll('.archera-offer-panel');
+    expect(panels.length).toBe(1);
+    const title = document.getElementById('archera-offer-title');
+    expect(title?.textContent).toMatch(/plan/i);
   });
 });
 
 // ---------------------------------------------------------------------------
-// openCreatePlanModal / openNewPlanModal — CTA in plan modal
+// closeArcheraOfferModal
 // ---------------------------------------------------------------------------
 
-describe('openCreatePlanModal — Archera CTA', () => {
-  beforeEach(() => {
-    buildPlanModalDOM();
-    buildArcheraContainer();
-  });
-
-  it('injects #archera-plan-cta into #plan-modal', () => {
-    openCreatePlanModal();
-    const cta = document.getElementById('archera-plan-cta');
-    expect(cta).not.toBeNull();
-    expect(cta!.textContent).toContain('Archera');
-    expect(cta!.textContent).toContain('Insure this plan');
-  });
-
-  it('CTA appears before .modal-buttons', () => {
-    openCreatePlanModal();
-    const form = document.getElementById('plan-form')!;
-    const children = Array.from(form.children);
-    const ctaIdx = children.findIndex(el => el.id === 'archera-plan-cta');
-    const btnsIdx = children.findIndex(el => el.classList.contains('modal-buttons'));
-    expect(ctaIdx).toBeGreaterThanOrEqual(0);
-    expect(btnsIdx).toBeGreaterThanOrEqual(0);
-    expect(ctaIdx).toBeLessThan(btnsIdx);
-  });
-
-  it('does not duplicate the CTA on repeated opens', () => {
-    openCreatePlanModal();
-    openCreatePlanModal();
-    const ctas = document.querySelectorAll('#plan-modal .archera-cta');
-    expect(ctas.length).toBe(1);
-  });
-});
-
-describe('openNewPlanModal — Archera CTA', () => {
-  beforeEach(() => {
-    buildPlanModalDOM();
-    buildArcheraContainer();
-  });
-
-  it('injects #archera-plan-cta into #plan-modal', () => {
-    openNewPlanModal();
-    const cta = document.getElementById('archera-plan-cta');
-    expect(cta).not.toBeNull();
-    expect(cta!.textContent).toContain('Archera');
-    expect(cta!.textContent).toContain('Insure this plan');
-  });
-
-  it('does not duplicate the CTA if opened multiple times', () => {
-    openNewPlanModal();
-    openNewPlanModal();
-    const ctas = document.querySelectorAll('#plan-modal .archera-cta');
-    expect(ctas.length).toBe(1);
+describe('closeArcheraOfferModal', () => {
+  it('adds .hidden and clears content', () => {
+    buildArcheraOfferContainer();
+    openArcheraOfferModal('purchase');
+    closeArcheraOfferModal();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+    expect(container.childNodes.length).toBe(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Transparency disclosures — Page A and Page B
+// Transparency disclosure
 // ---------------------------------------------------------------------------
 
-describe('transparency disclosures', () => {
+describe('transparency disclosure', () => {
   beforeEach(() => {
     buildArcheraContainer();
   });
 
-  it('Page A contains "CUDly works fully without Archera" fact', () => {
-    openArcheraPage('what-is-archera');
+  it('contains the "CUDly works fully without Archera" fact', () => {
+    openArcheraPage();
     const text = document.getElementById('archera-page-container')!.textContent!;
     expect(text).toMatch(/fully without Archera/i);
   });
 
-  it('Page A contains the Archera sponsorship fact', () => {
-    openArcheraPage('what-is-archera');
+  it('contains the Archera sponsorship fact', () => {
+    openArcheraPage();
     const text = document.getElementById('archera-page-container')!.textContent!;
     expect(text).toMatch(/sponsors/i);
     expect(text).toMatch(/revenue/i);
   });
 
-  it('Page A disclosure heading reads "Why is CUDly telling me about this?"', () => {
-    openArcheraPage('what-is-archera');
+  it('disclosure is rendered as a "Full disclosure:" paragraph (no heading)', () => {
+    openArcheraPage();
     const container = document.getElementById('archera-page-container')!;
-    const disclosure = container.querySelector('.archera-disclosure h2');
-    expect(disclosure?.textContent).toMatch(/Why is CUDly telling me about this/i);
-  });
-
-  it('Page B contains the "CUDly works fully without Archera" fact', () => {
-    openArcheraPage('how-it-works');
-    const text = document.getElementById('archera-page-container')!.textContent!;
-    expect(text).toMatch(/fully without Archera/i);
-  });
-
-  it('Page B contains the Archera sponsorship fact', () => {
-    openArcheraPage('how-it-works');
-    const text = document.getElementById('archera-page-container')!.textContent!;
-    expect(text).toMatch(/sponsors/i);
-  });
-
-  it('Page B disclosure heading reads "Disclosure"', () => {
-    openArcheraPage('how-it-works');
-    const container = document.getElementById('archera-page-container')!;
-    const disclosure = container.querySelector('.archera-disclosure h2');
-    expect(disclosure?.textContent).toBe('Disclosure');
+    const disclosure = container.querySelector<HTMLParagraphElement>('p.archera-disclosure');
+    expect(disclosure).not.toBeNull();
+    expect(disclosure!.textContent).toMatch(/Full disclosure:/);
+    // Heading-level "Why is CUDly telling me about this?" has been removed
+    // along with the duplicate user-interest paragraph (folded into lead).
+    expect(container.textContent).not.toMatch(/Why is CUDly telling me about this/i);
   });
 });
 
@@ -533,7 +382,7 @@ describe('handleArcheraDeeplink', () => {
     expect(container.classList.contains('hidden')).toBe(true);
   });
 
-  it('returns true and opens Page A for ARCHERA_PAGE_A_PATH', () => {
+  it('returns true and opens the overlay for ARCHERA_PAGE_A_PATH', () => {
     Object.defineProperty(window, 'location', {
       value: { pathname: ARCHERA_PAGE_A_PATH },
       writable: true,
@@ -543,10 +392,10 @@ describe('handleArcheraDeeplink', () => {
     expect(result).toBe(true);
     const container = document.getElementById('archera-page-container')!;
     expect(container.classList.contains('hidden')).toBe(false);
-    expect(container.querySelector('h1')?.textContent).toBe('What is Archera Insurance?');
+    expect(container.querySelector('h1')?.textContent).toBe('Archera Insurance');
   });
 
-  it('returns true and opens Page B for ARCHERA_PAGE_B_PATH', () => {
+  it('returns true and opens the same overlay for legacy ARCHERA_PAGE_B_PATH', () => {
     Object.defineProperty(window, 'location', {
       value: { pathname: ARCHERA_PAGE_B_PATH },
       writable: true,
@@ -556,6 +405,6 @@ describe('handleArcheraDeeplink', () => {
     expect(result).toBe(true);
     const container = document.getElementById('archera-page-container')!;
     expect(container.classList.contains('hidden')).toBe(false);
-    expect(container.querySelector('h1')?.textContent).toContain('integration works');
+    expect(container.querySelector('h1')?.textContent).toBe('Archera Insurance');
   });
 });
