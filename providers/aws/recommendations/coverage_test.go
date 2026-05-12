@@ -33,7 +33,7 @@ func (m *mockCoverageCE) GetReservationCoverage(ctx context.Context, params *cos
 // TestGetRICoverageMap_GroupsByRegionAndInstanceType confirms a single-page
 // CE response is parsed into the expected pool-keyed map and that absent
 // attribute keys are skipped rather than producing zero-valued entries.
-func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
+func TestGetRICoverageMap_GroupsByAccountAndInstanceType(t *testing.T) {
 	mock := &mockCoverageCE{
 		coverageOutput: &costexplorer.GetReservationCoverageOutput{
 			CoveragesByTime: []types.CoverageByTime{
@@ -41,7 +41,7 @@ func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
 					Groups: []types.ReservationCoverageGroup{
 						{
 							Attributes: map[string]string{
-								"region":       "us-east-1",
+								"account":      "test-account-a",
 								"instanceType": "db.r6g.large",
 							},
 							Coverage: &types.Coverage{
@@ -51,13 +51,12 @@ func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
 							},
 						},
 						{
-							// Mixed-case region from CE should normalise to lowercase.
-							// Also exercises the SCREAMING_SNAKE_CASE fallback path:
-							// CE returns camelCase keys in practice but our parser
-							// tolerates either form.
+							// SCREAMING_SNAKE_CASE fallback path: CE returns
+							// camelCase keys in practice but the parser tolerates
+							// either form.
 							Attributes: map[string]string{
-								"REGION":        "EU-WEST-2",
-								"INSTANCE_TYPE": "db.r6g.large",
+								"LINKED_ACCOUNT": "test-account-b",
+								"INSTANCE_TYPE":  "db.r6g.large",
 							},
 							Coverage: &types.Coverage{
 								CoverageHours: &types.CoverageHours{
@@ -67,7 +66,7 @@ func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
 						},
 						{
 							// Missing INSTANCE_TYPE attribute → skipped.
-							Attributes: map[string]string{"REGION": "us-east-1"},
+							Attributes: map[string]string{"account": "test-account-a"},
 							Coverage: &types.Coverage{
 								CoverageHours: &types.CoverageHours{
 									CoverageHoursPercentage: aws.String("99.9"),
@@ -81,18 +80,20 @@ func TestGetRICoverageMap_GroupsByRegionAndInstanceType(t *testing.T) {
 	}
 	client := NewClientWithAPI(mock, "us-east-1")
 
-	got, err := client.GetRICoverageMap(context.Background(), 30)
+	regions := []string{"us-east-1", "eu-west-2"}
+	got, err := client.GetRICoverageMap(context.Background(), 30, regions)
 	require.NoError(t, err)
-	// One call per non-RDS service in coverageServiceFilters (EC2,
-	// ElastiCache, OpenSearch, Redshift, MemoryDB = 5) + one per RDS
-	// engine in rdsCoverageEngines (MySQL/PostgreSQL/MariaDB/Oracle/
-	// SQL Server/Aurora MySQL/Aurora PostgreSQL = 7) = 12 single-page calls.
-	wantCalls := len(coverageServiceFilters) + len(rdsCoverageEngines)
-	assert.Equal(t, wantCalls, mock.coverageCalls, "one CE call per (service|RDS engine) filter combo")
+	// One call per (region, service) for non-RDS + one per (region, RDS engine).
+	// Total = len(regions) × (len(coverageServiceFilters) + len(rdsCoverageEngines)).
+	wantCalls := len(regions) * (len(coverageServiceFilters) + len(rdsCoverageEngines))
+	assert.Equal(t, wantCalls, mock.coverageCalls, "one CE call per (region, service|engine) combo")
 
-	assert.InDelta(t, 50.0, got[poolKey("us-east-1", "db.r6g.large")], 0.001)
-	assert.InDelta(t, 33.7, got[poolKey("eu-west-2", "db.r6g.large")], 0.001, "REGION attribute should be lowercased")
-	_, hasMissing := got[poolKey("us-east-1", "")]
+	// Account test-account-a in us-east-1 + db.r6g.large = 50%. The mock
+	// returns the same canned response for every call, so the per-region
+	// loop writes the same key on every iteration — last write wins.
+	assert.InDelta(t, 50.0, got[poolKey("eu-west-2", "db.r6g.large", "test-account-a")], 0.001)
+	assert.InDelta(t, 33.7, got[poolKey("eu-west-2", "db.r6g.large", "test-account-b")], 0.001, "SCREAMING_SNAKE_CASE attribute keys tolerated")
+	_, hasMissing := got[poolKey("us-east-1", "", "test-account-a")]
 	assert.False(t, hasMissing, "groups missing INSTANCE_TYPE should be skipped, not emit empty keys")
 }
 
@@ -102,23 +103,28 @@ func TestGetRICoverageMap_LookbackDefault(t *testing.T) {
 	mock := &mockCoverageCE{coverageOutput: &costexplorer.GetReservationCoverageOutput{}}
 	client := NewClientWithAPI(mock, "us-east-1")
 
-	_, err := client.GetRICoverageMap(context.Background(), 0)
+	regions := []string{"us-east-1"}
+	_, err := client.GetRICoverageMap(context.Background(), 0, regions)
 	require.NoError(t, err)
-	wantCalls := len(coverageServiceFilters) + len(rdsCoverageEngines)
+	wantCalls := len(regions) * (len(coverageServiceFilters) + len(rdsCoverageEngines))
 	assert.Equal(t, wantCalls, mock.coverageCalls)
 }
 
-// TestApplyCoverageMapToRecommendations covers the three cases: matched
-// (sets the field), unmatched (leaves zero), and empty map (no-op).
+// TestApplyCoverageMapToRecommendations covers the per-account matching:
+// recs look up by (region, instance_type, [engine], account) so accounts
+// with zero existing coverage don't see another account's coverage bled
+// in via the org-wide aggregate.
 func TestApplyCoverageMapToRecommendations(t *testing.T) {
+	const acctA = "test-account-a"
+	const acctB = "test-account-b"
 	recs := []common.Recommendation{
-		{Region: "us-east-1", ResourceType: "db.r6g.large"},
-		{Region: "eu-west-2", ResourceType: "db.r6g.large"},
-		{Region: "us-east-1", ResourceType: "db.m5.large"}, // no match
+		{Region: "us-east-1", ResourceType: "db.r6g.large", Account: acctA},
+		{Region: "eu-west-2", ResourceType: "db.r6g.large", Account: acctB},
+		{Region: "us-east-1", ResourceType: "db.m5.large", Account: acctA}, // no match
 	}
 	coverage := PoolCoverageMap{
-		"us-east-1:db.r6g.large": 50.0,
-		"eu-west-2:db.r6g.large": 33.7,
+		poolKey("us-east-1", "db.r6g.large", acctA): 50.0,
+		poolKey("eu-west-2", "db.r6g.large", acctB): 33.7,
 	}
 
 	ApplyCoverageMapToRecommendations(recs, coverage)
@@ -129,44 +135,74 @@ func TestApplyCoverageMapToRecommendations(t *testing.T) {
 
 	t.Run("empty map is a no-op", func(t *testing.T) {
 		recs := []common.Recommendation{
-			{Region: "us-east-1", ResourceType: "db.r6g.large", ExistingCoveragePct: 42},
+			{Region: "us-east-1", ResourceType: "db.r6g.large", Account: acctA, ExistingCoveragePct: 42},
 		}
 		ApplyCoverageMapToRecommendations(recs, nil)
 		assert.Equal(t, 42.0, recs[0].ExistingCoveragePct, "nil map must leave existing values untouched")
 	})
 
-	t.Run("case-insensitive matching", func(t *testing.T) {
+	t.Run("case-insensitive matching for region/instance", func(t *testing.T) {
 		// Recommendations carry mixed-case region/type strings; the lookup
 		// must normalise both sides via poolKey.
-		recs := []common.Recommendation{{Region: "US-EAST-1", ResourceType: "DB.R6G.LARGE"}}
-		cov := PoolCoverageMap{"us-east-1:db.r6g.large": 75.0}
+		recs := []common.Recommendation{{Region: "US-EAST-1", ResourceType: "DB.R6G.LARGE", Account: acctA}}
+		cov := PoolCoverageMap{poolKey("us-east-1", "db.r6g.large", acctA): 75.0}
 		ApplyCoverageMapToRecommendations(recs, cov)
 		assert.InDelta(t, 75.0, recs[0].ExistingCoveragePct, 0.001)
 	})
 
-	t.Run("RDS recs look up with engine-aware key", func(t *testing.T) {
-		// Same region + instance type, different engines, different
-		// existing coverage — the per-engine fetcher writes one entry per
-		// engine and the lookup must pick the right one. CE-side ("Aurora
-		// MySQL") and parser-side ("aurora-mysql") forms must collapse to
-		// the same key via normaliseRDSEngine.
+	t.Run("different accounts in same pool see different coverage", func(t *testing.T) {
+		// Production has 80% covered, staging has 0% — same pool dimensions
+		// otherwise. Without the per-account split this would average to ~40%
+		// for both. The per-account lookup keeps them distinct.
+		recs := []common.Recommendation{
+			{
+				Service:      common.ServiceRDS,
+				Region:       "us-east-1",
+				ResourceType: "db.t4g.medium",
+				Account:      "prod-account",
+				Details:      &common.DatabaseDetails{Engine: "aurora-mysql"},
+			},
+			{
+				Service:      common.ServiceRDS,
+				Region:       "us-east-1",
+				ResourceType: "db.t4g.medium",
+				Account:      "staging-account",
+				Details:      &common.DatabaseDetails{Engine: "aurora-mysql"},
+			},
+		}
+		cov := PoolCoverageMap{
+			rdsPoolKey("us-east-1", "db.t4g.medium", "Aurora MySQL", "prod-account"):    80.0,
+			rdsPoolKey("us-east-1", "db.t4g.medium", "Aurora MySQL", "staging-account"): 0.0,
+		}
+		ApplyCoverageMapToRecommendations(recs, cov)
+		assert.InDelta(t, 80.0, recs[0].ExistingCoveragePct, 0.001, "prod sees its own 80% coverage")
+		assert.Equal(t, 0.0, recs[1].ExistingCoveragePct, "staging sees 0%, not the prod-bled average")
+	})
+
+	t.Run("RDS recs look up with engine-aware key per account", func(t *testing.T) {
+		// Same region + instance type + account, different engines —
+		// the per-engine fetcher writes one entry per engine and the
+		// lookup must pick the right one. CE-side ("Aurora MySQL") and
+		// parser-side ("aurora-mysql") forms collapse to the same key.
 		recs := []common.Recommendation{
 			{
 				Service:      common.ServiceRDS,
 				Region:       "eu-west-2",
 				ResourceType: "db.r6g.large",
+				Account:      acctA,
 				Details:      &common.DatabaseDetails{Engine: "aurora-mysql"},
 			},
 			{
 				Service:      common.ServiceRDS,
 				Region:       "eu-west-2",
 				ResourceType: "db.r6g.large",
+				Account:      acctA,
 				Details:      &common.DatabaseDetails{Engine: "mysql"},
 			},
 		}
 		cov := PoolCoverageMap{
-			rdsPoolKey("eu-west-2", "db.r6g.large", "Aurora MySQL"): 98.5,
-			rdsPoolKey("eu-west-2", "db.r6g.large", "MySQL"):        0.0,
+			rdsPoolKey("eu-west-2", "db.r6g.large", "Aurora MySQL", acctA): 98.5,
+			rdsPoolKey("eu-west-2", "db.r6g.large", "MySQL", acctA):        0.0,
 		}
 		ApplyCoverageMapToRecommendations(recs, cov)
 		assert.InDelta(t, 98.5, recs[0].ExistingCoveragePct, 0.001, "aurora-mysql rec picks up Aurora MySQL coverage")

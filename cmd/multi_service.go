@@ -29,10 +29,14 @@ const existingCoverageLookbackDays = 30
 // Explorer so --target-coverage sizing can subtract what's already owned in
 // each pool. Best-effort: a transient CE failure logs a warning and returns
 // an empty map, which the sizing path treats as "no signal" — recs sized
-// against avg without subtracting existing commitments (the old behavior).
-// Skipping the fetch entirely when --target-coverage is not in play avoids a
-// needless CE call (and its $0.01 charge) for users on the --coverage path.
-func fetchExistingCoverage(ctx context.Context, recClient provider.RecommendationsClient, cfg Config) recommendations.PoolCoverageMap {
+// without subtracting existing commitments. Skipping the fetch entirely
+// when --target-coverage is not in play avoids the per-region CE charges
+// for users on the --coverage path.
+//
+// Coverage is fetched per-region per-account so CE's org-wide aggregate
+// doesn't bleed one account's coverage into another in multi-account orgs.
+// Regions come from cfg.Regions if set, otherwise from EC2 DescribeRegions.
+func fetchExistingCoverage(ctx context.Context, awsCfg aws.Config, recClient provider.RecommendationsClient, cfg Config) recommendations.PoolCoverageMap {
 	if cfg.TargetCoverage <= 0 {
 		return nil
 	}
@@ -42,13 +46,22 @@ func fetchExistingCoverage(ctx context.Context, recClient provider.Recommendatio
 		// the no-existing-commitments path.
 		return nil
 	}
-	AppLogger.Printf("\n🔎 Fetching existing-RI coverage from Cost Explorer (lookback %d days)...\n", existingCoverageLookbackDays)
-	cov, err := adapter.GetRICoverageMap(ctx, existingCoverageLookbackDays)
+	regions := cfg.Regions
+	if len(regions) == 0 {
+		allRegions, err := getAllAWSRegions(ctx, awsCfg)
+		if err != nil {
+			AppLogger.Printf("  ⚠️  Could not list AWS regions for coverage fetch (%v); skipping existing-coverage subtraction\n", err)
+			return nil
+		}
+		regions = allRegions
+	}
+	AppLogger.Printf("\n🔎 Fetching existing-RI coverage from Cost Explorer per-account across %d regions (lookback %d days)...\n", len(regions), existingCoverageLookbackDays)
+	cov, err := adapter.GetRICoverageMap(ctx, existingCoverageLookbackDays, regions)
 	if err != nil {
 		AppLogger.Printf("  ⚠️  Could not fetch existing-RI coverage (%v); sizing will assume zero existing coverage\n", err)
 		return nil
 	}
-	AppLogger.Printf("  ✅ Fetched coverage for %d (region, instance-type) pools\n", len(cov))
+	AppLogger.Printf("  ✅ Fetched coverage for %d (region, instance-type, engine, account) entries\n", len(cov))
 	return cov
 }
 
@@ -101,7 +114,7 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 	// and continues with an empty map, which makes sizing degenerate to
 	// the no-existing-commitments path (matches behavior when no recs
 	// are matched in the map).
-	coverageMap := fetchExistingCoverage(ctx, recClient, cfg)
+	coverageMap := fetchExistingCoverage(ctx, awsCfg, recClient, cfg)
 
 	// Phase 1: collect all recommendations without purchasing.
 	AppLogger.Printf("\n📥 Fetching recommendations from all services...\n")

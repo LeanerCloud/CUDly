@@ -100,11 +100,11 @@ func commitmentIsActive(c common.Commitment) bool {
 
 // commitmentPoolKey returns the same lookup key shape used by the coverage
 // map: engine-aware for RDS, region+instance-type for everything else.
-// The shape must match lookupPoolKey so adjustments align with the
-// existing-coverage signal they're modifying.
+// Both forms include the linked-account ID so adjustments align with the
+// per-account existing-coverage signal they're modifying.
 func commitmentPoolKey(c common.Commitment) string {
 	if c.Service == common.ServiceRDS || c.Service == common.ServiceRelationalDB {
-		return rdsPoolKey(c.Region, c.ResourceType, c.Engine)
+		return rdsPoolKey(c.Region, c.ResourceType, c.Engine, c.Account)
 	}
-	return poolKey(c.Region, c.ResourceType)
+	return poolKey(c.Region, c.ResourceType, c.Account)
 }

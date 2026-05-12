@@ -165,11 +165,13 @@ func (r *RecommendationsClientAdapter) GetRIUtilization(ctx context.Context, loo
 }
 
 // GetRICoverageMap returns the per-pool RI coverage % over the last
-// lookbackDays days, keyed by "region:instance_type". Used by the
-// --target-coverage sizing path to subtract existing pool coverage from
-// the under-buy formula.
-func (r *RecommendationsClientAdapter) GetRICoverageMap(ctx context.Context, lookbackDays int) (recommendations.PoolCoverageMap, error) {
-	return r.client.GetRICoverageMap(ctx, lookbackDays)
+// lookbackDays days, keyed by "region:instance_type:account" (or
+// "region:instance_type:engine:account" for RDS) so the apply helper
+// can look up per-linked-account coverage. Caller passes the regions
+// to scan; CE returns coverage filtered to that region and grouped by
+// LINKED_ACCOUNT + INSTANCE_TYPE.
+func (r *RecommendationsClientAdapter) GetRICoverageMap(ctx context.Context, lookbackDays int, regions []string) (recommendations.PoolCoverageMap, error) {
+	return r.client.GetRICoverageMap(ctx, lookbackDays, regions)
 }
 
 // NewRecommendationsClientDirect creates a new recommendations client returning the concrete type

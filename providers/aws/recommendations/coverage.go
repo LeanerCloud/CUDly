@@ -59,11 +59,12 @@ const rdsServiceFilter = "Amazon Relational Database Service"
 // region and their existing-RI coverage doesn't bleed across.
 type PoolCoverageMap map[string]float64
 
-// poolKey returns the canonical lookup key for a (region, instance_type)
-// pair. Both inputs are lower-cased so callers don't have to normalise
-// case at every site.
-func poolKey(region, instanceType string) string {
-	return strings.ToLower(region) + ":" + strings.ToLower(instanceType)
+// poolKey returns the canonical non-RDS lookup key for a
+// (region, instance_type, account) tuple. All inputs are lower-cased so
+// callers don't have to normalise case at every site. Account is the
+// AWS-side 12-digit linked-account ID (kept as-is — it's already digits).
+func poolKey(region, instanceType, account string) string {
+	return strings.ToLower(region) + ":" + strings.ToLower(instanceType) + ":" + account
 }
 
 // rdsPoolKey returns the engine-aware lookup key for an RDS pool. CE's
@@ -71,8 +72,10 @@ func poolKey(region, instanceType string) string {
 // while CUDly's parser stores the shorthand on rec.Details.Engine
 // ("aurora-mysql"). Both forms normalise to the same lookup key here so
 // the producer (per-engine fetcher) and consumer (apply helper) agree.
-func rdsPoolKey(region, instanceType, engine string) string {
-	return strings.ToLower(region) + ":" + strings.ToLower(instanceType) + ":" + normaliseRDSEngine(engine)
+// Account is the AWS-side linked-account ID, mirroring the LINKED_ACCOUNT
+// dimension we group by in CE.
+func rdsPoolKey(region, instanceType, engine, account string) string {
+	return strings.ToLower(region) + ":" + strings.ToLower(instanceType) + ":" + normaliseRDSEngine(engine) + ":" + account
 }
 
 // normaliseRDSEngine canonicalises an engine string from either CE's
@@ -103,7 +106,7 @@ func normaliseRDSEngine(engine string) string {
 // map; ApplyCoverageMapToRecommendations leaves ExistingCoveragePct at zero
 // for those recs, which the sizing path treats as "no signal" and falls
 // back to the no-existing-commitments formula.
-func (c *Client) GetRICoverageMap(ctx context.Context, lookbackDays int) (PoolCoverageMap, error) {
+func (c *Client) GetRICoverageMap(ctx context.Context, lookbackDays int, regions []string) (PoolCoverageMap, error) {
 	if lookbackDays <= 0 {
 		lookbackDays = 30
 	}
@@ -113,37 +116,47 @@ func (c *Client) GetRICoverageMap(ctx context.Context, lookbackDays int) (PoolCo
 	endStr := end.Format("2006-01-02")
 
 	out := make(PoolCoverageMap)
-	for _, service := range coverageServiceFilters {
-		if err := c.fetchCoverageForService(ctx, startStr, endStr, service, out); err != nil {
-			return nil, fmt.Errorf("fetching coverage for service %q: %w", service, err)
+	// CE's GroupBy is capped at two dimensions. We group by LINKED_ACCOUNT
+	// + INSTANCE_TYPE and push REGION into the Filter so coverage comes
+	// back per linked account in the region we're scanning. Without this
+	// per-account split, CE's org-wide aggregate would average a heavily-
+	// covered account's coverage into accounts with zero existing RIs in
+	// the same pool — see #338 design discussion.
+	//
+	// Cost: one CE call per (service, region) for non-RDS; one CE call per
+	// (engine, region) for RDS. For shift-prd's 5 services × ~23 regions +
+	// 7 engines × 23 regions ≈ 270 calls (~$2.70/run). Empty regions
+	// return quickly so the bound is loose in practice.
+	for _, region := range regions {
+		for _, service := range coverageServiceFilters {
+			if err := c.fetchCoverageForServiceRegion(ctx, startStr, endStr, service, region, out); err != nil {
+				return nil, fmt.Errorf("fetching coverage for service %q region %q: %w", service, region, err)
+			}
 		}
-	}
-	// RDS fans out per engine because mixed-engine pools (same instance type,
-	// different DB engines) aren't separable via the 2-dimension GroupBy. See
-	// coverageServiceFilters block-comment for the rationale.
-	for _, engine := range rdsCoverageEngines {
-		if err := c.fetchCoverageForRDSEngine(ctx, startStr, endStr, engine, out); err != nil {
-			return nil, fmt.Errorf("fetching coverage for RDS engine %q: %w", engine, err)
+		for _, engine := range rdsCoverageEngines {
+			if err := c.fetchCoverageForRDSEngineRegion(ctx, startStr, endStr, engine, region, out); err != nil {
+				return nil, fmt.Errorf("fetching coverage for RDS engine %q region %q: %w", engine, region, err)
+			}
 		}
 	}
 	return out, nil
 }
 
-// fetchCoverageForRDSEngine runs the paged GetReservationCoverage loop for
-// RDS recommendations filtered to a single DATABASE_ENGINE. Writes entries
-// keyed by "region:instance_type:engine" so the apply helper can look up
-// per-engine coverage instead of the per-pool aggregate that
-// fetchCoverageForService would produce. Solves the cross-engine bleed:
-// without it, a db.r7g.large in eu-west-2 with heavy Aurora coverage looks
-// 83%-covered even though MySQL recs in the same pool have 0% coverage.
-func (c *Client) fetchCoverageForRDSEngine(ctx context.Context, startStr, endStr, engine string, out PoolCoverageMap) error {
+// fetchCoverageForRDSEngineRegion runs the paged GetReservationCoverage
+// loop for one (RDS engine, region) tuple. Writes entries keyed by
+// "region:instance_type:engine:account" so the apply helper looks up
+// per-engine per-account coverage. This solves both the cross-engine
+// bleed (db.r7g.large with heavy Aurora coverage looking covered for
+// MySQL too) and the cross-account bleed (one account's full coverage
+// dragging up the org-wide average against accounts with zero coverage).
+func (c *Client) fetchCoverageForRDSEngineRegion(ctx context.Context, startStr, endStr, engine, region string, out PoolCoverageMap) error {
 	input := &costexplorer.GetReservationCoverageInput{
 		TimePeriod: &types.DateInterval{
 			Start: aws.String(startStr),
 			End:   aws.String(endStr),
 		},
 		GroupBy: []types.GroupDefinition{
-			{Type: types.GroupDefinitionTypeDimension, Key: aws.String("REGION")},
+			{Type: types.GroupDefinitionTypeDimension, Key: aws.String("LINKED_ACCOUNT")},
 			{Type: types.GroupDefinitionTypeDimension, Key: aws.String("INSTANCE_TYPE")},
 		},
 		Filter: &types.Expression{
@@ -156,6 +169,10 @@ func (c *Client) fetchCoverageForRDSEngine(ctx context.Context, startStr, endStr
 					Key:    types.DimensionDatabaseEngine,
 					Values: []string{engine},
 				}},
+				{Dimensions: &types.DimensionValues{
+					Key:    types.DimensionRegion,
+					Values: []string{region},
+				}},
 			},
 		},
 		Metrics: []string{"Hour"},
@@ -168,7 +185,7 @@ func (c *Client) fetchCoverageForRDSEngine(ctx context.Context, startStr, endStr
 		if err != nil {
 			return err
 		}
-		accumulateRDSEngineGroups(out, result.CoveragesByTime, engine)
+		accumulateRDSEngineAccountGroups(out, result.CoveragesByTime, engine, region)
 		if result.NextPageToken == nil || *result.NextPageToken == "" {
 			return nil
 		}
@@ -176,32 +193,38 @@ func (c *Client) fetchCoverageForRDSEngine(ctx context.Context, startStr, endStr
 	}
 }
 
-// fetchCoverageForService runs the paged GetReservationCoverage loop for a
-// single SERVICE dimension value and writes the (region, instance_type) →
-// HoursPercentage entries into out. Split per-service because CE returns
-// only EC2 coverage when no SERVICE filter is set, so a single
-// no-filter call hides RDS/ElastiCache/etc. coverage entirely.
-func (c *Client) fetchCoverageForService(ctx context.Context, startStr, endStr, service string, out PoolCoverageMap) error {
+// fetchCoverageForServiceRegion runs the paged GetReservationCoverage loop
+// for one (non-RDS service, region) tuple. Writes entries keyed by
+// "region:instance_type:account". Same per-account split as the RDS path,
+// without the engine dimension (non-RDS services don't have it).
+//
+// "Hour" tells CE to include the Hour coverage block in the response;
+// CoverageHoursPercentage inside that block is what we actually parse.
+// HoursPercentage isn't a valid Metrics value (CE rejects it with
+// ValidationException) — Metrics names the block, the percentage field
+// is computed and included automatically.
+func (c *Client) fetchCoverageForServiceRegion(ctx context.Context, startStr, endStr, service, region string, out PoolCoverageMap) error {
 	input := &costexplorer.GetReservationCoverageInput{
 		TimePeriod: &types.DateInterval{
 			Start: aws.String(startStr),
 			End:   aws.String(endStr),
 		},
 		GroupBy: []types.GroupDefinition{
-			{Type: types.GroupDefinitionTypeDimension, Key: aws.String("REGION")},
+			{Type: types.GroupDefinitionTypeDimension, Key: aws.String("LINKED_ACCOUNT")},
 			{Type: types.GroupDefinitionTypeDimension, Key: aws.String("INSTANCE_TYPE")},
 		},
 		Filter: &types.Expression{
-			Dimensions: &types.DimensionValues{
-				Key:    types.DimensionService,
-				Values: []string{service},
+			And: []types.Expression{
+				{Dimensions: &types.DimensionValues{
+					Key:    types.DimensionService,
+					Values: []string{service},
+				}},
+				{Dimensions: &types.DimensionValues{
+					Key:    types.DimensionRegion,
+					Values: []string{region},
+				}},
 			},
 		},
-		// "Hour" tells CE to include the Hour coverage block in the response;
-		// CoverageHoursPercentage inside that block is what we actually parse.
-		// HoursPercentage isn't a valid Metrics value (CE rejects it with
-		// ValidationException) — Metrics names the block, the percentage
-		// field is computed and included automatically.
 		Metrics: []string{"Hour"},
 	}
 
@@ -212,7 +235,7 @@ func (c *Client) fetchCoverageForService(ctx context.Context, startStr, endStr, 
 		if err != nil {
 			return err
 		}
-		accumulateCoverageGroups(out, result.CoveragesByTime)
+		accumulateAccountGroups(out, result.CoveragesByTime, region)
 		if result.NextPageToken == nil || *result.NextPageToken == "" {
 			return nil
 		}
@@ -239,17 +262,15 @@ func (c *Client) fetchCoveragePage(ctx context.Context, input *costexplorer.GetR
 	}
 }
 
-// accumulateCoverageGroups walks a page of CE coverage responses and writes
-// the (region, instance_type) → HoursPercentage entries into out. Later
-// pages overwrite earlier ones for the same key — CE returns one group per
-// (region, instance_type) per time period, so collisions only happen across
-// time periods and we keep the latest value (sufficient as a single-figure
-// summary; finer time-series analysis is out of scope here).
-func accumulateCoverageGroups(out PoolCoverageMap, byTime []types.CoverageByTime) {
+// accumulateAccountGroups walks a page of CE coverage responses grouped by
+// LINKED_ACCOUNT + INSTANCE_TYPE and writes (region, instance_type, account)
+// → HoursPercentage entries into out. The region arg comes from the caller
+// (we filter by region; CE doesn't echo it back in the group attributes).
+func accumulateAccountGroups(out PoolCoverageMap, byTime []types.CoverageByTime, region string) {
 	for _, period := range byTime {
 		for _, group := range period.Groups {
-			region, instType := extractGroupPoolKey(group.Attributes)
-			if region == "" || instType == "" {
+			account, instType := extractGroupAccountInstanceType(group.Attributes)
+			if account == "" || instType == "" {
 				continue
 			}
 			if group.Coverage == nil || group.Coverage.CoverageHours == nil ||
@@ -257,21 +278,19 @@ func accumulateCoverageGroups(out PoolCoverageMap, byTime []types.CoverageByTime
 				continue
 			}
 			pct := parseFloat(aws.ToString(group.Coverage.CoverageHours.CoverageHoursPercentage))
-			out[poolKey(region, instType)] = pct
+			out[poolKey(region, instType, account)] = pct
 		}
 	}
 }
 
-// accumulateRDSEngineGroups is the RDS variant of accumulateCoverageGroups
-// that writes engine-aware keys. The engine arg is the CE-side
-// DATABASE_ENGINE filter value that produced this page; we encode it into
-// each key via rdsPoolKey so the apply helper can disambiguate
-// same-instance-type pools running different engines.
-func accumulateRDSEngineGroups(out PoolCoverageMap, byTime []types.CoverageByTime, engine string) {
+// accumulateRDSEngineAccountGroups is the RDS variant of accumulateAccountGroups
+// that writes engine-aware keys. The engine and region args come from the
+// caller (both are in the Filter, not the GroupBy).
+func accumulateRDSEngineAccountGroups(out PoolCoverageMap, byTime []types.CoverageByTime, engine, region string) {
 	for _, period := range byTime {
 		for _, group := range period.Groups {
-			region, instType := extractGroupPoolKey(group.Attributes)
-			if region == "" || instType == "" {
+			account, instType := extractGroupAccountInstanceType(group.Attributes)
+			if account == "" || instType == "" {
 				continue
 			}
 			if group.Coverage == nil || group.Coverage.CoverageHours == nil ||
@@ -279,27 +298,27 @@ func accumulateRDSEngineGroups(out PoolCoverageMap, byTime []types.CoverageByTim
 				continue
 			}
 			pct := parseFloat(aws.ToString(group.Coverage.CoverageHours.CoverageHoursPercentage))
-			out[rdsPoolKey(region, instType, engine)] = pct
+			out[rdsPoolKey(region, instType, engine, account)] = pct
 		}
 	}
 }
 
-// extractGroupPoolKey reads the REGION and INSTANCE_TYPE values from CE's
-// Attributes map. CE sends keys in camelCase (e.g. "region", "instanceType")
-// even though the GroupBy input expects SCREAMING_SNAKE_CASE
-// ("REGION", "INSTANCE_TYPE"); normalise both sides by stripping underscores
-// and lower-casing before comparing. Returns ("", "") when either dimension
-// is missing — caller skips those groups.
-func extractGroupPoolKey(attrs map[string]string) (region, instanceType string) {
+// extractGroupAccountInstanceType reads the LINKED_ACCOUNT and INSTANCE_TYPE
+// values from CE's Attributes map. CE sends keys in camelCase ("account" /
+// "instanceType") even though the GroupBy input expects SCREAMING_SNAKE_CASE
+// ("LINKED_ACCOUNT" / "INSTANCE_TYPE"); normalise both sides by stripping
+// underscores and lower-casing before comparing. Returns ("", "") when
+// either dimension is missing — caller skips those groups.
+func extractGroupAccountInstanceType(attrs map[string]string) (account, instanceType string) {
 	for k, v := range attrs {
 		switch strings.ToLower(strings.ReplaceAll(k, "_", "")) {
-		case "region":
-			region = strings.ToLower(v)
+		case "account", "linkedaccount":
+			account = v // 12-digit AWS account ID, case-insensitive but already digits
 		case "instancetype":
 			instanceType = strings.ToLower(v)
 		}
 	}
-	return region, instanceType
+	return account, instanceType
 }
 
 // ApplyCoverageMapToRecommendations sets ExistingCoveragePct on each rec
@@ -325,13 +344,14 @@ func ApplyCoverageMapToRecommendations(recs []common.Recommendation, coverage Po
 }
 
 // lookupPoolKey returns the pool key for a recommendation. RDS uses the
-// engine-aware form so the per-engine fetcher's keys match. Other services
-// fall back to the simpler region:instance_type form.
+// engine-aware form; non-RDS uses the simpler form. Both include the
+// linked-account ID so the per-account fetcher's keys match — without
+// this, CE's org-wide aggregate would bleed across accounts.
 func lookupPoolKey(rec common.Recommendation) string {
 	if engine := rdsEngineFromRec(rec); engine != "" {
-		return rdsPoolKey(rec.Region, rec.ResourceType, engine)
+		return rdsPoolKey(rec.Region, rec.ResourceType, engine, rec.Account)
 	}
-	return poolKey(rec.Region, rec.ResourceType)
+	return poolKey(rec.Region, rec.ResourceType, rec.Account)
 }
 
 // rdsEngineFromRec extracts the RDS engine string from a recommendation's
