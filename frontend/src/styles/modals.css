@@ -66,7 +66,7 @@
     justify-content: flex-end;
     margin-top: 1.5rem;
     padding-top: 1rem;
-    border-top: 1px solid #eee;
+    border-top: 1px solid var(--cudly-border);
 }
 
 /* Modal description */
@@ -131,7 +131,7 @@
 }
 
 .prereq-description {
-    color: #555;
+    color: var(--cudly-text-muted);
     font-size: 0.85rem;
     margin-bottom: 0.75rem;
 }
@@ -189,7 +189,7 @@
 .purchase-modal-include-label {
     display: block;
     font-size: 0.8rem;
-    color: #555;
+    color: var(--cudly-text-muted);
     margin-top: 2px;
 }
 

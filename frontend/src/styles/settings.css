@@ -135,7 +135,7 @@
 }
 
 .credential-status.configured {
-    background: #e6f4ea;
+    background: var(--cudly-success-bg);
     color: #137333;
 }
 
@@ -175,7 +175,7 @@
 
 /* Provider settings section */
 .provider-settings {
-    background: #fafafa;
+    background: var(--cudly-surface-muted);
 }
 
 .provider-settings.hidden {
@@ -477,7 +477,7 @@ select.dirty {
 .permission-matrix th { background: var(--cudly-bg); font-weight: 600; }
 .permission-matrix td:first-child { text-align: left; font-family: monospace; }
 .permission-matrix .has-perm { color: #137333; font-weight: 600; }
-.permission-matrix .no-perm { color: #ccc; }
+.permission-matrix .no-perm { color: var(--cudly-border-strong); }
 
 /* Expandable user rows */
 .user-expand-btn {
@@ -491,7 +491,7 @@ select.dirty {
 .user-expand-btn:hover { color: var(--cudly-primary); }
 .user-expand-row.hidden { display: none; }
 .user-expand-panel {
-    background: #fafafa;
+    background: var(--cudly-surface-muted);
     padding: 1rem 1.25rem;
     border-top: 1px solid var(--cudly-border);
     border-bottom: 1px solid var(--cudly-border);
@@ -558,7 +558,7 @@ select.dirty {
     flex-wrap: wrap;
     gap: 0.25rem;
     padding: 0.5rem;
-    background: #f9f9f9;
+    background: var(--cudly-surface-muted);
     border: 1px solid var(--cudly-border);
     border-radius: 4px;
     min-height: 2rem;

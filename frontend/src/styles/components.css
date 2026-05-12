@@ -220,9 +220,9 @@ button.danger:hover {
 }
 
 .btn-small.warning {
-    background: #fbbc04;
+    background: var(--cudly-warn);
     color: var(--cudly-text);
-    border-color: #fbbc04;
+    border-color: var(--cudly-warn);
 }
 
 .btn-small.warning:hover {
@@ -563,7 +563,7 @@ button.danger:hover {
 }
 
 .accounts-overview-chip:hover {
-    background: #f5f7fa;
+    background: var(--cudly-bg);
     border-color: #4a90e2;
 }
 
@@ -601,7 +601,7 @@ button.danger:hover {
 }
 
 .status-chip:hover {
-    background: #f5f7fa;
+    background: var(--cudly-bg);
 }
 
 .status-chip.active {
@@ -1344,7 +1344,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-weight: 600;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    background: #f0f0f0;
+    background: var(--cudly-border);
     color: var(--cudly-text-muted);
 }
 
@@ -1388,7 +1388,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .badge-muted {
-    background: #f0f0f0;
+    background: var(--cudly-border);
     color: var(--cudly-text-muted);
 }
 
