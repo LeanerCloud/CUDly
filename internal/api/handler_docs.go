@@ -24,7 +24,7 @@ var openapiSpec []byte
 //     because the bundle injects styles at runtime.
 //   - img-src: 'self' + data: for the bundle's data-URI icons.
 //   - font-src: 'self' + unpkg for any web fonts swagger-ui references.
-//   - connect-src: 'self' for the /api/docs/openapi.yaml fetch.
+//   - connect-src: 'self' for the same-origin openapi.yaml fetch.
 //   - frame-ancestors: 'none' (unchanged from the default — still
 //     clickjacking-safe).
 //
@@ -53,7 +53,8 @@ func (h *Handler) serveDocsUI(_ context.Context, _ *events.LambdaFunctionURLRequ
   <div id="swagger-ui"></div>
   <script src="https://unpkg.com/swagger-ui-dist@5.32.5/swagger-ui-bundle.js"></script>
   <script>
-    SwaggerUIBundle({url:"/api/docs/openapi.yaml",dom_id:"#swagger-ui",deepLinking:true,presets:[SwaggerUIBundle.presets.apis,SwaggerUIBundle.SwaggerUIStandalonePreset],layout:"BaseLayout"});
+    const specURL = window.location.pathname.replace(/\/+$/, "") + "/openapi.yaml";
+    SwaggerUIBundle({url:specURL,dom_id:"#swagger-ui",deepLinking:true,presets:[SwaggerUIBundle.presets.apis,SwaggerUIBundle.SwaggerUIStandalonePreset],layout:"BaseLayout"});
   </script>
 </body>
 </html>`
