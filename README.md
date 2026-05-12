@@ -114,9 +114,21 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
 |------|-------------|---------|
 | `-p, --payment` | Payment option: `all-upfront`, `partial-upfront`, `no-upfront` | no-upfront |
 | `-t, --term` | Term in years: `1` or `3` | 3 |
-| `-c, --coverage` | Coverage percentage (0-100) | 80 |
+| `-c, --coverage` | Coverage percentage (0-100) — % of each recommendation's instance count to purchase | 80 |
+| `-u, --target-utilization` | Target post-purchase utilization % (0-100). Sizes purchases so projected utilization stays >= target. Overrides `--coverage`. | 0 (disabled) |
 | `--max-instances` | Maximum instances to purchase (0 = unlimited) | 0 |
 | `--override-count` | Override recommended count with specific value | 0 |
+
+> **`--coverage` vs `--target-utilization`** — two different sizing
+> levers. `--coverage` is "how much of the recommendation should I
+> buy?" (scales the instance count proportionally). `--target-utilization`
+> is "how aggressively can the commitment be used?" (sizes the buy
+> against historical hourly usage so each unit hits the target
+> utilization). **Counter-intuitively, a higher `--target-utilization`
+> means buying *fewer* commitments**: utilization is used÷bought, so
+> raising the target shrinks the bought side. Use `--target-utilization`
+> when you'd rather under-buy and spill to on-demand than over-buy and
+> leave commitments idle.
 
 ### Execution Control
 
