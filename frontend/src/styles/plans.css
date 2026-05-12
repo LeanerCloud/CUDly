@@ -14,9 +14,9 @@
 
 /* Plan cards */
 .plan-card {
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
     margin-bottom: 1rem;
     overflow: hidden;
 }
@@ -26,8 +26,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 1.5rem;
-    background: #f8f9fa;
-    border-bottom: 1px solid #eee;
+    background: var(--cudly-surface-muted);
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 .plan-header h3 {
@@ -110,7 +110,7 @@
 .upcoming-date .day {
     font-size: 1.5rem;
     font-weight: bold;
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 .upcoming-date .month {
@@ -136,7 +136,7 @@
 .upcoming-savings .amount {
     font-size: 1.25rem;
     font-weight: bold;
-    color: #34a853;
+    color: var(--cudly-success);
 }
 
 .upcoming-savings .label {
@@ -163,7 +163,7 @@
 }
 
 .ramp-option:hover {
-    border-color: #1a73e8;
+    border-color: var(--cudly-primary);
 }
 
 .ramp-option input[type="radio"] {
@@ -171,8 +171,8 @@
 }
 
 .ramp-option:has(input:checked) {
-    border-color: #1a73e8;
-    background: #e8f0fe;
+    border-color: var(--cudly-primary);
+    background: var(--cudly-info-bg);
 }
 
 .ramp-label {

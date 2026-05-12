@@ -894,26 +894,60 @@ th .column-filter-btn.active {
     cursor: pointer;
 }
 
-/* Sticky bottom action box — Payment / Capacity % / Purchase / Create Plan. */
+/* Sticky bottom action box — Payment / Capacity % / Purchase / Create Plan.
+ *
+ * The mock UI (issue #340) hosts this in a right-side drawer ("Plan
+ * builder"). Pulling the existing sticky-bottom action-box into a side
+ * drawer would require non-trivial recommendations.ts changes; the
+ * pragmatic intermediate is to keep the sticky-bottom layout but pick
+ * up the design tokens so colors + spacing + radii sit in the same
+ * visual family as the rest of the action-center reskin. Drawer is
+ * tracked as a deferred sub-task in #340. */
 :root { --action-box-height: 80px; }
 .recommendations-action-box {
     position: sticky;
     bottom: 0;
     height: var(--action-box-height);
-    background: #fff;
-    border-top: 1px solid #d0d7de;
-    box-shadow: 0 -2px 8px rgba(0,0,0,0.08);
+    background: var(--cudly-surface);
+    border-top: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-md);
     z-index: 10;
-    padding: 0.75rem 1rem;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
     box-sizing: border-box;
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md) var(--cudly-r-md) 0 0;
 }
 .recommendations-action-box .recommendations-action-summary {
-    color: #555;
-    font-size: 0.9em;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
     margin-right: auto;
+}
+
+/* Context drawer placeholder (issue #340 T8) — class slot reserved for
+ * a future right-side "Plan builder" drawer that will host selected-rec
+ * summary + Purchase / Create Plan affordances. Today it's a stub that
+ * doesn't apply to any element; once the drawer ships, recommendations.ts
+ * will toggle this class on the new <aside>. Keeping the stub here keeps
+ * the design-token mapping in one place for the migration. */
+.context-drawer {
+    position: fixed;
+    top: var(--cudly-topbar-h);
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    background: var(--cudly-surface);
+    border-left: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-lg);
+    padding: var(--cudly-sp-5);
+    overflow-y: auto;
+    z-index: 20;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+}
+.context-drawer.open {
+    transform: translateX(0);
 }
 .recommendations-action-box label {
     display: flex;
