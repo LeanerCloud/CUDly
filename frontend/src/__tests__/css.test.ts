@@ -66,12 +66,17 @@ describe('CSS Styles', () => {
   });
 
   describe('CSS Classes', () => {
-    test('has savings class with green color', () => {
-      expect(css).toMatch(/\.savings\s*\{[^}]*color:\s*#34a853/);
+    test('has savings class with success color token', () => {
+      // After issue #340 the literal #34a853 was replaced with the
+      // --cudly-success token; assert the .savings rule still binds
+      // to a green-family colour via either the token or its literal.
+      expect(css).toMatch(/\.savings\s*\{[^}]*color:\s*(var\(--cudly-success\)|#34a853)/);
     });
 
-    test('has error class with red color', () => {
-      expect(css).toMatch(/\.error\s*\{[^}]*color:\s*#ea4335/);
+    test('has error class with error color token', () => {
+      // Post-#340 the literal #ea4335 was replaced with the
+      // --cudly-error token; assert either form.
+      expect(css).toMatch(/\.error\s*\{[^}]*color:\s*(var\(--cudly-error\)|#ea4335)/);
     });
 
     test('has provider badge classes', () => {

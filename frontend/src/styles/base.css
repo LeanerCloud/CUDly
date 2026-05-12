@@ -29,6 +29,7 @@
     /* Status (semantic) — keep existing palette to avoid surprise drift */
     --cudly-success: #34a853;
     --cudly-success-bg: #e8f5e9;
+    --cudly-success-fg: #2e7d32;
     --cudly-warn: #fbbc04;
     --cudly-warn-bg: #fff3e0;
     --cudly-warn-fg: #e65100;
@@ -83,9 +84,17 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+html {
+    /* Smooth anchor-jump scrolling (e.g. when the skip-to-main link or
+     * future in-page anchors fire). Overridden to `auto` by the
+     * prefers-reduced-motion rule below for users who opt out. */
+    scroll-behavior: smooth;
+}
+
 body {
     font-family: var(--cudly-font-base);
-    background: #f5f5f5;
+    background: var(--cudly-bg);
+    color: var(--cudly-text);
 }
 
 /* Generic utilities — prefer these over inline `style="..."` attributes
@@ -96,7 +105,7 @@ body {
 }
 
 .text-muted {
-    color: #999;
+    color: var(--cudly-text-subtle);
     font-size: 0.85rem;
 }
 
@@ -109,14 +118,14 @@ body {
 }
 
 .savings {
-    color: #34a853;
+    color: var(--cudly-success);
 }
 
 
 .error {
-    color: #ea4335;
+    color: var(--cudly-error);
     padding: 1rem;
-    background: #fce8e6;
+    background: var(--cudly-error-bg);
     border-radius: 4px;
 }
 
@@ -194,14 +203,14 @@ body {
 
 /* Help text */
 .help-text {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.875rem;
     margin-bottom: 0.75rem;
 }
 
 /* Loading state */
 .loading {
-    color: #666;
+    color: var(--cudly-text-muted);
     padding: 2rem;
     text-align: center;
 }
@@ -213,10 +222,10 @@ body {
 /* Error message */
 .error-message {
     padding: 1rem;
-    background: #fce8e6;
-    border: 1px solid #ea4335;
+    background: var(--cudly-error-bg);
+    border: 1px solid var(--cudly-error);
     border-radius: 4px;
-    color: #c5221f;
+    color: var(--cudly-error-fg);
     margin-top: 1rem;
 }
 
@@ -227,10 +236,10 @@ body {
 /* Success message */
 .success-message {
     padding: 1rem;
-    background: #e8f5e9;
-    border: 1px solid #4caf50;
+    background: var(--cudly-success-bg);
+    border: 1px solid var(--cudly-success);
     border-radius: 4px;
-    color: #2e7d32;
+    color: var(--cudly-success-fg);
     margin-top: 1rem;
 }
 
@@ -242,10 +251,10 @@ body {
  * / automation warnings read as warnings, not failures. */
 .warning-message {
     padding: 1rem;
-    background: #fff3e0;
-    border: 1px solid #fbbc04;
+    background: var(--cudly-warn-bg);
+    border: 1px solid var(--cudly-warn);
     border-radius: 4px;
-    color: #e65100;
+    color: var(--cudly-warn-fg);
     margin-top: 1rem;
     margin-bottom: 1rem;
 }
