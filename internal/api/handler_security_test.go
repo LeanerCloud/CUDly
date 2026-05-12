@@ -161,6 +161,44 @@ func TestServeDocsUI_RelaxedCSP(t *testing.T) {
 	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
 }
 
+// TestServeDocsUI_RelaxedCSP_RootDocs verifies the /docs/ HTML response carries
+// the same relaxed Content-Security-Policy as /api/docs/, whitelisting exactly
+// what Swagger UI needs to render.
+func TestServeDocsUI_RelaxedCSP_RootDocs(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/docs/",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	csp := resp.Headers["Content-Security-Policy"]
+	// The docs CSP must permit the swagger-ui CDN, its inline bootstrap,
+	// data URIs for icons, and same-origin connect-src for openapi.yaml.
+	assert.Contains(t, csp, "https://unpkg.com", "docs CSP must allow swagger-ui CDN")
+	assert.Contains(t, csp, "'unsafe-inline'", "docs CSP must allow the inline bootstrap script")
+	assert.Contains(t, csp, "data:", "docs CSP must allow data: URIs for icons")
+	assert.Contains(t, csp, "connect-src 'self'", "docs CSP must allow openapi.yaml fetch from same origin")
+	assert.Contains(t, csp, "frame-ancestors 'none'", "docs CSP must keep clickjacking protection")
+	// The restrictive default must not leak through.
+	assert.NotEqual(t, "default-src 'none'; frame-ancestors 'none'", csp,
+		"docs path must override the restrictive default CSP")
+
+	// Other security headers stay strict.
+	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
+	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+}
+
 // TestServeOpenAPISpec_KeepsStrictCSP verifies that the openapi.yaml endpoint
 // (which serves raw YAML, no scripts) keeps the default restrictive CSP.
 // Only the HTML docs page needs the relaxed policy.
