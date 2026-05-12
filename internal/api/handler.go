@@ -375,9 +375,16 @@ func (h *Handler) handleRequestError(err error) (int, any) {
 // rawResponse allows handlers to return pre-formatted, non-JSON content
 // (e.g. HTML, YAML). buildResponse will use the body and contentType directly
 // instead of JSON-marshaling.
+//
+// csp, when non-empty, overrides the default restrictive Content-Security-
+// Policy header set by setSecurityHeaders. Used by serveDocsUI to relax the
+// CSP for the Swagger UI page (the default `default-src 'none'` blocks the
+// CDN-hosted swagger-ui assets and the inline bootstrap script, leaving the
+// page blank — closes issue #329).
 type rawResponse struct {
 	contentType string
 	body        string
+	csp         string
 }
 
 // buildResponse creates a Lambda Function URL response
@@ -393,6 +400,9 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 	// Handle raw (non-JSON) responses
 	if raw, ok := body.(*rawResponse); ok {
 		headers["Content-Type"] = raw.contentType
+		if raw.csp != "" {
+			headers["Content-Security-Policy"] = raw.csp
+		}
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: statusCode,
 			Headers:    headers,

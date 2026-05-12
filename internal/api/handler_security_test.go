@@ -122,6 +122,94 @@ func TestHandleRequest_SecurityHeaders_ErrorResponse(t *testing.T) {
 	assert.Equal(t, "geolocation=(), microphone=(), camera=()", resp.Headers["Permissions-Policy"])
 }
 
+// TestServeDocsUI_RelaxedCSP verifies the /api/docs HTML response carries a
+// relaxed Content-Security-Policy that whitelists exactly what Swagger UI
+// needs to render. The default restrictive CSP (default-src 'none') blocks
+// every script and stylesheet on the page, leaving it blank — issue #329.
+func TestServeDocsUI_RelaxedCSP(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/docs/",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	csp := resp.Headers["Content-Security-Policy"]
+	// The docs CSP must permit the swagger-ui CDN, its inline bootstrap,
+	// data URIs for icons, and same-origin connect-src for openapi.yaml.
+	assert.Contains(t, csp, "https://unpkg.com", "docs CSP must allow swagger-ui CDN")
+	assert.Contains(t, csp, "'unsafe-inline'", "docs CSP must allow the inline bootstrap script")
+	assert.Contains(t, csp, "data:", "docs CSP must allow data: URIs for icons")
+	assert.Contains(t, csp, "connect-src 'self'", "docs CSP must allow openapi.yaml fetch from same origin")
+	assert.Contains(t, csp, "frame-ancestors 'none'", "docs CSP must keep clickjacking protection")
+	// The restrictive default must not leak through.
+	assert.NotEqual(t, "default-src 'none'; frame-ancestors 'none'", csp,
+		"docs path must override the restrictive default CSP")
+
+	// Other security headers stay strict.
+	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
+	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+}
+
+// TestServeOpenAPISpec_KeepsStrictCSP verifies that the openapi.yaml endpoint
+// (which serves raw YAML, no scripts) keeps the default restrictive CSP.
+// Only the HTML docs page needs the relaxed policy.
+func TestServeOpenAPISpec_KeepsStrictCSP(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/docs/openapi.yaml",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	// Strict CSP unchanged for the YAML endpoint.
+	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'",
+		resp.Headers["Content-Security-Policy"],
+		"openapi.yaml is non-HTML and must keep the strict default CSP")
+}
+
+// TestNonDocsPath_KeepsStrictCSP verifies that a non-docs path (e.g. /api/health)
+// is unaffected by the docs-path CSP override and still emits the strict CSP.
+func TestNonDocsPath_KeepsStrictCSP(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{corsAllowedOrigin: "https://example.com"}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/health",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'",
+		resp.Headers["Content-Security-Policy"],
+		"non-docs paths must retain the strict default CSP")
+}
+
 // TestHandleRequest_SecurityHeaders_RequestTooLarge verifies 413 responses include security headers
 func TestHandleRequest_SecurityHeaders_RequestTooLarge(t *testing.T) {
 	ctx := context.Background()
