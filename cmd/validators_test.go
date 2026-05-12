@@ -89,7 +89,7 @@ func TestValidateNumericRanges(t *testing.T) {
 
 			// Execute (nil cmd — these tests only exercise the numeric
 			// bounds checks; the flag-source-detection branch is covered
-			// by TestValidateTargetUtilization below).
+			// by TestValidateTargetCoverage below).
 			err := validateNumericRanges(nil)
 
 			// Verify
@@ -414,13 +414,13 @@ func TestValidateNoConflicts(t *testing.T) {
 
 // Note: TestValidateInstanceTypes and TestValidateFlags already exist in main_test.go
 
-// TestValidateTargetUtilization covers the --target-utilization range check
+// TestValidateTargetCoverage covers the --target-coverage range check
 // and the "both flags explicitly set" info-log gate. The log itself isn't
 // asserted (log goes to stderr via log.Printf and capturing it from this
 // package's tests is more friction than value); we verify the validator
 // does not error in the "both set" case and does error on out-of-range
 // values.
-func TestValidateTargetUtilization(t *testing.T) {
+func TestValidateTargetCoverage(t *testing.T) {
 	tests := []struct {
 		name      string
 		target    float64
@@ -434,11 +434,11 @@ func TestValidateTargetUtilization(t *testing.T) {
 		{name: "mid-range valid", target: 95, coverage: 80, wantErr: false},
 		{
 			name: "negative target rejected", target: -0.5, coverage: 80, wantErr: true,
-			errSubstr: "target-utilization percentage must be between 0 and 100",
+			errSubstr: "target-coverage percentage must be between 0 and 100",
 		},
 		{
 			name: "above 100 rejected", target: 100.01, coverage: 80, wantErr: true,
-			errSubstr: "target-utilization percentage must be between 0 and 100",
+			errSubstr: "target-coverage percentage must be between 0 and 100",
 		},
 		{
 			// Both flags valid — should not error. The info-log is fired but
@@ -449,7 +449,7 @@ func TestValidateTargetUtilization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			toolCfg = Config{Coverage: tt.coverage, TargetUtilization: tt.target}
+			toolCfg = Config{Coverage: tt.coverage, TargetCoverage: tt.target}
 			err := validateNumericRanges(nil)
 			if tt.wantErr {
 				if err == nil {

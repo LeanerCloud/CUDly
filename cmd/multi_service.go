@@ -343,15 +343,15 @@ func filterAndAdjustRecommendations(recommendations []common.Recommendation, csv
 		AppLogger.Printf("🔍 After filters: %d recommendations (filtered out %d)\n", len(recommendations), originalCount-len(recommendations))
 	}
 
-	// Apply sizing — target-utilization if set, otherwise coverage.
+	// Apply sizing — target-coverage if set, otherwise coverage.
 	// Coverage 100% is a no-op (early-returned inside ApplyCoverage), but
-	// --target-utilization always applies even at coverage 100%, so the
-	// CSV-path short-circuit is conditional on TargetUtilization == 0.
-	if cfg.TargetUtilization > 0 || csvModeCoverage < 100 {
+	// --target-coverage always applies even at coverage 100%, so the
+	// CSV-path short-circuit is conditional on TargetCoverage == 0.
+	if cfg.TargetCoverage > 0 || csvModeCoverage < 100 {
 		beforeSize := len(recommendations)
 		recommendations = applySizing(recommendations, cfg, csvModeCoverage)
-		if cfg.TargetUtilization > 0 {
-			AppLogger.Printf("🎯 Applying %.1f%% target-utilization: %d recommendations selected (from %d)\n", cfg.TargetUtilization, len(recommendations), beforeSize)
+		if cfg.TargetCoverage > 0 {
+			AppLogger.Printf("🎯 Applying %.1f%% target-coverage: %d recommendations selected (from %d)\n", cfg.TargetCoverage, len(recommendations), beforeSize)
 		} else {
 			AppLogger.Printf("📈 Applying %.1f%% coverage: %d recommendations selected (from %d)\n", csvModeCoverage, len(recommendations), beforeSize)
 		}

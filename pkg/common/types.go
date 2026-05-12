@@ -167,7 +167,7 @@ type Recommendation struct {
 	BreakEvenMonths float64 `json:"break_even_months,omitempty" csv:"BreakEvenMonths"`
 
 	// Utilization signals — populated by cloud parsers when the API exposes them.
-	// Used by --target-utilization sizing (see cmd/helpers.go: ApplyTargetUtilization).
+	// Used by --target-coverage sizing (see cmd/helpers.go: ApplyTargetCoverage).
 	// AverageInstancesUsedPerHour is RI-only (zero for SPs and other commitment types).
 	// RecommendedUtilization is "what AWS projects for the full recommendation"
 	// (%). ProjectedUtilization / ProjectedCoverage are populated by the sizing

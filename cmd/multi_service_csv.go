@@ -167,7 +167,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	defer writer.Flush()
 
 	// Write header. ProjectedUtilization, ProjectedCoverage, and
-	// RecommendedUtilization appended for --target-utilization (#338);
+	// RecommendedUtilization appended for --target-coverage (#338);
 	// they print blank when zero so users on the coverage path don't see
 	// noise.
 	header := []string{
@@ -217,7 +217,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 // formatPercentOrBlank renders a % value as "%.1f" when non-zero, "" otherwise.
 // Zero means "unknown / not applicable" — we don't want "0.0" in cells where
 // the metric simply wasn't computed (e.g. ProjectedCoverage for SP rows, or
-// any utilization field when --target-utilization wasn't used).
+// any utilization field when --target-coverage wasn't used).
 func formatPercentOrBlank(v float64) string {
 	if v == 0 {
 		return ""

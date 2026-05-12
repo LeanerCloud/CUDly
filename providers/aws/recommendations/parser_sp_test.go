@@ -153,7 +153,7 @@ func TestGetFilteredPlanTypes(t *testing.T) {
 
 // TestParseSavingsPlanDetail_RecommendedUtilization covers the
 // EstimatedAverageUtilization field added for issue #338 — the SP equivalent
-// of the RI AverageUtilization signal that drives --target-utilization sizing.
+// of the RI AverageUtilization signal that drives --target-coverage sizing.
 func TestParseSavingsPlanDetail_RecommendedUtilization(t *testing.T) {
 	client := &Client{}
 	params := common.RecommendationParams{

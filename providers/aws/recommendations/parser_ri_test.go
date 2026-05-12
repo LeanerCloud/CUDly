@@ -397,7 +397,7 @@ func TestParseRecommendations_EmptyInput(t *testing.T) {
 }
 
 // TestParseRIUtilizationSignals covers the AverageNumberOfInstancesUsedPerHour
-// and AverageUtilization fields added for issue #338 (--target-utilization).
+// and AverageUtilization fields added for issue #338 (--target-coverage).
 // Verifies both successful parses, nil-pointer fallback to zero, and
 // parse-failure fallback to zero — the sizing path in cmd/helpers.go treats
 // zero as "no signal" so the fallback behaviour matters.

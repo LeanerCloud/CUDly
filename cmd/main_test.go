@@ -636,7 +636,7 @@ func TestGeneratePurchaseIDCoverageVariations(t *testing.T) {
 	}
 }
 
-// TestEffectiveSizingPct locks the rule that target-utilization wins over
+// TestEffectiveSizingPct locks the rule that target-coverage wins over
 // coverage when both are configured. Without this, dry-run purchase IDs (and
 // any other audit label that calls effectiveSizingPct) print the unused
 // default Coverage=80 instead of the actual target value the user passed.
@@ -649,9 +649,9 @@ func TestEffectiveSizingPct(t *testing.T) {
 	}{
 		{"target unset, coverage default", Config{Coverage: 80}, 80},
 		{"target unset, coverage custom", Config{Coverage: 50}, 50},
-		{"target set, coverage default ignored", Config{TargetUtilization: 70, Coverage: 80}, 70},
-		{"target set, coverage explicit ignored", Config{TargetUtilization: 95, Coverage: 30}, 95},
-		{"target zero falls back to coverage", Config{TargetUtilization: 0, Coverage: 60}, 60},
+		{"target set, coverage default ignored", Config{TargetCoverage: 70, Coverage: 80}, 70},
+		{"target set, coverage explicit ignored", Config{TargetCoverage: 95, Coverage: 30}, 95},
+		{"target zero falls back to coverage", Config{TargetCoverage: 0, Coverage: 60}, 60},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -37,11 +37,13 @@ type Config struct {
 	Regions   []string
 	Services  []string
 	Coverage  float64
-	// TargetUtilization, when > 0, switches sizing from coverage-% to
-	// "size the purchase so projected post-purchase utilization stays >=
-	// this %". Mutually exclusive with --coverage (target wins, with an
-	// info log). See cmd/helpers.go: ApplyTargetUtilization.
-	TargetUtilization      float64
+	// TargetCoverage, when > 0, switches sizing from --coverage's
+	// rec.Count-scaling to under-buy against historical hourly usage:
+	// each rec is sized to floor(avg * TargetCoverage/100), leaving
+	// (100-TargetCoverage)% of historical demand on-demand. Mutually
+	// exclusive with --coverage (target wins, with an info log). See
+	// cmd/helpers.go: ApplyTargetCoverage.
+	TargetCoverage         float64
 	ActualPurchase         bool
 	CSVOutput              string
 	CSVInput               string
@@ -97,10 +99,11 @@ func init() {
 	rootCmd.Flags().StringSliceVarP(&toolCfg.Services, "services", "s", []string{"rds"}, "Services to process (rds, elasticache, ec2, opensearch, redshift, memorydb, savingsplans)")
 	rootCmd.Flags().BoolVar(&toolCfg.AllServices, "all-services", false, "Process all supported services")
 	rootCmd.Flags().Float64VarP(&toolCfg.Coverage, "coverage", "c", 80.0, "Percentage of recommendations to purchase (0-100)")
-	rootCmd.Flags().Float64VarP(&toolCfg.TargetUtilization, "target-utilization", "u", 0,
-		"Target post-purchase utilization % (0-100). When >0, sizes recommendations "+
-			"so projected utilization stays >= target — higher target = fewer commitments "+
-			"bought (stricter waste ceiling). Overrides --coverage. Default 0 = disabled.")
+	rootCmd.Flags().Float64VarP(&toolCfg.TargetCoverage, "target-coverage", "u", 0,
+		"Target % (0-100) of historical avg-hourly usage to cover with commitments. "+
+			"When >0, sizes each rec to floor(avg * target/100) so projected coverage "+
+			"approximates target and projected utilization stays near 100%, leaving "+
+			"(100-target)% on-demand headroom. Overrides --coverage. Default 0 = disabled.")
 	rootCmd.Flags().BoolVar(&toolCfg.ActualPurchase, "purchase", false, "Actually purchase RIs instead of just printing the data")
 	rootCmd.Flags().StringVarP(&toolCfg.CSVOutput, "output", "o", "", "Output CSV file path (if not specified, auto-generates filename)")
 	rootCmd.Flags().StringVarP(&toolCfg.CSVInput, "input-csv", "i", "", "Input CSV file with recommendations to purchase")
@@ -248,12 +251,12 @@ func createServiceClient(service common.ServiceType, cfg aws.Config) provider.Se
 }
 
 // effectiveSizingPct returns the sizing % actually applied to recommendations:
-// cfg.TargetUtilization when set (>0), else cfg.Coverage. Use this when
+// cfg.TargetCoverage when set (>0), else cfg.Coverage. Use this when
 // emitting human-facing labels (purchase IDs, audit-log fields) so the label
 // reflects the value that drove the sizing, not the unused default.
 func effectiveSizingPct(cfg Config) float64 {
-	if cfg.TargetUtilization > 0 {
-		return cfg.TargetUtilization
+	if cfg.TargetCoverage > 0 {
+		return cfg.TargetCoverage
 	}
 	return cfg.Coverage
 }

@@ -66,7 +66,7 @@ func (c *Client) parseRecommendationDetail(details *types.ReservationPurchaseRec
 	// Parse AWS-provided cost details
 	c.parseAWSCostDetails(rec, details)
 
-	// Parse RI utilization signals used by --target-utilization sizing
+	// Parse RI utilization signals used by --target-coverage sizing
 	c.parseRIUtilizationSignals(rec, details)
 
 	// Parse service-specific details
@@ -80,7 +80,7 @@ func (c *Client) parseRecommendationDetail(details *types.ReservationPurchaseRec
 // parseRIUtilizationSignals populates AverageInstancesUsedPerHour and
 // RecommendedUtilization from the CE response. Both fields are *string in the
 // SDK; nil or unparseable values leave the destination at zero, which the
-// --target-utilization sizing path treats as "no signal" and skips.
+// --target-coverage sizing path treats as "no signal" and skips.
 func (c *Client) parseRIUtilizationSignals(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) {
 	if details.AverageNumberOfInstancesUsedPerHour != nil {
 		if v, err := strconv.ParseFloat(*details.AverageNumberOfInstancesUsedPerHour, 64); err == nil {

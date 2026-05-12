@@ -137,7 +137,7 @@ func (c *Client) parseSavingsPlanDetail(
 	savingsPercent := parseOptionalFloat("EstimatedSavingsPercentage", detail.EstimatedSavingsPercentage)
 	upfrontCost := parseOptionalFloat("UpfrontCost", detail.UpfrontCost)
 	// EstimatedAverageUtilization carries the "if you buy exactly this commitment,
-	// what % of it will AWS expect to be used" signal. Used by --target-utilization
+	// what % of it will AWS expect to be used" signal. Used by --target-coverage
 	// sizing in cmd/helpers.go; zero (nil pointer or parse failure) means "no signal"
 	// and the sizing path leaves the recommendation unchanged.
 	recommendedUtilization := parseOptionalFloat("EstimatedAverageUtilization", detail.EstimatedAverageUtilization)

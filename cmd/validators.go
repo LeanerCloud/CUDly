@@ -42,7 +42,7 @@ func validateNumericRanges(cmd *cobra.Command) error {
 		return fmt.Errorf("coverage percentage must be between 0 and 100, got: %.2f", toolCfg.Coverage)
 	}
 
-	if err := validateTargetUtilization(cmd); err != nil {
+	if err := validateTargetCoverage(cmd); err != nil {
 		return err
 	}
 
@@ -67,22 +67,22 @@ func validateNumericRanges(cmd *cobra.Command) error {
 	return nil
 }
 
-// validateTargetUtilization validates the --target-utilization range and
+// validateTargetCoverage validates the --target-coverage range and
 // emits an info-log when it is set alongside an explicitly-overridden
 // --coverage (target wins). Split out of validateNumericRanges to keep
 // the parent under gocyclo's complexity threshold.
-func validateTargetUtilization(cmd *cobra.Command) error {
-	if toolCfg.TargetUtilization < 0 || toolCfg.TargetUtilization > 100 {
-		return fmt.Errorf("target-utilization percentage must be between 0 and 100, got: %.2f", toolCfg.TargetUtilization)
+func validateTargetCoverage(cmd *cobra.Command) error {
+	if toolCfg.TargetCoverage < 0 || toolCfg.TargetCoverage > 100 {
+		return fmt.Errorf("target-coverage percentage must be between 0 and 100, got: %.2f", toolCfg.TargetCoverage)
 	}
 
-	// Info-log when both flags are explicitly set — target-utilization wins.
+	// Info-log when both flags are explicitly set — target-coverage wins.
 	// Detect "user explicitly set --coverage" via cobra's Changed() rather than
 	// comparing to the default value, so a user who happens to set --coverage 80
 	// (which equals the default) still sees the notice.
-	if toolCfg.TargetUtilization > 0 && cmd != nil && cmd.Flags().Changed("coverage") {
-		log.Printf("--target-utilization=%.1f set; --coverage=%.1f is being ignored (target-utilization sizing supersedes coverage sizing)",
-			toolCfg.TargetUtilization, toolCfg.Coverage)
+	if toolCfg.TargetCoverage > 0 && cmd != nil && cmd.Flags().Changed("coverage") {
+		log.Printf("--target-coverage=%.1f set; --coverage=%.1f is being ignored (target-coverage sizing supersedes coverage sizing)",
+			toolCfg.TargetCoverage, toolCfg.Coverage)
 	}
 	return nil
 }
