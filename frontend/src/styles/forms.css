@@ -45,12 +45,28 @@ label {
     font-size: 0.9rem;
 }
 
-/* Filter chips (issue #340) — the section-level provider/account selects
- * adopt a pill shape so they read as filter chips rather than form
- * inputs. Native <select> keeps its dropdown behaviour; only the
- * styling changes — no JS required, no risk to existing wire-up. */
+/* Filter chips (issue #340) — every filter-like select / date / text
+ * input across the app picks up a pill shape so the user reads them
+ * as "filter chips" rather than form fields. Native <select> keeps
+ * its dropdown behaviour; only the styling changes.
+ *
+ * Targets every filter context we have: .filter-group (the canonical
+ * one), .controls-bar (Savings History's Period select),
+ * .date-range-picker / #history-controls (Purchase History's date
+ * range + provider/account filters). Form selects inside <form> or
+ * <fieldset> (Admin settings, modals) are intentionally NOT matched
+ * so they keep their square form-input shape. */
 .filter-group select,
-.filter-group input {
+.filter-group input,
+.controls-bar > label > select,
+.controls-bar > label > input,
+.controls-bar > select,
+.controls-bar > input,
+.date-range-picker select,
+.date-range-picker input[type="date"],
+.date-range-picker input[type="text"],
+#history-controls select,
+#history-controls input[type="date"] {
     padding: 0.4rem 0.9rem;
     border: 1px solid var(--cudly-border-strong);
     border-radius: var(--cudly-r-full);
@@ -62,12 +78,30 @@ label {
 }
 
 .filter-group select:hover,
-.filter-group input:hover {
+.filter-group input:hover,
+.controls-bar > label > select:hover,
+.controls-bar > label > input:hover,
+.controls-bar > select:hover,
+.controls-bar > input:hover,
+.date-range-picker select:hover,
+.date-range-picker input[type="date"]:hover,
+.date-range-picker input[type="text"]:hover,
+#history-controls select:hover,
+#history-controls input[type="date"]:hover {
     border-color: var(--cudly-primary);
 }
 
 .filter-group select:focus-visible,
-.filter-group input:focus-visible {
+.filter-group input:focus-visible,
+.controls-bar > label > select:focus-visible,
+.controls-bar > label > input:focus-visible,
+.controls-bar > select:focus-visible,
+.controls-bar > input:focus-visible,
+.date-range-picker select:focus-visible,
+.date-range-picker input[type="date"]:focus-visible,
+.date-range-picker input[type="text"]:focus-visible,
+#history-controls select:focus-visible,
+#history-controls input[type="date"]:focus-visible {
     outline: none;
     border-color: var(--cudly-primary);
     box-shadow: 0 0 0 3px var(--cudly-info-bg);
