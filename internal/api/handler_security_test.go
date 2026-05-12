@@ -122,6 +122,121 @@ func TestHandleRequest_SecurityHeaders_ErrorResponse(t *testing.T) {
 	assert.Equal(t, "geolocation=(), microphone=(), camera=()", resp.Headers["Permissions-Policy"])
 }
 
+// TestServeDocsUI_RelaxedCSP verifies the /api/docs HTML response carries a
+// relaxed Content-Security-Policy that whitelists exactly what Swagger UI
+// needs to render. The default restrictive CSP (default-src 'none') blocks
+// every script and stylesheet on the page, leaving it blank — issue #329.
+//
+// Asserts EXACT equality against docsPageCSP so a future broadening of the
+// policy (extra source, extra directive, accidental wildcard) triggers a
+// test failure rather than silently passing through a Contains-style check.
+func TestServeDocsUI_RelaxedCSP(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/docs/",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	// Exact-match assertion: any drift from the canonical docs policy fails.
+	assert.Equal(t, docsPageCSP, resp.Headers["Content-Security-Policy"],
+		"docs CSP must match the canonical docsPageCSP exactly")
+
+	// Other security headers stay strict.
+	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
+	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+}
+
+// TestServeDocsUI_RelaxedCSP_RootDocs verifies the same relaxed CSP is
+// applied to the root /docs/ prefix path (no /api/ prefix). The router
+// dispatches both /docs and /api/docs to docsHandler, so both surfaces
+// must get the override; otherwise the legacy header link in the
+// frontend would render blank.
+func TestServeDocsUI_RelaxedCSP_RootDocs(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/docs/",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	assert.Equal(t, docsPageCSP, resp.Headers["Content-Security-Policy"],
+		"root /docs/ CSP must match the canonical docsPageCSP exactly")
+
+	// Strict default must not leak through.
+	assert.NotEqual(t, "default-src 'none'; frame-ancestors 'none'",
+		resp.Headers["Content-Security-Policy"],
+		"/docs/ must override the restrictive default CSP")
+}
+
+// TestServeOpenAPISpec_KeepsStrictCSP verifies that the openapi.yaml endpoint
+// (which serves raw YAML, no scripts) keeps the default restrictive CSP.
+// Only the HTML docs page needs the relaxed policy.
+func TestServeOpenAPISpec_KeepsStrictCSP(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/docs/openapi.yaml",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	// Strict CSP unchanged for the YAML endpoint.
+	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'",
+		resp.Headers["Content-Security-Policy"],
+		"openapi.yaml is non-HTML and must keep the strict default CSP")
+}
+
+// TestNonDocsPath_KeepsStrictCSP verifies that a non-docs path (e.g. /api/health)
+// is unaffected by the docs-path CSP override and still emits the strict CSP.
+func TestNonDocsPath_KeepsStrictCSP(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{corsAllowedOrigin: "https://example.com"}
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/health",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'",
+		resp.Headers["Content-Security-Policy"],
+		"non-docs paths must retain the strict default CSP")
+}
+
 // TestHandleRequest_SecurityHeaders_RequestTooLarge verifies 413 responses include security headers
 func TestHandleRequest_SecurityHeaders_RequestTooLarge(t *testing.T) {
 	ctx := context.Background()
