@@ -180,7 +180,9 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	// stay on the Recommendation struct for internal use (SP no-signal
 	// guard, etc.).
 	header := []string{
-		"Service", "Region", "ResourceType", "Engine", "Count", "RecommendedCount",
+		"Service", "Region", "ResourceType", "Engine",
+		"Instances", "CoveredInstances",
+		"Count", "RecommendedCount",
 		"Account", "AccountName", "Term", "PaymentOption",
 		"UpfrontPayment", "EstimatedSavings",
 		"CommitmentID", "Success", "Error", "Timestamp",
@@ -203,6 +205,8 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			rec.Region,
 			rec.ResourceType,
 			extractEngine(rec),
+			formatAvgInstancesOrBlank(rec.AverageInstancesUsedPerHour),
+			formatCoveredInstancesOrBlank(rec),
 			fmt.Sprintf("%d", rec.Count),
 			formatIntOrBlank(rec.RecommendedCount),
 			rec.Account,
@@ -240,14 +244,31 @@ func formatIntOrBlank(v int) string {
 // extractEngine returns the engine / platform string for a recommendation's
 // polymorphic Details: Engine for RDS / ElastiCache (DatabaseDetails,
 // CacheDetails), Platform for EC2 (ComputeDetails), empty for SP and other
-// commitment types that don't carry an engine field. Matches the dispatch
-// in generatePurchaseID so the CSV column and the dry-run ID never disagree.
+// commitment types that don't carry an engine field.
+//
+// Both value and pointer Details are accepted because the parser stores
+// *DatabaseDetails / *CacheDetails / *ComputeDetails while the CSV-loader
+// path constructs the value forms; the dispatch in generatePurchaseID does
+// the same trick. Without the pointer cases the column silently blanks
+// every row coming from the live parser path.
 func extractEngine(rec common.Recommendation) string {
 	switch details := rec.Details.(type) {
+	case *common.DatabaseDetails:
+		if details != nil {
+			return details.Engine
+		}
 	case common.DatabaseDetails:
 		return details.Engine
+	case *common.CacheDetails:
+		if details != nil {
+			return details.Engine
+		}
 	case common.CacheDetails:
 		return details.Engine
+	case *common.ComputeDetails:
+		if details != nil {
+			return details.Platform
+		}
 	case common.ComputeDetails:
 		return details.Platform
 	}
@@ -262,6 +283,30 @@ func formatCurrencyOrBlank(v float64) string {
 		return ""
 	}
 	return fmt.Sprintf("%.2f", v)
+}
+
+// formatAvgInstancesOrBlank renders the average instances-per-hour signal
+// (AverageInstancesUsedPerHour from CE) with one decimal so operators can
+// see the pool's running demand without losing the fractional precision
+// CE returns. Blank when zero, matching the "0 = no signal" convention.
+func formatAvgInstancesOrBlank(v float64) string {
+	if v == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.1f", v)
+}
+
+// formatCoveredInstancesOrBlank renders the instances in the pool already
+// covered by existing commitments: avg × existing_coverage / 100. Useful
+// next to Instances so operators can read "you have X running, Y are
+// already covered, this rec adds N more" without doing the arithmetic.
+// Blank when either signal is zero (we can't compute a meaningful value).
+func formatCoveredInstancesOrBlank(rec common.Recommendation) string {
+	if rec.AverageInstancesUsedPerHour <= 0 || rec.ExistingCoveragePct <= 0 {
+		return ""
+	}
+	covered := rec.AverageInstancesUsedPerHour * rec.ExistingCoveragePct / 100.0
+	return fmt.Sprintf("%.1f", covered)
 }
 
 // formatPercentOrBlank renders a % value as "%.1f" when non-zero, "" otherwise.

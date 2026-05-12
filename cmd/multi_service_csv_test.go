@@ -202,18 +202,22 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	results := []common.PurchaseResult{
 		{
 			Recommendation: common.Recommendation{
-				Service:                common.ServiceEC2,
-				Region:                 "us-east-1",
-				ResourceType:           "t3.medium",
-				Count:                  7,   // post-sizing
-				RecommendedCount:       10,  // AWS pre-sizing
-				CommitmentCost:         700, // already scaled at sizing time
-				Term:                   "1yr",
-				ProjectedUtilization:   95.0,
-				ProjectedCoverage:      87.5,
-				ExistingCoveragePct:    20.0,
-				RecommendedUtilization: 80.0,
-				Details:                common.ComputeDetails{Platform: "Linux/UNIX"},
+				Service:                     common.ServiceEC2,
+				Region:                      "us-east-1",
+				ResourceType:                "t3.medium",
+				Count:                       7,   // post-sizing
+				RecommendedCount:            10,  // AWS pre-sizing
+				CommitmentCost:              700, // already scaled at sizing time
+				Term:                        "1yr",
+				ProjectedUtilization:        95.0,
+				ProjectedCoverage:           87.5,
+				ExistingCoveragePct:         20.0,
+				RecommendedUtilization:      80.0,
+				AverageInstancesUsedPerHour: 10.0,
+				// Pointer form matches the live parser (parser_services.go
+				// stores &common.ComputeDetails{...}); extractEngine must
+				// handle both pointer and value Details.
+				Details: &common.ComputeDetails{Platform: "Linux/UNIX"},
 			},
 			Success: true,
 		},
@@ -258,7 +262,8 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 3) // header + 2 data rows
 	header := rows[0]
-	idxProjCov, idxRecCount, idxUpfront, idxExisting, idxEngine := -1, -1, -1, -1, -1
+	idxProjCov, idxRecCount, idxUpfront, idxExisting := -1, -1, -1, -1
+	idxEngine, idxInstances, idxCovered := -1, -1, -1
 	for i, h := range header {
 		switch h {
 		case "ProjectedCoverage":
@@ -271,6 +276,10 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 			idxExisting = i
 		case "Engine":
 			idxEngine = i
+		case "Instances":
+			idxInstances = i
+		case "CoveredInstances":
+			idxCovered = i
 		}
 	}
 	require.NotEqual(t, -1, idxProjCov, "ProjectedCoverage column not found")
@@ -278,17 +287,22 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	require.NotEqual(t, -1, idxUpfront, "UpfrontPayment column not found")
 	require.NotEqual(t, -1, idxExisting, "ExistingCoverage column not found")
 	require.NotEqual(t, -1, idxEngine, "Engine column not found")
+	require.NotEqual(t, -1, idxInstances, "Instances column not found")
+	require.NotEqual(t, -1, idxCovered, "CoveredInstances column not found")
 
 	// Populated row: RecommendedCount=10 renders as "10", UpfrontPayment
 	// emits CommitmentCost as-is (sizing already scaled it; see
 	// ApplyTargetCoverage), ProjectedCoverage=87.5 renders, ExistingCoverage=20.0,
-	// Engine pulled from ComputeDetails.Platform.
+	// Engine pulled from *ComputeDetails.Platform. Instances = avg = 10.0.
+	// CoveredInstances = 10.0 × 20% = 2.0.
 	populatedRow := rows[1]
 	assert.Equal(t, "10", populatedRow[idxRecCount], "RecommendedCount should render as decimal")
 	assert.Equal(t, "700.00", populatedRow[idxUpfront], "UpfrontPayment should render rec.CommitmentCost as-is")
 	assert.Equal(t, "87.5", populatedRow[idxProjCov])
 	assert.Equal(t, "20.0", populatedRow[idxExisting], "ExistingCoverage should render with one decimal")
-	assert.Equal(t, "Linux/UNIX", populatedRow[idxEngine], "Engine should pull from ComputeDetails.Platform")
+	assert.Equal(t, "Linux/UNIX", populatedRow[idxEngine], "Engine should pull from *ComputeDetails.Platform")
+	assert.Equal(t, "10.0", populatedRow[idxInstances], "Instances should render avg with one decimal")
+	assert.Equal(t, "2.0", populatedRow[idxCovered], "CoveredInstances = avg * existing_cov / 100")
 
 	// Zero-fields row: optional cells blank, Engine blank when Details is nil.
 	zeroRow := rows[2]
@@ -297,6 +311,8 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	assert.Equal(t, "", zeroRow[idxUpfront], "zero CommitmentCost should leave UpfrontPayment blank")
 	assert.Equal(t, "", zeroRow[idxExisting], "zero ExistingCoverage should be blank")
 	assert.Equal(t, "", zeroRow[idxEngine], "missing Details should leave Engine blank")
+	assert.Equal(t, "", zeroRow[idxInstances], "zero avg should leave Instances blank")
+	assert.Equal(t, "", zeroRow[idxCovered], "missing avg or existing_cov should leave CoveredInstances blank")
 }
 
 // TestExtractEngine covers the four cases the helper dispatches on:
@@ -308,11 +324,18 @@ func TestExtractEngine(t *testing.T) {
 		rec  common.Recommendation
 		want string
 	}{
-		{"DatabaseDetails -> Engine", common.Recommendation{Details: common.DatabaseDetails{Engine: "aurora-postgresql"}}, "aurora-postgresql"},
-		{"CacheDetails -> Engine", common.Recommendation{Details: common.CacheDetails{Engine: "redis"}}, "redis"},
-		{"ComputeDetails -> Platform", common.Recommendation{Details: common.ComputeDetails{Platform: "Linux/UNIX"}}, "Linux/UNIX"},
+		// Pointer forms — what the live parser actually emits.
+		{"*DatabaseDetails -> Engine", common.Recommendation{Details: &common.DatabaseDetails{Engine: "aurora-postgresql"}}, "aurora-postgresql"},
+		{"*CacheDetails -> Engine", common.Recommendation{Details: &common.CacheDetails{Engine: "redis"}}, "redis"},
+		{"*ComputeDetails -> Platform", common.Recommendation{Details: &common.ComputeDetails{Platform: "Linux/UNIX"}}, "Linux/UNIX"},
+		// Value forms — what the CSV-loader path constructs.
+		{"DatabaseDetails (value) -> Engine", common.Recommendation{Details: common.DatabaseDetails{Engine: "mysql"}}, "mysql"},
+		{"CacheDetails (value) -> Engine", common.Recommendation{Details: common.CacheDetails{Engine: "memcached"}}, "memcached"},
+		{"ComputeDetails (value) -> Platform", common.Recommendation{Details: common.ComputeDetails{Platform: "Windows"}}, "Windows"},
+		// Fallbacks.
 		{"nil Details -> empty", common.Recommendation{}, ""},
 		{"SavingsPlanDetails -> empty", common.Recommendation{Details: &common.SavingsPlanDetails{HourlyCommitment: 1.0}}, ""},
+		{"nil *DatabaseDetails -> empty", common.Recommendation{Details: (*common.DatabaseDetails)(nil)}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
