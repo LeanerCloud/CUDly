@@ -98,22 +98,30 @@ func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 // password via the welcome email link, so the password validator is skipped.
 func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserRequest) error {
 	if _, err := mail.ParseAddress(req.Email); err != nil {
-		return fmt.Errorf("invalid email format")
+		return ErrInvalidEmail
 	}
 	existing, err := s.store.GetUserByEmail(ctx, req.Email)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	if existing != nil {
-		return fmt.Errorf("email already in use")
+		return ErrEmailInUse
 	}
 	if req.Role != RoleAdmin && req.Role != RoleUser && req.Role != RoleReadOnly {
-		return fmt.Errorf("invalid role: %s", req.Role)
+		// %w lets the API handler detect the category via errors.Is(ErrInvalidRole)
+		// while preserving the specific role name in the user-facing message.
+		return fmt.Errorf("%w: %s", ErrInvalidRole, req.Role)
 	}
 	if req.Password == "" {
 		return nil
 	}
-	return s.validatePassword(req.Password)
+	if err := s.validatePassword(req.Password); err != nil {
+		// validatePassword returns specific messages ("must be at least N
+		// characters", "common password", etc.); wrap so the handler can
+		// detect the category while keeping the message detail.
+		return fmt.Errorf("%w: %v", ErrPasswordPolicy, err)
+	}
+	return nil
 }
 
 // CreateUserResult bundles the created user with optional invite-email
