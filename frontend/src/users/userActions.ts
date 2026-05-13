@@ -88,12 +88,12 @@ export async function loadUsers(): Promise<void> {
     applyFilters();
 
     renderUsers(filteredUsers);
-    renderGroups(groupsResponse.groups);
+    renderGroups(groups);
     renderUserStats();
 
     const matrixContainer = document.getElementById('permission-matrix');
     if (matrixContainer) {
-      renderPermissionMatrix(groupsResponse.groups, matrixContainer);
+      renderPermissionMatrix(groups, matrixContainer);
     }
   } catch (error) {
     console.error('Failed to load users/groups:', error);
