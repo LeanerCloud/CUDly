@@ -474,9 +474,10 @@ describe('HTML Structure', () => {
       const role = document.getElementById('user-role') as HTMLSelectElement | null;
       expect(role).toBeTruthy();
       const options = Array.from(role?.querySelectorAll('option') ?? []).map(o => o.value);
-      expect(options).toContain('readonly');
-      expect(options).toContain('user');
-      expect(options).toContain('admin');
+      // Exact-set equality (not toContain) so a regression that
+      // re-introduces the pre-fix viewer/editor values — or adds any
+      // other role the backend allowlist would reject — fails the test.
+      expect(new Set(options)).toEqual(new Set(['readonly', 'user', 'admin']));
     });
 
     test('has user groups multi-select', () => {
