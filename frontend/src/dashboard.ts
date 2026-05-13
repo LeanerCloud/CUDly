@@ -5,13 +5,14 @@
 import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, getDateParts, escapeHtml } from './utils';
+import { formatCurrency, getDateParts } from './utils';
 import { renderFreshness } from './freshness';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommendation } from './types';
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange } from './recommendations';
+import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -51,6 +52,15 @@ export function setupDashboardHandlers(): void {
  * Load dashboard data
  */
 export async function loadDashboard(): Promise<void> {
+  // Issue #344 T3: render skeletons synchronously before kicking off the
+  // fetch so the panels show "loading" intent instead of staying blank.
+  // The success render replaces children for a clean handoff; the catch
+  // block calls teardownSkeleton before rendering the error.
+  const summaryEl = document.getElementById('summary');
+  if (summaryEl) showSkeletonTiles(summaryEl, 4);
+  const upcomingEl = document.getElementById('upcoming-list');
+  if (upcomingEl) showSkeletonBlock(upcomingEl, '100%', '6rem');
+
   try {
     const currentProvider = state.getCurrentProvider();
     const currentAccountIDs = state.getCurrentAccountIDs();
@@ -102,9 +112,18 @@ export async function loadDashboard(): Promise<void> {
     console.error('Failed to load dashboard:', error);
     const summary = document.getElementById('summary');
     if (summary) {
+      teardownSkeleton(summary);
       const err = error as Error;
-      summary.innerHTML = `<p class="error">Failed to load dashboard: ${escapeHtml(err.message)}</p>`;
+      while (summary.firstChild) summary.removeChild(summary.firstChild);
+      const p = document.createElement('p');
+      p.classList.add('error');
+      p.textContent = `Failed to load dashboard: ${err.message}`;
+      summary.appendChild(p);
     }
+    // Clear the upcoming-list skeleton too — shimmer next to a dashboard
+    // error reads as a fresh fetch in-flight, which is misleading.
+    const upcoming = document.getElementById('upcoming-list');
+    if (upcoming) teardownSkeleton(upcoming);
   }
 }
 

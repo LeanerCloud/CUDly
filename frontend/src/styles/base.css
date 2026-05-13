@@ -219,6 +219,67 @@ body {
     display: none;
 }
 
+/* Loading skeletons (issue #344 T3).
+ *
+ * Shimmer-animated placeholder blocks rendered synchronously at the start
+ * of every fetch path so panels show "loading" intent instead of staying
+ * empty. The render-success path replaces the skeleton container's
+ * children for a clean handoff; error paths must call the same teardown
+ * + renderError sequence so a skeleton never sits next to an error toast.
+ *
+ * Container helper `.skeleton-group` lays out child skeletons in a column
+ * with consistent spacing; `.skeleton-row-grid` does the same with the
+ * recommendations / history grid so each skeleton row reads as a table
+ * row. */
+.skeleton {
+    display: block;
+    background: linear-gradient(
+        90deg,
+        var(--cudly-surface-muted) 0%,
+        var(--cudly-border) 50%,
+        var(--cudly-surface-muted) 100%
+    );
+    background-size: 200% 100%;
+    border-radius: var(--cudly-r-sm);
+    animation: cudly-shimmer 1.6s ease-in-out infinite;
+}
+
+.skeleton-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cudly-sp-3);
+}
+
+.skeleton-tile {
+    /* KPI tile shape — matches .kpi-tile's padding + min height so the
+     * post-render swap doesn't trigger layout shift. */
+    padding: var(--cudly-sp-4);
+    min-height: 6rem;
+}
+
+.skeleton-tile .skeleton {
+    margin-bottom: var(--cudly-sp-2);
+}
+
+.skeleton-tile .skeleton:last-child {
+    margin-bottom: 0;
+}
+
+@keyframes cudly-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Respect users who prefer reduced motion — drop the shimmer animation
+ * but keep a static muted background so the "loading" affordance still
+ * reads visually. */
+@media (prefers-reduced-motion: reduce) {
+    .skeleton {
+        animation: none;
+        background: var(--cudly-surface-muted);
+    }
+}
+
 /* Error message */
 .error-message {
     padding: 1rem;

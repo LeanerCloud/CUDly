@@ -255,6 +255,42 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Failed to load dashboard');
     });
 
+    // Issue #344 T3: skeleton lifecycle — skeleton renders synchronously
+    // at fetch start, then is replaced by the success render (clean
+    // handoff) or torn down on error so it never sits next to a stale
+    // error message.
+    test('error path tears down the loading skeleton', async () => {
+      (api.getDashboardSummary as jest.Mock).mockRejectedValue(new Error('API Error'));
+      console.error = jest.fn();
+
+      await loadDashboard();
+
+      const summary = document.getElementById('summary');
+      expect(summary?.querySelector('.skeleton-tile')).toBeNull();
+      expect(summary?.dataset['skeletonActive']).toBeUndefined();
+    });
+
+    test('success path replaces the loading skeleton with KPI tiles', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 1000,
+        total_recommendations: 5,
+        active_commitments: 3,
+        committed_monthly: 500,
+        current_coverage: 70,
+        target_coverage: 80,
+        ytd_savings: 5000,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const summary = document.getElementById('summary');
+      // Real KPI tiles render — skeleton placeholders are gone.
+      expect(summary?.querySelectorAll('.kpi-tile').length).toBeGreaterThan(0);
+      expect(summary?.querySelector('.skeleton-tile')).toBeNull();
+    });
+
     test('uses current provider filter', async () => {
       (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({

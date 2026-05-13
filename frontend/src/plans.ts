@@ -12,6 +12,7 @@ import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
+import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -28,6 +29,14 @@ let pendingPlanRecommendations: api.Recommendation[] = [];
  * Load plans and planned purchases
  */
 export async function loadPlans(): Promise<void> {
+  // Issue #344 T3: skeleton tiles for the plans list. Synchronous
+  // render before fetch so the page doesn't sit blank during the
+  // round-trip. The planned-purchases skeleton lives in
+  // loadPlannedPurchases so direct callers of that fetch (not via
+  // loadPlans) get the same loading affordance.
+  const plansList = document.getElementById('plans-list');
+  if (plansList) showSkeletonTiles(plansList, 3);
+
   try {
     const data = await api.getPlans() as unknown as PlansResponse;
     let plans = data.plans || [];
@@ -50,6 +59,7 @@ export async function loadPlans(): Promise<void> {
     console.error('Failed to load plans:', error);
     const list = document.getElementById('plans-list');
     if (list) {
+      teardownSkeleton(list);
       const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load plans: ${escapeHtml(err.message)}</p>`;
     }
@@ -66,11 +76,18 @@ async function loadPlannedPurchases(): Promise<void> {
   const container = document.getElementById('planned-purchases-list');
   if (!container) return;
 
+  // Issue #344 T3 (CR follow-up on PR #346): skeleton lives here, not
+  // in loadPlans, so direct callers (e.g. follow-up refresh paths after
+  // a single purchase action) also get the loading affordance. 5 rows
+  // × 11 cols matches the rendered table — see renderPlannedPurchases.
+  showSkeletonRows(container, 5, 11);
+
   try {
     const data = await api.getPlannedPurchases();
     renderPlannedPurchases(data.purchases || []);
   } catch (error) {
     console.error('Failed to load planned purchases:', error);
+    teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load planned purchases: ${escapeHtml(err.message)}</p>`;
   }
