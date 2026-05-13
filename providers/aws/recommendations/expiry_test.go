@@ -205,13 +205,17 @@ func TestAdjustExistingCoverageForExpiringCommitments(t *testing.T) {
 		assert.Equal(t, 80.0, recs[0].ExistingCoveragePct)
 	})
 
-	t.Run("already-expired commitments are skipped", func(t *testing.T) {
-		// A commitment with EndDate in the past was already filtered by the
-		// State check upstream, but defensively the function should treat
-		// past dates as "not in the window" too. Past < cutoff but
-		// (past < now) means the RI is no longer providing coverage and
-		// shouldn't be deducted from current ExistingCoveragePct (which
-		// presumably already excludes it).
+	t.Run("active commits with EndDate before cutoff are counted (incl. past dates)", func(t *testing.T) {
+		// The window check is EndDate <= cutoff: past dates satisfy that
+		// too. State="active" + EndDate<cutoff is treated as expiring
+		// regardless of whether EndDate is in the past or future. The
+		// upstream State filter is the gate for "is this RI providing
+		// coverage right now"; once a commitment passes that filter, this
+		// function trusts its EndDate alone.
+		//
+		// Document the intent here so a future reader doesn't try to add
+		// "EndDate > now" as an additional guard and silently change the
+		// semantics of pastDate commitments.
 		recs := []common.Recommendation{{
 			Service:                     common.ServiceRDS,
 			Region:                      "us-east-1",
@@ -229,12 +233,8 @@ func TestAdjustExistingCoverageForExpiringCommitments(t *testing.T) {
 			State:        "active",
 			EndDate:      pastDate,
 		}}
-		// pastDate IS before cutoff (now+30d), so the current implementation
-		// counts it. Document this as the intended behaviour: anything with
-		// State="active" and EndDate within the cutoff is treated as soon-
-		// to-expire. The State filter upstream catches truly expired ones.
 		n := AdjustExistingCoverageForExpiringCommitments(recs, commits, 30)
-		assert.Equal(t, 1, n)
+		assert.Equal(t, 1, n, "EndDate=pastDate <= cutoff so the commit IS counted")
 		assert.InDelta(t, 30.0, recs[0].ExistingCoveragePct, 0.001)
 	})
 
