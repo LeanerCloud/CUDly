@@ -3285,6 +3285,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // the table, with backend-deferred fields the only differentiators).
   container.querySelectorAll<HTMLTableRowElement>('tr.recommendation-row').forEach((tr) => {
     tr.addEventListener('click', (e) => {
+      if (!(e.target instanceof Element)) return;
       const target = e.target as HTMLElement;
       if (target.closest('input, button, a, label, select, [data-action]')) return;
       const cb = tr.querySelector<HTMLInputElement>('input[type="checkbox"][data-rec-id]');
