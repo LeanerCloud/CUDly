@@ -139,6 +139,14 @@ jobs:
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
+          # DASHBOARD_URL is the customer-facing dashboard origin used in
+          # email links (invite, password reset, welcome). For Lambda-
+          # Function-URL deployments (no custom domain), set the repo
+          # secret DASHBOARD_URL to the function URL — see #363 +
+          # github-dev.tfvars for the bootstrap pattern. Empty string is
+          # accepted by the var (the Terraform local then falls back to
+          # frontend_domain_names[0]).
+          TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
         run: |
           cd terraform/environments/aws
           terraform plan \
@@ -150,6 +158,14 @@ jobs:
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
+          # DASHBOARD_URL is the customer-facing dashboard origin used in
+          # email links (invite, password reset, welcome). For Lambda-
+          # Function-URL deployments (no custom domain), set the repo
+          # secret DASHBOARD_URL to the function URL — see #363 +
+          # github-dev.tfvars for the bootstrap pattern. Empty string is
+          # accepted by the var (the Terraform local then falls back to
+          # frontend_domain_names[0]).
+          TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
         run: |
           cd terraform/environments/aws
           terraform apply -auto-approve tfplan
