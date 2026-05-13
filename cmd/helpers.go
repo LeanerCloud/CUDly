@@ -382,6 +382,10 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 	adjusted.CommitmentCost = rec.CommitmentCost * ratio
 	adjusted.OnDemandCost = rec.OnDemandCost * ratio
 	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
+	if rec.RecurringMonthlyCost != nil {
+		scaled := *rec.RecurringMonthlyCost * ratio
+		adjusted.RecurringMonthlyCost = &scaled
+	}
 
 	// Projection metrics. ProjectedCoverage is TOTAL coverage (existing +
 	// new) so operators can see the figure they actually targeted.
@@ -442,6 +446,10 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 	adjusted.CommitmentCost = rec.CommitmentCost * ratio
 	adjusted.OnDemandCost = rec.OnDemandCost * ratio
 	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
+	if rec.RecurringMonthlyCost != nil {
+		scaled := *rec.RecurringMonthlyCost * ratio
+		adjusted.RecurringMonthlyCost = &scaled
+	}
 	// Shrinking commitment raises projected utilization by 1/ratio
 	// (used is fixed = orig_commit * RecUtil, bought is orig_commit * ratio).
 	// Clamp to 100 since utilization caps at full use.

@@ -132,6 +132,38 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 		assert.InDelta(t, 1500.0, sized[0].CommitmentCost, 0.01)
 	})
 
+	t.Run("RecurringMonthlyCost scales with count when populated", func(t *testing.T) {
+		// Partial-upfront RIs carry a per-month fee in addition to upfront.
+		// Family-NU sizing must scale this fee by newCount/oldCount so the
+		// returned rec's monthly cost reflects what the user actually buys
+		// (not AWS's original recommendation count). nil input stays nil.
+		monthly := 100.0
+		cov := PoolCoverageMap{
+			rdsPoolKey("eu-west-2", "db.r7g.large", "MySQL", "Multi-AZ"): {
+				Pct: 0.0, AvgInstancesPerHour: 10,
+			},
+		}
+		recs := []common.Recommendation{
+			{
+				Service:              common.ServiceRDS,
+				CommitmentType:       common.CommitmentReservedInstance,
+				Region:               "eu-west-2",
+				ResourceType:         "db.r7g.large",
+				Count:                5,
+				CommitmentCost:       5000,
+				RecurringMonthlyCost: &monthly,
+				Details:              &common.DatabaseDetails{Engine: "mysql", AZConfig: "multi-az"},
+			},
+		}
+		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		require.Len(t, sized, 1)
+		// Scale 32/20 = 1.6 → newCount = 8 → monthly = 100 × 8/5 = 160
+		assert.Equal(t, 8, sized[0].Count)
+		require.NotNil(t, sized[0].RecurringMonthlyCost)
+		assert.InDelta(t, 160.0, *sized[0].RecurringMonthlyCost, 0.001, "monthly fee scales by 8/5 alongside other costs")
+		assert.Equal(t, 100.0, monthly, "original target should not be mutated (new pointer)")
+	})
+
 	t.Run("AWS rec under-recommends → counts scale up", func(t *testing.T) {
 		// Family eu-west-2 / db.r7g / MySQL / Multi-AZ:
 		// Only db.r7g.large size in this fixture, avg=10, cov=0%.

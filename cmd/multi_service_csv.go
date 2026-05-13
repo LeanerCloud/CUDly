@@ -185,7 +185,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 		"Instances", "CoveredInstances",
 		"Count", "NormalizedUnits", "RecommendedCount",
 		"Account", "AccountName", "Term", "PaymentOption",
-		"UpfrontPayment", "EstimatedSavings",
+		"UpfrontPayment", "RecurringMonthlyCost", "EstimatedSavings",
 		"CommitmentID", "Success", "Error", "Timestamp",
 		"ExistingCoverage", "ProjectedCoverage",
 	}
@@ -218,6 +218,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			rec.Term,
 			rec.PaymentOption,
 			formatCurrencyOrBlank(rec.CommitmentCost),
+			formatRecurringMonthlyOrBlank(rec.RecurringMonthlyCost),
 			fmt.Sprintf("%.2f", rec.EstimatedSavings),
 			r.CommitmentID,
 			fmt.Sprintf("%t", r.Success),
@@ -327,6 +328,23 @@ func extractEngine(rec common.Recommendation) string {
 		return details.Platform
 	}
 	return ""
+}
+
+// formatRecurringMonthlyOrBlank renders rec.RecurringMonthlyCost (the
+// per-month fee on top of any upfront payment, populated by the AWS
+// parser when CE returns RecurringStandardMonthlyCost). Distinguishes
+// "no recurring fee" (all-upfront RIs, where the pointer is set to
+// zero) from "unknown" (pointer is nil because CE didn't return the
+// field): zero renders as "0.00", nil renders as blank.
+//
+// Operators on partial-upfront / no-upfront plans need this to compute
+// total cost (upfront + monthly × 36); without it the CSV only shows
+// the upfront portion and over-states ROI.
+func formatRecurringMonthlyOrBlank(p *float64) string {
+	if p == nil {
+		return ""
+	}
+	return fmt.Sprintf("%.2f", *p)
 }
 
 // formatCurrencyOrBlank renders a currency value as "%.2f" when non-zero,

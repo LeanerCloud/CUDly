@@ -315,6 +315,30 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	assert.Equal(t, "", zeroRow[idxCovered], "missing avg or existing_cov should leave CoveredInstances blank")
 }
 
+// TestFormatRecurringMonthlyOrBlank locks the nil-vs-zero distinction:
+// nil pointer (AWS API didn't return RecurringStandardMonthlyCost)
+// renders as blank, zero value (genuinely no monthly fee, e.g.
+// all-upfront RIs) renders as "0.00". Operators need to tell "we don't
+// know" apart from "definitely zero" to compute total cost correctly.
+func TestFormatRecurringMonthlyOrBlank(t *testing.T) {
+	zero := 0.0
+	twenty := 20.5
+	tests := []struct {
+		name string
+		in   *float64
+		want string
+	}{
+		{"nil → blank (unknown)", nil, ""},
+		{"zero pointer → 0.00 (definitely zero)", &zero, "0.00"},
+		{"non-zero → formatted", &twenty, "20.50"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatRecurringMonthlyOrBlank(tt.in))
+		})
+	}
+}
+
 // TestExtractRDSFamily covers the family-prefix extraction used by the
 // CSV writer to group rows by size-flex family.
 func TestExtractRDSFamily(t *testing.T) {

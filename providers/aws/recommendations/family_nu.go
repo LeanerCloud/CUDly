@@ -261,6 +261,10 @@ func scaleRDSRecInFamily(rec common.Recommendation, scale, existingPct, familyTo
 	rec.CommitmentCost *= ratio
 	rec.OnDemandCost *= ratio
 	rec.EstimatedSavings *= ratio
+	if rec.RecurringMonthlyCost != nil {
+		scaled := *rec.RecurringMonthlyCost * ratio
+		rec.RecurringMonthlyCost = &scaled
+	}
 	rec.ExistingCoveragePct = existingPct
 	newNU := float64(newCount) * rdsInstanceNUFromType(rec.ResourceType)
 	projCov := existingPct + newNU/familyTotalNU*100.0

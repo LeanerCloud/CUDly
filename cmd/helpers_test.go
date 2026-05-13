@@ -1032,6 +1032,31 @@ func TestApplyTargetCoverage_RI_CostScaling(t *testing.T) {
 	assert.InDelta(t, 1200.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by nTarget/rec.Count")
 	assert.InDelta(t, 300.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by nTarget/rec.Count")
 	assert.Equal(t, 25.0, out[0].SavingsPercentage, "SavingsPercentage is invariant under count scaling")
+
+	t.Run("RecurringMonthlyCost scales by ratio when populated", func(t *testing.T) {
+		// AWS populated RecurringStandardMonthlyCost for partial/no-upfront
+		// recs; sized purchase must scale this monthly fee by the same
+		// nTarget/rec.Count ratio so total cost (upfront + monthly × term)
+		// reflects what the user actually buys.
+		monthly := 50.0
+		recWithMonthly := rec
+		recWithMonthly.RecurringMonthlyCost = &monthly
+		out := ApplyTargetCoverage([]common.Recommendation{recWithMonthly}, 80)
+		require.Len(t, out, 1)
+		require.NotNil(t, out[0].RecurringMonthlyCost, "scaled pointer should be non-nil")
+		assert.InDelta(t, 30.0, *out[0].RecurringMonthlyCost, 0.001, "monthly cost scales by 6/10")
+		// Original pointer untouched (we allocated a new one).
+		assert.Equal(t, 50.0, monthly, "original RecurringMonthlyCost target should not be mutated")
+	})
+
+	t.Run("RecurringMonthlyCost stays nil when not populated", func(t *testing.T) {
+		// AWS API didn't return RecurringStandardMonthlyCost (all-upfront,
+		// or field missing). The sized rec should also have nil so
+		// downstream renders "unknown" rather than zero.
+		out := ApplyTargetCoverage([]common.Recommendation{rec}, 80)
+		require.Len(t, out, 1)
+		assert.Nil(t, out[0].RecurringMonthlyCost, "nil input → nil output")
+	})
 }
 
 // TestApplyTargetCoverage_RI_ExistingCoverage covers the under-buy formula's
