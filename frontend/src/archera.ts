@@ -83,6 +83,11 @@ export function openArcheraOfferModal(context: ArcheraContext = 'purchase'): voi
       : null;
   }
 
+  // Re-open path: tear down any document-level listeners attached by a
+  // prior open() so we don't leak them by overwriting _offerModalCleanup
+  // below. Idempotent: no-op if no prior open is in flight.
+  if (_offerModalCleanup) _offerModalCleanup();
+
   while (container.firstChild) container.removeChild(container.firstChild);
   container.classList.remove('hidden');
 
@@ -178,13 +183,42 @@ export function openArcheraOfferModal(context: ArcheraContext = 'purchase'): voi
 
   panel.appendChild(actions);
 
-  // Keyboard: ESC closes. Outside-click is handled by the backdrop above.
+  // Keyboard handling:
+  //   - Document-level keydown: ESC closes (works regardless of where focus is).
+  //   - Panel-level keydown: Tab / Shift+Tab trap focus inside the dialog
+  //     so keyboard users can't tab into background controls (required
+  //     for role="dialog" aria-modal="true" to actually be modal).
   const escHandler = (e: KeyboardEvent): void => {
     if (e.key === 'Escape') closeArcheraOfferModal();
   };
   document.addEventListener('keydown', escHandler);
+
+  const trapHandler = (e: KeyboardEvent): void => {
+    if (e.key !== 'Tab') return;
+    // Re-query each Tab press because the <details> drop-down expands the
+    // focusable set when opened — caching at modal-build time would miss
+    // those nested focusables.
+    const focusables = panel.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
+        ' textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    );
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  panel.addEventListener('keydown', trapHandler);
+
   _offerModalCleanup = () => {
     document.removeEventListener('keydown', escHandler);
+    panel.removeEventListener('keydown', trapHandler);
     _offerModalCleanup = null;
   };
 

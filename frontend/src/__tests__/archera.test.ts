@@ -310,6 +310,67 @@ describe('openArcheraOfferModal', () => {
     const title = document.getElementById('archera-offer-title');
     expect(title?.textContent).toMatch(/plan/i);
   });
+
+  it('re-opening tears down the previous open\'s ESC listener (no leak)', () => {
+    // Spy on document.addEventListener so we can count keydown handlers
+    // attached across the two opens. Without the cleanup-before-open
+    // guard the second open would have added a second handler without
+    // removing the first.
+    const addSpy = jest.spyOn(document, 'addEventListener');
+    const removeSpy = jest.spyOn(document, 'removeEventListener');
+    try {
+      openArcheraOfferModal('purchase');
+      const addsAfterFirst = addSpy.mock.calls.filter(c => c[0] === 'keydown').length;
+      const removesAfterFirst = removeSpy.mock.calls.filter(c => c[0] === 'keydown').length;
+      openArcheraOfferModal('plan');
+      const addsAfterSecond = addSpy.mock.calls.filter(c => c[0] === 'keydown').length;
+      const removesAfterSecond = removeSpy.mock.calls.filter(c => c[0] === 'keydown').length;
+      // Second open must remove the first open's handler before adding a new one.
+      expect(addsAfterSecond - addsAfterFirst).toBe(1);
+      expect(removesAfterSecond - removesAfterFirst).toBe(1);
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
+  });
+
+  it('traps Tab focus inside the panel (Tab from last → first)', () => {
+    openArcheraOfferModal('purchase');
+    const panel = document.querySelector<HTMLElement>(
+      '#archera-offer-modal-container .archera-offer-panel',
+    )!;
+    const focusables = panel.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    );
+    expect(focusables.length).toBeGreaterThanOrEqual(2);
+    const first = focusables[0]!;
+    const last = focusables[focusables.length - 1]!;
+    // Focus the last element, then dispatch Tab — focus should wrap to first.
+    last.focus();
+    expect(document.activeElement).toBe(last);
+    const evt = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    panel.dispatchEvent(evt);
+    expect(document.activeElement).toBe(first);
+    expect(evt.defaultPrevented).toBe(true);
+  });
+
+  it('traps Shift+Tab focus inside the panel (Shift+Tab from first → last)', () => {
+    openArcheraOfferModal('purchase');
+    const panel = document.querySelector<HTMLElement>(
+      '#archera-offer-modal-container .archera-offer-panel',
+    )!;
+    const focusables = panel.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    );
+    const first = focusables[0]!;
+    const last = focusables[focusables.length - 1]!;
+    first.focus();
+    expect(document.activeElement).toBe(first);
+    const evt = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    panel.dispatchEvent(evt);
+    expect(document.activeElement).toBe(last);
+    expect(evt.defaultPrevented).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
