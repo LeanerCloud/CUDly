@@ -204,62 +204,32 @@ func (c *Client) GetRICoverageMap(ctx context.Context, lookbackDays int, regions
 	return out, nil
 }
 
-// fetchCoverageForRDSEngineRegion runs the paged GetReservationCoverage
-// loop for one (RDS engine, region) tuple. Writes entries keyed by
+// fetchCoverageForRDSEngineRegion fetches coverage for one (RDS engine,
+// region) tuple. Writes entries keyed by
 // "region:instance_type:engine:deployment" so the apply helper looks up
 // per-engine per-deployment coverage. This solves both the cross-engine
 // bleed (db.r7g.large with heavy Aurora coverage looking covered for
-// MySQL too) and the cross-deployment bleed (a Single-AZ RI being credited
-// against Multi-AZ demand).
+// MySQL too) and the cross-deployment bleed (a Single-AZ RI being
+// credited against Multi-AZ demand).
 func (c *Client) fetchCoverageForRDSEngineRegion(ctx context.Context, startStr, endStr string, windowHours float64, engine, region string, out PoolCoverageMap) error {
 	input := &costexplorer.GetReservationCoverageInput{
-		TimePeriod: &types.DateInterval{
-			Start: aws.String(startStr),
-			End:   aws.String(endStr),
-		},
+		TimePeriod: &types.DateInterval{Start: aws.String(startStr), End: aws.String(endStr)},
 		GroupBy: []types.GroupDefinition{
 			{Type: types.GroupDefinitionTypeDimension, Key: aws.String(string(types.DimensionInstanceType))},
 			{Type: types.GroupDefinitionTypeDimension, Key: aws.String(string(types.DimensionDeploymentOption))},
 		},
-		Filter: &types.Expression{
-			And: []types.Expression{
-				{Dimensions: &types.DimensionValues{
-					Key:    types.DimensionService,
-					Values: []string{rdsServiceFilter},
-				}},
-				{Dimensions: &types.DimensionValues{
-					Key:    types.DimensionDatabaseEngine,
-					Values: []string{engine},
-				}},
-				{Dimensions: &types.DimensionValues{
-					Key:    types.DimensionRegion,
-					Values: []string{region},
-				}},
-			},
-		},
+		Filter:  rdsEngineRegionFilter(engine, region),
 		Metrics: []string{"Hour"},
 	}
-
-	var token *string
-	for {
-		input.NextPageToken = token
-		result, err := c.fetchCoveragePage(ctx, input)
-		if err != nil {
-			return err
-		}
-		accumulateRDSEngineGroups(out, result.CoveragesByTime, engine, region, windowHours)
-		if result.NextPageToken == nil || *result.NextPageToken == "" {
-			return nil
-		}
-		token = result.NextPageToken
-	}
+	return c.fetchCoveragePaged(ctx, input, func(instType, deployment string, cov PoolCoverage) {
+		out[rdsPoolKey(region, instType, engine, deployment)] = cov
+	}, windowHours)
 }
 
-// fetchCoverageForServiceRegion runs the paged GetReservationCoverage loop
-// for one (non-RDS service, region) tuple. Writes entries keyed by
-// "region:instance_type". Non-RDS services don't have an engine or
-// deployment-option split worth tracking the way RDS does, so we group by
-// INSTANCE_TYPE alone.
+// fetchCoverageForServiceRegion fetches coverage for one (non-RDS
+// service, region) tuple. Writes entries keyed by "region:instance_type"
+// — non-RDS services don't have an engine or deployment split worth
+// tracking the way RDS does, so we group by INSTANCE_TYPE alone.
 //
 // "Hour" tells CE to include the Hour coverage block in the response;
 // CoverageHoursPercentage + TotalRunningHours inside that block are what
@@ -268,28 +238,29 @@ func (c *Client) fetchCoverageForRDSEngineRegion(ctx context.Context, startStr, 
 // percentage / hours fields are computed and included automatically.
 func (c *Client) fetchCoverageForServiceRegion(ctx context.Context, startStr, endStr string, windowHours float64, service, region string, out PoolCoverageMap) error {
 	input := &costexplorer.GetReservationCoverageInput{
-		TimePeriod: &types.DateInterval{
-			Start: aws.String(startStr),
-			End:   aws.String(endStr),
-		},
+		TimePeriod: &types.DateInterval{Start: aws.String(startStr), End: aws.String(endStr)},
 		GroupBy: []types.GroupDefinition{
 			{Type: types.GroupDefinitionTypeDimension, Key: aws.String(string(types.DimensionInstanceType))},
 		},
-		Filter: &types.Expression{
-			And: []types.Expression{
-				{Dimensions: &types.DimensionValues{
-					Key:    types.DimensionService,
-					Values: []string{service},
-				}},
-				{Dimensions: &types.DimensionValues{
-					Key:    types.DimensionRegion,
-					Values: []string{region},
-				}},
-			},
-		},
+		Filter:  serviceRegionFilter(service, region),
 		Metrics: []string{"Hour"},
 	}
+	return c.fetchCoveragePaged(ctx, input, func(instType, _ string, cov PoolCoverage) {
+		out[poolKey(region, instType)] = cov
+	}, windowHours)
+}
 
+// fetchCoveragePaged runs the paginated GetReservationCoverage loop and
+// invokes record on each group with a non-empty INSTANCE_TYPE and a
+// valid Coverage block. The keyed-write logic is callsite-specific
+// (RDS keys carry engine + deployment, non-RDS keys don't), so record
+// closes over the key shape the caller wants.
+func (c *Client) fetchCoveragePaged(
+	ctx context.Context,
+	input *costexplorer.GetReservationCoverageInput,
+	record func(instType, deployment string, cov PoolCoverage),
+	windowHours float64,
+) error {
 	var token *string
 	for {
 		input.NextPageToken = token
@@ -297,11 +268,49 @@ func (c *Client) fetchCoverageForServiceRegion(ctx context.Context, startStr, en
 		if err != nil {
 			return err
 		}
-		accumulateGroups(out, result.CoveragesByTime, region, windowHours)
+		for _, period := range result.CoveragesByTime {
+			for _, group := range period.Groups {
+				instType, deployment := extractGroupAttributes(group.Attributes)
+				if instType == "" {
+					continue
+				}
+				cov, ok := poolCoverageFromGroup(group, windowHours)
+				if !ok {
+					continue
+				}
+				record(instType, deployment, cov)
+			}
+		}
 		if result.NextPageToken == nil || *result.NextPageToken == "" {
 			return nil
 		}
 		token = result.NextPageToken
+	}
+}
+
+// rdsEngineRegionFilter builds the CE Filter expression scoping a
+// GetReservationCoverage call to a single (RDS engine, region) tuple.
+// Extracted so the fetch path doesn't bury the filter shape inside the
+// input struct literal.
+func rdsEngineRegionFilter(engine, region string) *types.Expression {
+	return &types.Expression{
+		And: []types.Expression{
+			{Dimensions: &types.DimensionValues{Key: types.DimensionService, Values: []string{rdsServiceFilter}}},
+			{Dimensions: &types.DimensionValues{Key: types.DimensionDatabaseEngine, Values: []string{engine}}},
+			{Dimensions: &types.DimensionValues{Key: types.DimensionRegion, Values: []string{region}}},
+		},
+	}
+}
+
+// serviceRegionFilter builds the CE Filter expression scoping a
+// GetReservationCoverage call to a single (service, region) tuple
+// (non-RDS variant: no DATABASE_ENGINE dimension).
+func serviceRegionFilter(service, region string) *types.Expression {
+	return &types.Expression{
+		And: []types.Expression{
+			{Dimensions: &types.DimensionValues{Key: types.DimensionService, Values: []string{service}}},
+			{Dimensions: &types.DimensionValues{Key: types.DimensionRegion, Values: []string{region}}},
+		},
 	}
 }
 
@@ -341,46 +350,6 @@ func poolCoverageFromGroup(group types.ReservationCoverageGroup, windowHours flo
 		avg = parseFloat(aws.ToString(group.Coverage.CoverageHours.TotalRunningHours)) / windowHours
 	}
 	return PoolCoverage{Pct: pct, AvgInstancesPerHour: avg}, true
-}
-
-// accumulateGroups walks a page of CE coverage responses grouped by
-// INSTANCE_TYPE and writes (region, instance_type) → PoolCoverage entries
-// into out. The region arg comes from the caller (we filter by region; CE
-// doesn't echo it back in the group attributes).
-func accumulateGroups(out PoolCoverageMap, byTime []types.CoverageByTime, region string, windowHours float64) {
-	for _, period := range byTime {
-		for _, group := range period.Groups {
-			instType, _ := extractGroupAttributes(group.Attributes)
-			if instType == "" {
-				continue
-			}
-			cov, ok := poolCoverageFromGroup(group, windowHours)
-			if !ok {
-				continue
-			}
-			out[poolKey(region, instType)] = cov
-		}
-	}
-}
-
-// accumulateRDSEngineGroups is the RDS variant of accumulateGroups that writes
-// engine + deployment-aware keys. The engine and region args come from the
-// caller (both are in the Filter, not the GroupBy); deployment comes from
-// the group attributes.
-func accumulateRDSEngineGroups(out PoolCoverageMap, byTime []types.CoverageByTime, engine, region string, windowHours float64) {
-	for _, period := range byTime {
-		for _, group := range period.Groups {
-			instType, deployment := extractGroupAttributes(group.Attributes)
-			if instType == "" {
-				continue
-			}
-			cov, ok := poolCoverageFromGroup(group, windowHours)
-			if !ok {
-				continue
-			}
-			out[rdsPoolKey(region, instType, engine, deployment)] = cov
-		}
-	}
 }
 
 // extractGroupAttributes reads INSTANCE_TYPE and DEPLOYMENT_OPTION values
