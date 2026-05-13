@@ -12,8 +12,9 @@ import (
 type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error)
 
 // AuthLevel controls how Router.Route() enforces authentication.
-// The zero value is AuthAdmin — secure by default.
-// Any Route without an explicit Auth field requires admin access.
+// The Auth field on Route is MANDATORY — NewRouter panics at startup
+// if any registered route leaves it at the zero value. See the const
+// block below for the AuthAdmin / AuthUser / AuthPublic options.
 //
 // Router.Route enforces these levels itself as a defence-in-depth check,
 // in addition to the validateSecurity → authenticate middleware that runs
@@ -23,14 +24,23 @@ type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest
 type AuthLevel int
 
 const (
+	// authUnset is the zero value. NewRouter panics at startup if any
+	// route is registered with this value, forcing every route author
+	// to make an explicit choice between AuthAdmin / AuthUser / AuthPublic.
+	// Prior versions of this file used AuthAdmin as the iota zero with a
+	// "secure by default" rationale, but that pattern silently locked
+	// every non-admin user out of any new read-only endpoint a developer
+	// added without thinking about it (issue surfaced in 2026-05-14
+	// readonly-role lockout). Making the field mandatory at the route
+	// declaration site removes the failure mode entirely.
+	authUnset AuthLevel = iota
 	// AuthAdmin requires admin role (admin API key or admin bearer-token
-	// session). Zero value — any Route without an explicit Auth field gets
-	// this. Enforced by Router.Route via h.requireAdmin.
-	AuthAdmin AuthLevel = iota
+	// session). Enforced by Router.Route via h.requireAdmin.
+	AuthAdmin
 	// AuthUser requires any authenticated user (admin API key, user API
-	// key, or any valid bearer-token session). Use for self-service
-	// endpoints (logout, profile, API key management). Enforced by
-	// Router.Route via h.requireAuth.
+	// key, or any valid bearer-token session). Use for read-only views
+	// and self-service endpoints (logout, profile, API key management).
+	// Enforced by Router.Route via h.requireAuth.
 	AuthUser
 	// AuthPublic requires no authentication. Must also be listed in
 	// isPublicEndpoint() so the middleware skips its auth/CSRF checks.
@@ -48,8 +58,10 @@ type Route struct {
 	// Handler function
 	Handler RouteHandler
 
-	// Auth controls authentication level. Defaults to AuthAdmin (0) — secure by default.
-	// Explicitly set to AuthUser or AuthPublic to relax the requirement.
+	// Auth controls authentication level. REQUIRED — leaving this unset
+	// (zero value) causes NewRouter to panic at startup so every route
+	// author makes an explicit AuthAdmin / AuthUser / AuthPublic choice.
+	// See AuthLevel doc for the history behind the mandatory-field rule.
 	Auth AuthLevel
 }
 
@@ -59,25 +71,41 @@ type Router struct {
 	h      *Handler
 }
 
-// NewRouter creates a new router with all routes configured
+// NewRouter creates a new router with all routes configured.
+// Panics on startup if any route was registered with an unset Auth
+// field — see the AuthLevel doc for the rationale (forces every route
+// author to declare a level explicitly so a missed field can't silently
+// inherit an over- or under-permissive default).
 func NewRouter(h *Handler) *Router {
 	r := &Router{h: h}
 	r.registerRoutes()
+	for i, route := range r.routes {
+		if route.Auth == authUnset {
+			panic(fmt.Sprintf(
+				"router: route %d (%s%s%s %q) has unset Auth field — every route must declare AuthAdmin, AuthUser, or AuthPublic explicitly",
+				i, route.PathPrefix, route.ExactPath, route.PathSuffix, route.Method,
+			))
+		}
+	}
 	return r
 }
 
 // registerRoutes sets up all application routes
 func (r *Router) registerRoutes() {
 	r.routes = []Route{
-		// Dashboard endpoints
-		{ExactPath: "/api/dashboard/summary", Method: "GET", Handler: r.dashboardSummaryHandler},
-		{ExactPath: "/api/dashboard/upcoming", Method: "GET", Handler: r.upcomingPurchasesHandler},
+		// Dashboard endpoints — read-only views available to any signed-in
+		// user (admin / user / readonly). The page itself is the landing
+		// screen post-login and was locking out non-admin roles when these
+		// routes defaulted to AuthAdmin.
+		{ExactPath: "/api/dashboard/summary", Method: "GET", Handler: r.dashboardSummaryHandler, Auth: AuthUser},
+		{ExactPath: "/api/dashboard/upcoming", Method: "GET", Handler: r.upcomingPurchasesHandler, Auth: AuthUser},
 
-		// Configuration endpoints
-		{ExactPath: "/api/config", Method: "GET", Handler: r.getConfigHandler},
-		{ExactPath: "/api/config", Method: "PUT", Handler: r.updateConfigHandler},
-		{PathPrefix: "/api/config/service/", Method: "GET", Handler: r.getServiceConfigHandler},
-		{PathPrefix: "/api/config/service/", Method: "PUT", Handler: r.updateServiceConfigHandler},
+		// Configuration endpoints — GET is AuthUser (settings are app config,
+		// not secrets — credentials live elsewhere), PUT remains AuthAdmin.
+		{ExactPath: "/api/config", Method: "GET", Handler: r.getConfigHandler, Auth: AuthUser},
+		{ExactPath: "/api/config", Method: "PUT", Handler: r.updateConfigHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/config/service/", Method: "GET", Handler: r.getServiceConfigHandler, Auth: AuthUser},
+		{PathPrefix: "/api/config/service/", Method: "PUT", Handler: r.updateServiceConfigHandler, Auth: AuthAdmin},
 
 		// Dynamically-probed AWS commitment-option combos. Non-admin reads
 		// (AuthUser) — data is public-ish (hardcoded in the frontend today)
@@ -87,30 +115,34 @@ func (r *Router) registerRoutes() {
 		// Recommendations endpoints. The /:id/detail suffix route uses
 		// the same prefix+suffix pattern as /api/plans/{id}/purchases
 		// below — extractParams strips both ends to recover the id.
-		{ExactPath: "/api/recommendations", Method: "GET", Handler: r.getRecommendationsHandler},
-		{ExactPath: "/api/recommendations/freshness", Method: "GET", Handler: r.getRecommendationsFreshnessHandler},
+		// AuthUser for the GETs so readonly/user roles can browse the
+		// recommendation feed (handlers still scope rows by account
+		// permission grants).
+		{ExactPath: "/api/recommendations", Method: "GET", Handler: r.getRecommendationsHandler, Auth: AuthUser},
+		{ExactPath: "/api/recommendations/freshness", Method: "GET", Handler: r.getRecommendationsFreshnessHandler, Auth: AuthUser},
 		// AuthUser: any signed-in user can trigger refresh; the handler
 		// then enforces requirePermission(view, recommendations) so
 		// users without that permission are rejected at the handler
 		// (admin-only would block view-only roles that legitimately
 		// need to refresh the data they're allowed to see).
 		{ExactPath: "/api/recommendations/refresh", Method: "POST", Handler: r.refreshRecommendationsHandler, Auth: AuthUser},
-		{PathPrefix: "/api/recommendations/", PathSuffix: "/detail", Method: "GET", Handler: r.getRecommendationDetailHandler},
+		{PathPrefix: "/api/recommendations/", PathSuffix: "/detail", Method: "GET", Handler: r.getRecommendationDetailHandler, Auth: AuthUser},
 
-		// Purchase plans endpoints
-		{ExactPath: "/api/plans", Method: "GET", Handler: r.listPlansHandler},
-		{ExactPath: "/api/plans", Method: "POST", Handler: r.createPlanHandler},
+		// Purchase plans endpoints — GETs are AuthUser (anyone signed in
+		// can see plans they're entitled to), writes stay AuthAdmin.
+		{ExactPath: "/api/plans", Method: "GET", Handler: r.listPlansHandler, Auth: AuthUser},
+		{ExactPath: "/api/plans", Method: "POST", Handler: r.createPlanHandler, Auth: AuthAdmin},
 		// Suffix routes must precede generic prefix routes so they are matched first.
-		{PathPrefix: "/api/plans/", PathSuffix: "/purchases", Method: "POST", Handler: r.createPlannedPurchasesHandler},
-		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "GET", Handler: r.listPlanAccountsHandler},
-		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "PUT", Handler: r.setPlanAccountsHandler},
-		{PathPrefix: "/api/plans/", Method: "GET", Handler: r.getPlanHandler},
-		{PathPrefix: "/api/plans/", Method: "PUT", Handler: r.updatePlanHandler},
-		{PathPrefix: "/api/plans/", Method: "PATCH", Handler: r.patchPlanHandler},
-		{PathPrefix: "/api/plans/", Method: "DELETE", Handler: r.deletePlanHandler},
+		{PathPrefix: "/api/plans/", PathSuffix: "/purchases", Method: "POST", Handler: r.createPlannedPurchasesHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "GET", Handler: r.listPlanAccountsHandler, Auth: AuthUser},
+		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "PUT", Handler: r.setPlanAccountsHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/plans/", Method: "GET", Handler: r.getPlanHandler, Auth: AuthUser},
+		{PathPrefix: "/api/plans/", Method: "PUT", Handler: r.updatePlanHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/plans/", Method: "PATCH", Handler: r.patchPlanHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/plans/", Method: "DELETE", Handler: r.deletePlanHandler, Auth: AuthAdmin},
 
 		// Purchase actions
-		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler},
+		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler, Auth: AuthAdmin},
 		// Approve + Cancel also accept GET so the one-click links in the
 		// approval email (rendered as <a href>) land on the correct
 		// handler instead of falling through to the catch-all 401 that
@@ -128,22 +160,25 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/purchases/retry/", Method: "POST", Handler: r.retryPurchaseHandler, Auth: AuthUser},
 
 		// Planned purchases endpoints (must come before generic /api/purchases/{id})
-		{ExactPath: "/api/purchases/planned", Method: "GET", Handler: r.getPlannedPurchasesHandler},
-		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/pause", Method: "POST", Handler: r.pausePlannedPurchaseHandler},
-		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/resume", Method: "POST", Handler: r.resumePlannedPurchaseHandler},
-		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/run", Method: "POST", Handler: r.runPlannedPurchaseHandler},
-		{PathPrefix: "/api/purchases/planned/", Method: "DELETE", Handler: r.deletePlannedPurchaseHandler},
+		// — GET list is AuthUser; the action endpoints (pause/resume/run/delete)
+		// stay AuthAdmin.
+		{ExactPath: "/api/purchases/planned", Method: "GET", Handler: r.getPlannedPurchasesHandler, Auth: AuthUser},
+		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/pause", Method: "POST", Handler: r.pausePlannedPurchaseHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/resume", Method: "POST", Handler: r.resumePlannedPurchaseHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/run", Method: "POST", Handler: r.runPlannedPurchaseHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/purchases/planned/", Method: "DELETE", Handler: r.deletePlannedPurchaseHandler, Auth: AuthAdmin},
 
 		// Generic purchase details (must come after more specific routes)
-		{PathPrefix: "/api/purchases/", Method: "GET", Handler: r.getPurchaseDetailsHandler},
+		// — read-only; AuthUser so the history detail view works for everyone.
+		{PathPrefix: "/api/purchases/", Method: "GET", Handler: r.getPurchaseDetailsHandler, Auth: AuthUser},
 
-		// History endpoints
-		{ExactPath: "/api/history", Method: "GET", Handler: r.getHistoryHandler},
-		{ExactPath: "/api/history/analytics", Method: "GET", Handler: r.getHistoryAnalyticsHandler},
-		{ExactPath: "/api/history/breakdown", Method: "GET", Handler: r.getHistoryBreakdownHandler},
+		// History endpoints — read-only views available to any signed-in user.
+		{ExactPath: "/api/history", Method: "GET", Handler: r.getHistoryHandler, Auth: AuthUser},
+		{ExactPath: "/api/history/analytics", Method: "GET", Handler: r.getHistoryAnalyticsHandler, Auth: AuthUser},
+		{ExactPath: "/api/history/breakdown", Method: "GET", Handler: r.getHistoryBreakdownHandler, Auth: AuthUser},
 
 		// Analytics collection endpoint
-		{ExactPath: "/api/analytics/collect", Method: "POST", Handler: r.triggerAnalyticsCollectionHandler},
+		{ExactPath: "/api/analytics/collect", Method: "POST", Handler: r.triggerAnalyticsCollectionHandler, Auth: AuthAdmin},
 
 		// Auth endpoints
 		{ExactPath: "/api/auth/login", Method: "POST", Handler: r.loginHandler, Auth: AuthPublic},
@@ -163,40 +198,47 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/api-keys/", Method: "DELETE", Handler: r.deleteAPIKeyHandler, Auth: AuthUser},
 
 		// User management endpoints
-		{ExactPath: "/api/users", Method: "GET", Handler: r.listUsersHandler},
-		{ExactPath: "/api/users", Method: "POST", Handler: r.createUserHandler},
-		{PathPrefix: "/api/users/", Method: "GET", Handler: r.getUserHandler},
-		{PathPrefix: "/api/users/", Method: "PUT", Handler: r.updateUserHandler},
-		{PathPrefix: "/api/users/", Method: "DELETE", Handler: r.deleteUserHandler},
+		{ExactPath: "/api/users", Method: "GET", Handler: r.listUsersHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/users", Method: "POST", Handler: r.createUserHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/users/", Method: "GET", Handler: r.getUserHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/users/", Method: "PUT", Handler: r.updateUserHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/users/", Method: "DELETE", Handler: r.deleteUserHandler, Auth: AuthAdmin},
 
-		// Cloud Account endpoints (more-specific suffix routes must precede generic prefix routes)
-		{ExactPath: "/api/accounts/discover-org", Method: "POST", Handler: r.discoverOrgAccountsHandler},
-		{ExactPath: "/api/accounts/self", Method: "POST", Handler: r.createSelfAccountHandler},
-		{ExactPath: "/api/accounts", Method: "GET", Handler: r.listAccountsHandler},
-		{ExactPath: "/api/accounts", Method: "POST", Handler: r.createAccountHandler},
-		{PathPrefix: "/api/accounts/", PathSuffix: "/credentials", Method: "POST", Handler: r.saveAccountCredentialsHandler},
-		{PathPrefix: "/api/accounts/", PathSuffix: "/test", Method: "POST", Handler: r.testAccountCredentialsHandler},
-		{PathPrefix: "/api/accounts/", PathSuffix: "/service-overrides", Method: "GET", Handler: r.listAccountServiceOverridesHandler},
-		{PathPrefix: "/api/accounts/", Method: "PUT", Handler: r.updateAccountOrServiceOverrideHandler},
-		{PathPrefix: "/api/accounts/", Method: "DELETE", Handler: r.deleteAccountOrServiceOverrideHandler},
-		{PathPrefix: "/api/accounts/", Method: "GET", Handler: r.getAccountHandler},
+		// Cloud Account endpoints (more-specific suffix routes must precede generic prefix routes).
+		// GETs are AuthUser — account metadata is needed by every dashboard
+		// page; sensitive credential bodies are redacted in the handler's
+		// response shape, not gated at the route layer.
+		{ExactPath: "/api/accounts/discover-org", Method: "POST", Handler: r.discoverOrgAccountsHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/accounts/self", Method: "POST", Handler: r.createSelfAccountHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/accounts", Method: "GET", Handler: r.listAccountsHandler, Auth: AuthUser},
+		{ExactPath: "/api/accounts", Method: "POST", Handler: r.createAccountHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/accounts/", PathSuffix: "/credentials", Method: "POST", Handler: r.saveAccountCredentialsHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/accounts/", PathSuffix: "/test", Method: "POST", Handler: r.testAccountCredentialsHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/accounts/", PathSuffix: "/service-overrides", Method: "GET", Handler: r.listAccountServiceOverridesHandler, Auth: AuthUser},
+		{PathPrefix: "/api/accounts/", Method: "PUT", Handler: r.updateAccountOrServiceOverrideHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/accounts/", Method: "DELETE", Handler: r.deleteAccountOrServiceOverrideHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/accounts/", Method: "GET", Handler: r.getAccountHandler, Auth: AuthUser},
 
-		// Group management endpoints
-		{ExactPath: "/api/groups", Method: "GET", Handler: r.listGroupsHandler},
-		{ExactPath: "/api/groups", Method: "POST", Handler: r.createGroupHandler},
-		{PathPrefix: "/api/groups/", Method: "GET", Handler: r.getGroupHandler},
-		{PathPrefix: "/api/groups/", Method: "PUT", Handler: r.updateGroupHandler},
-		{PathPrefix: "/api/groups/", Method: "DELETE", Handler: r.deleteGroupHandler},
+		// Group management endpoints — list/get readable by any signed-in
+		// user (group display name is needed when rendering user lists);
+		// CUD stays AuthAdmin.
+		{ExactPath: "/api/groups", Method: "GET", Handler: r.listGroupsHandler, Auth: AuthUser},
+		{ExactPath: "/api/groups", Method: "POST", Handler: r.createGroupHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/groups/", Method: "GET", Handler: r.getGroupHandler, Auth: AuthUser},
+		{PathPrefix: "/api/groups/", Method: "PUT", Handler: r.updateGroupHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/groups/", Method: "DELETE", Handler: r.deleteGroupHandler, Auth: AuthAdmin},
 
-		// RI Exchange endpoints
-		{ExactPath: "/api/ri-exchange/instances", Method: "GET", Handler: r.listConvertibleRIsHandler},
-		{ExactPath: "/api/ri-exchange/utilization", Method: "GET", Handler: r.getRIUtilizationHandler},
-		{ExactPath: "/api/ri-exchange/reshape-recommendations", Method: "GET", Handler: r.getReshapeRecommendationsHandler},
-		{ExactPath: "/api/ri-exchange/quote", Method: "POST", Handler: r.getExchangeQuoteHandler},
-		{ExactPath: "/api/ri-exchange/execute", Method: "POST", Handler: r.executeExchangeHandler},
-		{ExactPath: "/api/ri-exchange/config", Method: "GET", Handler: r.getRIExchangeConfigHandler},
-		{ExactPath: "/api/ri-exchange/config", Method: "PUT", Handler: r.updateRIExchangeConfigHandler},
-		{ExactPath: "/api/ri-exchange/history", Method: "GET", Handler: r.getRIExchangeHistoryHandler},
+		// RI Exchange endpoints — GETs are AuthUser (Convertible RIs,
+		// Reshape Recommendations, Exchange History pages all need this);
+		// quote / execute / config writes stay AuthAdmin.
+		{ExactPath: "/api/ri-exchange/instances", Method: "GET", Handler: r.listConvertibleRIsHandler, Auth: AuthUser},
+		{ExactPath: "/api/ri-exchange/utilization", Method: "GET", Handler: r.getRIUtilizationHandler, Auth: AuthUser},
+		{ExactPath: "/api/ri-exchange/reshape-recommendations", Method: "GET", Handler: r.getReshapeRecommendationsHandler, Auth: AuthUser},
+		{ExactPath: "/api/ri-exchange/quote", Method: "POST", Handler: r.getExchangeQuoteHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/ri-exchange/execute", Method: "POST", Handler: r.executeExchangeHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/ri-exchange/config", Method: "GET", Handler: r.getRIExchangeConfigHandler, Auth: AuthUser},
+		{ExactPath: "/api/ri-exchange/config", Method: "PUT", Handler: r.updateRIExchangeConfigHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/ri-exchange/history", Method: "GET", Handler: r.getRIExchangeHistoryHandler, Auth: AuthUser},
 		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
 
@@ -205,11 +247,11 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/register/", Method: "GET", Handler: r.getRegistrationStatusHandler, Auth: AuthPublic},
 
 		// Admin registration management (suffix routes before generic prefix)
-		{ExactPath: "/api/registrations", Method: "GET", Handler: r.listRegistrationsHandler},
-		{PathPrefix: "/api/registrations/", PathSuffix: "/approve", Method: "POST", Handler: r.approveRegistrationHandler},
-		{PathPrefix: "/api/registrations/", PathSuffix: "/reject", Method: "POST", Handler: r.rejectRegistrationHandler},
-		{PathPrefix: "/api/registrations/", Method: "DELETE", Handler: r.deleteRegistrationHandler},
-		{PathPrefix: "/api/registrations/", Method: "GET", Handler: r.getRegistrationHandler},
+		{ExactPath: "/api/registrations", Method: "GET", Handler: r.listRegistrationsHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/registrations/", PathSuffix: "/approve", Method: "POST", Handler: r.approveRegistrationHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/registrations/", PathSuffix: "/reject", Method: "POST", Handler: r.rejectRegistrationHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/registrations/", Method: "DELETE", Handler: r.deleteRegistrationHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/registrations/", Method: "GET", Handler: r.getRegistrationHandler, Auth: AuthAdmin},
 
 		// Federation IaC download endpoint (requires auth — templates embed the
 		// host AWS account ID via STS, which we don't want to leak to unauth'd
@@ -242,9 +284,10 @@ func (r *Router) registerRoutes() {
 // authenticate already runs in the middleware pipeline before dispatch,
 // but Router.Route also enforces the per-route Auth level so routes stay
 // protected even if middleware ordering changes or a new code path
-// bypasses validateSecurity. Routes with Auth == AuthAdmin (the default)
-// require admin access; AuthUser routes require any authenticated user;
-// AuthPublic routes are unauthenticated.
+// bypasses validateSecurity. AuthAdmin routes require admin access;
+// AuthUser routes require any authenticated user; AuthPublic routes are
+// unauthenticated. There is no implicit default — every route declares
+// its level at registration time and NewRouter rejects authUnset.
 func (r *Router) Route(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (any, error) {
 	for _, route := range r.routes {
 		if r.matches(route, method, path) {
@@ -259,6 +302,10 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 				}
 			case AuthPublic:
 				// no auth check; relied upon by middleware via isPublicEndpoint
+			default:
+				// authUnset / unknown level — NewRouter should have already
+				// panicked at startup. Defence in depth: refuse to dispatch.
+				return nil, NewClientError(500, "internal routing error")
 			}
 			params := r.extractParams(route, path)
 			return route.Handler(ctx, req, params)
