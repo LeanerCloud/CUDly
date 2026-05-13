@@ -23,8 +23,14 @@ export async function getUser(userId: string): Promise<APIUser> {
  * Create a new user
  */
 export async function createUser(req: CreateUserRequest): Promise<APIUser> {
-  // Base64 encode password to match backend expectation
-  const encodedReq = { ...req, password: base64Encode(req.password) };
+  // Base64 encode password to match backend expectation. Pass an empty
+  // string through unmodified so the backend's invite-on-empty-password
+  // path triggers — base64-encoding "" would still produce "" but
+  // skipping the call keeps intent obvious.
+  const encodedReq = {
+    ...req,
+    password: req.password ? base64Encode(req.password) : ''
+  };
   return apiRequest<APIUser>('/users', {
     method: 'POST',
     body: JSON.stringify(encodedReq)

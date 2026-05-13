@@ -222,6 +222,71 @@ func TestService_CreateUser(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("invite flow when password omitted", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		mockStore.On("GetUserByEmail", ctx, "invitee@example.com").Return(nil, nil).Once()
+
+		var captured *User
+		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).
+			Run(func(args mock.Arguments) { captured = args.Get(1).(*User) }).
+			Return(nil).Once()
+		mockEmail.On("SendUserInviteEmail", ctx, "invitee@example.com", mock.AnythingOfType("string")).
+			Return(nil).Once()
+
+		req := CreateUserRequest{
+			Email: "invitee@example.com",
+			Role:  RoleUser,
+			// Password intentionally empty — admin is inviting the user.
+		}
+
+		user, err := service.CreateUser(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, user)
+		require.NotNil(t, captured)
+
+		// Invited users land inactive and only flip to active after they
+		// set their password through the welcome-link flow.
+		assert.False(t, captured.Active)
+
+		// A setup token must be stored so the welcome-link flow can find
+		// the user; the placeholder hash must not be empty so the
+		// password_hash NOT NULL constraint is satisfied and no client
+		// input can match it.
+		assert.NotEmpty(t, captured.PasswordResetToken)
+		require.NotNil(t, captured.PasswordResetExpiry)
+		assert.True(t, captured.PasswordResetExpiry.After(time.Now()))
+		assert.NotEmpty(t, captured.PasswordHash)
+
+		mockStore.AssertExpectations(t)
+		mockEmail.AssertExpectations(t)
+	})
+
+	t.Run("invite flow still succeeds when email send fails", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		mockStore.On("GetUserByEmail", ctx, "invitee@example.com").Return(nil, nil).Once()
+		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
+		mockEmail.On("SendUserInviteEmail", ctx, "invitee@example.com", mock.AnythingOfType("string")).
+			Return(assert.AnError).Once()
+
+		req := CreateUserRequest{
+			Email: "invitee@example.com",
+			Role:  RoleUser,
+		}
+
+		user, err := service.CreateUser(ctx, req)
+		require.NoError(t, err)
+		assert.NotNil(t, user)
+
+		mockStore.AssertExpectations(t)
+		mockEmail.AssertExpectations(t)
+	})
 }
 
 func TestService_DeleteUser(t *testing.T) {

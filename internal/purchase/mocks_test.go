@@ -570,6 +570,11 @@ func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashb
 	return args.Error(0)
 }
 
+func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, setupURL string) error {
+	args := m.Called(ctx, emailAddr, setupURL)
+	return args.Error(0)
+}
+
 func (m *MockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)

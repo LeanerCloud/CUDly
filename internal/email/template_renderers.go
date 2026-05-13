@@ -44,6 +44,14 @@ func RenderWelcomeEmail(email, dashboardURL, role string) (string, error) {
 	})
 }
 
+// RenderUserInviteEmail renders the user-invite email template.
+func RenderUserInviteEmail(email, setupURL string) (string, error) {
+	return renderTemplate("user-invite", userInviteTemplate, UserInviteData{
+		Email:    email,
+		SetupURL: setupURL,
+	})
+}
+
 // RenderNewRecommendationsEmail renders the new recommendations email template
 func RenderNewRecommendationsEmail(data NotificationData) (string, error) {
 	return renderTemplate("recommendations", newRecommendationsTemplate, data)

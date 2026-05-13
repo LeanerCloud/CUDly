@@ -27,11 +27,13 @@ export function openCreateUserModal(): void {
   form.reset();
   (document.getElementById('user-id') as HTMLInputElement).value = '';
 
-  // Show password field for new user
+  // Show password field for new user. Password is optional: leaving it
+  // blank invites the user via email to set their own password on first
+  // login, so don't mark the field required.
   const passwordFields = document.getElementById('password-fields');
   if (passwordFields) {
     passwordFields.classList.remove('hidden');
-    (document.getElementById('user-password') as HTMLInputElement).required = true;
+    (document.getElementById('user-password') as HTMLInputElement).required = false;
   }
 
   // Populate groups dropdown
@@ -109,18 +111,23 @@ export async function saveUser(e: Event): Promise<void> {
       });
       showSuccess('User updated successfully');
     } else {
-      // Create new user
-      if (!password || password.length < 12) {
-        showError('Password must be at least 12 characters');
-        return;
-      }
-      const hasUppercase = /[A-Z]/.test(password);
-      const hasLowercase = /[a-z]/.test(password);
-      const hasNumber = /[0-9]/.test(password);
-      const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
-      if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-        showError('Password must contain uppercase, lowercase, number, and special character');
-        return;
+      // Create new user. Password is optional: if blank, the backend
+      // emails an invite that lets the user pick their own password on
+      // first login. Only run client-side strength checks when a
+      // password was actually entered.
+      if (password) {
+        if (password.length < 12) {
+          showError('Password must be at least 12 characters');
+          return;
+        }
+        const hasUppercase = /[A-Z]/.test(password);
+        const hasLowercase = /[a-z]/.test(password);
+        const hasNumber = /[0-9]/.test(password);
+        const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+        if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
+          showError('Password must contain uppercase, lowercase, number, and special character');
+          return;
+        }
       }
       await api.createUser({
         email,
@@ -128,7 +135,11 @@ export async function saveUser(e: Event): Promise<void> {
         role,
         groups: selectedGroups
       });
-      showSuccess('User created successfully');
+      showSuccess(
+        password
+          ? 'User created successfully'
+          : `Invitation email sent to ${email} — they will set their password on first login`
+      );
     }
 
     closeUserModal();

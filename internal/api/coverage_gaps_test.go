@@ -806,6 +806,7 @@ func (s *stubEmailNotifier) SendPurchaseFailedNotification(_ context.Context, _ 
 }
 func (s *stubEmailNotifier) SendPasswordResetEmail(_ context.Context, _, _ string) error { return nil }
 func (s *stubEmailNotifier) SendWelcomeEmail(_ context.Context, _, _, _ string) error    { return nil }
+func (s *stubEmailNotifier) SendUserInviteEmail(_ context.Context, _, _ string) error    { return nil }
 func (s *stubEmailNotifier) SendRIExchangePendingApproval(_ context.Context, _ email.RIExchangeNotificationData) error {
 	return nil
 }
