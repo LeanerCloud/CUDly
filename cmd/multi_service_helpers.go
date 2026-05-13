@@ -483,9 +483,22 @@ func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config, coverag
 			AppLogger.Printf("  ⏰ Treating %d recs as partially uncovered (RIs expiring within %d days)\n", n, cfg.RebuyWindowDays)
 		}
 	}
-	filteredRecs := applySizing(recs, cfg, cfg.Coverage)
+	// Family-NU sizing for RDS recs: AWS rec API already bundles size-flex
+	// demand within a family into one rec at one size, so per-pool sizing
+	// under-buys. Run the family-NU pass first (RDS only, target-coverage
+	// mode only); non-RDS recs flow through the per-pool path unchanged.
+	// When TargetCoverage isn't set (legacy --coverage path) the per-pool
+	// flow handles everything as before.
+	var sizedRDS []common.Recommendation
+	rest := recs
 	if cfg.TargetCoverage > 0 {
-		AppLogger.Printf("  🎯 Applying %.1f%% target-coverage: %d recommendations selected\n", cfg.TargetCoverage, len(filteredRecs))
+		sizedRDS, rest = recommendations.ApplyFamilyNUSizingRDS(recs, coverageMap, cfg.TargetCoverage)
+	}
+	filteredRecs := applySizing(rest, cfg, cfg.Coverage)
+	filteredRecs = append(filteredRecs, sizedRDS...)
+	if cfg.TargetCoverage > 0 {
+		AppLogger.Printf("  🎯 Applying %.1f%% target-coverage: %d recommendations selected (%d via family-NU, %d via per-pool)\n",
+			cfg.TargetCoverage, len(filteredRecs), len(sizedRDS), len(filteredRecs)-len(sizedRDS))
 	} else {
 		AppLogger.Printf("  📈 Applying %.1f%% coverage: %d recommendations selected\n", cfg.Coverage, len(filteredRecs))
 	}
