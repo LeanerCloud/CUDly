@@ -315,6 +315,59 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	assert.Equal(t, "", zeroRow[idxCovered], "missing avg or existing_cov should leave CoveredInstances blank")
 }
 
+// TestExtractRDSFamily covers the family-prefix extraction used by the
+// CSV writer to group rows by size-flex family.
+func TestExtractRDSFamily(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  common.Recommendation
+		want string
+	}{
+		{"RDS db.r7g.large", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large"}, "db.r7g"},
+		{"RDS db.t4g.medium", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.medium"}, "db.t4g"},
+		{"RelationalDB alias", common.Recommendation{Service: common.ServiceRelationalDB, ResourceType: "db.m5.xlarge"}, "db.m5"},
+		// Non-RDS services blank even when ResourceType looks RDS-shaped.
+		{"EC2 ignored", common.Recommendation{Service: common.ServiceEC2, ResourceType: "m5.large"}, ""},
+		{"ElastiCache ignored", common.Recommendation{Service: common.ServiceElastiCache, ResourceType: "cache.t3.micro"}, ""},
+		// Malformed RDS type.
+		{"RDS bare type", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractRDSFamily(tt.rec))
+		})
+	}
+}
+
+// TestFormatNormalizedUnitsOrBlank confirms NU values land for RDS rows
+// with known sizes and stay blank for non-RDS / zero-count / unknown-size
+// inputs, matching the "0/empty = unknown" convention used elsewhere.
+func TestFormatNormalizedUnitsOrBlank(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  common.Recommendation
+		want string
+	}{
+		// 15 × db.r7g.large = 15 × 4 NU = 60 NU
+		{"r7g.large × 15", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large", Count: 15}, "60"},
+		// 3 × db.t4g.medium = 3 × 2 NU = 6 NU
+		{"t4g.medium × 3", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.medium", Count: 3}, "6"},
+		// Fractional NU survives via %g (db.t4g.micro = 0.5 NU)
+		{"t4g.micro × 3", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.micro", Count: 3}, "1.5"},
+		// Non-RDS service → blank
+		{"EC2 row blank", common.Recommendation{Service: common.ServiceEC2, ResourceType: "m5.large", Count: 5}, ""},
+		// Zero count → blank
+		{"zero count blank", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large", Count: 0}, ""},
+		// Unknown size → blank
+		{"unknown size blank", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.bogus", Count: 5}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatNormalizedUnitsOrBlank(tt.rec))
+		})
+	}
+}
+
 // TestExtractDeployment covers the deployment-extraction helper used by
 // the RDS row in the CSV. Single-AZ / Multi-AZ is critical context for
 // pricing verification (Multi-AZ list price is ~2x Single-AZ) so the

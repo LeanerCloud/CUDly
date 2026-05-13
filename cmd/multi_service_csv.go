@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 )
 
 // determineCSVCoverage determines the coverage percentage to use for CSV mode
@@ -180,9 +181,9 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	// stay on the Recommendation struct for internal use (SP no-signal
 	// guard, etc.).
 	header := []string{
-		"Service", "Region", "ResourceType", "Engine", "Deployment",
+		"Service", "Region", "ResourceType", "Family", "Engine", "Deployment",
 		"Instances", "CoveredInstances",
-		"Count", "RecommendedCount",
+		"Count", "NormalizedUnits", "RecommendedCount",
 		"Account", "AccountName", "Term", "PaymentOption",
 		"UpfrontPayment", "EstimatedSavings",
 		"CommitmentID", "Success", "Error", "Timestamp",
@@ -204,11 +205,13 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			string(rec.Service),
 			rec.Region,
 			rec.ResourceType,
+			extractRDSFamily(rec),
 			extractEngine(rec),
 			extractDeployment(rec),
 			formatAvgInstancesOrBlank(rec.AverageInstancesUsedPerHour),
 			formatCoveredInstancesOrBlank(rec),
 			fmt.Sprintf("%d", rec.Count),
+			formatNormalizedUnitsOrBlank(rec),
 			formatIntOrBlank(rec.RecommendedCount),
 			rec.Account,
 			rec.AccountName,
@@ -240,6 +243,35 @@ func formatIntOrBlank(v int) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", v)
+}
+
+// extractRDSFamily returns the RDS instance-family prefix (e.g.
+// "db.r7g") for an RDS recommendation, empty for any service whose
+// instance type doesn't follow the RDS three-part naming. Useful for
+// grouping rows in the CSV by family-NU bucket so operators can see at
+// a glance which recs belong to the same size-flex family.
+func extractRDSFamily(rec common.Recommendation) string {
+	if rec.Service != common.ServiceRDS && rec.Service != common.ServiceRelationalDB {
+		return ""
+	}
+	return recommendations.RDSFamilyFromType(rec.ResourceType)
+}
+
+// formatNormalizedUnitsOrBlank renders the per-rec NU contribution
+// (rec.Count × NU(size)) for RDS rows: e.g. 15 × db.r7g.large = 60 NU.
+// Surfaces the size-flex math AWS rec API uses to bundle family demand
+// into a single rec at one size — without this column, operators have
+// to compute NU by hand to verify the bundling. Renders blank for
+// non-RDS rows and for sizes not in the standard NU scale.
+func formatNormalizedUnitsOrBlank(rec common.Recommendation) string {
+	if rec.Service != common.ServiceRDS && rec.Service != common.ServiceRelationalDB {
+		return ""
+	}
+	nu := recommendations.RDSInstanceNUFromType(rec.ResourceType)
+	if nu == 0 || rec.Count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%g", float64(rec.Count)*nu)
 }
 
 // extractDeployment returns the RDS deployment-option string

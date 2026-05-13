@@ -34,6 +34,23 @@ var rdsInstanceNU = map[string]float64{
 	"32xlarge": 256,
 }
 
+// RDSInstanceNUFromType is the exported counterpart of rdsInstanceNUFromType
+// for callers outside this package that need the NU value for an RDS
+// instance type (e.g. CSV writers displaying per-row family-NU
+// contribution). Returns 0 for unknown sizes — same fallback semantics
+// as the unexported helper.
+func RDSInstanceNUFromType(instanceType string) float64 {
+	return rdsInstanceNUFromType(instanceType)
+}
+
+// RDSFamilyFromType is the exported counterpart of rdsFamilyFromType for
+// callers outside this package that need the family prefix of an RDS
+// instance type (e.g. CSV writers grouping rows by family). Empty
+// string when the type doesn't carry a recognisable size suffix.
+func RDSFamilyFromType(instanceType string) string {
+	return rdsFamilyFromType(instanceType)
+}
+
 // rdsInstanceNUFromType returns the NU value for an instance type like
 // "db.r7g.2xlarge", parsing out the size suffix ("2xlarge" → 16). Returns
 // 0 when the size isn't recognised — callers treat that as "no family-NU
