@@ -1106,6 +1106,12 @@ async function handleAddPurchases(e: Event): Promise<void> {
   }
 }
 
+// Unsubscribe handles kept at module scope so setupPlanHandlers stays
+// idempotent: calling it more than once (e.g. in tests or after HMR)
+// replaces the old subscriptions rather than stacking duplicates.
+let _unsubProvider: (() => void) | null = null;
+let _unsubAccount: (() => void) | null = null;
+
 /**
  * Setup plan form event handlers (provider-aware service dropdown).
  *
@@ -1114,8 +1120,12 @@ async function handleAddPurchases(e: Event): Promise<void> {
  * the page level.
  */
 export function setupPlanHandlers(): void {
-  state.subscribeProvider(() => void loadPlans());
-  state.subscribeAccount(() => void loadPlans());
+  // Drop any previous subscriptions before re-registering so we don't
+  // accumulate duplicate loadPlans() calls on each invocation.
+  _unsubProvider?.();
+  _unsubAccount?.();
+  _unsubProvider = state.subscribeProvider(() => void loadPlans());
+  _unsubAccount = state.subscribeAccount(() => void loadPlans());
 
   const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
   const serviceSelect = document.getElementById('plan-service') as HTMLSelectElement | null;

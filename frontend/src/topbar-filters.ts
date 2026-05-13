@@ -31,18 +31,27 @@ const PROVIDER_OPTIONS: ChipSelectOption[] = [
 let providerChip: ChipSelectHandle | null = null;
 let accountChip: ChipSelectHandle | null = null;
 
+// Monotonically-increasing request counter. Each populateAccountOptions call
+// captures its generation before awaiting; the result is discarded if a newer
+// call has started, preventing stale responses from overwriting fresh options.
+let _accountRequestGen = 0;
+
 /**
  * Build the account chip's option list from the current provider context.
  * Always includes the "All Accounts" option at the top.
+ * Uses a generation counter to discard responses from superseded requests.
  */
 async function populateAccountOptions(provider: string): Promise<void> {
   if (!accountChip) return;
+  const gen = ++_accountRequestGen;
   try {
     const filter =
       provider && provider !== '' && provider !== 'all'
         ? { provider: provider as 'aws' | 'azure' | 'gcp' }
         : undefined;
     const accounts = await api.listAccounts(filter);
+    // Discard if a newer request has already started.
+    if (gen !== _accountRequestGen) return;
     const options: ChipSelectOption[] = [
       { value: '', label: 'All Accounts' },
       ...accounts.map((a) => ({
@@ -52,6 +61,7 @@ async function populateAccountOptions(provider: string): Promise<void> {
     ];
     accountChip.setOptions(options);
   } catch (err) {
+    if (gen !== _accountRequestGen) return;
     console.warn('topbar-filters: failed to list accounts for chip:', err);
     accountChip.setOptions([{ value: '', label: 'All Accounts' }]);
   }
