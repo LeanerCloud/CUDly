@@ -82,27 +82,42 @@ export function skeletonRow(cols: number): HTMLTableRowElement {
 }
 
 /**
+ * Wipe whatever is currently in `container` (skeleton, real content,
+ * stale error message — anything) and mark the container as actively
+ * holding a skeleton. The `show*` helpers all start with this so the
+ * placeholder *replaces* prior content, never appends to it. The
+ * previous implementation called `teardownSkeleton`, which is
+ * conditional on the marker being present — that meant a first render
+ * (no marker yet) where the container already had real content would
+ * end up with skeletons appended below the real content instead of
+ * replacing it (CR review on PR #346).
+ */
+function activateSkeleton(container: HTMLElement): void {
+  while (container.firstChild) container.removeChild(container.firstChild);
+  container.dataset['skeletonActive'] = '1';
+}
+
+/**
  * Replace the children of `container` with a stack of `count` tile
  * skeletons inside a grid wrapper — used for the dashboard KPI grid and
  * Plans cards row.
  */
 export function showSkeletonTiles(container: HTMLElement, count: number): void {
-  teardownSkeleton(container);
+  activateSkeleton(container);
   const safeCount = Math.max(1, Math.floor(count));
   for (let i = 0; i < safeCount; i += 1) {
     container.appendChild(skeletonTile());
   }
-  container.dataset['skeletonActive'] = '1';
 }
 
 /**
  * Replace the children of `container` with `count` skeleton rows inside
  * a minimal `<table><tbody>` shell. The cols argument controls the
  * number of cells per row so the placeholder matches the eventual table
- * shape (5 cols for plans, 8 for history, etc.).
+ * shape (11 cols for history, 8 for RI tables, etc.).
  */
 export function showSkeletonRows(container: HTMLElement, count: number, cols: number): void {
-  teardownSkeleton(container);
+  activateSkeleton(container);
   const table = document.createElement('table');
   table.classList.add('skeleton-table');
   const tbody = document.createElement('tbody');
@@ -112,7 +127,6 @@ export function showSkeletonRows(container: HTMLElement, count: number, cols: nu
   }
   table.appendChild(tbody);
   container.appendChild(table);
-  container.dataset['skeletonActive'] = '1';
 }
 
 /**
@@ -120,9 +134,8 @@ export function showSkeletonRows(container: HTMLElement, count: number, cols: nu
  * to `width` x `height`. Useful for chart placeholders.
  */
 export function showSkeletonBlock(container: HTMLElement, width: string, height: string): void {
-  teardownSkeleton(container);
+  activateSkeleton(container);
   container.appendChild(skeletonBox(width, height));
-  container.dataset['skeletonActive'] = '1';
 }
 
 /**

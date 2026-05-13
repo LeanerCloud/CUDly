@@ -82,9 +82,11 @@ async function loadConvertibleRIs(): Promise<void> {
   if (!container) return;
 
   // Issue #344 T3: shimmer skeleton replaces the static "Loading…" text.
-  // 3 rows × 7 cols matches the convertible-RI table's column shape;
-  // renderRIsTable swaps the children on success for a clean handoff.
-  showSkeletonRows(container, 3, 7);
+  // 3 rows × 8 cols matches the convertible-RI table's column shape
+  // (RI ID / Instance Type / AZ / Count / Offering / Expiry /
+  // Utilization / Actions — see renderRIsTable); renderRIsTable swaps
+  // the children on success for a clean handoff.
+  showSkeletonRows(container, 3, 8);
 
   try {
     currentRIs = await api.listConvertibleRIs();
@@ -173,9 +175,10 @@ export async function loadReshapeRecommendations(): Promise<void> {
   if (!container) return;
 
   // Issue #344 T3: skeleton rows for the reshape-recommendations table.
-  // 3 rows × 5 cols matches the rendered table shape (Source RI /
-  // Current / Target / Quote / Action).
-  showSkeletonRows(container, 3, 5);
+  // 3 rows × 8 cols matches the rendered table shape — see
+  // renderRecommendations: Source RI / Current / Suggested /
+  // Alternatives / Utilization / Normalized Units / Reason / Actions.
+  showSkeletonRows(container, 3, 8);
 
   try {
     currentRecommendations = await api.getReshapeRecommendations();

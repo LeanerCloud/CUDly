@@ -131,4 +131,45 @@ describe('skeleton show / teardown lifecycle', () => {
     expect(container.querySelectorAll('.skeleton-tile')).toHaveLength(0);
     expect(container.querySelectorAll('tr.skeleton-row')).toHaveLength(5);
   });
+
+  // PR #346 CR follow-up: the previous implementation called
+  // teardownSkeleton (which is conditional on the marker) so a first
+  // render where the container already held real content would APPEND
+  // skeletons below it instead of replacing them. The show* helpers
+  // must always clear children unconditionally.
+  test('show* helpers replace existing real content unconditionally on first render', () => {
+    const stale = document.createElement('p');
+    stale.textContent = 'previous content (no skeleton marker)';
+    container.appendChild(stale);
+    expect(container.children).toHaveLength(1);
+
+    showSkeletonTiles(container, 3);
+
+    // The pre-existing <p> must be gone, not still sitting at the top.
+    expect(container.querySelector('p')).toBeNull();
+    expect(container.querySelectorAll('.skeleton-tile')).toHaveLength(3);
+    expect(isSkeletonActive(container)).toBe(true);
+  });
+
+  test('showSkeletonRows also clears unmarked prior content', () => {
+    const stale = document.createElement('div');
+    stale.classList.add('error');
+    stale.textContent = 'old error';
+    container.appendChild(stale);
+
+    showSkeletonRows(container, 4, 5);
+
+    expect(container.querySelector('.error')).toBeNull();
+    expect(container.querySelectorAll('tr.skeleton-row')).toHaveLength(4);
+  });
+
+  test('showSkeletonBlock also clears unmarked prior content', () => {
+    const stale = document.createElement('canvas');
+    container.appendChild(stale);
+
+    showSkeletonBlock(container, '100%', '6rem');
+
+    expect(container.querySelector('canvas')).toBeNull();
+    expect(container.querySelectorAll('.skeleton')).toHaveLength(1);
+  });
 });

@@ -29,13 +29,13 @@ let pendingPlanRecommendations: api.Recommendation[] = [];
  * Load plans and planned purchases
  */
 export async function loadPlans(): Promise<void> {
-  // Issue #344 T3: skeleton tiles for the plans list + rows for the
-  // planned-purchases table. Synchronous render before fetch so the
-  // page doesn't sit blank during the round-trip.
+  // Issue #344 T3: skeleton tiles for the plans list. Synchronous
+  // render before fetch so the page doesn't sit blank during the
+  // round-trip. The planned-purchases skeleton lives in
+  // loadPlannedPurchases so direct callers of that fetch (not via
+  // loadPlans) get the same loading affordance.
   const plansList = document.getElementById('plans-list');
   if (plansList) showSkeletonTiles(plansList, 3);
-  const plannedContainer = document.getElementById('planned-purchases-list');
-  if (plannedContainer) showSkeletonRows(plannedContainer, 5, 11);
 
   try {
     const data = await api.getPlans() as unknown as PlansResponse;
@@ -75,6 +75,12 @@ export async function loadPlans(): Promise<void> {
 async function loadPlannedPurchases(): Promise<void> {
   const container = document.getElementById('planned-purchases-list');
   if (!container) return;
+
+  // Issue #344 T3 (CR follow-up on PR #346): skeleton lives here, not
+  // in loadPlans, so direct callers (e.g. follow-up refresh paths after
+  // a single purchase action) also get the loading affordance. 5 rows
+  // × 11 cols matches the rendered table — see renderPlannedPurchases.
+  showSkeletonRows(container, 5, 11);
 
   try {
     const data = await api.getPlannedPurchases();

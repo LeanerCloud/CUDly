@@ -161,9 +161,11 @@ export async function loadHistory(): Promise<void> {
   // Issue #344 T3: skeleton rows for the purchase-history table. 8
   // rows matches the typical first-page row count so the skeleton
   // doesn't shrink dramatically when real data arrives. Column count
-  // (10) mirrors the rendered table — see renderHistoryList.
+  // (11) mirrors the rendered table headers in renderHistoryList:
+  // Status / Date / Provider / Service / Type / Region / Count /
+  // Term / Upfront Cost / Monthly Savings / Plan.
   const listEl = document.getElementById('history-list');
-  if (listEl) showSkeletonRows(listEl, 8, 10);
+  if (listEl) showSkeletonRows(listEl, 8, 11);
 
   try {
     // Provider/account filters live in state.ts now (mutated by topbar chips).
