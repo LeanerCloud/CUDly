@@ -474,8 +474,8 @@ describe('HTML Structure', () => {
       const role = document.getElementById('user-role') as HTMLSelectElement | null;
       expect(role).toBeTruthy();
       const options = Array.from(role?.querySelectorAll('option') ?? []).map(o => o.value);
-      expect(options).toContain('viewer');
-      expect(options).toContain('editor');
+      expect(options).toContain('readonly');
+      expect(options).toContain('user');
       expect(options).toContain('admin');
     });
 

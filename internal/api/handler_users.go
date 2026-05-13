@@ -49,10 +49,10 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 
 	// Validate role against allowlist
 	switch createReq.Role {
-	case "admin", "user":
+	case auth.RoleAdmin, auth.RoleUser, auth.RoleReadOnly:
 		// valid
 	default:
-		return nil, NewClientError(400, "role must be one of: admin, user")
+		return nil, NewClientError(400, "role must be one of: admin, user, readonly")
 	}
 
 	// Decode base64-encoded password
