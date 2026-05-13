@@ -103,13 +103,14 @@ func commitmentIsActive(c common.Commitment) bool {
 // everything else. Keys are org-wide (no account dimension) so an
 // expiring RI in one linked account adjusts the org-wide coverage signal
 // for the pool it belongs to — matching the way the coverage map itself
-// is now aggregated. common.Commitment doesn't currently carry a
-// deployment-option field, so RDS expiry keys default to "" deployment
-// and will only match coverage entries written without a deployment
-// suffix — a known limitation tracked separately from this change.
+// is now aggregated. The Deployment field on common.Commitment carries
+// the same "single-az"/"multi-az" vocabulary as DatabaseDetails.AZConfig
+// on Recommendation, so a Multi-AZ commitment's expiry adjusts only the
+// Multi-AZ pool's existing-coverage signal (a Single-AZ RI cannot cover
+// Multi-AZ demand and vice versa).
 func commitmentPoolKey(c common.Commitment) string {
 	if c.Service == common.ServiceRDS || c.Service == common.ServiceRelationalDB {
-		return rdsPoolKey(c.Region, c.ResourceType, c.Engine, "")
+		return rdsPoolKey(c.Region, c.ResourceType, c.Engine, c.Deployment)
 	}
 	return poolKey(c.Region, c.ResourceType)
 }

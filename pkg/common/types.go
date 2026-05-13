@@ -255,7 +255,16 @@ func NormalizeSource(s string) (string, error) {
 	}
 }
 
-// Commitment represents an existing commitment (RI/SP/CUD/etc)
+// Commitment represents an existing commitment (RI/SP/CUD/etc).
+//
+// Deployment is RDS-specific (Multi-AZ vs Single-AZ); it stays empty for
+// services that don't have a deployment dimension (EC2, ElastiCache,
+// etc). When populated, it carries the same vocabulary as
+// DatabaseDetails.AZConfig on Recommendation ("single-az" / "multi-az")
+// so pool-key matching can collapse both sides via normaliseDeployment
+// in the recommendations package. Without this field, RDS expiry
+// adjustments would silently miss because Recommendation lookup keys
+// are deployment-aware while commitment keys defaulted to empty.
 type Commitment struct {
 	Provider       ProviderType   `json:"provider"`
 	Account        string         `json:"account"`
@@ -264,7 +273,8 @@ type Commitment struct {
 	Service        ServiceType    `json:"service"`
 	Region         string         `json:"region"`
 	ResourceType   string         `json:"resource_type"`
-	Engine         string         `json:"engine,omitempty"` // Database engine for RDS/ElastiCache (e.g., "mysql", "aurora-postgresql")
+	Engine         string         `json:"engine,omitempty"`     // Database engine for RDS/ElastiCache (e.g., "mysql", "aurora-postgresql")
+	Deployment     string         `json:"deployment,omitempty"` // RDS Multi-AZ vs Single-AZ; empty for non-RDS
 	Count          int            `json:"count"`
 	StartDate      time.Time      `json:"start_date"`
 	EndDate        time.Time      `json:"end_date"`

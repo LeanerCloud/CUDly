@@ -87,6 +87,15 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 				termMonths = 36
 			}
 
+			// Deployment carries the same vocabulary as DatabaseDetails.AZConfig
+			// on Recommendation so pool-key matching aligns deployment-wise
+			// between recs and existing commitments (used by expiry adjustment).
+			// AWS RDS SDK exposes MultiAZ as a *bool on ReservedDBInstance;
+			// nil or false → "single-az", true → "multi-az".
+			deployment := "single-az"
+			if aws.ToBool(instance.MultiAZ) {
+				deployment = "multi-az"
+			}
 			commitment := common.Commitment{
 				Provider:       common.ProviderAWS,
 				CommitmentID:   aws.ToString(instance.ReservedDBInstanceId),
@@ -95,6 +104,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 				Region:         c.region,
 				ResourceType:   aws.ToString(instance.DBInstanceClass),
 				Engine:         aws.ToString(instance.ProductDescription), // Capture engine for accurate duplicate checking
+				Deployment:     deployment,
 				Count:          int(aws.ToInt32(instance.DBInstanceCount)),
 				State:          state,
 				StartDate:      aws.ToTime(instance.StartTime),

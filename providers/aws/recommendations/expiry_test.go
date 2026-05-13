@@ -68,6 +68,47 @@ func TestAdjustExistingCoverageForExpiringCommitments(t *testing.T) {
 		assert.InDelta(t, 30.0, recs[0].ExistingCoveragePct, 0.001)
 	})
 
+	t.Run("deployment-aware matching: Single-AZ commit only adjusts Single-AZ rec", func(t *testing.T) {
+		// Two recs for the same (region, type, engine) but different
+		// deployments. An expiring Single-AZ commitment must only affect
+		// the Single-AZ rec's existing-coverage signal — a Single-AZ RI
+		// cannot cover Multi-AZ demand. Without Deployment threaded into
+		// commitmentPoolKey, the commitment's empty-deployment key would
+		// miss both recs (both have deployment-aware lookup keys).
+		recs := []common.Recommendation{
+			{
+				Service:                     common.ServiceRDS,
+				Region:                      "us-east-1",
+				ResourceType:                "db.r6g.large",
+				AverageInstancesUsedPerHour: 10,
+				ExistingCoveragePct:         80,
+				Details:                     &common.DatabaseDetails{Engine: pgEngine, AZConfig: "single-az"},
+			},
+			{
+				Service:                     common.ServiceRDS,
+				Region:                      "us-east-1",
+				ResourceType:                "db.r6g.large",
+				AverageInstancesUsedPerHour: 10,
+				ExistingCoveragePct:         80,
+				Details:                     &common.DatabaseDetails{Engine: pgEngine, AZConfig: "multi-az"},
+			},
+		}
+		commits := []common.Commitment{{
+			Service:      common.ServiceRDS,
+			Region:       "us-east-1",
+			ResourceType: "db.r6g.large",
+			Engine:       pgEngine,
+			Deployment:   "single-az",
+			Count:        5,
+			State:        "active",
+			EndDate:      soon,
+		}}
+		n := AdjustExistingCoverageForExpiringCommitments(recs, commits, 30)
+		assert.Equal(t, 1, n, "only the Single-AZ rec adjusted")
+		assert.InDelta(t, 30.0, recs[0].ExistingCoveragePct, 0.001, "Single-AZ rec: 80% - 50% expiring = 30%")
+		assert.Equal(t, 80.0, recs[1].ExistingCoveragePct, "Multi-AZ rec untouched (different deployment pool)")
+	})
+
 	t.Run("commitments expiring outside window are ignored", func(t *testing.T) {
 		recs := []common.Recommendation{{
 			Service:                     common.ServiceRDS,
