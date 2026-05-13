@@ -12,28 +12,28 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// SetupAdmin creates the first admin user using API key authentication
+// SetupAdmin creates the first admin user using API key authentication.
+// The bootstrap is race-safe in two layers: an upfront AdminExists() check
+// (common case — fast path, no insert when an admin already exists) and an
+// atomic CreateAdminIfNone() conditional insert (closes the TOCTOU window
+// where two concurrent bootstrap callers both passed the existence check).
 func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*LoginResponse, error) {
-	// Check if admin already exists
 	exists, err := s.store.AdminExists(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check admin: %w", err)
 	}
 	if exists {
-		return nil, fmt.Errorf("admin user already exists")
+		return nil, ErrAdminExists
 	}
 
-	// Validate email
 	if _, err := mail.ParseAddress(req.Email); err != nil {
-		return nil, fmt.Errorf("invalid email format")
+		return nil, ErrInvalidEmail
 	}
 
-	// Validate password
 	if err := s.validatePassword(req.Password); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrPasswordPolicy, err)
 	}
 
-	// Hash password directly with bcrypt (no custom salt needed)
 	passwordHash, err := s.hashPassword(req.Password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
@@ -55,15 +55,21 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		Active:       true,
 	}
 
-	if err := s.store.CreateUser(ctx, user); err != nil {
-		// Two callers reaching CreateUser concurrently after both passed the
-		// AdminExists() check is caught by the users_one_admin partial unique
-		// index (migration 000025). Map that duplicate-key error to the same
-		// "admin already exists" semantic the existence check returned above.
-		if isDuplicateKeyError(err) {
-			return nil, fmt.Errorf("admin user already exists")
+	inserted, err := s.store.CreateAdminIfNone(ctx, user)
+	if err != nil {
+		// ErrEmailInUse (email collision with an existing non-admin user)
+		// surfaces unwrapped so the handler maps it to 409. Other errors
+		// stay wrapped for diagnosis.
+		if errors.Is(err, ErrEmailInUse) {
+			return nil, err
 		}
 		return nil, fmt.Errorf("failed to create admin: %w", err)
+	}
+	if !inserted {
+		// Another bootstrap caller raced ahead between AdminExists and the
+		// conditional insert. Returns the same sentinel as the fast-path
+		// check above so the handler maps both branches to 409.
+		return nil, ErrAdminExists
 	}
 
 	// Create session

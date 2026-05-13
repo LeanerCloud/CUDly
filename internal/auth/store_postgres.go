@@ -279,6 +279,58 @@ func (s *PostgresStore) AdminExists(ctx context.Context) (bool, error) {
 	return exists, nil
 }
 
+// CreateAdminIfNone atomically inserts user as the first admin in the
+// system. Returns (true, nil) when the insert succeeded; (false, nil)
+// when an admin already existed (TOCTOU race — both callers passed
+// AdminExists, only one wins the insert); (false, ErrEmailInUse) when
+// the email collides with an existing (non-admin) user; (false, err)
+// for any other failure.
+//
+// The conditional INSERT closes the bootstrap race without the
+// users_one_admin partial unique index (dropped in migration 000050).
+// Postgres guarantees atomicity of the SELECT … WHERE NOT EXISTS …
+// INSERT in a single statement — no advisory lock or transaction is
+// needed.
+func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool, error) {
+	if user.ID == "" {
+		user.ID = uuid.New().String()
+	}
+	now := time.Now()
+	user.CreatedAt = now
+	user.UpdatedAt = now
+
+	query := `
+		INSERT INTO users (
+			id, email, password_hash, salt, role, group_ids, active,
+			mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
+			failed_login_attempts, locked_until, password_history,
+			created_at, updated_at, last_login_at
+		)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+		WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')
+	`
+
+	tag, err := s.db.Exec(ctx, query,
+		user.ID, user.Email, user.PasswordHash, user.Salt, user.Role,
+		user.GroupIDs, user.Active, user.MFAEnabled, user.MFASecret,
+		user.PasswordResetToken, user.PasswordResetExpiry,
+		user.FailedLoginAttempts, user.LockedUntil, user.PasswordHistory,
+		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
+	)
+	if err != nil {
+		// Email uniqueness can still fire if the bootstrap caller reuses
+		// an email already held by a non-admin user. Surface as the same
+		// sentinel the regular create path uses so callers get a clean
+		// "email already in use" instead of a raw DB error.
+		if isEmailDuplicateError(err) {
+			return false, ErrEmailInUse
+		}
+		return false, fmt.Errorf("failed to create admin: %w", err)
+	}
+
+	return tag.RowsAffected() > 0, nil
+}
+
 // ==========================================
 // GROUP OPERATIONS
 // ==========================================

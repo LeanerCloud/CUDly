@@ -298,6 +298,12 @@ func (m *MockAuthStore) AdminExists(ctx context.Context) (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+// CreateAdminIfNone mocks the CreateAdminIfNone operation
+func (m *MockAuthStore) CreateAdminIfNone(ctx context.Context, user *auth.User) (bool, error) {
+	args := m.Called(ctx, user)
+	return args.Bool(0), args.Error(1)
+}
+
 // GetGroup mocks the GetGroup operation
 func (m *MockAuthStore) GetGroup(ctx context.Context, groupID string) (*auth.Group, error) {
 	args := m.Called(ctx, groupID)

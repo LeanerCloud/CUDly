@@ -48,6 +48,10 @@ func (m *mockAuthStoreForHealth) AdminExists(ctx context.Context) (bool, error) 
 	return false, nil
 }
 
+func (m *mockAuthStoreForHealth) CreateAdminIfNone(ctx context.Context, user *auth.User) (bool, error) {
+	return true, nil
+}
+
 func (m *mockAuthStoreForHealth) GetGroup(ctx context.Context, groupID string) (*auth.Group, error) {
 	return nil, nil
 }
