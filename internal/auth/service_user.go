@@ -231,26 +231,46 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 	result := &CreateUserResult{User: user}
 
 	if invite {
-		setupURL := fmt.Sprintf("%s/reset-password?token=%s", s.dashboardURL, inviteToken)
-		err := s.emailSender.SendUserInviteEmail(ctx, user.Email, setupURL)
-		sent := err == nil
-		result.InviteEmailSent = &sent
-		if err != nil {
-			// Don't fail the API call: the user row was created
-			// successfully and a 5xx here would imply the whole
-			// operation rolled back. Surface the failure via the
-			// result instead so the caller can show the admin a
-			// warning toast and point them at the Forgot Password
-			// flow as the recovery path.
-			result.InviteEmailError = err.Error()
-			logging.Errorf("Failed to send user invite email: %v", err)
-		}
-		logging.Infof("User invited: id=%s, role=%s, email_sent=%t", user.ID, user.Role, sent)
+		s.sendInviteEmail(ctx, user, inviteToken, result)
 	} else {
 		logging.Infof("User created: id=%s, role=%s", user.ID, user.Role)
 	}
 
 	return result, nil
+}
+
+// sendInviteEmail constructs the setup URL and dispatches the invite,
+// recording the outcome on result. Extracted from CreateUser so the
+// caller stays under gocyclo's complexity threshold.
+//
+// When dashboardURL is empty the send is skipped and InviteEmailError
+// carries a clear "fix DASHBOARD_URL" hint back to the admin — the
+// user row is already persisted, the operator can re-invite once the
+// env var is set rather than silently mailing out a broken relative
+// link. Issue #355.
+func (s *Service) sendInviteEmail(ctx context.Context, user *User, inviteToken string, result *CreateUserResult) {
+	if s.dashboardURL == "" {
+		notSent := false
+		result.InviteEmailSent = &notSent
+		result.InviteEmailError = "DashboardURL is not configured on the server; the invite link cannot be generated. Ask the operator to set DASHBOARD_URL before re-inviting."
+		logging.Errorf("CreateUser invite: skipping send for user_id=%s — DashboardURL empty", user.ID)
+		return
+	}
+	setupURL := fmt.Sprintf("%s/reset-password?token=%s", s.dashboardURL, inviteToken)
+	err := s.emailSender.SendUserInviteEmail(ctx, user.Email, setupURL)
+	sent := err == nil
+	result.InviteEmailSent = &sent
+	if err != nil {
+		// Don't fail the API call: the user row was created
+		// successfully and a 5xx here would imply the whole
+		// operation rolled back. Surface the failure via the
+		// result instead so the caller can show the admin a
+		// warning toast and point them at the Forgot Password
+		// flow as the recovery path.
+		result.InviteEmailError = err.Error()
+		logging.Errorf("Failed to send user invite email: %v", err)
+	}
+	logging.Infof("User invited: id=%s, role=%s, email_sent=%t", user.ID, user.Role, sent)
 }
 
 // UpdateUser updates user details (admin only)

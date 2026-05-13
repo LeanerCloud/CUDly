@@ -272,6 +272,17 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 		return fmt.Errorf("failed to save reset token: %w", err)
 	}
 
+	// Skip the email entirely if dashboardURL is unconfigured — a broken
+	// relative link in an inbox is worse than no email; the operator's
+	// startup-time WARN already names the missing env var. Don't return an
+	// error to the caller to preserve the email-enumeration protection
+	// (RequestPasswordReset must look identical whether or not the email
+	// exists, and that includes whether or not a send happened). Issue #355.
+	if s.dashboardURL == "" {
+		logging.Errorf("RequestPasswordReset: skipping send — DashboardURL empty would produce a broken relative link (set DASHBOARD_URL).")
+		return nil
+	}
+
 	// Send reset email (use unhashed token in URL)
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.dashboardURL, token)
 	if err := s.emailSender.SendPasswordResetEmail(ctx, user.Email, resetURL); err != nil {
