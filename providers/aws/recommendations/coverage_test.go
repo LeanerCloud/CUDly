@@ -136,8 +136,11 @@ func TestApplyCoverageMapToRecommendations(t *testing.T) {
 	ApplyCoverageMapToRecommendations(recs, coverage)
 
 	assert.InDelta(t, 50.0, recs[0].ExistingCoveragePct, 0.001)
+	assert.True(t, recs[0].ExistingCoverageKnown, "matched pool sets Known=true")
 	assert.InDelta(t, 33.7, recs[1].ExistingCoveragePct, 0.001)
+	assert.True(t, recs[1].ExistingCoverageKnown, "matched pool sets Known=true")
 	assert.Equal(t, 0.0, recs[2].ExistingCoveragePct, "unmatched pool should leave field at zero (no signal)")
+	assert.False(t, recs[2].ExistingCoverageKnown, "unmatched pool leaves Known=false so CSV renders n/a")
 
 	t.Run("empty map is a no-op", func(t *testing.T) {
 		recs := []common.Recommendation{

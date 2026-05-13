@@ -277,6 +277,7 @@ func annotateFamilyProjection(sized []common.Recommendation, existingPct, totalN
 	}
 	for i := range sized {
 		sized[i].ExistingCoveragePct = existingPct
+		sized[i].ExistingCoverageKnown = true
 		sized[i].ProjectedCoverage = familyProj
 		if sized[i].AverageInstancesUsedPerHour > 0 {
 			util := sized[i].AverageInstancesUsedPerHour / float64(sized[i].Count) * 100.0

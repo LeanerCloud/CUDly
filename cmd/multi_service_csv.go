@@ -224,7 +224,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			fmt.Sprintf("%t", r.Success),
 			errStr,
 			r.Timestamp.Format(time.RFC3339),
-			formatPercentOrBlank(rec.ExistingCoveragePct),
+			formatExistingCoverage(rec),
 			formatPercentOrBlank(rec.ProjectedCoverage),
 		}
 		if err := writer.Write(row); err != nil {
@@ -328,6 +328,26 @@ func extractEngine(rec common.Recommendation) string {
 		return details.Platform
 	}
 	return ""
+}
+
+// formatExistingCoverage renders the existing-RI coverage cell with
+// three distinct states:
+//   - "n/a" when CE returned no data for the rec's pool (rec parser was
+//     able to surface a recommendation from some other signal but CE's
+//     coverage view doesn't see the pool yet — e.g. recently-launched
+//     instances within CUDly's run window but outside CE's lookback)
+//   - "0.0" when CE confirms the pool exists but has zero RI coverage
+//     (the legitimate "buy for uncovered demand" case)
+//   - "X.X" with one decimal for any non-zero coverage percentage
+//
+// Previously both the no-data and the genuine-zero cases rendered as a
+// blank cell, conflating "we don't know" with "definitely zero" and
+// making it impossible to spot pools where the CE signal was missing.
+func formatExistingCoverage(rec common.Recommendation) string {
+	if !rec.ExistingCoverageKnown {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f", rec.ExistingCoveragePct)
 }
 
 // formatRecurringMonthlyOrBlank renders rec.RecurringMonthlyCost (the

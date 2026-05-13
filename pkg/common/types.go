@@ -184,8 +184,17 @@ type Recommendation struct {
 	RecommendedUtilization      float64 `json:"recommended_utilization,omitempty" csv:"RecommendedUtilization"`
 	RecommendedCount            int     `json:"recommended_count,omitempty" csv:"RecommendedCount"`
 	ExistingCoveragePct         float64 `json:"existing_coverage_pct,omitempty" csv:"ExistingCoveragePct"`
-	ProjectedUtilization        float64 `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
-	ProjectedCoverage           float64 `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
+	// ExistingCoverageKnown distinguishes "CE returned a value for this
+	// pool" (Known=true, Pct possibly 0.0 meaning the pool has running
+	// instances but no RI coverage yet) from "CE has no data for this
+	// pool" (Known=false, Pct=0.0 by default). Set by
+	// ApplyCoverageMapToRecommendations whenever a pool lookup hits, and
+	// by family-NU sizing when a family-level existing% lands on the rec.
+	// CSV writers use this to render "n/a" for unknown vs "0.0" for
+	// genuine zero-coverage pools.
+	ExistingCoverageKnown bool    `json:"existing_coverage_known,omitempty" csv:"-"`
+	ProjectedUtilization  float64 `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
+	ProjectedCoverage     float64 `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
 
 	// RawRecommendation holds the original cloud API response bytes for audit/debugging.
 	// omitempty ensures nil is absent from JSON (not written as null).

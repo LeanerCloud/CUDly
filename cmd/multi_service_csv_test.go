@@ -212,6 +212,7 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 				ProjectedUtilization:        95.0,
 				ProjectedCoverage:           87.5,
 				ExistingCoveragePct:         20.0,
+				ExistingCoverageKnown:       true,
 				RecommendedUtilization:      80.0,
 				AverageInstancesUsedPerHour: 10.0,
 				// Pointer form matches the live parser (parser_services.go
@@ -305,14 +306,43 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	assert.Equal(t, "2.0", populatedRow[idxCovered], "CoveredInstances = avg * existing_cov / 100")
 
 	// Zero-fields row: optional cells blank, Engine blank when Details is nil.
+	// ExistingCoverage shows "n/a" because ExistingCoverageKnown wasn't set:
+	// CE had no data for this pool (distinct from "0% covered", which would
+	// be ExistingCoverageKnown=true, Pct=0 rendering as "0.0").
 	zeroRow := rows[2]
 	assert.Equal(t, "", zeroRow[idxProjCov], "zero ProjectedCoverage should be blank")
 	assert.Equal(t, "", zeroRow[idxRecCount], "zero RecommendedCount should be blank (SP rec or pre-sizing)")
 	assert.Equal(t, "", zeroRow[idxUpfront], "zero CommitmentCost should leave UpfrontPayment blank")
-	assert.Equal(t, "", zeroRow[idxExisting], "zero ExistingCoverage should be blank")
+	assert.Equal(t, "n/a", zeroRow[idxExisting], "ExistingCoverage should render n/a when CE had no signal")
 	assert.Equal(t, "", zeroRow[idxEngine], "missing Details should leave Engine blank")
 	assert.Equal(t, "", zeroRow[idxInstances], "zero avg should leave Instances blank")
 	assert.Equal(t, "", zeroRow[idxCovered], "missing avg or existing_cov should leave CoveredInstances blank")
+}
+
+// TestFormatExistingCoverage locks the three-state rendering:
+//   - ExistingCoverageKnown=false → "n/a" (CE has no data for this pool)
+//   - ExistingCoverageKnown=true, Pct=0 → "0.0" (CE confirms zero coverage)
+//   - ExistingCoverageKnown=true, Pct>0 → formatted with one decimal
+//
+// Critical for operators interpreting the column: a blank or zero cell
+// previously meant either "CE was queried but returned 0%" or "CE
+// returned nothing", with no way to tell which.
+func TestFormatExistingCoverage(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  common.Recommendation
+		want string
+	}{
+		{"unknown (CE no data)", common.Recommendation{}, "n/a"},
+		{"known zero coverage", common.Recommendation{ExistingCoverageKnown: true}, "0.0"},
+		{"known partial coverage", common.Recommendation{ExistingCoverageKnown: true, ExistingCoveragePct: 37.74}, "37.7"},
+		{"known full coverage", common.Recommendation{ExistingCoverageKnown: true, ExistingCoveragePct: 100.0}, "100.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatExistingCoverage(tt.rec))
+		})
+	}
 }
 
 // TestFormatRecurringMonthlyOrBlank locks the nil-vs-zero distinction:

@@ -452,6 +452,7 @@ func ApplyCoverageMapToRecommendations(recs []common.Recommendation, coverage Po
 			continue
 		}
 		recs[i].ExistingCoveragePct = cov.Pct
+		recs[i].ExistingCoverageKnown = true
 		if cov.AvgInstancesPerHour <= 0 {
 			// No org-wide avg signal — leave rec.avg as-is (rec API's
 			// per-account number is the only signal we have for sizing).
