@@ -155,13 +155,26 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 			continue
 		}
 
-		// For RIs, reduce the count and scale cost-bearing fields proportionally.
+		// For RIs, reduce the count and scale cost-bearing fields by the
+		// DISCRETE count ratio (newCount / rec.Count) rather than the
+		// requested ratio. Truncating newCount to an int then multiplying
+		// costs by the unrounded ratio desynchronises Count and costs:
+		// e.g. rec.Count=3 + ratio=0.5 yields newCount=1 (33% of instances)
+		// but costs would scale to 50%, overstating the sized purchase
+		// price by ~50%. Mirrors ApplyTargetCoverage / family-NU sizing.
+		// rec.Count is guaranteed > 0 here because newCount > 0 implies
+		// rec.Count >= 1 (int(0 * ratio) is 0 for any ratio).
 		newCount := int(float64(rec.Count) * ratio)
 		if newCount > 0 {
+			sizedRatio := float64(newCount) / float64(rec.Count)
 			adjusted.Count = newCount
-			adjusted.CommitmentCost = rec.CommitmentCost * ratio
-			adjusted.OnDemandCost = rec.OnDemandCost * ratio
-			adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
+			adjusted.CommitmentCost = rec.CommitmentCost * sizedRatio
+			adjusted.OnDemandCost = rec.OnDemandCost * sizedRatio
+			adjusted.EstimatedSavings = rec.EstimatedSavings * sizedRatio
+			if rec.RecurringMonthlyCost != nil {
+				scaled := *rec.RecurringMonthlyCost * sizedRatio
+				adjusted.RecurringMonthlyCost = &scaled
+			}
 			result = append(result, adjusted)
 		}
 	}

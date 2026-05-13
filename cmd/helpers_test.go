@@ -344,6 +344,38 @@ func TestApplyCoverage(t *testing.T) {
 	}
 }
 
+// TestApplyCoverage_RICostScaling locks the fix for the CR finding on
+// helpers.go:159-166: cost-bearing fields must scale by the DISCRETE
+// count ratio (newCount / rec.Count), not the raw coverage ratio. With
+// rec.Count=3 and coverage=50%, newCount=int(1.5)=1 (33% of instances)
+// so costs must drop to 33% of original, not 50%, otherwise the sized
+// purchase reads ~50% more expensive than what was actually bought.
+func TestApplyCoverage_RICostScaling(t *testing.T) {
+	monthly := 60.0
+	recs := []common.Recommendation{
+		{
+			Service:              common.ServiceEC2,
+			CommitmentType:       common.CommitmentReservedInstance,
+			Count:                3,
+			CommitmentCost:       900,
+			OnDemandCost:         1800,
+			EstimatedSavings:     300,
+			RecurringMonthlyCost: &monthly,
+		},
+	}
+	out := ApplyCoverage(recs, 50.0)
+	require.Len(t, out, 1)
+	// newCount = int(3 * 0.5) = 1. sizedRatio = 1/3.
+	assert.Equal(t, 1, out[0].Count)
+	assert.InDelta(t, 300.0, out[0].CommitmentCost, 0.01, "CommitmentCost scales by 1/3 (newCount/rec.Count), NOT 0.5 (raw ratio)")
+	assert.InDelta(t, 600.0, out[0].OnDemandCost, 0.01)
+	assert.InDelta(t, 100.0, out[0].EstimatedSavings, 0.01)
+	require.NotNil(t, out[0].RecurringMonthlyCost)
+	assert.InDelta(t, 20.0, *out[0].RecurringMonthlyCost, 0.01, "RecurringMonthlyCost scales by sized ratio too")
+	// Original pointer not mutated.
+	assert.Equal(t, 60.0, monthly)
+}
+
 func TestAdjustRecommendationsForExisting(t *testing.T) {
 	ctx := context.Background()
 
