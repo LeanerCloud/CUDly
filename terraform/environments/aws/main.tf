@@ -53,9 +53,25 @@ resource "random_id" "suffix" {
 
 locals {
   stack_name = "${var.project_name}-${var.environment}-${random_id.suffix.hex}"
-  # Dashboard URL for CORS and email links
-  # Priority: custom domain > CDN domain > compute default endpoint
-  dashboard_url = length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" : ""
+  # Dashboard URL for CORS and email links.
+  #
+  # Priority (matches outputs.tf's frontend_url chain, modulo the Lambda
+  # Function URL tier which can't go here without a dependency cycle —
+  # see var.dashboard_url for the explanation):
+  #   1. var.dashboard_url (explicit override — used when serving from
+  #      a raw Lambda Function URL, since Terraform locals can't
+  #      reference module.compute_lambda.function_url without a cycle).
+  #   2. var.frontend_domain_names[0] (custom domain fronted by
+  #      ACM + Route53 — set together with subdomain_zone_name).
+  #   3. Empty — the auth Service refuses to send invite / password-reset
+  #      emails when this is empty (see internal/auth/service.go's
+  #      startup WARN + service_user.go / service_password.go per-send
+  #      guards) so a misconfigured deployment doesn't ship broken links.
+  dashboard_url = (
+    var.dashboard_url != "" ? var.dashboard_url :
+    length(var.frontend_domain_names) > 0 ? "https://${var.frontend_domain_names[0]}" :
+    ""
+  )
 
   # FROM_EMAIL resolution order:
   #   1. Explicit var.from_email (use when subdomain_zone_name is unset

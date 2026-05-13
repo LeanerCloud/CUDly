@@ -414,6 +414,36 @@ variable "rds_cluster_id_for_rotation" {
   }
 }
 
+variable "dashboard_url" {
+  description = <<-EOT
+    Customer-facing dashboard origin used for email links (invite, password
+    reset, welcome) and as the default for CORS_ALLOWED_ORIGIN. Takes
+    precedence over frontend_domain_names.
+
+    Set this for deployments that serve the dashboard from somewhere
+    Terraform can't safely auto-derive — typically a raw Lambda Function
+    URL. The Lambda Function URL only exists after the function is
+    created, but locals can't reference module.compute_lambda outputs
+    without creating a dependency cycle (the same module consumes
+    local.dashboard_url via additional_env_vars), so the operator
+    bootstraps this manually: run `terraform apply` once, copy
+    `terraform output frontend_url`, set the value here, re-apply.
+
+    Leave empty to use the existing chain (frontend_domain_names →
+    empty), which is correct for deployments with a custom domain
+    fronted by ACM + Route53 already configured.
+
+    Must include the scheme. Must NOT have a trailing slash.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.dashboard_url == "" || can(regex("^https?://[^/]+(?::[0-9]+)?$", var.dashboard_url))
+    error_message = "dashboard_url must be empty OR a scheme + host (+ optional port), with no trailing slash and no path."
+  }
+}
+
 variable "frontend_domain_names" {
   description = <<-EOT
     Custom domain names for the frontend CloudFront distribution. The first

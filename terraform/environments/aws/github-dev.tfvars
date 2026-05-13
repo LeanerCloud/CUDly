@@ -81,6 +81,14 @@ recommendation_schedule = "rate(1 day)"
 #   TF_VAR_image_uri      = (from build step)
 #   TF_VAR_subdomain_zone_name    = cudly.leanercloud.com
 #   TF_VAR_frontend_domain_names  = ["lambda-dev.cudly.leanercloud.com"]
+#   TF_VAR_dashboard_url  = "https://<lambda-function-url-host>"
+#     # Set this only when serving from a raw Lambda Function URL — i.e.
+#     # frontend_domain_names is not pointing at a Route53/ACM-fronted
+#     # custom domain. Bootstrap: run `terraform apply` once, then
+#     # `terraform output frontend_url` gives the value; copy it in here
+#     # and re-apply so DASHBOARD_URL is persisted in the Lambda env (the
+#     # auth Service refuses to send invite/password-reset emails when
+#     # DASHBOARD_URL is empty — see #355).
 #   TF_VAR_from_email     = ${{ secrets.FROM_EMAIL }}
 #     # Required when subdomain_zone_name is unset. Must be an SES-verified
 #     # identity in the target account. Without it, FROM_EMAIL reaches the
