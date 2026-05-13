@@ -62,12 +62,44 @@ export function setCurrentUser(user: AppState['currentUser']) {
   state.currentUser = user;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Filter subscription pattern (issue #344 T2).
+//
+// Each section (Home / Opportunities / Plans / Purchases) used to bind its
+// own `change` listener to a per-section `<select>` to know when the
+// provider/account filter changed. With the filter relocated to the topbar,
+// every section subscribes through this module instead. Topbar-filters
+// updates state via setCurrentProvider/setCurrentAccountIDs; subscribers
+// then re-run their loaders.
+//
+// Unsubscribe is returned so tests and dev-only init paths can clean up.
+// ──────────────────────────────────────────────────────────────────────────
+type Listener = () => void;
+const providerListeners: Set<Listener> = new Set();
+const accountListeners: Set<Listener> = new Set();
+
+export function subscribeProvider(cb: Listener): () => void {
+  providerListeners.add(cb);
+  return () => providerListeners.delete(cb);
+}
+
+export function subscribeAccount(cb: Listener): () => void {
+  accountListeners.add(cb);
+  return () => accountListeners.delete(cb);
+}
+
 export function getCurrentProvider() {
   return state.currentProvider;
 }
 
 export function setCurrentProvider(provider: AppState['currentProvider']) {
+  const changed = state.currentProvider !== provider;
   state.currentProvider = provider;
+  if (changed) {
+    providerListeners.forEach((cb) => {
+      try { cb(); } catch (err) { console.warn('subscribeProvider listener error:', err); }
+    });
+  }
 }
 
 export function getRecommendations(): AppState['currentRecommendations'] {
@@ -112,7 +144,16 @@ export function getCurrentAccountIDs(): string[] {
 }
 
 export function setCurrentAccountIDs(ids: string[]) {
+  const current = state.currentAccountIDs;
+  const changed =
+    ids.length !== current.length ||
+    ids.some((id, i) => id !== current[i]);
   state.currentAccountIDs = ids;
+  if (changed) {
+    accountListeners.forEach((cb) => {
+      try { cb(); } catch (err) { console.warn('subscribeAccount listener error:', err); }
+    });
+  }
 }
 
 // Per-column filters live in their own module-scoped state, in-memory only.

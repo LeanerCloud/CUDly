@@ -29,6 +29,7 @@
                 </span>
                 <h1>CUDly</h1>
             </div>
+            <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
             <div id="user-info">
                 <span id="user-email-display"></span>
                 <span id="user-role-display" class="role-badge"></span>
@@ -70,29 +71,9 @@
                 </nav>
             </aside>
             <main class="app-main" id="main-content">
-            <!-- Home Tab -->
+            <!-- Home Tab. Provider/Account filters live in the topbar
+                 (#topbar-filters); they're global across all sections. -->
             <div id="home-tab" class="tab-content active" role="tabpanel" aria-labelledby="home-tab-btn">
-                <section id="dashboard-controls">
-                    <div class="controls-bar">
-                        <div class="filter-group">
-                            <label>Provider:
-                                <select id="dashboard-provider-filter">
-                                    <option value="">All Providers</option>
-                                    <option value="aws">AWS</option>
-                                    <option value="azure">Azure</option>
-                                    <option value="gcp">GCP</option>
-                                </select>
-                            </label>
-                        </div>
-                        <div class="filter-group">
-                            <label>Account:
-                                <select id="dashboard-account-filter">
-                                    <option value="">All Accounts</option>
-                                </select>
-                            </label>
-                        </div>
-                    </div>
-                </section>
                 <section id="dashboard-freshness" class="freshness-indicator" aria-live="polite"></section>
                 <section id="summary"></section>
                 <section id="savings-trend-section" class="card chart-section">
@@ -134,25 +115,8 @@
             <div id="plans-tab" class="tab-content" role="tabpanel" aria-labelledby="plans-tab-btn">
                 <section id="plans-header" class="card page-hero">
                     <h2>Purchase Plans</h2>
-                    <div class="controls-bar">
-                        <div class="filter-group">
-                            <label>Provider:
-                                <select id="plans-provider-filter">
-                                    <option value="">All Providers</option>
-                                    <option value="aws">AWS</option>
-                                    <option value="azure">Azure</option>
-                                    <option value="gcp">GCP</option>
-                                </select>
-                            </label>
-                        </div>
-                        <div class="filter-group">
-                            <label>Account:
-                                <select id="plans-account-filter">
-                                    <option value="">All Accounts</option>
-                                </select>
-                            </label>
-                        </div>
-                    </div>
+                    <!-- Provider/Account filters now live in the topbar
+                         (#topbar-filters), globally shared across sections. -->
                     <button id="new-plan-btn" class="primary">New Plan</button>
                 </section>
                 <section id="plans-list"></section>
@@ -218,19 +182,9 @@
                         <div class="date-range-picker">
                             <label>From: <input type="date" id="history-start"></label>
                             <label>To: <input type="date" id="history-end"></label>
-                            <label>Provider:
-                                <select id="history-provider-filter">
-                                    <option value="">All Providers</option>
-                                    <option value="aws">AWS</option>
-                                    <option value="azure">Azure</option>
-                                    <option value="gcp">GCP</option>
-                                </select>
-                            </label>
-                            <label>Account:
-                                <select id="history-account-filter">
-                                    <option value="">All Accounts</option>
-                                </select>
-                            </label>
+                            <!-- Provider/Account filters now live in the
+                                 topbar (#topbar-filters); date-range stays
+                                 here because it's history-specific. -->
                             <button id="load-history-btn">Load History</button>
                         </div>
                     </section>

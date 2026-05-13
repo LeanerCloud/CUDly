@@ -14,6 +14,7 @@ import { loadHistory } from './history';
 import { logout } from './auth';
 import { openCreateUserModal, closeUserModal } from './users/userModals';
 import { openCreateGroupModal, closeGroupModal, addPermission, closeDuplicateGroupModal, saveDuplicateGroup } from './groups/groupModals';
+import { initTopbarFilters } from './topbar-filters';
 
 // Re-export for external use
 export { api, utils };
@@ -64,6 +65,12 @@ document.addEventListener('DOMContentLoaded', () => {
       localStorage.setItem(STORAGE_KEY, isCollapsed ? '1' : '0');
     });
   }
+
+  // Global filter chips in the topbar (issue #344 T2). Replaces the
+  // per-section provider/account dropdowns that Home / Plans / Purchases
+  // used to carry; sections subscribe to state.subscribeProvider /
+  // subscribeAccount and reload themselves when the filter changes.
+  initTopbarFilters();
 });
 
 // Initialize on page load

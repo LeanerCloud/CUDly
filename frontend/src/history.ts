@@ -3,7 +3,8 @@
  */
 
 import * as api from './api';
-import { formatCurrency, formatDate, formatTerm, escapeHtml, populateAccountFilter } from './utils';
+import * as state from './state';
+import { formatCurrency, formatDate, formatTerm, escapeHtml } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
@@ -59,21 +60,16 @@ function applyExecutionDeepLink(): boolean {
   return true;
 }
 
-function populateHistoryAccountFilter(provider?: string): Promise<void> {
-  return populateAccountFilter('history-account-filter', api.listAccounts, provider);
-}
-
 /**
- * Setup history filter event handlers
+ * Setup history filter event handlers.
+ *
+ * Provider/account filters are global (sourced from state.ts via the
+ * topbar chips). The history-section's own controls are just date range
+ * + Load History button — those stay here.
  */
 export function setupHistoryHandlers(): void {
-  const providerFilter = document.getElementById('history-provider-filter') as HTMLSelectElement | null;
-  if (providerFilter) {
-    providerFilter.addEventListener('change', () => {
-      void populateHistoryAccountFilter(providerFilter.value);
-    });
-  }
-  void populateHistoryAccountFilter();
+  state.subscribeProvider(() => void loadHistory());
+  state.subscribeAccount(() => void loadHistory());
 }
 
 /**
@@ -162,13 +158,14 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
  */
 export async function loadHistory(): Promise<void> {
   try {
-    const rawProvider = (document.getElementById('history-provider-filter') as HTMLSelectElement | null)?.value || '';
+    // Provider/account filters live in state.ts now (mutated by topbar chips).
+    const rawProvider = state.getCurrentProvider();
     const provider: api.Provider | undefined = (VALID_PROVIDERS as string[]).includes(rawProvider)
       ? (rawProvider as api.Provider)
       : undefined;
 
-    const rawAccountId = (document.getElementById('history-account-filter') as HTMLSelectElement | null)?.value || '';
-    const accountIDs: string[] | undefined = rawAccountId ? [rawAccountId] : undefined;
+    const stateAccountIDs = state.getCurrentAccountIDs();
+    const accountIDs: string[] | undefined = stateAccountIDs.length > 0 ? stateAccountIDs : undefined;
 
     const filters: api.HistoryFilters = {
       start: (document.getElementById('history-start') as HTMLInputElement | null)?.value,

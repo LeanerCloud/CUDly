@@ -20,26 +20,39 @@ jest.mock('../utils', () => ({
   populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
 
+// Issue #344 T2: history.ts reads provider/account from the global
+// topbar filter via state — mock the module so each test can pre-set
+// the values it wants `loadHistory` to read.
+const mockGetCurrentProvider = jest.fn<string, []>().mockReturnValue('all');
+const mockGetCurrentAccountIDs = jest.fn<string[], []>().mockReturnValue([]);
+jest.mock('../state', () => ({
+  getCurrentUser: jest.fn(),
+  getCurrentProvider: () => mockGetCurrentProvider(),
+  setCurrentProvider: jest.fn(),
+  getCurrentAccountIDs: () => mockGetCurrentAccountIDs(),
+  setCurrentAccountIDs: jest.fn(),
+  subscribeProvider: jest.fn().mockReturnValue(() => {}),
+  subscribeAccount: jest.fn().mockReturnValue(() => {}),
+}));
+
 import * as api from '../api';
 import { switchTab } from '../navigation';
 
 describe('History Module', () => {
   beforeEach(() => {
-    // Reset DOM
+    // Reset DOM. Issue #344 T2: provider/account filters now live in
+    // the global topbar (state-driven); only the per-section controls
+    // remain on the history page.
     document.body.innerHTML = `
       <input type="date" id="history-start">
       <input type="date" id="history-end">
-      <select id="history-provider-filter">
-        <option value="">All Providers</option>
-        <option value="aws">AWS</option>
-        <option value="azure">Azure</option>
-        <option value="gcp">GCP</option>
-      </select>
       <div id="history-summary"></div>
       <div id="history-list"></div>
     `;
 
     jest.clearAllMocks();
+    mockGetCurrentProvider.mockReturnValue('all');
+    mockGetCurrentAccountIDs.mockReturnValue([]);
   });
 
   describe('initHistoryDateRange', () => {
@@ -192,11 +205,11 @@ describe('History Module', () => {
 
       const startInput = document.getElementById('history-start') as HTMLInputElement;
       const endInput = document.getElementById('history-end') as HTMLInputElement;
-      const providerFilter = document.getElementById('history-provider-filter') as HTMLSelectElement;
 
       startInput.value = '2024-01-01';
       endInput.value = '2024-03-01';
-      providerFilter.value = 'aws';
+      // Provider scope now comes from the global topbar (state.ts).
+      mockGetCurrentProvider.mockReturnValue('aws');
 
       await loadHistory();
 
@@ -262,8 +275,10 @@ describe('History Module', () => {
         purchases: []
       });
 
-      const providerFilter = document.getElementById('history-provider-filter') as HTMLSelectElement;
-      providerFilter.value = '';
+      // 'all' is the topbar-chip "All providers" value, which loadHistory
+      // translates to `provider: undefined` (no provider scope on the API
+      // call). Same semantic as the old empty-string select value.
+      mockGetCurrentProvider.mockReturnValue('all');
 
       await loadHistory();
 

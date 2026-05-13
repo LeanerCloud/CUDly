@@ -48,6 +48,15 @@ jest.mock('../toast', () => ({
 
 jest.mock('../state', () => ({
   getCurrentUser: jest.fn(),
+  // Issue #344 T2: history.ts reads provider/account from the global
+  // topbar filter via state. Default provider 'all' + no account scope
+  // preserves the pre-topbar behaviour these tests assume.
+  getCurrentProvider: jest.fn().mockReturnValue(''),
+  setCurrentProvider: jest.fn(),
+  getCurrentAccountIDs: jest.fn().mockReturnValue([]),
+  setCurrentAccountIDs: jest.fn(),
+  subscribeProvider: jest.fn().mockReturnValue(() => {}),
+  subscribeAccount: jest.fn().mockReturnValue(() => {}),
 }));
 
 import * as api from '../api';
