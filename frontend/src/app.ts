@@ -169,12 +169,14 @@ export function setupEventListeners(): void {
  * Setup all button event listeners (Security improvement: replaces inline onclick handlers)
  */
 function setupButtonHandlers(): void {
-  // Recommendations buttons — the sole Refresh affordance now lives in
-  // the freshness indicator (`recommendations-freshness`), rendered and
-  // wired by renderFreshness in `freshness.ts`. The older filter-bar
-  // Refresh button was removed because it duplicated the freshness-
-  // indicator Refresh with strictly worse UX (alert() popup + 5s delay
-  // vs. the freshness button's inline disable + re-render).
+  // Recommendations buttons — there is no visible Refresh affordance.
+  // The previous filter-bar Refresh button was replaced by the freshness
+  // indicator's Refresh, which was itself removed (#284 follow-up):
+  // triggerAutoRefreshIfStale in recommendations.ts now fires on every
+  // load if the cache is older than 24h, surfacing collection errors
+  // via toast. Users who need a manual refresh can reload the page;
+  // operators should expose a more-explicit affordance if support
+  // demand surfaces it.
   //
   // Bundle B note (column-filter UX overhaul): #create-plan-btn was relocated
   // from the old top filter bar into the sticky bottom action box. The

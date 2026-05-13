@@ -38,6 +38,12 @@ jest.mock('../recommendations', () => ({
   groupRecsByCell: (recs: unknown[]) => mockGroupRecsByCell(recs),
   pageLevelRange: (groups: Map<string, unknown[]>) => mockPageLevelRange(groups),
   formatSavingsRange: (min: number, max: number) => mockFormatSavingsRange(min, max),
+  // Freshness-bar deletion (#284 follow-up): dashboard's loadDashboard
+  // now calls triggerAutoRefreshIfStale(loadDashboard) so the 24h
+  // auto-refresh + collection-error toast also fire on Home, not just
+  // on Opportunities. Stub it as a resolved no-op so dashboard tests
+  // don't see a real /freshness round-trip.
+  triggerAutoRefreshIfStale: jest.fn(() => Promise.resolve()),
 }));
 
 import { loadDashboard } from '../dashboard';
