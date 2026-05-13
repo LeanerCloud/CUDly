@@ -228,4 +228,113 @@ describe('createChipSelect', () => {
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     expect(root.querySelector('.chip-select-menu')?.classList.contains('hidden')).toBe(false);
   });
+
+  test('role="listbox" is on the ul, not the outer div', () => {
+    const { root } = createChipSelect({
+      label: 'Provider',
+      options: SHORT_OPTIONS,
+      value: '',
+      onChange: () => {},
+    });
+    document.body.appendChild(root);
+    const trigger = root.querySelector<HTMLButtonElement>('.chip-select')!;
+    trigger.click();
+
+    const ul = root.querySelector('ul');
+    const menu = root.querySelector('.chip-select-menu');
+    expect(ul?.getAttribute('role')).toBe('listbox');
+    expect(menu?.getAttribute('role')).toBeNull();
+  });
+
+  test('option li elements have stable ids and aria-activedescendant tracks the highlight', () => {
+    const { root } = createChipSelect({
+      label: 'Provider',
+      options: SHORT_OPTIONS,
+      value: 'aws',
+      onChange: () => {},
+    });
+    document.body.appendChild(root);
+    const trigger = root.querySelector<HTMLButtonElement>('.chip-select')!;
+    trigger.click();
+
+    const options = root.querySelectorAll<HTMLLIElement>('.chip-select-option');
+    // Every option must have a non-empty id.
+    options.forEach((li) => expect(li.id).toBeTruthy());
+
+    // aria-activedescendant should point at the highlighted option (aws = index 1).
+    const activeId = trigger.getAttribute('aria-activedescendant');
+    expect(activeId).toBeTruthy();
+    const activeLi = document.getElementById(activeId!);
+    expect(activeLi?.dataset['value']).toBe('aws');
+  });
+
+  test('aria-activedescendant is cleared when the menu closes', () => {
+    const { root } = createChipSelect({
+      label: 'Provider',
+      options: SHORT_OPTIONS,
+      value: 'aws',
+      onChange: () => {},
+    });
+    document.body.appendChild(root);
+    const trigger = root.querySelector<HTMLButtonElement>('.chip-select')!;
+    trigger.click();
+    expect(trigger.getAttribute('aria-activedescendant')).toBeTruthy();
+
+    trigger.click(); // close
+    expect(trigger.getAttribute('aria-activedescendant')).toBeNull();
+  });
+
+  test('ArrowDown on trigger does not skip the initial active option (double-fire fix)', () => {
+    const { root } = createChipSelect({
+      label: 'Provider',
+      options: SHORT_OPTIONS,
+      value: 'aws', // index 1 in SHORT_OPTIONS
+      onChange: () => {},
+    });
+    document.body.appendChild(root);
+    const trigger = root.querySelector<HTMLButtonElement>('.chip-select')!;
+
+    // ArrowDown should open the menu with 'aws' highlighted, NOT advance it to 'azure'.
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    const activeId = trigger.getAttribute('aria-activedescendant');
+    const activeLi = activeId ? document.getElementById(activeId) : null;
+    expect(activeLi?.dataset['value']).toBe('aws');
+  });
+
+  test('Tab on search input closes the menu', () => {
+    const { root } = createChipSelect({
+      label: 'Account',
+      options: LONG_OPTIONS,
+      value: '',
+      onChange: () => {},
+    });
+    document.body.appendChild(root);
+    root.querySelector<HTMLButtonElement>('.chip-select')!.click();
+
+    const search = root.querySelector<HTMLInputElement>('.chip-select-search')!;
+    expect(root.querySelector('.chip-select-menu')?.classList.contains('hidden')).toBe(false);
+
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    expect(root.querySelector('.chip-select-menu')?.classList.contains('hidden')).toBe(true);
+  });
+
+  test('"No matches" hint has role="option" and aria-disabled="true"', () => {
+    const { root } = createChipSelect({
+      label: 'Account',
+      options: LONG_OPTIONS,
+      value: '',
+      onChange: () => {},
+    });
+    document.body.appendChild(root);
+    root.querySelector<HTMLButtonElement>('.chip-select')!.click();
+
+    const search = root.querySelector<HTMLInputElement>('.chip-select-search')!;
+    search.value = 'zzzzz nope';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+
+    const empty = root.querySelector('.chip-select-empty');
+    expect(empty?.getAttribute('role')).toBe('option');
+    expect(empty?.getAttribute('aria-disabled')).toBe('true');
+    expect(empty?.getAttribute('aria-selected')).toBe('false');
+  });
 });

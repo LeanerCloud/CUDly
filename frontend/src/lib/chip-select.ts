@@ -113,8 +113,6 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
 
   const menu = document.createElement('div');
   menu.classList.add('chip-select-menu', 'hidden');
-  menu.setAttribute('role', 'listbox');
-  menu.setAttribute('aria-label', cfg.label);
   root.appendChild(menu);
 
   // Search input is created lazily because it only renders for long lists.
@@ -126,6 +124,11 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
 
   const optionsList = document.createElement('ul');
   optionsList.classList.add('chip-select-options');
+  // role="listbox" lives on the ul so option elements are directly owned by
+  // their listbox — placing it on the outer div would make them grandchildren,
+  // which violates the ARIA ownership requirement (WAI-ARIA §6.6.12).
+  optionsList.setAttribute('role', 'listbox');
+  optionsList.setAttribute('aria-label', cfg.label);
   menu.appendChild(optionsList);
 
   /**
@@ -143,18 +146,27 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
     triggerValue.textContent = findOptionLabel(options, currentValue) || '(any)';
   }
 
+  // Stable id prefix for this instance, used for aria-activedescendant.
+  const idPrefix = `chip-select-opt-${cfg.label.toLowerCase().replace(/\s+/g, '-')}`;
+
   function renderOptions(): void {
     while (optionsList.firstChild) optionsList.removeChild(optionsList.firstChild);
     const visible = visibleOptions();
+    let activeOptId: string | null = null;
     visible.forEach((opt, i) => {
       const li = document.createElement('li');
+      const optId = `${idPrefix}-${opt.value !== '' ? opt.value : 'empty'}-${i}`;
+      li.id = optId;
       li.setAttribute('role', 'option');
       li.classList.add('chip-select-option');
       li.dataset['value'] = opt.value;
       li.textContent = opt.label;
       const isCurrent = opt.value === currentValue;
       li.setAttribute('aria-selected', isCurrent ? 'true' : 'false');
-      if (i === activeIndex) li.classList.add('active');
+      if (i === activeIndex) {
+        li.classList.add('active');
+        activeOptId = optId;
+      }
       if (isCurrent) li.classList.add('current');
       li.addEventListener('mousedown', (ev) => {
         // mousedown not click — fires before the focusout that would close
@@ -164,12 +176,22 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
       });
       optionsList.appendChild(li);
     });
+    // Keep aria-activedescendant in sync with the highlighted option.
+    if (activeOptId !== null) {
+      trigger.setAttribute('aria-activedescendant', activeOptId);
+    } else {
+      trigger.removeAttribute('aria-activedescendant');
+    }
     // Empty-result hint when filter doesn't match anything.
     if (visible.length === 0) {
       const li = document.createElement('li');
       li.classList.add('chip-select-empty');
       li.textContent = 'No matches';
+      // role="option" + aria-disabled so AT users hear "No matches, dimmed"
+      // rather than encountering an orphaned element inside role="listbox".
+      li.setAttribute('role', 'option');
       li.setAttribute('aria-disabled', 'true');
+      li.setAttribute('aria-selected', 'false');
       optionsList.appendChild(li);
     }
   }
@@ -236,6 +258,7 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
     isOpen = false;
     menu.classList.add('hidden');
     trigger.setAttribute('aria-expanded', 'false');
+    trigger.removeAttribute('aria-activedescendant');
     if (outsideListener) {
       document.removeEventListener('mousedown', outsideListener);
       outsideListener = null;
@@ -267,41 +290,21 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
       openMenu();
     }
   });
+  // Single keydown handler on the trigger — captures wasOpen before any
+  // mutation so open and navigate are mutually exclusive for the same event.
+  // Previously two separate listeners caused ArrowDown to both open the menu
+  // (setting activeIndex) and immediately advance it by one.
   trigger.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'ArrowDown') {
-      ev.preventDefault();
-      openMenu();
+    const wasOpen = isOpen;
+    if (!wasOpen) {
+      // Closed — open on Enter / Space / ArrowDown.
+      if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        openMenu();
+      }
+      return;
     }
-  });
-
-  // Search input interactions.
-  search.addEventListener('input', () => {
-    filterText = search.value;
-    activeIndex = 0;
-    renderOptions();
-  });
-  search.addEventListener('keydown', (ev) => {
-    if (ev.key === 'ArrowDown') {
-      ev.preventDefault();
-      activeIndex = Math.min(activeIndex + 1, visibleOptions().length - 1);
-      renderOptions();
-    } else if (ev.key === 'ArrowUp') {
-      ev.preventDefault();
-      activeIndex = Math.max(activeIndex - 1, 0);
-      renderOptions();
-    } else if (ev.key === 'Enter') {
-      ev.preventDefault();
-      const visible = visibleOptions();
-      const pick = visible[activeIndex];
-      if (pick) selectByValue(pick.value);
-    }
-  });
-
-  // Menu-level keyboard handling when search isn't present (focus stays on
-  // trigger; keyboard goes through document-level handler installed in
-  // openMenu's escListener — extend for arrows below).
-  trigger.addEventListener('keydown', (ev) => {
-    if (!isOpen) return;
+    // Already open — navigate.
     const visible = visibleOptions();
     if (ev.key === 'ArrowDown') {
       ev.preventDefault();
@@ -313,6 +316,34 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
       renderOptions();
     } else if (ev.key === 'Enter') {
       ev.preventDefault();
+      const pick = visible[activeIndex];
+      if (pick) selectByValue(pick.value);
+    }
+  });
+
+  // Search input interactions.
+  search.addEventListener('input', () => {
+    filterText = search.value;
+    activeIndex = 0;
+    renderOptions();
+  });
+  search.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Tab') {
+      // Close menu but let Tab continue to the next focusable element.
+      closeMenu();
+      return;
+    }
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      activeIndex = Math.min(activeIndex + 1, visibleOptions().length - 1);
+      renderOptions();
+    } else if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, 0);
+      renderOptions();
+    } else if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const visible = visibleOptions();
       const pick = visible[activeIndex];
       if (pick) selectByValue(pick.value);
     }
