@@ -105,6 +105,14 @@ jobs:
     name: Build & Deploy
     runs-on: ubuntu-24.04-arm  # ARM runner: Docker build targets linux/arm64 (Lambda/Fargate Graviton2)
     needs: prepare
+    # Bind to the named GitHub Environment matching the target so
+    # secrets.* resolve to environment-scoped values when defined,
+    # falling back to repo-scoped secrets otherwise. Without this,
+    # DASHBOARD_URL (and any other per-env secret like FROM_EMAIL,
+    # ADMIN_EMAIL) would be repo-wide and dev/staging/prod would
+    # all share one value — producing wrong email links in customer
+    # mailboxes. Per CR review on PR #368.
+    environment: ${{ needs.prepare.outputs.environment }}
     outputs:
       function_url: ${{ steps.outputs.outputs.function_url }}
       function_name: ${{ steps.outputs.outputs.function_name }}
@@ -139,6 +147,14 @@ jobs:
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
+          # DASHBOARD_URL is the customer-facing dashboard origin used in
+          # email links (invite, password reset, welcome). For Lambda-
+          # Function-URL deployments (no custom domain), set the repo
+          # secret DASHBOARD_URL to the function URL — see #363 +
+          # github-dev.tfvars for the bootstrap pattern. Empty string is
+          # accepted by the var (the Terraform local then falls back to
+          # frontend_domain_names[0]).
+          TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
         run: |
           cd terraform/environments/aws
           terraform plan \
@@ -150,6 +166,14 @@ jobs:
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
+          # DASHBOARD_URL is the customer-facing dashboard origin used in
+          # email links (invite, password reset, welcome). For Lambda-
+          # Function-URL deployments (no custom domain), set the repo
+          # secret DASHBOARD_URL to the function URL — see #363 +
+          # github-dev.tfvars for the bootstrap pattern. Empty string is
+          # accepted by the var (the Terraform local then falls back to
+          # frontend_domain_names[0]).
+          TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
         run: |
           cd terraform/environments/aws
           terraform apply -auto-approve tfplan
