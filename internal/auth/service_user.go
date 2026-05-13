@@ -12,28 +12,28 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// SetupAdmin creates the first admin user using API key authentication
+// SetupAdmin creates the first admin user using API key authentication.
+// The bootstrap is race-safe in two layers: an upfront AdminExists() check
+// (common case — fast path, no insert when an admin already exists) and an
+// atomic CreateAdminIfNone() conditional insert (closes the TOCTOU window
+// where two concurrent bootstrap callers both passed the existence check).
 func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*LoginResponse, error) {
-	// Check if admin already exists
 	exists, err := s.store.AdminExists(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check admin: %w", err)
 	}
 	if exists {
-		return nil, fmt.Errorf("admin user already exists")
+		return nil, ErrAdminExists
 	}
 
-	// Validate email
 	if _, err := mail.ParseAddress(req.Email); err != nil {
-		return nil, fmt.Errorf("invalid email format")
+		return nil, ErrInvalidEmail
 	}
 
-	// Validate password
 	if err := s.validatePassword(req.Password); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrPasswordPolicy, err)
 	}
 
-	// Hash password directly with bcrypt (no custom salt needed)
 	passwordHash, err := s.hashPassword(req.Password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
@@ -55,15 +55,21 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		Active:       true,
 	}
 
-	if err := s.store.CreateUser(ctx, user); err != nil {
-		// Two callers reaching CreateUser concurrently after both passed the
-		// AdminExists() check is caught by the users_one_admin partial unique
-		// index (migration 000025). Map that duplicate-key error to the same
-		// "admin already exists" semantic the existence check returned above.
-		if isDuplicateKeyError(err) {
-			return nil, fmt.Errorf("admin user already exists")
+	inserted, err := s.store.CreateAdminIfNone(ctx, user)
+	if err != nil {
+		// ErrEmailInUse (email collision with an existing non-admin user)
+		// surfaces unwrapped so the handler maps it to 409. Other errors
+		// stay wrapped for diagnosis.
+		if errors.Is(err, ErrEmailInUse) {
+			return nil, err
 		}
 		return nil, fmt.Errorf("failed to create admin: %w", err)
+	}
+	if !inserted {
+		// Another bootstrap caller raced ahead between AdminExists and the
+		// conditional insert. Returns the same sentinel as the fast-path
+		// check above so the handler maps both branches to 409.
+		return nil, ErrAdminExists
 	}
 
 	// Create session
@@ -86,6 +92,23 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 	}, nil
 }
 
+// mapStoreCreateUserError maps a Store.CreateUser error into the auth
+// package's sentinel set so the API handler can surface 4xx instead of
+// 500 for known recoverable failures. Defence-in-depth: the validator
+// pre-checks email-in-use, but two callers can race past it and hit the
+// users_email_key unique constraint. Extracted from CreateUser /
+// SetupAdmin call sites to keep both functions under gocyclo's
+// complexity threshold. Issue #349.
+func mapStoreCreateUserError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isEmailDuplicateError(err) {
+		return ErrEmailInUse
+	}
+	return fmt.Errorf("failed to create user: %w", err)
+}
+
 // CheckAdminExists returns whether an admin user exists
 func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 	return s.store.AdminExists(ctx)
@@ -98,22 +121,30 @@ func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 // password via the welcome email link, so the password validator is skipped.
 func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserRequest) error {
 	if _, err := mail.ParseAddress(req.Email); err != nil {
-		return fmt.Errorf("invalid email format")
+		return ErrInvalidEmail
 	}
 	existing, err := s.store.GetUserByEmail(ctx, req.Email)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	if existing != nil {
-		return fmt.Errorf("email already in use")
+		return ErrEmailInUse
 	}
 	if req.Role != RoleAdmin && req.Role != RoleUser && req.Role != RoleReadOnly {
-		return fmt.Errorf("invalid role: %s", req.Role)
+		// %w lets the API handler detect the category via errors.Is(ErrInvalidRole)
+		// while preserving the specific role name in the user-facing message.
+		return fmt.Errorf("%w: %s", ErrInvalidRole, req.Role)
 	}
 	if req.Password == "" {
 		return nil
 	}
-	return s.validatePassword(req.Password)
+	if err := s.validatePassword(req.Password); err != nil {
+		// validatePassword returns specific messages ("must be at least N
+		// characters", "common password", etc.); wrap so the handler can
+		// detect the category while keeping the message detail.
+		return fmt.Errorf("%w: %v", ErrPasswordPolicy, err)
+	}
+	return nil
 }
 
 // CreateUserResult bundles the created user with optional invite-email
@@ -193,8 +224,8 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 		inviteToken = token
 	}
 
-	if err := s.store.CreateUser(ctx, user); err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
+	if err := mapStoreCreateUserError(s.store.CreateUser(ctx, user)); err != nil {
+		return nil, err
 	}
 
 	result := &CreateUserResult{User: user}

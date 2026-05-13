@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -22,12 +21,13 @@ func TestService_SetupAdmin(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("AdminExists", ctx).Return(false, nil).Once()
-		// Capture the user passed to CreateUser so we can assert on the
-		// auto-assigned DefaultAdminGroupID.
+		// Capture the user passed to CreateAdminIfNone so we can assert
+		// on the auto-assigned DefaultAdminGroupID. CreateAdminIfNone
+		// replaces CreateUser on the bootstrap path (issue #349).
 		var capturedUser *User
-		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).
+		mockStore.On("CreateAdminIfNone", ctx, mock.AnythingOfType("*auth.User")).
 			Run(func(args mock.Arguments) { capturedUser = args.Get(1).(*User) }).
-			Return(nil).Once()
+			Return(true, nil).Once()
 		mockStore.On("CreateSession", ctx, mock.AnythingOfType("*auth.Session")).Return(nil).Once()
 
 		req := SetupAdminRequest{
@@ -701,7 +701,8 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("AdminExists", ctx).Return(false, nil).Once()
-		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(fmt.Errorf("database error")).Once()
+		// Bootstrap path now calls CreateAdminIfNone (issue #349).
+		mockStore.On("CreateAdminIfNone", ctx, mock.AnythingOfType("*auth.User")).Return(false, fmt.Errorf("database error")).Once()
 
 		req := SetupAdminRequest{
 			Email:    "admin@example.com",
@@ -716,22 +717,21 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	// TestSetupAdmin TOCTOU fix (migration 000025_admin_role_unique + service
-	// change in 957295317): when AdminExists() reports false but the database
-	// rejects CreateUser with a 23505 duplicate-key error (another concurrent
-	// SetupAdmin won the race), the service must translate that into the same
-	// "admin user already exists" message the existence check would have
-	// returned — NOT the generic "failed to create admin" wrapper.
-	t.Run("admin creation races to duplicate-key", func(t *testing.T) {
+	// TestSetupAdmin TOCTOU fix (issue #349, migration 000050): when
+	// AdminExists() reports false but a concurrent SetupAdmin caller wins
+	// the race to insert, the conditional INSERT-WHERE-NOT-EXISTS in
+	// CreateAdminIfNone returns (false, nil) — meaning the row was not
+	// inserted because the WHERE clause failed. The service must
+	// translate that into ErrAdminExists, NOT a generic wrapped error.
+	t.Run("admin creation loses the race", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("AdminExists", ctx).Return(false, nil).Once()
-		// Simulate the partial unique index on (role) WHERE role = 'admin'
-		// rejecting the insert with a 23505 unique violation.
-		pgErr := &pgconn.PgError{Code: "23505", ConstraintName: "users_one_admin"}
-		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(pgErr).Once()
+		// Simulate the conditional insert finding that another admin
+		// already exists (inserted=false, no error).
+		mockStore.On("CreateAdminIfNone", ctx, mock.AnythingOfType("*auth.User")).Return(false, nil).Once()
 
 		req := SetupAdminRequest{
 			Email:    "admin@example.com",
@@ -741,9 +741,10 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 		resp, err := service.SetupAdmin(ctx, req)
 		require.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "admin user already exists")
-		// Do NOT leak the "failed to create admin" wrapper — the error surface
-		// should be indistinguishable from the pre-race existence check.
+		assert.ErrorIs(t, err, ErrAdminExists)
+		// Do NOT leak the "failed to create admin" wrapper — the error
+		// surface should be indistinguishable from the pre-race existence
+		// check.
 		assert.NotContains(t, err.Error(), "failed to create admin")
 
 		mockStore.AssertExpectations(t)
