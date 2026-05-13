@@ -6,7 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import type { CostPeriod } from './state';
 import { formatCurrency, formatTerm, escapeHtml } from './utils';
-import { getRecommendationDetail, getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI, type RecommendationDetail } from './api/recommendations';
+import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import { showToast } from './toast';
 import {
   isPaymentSupported,
@@ -2007,229 +2007,6 @@ function mountCostPeriodSelector(bar: HTMLElement): void {
 // inside the bottom action box. The old helper had only one caller; folding
 // keeps the action-target logic centralised in one place.
 
-function openDetailDrawer(rec: LocalRecommendation): void {
-  // Remove any previous drawer so repeat clicks don't stack.
-  document.querySelectorAll('.detail-drawer').forEach((el) => el.remove());
-  document.querySelectorAll('.detail-drawer-backdrop').forEach((el) => el.remove());
-
-  const backdrop = document.createElement('div');
-  backdrop.className = 'detail-drawer-backdrop';
-
-  const drawer = document.createElement('aside');
-  drawer.className = 'detail-drawer';
-  drawer.setAttribute('role', 'dialog');
-  drawer.setAttribute('aria-label', 'Recommendation details');
-
-  const onClose = (): void => {
-    drawer.remove();
-    backdrop.remove();
-    document.removeEventListener('keydown', onKey);
-  };
-  const onKey = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') onClose();
-  };
-  backdrop.addEventListener('click', onClose);
-  document.addEventListener('keydown', onKey);
-
-  const title = document.createElement('h3');
-  title.textContent = `${rec.provider.toUpperCase()} ${rec.service} \u2014 ${rec.resource_type}`;
-  drawer.appendChild(title);
-
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'detail-drawer-close btn btn-small';
-  closeBtn.setAttribute('aria-label', 'Close details');
-  closeBtn.textContent = '\u2715';
-  closeBtn.addEventListener('click', onClose);
-  drawer.appendChild(closeBtn);
-
-  const fields: Array<[string, string]> = [
-    ['Provider', rec.provider.toUpperCase()],
-    ['Service', rec.service],
-    ['Resource type', rec.resource_type + (rec.engine ? ` (${rec.engine})` : '')],
-    ['Region', rec.region],
-    ['Instances', String(rec.count)],
-    ['Term', formatTerm(rec.term)],
-    ['Monthly savings', formatCurrency(rec.savings)],
-    ['Upfront cost', formatCurrency(rec.upfront_cost)],
-  ];
-  const dl = document.createElement('dl');
-  dl.className = 'detail-drawer-fields';
-  fields.forEach(([k, v]) => {
-    const dt = document.createElement('dt');
-    dt.textContent = k;
-    const dd = document.createElement('dd');
-    dd.textContent = v;
-    dl.appendChild(dt);
-    dl.appendChild(dd);
-  });
-  drawer.appendChild(dl);
-
-  // Confidence + provenance + usage history are sourced from the
-  // per-id detail endpoint (issue #44). The drawer renders a loading
-  // placeholder for each block immediately, then fills them in once
-  // the fetch resolves. The fetch is memoised per id for the drawer
-  // lifetime so re-opening the same row never re-hits the network
-  // within a single session (cache cleared on drawer close).
-  const confidenceRow = document.createElement('dl');
-  confidenceRow.className = 'detail-drawer-fields';
-  const confDt = document.createElement('dt');
-  confDt.textContent = 'Confidence';
-  const confDd = document.createElement('dd');
-  const badge = document.createElement('span');
-  badge.className = 'confidence-badge confidence-loading';
-  badge.textContent = '…';
-  confDd.appendChild(badge);
-  confidenceRow.appendChild(confDt);
-  confidenceRow.appendChild(confDd);
-  drawer.appendChild(confidenceRow);
-
-  const provenance = document.createElement('p');
-  provenance.className = 'detail-drawer-note';
-  provenance.textContent = 'Loading recommendation details\u2026';
-  drawer.appendChild(provenance);
-
-  // Usage history container \u2014 replaced once the detail fetch resolves
-  // with either an inline SVG sparkline (when usage_history is
-  // non-empty) or a "not yet available" note (the documented default
-  // until the collector starts persisting time-series usage \u2014
-  // known_issues/28).
-  const usageContainer = document.createElement('div');
-  usageContainer.className = 'detail-drawer-usage';
-  const usagePlaceholder = document.createElement('p');
-  usagePlaceholder.className = 'detail-drawer-note detail-drawer-note-muted';
-  usagePlaceholder.textContent = 'Loading usage history\u2026';
-  usageContainer.appendChild(usagePlaceholder);
-  drawer.appendChild(usageContainer);
-
-  const renderUsageEmptyNote = (): HTMLParagraphElement => {
-    const note = document.createElement('p');
-    note.className = 'detail-drawer-note detail-drawer-note-muted';
-    note.textContent = 'Usage history not yet available.';
-    return note;
-  };
-
-  void fetchRecommendationDetail(rec.id)
-    .then((detail) => {
-      // Confidence: server-supplied bucket replaces the previous
-      // client-side heuristic so the label tracks the collector's
-      // view of the rec rather than a frontend approximation.
-      const bucket = detail.confidence_bucket;
-      badge.className = `confidence-badge confidence-${bucket}`;
-      badge.textContent = bucket.charAt(0).toUpperCase() + bucket.slice(1);
-
-      // Provenance: rendered verbatim \u2014 the backend already names
-      // the collector + last-collected timestamp.
-      provenance.textContent = detail.provenance_note;
-
-      // Usage history: render the sparkline when we have points,
-      // else a one-line note. The empty case is the documented
-      // default until the collector wiring follow-up lands.
-      const next = (detail.usage_history && detail.usage_history.length > 0)
-        ? renderUsageSparkline(detail.usage_history)
-        : renderUsageEmptyNote();
-      usageContainer.replaceChildren(next);
-    })
-    .catch(() => {
-      // Detail-endpoint failure shouldn't blank the drawer \u2014 fall
-      // back to a minimal "details unavailable" state. Confidence
-      // badge is reset to an explicit Unknown rather than mis-claiming
-      // a bucket on a failed fetch.
-      badge.className = 'confidence-badge confidence-unknown';
-      badge.textContent = 'Unknown';
-      provenance.textContent = `Derived from ${providerDisplayName(rec.provider)} recommendation APIs. (Details temporarily unavailable.)`;
-      usageContainer.replaceChildren(renderUsageEmptyNote());
-    });
-
-  document.body.appendChild(backdrop);
-  document.body.appendChild(drawer);
-  closeBtn.focus();
-}
-
-// detailFetchCache memoises in-flight + resolved detail fetches per id
-// so re-opening the same row never re-hits the network within a single
-// session. Cleared via clearRecommendationDetailCache() so a long-lived
-// dashboard tab doesn't pin stale details indefinitely (the values
-// evolve on every collector cycle).
-const detailFetchCache = new Map<string, Promise<RecommendationDetail>>();
-
-function fetchRecommendationDetail(id: string): Promise<RecommendationDetail> {
-  const existing = detailFetchCache.get(id);
-  if (existing) return existing;
-  const inflight = getRecommendationDetail(id);
-  detailFetchCache.set(id, inflight);
-  // On rejection, drop the cached promise so the next open retries.
-  inflight.catch(() => detailFetchCache.delete(id));
-  return inflight;
-}
-
-/**
- * Clear the per-id detail-fetch cache. Exposed for tests + for any
- * future explicit "refresh details" affordance.
- */
-export function clearRecommendationDetailCache(): void {
-  detailFetchCache.clear();
-}
-
-/**
- * Render a tiny inline SVG sparkline of the per-recommendation usage
- * history. Two polylines (CPU + memory) over a shared time axis, no
- * axes/legend — just enough to give a directional sense of utilisation
- * over the collection window without pulling in a chart library.
- */
-function renderUsageSparkline(points: ReadonlyArray<{ timestamp: string; cpu_pct: number; mem_pct: number }>): SVGSVGElement {
-  const svgNS = 'http://www.w3.org/2000/svg';
-  const width = 280;
-  const height = 60;
-  const padX = 4;
-  const padY = 4;
-  const usableW = width - padX * 2;
-  const usableH = height - padY * 2;
-
-  // Y axis is fixed to 0..100 since CPU/mem percentages have a known
-  // range — keeps the visual comparison stable across recs.
-  const yMax = 100;
-  const xStep = points.length > 1 ? usableW / (points.length - 1) : 0;
-  const project = (val: number, idx: number): [number, number] => {
-    const clamped = Math.max(0, Math.min(yMax, val));
-    const x = padX + xStep * idx;
-    const y = padY + usableH * (1 - clamped / yMax);
-    return [x, y];
-  };
-
-  const buildPath = (selector: (p: { cpu_pct: number; mem_pct: number }) => number): string =>
-    points.map((p, i) => {
-      const [x, y] = project(selector(p), i);
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
-
-  const svg = document.createElementNS(svgNS, 'svg');
-  svg.setAttribute('class', 'detail-drawer-sparkline');
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  svg.setAttribute('width', String(width));
-  svg.setAttribute('height', String(height));
-  svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', `Usage history: ${points.length} samples, CPU and memory percent over time`);
-
-  const cpu = document.createElementNS(svgNS, 'path');
-  cpu.setAttribute('d', buildPath((p) => p.cpu_pct));
-  cpu.setAttribute('fill', 'none');
-  cpu.setAttribute('stroke', 'currentColor');
-  cpu.setAttribute('stroke-width', '1.5');
-  cpu.setAttribute('class', 'sparkline-cpu');
-  svg.appendChild(cpu);
-
-  const mem = document.createElementNS(svgNS, 'path');
-  mem.setAttribute('d', buildPath((p) => p.mem_pct));
-  mem.setAttribute('fill', 'none');
-  mem.setAttribute('stroke', 'currentColor');
-  mem.setAttribute('stroke-width', '1.5');
-  mem.setAttribute('stroke-dasharray', '3,2');
-  mem.setAttribute('class', 'sparkline-mem');
-  svg.appendChild(mem);
-
-  return svg;
-}
 
 function providerDisplayName(provider: string): string {
   switch (provider.toLowerCase()) {
@@ -3496,18 +3273,24 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
     });
   });
 
-  // Row-click opens the detail drawer — skip clicks that originated on
-  // the checkbox or any interactive child (anchors, buttons) so those
-  // flow through to their own handlers without also triggering the
-  // drawer. Also skip summary rows (they represent a cell group, not
-  // a single rec, so have no detail to show).
+  // Row-click toggles selection (issue #344 T4'). Clicking anywhere on
+  // the row's body now toggles the row's checkbox + dispatches the
+  // existing change handler — which already enforces the
+  // one-variant-per-cell radio behaviour (issue #224) and rerenders.
+  // Skip clicks on the checkbox itself (its native click already
+  // toggles) and on any interactive child (button / a / input / label /
+  // select / [data-action]) so per-row controls keep their own
+  // semantics. The previous row-click → openDetailDrawer behaviour was
+  // dropped: see plan.md §T4 (the detail drawer's payload duplicated
+  // the table, with backend-deferred fields the only differentiators).
   container.querySelectorAll<HTMLTableRowElement>('tr.recommendation-row').forEach((tr) => {
     tr.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
-      if (target.closest('input[type="checkbox"], button, a')) return;
-      const id = tr.dataset['recId'] || '';
-      const rec = recommendations.find((r) => r.id === id);
-      if (rec) openDetailDrawer(rec);
+      if (target.closest('input, button, a, label, select, [data-action]')) return;
+      const cb = tr.querySelector<HTMLInputElement>('input[type="checkbox"][data-rec-id]');
+      if (!cb) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
     });
   });
 }
