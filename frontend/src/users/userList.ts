@@ -109,12 +109,8 @@ export function renderUsers(users: APIUser[]): void {
             <td><span class="text-muted">${user.last_login ? formatRelativeTime(user.last_login) : 'Never'}</span></td>
             <td>
               <div class="action-buttons">
-                <button class="btn-small btn-icon edit-user-btn" data-user-id="${escapeHtml(user.id)}" title="Edit user" aria-label="Edit user ${escapeHtml(user.email)}">
-                  <i class="icon-edit" aria-hidden="true"></i>
-                </button>
-                <button class="btn-small btn-icon btn-danger delete-user-btn" data-user-id="${escapeHtml(user.id)}" title="Delete user" aria-label="Delete user ${escapeHtml(user.email)}">
-                  <i class="icon-trash" aria-hidden="true"></i>
-                </button>
+                <button class="btn-small edit-user-btn" data-user-id="${escapeHtml(user.id)}" aria-label="Edit user ${escapeHtml(user.email)}">Edit</button>
+                <button class="btn-small btn-danger delete-user-btn" data-user-id="${escapeHtml(user.id)}" aria-label="Delete user ${escapeHtml(user.email)}">Delete</button>
               </div>
             </td>
           </tr>
