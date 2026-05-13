@@ -6,26 +6,31 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestNewRouter_PanicsOnUnsetAuth verifies the guard added when Auth
-// was made a mandatory Route field. A route registered without an
-// explicit AuthAdmin / AuthUser / AuthPublic must NOT silently inherit
-// any default — NewRouter panics at startup so the missed field is
-// caught immediately rather than producing a runtime lockout once a
-// non-admin user signs in. See AuthLevel doc for the rationale.
-func TestNewRouter_PanicsOnUnsetAuth(t *testing.T) {
-	// Replay NewRouter's validation loop with a fixture route list that
-	// has Auth omitted (zero value = authUnset). Mirrors the production
-	// loop inside NewRouter exactly.
+// TestValidateRoutes_PanicsOnUnsetAuth exercises the live validator
+// NewRouter calls. Asserts the production validateRoutes — not a
+// replay — so if a refactor removes the call from NewRouter the test
+// stops passing (caught by CR review of #364 — the previous version
+// replayed the panic loop inline and would have kept passing even if
+// NewRouter stopped enforcing).
+func TestValidateRoutes_PanicsOnUnsetAuth(t *testing.T) {
 	assert.Panics(t, func() {
-		r := &Router{routes: []Route{
+		validateRoutes([]Route{
 			{ExactPath: "/x", Method: "GET" /* Auth deliberately omitted */},
-		}}
-		for i, route := range r.routes {
-			if route.Auth == authUnset {
-				panic("router: route " + string(rune(i)) + " has unset Auth field")
-			}
-		}
-	}, "expected the NewRouter-equivalent loop to panic when Auth is the zero value")
+		})
+	}, "expected validateRoutes to panic when Auth is the zero value")
+}
+
+// TestValidateRoutes_AcceptsAllExplicitLevels covers the happy path
+// for each of the three valid Auth values. A route table where every
+// entry declares a level must NOT panic.
+func TestValidateRoutes_AcceptsAllExplicitLevels(t *testing.T) {
+	assert.NotPanics(t, func() {
+		validateRoutes([]Route{
+			{ExactPath: "/a", Method: "GET", Auth: AuthAdmin},
+			{ExactPath: "/u", Method: "GET", Auth: AuthUser},
+			{ExactPath: "/p", Method: "GET", Auth: AuthPublic},
+		})
+	}, "validateRoutes must accept any explicit Auth level")
 }
 
 // TestRoute_AllRegisteredHaveExplicitAuth is a structural assertion on the

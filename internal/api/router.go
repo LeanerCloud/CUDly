@@ -79,7 +79,18 @@ type Router struct {
 func NewRouter(h *Handler) *Router {
 	r := &Router{h: h}
 	r.registerRoutes()
-	for i, route := range r.routes {
+	validateRoutes(r.routes)
+	return r
+}
+
+// validateRoutes panics if any route in the slice has Auth == authUnset.
+// Extracted from NewRouter so tests can exercise the live validator
+// directly rather than replaying the check inline — without this split,
+// a regression that removes the call from NewRouter wouldn't be caught
+// by a unit test (the inline replay would keep passing in isolation).
+// See CR feedback on PR #364.
+func validateRoutes(routes []Route) {
+	for i, route := range routes {
 		if route.Auth == authUnset {
 			panic(fmt.Sprintf(
 				"router: route %d (%s%s%s %q) has unset Auth field — every route must declare AuthAdmin, AuthUser, or AuthPublic explicitly",
@@ -87,7 +98,6 @@ func NewRouter(h *Handler) *Router {
 			))
 		}
 	}
-	return r
 }
 
 // registerRoutes sets up all application routes
