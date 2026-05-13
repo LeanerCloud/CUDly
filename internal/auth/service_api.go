@@ -8,25 +8,35 @@ import (
 
 // API adapter types - these match the types in internal/api/handler.go
 
-// APIUser is the user type for API responses
+// APIUser is the user type for API responses.
+//
+// Groups deliberately has NO omitempty: the frontend's TS type
+// (frontend/src/api/types.ts) declares groups as a required string[],
+// and renderers read user.groups.length / iterate user.groups without
+// a guard. Omitting the field on empty slices breaks that contract
+// and crashes the admin users page with "TypeError: Cannot read
+// properties of undefined (reading 'length')" — see issue #350.
 type APIUser struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
 	Role       string   `json:"role"`
-	Groups     []string `json:"groups,omitempty"`
+	Groups     []string `json:"groups"`
 	MFAEnabled bool     `json:"mfa_enabled"`
 	CreatedAt  string   `json:"created_at,omitempty"`
 	UpdatedAt  string   `json:"updated_at,omitempty"`
 	LastLogin  string   `json:"last_login,omitempty"`
 }
 
-// APIGroup is the group type for API responses
+// APIGroup is the group type for API responses.
+//
+// AllowedAccounts has NO omitempty for the same reason Groups doesn't on
+// APIUser — the frontend treats it as always present. See issue #350.
 type APIGroup struct {
 	ID              string          `json:"id"`
 	Name            string          `json:"name"`
 	Description     string          `json:"description,omitempty"`
 	Permissions     []APIPermission `json:"permissions"`
-	AllowedAccounts []string        `json:"allowed_accounts,omitempty"`
+	AllowedAccounts []string        `json:"allowed_accounts"`
 	CreatedAt       string          `json:"created_at,omitempty"`
 	UpdatedAt       string          `json:"updated_at,omitempty"`
 }
@@ -53,6 +63,22 @@ type APICreateUserRequest struct {
 	Password string   `json:"password"`
 	Role     string   `json:"role"`
 	Groups   []string `json:"groups,omitempty"`
+}
+
+// APICreateUserResponse is the response type for POST /api/users. It
+// embeds APIUser so existing consumers keep reading the flat
+// {id, email, role, ...} fields and only callers that need the new
+// invite-status information have to look at the extra optional fields.
+//
+// InviteEmailSent is non-nil only when the request created an invited
+// (passwordless) user. true means the invite email was handed to the
+// configured sender; false means the user row exists but the recipient
+// hasn't been told how to activate it and the admin should re-mail the
+// setup link via Forgot Password.
+type APICreateUserResponse struct {
+	*APIUser
+	InviteEmailSent  *bool  `json:"invite_email_sent,omitempty"`
+	InviteEmailError string `json:"invite_email_error,omitempty"`
 }
 
 // APIUpdateUserRequest is the request type for updating users via API
@@ -90,11 +116,18 @@ func userToAPIUser(u *User) *APIUser {
 	if u.LastLoginAt != nil {
 		lastLogin = u.LastLoginAt.Format(time.RFC3339)
 	}
+	// Substitute an empty slice for nil so the JSON encoder emits "[]"
+	// rather than "null", matching the TS contract that declares
+	// APIUser.groups as a required string[] (issue #350).
+	groups := u.GroupIDs
+	if groups == nil {
+		groups = []string{}
+	}
 	return &APIUser{
 		ID:         u.ID,
 		Email:      u.Email,
 		Role:       u.Role,
-		Groups:     u.GroupIDs,
+		Groups:     groups,
 		MFAEnabled: u.MFAEnabled,
 		CreatedAt:  u.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:  u.UpdatedAt.Format(time.RFC3339),
@@ -110,12 +143,17 @@ func groupToAPIGroup(g *Group) *APIGroup {
 	for i, p := range g.Permissions {
 		apiPerms[i] = permissionToAPIPermission(p)
 	}
+	// Empty-slice substitution: see userToAPIUser. Issue #350.
+	allowedAccounts := g.AllowedAccounts
+	if allowedAccounts == nil {
+		allowedAccounts = []string{}
+	}
 	return &APIGroup{
 		ID:              g.ID,
 		Name:            g.Name,
 		Description:     g.Description,
 		Permissions:     apiPerms,
-		AllowedAccounts: g.AllowedAccounts,
+		AllowedAccounts: allowedAccounts,
 		CreatedAt:       g.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       g.UpdatedAt.Format(time.RFC3339),
 	}
@@ -170,11 +208,15 @@ func (s *Service) CreateUserAPI(ctx context.Context, reqInterface any) (any, err
 		Role:     req.Role,
 		GroupIDs: req.Groups,
 	}
-	user, err := s.CreateUser(ctx, authReq)
+	result, err := s.CreateUser(ctx, authReq)
 	if err != nil {
 		return nil, err
 	}
-	return userToAPIUser(user), nil
+	return &APICreateUserResponse{
+		APIUser:          userToAPIUser(result.User),
+		InviteEmailSent:  result.InviteEmailSent,
+		InviteEmailError: result.InviteEmailError,
+	}, nil
 }
 
 // UpdateUserAPI updates a user via the API

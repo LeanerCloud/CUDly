@@ -42,10 +42,29 @@ services:
       DB_AUTO_MIGRATE: "true"
       DB_MIGRATIONS_PATH: /app/internal/database/postgres/migrations
 
-      # Secret provider (use aws with empty credentials for local dev)
-      SECRET_PROVIDER: aws
-      # Email disabled for local development (no SNS topic)
+      # Secret provider — "env" reads secrets from env vars (local-dev only).
+      # Production uses "aws" / "azure" / "gcp" with real Secrets Manager.
+      SECRET_PROVIDER: env
+
+      # Admin password secret: the EnvResolver looks up the env var whose
+      # NAME equals ADMIN_PASSWORD_SECRET. Here it points at ADMIN_PASSWORD_DEV.
+      ADMIN_PASSWORD_SECRET: ADMIN_PASSWORD_DEV
+      ADMIN_PASSWORD_DEV: "LocalDev!Pass123"
+      ADMIN_EMAIL: admin@cudly.local
+
+      # API-key secret: same pattern — name → env var that holds the value.
+      # Frontend asks for this in the admin-setup modal.
+      API_KEY_SECRET_ARN: ADMIN_API_KEY_DEV
+      ADMIN_API_KEY_DEV: "cudly-local-dev-api-key-not-for-prod"
+
+      # Credential encryption: dev key (all-zero) is gated behind this flag.
+      CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY: "1"
+
+      # Email disabled for local development (no SNS topic / SES creds)
       EMAIL_ENABLED: "false"
+      # Scheduled-task auth: OIDC for prod, disabled for local dev so the
+      # internal /api/scheduled/* endpoints don't require Google ID tokens.
+      SCHEDULED_TASK_AUTH_MODE: disabled
 
       # Application settings
       ENVIRONMENT: development

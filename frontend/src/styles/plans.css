@@ -14,11 +14,17 @@
 
 /* Plan cards */
 .plan-card {
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
     margin-bottom: 1rem;
     overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.plan-card:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--cudly-shadow-md);
 }
 
 .plan-header {
@@ -26,13 +32,13 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 1.5rem;
-    background: #f8f9fa;
-    border-bottom: 1px solid #eee;
+    background: var(--cudly-surface-muted);
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 .plan-header h3 {
     margin: 0;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .plan-status {
@@ -59,20 +65,20 @@
 
 .plan-detail-label {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     margin-bottom: 0.25rem;
 }
 
 .plan-detail-value {
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .plan-actions {
     display: flex;
     gap: 0.5rem;
     padding-top: 1rem;
-    border-top: 1px solid #eee;
+    border-top: 1px solid var(--cudly-border);
 }
 
 /* Upcoming purchases */
@@ -88,12 +94,18 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: white;
-    padding: 1rem 1.5rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    margin-bottom: 0.75rem;
-    border-left: 4px solid #1a73e8;
+    background: var(--cudly-surface);
+    padding: var(--cudly-sp-4) var(--cudly-sp-5);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
+    margin-bottom: var(--cudly-sp-3);
+    border-left: 4px solid var(--cudly-primary);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.upcoming-card:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--cudly-shadow-md);
 }
 
 .upcoming-info {
@@ -110,22 +122,22 @@
 .upcoming-date .day {
     font-size: 1.5rem;
     font-weight: bold;
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 
 .upcoming-date .month {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 .upcoming-details h4 {
     margin: 0 0 0.25rem 0;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .upcoming-details p {
     margin: 0;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.9rem;
 }
 
@@ -136,12 +148,12 @@
 .upcoming-savings .amount {
     font-size: 1.25rem;
     font-weight: bold;
-    color: #34a853;
+    color: var(--cudly-success);
 }
 
 .upcoming-savings .label {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 /* Ramp schedule options */
@@ -156,14 +168,14 @@
     display: flex;
     flex-direction: column;
     padding: 1rem;
-    border: 2px solid #ddd;
+    border: 2px solid var(--cudly-border-strong);
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .ramp-option:hover {
-    border-color: #1a73e8;
+    border-color: var(--cudly-primary);
 }
 
 .ramp-option input[type="radio"] {
@@ -171,24 +183,24 @@
 }
 
 .ramp-option:has(input:checked) {
-    border-color: #1a73e8;
-    background: #e8f0fe;
+    border-color: var(--cudly-primary);
+    background: var(--cudly-info-bg);
 }
 
 .ramp-label {
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
     margin-bottom: 0.25rem;
 }
 
 .ramp-desc {
     font-size: 0.8rem;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 #custom-ramp-config {
     margin-top: 1rem;
     padding: 1rem;
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     border-radius: 8px;
 }

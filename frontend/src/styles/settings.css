@@ -1,7 +1,9 @@
-/* Settings sub-tab bar — mirrors main .tabs / .tab-btn style at smaller scale */
-.settings-tabs {
+/* Settings sub-tab bar — mirrors main .tabs / .tab-btn style at smaller scale.
+ * .inventory-subnav uses the same shape (issue #340 T4). */
+.settings-tabs,
+.inventory-subnav {
     display: flex;
-    border-bottom: 2px solid #e0e0e0;
+    border-bottom: 2px solid var(--cudly-border);
     margin-bottom: 1.5rem;
 }
 
@@ -10,7 +12,7 @@
     background: none;
     border: none;
     border-bottom: 3px solid transparent;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.9rem;
     cursor: pointer;
     border-radius: 0;
@@ -18,14 +20,23 @@
 }
 
 .sub-tab-btn:hover {
-    background: #f5f5f5;
-    color: #1a73e8;
+    background: var(--cudly-bg);
+    color: var(--cudly-primary);
 }
 
 .sub-tab-btn.active {
-    color: #1a73e8;
-    border-bottom-color: #1a73e8;
+    color: var(--cudly-primary);
+    border-bottom-color: var(--cudly-primary);
     font-weight: 600;
+}
+
+/* Visible keyboard focus on sub-tab buttons (Admin sub-tabs + Inventory
+ * sub-tabs). Without this, Chrome's default outline doesn't render on
+ * the borderless buttons, so keyboard users can't see where they are. */
+.sub-tab-btn:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: -2px;
+    border-radius: var(--cudly-r-sm);
 }
 
 /* Settings panel chrome (white bg, padding, radius, shadow) comes from the
@@ -38,11 +49,11 @@
 #accounts-section h2,
 #users-section h2 {
     margin-bottom: 0.5rem;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .settings-description {
-    color: #666;
+    color: var(--cudly-text-muted);
     margin-bottom: 1.5rem;
 }
 
@@ -55,7 +66,7 @@
 }
 
 .settings-category {
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--cudly-border);
     border-radius: 8px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
@@ -64,7 +75,7 @@
 .settings-category legend {
     font-weight: 600;
     font-size: 1.1rem;
-    color: #1a73e8;
+    color: var(--cudly-primary);
     padding: 0 0.5rem;
 }
 
@@ -73,7 +84,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 .setting-row:last-child {
@@ -90,7 +101,7 @@
 .setting-info label,
 .setting-info .label-like {
     font-weight: 500;
-    color: #333;
+    color: var(--cudly-text);
     margin: 0;
 }
 
@@ -105,7 +116,7 @@
 .setting-input input[type="number"],
 .setting-input select {
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-size: 0.9rem;
     min-width: 200px;
@@ -119,12 +130,12 @@
     font-size: 0.9rem;
     padding: 0.25rem 0.75rem;
     border-radius: 4px;
-    background: #f5f5f5;
-    color: #666;
+    background: var(--cudly-bg);
+    color: var(--cudly-text-muted);
 }
 
 .credential-status.configured {
-    background: #e6f4ea;
+    background: var(--cudly-success-bg);
     color: #137333;
 }
 
@@ -134,20 +145,20 @@
     gap: 1rem;
     margin-top: 2rem;
     padding-top: 1rem;
-    border-top: 1px solid #e0e0e0;
+    border-top: 1px solid var(--cudly-border);
 }
 
 /* Settings sub-setting (indented) */
 .setting-row.sub-setting {
     margin-left: 2rem;
     padding-left: 1rem;
-    border-left: 2px solid #e0e0e0;
+    border-left: 2px solid var(--cudly-border);
 }
 
 /* Settings help text */
 .settings-help {
     font-size: 0.85rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     margin-bottom: 1rem;
     font-style: italic;
 }
@@ -156,15 +167,15 @@
 .subsection-title {
     font-size: 0.95rem;
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
     margin: 1.5rem 0 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 /* Provider settings section */
 .provider-settings {
-    background: #fafafa;
+    background: var(--cudly-surface-muted);
 }
 
 .provider-settings.hidden {
@@ -186,7 +197,7 @@
 
 .service-default-card {
     background: white;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--cudly-border);
     border-radius: 8px;
     padding: 1rem;
 }
@@ -195,14 +206,14 @@
     margin: 0 0 0.75rem;
     font-size: 0.9rem;
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .service-default-card .service-default-hint {
     margin: -0.5rem 0 0.75rem;
     font-size: 0.75rem;
     line-height: 1.3;
-    color: #666;
+    color: var(--cudly-text-muted);
 }
 
 .service-default-card label {
@@ -210,7 +221,7 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.85rem;
-    color: #666;
+    color: var(--cudly-text-muted);
     margin-bottom: 0.5rem;
 }
 
@@ -221,7 +232,7 @@
 .service-default-card select {
     flex: 1;
     padding: 0.35rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     font-size: 0.85rem;
 }
@@ -232,20 +243,20 @@
     justify-content: flex-end;
     padding-top: 1rem;
     margin-top: 1rem;
-    border-top: 1px solid #e0e0e0;
+    border-top: 1px solid var(--cudly-border);
 }
 
 /* Dirty (changed but unsaved) field highlight */
 input.dirty,
 select.dirty {
     border-color: #f4a261 !important;
-    background-color: #fffbf5 !important;
+    background-color: #fff8e1 !important;
     box-shadow: 0 0 0 2px rgba(244, 162, 97, 0.25);
 }
 
 /* Dirty highlight for checkbox containers */
 .setting-input.dirty {
-    background-color: #fffbf5;
+    background-color: #fff8e1;
     border-radius: 4px;
     padding: 2px 8px;
     outline: 2px solid #f4a261;
@@ -263,7 +274,7 @@ select.dirty {
 
 .federation-hint {
     font-size: 0.85rem;
-    color: #555;
+    color: var(--cudly-text-muted);
     margin: 0 0 0.75rem;
 }
 
@@ -279,12 +290,12 @@ select.dirty {
     align-items: center;
     gap: 0.5rem;
     padding: 1rem 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--cudly-border);
 }
 
 .target-cloud-row label {
     font-weight: 500;
-    color: #333;
+    color: var(--cudly-text);
     margin: 0;
 }
 
@@ -305,8 +316,8 @@ select.dirty {
 
 .target-cloud-pills .target-cloud-pill[aria-pressed="true"],
 .target-cloud-pills .target-cloud-pill.selected {
-    background: #2e6bd9;
-    border-color: #2e6bd9;
+    background: var(--cudly-primary-hover);
+    border-color: var(--cudly-primary-hover);
     color: white;
 }
 
@@ -375,7 +386,7 @@ select.dirty {
 
 .federation-account-id {
     font-size: 0.8rem;
-    color: #888;
+    color: var(--cudly-text-muted);
     white-space: nowrap;
 }
 
@@ -387,7 +398,7 @@ select.dirty {
 
 .federation-empty {
     font-size: 0.85rem;
-    color: #888;
+    color: var(--cudly-text-muted);
     font-style: italic;
     margin: 0;
     padding: 0.5rem 0;
@@ -424,7 +435,7 @@ select.dirty {
 
 /* Group cards */
 .group-card {
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--cudly-border);
     border-radius: 8px;
     padding: 1.25rem;
     margin-bottom: 1rem;
@@ -437,15 +448,15 @@ select.dirty {
     margin-bottom: 0.75rem;
 }
 .group-card-header h4 { margin: 0 0 0.25rem; }
-.group-card-header .group-description { font-size: 0.85rem; color: #666; margin: 0; }
+.group-card-header .group-description { font-size: 0.85rem; color: var(--cudly-text-muted); margin: 0; }
 .group-card-actions { display: flex; gap: 0.5rem; flex-shrink: 0; align-items: center; }
 .permission-badge {
     display: inline-block;
     font-size: 0.8rem;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    background: #e8f0fe;
-    color: #1a73e8;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
     margin: 0.15rem;
     font-family: monospace;
 }
@@ -454,36 +465,36 @@ select.dirty {
     font-size: 0.8rem;
     padding: 0.15rem 0.4rem;
     border-radius: 10px;
-    background: #f0f0f0;
-    color: #555;
+    background: var(--cudly-border);
+    color: var(--cudly-text-muted);
     margin: 0.1rem;
 }
-.group-members { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #f0f0f0; }
+.group-members { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--cudly-border); }
 
 /* Permission matrix */
 .permission-matrix { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-.permission-matrix th, .permission-matrix td { padding: 0.4rem 0.6rem; border: 1px solid #e0e0e0; text-align: center; }
-.permission-matrix th { background: #f5f5f5; font-weight: 600; }
+.permission-matrix th, .permission-matrix td { padding: 0.4rem 0.6rem; border: 1px solid var(--cudly-border); text-align: center; }
+.permission-matrix th { background: var(--cudly-bg); font-weight: 600; }
 .permission-matrix td:first-child { text-align: left; font-family: monospace; }
 .permission-matrix .has-perm { color: #137333; font-weight: 600; }
-.permission-matrix .no-perm { color: #ccc; }
+.permission-matrix .no-perm { color: var(--cudly-border-strong); }
 
 /* Expandable user rows */
 .user-expand-btn {
     background: none;
     border: none;
     cursor: pointer;
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.9rem;
     padding: 0.2rem 0.4rem;
 }
-.user-expand-btn:hover { color: #1a73e8; }
+.user-expand-btn:hover { color: var(--cudly-primary); }
 .user-expand-row.hidden { display: none; }
 .user-expand-panel {
-    background: #fafafa;
+    background: var(--cudly-surface-muted);
     padding: 1rem 1.25rem;
-    border-top: 1px solid #e0e0e0;
-    border-bottom: 1px solid #e0e0e0;
+    border-top: 1px solid var(--cudly-border);
+    border-bottom: 1px solid var(--cudly-border);
 }
 .expand-panel-body {
     display: grid;
@@ -495,7 +506,7 @@ select.dirty {
     margin: 0 0 0.5rem;
     font-size: 0.85rem;
     font-weight: 600;
-    color: #333;
+    color: var(--cudly-text);
 }
 .group-checkbox-list {
     display: flex;
@@ -510,7 +521,7 @@ select.dirty {
     cursor: pointer;
     padding: 0.15rem 0;
 }
-.group-checkbox-label:hover { color: #1a73e8; }
+.group-checkbox-label:hover { color: var(--cudly-primary); }
 .perm-badge-list {
     display: flex;
     flex-wrap: wrap;
@@ -536,19 +547,19 @@ select.dirty {
     font-size: 1.5rem;
     line-height: 1;
     cursor: pointer;
-    color: #666;
+    color: var(--cudly-text-muted);
     padding: 0 0.25rem;
 }
 .modal-close:hover {
-    color: #1a73e8;
+    color: var(--cudly-primary);
 }
 .perm-preview {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
     padding: 0.5rem;
-    background: #f9f9f9;
-    border: 1px solid #e0e0e0;
+    background: var(--cudly-surface-muted);
+    border: 1px solid var(--cudly-border);
     border-radius: 4px;
     min-height: 2rem;
 }
@@ -556,8 +567,8 @@ select.dirty {
     max-height: 200px;
     overflow-y: auto;
     padding: 0.5rem;
-    background: #fff;
-    border: 1px solid #e0e0e0;
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border);
     border-radius: 4px;
     margin-top: 0.5rem;
 }
@@ -573,7 +584,7 @@ select.dirty {
 .dup-account-hidden { display: none; }
 .dup-empty {
     font-size: 0.85rem;
-    color: #888;
+    color: var(--cudly-text-muted);
     font-style: italic;
     padding: 0.5rem;
     margin: 0;

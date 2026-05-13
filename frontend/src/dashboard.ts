@@ -5,13 +5,14 @@
 import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, getDateParts, escapeHtml, populateAccountFilter } from './utils';
+import { formatCurrency, getDateParts } from './utils';
 import { renderFreshness } from './freshness';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommendation } from './types';
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange } from './recommendations';
+import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -36,50 +37,14 @@ let upcomingPurchasesIndex: Map<string, UpcomingPurchase> = new Map();
  * Setup dashboard event handlers
  */
 export function setupDashboardHandlers(): void {
-  const providerFilter = document.getElementById('dashboard-provider-filter') as HTMLSelectElement | null;
-  if (providerFilter) {
-    // Set initial value from state
-    providerFilter.value = state.getCurrentProvider();
+  // Filter source-of-truth lives in state.ts (mutated by the global
+  // topbar chips). Subscribe to filter changes and reload the dashboard;
+  // the issue #185 ordering rule (clear accounts before refetching for a
+  // new provider) is enforced by topbar-filters.ts at the source so the
+  // dashboard's loadDashboard() always sees consistent state.
+  state.subscribeProvider(() => void loadDashboard());
+  state.subscribeAccount(() => void loadDashboard());
 
-    // Issue #185: previously this handler fired populateAccountFilter
-    // and loadDashboard in parallel via two `void` calls. loadDashboard
-    // ran first, reading stale `state.currentAccountIDs` from the
-    // prior provider — so the dashboard rendered with the wrong
-    // account filter. Worse, populateAccountFilter restores
-    // `select.value = current` after repopulating; if the previously-
-    // picked account isn't in the new provider's account list, the
-    // dropdown silently goes empty (programmatic value change → no
-    // `change` event fires) and state never resyncs. The fix:
-    //   (a) clear the account selection in state synchronously so any
-    //       in-flight read sees the cleared value,
-    //   (b) await populateAccountFilter so loadDashboard sees a
-    //       fully-populated dropdown,
-    //   (c) explicitly reset the dropdown's display value to "(All
-    //       accounts)" — no account from the previous provider can
-    //       ever be valid here.
-    providerFilter.addEventListener('change', () => {
-      void (async (): Promise<void> => {
-        const newProvider = providerFilter.value as '' | 'aws' | 'azure' | 'gcp';
-        state.setCurrentProvider(newProvider);
-        state.setCurrentAccountIDs([]);
-        await populateAccountFilter('dashboard-account-filter', api.listAccounts, newProvider);
-        const accountSel = document.getElementById('dashboard-account-filter') as HTMLSelectElement | null;
-        if (accountSel) accountSel.value = '';
-        await loadDashboard();
-      })();
-    });
-  }
-
-  const accountFilter = document.getElementById('dashboard-account-filter') as HTMLSelectElement | null;
-  if (accountFilter) {
-    accountFilter.addEventListener('change', () => {
-      const val = accountFilter.value;
-      state.setCurrentAccountIDs(val ? [val] : []);
-      void loadDashboard();
-    });
-  }
-
-  void populateAccountFilter('dashboard-account-filter', api.listAccounts, state.getCurrentProvider());
   setupSavingsTrendHandlers();
 }
 
@@ -87,6 +52,15 @@ export function setupDashboardHandlers(): void {
  * Load dashboard data
  */
 export async function loadDashboard(): Promise<void> {
+  // Issue #344 T3: render skeletons synchronously before kicking off the
+  // fetch so the panels show "loading" intent instead of staying blank.
+  // The success render replaces children for a clean handoff; the catch
+  // block calls teardownSkeleton before rendering the error.
+  const summaryEl = document.getElementById('summary');
+  if (summaryEl) showSkeletonTiles(summaryEl, 4);
+  const upcomingEl = document.getElementById('upcoming-list');
+  if (upcomingEl) showSkeletonBlock(upcomingEl, '100%', '6rem');
+
   try {
     const currentProvider = state.getCurrentProvider();
     const currentAccountIDs = state.getCurrentAccountIDs();
@@ -138,9 +112,18 @@ export async function loadDashboard(): Promise<void> {
     console.error('Failed to load dashboard:', error);
     const summary = document.getElementById('summary');
     if (summary) {
+      teardownSkeleton(summary);
       const err = error as Error;
-      summary.innerHTML = `<p class="error">Failed to load dashboard: ${escapeHtml(err.message)}</p>`;
+      while (summary.firstChild) summary.removeChild(summary.firstChild);
+      const p = document.createElement('p');
+      p.classList.add('error');
+      p.textContent = `Failed to load dashboard: ${err.message}`;
+      summary.appendChild(p);
     }
+    // Clear the upcoming-list skeleton too — shimmer next to a dashboard
+    // error reads as a fresh fetch in-flight, which is misleading.
+    const upcoming = document.getElementById('upcoming-list');
+    if (upcoming) teardownSkeleton(upcoming);
   }
 }
 
@@ -175,29 +158,107 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   const coverageValue = nothingTracked ? '—' : `${data.current_coverage || 0}%`;
   const coverageDetail = nothingTracked ? 'No services tracked' : `Target: ${data.target_coverage || 80}%`;
 
-  summary.innerHTML = `
-    <div class="card">
-      <h3>Potential Monthly Savings</h3>
-      <p class="value savings">${savingsDisplay}</p>
-      <p class="detail">${data.total_recommendations || 0} recommendations</p>
-    </div>
-    <div class="card">
-      <h3>Active Commitments</h3>
-      <p class="value">${data.active_commitments || 0}</p>
-      <p class="detail">${formatCurrency(data.committed_monthly)}/mo committed</p>
-    </div>
-    <div class="card">
-      <h3>Current Coverage</h3>
-      <p class="value">${coverageValue}</p>
-      <p class="detail">${coverageDetail}</p>
-    </div>
-    <div class="card">
-      <h3>YTD Savings</h3>
-      <p class="value savings">${formatCurrency(data.ytd_savings)}</p>
-      <p class="detail">From commitment purchases</p>
-    </div>
-  `;
+  // Render KPI tiles via DOM construction (textContent / appendChild)
+  // rather than an innerHTML template literal, per the issue #340 plan's
+  // XSS constraint. The values are all backend-sourced numbers/strings,
+  // but the safe-by-default pattern is cheap and removes the question.
+  while (summary.firstChild) summary.removeChild(summary.firstChild);
+  const tiles: ReadonlyArray<{
+    kpi: string;
+    title: string;
+    value: string;
+    valueSavings?: boolean;
+    detail: string;
+  }> = [
+    { kpi: 'savings',     title: 'Potential Monthly Savings', value: savingsDisplay, valueSavings: true,
+      detail: `${data.total_recommendations || 0} recommendations` },
+    { kpi: 'commitments', title: 'Active Commitments', value: String(data.active_commitments || 0),
+      detail: `${formatCurrency(data.committed_monthly)}/mo committed` },
+    { kpi: 'coverage',    title: 'Current Coverage', value: coverageValue, detail: coverageDetail },
+    { kpi: 'ytd',         title: 'YTD Savings', value: formatCurrency(data.ytd_savings), valueSavings: true,
+      detail: 'From commitment purchases' },
+  ];
+  for (const t of tiles) {
+    const card = document.createElement('div');
+    card.classList.add('card', 'kpi-tile');
+    card.dataset['kpi'] = t.kpi;
+    const h3 = document.createElement('h3');
+    h3.textContent = t.title;
+    const valueP = document.createElement('p');
+    valueP.classList.add('value', 'kpi-tile-value');
+    if (t.valueSavings) valueP.classList.add('savings');
+    valueP.textContent = t.value;
+    const detailP = document.createElement('p');
+    detailP.classList.add('detail', 'kpi-tile-detail');
+    detailP.textContent = t.detail;
+    const spark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    spark.classList.add('kpi-tile-spark', 'hidden');
+    spark.dataset['sparkKey'] = t.kpi;
+    spark.setAttribute('aria-hidden', 'true');
+    card.appendChild(h3);
+    card.appendChild(valueP);
+    card.appendChild(detailP);
+    card.appendChild(spark);
+    summary.appendChild(card);
+  }
 }
+
+/**
+ * Build a small SVG polyline path string from a series of numeric values,
+ * normalized into a width × height viewport. Returns the points string for
+ * a <polyline points="..."> element. Pure helper — no DOM access, no I/O.
+ */
+function sparklinePoints(values: readonly number[], width: number, height: number): string {
+  if (values.length < 2) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const stepX = width / (values.length - 1);
+  return values.map((v, i) => {
+    const x = i * stepX;
+    const y = height - ((v - min) / range) * height;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+}
+
+/**
+ * Attach an SVG sparkline to a single KPI tile, keyed by its data-spark-key.
+ * Silently no-ops when the placeholder isn't in the DOM (e.g. a different
+ * card layout is rendered) or when there aren't enough data points to draw
+ * a meaningful line. Uses DOM methods only — no innerHTML.
+ */
+function attachSparkline(key: string, values: readonly number[]): void {
+  const svg = document.querySelector<SVGSVGElement>(`.kpi-tile-spark[data-spark-key="${key}"]`);
+  if (!svg) return;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  if (values.length < 2) {
+    svg.classList.add('hidden');
+    return;
+  }
+  svg.classList.remove('hidden');
+
+  const width = 80;
+  const height = 24;
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+
+  const points = sparklinePoints(values, width, height);
+  if (!points) {
+    svg.classList.add('hidden');
+    return;
+  }
+
+  const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  polyline.setAttribute('points', points);
+  polyline.setAttribute('fill', 'none');
+  polyline.setAttribute('stroke', 'currentColor');
+  polyline.setAttribute('stroke-width', '1.5');
+  polyline.setAttribute('stroke-linecap', 'round');
+  polyline.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(polyline);
+}
+
+export const __test__ = { sparklinePoints, attachSparkline };
 
 function renderSavingsChart(byService: Record<string, ServiceSavings>): void {
   const ctx = document.getElementById('savings-chart') as HTMLCanvasElement | null;
@@ -288,31 +349,79 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
     return;
   }
 
-  container.innerHTML = purchases.map(p => {
+  container.textContent = '';
+  for (const p of purchases) {
     const dateParts = getDateParts(p.scheduled_date);
-    return `
-      <div class="upcoming-card">
-        <div class="upcoming-info">
-          <div class="upcoming-date">
-            <div class="day">${dateParts.day}</div>
-            <div class="month">${dateParts.month}</div>
-          </div>
-          <div class="upcoming-details">
-            <h4>${escapeHtml(p.plan_name)}</h4>
-            <p><span class="provider-badge ${p.provider}">${p.provider.toUpperCase()}</span> ${escapeHtml(p.service)} - Step ${p.step_number} of ${p.total_steps}</p>
-          </div>
-        </div>
-        <div class="upcoming-savings">
-          <div class="amount">${formatCurrency(p.estimated_savings)}</div>
-          <div class="label">Est. monthly savings</div>
-        </div>
-        <div class="upcoming-actions">
-          <button data-action="view-purchase" data-id="${p.execution_id}">View Details</button>
-          <button data-action="cancel-purchase" data-id="${p.execution_id}" class="danger">Cancel</button>
-        </div>
-      </div>
-    `;
-  }).join('');
+
+    const card = document.createElement('div');
+    card.className = 'upcoming-card';
+
+    // Info block
+    const info = document.createElement('div');
+    info.className = 'upcoming-info';
+
+    const dateDiv = document.createElement('div');
+    dateDiv.className = 'upcoming-date';
+    const dayDiv = document.createElement('div');
+    dayDiv.className = 'day';
+    dayDiv.textContent = String(dateParts.day);
+    const monthDiv = document.createElement('div');
+    monthDiv.className = 'month';
+    monthDiv.textContent = dateParts.month;
+    dateDiv.appendChild(dayDiv);
+    dateDiv.appendChild(monthDiv);
+
+    const details = document.createElement('div');
+    details.className = 'upcoming-details';
+    const h4 = document.createElement('h4');
+    h4.textContent = p.plan_name;
+    const descP = document.createElement('p');
+    const badge = document.createElement('span');
+    badge.className = 'provider-badge';
+    // Whitelist provider to a CSS class — only alphanumeric + hyphen allowed
+    const safeProvider = /^[a-z0-9-]+$/i.test(p.provider) ? p.provider : 'unknown';
+    badge.classList.add(safeProvider);
+    badge.textContent = p.provider.toUpperCase();
+    descP.appendChild(badge);
+    descP.appendChild(document.createTextNode(` ${p.service} - Step ${p.step_number} of ${p.total_steps}`));
+    details.appendChild(h4);
+    details.appendChild(descP);
+
+    info.appendChild(dateDiv);
+    info.appendChild(details);
+
+    // Savings block
+    const savings = document.createElement('div');
+    savings.className = 'upcoming-savings';
+    const amountDiv = document.createElement('div');
+    amountDiv.className = 'amount';
+    amountDiv.textContent = formatCurrency(p.estimated_savings);
+    const labelDiv = document.createElement('div');
+    labelDiv.className = 'label';
+    labelDiv.textContent = 'Est. monthly savings';
+    savings.appendChild(amountDiv);
+    savings.appendChild(labelDiv);
+
+    // Actions block
+    const actions = document.createElement('div');
+    actions.className = 'upcoming-actions';
+    const viewBtn = document.createElement('button');
+    viewBtn.dataset['action'] = 'view-purchase';
+    viewBtn.dataset['id'] = String(p.execution_id);
+    viewBtn.textContent = 'View Details';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.dataset['action'] = 'cancel-purchase';
+    cancelBtn.dataset['id'] = String(p.execution_id);
+    cancelBtn.className = 'danger';
+    cancelBtn.textContent = 'Cancel';
+    actions.appendChild(viewBtn);
+    actions.appendChild(cancelBtn);
+
+    card.appendChild(info);
+    card.appendChild(savings);
+    card.appendChild(actions);
+    container.appendChild(card);
+  }
 
   // Add event listeners
   container.querySelectorAll<HTMLButtonElement>('[data-action="view-purchase"]').forEach(btn => {
@@ -493,10 +602,17 @@ export async function loadSavingsTrendChart(): Promise<void> {
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
       canvas.classList.add('hidden');
       empty?.classList.remove('hidden');
+      attachSparkline('ytd', []);
       return;
     }
     canvas.classList.remove('hidden');
     empty?.classList.add('hidden');
+
+    // YTD Savings KPI tile sparkline (issue #340 T6) — uses the same
+    // cumulative_savings series the main chart renders. Skips silently
+    // when the tile isn't in the DOM (e.g. a different layout is mounted).
+    const cumulativeForSpark = data.data_points.map((p: SavingsDataPoint) => p.cumulative_savings || 0);
+    attachSparkline('ytd', cumulativeForSpark);
 
     if (savingsTrendChart) savingsTrendChart.destroy();
     const labels = data.data_points.map((p: SavingsDataPoint) => {
@@ -546,6 +662,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+    attachSparkline('ytd', []);
     canvas.classList.add('hidden');
     if (empty) {
       empty.textContent = 'Savings history is not available yet.';

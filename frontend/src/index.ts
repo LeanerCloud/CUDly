@@ -14,6 +14,7 @@ import { loadHistory } from './history';
 import { logout } from './auth';
 import { openCreateUserModal, closeUserModal } from './users/userModals';
 import { openCreateGroupModal, closeGroupModal, addPermission, closeDuplicateGroupModal, saveDuplicateGroup } from './groups/groupModals';
+import { initTopbarFilters } from './topbar-filters';
 
 // Re-export for external use
 export { api, utils };
@@ -47,6 +48,29 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('close-group-duplicate-modal-btn')?.addEventListener('click', closeDuplicateGroupModal);
   document.getElementById('cancel-group-duplicate-btn')?.addEventListener('click', closeDuplicateGroupModal);
   document.getElementById('group-duplicate-form')?.addEventListener('submit', (e) => void saveDuplicateGroup(e));
+
+  // Sidebar collapse toggle (issue #340). Persisted in localStorage so the
+  // user's preference survives reloads.
+  const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
+  const sidebarToggle = document.querySelector<HTMLButtonElement>('.app-sidebar-toggle');
+  if (sidebar && sidebarToggle) {
+    const STORAGE_KEY = 'cudly_sidebar_collapsed';
+    if (localStorage.getItem(STORAGE_KEY) === '1') {
+      sidebar.classList.add('collapsed');
+      sidebarToggle.setAttribute('aria-expanded', 'false');
+    }
+    sidebarToggle.addEventListener('click', () => {
+      const isCollapsed = sidebar.classList.toggle('collapsed');
+      sidebarToggle.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+      localStorage.setItem(STORAGE_KEY, isCollapsed ? '1' : '0');
+    });
+  }
+
+  // Global filter chips in the topbar (issue #344 T2). Replaces the
+  // per-section provider/account dropdowns that Home / Plans / Purchases
+  // used to carry; sections subscribe to state.subscribeProvider /
+  // subscribeAccount and reload themselves when the filter changes.
+  initTopbarFilters();
 });
 
 // Initialize on page load

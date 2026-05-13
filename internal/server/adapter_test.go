@@ -411,7 +411,8 @@ func TestAuthServiceAdapter_SetupAdmin(t *testing.T) {
 	ctx := context.Background()
 
 	mockStore.On("AdminExists", ctx).Return(false, nil)
-	mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil)
+	// Bootstrap path now calls CreateAdminIfNone (issue #349).
+	mockStore.On("CreateAdminIfNone", ctx, mock.AnythingOfType("*auth.User")).Return(true, nil)
 	mockStore.On("CreateSession", ctx, mock.AnythingOfType("*auth.Session")).Return(nil)
 
 	resp, err := adapter.SetupAdmin(ctx, api.SetupAdminRequest{

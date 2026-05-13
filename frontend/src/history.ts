@@ -3,12 +3,14 @@
  */
 
 import * as api from './api';
-import { formatCurrency, formatDate, formatTerm, escapeHtml, populateAccountFilter } from './utils';
+import * as state from './state';
+import { formatCurrency, formatDate, formatTerm, escapeHtml } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
+import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
@@ -59,21 +61,16 @@ function applyExecutionDeepLink(): boolean {
   return true;
 }
 
-function populateHistoryAccountFilter(provider?: string): Promise<void> {
-  return populateAccountFilter('history-account-filter', api.listAccounts, provider);
-}
-
 /**
- * Setup history filter event handlers
+ * Setup history filter event handlers.
+ *
+ * Provider/account filters are global (sourced from state.ts via the
+ * topbar chips). The history-section's own controls are just date range
+ * + Load History button — those stay here.
  */
 export function setupHistoryHandlers(): void {
-  const providerFilter = document.getElementById('history-provider-filter') as HTMLSelectElement | null;
-  if (providerFilter) {
-    providerFilter.addEventListener('change', () => {
-      void populateHistoryAccountFilter(providerFilter.value);
-    });
-  }
-  void populateHistoryAccountFilter();
+  state.subscribeProvider(() => void loadHistory());
+  state.subscribeAccount(() => void loadHistory());
 }
 
 /**
@@ -161,14 +158,24 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
  * Load history with filters
  */
 export async function loadHistory(): Promise<void> {
+  // Issue #344 T3: skeleton rows for the purchase-history table. 8
+  // rows matches the typical first-page row count so the skeleton
+  // doesn't shrink dramatically when real data arrives. Column count
+  // (11) mirrors the rendered table headers in renderHistoryList:
+  // Status / Date / Provider / Service / Type / Region / Count /
+  // Term / Upfront Cost / Monthly Savings / Plan.
+  const listEl = document.getElementById('history-list');
+  if (listEl) showSkeletonRows(listEl, 8, 11);
+
   try {
-    const rawProvider = (document.getElementById('history-provider-filter') as HTMLSelectElement | null)?.value || '';
+    // Provider/account filters live in state.ts now (mutated by topbar chips).
+    const rawProvider = state.getCurrentProvider();
     const provider: api.Provider | undefined = (VALID_PROVIDERS as string[]).includes(rawProvider)
       ? (rawProvider as api.Provider)
       : undefined;
 
-    const rawAccountId = (document.getElementById('history-account-filter') as HTMLSelectElement | null)?.value || '';
-    const accountIDs: string[] | undefined = rawAccountId ? [rawAccountId] : undefined;
+    const stateAccountIDs = state.getCurrentAccountIDs();
+    const accountIDs: string[] | undefined = stateAccountIDs.length > 0 ? stateAccountIDs : undefined;
 
     const filters: api.HistoryFilters = {
       start: (document.getElementById('history-start') as HTMLInputElement | null)?.value,
@@ -183,6 +190,7 @@ export async function loadHistory(): Promise<void> {
     console.error('Failed to load history:', error);
     const list = document.getElementById('history-list');
     if (list) {
+      teardownSkeleton(list);
       const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load history: ${escapeHtml(err.message)}</p>`;
     }

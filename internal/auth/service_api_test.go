@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -149,13 +150,17 @@ func TestService_CreateUserAPI(t *testing.T) {
 
 		result, err := service.CreateUserAPI(ctx, req)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		require.NotNil(t, result)
 
-		apiUser, ok := result.(*APIUser)
-		assert.True(t, ok)
-		assert.Equal(t, "newuser@example.com", apiUser.Email)
-		assert.Equal(t, RoleUser, apiUser.Role)
-		assert.Equal(t, []string{"group-1"}, apiUser.Groups)
+		resp, ok := result.(*APICreateUserResponse)
+		require.True(t, ok, "CreateUserAPI should wrap the response in APICreateUserResponse")
+		require.NotNil(t, resp.APIUser)
+		assert.Equal(t, "newuser@example.com", resp.Email)
+		assert.Equal(t, RoleUser, resp.Role)
+		assert.Equal(t, []string{"group-1"}, resp.Groups)
+		// Non-invite path: no invite-email status fields.
+		assert.Nil(t, resp.InviteEmailSent)
+		assert.Empty(t, resp.InviteEmailError)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -546,3 +551,109 @@ func TestService_HasPermissionAPI(t *testing.T) {
 }
 
 // Test error paths and edge cases
+
+// TestUserToAPIUser_EmptyGroups verifies the nil→[]string{} substitution
+// that lets the JSON encoder emit "groups": [] rather than "groups": null
+// or (with the old omitempty) omitting the field entirely. Frontend
+// renderers treat user.groups as a required string[] (TS contract in
+// frontend/src/api/types.ts); a nil/missing field crashes the admin
+// users page with "Cannot read properties of undefined (reading
+// 'length')". See issue #350.
+func TestUserToAPIUser_EmptyGroups(t *testing.T) {
+	now := time.Now()
+
+	t.Run("nil GroupIDs serialises as []", func(t *testing.T) {
+		user := &User{
+			ID:        "user-1",
+			Email:     "user@example.com",
+			Role:      RoleUser,
+			GroupIDs:  nil,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		api := userToAPIUser(user)
+		require.NotNil(t, api)
+		assert.NotNil(t, api.Groups, "Groups must NOT be nil — TS contract is string[]")
+		assert.Equal(t, []string{}, api.Groups)
+
+		// Marshal-check: the JSON output must contain "groups":[] and not
+		// drop the field. This is what the frontend actually consumes.
+		b, err := json.Marshal(api)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"groups":[]`, "JSON must emit empty array, not null and not absent")
+		assert.NotContains(t, string(b), `"groups":null`)
+	})
+
+	t.Run("empty-slice GroupIDs serialises as []", func(t *testing.T) {
+		user := &User{
+			ID:        "user-2",
+			Email:     "user2@example.com",
+			Role:      RoleUser,
+			GroupIDs:  []string{},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		api := userToAPIUser(user)
+		require.NotNil(t, api)
+		assert.Equal(t, []string{}, api.Groups)
+		b, err := json.Marshal(api)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"groups":[]`)
+	})
+
+	t.Run("non-empty GroupIDs preserved", func(t *testing.T) {
+		user := &User{
+			ID:        "user-3",
+			Email:     "admin@example.com",
+			Role:      RoleAdmin,
+			GroupIDs:  []string{"admin-group-id"},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		api := userToAPIUser(user)
+		require.NotNil(t, api)
+		assert.Equal(t, []string{"admin-group-id"}, api.Groups)
+		b, err := json.Marshal(api)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"groups":["admin-group-id"]`)
+	})
+}
+
+// TestGroupToAPIGroup_EmptyAllowedAccounts mirrors the user-side test
+// for AllowedAccounts. See issue #350.
+func TestGroupToAPIGroup_EmptyAllowedAccounts(t *testing.T) {
+	now := time.Now()
+
+	t.Run("nil AllowedAccounts serialises as []", func(t *testing.T) {
+		g := &Group{
+			ID:              "group-1",
+			Name:            "Empty",
+			AllowedAccounts: nil,
+			Permissions:     []Permission{},
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		api := groupToAPIGroup(g)
+		require.NotNil(t, api)
+		assert.NotNil(t, api.AllowedAccounts, "AllowedAccounts must NOT be nil")
+		assert.Equal(t, []string{}, api.AllowedAccounts)
+		b, err := json.Marshal(api)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"allowed_accounts":[]`)
+		assert.NotContains(t, string(b), `"allowed_accounts":null`)
+	})
+
+	t.Run("non-empty AllowedAccounts preserved", func(t *testing.T) {
+		g := &Group{
+			ID:              "group-2",
+			Name:            "Admins",
+			AllowedAccounts: []string{"*"},
+			Permissions:     []Permission{},
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		api := groupToAPIGroup(g)
+		require.NotNil(t, api)
+		assert.Equal(t, []string{"*"}, api.AllowedAccounts)
+	})
+}

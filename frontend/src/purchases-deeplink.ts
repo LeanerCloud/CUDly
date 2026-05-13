@@ -64,7 +64,7 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
       kind: 'error',
       timeout: null,
     });
-    window.history.replaceState({}, '', '/history');
+    window.history.replaceState({}, '', '/purchases');
     return true;
   }
 
@@ -83,7 +83,7 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
     destructive: dl.action === 'cancel',
   });
   if (!ok) {
-    window.history.replaceState({}, '', '/history');
+    window.history.replaceState({}, '', '/purchases');
     return true;
   }
 
@@ -100,6 +100,6 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
       timeout: null,
     });
   }
-  window.history.replaceState({}, '', '/history');
+  window.history.replaceState({}, '', '/purchases');
   return true;
 }

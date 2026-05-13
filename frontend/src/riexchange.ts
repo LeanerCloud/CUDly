@@ -17,6 +17,7 @@ import type {
   OfferingOption,
 } from './api';
 import { openModal, closeModal } from './modal';
+import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -80,7 +81,12 @@ async function loadConvertibleRIs(): Promise<void> {
   const container = document.getElementById('ri-exchange-instances-list');
   if (!container) return;
 
-  container.innerHTML = '<p class="loading">Loading convertible RIs...</p>';
+  // Issue #344 T3: shimmer skeleton replaces the static "Loading…" text.
+  // 3 rows × 8 cols matches the convertible-RI table's column shape
+  // (RI ID / Instance Type / AZ / Count / Offering / Expiry /
+  // Utilization / Actions — see renderRIsTable); renderRIsTable swaps
+  // the children on success for a clean handoff.
+  showSkeletonRows(container, 3, 8);
 
   try {
     currentRIs = await api.listConvertibleRIs();
@@ -89,6 +95,7 @@ async function loadConvertibleRIs(): Promise<void> {
     utilizationGeneration++;
     void loadUtilization(utilizationGeneration);
   } catch (error) {
+    teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load convertible RIs: ${escapeHtml(err.message)}</p>`;
   }
@@ -167,12 +174,17 @@ export async function loadReshapeRecommendations(): Promise<void> {
   const container = document.getElementById('ri-exchange-recommendations-list');
   if (!container) return;
 
-  container.innerHTML = '<p class="loading">Analyzing reshape opportunities...</p>';
+  // Issue #344 T3: skeleton rows for the reshape-recommendations table.
+  // 3 rows × 8 cols matches the rendered table shape — see
+  // renderRecommendations: Source RI / Current / Suggested /
+  // Alternatives / Utilization / Normalized Units / Reason / Actions.
+  showSkeletonRows(container, 3, 8);
 
   try {
     currentRecommendations = await api.getReshapeRecommendations();
     renderRecommendations(container);
   } catch (error) {
+    teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
   }

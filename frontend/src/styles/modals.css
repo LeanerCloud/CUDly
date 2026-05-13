@@ -33,13 +33,13 @@
 
 .modal-content h2 {
     margin-bottom: 1.5rem;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .modal-content label {
     display: block;
     margin-bottom: 1rem;
-    color: #333;
+    color: var(--cudly-text);
 }
 
 .modal-content input[type="text"],
@@ -49,7 +49,7 @@
 .modal-content textarea {
     width: 100%;
     padding: 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     margin-top: 0.25rem;
     font-size: 0.9rem;
@@ -66,12 +66,12 @@
     justify-content: flex-end;
     margin-top: 1.5rem;
     padding-top: 1rem;
-    border-top: 1px solid #eee;
+    border-top: 1px solid var(--cudly-border);
 }
 
 /* Modal description */
 .modal-description {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.9rem;
     margin-bottom: 1rem;
 }
@@ -91,7 +91,7 @@
 }
 
 .modal-hint {
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     padding: 1rem;
     border-radius: 4px;
     font-size: 0.9rem;
@@ -99,7 +99,7 @@
 }
 
 .modal-hint a {
-    color: #1a73e8;
+    color: var(--cudly-primary);
     text-decoration: none;
     font-weight: 500;
 }
@@ -110,7 +110,7 @@
 
 /* Modal step headers */
 .modal-content h4 {
-    color: #333;
+    color: var(--cudly-text);
     font-size: 0.95rem;
     margin: 0 0 0.75rem 0;
 }
@@ -126,12 +126,12 @@
 
 .prereq-section h4 {
     margin: 0 0 0.5rem 0;
-    color: #1a73e8;
+    color: var(--cudly-primary);
     font-size: 0.95rem;
 }
 
 .prereq-description {
-    color: #555;
+    color: var(--cudly-text-muted);
     font-size: 0.85rem;
     margin-bottom: 0.75rem;
 }
@@ -146,7 +146,7 @@
 }
 
 .prereq-hint {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.8rem;
     font-style: italic;
     margin-top: 0.75rem;
@@ -159,7 +159,7 @@
 .purchase-modal-commits {
     max-height: 55vh;
     overflow-y: auto;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--cudly-border);
     border-radius: 4px;
     margin-bottom: 1rem;
 }
@@ -168,7 +168,7 @@
 .purchase-modal-table thead th {
     position: sticky;
     top: 0;
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     z-index: 1;
 }
 
@@ -189,13 +189,13 @@
 .purchase-modal-include-label {
     display: block;
     font-size: 0.8rem;
-    color: #555;
+    color: var(--cudly-text-muted);
     margin-top: 2px;
 }
 
 /* Resource type sub-text inside the Service / Type cell. */
 .purchase-modal-resource-type {
-    color: #666;
+    color: var(--cudly-text-muted);
     font-size: 0.85em;
 }
 

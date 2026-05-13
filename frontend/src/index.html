@@ -14,13 +14,22 @@
          in addition to 'self'. -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.azurecontainerapps.io https://*.run.app; base-uri 'self'; form-action 'self'">
     <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta name="description" content="CUDly — Cloud Commitment Optimizer. Discover savings opportunities, plan and automate Reserved Instance / Savings Plan purchases, and manage commitment inventory across AWS, Azure, and GCP.">
+    <meta name="theme-color" content="#2563eb">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <title>CUDly - Cloud Commitment Optimizer</title>
 </head>
 <body>
-    <div id="app">
-        <header>
-            <h1>CUDly - Cloud Commitment Optimizer</h1>
+    <a href="#main-content" class="skip-to-main">Skip to main content</a>
+    <div id="app" class="app-shell">
+        <header class="app-topbar">
+            <div class="app-topbar-brand">
+                <span class="app-logo-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+                </span>
+                <h1>CUDly</h1>
+            </div>
+            <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
             <div id="user-info">
                 <span id="user-email-display"></span>
                 <span id="user-role-display" class="role-badge"></span>
@@ -29,38 +38,42 @@
                 <button id="logout-btn">Logout</button>
             </div>
         </header>
-        <div class="tabs" role="tablist" aria-label="Main navigation">
-            <button class="tab-btn active" id="dashboard-tab-btn" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="dashboard-tab">Dashboard</button>
-            <button class="tab-btn" id="recommendations-tab-btn" data-tab="recommendations" role="tab" aria-selected="false" aria-controls="recommendations-tab">Recommendations</button>
-            <button class="tab-btn" id="plans-tab-btn" data-tab="plans" role="tab" aria-selected="false" aria-controls="plans-tab">Purchase Plans</button>
-            <button class="tab-btn" id="history-tab-btn" data-tab="history" role="tab" aria-selected="false" aria-controls="history-tab">Purchase History</button>
-            <button class="tab-btn" id="ri-exchange-tab-btn" data-tab="ri-exchange" role="tab" aria-selected="false" aria-controls="ri-exchange-tab">RI Exchange</button>
-            <button class="tab-btn" id="settings-tab-btn" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings-tab">Settings</button>
-        </div>
-        <main>
-            <!-- Dashboard Tab -->
-            <div id="dashboard-tab" class="tab-content active" role="tabpanel" aria-labelledby="dashboard-tab-btn">
-                <section id="dashboard-controls">
-                    <div class="controls-bar">
-                        <div class="filter-group">
-                            <label>Provider:
-                                <select id="dashboard-provider-filter">
-                                    <option value="">All Providers</option>
-                                    <option value="aws">AWS</option>
-                                    <option value="azure">Azure</option>
-                                    <option value="gcp">GCP</option>
-                                </select>
-                            </label>
-                        </div>
-                        <div class="filter-group">
-                            <label>Account:
-                                <select id="dashboard-account-filter">
-                                    <option value="">All Accounts</option>
-                                </select>
-                            </label>
-                        </div>
-                    </div>
-                </section>
+        <div class="app-body">
+            <aside class="app-sidebar" aria-label="Primary navigation">
+                <button class="app-sidebar-toggle" type="button" aria-label="Toggle sidebar" aria-expanded="true">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                </button>
+                <nav class="app-sidebar-nav" role="tablist" aria-label="Main navigation" aria-orientation="vertical">
+                    <button class="tab-btn active" id="home-tab-btn" data-tab="home" role="tab" aria-selected="true" aria-controls="home-tab" aria-label="Home">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg>
+                        <span class="sidebar-label">Home</span>
+                    </button>
+                    <button class="tab-btn" id="opportunities-tab-btn" data-tab="opportunities" role="tab" aria-selected="false" aria-controls="opportunities-tab" aria-label="Opportunities">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M15 14c.97-.84 2-1.81 2-4a5 5 0 0 0-10 0c0 2.19 1.03 3.16 2 4"/><line x1="9" y1="18" x2="15" y2="18"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+                        <span class="sidebar-label">Opportunities</span>
+                    </button>
+                    <button class="tab-btn" id="plans-tab-btn" data-tab="plans" role="tab" aria-selected="false" aria-controls="plans-tab" aria-label="Plans">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12l2 2 4-4"/></svg>
+                        <span class="sidebar-label">Plans</span>
+                    </button>
+                    <button class="tab-btn" id="purchases-tab-btn" data-tab="purchases" role="tab" aria-selected="false" aria-controls="purchases-tab" aria-label="Purchases">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+                        <span class="sidebar-label">Purchases</span>
+                    </button>
+                    <button class="tab-btn" id="inventory-tab-btn" data-tab="inventory" role="tab" aria-selected="false" aria-controls="inventory-tab" aria-label="Inventory &amp; Coverage">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27,6.96 12,12.01 20.73,6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                        <span class="sidebar-label">Inventory &amp; Coverage</span>
+                    </button>
+                    <button class="tab-btn" id="admin-tab-btn" data-tab="admin" role="tab" aria-selected="false" aria-controls="admin-tab" aria-label="Admin">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        <span class="sidebar-label">Admin</span>
+                    </button>
+                </nav>
+            </aside>
+            <main class="app-main" id="main-content">
+            <!-- Home Tab. Provider/Account filters live in the topbar
+                 (#topbar-filters); they're global across all sections. -->
+            <div id="home-tab" class="tab-content active" role="tabpanel" aria-labelledby="home-tab-btn">
                 <section id="dashboard-freshness" class="freshness-indicator" aria-live="polite"></section>
                 <section id="summary"></section>
                 <section id="savings-trend-section" class="card chart-section">
@@ -86,8 +99,8 @@
                 </section>
             </div>
 
-            <!-- Recommendations Tab -->
-            <div id="recommendations-tab" class="tab-content" role="tabpanel" aria-labelledby="recommendations-tab-btn">
+            <!-- Opportunities Tab (renamed from Recommendations in #340) -->
+            <div id="opportunities-tab" class="tab-content" role="tabpanel" aria-labelledby="opportunities-tab-btn">
                 <section id="recommendations-summary"></section>
                 <!-- Per-column header filters replace the old top filter bar.
                      The Clear-filters badge + aria-live count are injected
@@ -100,27 +113,10 @@
 
             <!-- Purchase Plans Tab -->
             <div id="plans-tab" class="tab-content" role="tabpanel" aria-labelledby="plans-tab-btn">
-                <section id="plans-header" class="card">
+                <section id="plans-header" class="card page-hero">
                     <h2>Purchase Plans</h2>
-                    <div class="controls-bar">
-                        <div class="filter-group">
-                            <label>Provider:
-                                <select id="plans-provider-filter">
-                                    <option value="">All Providers</option>
-                                    <option value="aws">AWS</option>
-                                    <option value="azure">Azure</option>
-                                    <option value="gcp">GCP</option>
-                                </select>
-                            </label>
-                        </div>
-                        <div class="filter-group">
-                            <label>Account:
-                                <select id="plans-account-filter">
-                                    <option value="">All Accounts</option>
-                                </select>
-                            </label>
-                        </div>
-                    </div>
+                    <!-- Provider/Account filters now live in the topbar
+                         (#topbar-filters), globally shared across sections. -->
                     <button id="new-plan-btn" class="primary">New Plan</button>
                 </section>
                 <section id="plans-list"></section>
@@ -133,7 +129,7 @@
             </div>
 
             <!-- History Tab -->
-            <div id="history-tab" class="tab-content" role="tabpanel" aria-labelledby="history-tab-btn">
+            <div id="purchases-tab" class="tab-content" role="tabpanel" aria-labelledby="purchases-tab-btn">
                 <!-- Savings History Chart Section -->
                 <section id="savings-history-section" class="card">
                     <div class="section-header">
@@ -180,25 +176,15 @@
                 </section>
 
                 <!-- Purchase History Section -->
-                <section id="purchase-history-section" class="card">
+                <section id="purchase-history-section" class="card page-hero">
                     <h2>Purchase History</h2>
                     <section id="history-controls">
                         <div class="date-range-picker">
                             <label>From: <input type="date" id="history-start"></label>
                             <label>To: <input type="date" id="history-end"></label>
-                            <label>Provider:
-                                <select id="history-provider-filter">
-                                    <option value="">All Providers</option>
-                                    <option value="aws">AWS</option>
-                                    <option value="azure">Azure</option>
-                                    <option value="gcp">GCP</option>
-                                </select>
-                            </label>
-                            <label>Account:
-                                <select id="history-account-filter">
-                                    <option value="">All Accounts</option>
-                                </select>
-                            </label>
+                            <!-- Provider/Account filters now live in the
+                                 topbar (#topbar-filters); date-range stays
+                                 here because it's history-specific. -->
                             <button id="load-history-btn">Load History</button>
                         </div>
                     </section>
@@ -207,48 +193,75 @@
                 </section>
             </div>
 
-            <!-- RI Exchange Tab -->
-            <div id="ri-exchange-tab" class="tab-content" role="tabpanel" aria-labelledby="ri-exchange-tab-btn">
-                <section class="card">
-                    <div class="section-header">
-                        <h2>Convertible RI Exchange</h2>
-                        <div class="section-header-actions">
-                            <button id="ri-exchange-settings-btn" class="btn btn-small" title="Jump to Exchange Automation settings in Settings → Purchasing">⚙︎ Exchange settings</button>
-                            <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
-                        </div>
+            <!-- Inventory & Coverage Tab (umbrella section folding in RI Exchange, issue #340 T4) -->
+            <div id="inventory-tab" class="tab-content" role="tabpanel" aria-labelledby="inventory-tab-btn">
+                <div class="inventory-subnav" role="tablist" aria-label="Inventory &amp; Coverage navigation">
+                    <button class="sub-tab-btn" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="false" aria-controls="inventory-active-commitments">Active commitments</button>
+                    <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" aria-controls="inventory-coverage">Coverage</button>
+                    <button class="sub-tab-btn active" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="true" aria-controls="inventory-ri-exchange">RI Exchange</button>
+                </div>
+
+                <!-- Active commitments — placeholder until T7 wires per-commitment list.
+                     Backend doesn't expose a dedicated list endpoint today; tracked in
+                     issue #340 sub-task list. -->
+                <section id="inventory-active-commitments" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-active-commitments">
+                    <div class="empty-state">
+                        <h3>Active commitments</h3>
+                        <p>Per-commitment inventory view is coming soon. For now, your active commitment count is on the Home dashboard, and RI exchange opportunities are in the RI Exchange tab.</p>
                     </div>
-                    <p class="settings-description">View active convertible Reserved Instances, get automated reshape recommendations, and execute exchanges.</p>
                 </section>
 
-                <section class="card">
-                    <h3>Active Convertible RIs</h3>
-                    <div id="ri-exchange-instances-list"></div>
+                <!-- Coverage — placeholder until T7 wires per-provider donuts. -->
+                <section id="inventory-coverage" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-coverage">
+                    <div class="empty-state">
+                        <h3>Coverage</h3>
+                        <p>Per-provider coverage breakdowns are coming soon. Your overall coverage rate is on the Home dashboard.</p>
+                    </div>
                 </section>
 
-                <section class="card">
-                    <h3>Reshape Recommendations</h3>
-                    <p class="settings-description">Underutilized convertible RIs that could be exchanged for better-fitting instance types.</p>
-                    <div id="ri-exchange-recommendations-list"></div>
-                </section>
+                <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
+                <section id="inventory-ri-exchange" role="tabpanel" aria-labelledby="inv-subtab-ri-exchange">
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Convertible RI Exchange</h2>
+                            <div class="section-header-actions">
+                                <button id="ri-exchange-settings-btn" class="btn btn-small" title="Jump to Exchange Automation settings in Admin → Purchasing policies">⚙︎ Exchange settings</button>
+                                <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">View active convertible Reserved Instances, get automated reshape recommendations, and execute exchanges.</p>
+                    </section>
 
-                <section class="card">
-                    <h3>Exchange History</h3>
-                    <p class="settings-description">Recent RI exchange operations (last 12 months).</p>
-                    <div id="ri-exchange-history-list"></div>
+                    <section class="card">
+                        <h3>Active Convertible RIs</h3>
+                        <div id="ri-exchange-instances-list"></div>
+                    </section>
+
+                    <section class="card">
+                        <h3>Reshape Recommendations</h3>
+                        <p class="settings-description">Underutilized convertible RIs that could be exchanged for better-fitting instance types.</p>
+                        <div id="ri-exchange-recommendations-list"></div>
+                    </section>
+
+                    <section class="card">
+                        <h3>Exchange History</h3>
+                        <p class="settings-description">Recent RI exchange operations (last 12 months).</p>
+                        <div id="ri-exchange-history-list"></div>
+                    </section>
                 </section>
             </div>
 
-            <!-- Settings Tab -->
-            <div id="settings-tab" class="tab-content" role="tabpanel" aria-labelledby="settings-tab-btn">
-                <div class="settings-tabs" role="tablist" aria-label="Settings navigation">
-                    <button class="sub-tab-btn active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
-                    <button class="sub-tab-btn" data-settings-tab="purchasing" role="tab" aria-selected="false">Purchasing</button>
-                    <button class="sub-tab-btn admin-only" data-settings-tab="accounts" role="tab" aria-selected="false">Accounts</button>
-                    <button class="sub-tab-btn admin-only" data-settings-tab="users" role="tab" aria-selected="false">Users &amp; API Keys</button>
+            <!-- Admin Tab (renamed from Settings in #340) -->
+            <div id="admin-tab" class="tab-content" role="tabpanel" aria-labelledby="admin-tab-btn">
+                <div class="settings-tabs" role="tablist" aria-label="Admin navigation">
+                    <button class="sub-tab-btn active" id="admin-subtab-general" data-settings-tab="general" role="tab" aria-selected="true" aria-controls="settings-section">General</button>
+                    <button class="sub-tab-btn" id="admin-subtab-purchasing" data-settings-tab="purchasing" role="tab" aria-selected="false" aria-controls="purchasing-panel">Purchasing policies</button>
+                    <button class="sub-tab-btn admin-only" id="admin-subtab-accounts" data-settings-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts-section">Accounts &amp; onboarding</button>
+                    <button class="sub-tab-btn admin-only" id="admin-subtab-users" data-settings-tab="users" role="tab" aria-selected="false" aria-controls="users-section">Users, roles &amp; API keys</button>
                 </div>
-                <section id="settings-section" class="card">
+                <section id="settings-section" class="card page-hero" role="tabpanel" aria-labelledby="admin-subtab-general">
                     <h2>Global Configuration</h2>
-                    <p class="settings-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
+                    <p class="settings-description page-hero-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
                     <div id="settings-loading" class="loading">Loading settings...</div>
                     <form id="global-settings-form" class="settings-form hidden">
                         <fieldset class="settings-category">
@@ -331,7 +344,7 @@
                 </section>
 
                 <!-- Purchasing Section -->
-                <section id="purchasing-panel" class="card hidden">
+                <section id="purchasing-panel" class="card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-purchasing">
                     <h2>Purchasing Settings</h2>
                     <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
 
@@ -550,7 +563,7 @@
                 </section>
 
                 <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->
-                <section id="accounts-section" class="admin-only card hidden">
+                <section id="accounts-section" class="admin-only card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-accounts">
                     <h2>Accounts</h2>
                     <p class="settings-description">Onboard new cloud accounts via federation IaC, review account registrations, and manage per-provider accounts.</p>
 
@@ -618,7 +631,7 @@
                 </section>
 
                 <!-- User Management Section (Admin Only) -->
-                <section id="users-section" class="admin-only card hidden">
+                <section id="users-section" class="admin-only card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-users">
                     <h2>User Management</h2>
                     <p class="settings-description">Manage users and their permissions.</p>
 
@@ -645,7 +658,7 @@
                 </section>
 
                 <!-- API Keys Section (Admin Only) -->
-                <section id="apikeys-section" class="admin-only card hidden">
+                <section id="apikeys-section" class="admin-only card hidden" role="tabpanel" aria-labelledby="admin-subtab-users">
                     <fieldset class="settings-category">
                         <legend>API Keys</legend>
                         <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>
@@ -657,6 +670,7 @@
                 </section>
             </div>
         </main>
+        </div><!-- /.app-body -->
 
         <!-- Archera Insurance education overlay. Hidden by default;
              opened by the "Learn more" link inside the offer modal or by
@@ -907,13 +921,14 @@
                     </div>
                     <div id="password-fields" class="form-group">
                         <label for="user-password">Password</label>
-                        <input type="password" id="user-password" minlength="12" placeholder="Minimum 12 characters">
+                        <input type="password" id="user-password" minlength="12" placeholder="Leave blank to email an invitation">
+                        <small class="form-help">Leave blank to send the user an invitation email; they will set their own password on first login. If you enter a password it must be at least 12 characters and include upper / lower / number / special.</small>
                     </div>
                     <div class="form-group">
                         <label for="user-role">Role</label>
                         <select id="user-role" required>
-                            <option value="viewer">Viewer</option>
-                            <option value="editor">Editor</option>
+                            <option value="readonly">Viewer</option>
+                            <option value="user">Editor</option>
                             <option value="admin">Admin</option>
                         </select>
                     </div>

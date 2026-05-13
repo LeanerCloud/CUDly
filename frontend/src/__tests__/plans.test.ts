@@ -32,6 +32,16 @@ jest.mock('../state', () => ({
   // behaviour (no recommendations attached to plan).
   getVisibleRecommendations: jest.fn().mockReturnValue([]),
   setVisibleRecommendations: jest.fn(),
+  // Issue #344 T2: plans.ts reads the global filter via state and
+  // subscribes to changes so the list re-renders when the topbar chips
+  // change. The topbar's "All providers" chip writes '' to state, which
+  // is the falsy "no filter" value plans.ts checks for.
+  getCurrentProvider: jest.fn().mockReturnValue(''),
+  setCurrentProvider: jest.fn(),
+  getCurrentAccountIDs: jest.fn().mockReturnValue([]),
+  setCurrentAccountIDs: jest.fn(),
+  subscribeProvider: jest.fn().mockReturnValue(() => {}),
+  subscribeAccount: jest.fn().mockReturnValue(() => {}),
 }));
 
 // Mock history module
@@ -263,15 +273,12 @@ describe('Plans Module', () => {
       // map. Filtering via p.provider directly returned 0 rows every
       // time and was the cause of "switching Provider: AWS empties the
       // list" seen in the 2026-04-22 screenshots.
-      const filter = document.createElement('select');
-      filter.id = 'plans-provider-filter';
-      ['', 'aws', 'azure', 'gcp'].forEach((v) => {
-        const o = document.createElement('option');
-        o.value = v;
-        filter.appendChild(o);
-      });
-      filter.value = 'aws';
-      document.body.appendChild(filter);
+      //
+      // Issue #344 T2: provider filter source moved from a per-section
+      // <select> to the global topbar (state.ts). Simulate "user picked
+      // AWS in the topbar" by pointing the mock at 'aws'.
+      const state = await import('../state');
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
 
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [
@@ -293,11 +300,17 @@ describe('Plans Module', () => {
       });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
 
-      await loadPlans();
+      try {
+        await loadPlans();
 
-      const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('AWS fanout');
-      expect(list?.innerHTML).not.toContain('GCP CUDs');
+        const list = document.getElementById('plans-list');
+        expect(list?.innerHTML).toContain('AWS fanout');
+        expect(list?.innerHTML).not.toContain('GCP CUDs');
+      } finally {
+        // Restore the mock so the next test's "no provider scope"
+        // default holds (it relies on getCurrentProvider returning '').
+        (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+      }
     });
 
     test('shows error on API failure', async () => {

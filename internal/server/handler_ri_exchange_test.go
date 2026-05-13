@@ -799,6 +799,9 @@ func (m *mockEmailSender) SendPasswordResetEmail(context.Context, string, string
 func (m *mockEmailSender) SendWelcomeEmail(context.Context, string, string, string) error {
 	return nil
 }
+func (m *mockEmailSender) SendUserInviteEmail(context.Context, string, string) error {
+	return nil
+}
 
 func (m *mockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
 	if m.sendApprovalFunc != nil {

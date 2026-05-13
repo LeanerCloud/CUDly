@@ -3,7 +3,8 @@
  */
 
 import * as api from './api';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, populateAccountFilter } from './utils';
+import * as state from './state';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
@@ -12,6 +13,7 @@ import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { openArcheraOfferModal } from './archera';
+import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -28,6 +30,14 @@ let pendingPlanRecommendations: api.Recommendation[] = [];
  * Load plans and planned purchases
  */
 export async function loadPlans(): Promise<void> {
+  // Issue #344 T3: skeleton tiles for the plans list. Synchronous
+  // render before fetch so the page doesn't sit blank during the
+  // round-trip. The planned-purchases skeleton lives in
+  // loadPlannedPurchases so direct callers of that fetch (not via
+  // loadPlans) get the same loading affordance.
+  const plansList = document.getElementById('plans-list');
+  if (plansList) showSkeletonTiles(plansList, 3);
+
   try {
     const data = await api.getPlans() as unknown as PlansResponse;
     let plans = data.plans || [];
@@ -37,7 +47,10 @@ export async function loadPlans(): Promise<void> {
     // its first service entry (see extractPlanInfo below). Filtering on
     // `p.provider` directly silently returned zero rows for every
     // non-empty filter value.
-    const providerFilter = (document.getElementById('plans-provider-filter') as HTMLSelectElement | null)?.value;
+    // Filter source is the global topbar (state.ts), shared across
+    // sections. The topbar's "All Providers" chip writes '' to state,
+    // which is falsy so the filter is naturally skipped.
+    const providerFilter = state.getCurrentProvider();
     if (providerFilter) {
       plans = plans.filter(p => extractPlanInfo(p as unknown as BackendPlan).provider === providerFilter);
     }
@@ -47,6 +60,7 @@ export async function loadPlans(): Promise<void> {
     console.error('Failed to load plans:', error);
     const list = document.getElementById('plans-list');
     if (list) {
+      teardownSkeleton(list);
       const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load plans: ${escapeHtml(err.message)}</p>`;
     }
@@ -63,11 +77,18 @@ async function loadPlannedPurchases(): Promise<void> {
   const container = document.getElementById('planned-purchases-list');
   if (!container) return;
 
+  // Issue #344 T3 (CR follow-up on PR #346): skeleton lives here, not
+  // in loadPlans, so direct callers (e.g. follow-up refresh paths after
+  // a single purchase action) also get the loading affordance. 5 rows
+  // × 11 cols matches the rendered table — see renderPlannedPurchases.
+  showSkeletonRows(container, 5, 11);
+
   try {
     const data = await api.getPlannedPurchases();
     renderPlannedPurchases(data.purchases || []);
   } catch (error) {
     console.error('Failed to load planned purchases:', error);
+    teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load planned purchases: ${escapeHtml(err.message)}</p>`;
   }
@@ -1112,28 +1133,26 @@ async function handleAddPurchases(e: Event): Promise<void> {
   }
 }
 
+// Unsubscribe handles kept at module scope so setupPlanHandlers stays
+// idempotent: calling it more than once (e.g. in tests or after HMR)
+// replaces the old subscriptions rather than stacking duplicates.
+let _unsubProvider: (() => void) | null = null;
+let _unsubAccount: (() => void) | null = null;
+
 /**
- * Setup plan form event handlers (provider-aware service dropdown)
+ * Setup plan form event handlers (provider-aware service dropdown).
+ *
+ * Provider/account filter source-of-truth is the global topbar (state.ts);
+ * subscribe so the plans list re-renders when the user changes filters at
+ * the page level.
  */
-function populatePlansAccountFilter(provider?: string): Promise<void> {
-  return populateAccountFilter('plans-account-filter', api.listAccounts, provider);
-}
-
 export function setupPlanHandlers(): void {
-  const plansProviderFilter = document.getElementById('plans-provider-filter') as HTMLSelectElement | null;
-  if (plansProviderFilter) {
-    plansProviderFilter.addEventListener('change', () => {
-      void populatePlansAccountFilter(plansProviderFilter.value);
-      void loadPlans();
-    });
-  }
-
-  const plansAccountFilter = document.getElementById('plans-account-filter') as HTMLSelectElement | null;
-  if (plansAccountFilter) {
-    plansAccountFilter.addEventListener('change', () => void loadPlans());
-  }
-
-  void populatePlansAccountFilter();
+  // Drop any previous subscriptions before re-registering so we don't
+  // accumulate duplicate loadPlans() calls on each invocation.
+  _unsubProvider?.();
+  _unsubAccount?.();
+  _unsubProvider = state.subscribeProvider(() => void loadPlans());
+  _unsubAccount = state.subscribeAccount(() => void loadPlans());
 
   const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
   const serviceSelect = document.getElementById('plan-service') as HTMLSelectElement | null;

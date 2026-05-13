@@ -15,6 +15,14 @@ type StoreInterface interface {
 	ListUsers(ctx context.Context) ([]User, error)
 	GetUserByResetToken(ctx context.Context, token string) (*User, error)
 	AdminExists(ctx context.Context) (bool, error)
+	// CreateAdminIfNone atomically inserts user as the first admin in the
+	// system. Returns (true, nil) on success, (false, nil) when an admin
+	// already existed (TOCTOU race winner gets false), (false, ErrEmailInUse)
+	// when the email collides with an existing non-admin user, or
+	// (false, err) for any other failure. Used by SetupAdmin to close the
+	// bootstrap race without relying on the users_one_admin partial unique
+	// index (dropped in migration 000050).
+	CreateAdminIfNone(ctx context.Context, user *User) (bool, error)
 
 	// Group operations
 	GetGroup(ctx context.Context, groupID string) (*Group, error)
@@ -47,4 +55,5 @@ type StoreInterface interface {
 type EmailSenderInterface interface {
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
 	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
+	SendUserInviteEmail(ctx context.Context, email, setupURL string) error
 }

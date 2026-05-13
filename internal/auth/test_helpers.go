@@ -67,6 +67,11 @@ func (m *MockStore) AdminExists(ctx context.Context) (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockStore) CreateAdminIfNone(ctx context.Context, user *User) (bool, error) {
+	args := m.Called(ctx, user)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockStore) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	args := m.Called(ctx, groupID)
 	if args.Get(0) == nil {
@@ -188,6 +193,11 @@ func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, email, res
 
 func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
 	args := m.Called(ctx, email, dashboardURL, role)
+	return args.Error(0)
+}
+
+func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, email, setupURL string) error {
+	args := m.Called(ctx, email, setupURL)
 	return args.Error(0)
 }
 

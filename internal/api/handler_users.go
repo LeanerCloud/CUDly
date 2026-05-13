@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
@@ -49,10 +50,10 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 
 	// Validate role against allowlist
 	switch createReq.Role {
-	case "admin", "user":
+	case auth.RoleAdmin, auth.RoleUser, auth.RoleReadOnly:
 		// valid
 	default:
-		return nil, NewClientError(400, "role must be one of: admin, user")
+		return nil, NewClientError(400, "role must be one of: admin, user, readonly")
 	}
 
 	// Decode base64-encoded password
@@ -64,10 +65,29 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 
 	user, err := h.auth.CreateUserAPI(ctx, createReq)
 	if err != nil {
-		return nil, err
+		return nil, mapAuthError(err)
 	}
 
 	return user, nil
+}
+
+// mapAuthError maps internal/auth sentinel errors to the appropriate
+// ClientError status code so validation failures surface to the user
+// as a 4xx with the real message instead of a generic 500. Unrecognised
+// errors are returned unchanged for handleRequestError to render as 500.
+// Used by both /api/users (createUser) and the bootstrap setupAdmin
+// endpoint — they share the sentinel set. Issue #349.
+func mapAuthError(err error) error {
+	switch {
+	case errors.Is(err, auth.ErrInvalidEmail),
+		errors.Is(err, auth.ErrInvalidRole),
+		errors.Is(err, auth.ErrPasswordPolicy):
+		return NewClientError(400, err.Error())
+	case errors.Is(err, auth.ErrEmailInUse),
+		errors.Is(err, auth.ErrAdminExists):
+		return NewClientError(409, err.Error())
+	}
+	return err
 }
 
 // getUser handles GET /api/users/{id}

@@ -120,7 +120,9 @@ func (h *Handler) setupAdmin(ctx context.Context, req *events.LambdaFunctionURLR
 
 	response, err := h.auth.SetupAdmin(ctx, setupReq)
 	if err != nil {
-		return nil, err
+		// Share the sentinel→ClientError mapping with /api/users (issue #349)
+		// so bootstrap failures surface as the right 4xx instead of a 500.
+		return nil, mapAuthError(err)
 	}
 
 	return response, nil
