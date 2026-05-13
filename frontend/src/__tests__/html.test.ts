@@ -541,6 +541,14 @@ describe('HTML Structure', () => {
       expect(section).toBeTruthy();
     });
 
+    // Issue #344 follow-up: page-hero rolled out to the remaining
+    // section titles so the typographic hierarchy reads consistently
+    // across Plans / Purchases / Inventory / Admin.
+    test('uses the page-hero treatment for its title', () => {
+      const section = document.getElementById('savings-history-section');
+      expect(section?.classList.contains('page-hero')).toBe(true);
+    });
+
     test('has savings period selector', () => {
       const select = document.getElementById('savings-period') as HTMLSelectElement | null;
       expect(select).toBeTruthy();
@@ -575,6 +583,16 @@ describe('HTML Structure', () => {
     test('has planned purchases header', () => {
       const header = document.getElementById('planned-purchases-header');
       expect(header).toBeTruthy();
+    });
+
+    // Issue #344 follow-up: page-hero rolled out. The help-text
+    // paragraph picks up page-hero-description so it inherits the
+    // muted-body styling used on the other hero sections.
+    test('uses the page-hero treatment for its title + description', () => {
+      const header = document.getElementById('planned-purchases-header');
+      expect(header?.classList.contains('page-hero')).toBe(true);
+      const desc = header?.querySelector('.page-hero-description');
+      expect(desc).toBeTruthy();
     });
 
     test('has planned purchases list container', () => {

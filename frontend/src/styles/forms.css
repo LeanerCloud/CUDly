@@ -107,6 +107,31 @@ label {
     box-shadow: 0 0 0 3px var(--cudly-info-bg);
 }
 
+/* Tone down the native calendar-picker indicator inside our pill-
+ * shaped date inputs. Chrome's default is a black square that fights
+ * the rounded chip aesthetic; reduce opacity so it reads as a hint
+ * glyph rather than a button. On hover/focus the indicator returns to
+ * full opacity so it's still clearly interactive.
+ *
+ * The full custom-date-picker rebuild (deferred from issue #344) would
+ * replace the native widget entirely — meaningful effort for marginal
+ * gain. This rule covers the visible mismatch in the meantime without
+ * losing the platform's accessibility wiring (keyboard, screenreader,
+ * calendar grid). */
+.date-range-picker input[type="date"]::-webkit-calendar-picker-indicator,
+#history-controls input[type="date"]::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.date-range-picker input[type="date"]:hover::-webkit-calendar-picker-indicator,
+.date-range-picker input[type="date"]:focus-visible::-webkit-calendar-picker-indicator,
+#history-controls input[type="date"]:hover::-webkit-calendar-picker-indicator,
+#history-controls input[type="date"]:focus-visible::-webkit-calendar-picker-indicator {
+    opacity: 1;
+}
+
 .action-group {
     display: flex;
     gap: 0.5rem;
