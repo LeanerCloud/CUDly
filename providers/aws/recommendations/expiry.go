@@ -99,12 +99,17 @@ func commitmentIsActive(c common.Commitment) bool {
 }
 
 // commitmentPoolKey returns the same lookup key shape used by the coverage
-// map: engine-aware for RDS, region+instance-type for everything else.
-// Both forms include the linked-account ID so adjustments align with the
-// per-account existing-coverage signal they're modifying.
+// map: engine + deployment-aware for RDS, region+instance-type for
+// everything else. Keys are org-wide (no account dimension) so an
+// expiring RI in one linked account adjusts the org-wide coverage signal
+// for the pool it belongs to — matching the way the coverage map itself
+// is now aggregated. common.Commitment doesn't currently carry a
+// deployment-option field, so RDS expiry keys default to "" deployment
+// and will only match coverage entries written without a deployment
+// suffix — a known limitation tracked separately from this change.
 func commitmentPoolKey(c common.Commitment) string {
 	if c.Service == common.ServiceRDS || c.Service == common.ServiceRelationalDB {
-		return rdsPoolKey(c.Region, c.ResourceType, c.Engine, c.Account)
+		return rdsPoolKey(c.Region, c.ResourceType, c.Engine, "")
 	}
-	return poolKey(c.Region, c.ResourceType, c.Account)
+	return poolKey(c.Region, c.ResourceType)
 }
