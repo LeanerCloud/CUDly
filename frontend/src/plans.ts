@@ -3,7 +3,8 @@
  */
 
 import * as api from './api';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, populateAccountFilter } from './utils';
+import * as state from './state';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
@@ -36,7 +37,10 @@ export async function loadPlans(): Promise<void> {
     // its first service entry (see extractPlanInfo below). Filtering on
     // `p.provider` directly silently returned zero rows for every
     // non-empty filter value.
-    const providerFilter = (document.getElementById('plans-provider-filter') as HTMLSelectElement | null)?.value;
+    // Filter source is the global topbar (state.ts), shared across
+    // sections. The topbar's "All Providers" chip writes '' to state,
+    // which is falsy so the filter is naturally skipped.
+    const providerFilter = state.getCurrentProvider();
     if (providerFilter) {
       plans = plans.filter(p => extractPlanInfo(p as unknown as BackendPlan).provider === providerFilter);
     }
@@ -1103,27 +1107,15 @@ async function handleAddPurchases(e: Event): Promise<void> {
 }
 
 /**
- * Setup plan form event handlers (provider-aware service dropdown)
+ * Setup plan form event handlers (provider-aware service dropdown).
+ *
+ * Provider/account filter source-of-truth is the global topbar (state.ts);
+ * subscribe so the plans list re-renders when the user changes filters at
+ * the page level.
  */
-function populatePlansAccountFilter(provider?: string): Promise<void> {
-  return populateAccountFilter('plans-account-filter', api.listAccounts, provider);
-}
-
 export function setupPlanHandlers(): void {
-  const plansProviderFilter = document.getElementById('plans-provider-filter') as HTMLSelectElement | null;
-  if (plansProviderFilter) {
-    plansProviderFilter.addEventListener('change', () => {
-      void populatePlansAccountFilter(plansProviderFilter.value);
-      void loadPlans();
-    });
-  }
-
-  const plansAccountFilter = document.getElementById('plans-account-filter') as HTMLSelectElement | null;
-  if (plansAccountFilter) {
-    plansAccountFilter.addEventListener('change', () => void loadPlans());
-  }
-
-  void populatePlansAccountFilter();
+  state.subscribeProvider(() => void loadPlans());
+  state.subscribeAccount(() => void loadPlans());
 
   const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
   const serviceSelect = document.getElementById('plan-service') as HTMLSelectElement | null;

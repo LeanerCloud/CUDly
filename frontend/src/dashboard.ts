@@ -5,7 +5,7 @@
 import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, getDateParts, escapeHtml, populateAccountFilter } from './utils';
+import { formatCurrency, getDateParts, escapeHtml } from './utils';
 import { renderFreshness } from './freshness';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommendation } from './types';
 import type { SavingsDataPoint } from './api';
@@ -36,50 +36,14 @@ let upcomingPurchasesIndex: Map<string, UpcomingPurchase> = new Map();
  * Setup dashboard event handlers
  */
 export function setupDashboardHandlers(): void {
-  const providerFilter = document.getElementById('dashboard-provider-filter') as HTMLSelectElement | null;
-  if (providerFilter) {
-    // Set initial value from state
-    providerFilter.value = state.getCurrentProvider();
+  // Filter source-of-truth lives in state.ts (mutated by the global
+  // topbar chips). Subscribe to filter changes and reload the dashboard;
+  // the issue #185 ordering rule (clear accounts before refetching for a
+  // new provider) is enforced by topbar-filters.ts at the source so the
+  // dashboard's loadDashboard() always sees consistent state.
+  state.subscribeProvider(() => void loadDashboard());
+  state.subscribeAccount(() => void loadDashboard());
 
-    // Issue #185: previously this handler fired populateAccountFilter
-    // and loadDashboard in parallel via two `void` calls. loadDashboard
-    // ran first, reading stale `state.currentAccountIDs` from the
-    // prior provider — so the dashboard rendered with the wrong
-    // account filter. Worse, populateAccountFilter restores
-    // `select.value = current` after repopulating; if the previously-
-    // picked account isn't in the new provider's account list, the
-    // dropdown silently goes empty (programmatic value change → no
-    // `change` event fires) and state never resyncs. The fix:
-    //   (a) clear the account selection in state synchronously so any
-    //       in-flight read sees the cleared value,
-    //   (b) await populateAccountFilter so loadDashboard sees a
-    //       fully-populated dropdown,
-    //   (c) explicitly reset the dropdown's display value to "(All
-    //       accounts)" — no account from the previous provider can
-    //       ever be valid here.
-    providerFilter.addEventListener('change', () => {
-      void (async (): Promise<void> => {
-        const newProvider = providerFilter.value as '' | 'aws' | 'azure' | 'gcp';
-        state.setCurrentProvider(newProvider);
-        state.setCurrentAccountIDs([]);
-        await populateAccountFilter('dashboard-account-filter', api.listAccounts, newProvider);
-        const accountSel = document.getElementById('dashboard-account-filter') as HTMLSelectElement | null;
-        if (accountSel) accountSel.value = '';
-        await loadDashboard();
-      })();
-    });
-  }
-
-  const accountFilter = document.getElementById('dashboard-account-filter') as HTMLSelectElement | null;
-  if (accountFilter) {
-    accountFilter.addEventListener('change', () => {
-      const val = accountFilter.value;
-      state.setCurrentAccountIDs(val ? [val] : []);
-      void loadDashboard();
-    });
-  }
-
-  void populateAccountFilter('dashboard-account-filter', api.listAccounts, state.getCurrentProvider());
   setupSavingsTrendHandlers();
 }
 

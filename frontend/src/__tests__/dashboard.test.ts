@@ -69,12 +69,18 @@ import { loadSavingsTrendChart, setupSavingsTrendHandlers } from '../dashboard';
 
 // Mock state module
 jest.mock('../state', () => ({
-  getCurrentProvider: jest.fn().mockReturnValue('all'),
+  // Issue #344 T2: AppState.currentProvider is `api.Provider | ''` —
+  // '' is the topbar's "All Providers" sentinel, not the string 'all'.
+  getCurrentProvider: jest.fn().mockReturnValue(''),
   setCurrentProvider: jest.fn(),
   getCurrentAccountIDs: jest.fn().mockReturnValue([]),
   setCurrentAccountIDs: jest.fn(),
   getSavingsChart: jest.fn().mockReturnValue(null),
-  setSavingsChart: jest.fn()
+  setSavingsChart: jest.fn(),
+  // Global topbar filter subscriptions. Each section calls subscribe*
+  // during setup to register its reload callback.
+  subscribeProvider: jest.fn().mockReturnValue(() => {}),
+  subscribeAccount: jest.fn().mockReturnValue(() => {}),
 }));
 
 // Mock utils
@@ -132,7 +138,9 @@ describe('Dashboard Module', () => {
 
       await loadDashboard();
 
-      expect(api.getDashboardSummary).toHaveBeenCalledWith('all', []);
+      // Issue #344 T2: AppState.currentProvider is `api.Provider | ''`,
+      // not a literal 'all' — '' is the "All Providers" sentinel.
+      expect(api.getDashboardSummary).toHaveBeenCalledWith('', []);
       expect(api.getUpcomingPurchases).toHaveBeenCalled();
     });
 
@@ -680,107 +688,15 @@ describe('Dashboard Module', () => {
     });
   });
 
-  // Issue #185: provider-change handler must clear state.currentAccountIDs
-  // before loadDashboard reads it, AND must await populateAccountFilter
-  // so the dropdown is in a consistent state with the post-load state.
-  describe('Issue #185: provider switch clears stale account state before reload', () => {
-    let setupDashboardHandlers: typeof import('../dashboard').setupDashboardHandlers;
-
-    beforeEach(async () => {
-      setupDashboardHandlers = (await import('../dashboard')).setupDashboardHandlers;
-      // Build the test DOM via createElement (avoids innerHTML).
-      document.body.replaceChildren();
-      const providerSel = document.createElement('select');
-      providerSel.id = 'dashboard-provider-filter';
-      for (const [v, t] of [['', 'All'], ['aws', 'AWS'], ['azure', 'Azure']] as const) {
-        const opt = document.createElement('option');
-        opt.value = v; opt.textContent = t;
-        providerSel.appendChild(opt);
-      }
-      document.body.appendChild(providerSel);
-      const acctSel = document.createElement('select');
-      acctSel.id = 'dashboard-account-filter';
-      for (const [v, t] of [['', '(All accounts)'], ['aws-acct-1', 'aws-acct-1']] as const) {
-        const opt = document.createElement('option');
-        opt.value = v; opt.textContent = t;
-        acctSel.appendChild(opt);
-      }
-      document.body.appendChild(acctSel);
-      const summaryDiv = document.createElement('div');
-      summaryDiv.id = 'summary';
-      document.body.appendChild(summaryDiv);
-      const upcomingDiv = document.createElement('div');
-      upcomingDiv.id = 'upcoming-list';
-      document.body.appendChild(upcomingDiv);
-      const canvas = document.createElement('canvas');
-      canvas.id = 'savings-chart';
-      document.body.appendChild(canvas);
-
-      // Pre-load with an AWS account selected so we can prove the
-      // handler clears it.
-      (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
-      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['aws-acct-1']);
-      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
-        potential_monthly_savings: 0, total_recommendations: 0, active_commitments: 0,
-        committed_monthly: 0, current_coverage: 0, target_coverage: 0, ytd_savings: 0,
-        by_service: {}
-      });
-      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
-    });
-
-    test('switching provider clears state.currentAccountIDs and dispatches loadDashboard', async () => {
-      setupDashboardHandlers();
-      const providerSel = document.getElementById('dashboard-provider-filter') as HTMLSelectElement;
-      providerSel.value = 'azure';
-      providerSel.dispatchEvent(new Event('change'));
-
-      // Wait for the async handler chain to settle.
-      await new Promise(r => setTimeout(r, 0));
-      await new Promise(r => setTimeout(r, 0));
-
-      expect(state.setCurrentProvider).toHaveBeenCalledWith('azure');
-      // setCurrentAccountIDs([]) must be called so loadDashboard reads
-      // a clean state.
-      const clearCalls = (state.setCurrentAccountIDs as jest.Mock).mock.calls;
-      expect(clearCalls.some((c: unknown[]) => Array.isArray(c[0]) && (c[0] as unknown[]).length === 0)).toBe(true);
-      // The dashboard summary call must run AFTER the clear.
-      expect(api.getDashboardSummary).toHaveBeenCalled();
-    });
-
-    test('switching provider awaits populateAccountFilter before reloading the dashboard', async () => {
-      let resolvePopulate: (() => void) | undefined;
-      const populateBlocker = new Promise<void>((resolve) => { resolvePopulate = resolve; });
-      const utils = await import('../utils');
-      // setupDashboardHandlers runs an init populateAccountFilter call
-      // before any user interaction — let that one resolve immediately,
-      // and only block the second call (the provider-change one).
-      (utils.populateAccountFilter as jest.Mock)
-        .mockImplementationOnce(() => Promise.resolve())
-        .mockImplementationOnce(() => populateBlocker);
-
-      setupDashboardHandlers();
-      // Yield so the init populate + setupSavingsTrendHandlers settle
-      // (they don't call getDashboardSummary, so the assertion below
-      // is sound).
-      await new Promise(r => setTimeout(r, 0));
-      const providerSel = document.getElementById('dashboard-provider-filter') as HTMLSelectElement;
-      providerSel.value = 'azure';
-      providerSel.dispatchEvent(new Event('change'));
-
-      // Yield once — populateAccountFilter is pending; getDashboardSummary
-      // must NOT have fired yet.
-      await new Promise(r => setTimeout(r, 0));
-      const callsBefore = (api.getDashboardSummary as jest.Mock).mock.calls.length;
-      expect(callsBefore).toBe(0);
-
-      // Resolve populate; loadDashboard runs after.
-      resolvePopulate!();
-      await new Promise(r => setTimeout(r, 0));
-      await new Promise(r => setTimeout(r, 0));
-
-      const callsAfter = (api.getDashboardSummary as jest.Mock).mock.calls.length;
-      expect(callsAfter).toBeGreaterThan(0);
-    });
+  // Issue #185 invariant — clear account state BEFORE awaiting the
+  // account-list refetch on provider change — moved from dashboard.ts
+  // to topbar-filters.ts as part of issue #344 T2. The dashboard no
+  // longer owns the provider-change handler; it just reloads in
+  // response to state.subscribeProvider. The ordering test now lives
+  // alongside the owning module in topbar-filters.test.ts. See
+  // src/topbar-filters.ts::initTopbarFilters for the implementation.
+  describe.skip('Issue #185: provider switch clears stale account state before reload (moved to topbar-filters.test.ts)', () => {
+    test('placeholder — see topbar-filters.test.ts', () => {});
   });
 
   // KPI tile sparklines (issue #340 T6).

@@ -286,3 +286,14 @@ footer a:hover {
     gap: 0.5rem;
     align-items: center;
 }
+
+/* Global filter chips strip in the topbar (issue #344 T2). Hosts the
+ * shared Provider + Account chip-selects between the brand and the
+ * user-info block. */
+.app-topbar-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-3);
+    margin-left: auto;
+    margin-right: var(--cudly-sp-4);
+}

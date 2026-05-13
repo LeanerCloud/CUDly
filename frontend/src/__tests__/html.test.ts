@@ -206,10 +206,10 @@ describe('HTML Structure', () => {
       expect(endDate?.getAttribute('type')).toBe('date');
     });
 
-    test('has provider filter', () => {
-      const filter = document.getElementById('history-provider-filter');
-      expect(filter).toBeTruthy();
-    });
+    // Issue #344 T2: provider/account filters moved out of the History
+    // tab into the global topbar. The history page now only carries the
+    // date-range inputs + Load History button. Coverage for the topbar
+    // slot lives in the "Topbar" describe block below.
 
     test('has history list container', () => {
       const list = document.getElementById('history-list');
@@ -328,15 +328,14 @@ describe('HTML Structure', () => {
   });
 
   describe('Select Options', () => {
-    test('dashboard provider filter has correct options', () => {
-      const selector = document.getElementById('dashboard-provider-filter');
-      const options = selector?.querySelectorAll('option') ?? [];
-      const values = Array.from(options).map(o => o.value);
-
-      expect(values).toContain('');
-      expect(values).toContain('aws');
-      expect(values).toContain('azure');
-      expect(values).toContain('gcp');
+    // Issue #344 T2: per-section provider filter <select>s removed.
+    // The provider filter now lives in the global topbar as a chip-
+    // select (custom popover listbox, not a <select>). The slot exists
+    // at #topbar-filters; chip-select option coverage lives in
+    // chip-select.test.ts and topbar-filters.test.ts.
+    test('topbar filters slot exists', () => {
+      const slot = document.getElementById('topbar-filters');
+      expect(slot).toBeTruthy();
     });
 
     // Bundle B: #service-filter <select> deleted; service filtering happens
