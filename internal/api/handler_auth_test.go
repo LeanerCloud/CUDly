@@ -541,7 +541,11 @@ func TestHandler_resetPassword_Success(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth}
 
-	req := &events.LambdaFunctionURLRequest{Body: `{"token": "reset-token", "new_password": "newpassword123"}`}
+	// The handler base64-decodes new_password before forwarding to the
+	// service (issue #356), matching the frontend's submission shape. The
+	// service still receives the plaintext.
+	encoded := base64.StdEncoding.EncodeToString([]byte("newpassword123"))
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "reset-token", "new_password": "` + encoded + `"}`}
 	result, err := handler.resetPassword(ctx, req)
 	require.NoError(t, err)
 
@@ -580,7 +584,11 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 
 	handler := &Handler{auth: mockAuth}
 
-	req := &events.LambdaFunctionURLRequest{Body: `{"token": "bad-token", "new_password": "newpassword123"}`}
+	// new_password must be base64-encoded — the handler now decodes before
+	// forwarding (issue #356). Encoding "newpassword123" so the decode step
+	// passes and the error path under test (bad token) is the one that fires.
+	encoded := base64.StdEncoding.EncodeToString([]byte("newpassword123"))
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "bad-token", "new_password": "` + encoded + `"}`}
 	result, err := handler.resetPassword(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -770,4 +778,56 @@ func TestHandler_updateProfile_InvalidJSON(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid request body")
+}
+
+// TestHandler_resetPassword_DecodesBase64 verifies issue #356: the
+// resetPassword handler must base64-decode new_password before forwarding to
+// the service, matching the pattern used by login / change-password /
+// update-profile. Without this, the bcrypt hash stored represents the base64
+// string rather than the plaintext, and the user gets locked out after
+// completing the reset.
+func TestHandler_resetPassword_DecodesBase64(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	// The service must receive the DECODED password — that's what bcrypt then
+	// hashes and stores. If the handler skipped the decode, the captured
+	// req.NewPassword would be the base64 string and this expectation would
+	// fail.
+	mockAuth.On("ConfirmPasswordReset", ctx, PasswordResetConfirm{
+		Token:       "tok-abc",
+		NewPassword: "PlainText#1",
+	}).Return(nil)
+
+	handler := &Handler{auth: mockAuth}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte("PlainText#1"))
+	req := &events.LambdaFunctionURLRequest{
+		Body: `{"token": "tok-abc", "new_password": "` + encoded + `"}`,
+	}
+
+	result, err := handler.resetPassword(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	mockAuth.AssertExpectations(t)
+}
+
+// TestHandler_resetPassword_InvalidBase64 covers the malformed-input path —
+// the regression test mentioned in #356's acceptance criteria. A garbled
+// payload must surface as a 4xx, not a 5xx, so the operator gets a clear
+// "the link/payload is bad" instead of "internal server error".
+func TestHandler_resetPassword_InvalidBase64(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	handler := &Handler{auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Body: `{"token": "tok-abc", "new_password": "!!!not-valid-base64!!!"}`,
+	}
+
+	_, err := handler.resetPassword(ctx, req)
+	assert.Error(t, err)
+	// decodeBase64Password returns a ClientError(400) — assert the helper
+	// short-circuited before any service call fired.
+	mockAuth.AssertNotCalled(t, "ConfirmPasswordReset", mock.Anything, mock.Anything)
 }

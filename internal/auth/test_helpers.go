@@ -67,6 +67,11 @@ func (m *MockStore) AdminExists(ctx context.Context) (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockStore) CreateAdminIfNone(ctx context.Context, user *User) (bool, error) {
+	args := m.Called(ctx, user)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockStore) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	args := m.Called(ctx, groupID)
 	if args.Get(0) == nil {

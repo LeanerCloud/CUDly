@@ -985,9 +985,13 @@ describe('users/userActions', () => {
     { id: '2', email: 'user2@test.com', role: 'admin', groups: ['admins'], mfa_enabled: true }
   ];
 
+  // `allowed_accounts: []` matches the backend Group shape after the
+  // multi-cloud account-scoping work; renderGroups + state hydration
+  // now expect this field on every group, so the fixture has to carry
+  // it or deep-equal assertions diverge.
   const mockGroups = [
-    { id: 'admins', name: 'Admins', permissions: [], description: '' },
-    { id: 'developers', name: 'Developers', permissions: [], description: '' }
+    { id: 'admins', name: 'Admins', permissions: [], description: '', allowed_accounts: [] },
+    { id: 'developers', name: 'Developers', permissions: [], description: '', allowed_accounts: [] }
   ];
 
   beforeEach(() => {
@@ -1457,11 +1461,16 @@ describe('users/userModals', () => {
       expect(passwordFields?.classList.contains('hidden')).toBe(false);
     });
 
-    it('should make password required', () => {
+    it('should not mark password as required (blank invites the user)', () => {
+      // Issue #348 made password optional on create: leaving it blank
+      // emails an invite that lets the user set their own password on
+      // first login. Marking the field `required` on the form would
+      // block that flow at HTML-validation time, so userModals
+      // explicitly sets required=false on openCreateUserModal.
       userModals.openCreateUserModal();
 
       const passwordInput = document.getElementById('user-password') as HTMLInputElement;
-      expect(passwordInput?.required).toBe(true);
+      expect(passwordInput?.required).toBe(false);
     });
 
     it('should populate groups dropdown', () => {
@@ -1652,7 +1661,10 @@ describe('users/userModals', () => {
       expect(document.querySelector('.toast-error')).toBeTruthy();
     });
 
-    it('should validate empty password for new user', async () => {
+    it('should allow empty password for new user (invite flow, issue #348)', async () => {
+      // Empty password used to be a validation error; after issue #348
+      // it triggers the invite flow — createUser is called with an
+      // empty password and the backend emails a set-password link.
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
@@ -1663,8 +1675,12 @@ describe('users/userModals', () => {
 
       await userModals.saveUser(event);
 
-      expect(api.createUser).not.toHaveBeenCalled();
-      expect(document.querySelector('.toast-error')).toBeTruthy();
+      expect(api.createUser).toHaveBeenCalled();
+      const callArg = (api.createUser as jest.Mock).mock.calls[0][0];
+      expect(callArg.email).toBe('new@test.com');
+      expect(callArg.password).toBe('');
+      // No error toast on the invite-path success.
+      expect(document.querySelector('.toast-error')).toBeNull();
     });
 
     it('should close modal after save', async () => {
