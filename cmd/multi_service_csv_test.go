@@ -261,7 +261,14 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	r := csv.NewReader(strings.NewReader(csvText))
 	rows, err := r.ReadAll()
 	require.NoError(t, err)
-	require.Len(t, rows, 3) // header + 2 data rows
+	// Header + 2 data rows + 1 TOTAL row.
+	require.Len(t, rows, 4)
+	// TOTAL row sits at the bottom with "TOTAL" in the Service column and
+	// summed Count / UpfrontPayment / EstimatedSavings.
+	totalRow := rows[3]
+	assert.Equal(t, "TOTAL", totalRow[0], "TOTAL label lands in Service column")
+	// Data rows are sorted by UpfrontPayment DESC; populated rec ($700)
+	// comes before the empty rec ($0).
 	header := rows[0]
 	idxProjCov, idxRecCount, idxUpfront, idxExisting := -1, -1, -1, -1
 	idxEngine, idxInstances, idxCovered := -1, -1, -1
@@ -317,6 +324,69 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	assert.Equal(t, "", zeroRow[idxEngine], "missing Details should leave Engine blank")
 	assert.Equal(t, "", zeroRow[idxInstances], "zero avg should leave Instances blank")
 	assert.Equal(t, "", zeroRow[idxCovered], "missing avg or existing_cov should leave CoveredInstances blank")
+}
+
+// TestWriteMultiServiceCSVReport_SortAndTotal confirms data rows are
+// sorted by UpfrontPayment DESC and that a TOTAL summary row lands at
+// the bottom with the column sums. Operators reading the file top-down
+// want the biggest-dollar decisions surfaced first; the TOTAL row
+// removes the need to copy-paste columns into a spreadsheet to add
+// them up.
+func TestWriteMultiServiceCSVReport_SortAndTotal(t *testing.T) {
+	tmpDir := t.TempDir()
+	fp := tmpDir + "/sort-total.csv"
+
+	// Three recs: $5K, $20K, $1K upfront. After DESC sort the order
+	// should be 20K, 5K, 1K.
+	results := []common.PurchaseResult{
+		{Recommendation: common.Recommendation{Service: "rds", ResourceType: "db.r6g.large", Count: 5, CommitmentCost: 5000, EstimatedSavings: 500}},
+		{Recommendation: common.Recommendation{Service: "rds", ResourceType: "db.r6g.2xlarge", Count: 2, CommitmentCost: 20000, EstimatedSavings: 1500}},
+		{Recommendation: common.Recommendation{Service: "rds", ResourceType: "db.t4g.medium", Count: 4, CommitmentCost: 1000, EstimatedSavings: 80}},
+	}
+	require.NoError(t, writeMultiServiceCSVReport(results, fp))
+	content, err := os.ReadFile(fp)
+	require.NoError(t, err)
+
+	r := csv.NewReader(strings.NewReader(string(content)))
+	rows, err := r.ReadAll()
+	require.NoError(t, err)
+	require.Len(t, rows, 5) // header + 3 data + TOTAL
+
+	// Find UpfrontPayment column index.
+	header := rows[0]
+	idxUpfront := -1
+	idxCount := -1
+	idxService := -1
+	idxNU := -1
+	idxSavings := -1
+	for i, h := range header {
+		switch h {
+		case "UpfrontPayment":
+			idxUpfront = i
+		case "Count":
+			idxCount = i
+		case "Service":
+			idxService = i
+		case "NormalizedUnits":
+			idxNU = i
+		case "EstimatedSavings":
+			idxSavings = i
+		}
+	}
+
+	// Sort order: $20K, $5K, $1K.
+	assert.Equal(t, "20000.00", rows[1][idxUpfront], "row 1 has the largest upfront")
+	assert.Equal(t, "5000.00", rows[2][idxUpfront])
+	assert.Equal(t, "1000.00", rows[3][idxUpfront])
+
+	// TOTAL row aggregates: count=11, upfront=$26K, savings=$2,080.
+	// NU = 5×4 + 2×16 + 4×2 = 20 + 32 + 8 = 60.
+	totalRow := rows[4]
+	assert.Equal(t, "TOTAL", totalRow[idxService])
+	assert.Equal(t, "11", totalRow[idxCount])
+	assert.Equal(t, "60", totalRow[idxNU])
+	assert.Equal(t, "26000.00", totalRow[idxUpfront])
+	assert.Equal(t, "2080.00", totalRow[idxSavings])
 }
 
 // TestFormatExistingCoverage locks the three-state rendering:

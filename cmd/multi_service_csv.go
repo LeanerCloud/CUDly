@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -193,8 +194,18 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 		return fmt.Errorf("failed to write CSV header: %w", err)
 	}
 
-	// Write data rows
-	for _, r := range results {
+	// Sort by upfront DESC so the biggest-dollar decisions surface at
+	// the top of the file rather than wherever AWS rec API happened to
+	// return them. Operators reading top-down see the rows that matter
+	// most for budget review first. Copy the slice so the caller's
+	// ordering isn't mutated (some callers iterate results twice).
+	sorted := make([]common.PurchaseResult, len(results))
+	copy(sorted, results)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Recommendation.CommitmentCost > sorted[j].Recommendation.CommitmentCost
+	})
+
+	for _, r := range sorted {
 		rec := r.Recommendation
 		errStr := ""
 		if r.Error != nil {
@@ -232,7 +243,57 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 		}
 	}
 
+	// TOTAL row aggregates the sum-able fields (Count, NormalizedUnits,
+	// UpfrontPayment, RecurringMonthlyCost, EstimatedSavings) so operators
+	// don't have to recompute in a spreadsheet. The "TOTAL" label lands in
+	// the Service column for easy spotting; columns that don't aggregate
+	// meaningfully (per-rec identifiers, timestamps, %) stay blank.
+	if len(sorted) > 0 {
+		totalRow := buildTotalRow(sorted)
+		if err := writer.Write(totalRow); err != nil {
+			return fmt.Errorf("failed to write CSV total row: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// buildTotalRow sums the count + currency columns across results and
+// returns a row aligned to the same header order as writeCSVRowsOrdered.
+// Non-summable cells (per-rec identifiers, percentages, timestamps) are
+// blank; the "TOTAL" label lands in Service so the row reads as a
+// summary at first glance.
+func buildTotalRow(results []common.PurchaseResult) []string {
+	var totalCount int
+	var totalNU, totalUpfront, totalRecurring, totalSavings float64
+	hasRecurring := false
+	for _, r := range results {
+		totalCount += r.Recommendation.Count
+		totalNU += float64(r.Recommendation.Count) * recommendations.RDSInstanceNUFromType(r.Recommendation.ResourceType)
+		totalUpfront += r.Recommendation.CommitmentCost
+		totalSavings += r.Recommendation.EstimatedSavings
+		if r.Recommendation.RecurringMonthlyCost != nil {
+			totalRecurring += *r.Recommendation.RecurringMonthlyCost
+			hasRecurring = true
+		}
+	}
+	recurringCell := ""
+	if hasRecurring {
+		recurringCell = fmt.Sprintf("%.2f", totalRecurring)
+	}
+	nuCell := ""
+	if totalNU > 0 {
+		nuCell = fmt.Sprintf("%g", totalNU)
+	}
+	return []string{
+		"TOTAL", "", "", "", "", "", // Service through Deployment
+		"", "", // Instances, CoveredInstances
+		fmt.Sprintf("%d", totalCount), nuCell, "", // Count, NormalizedUnits, RecommendedCount
+		"", "", "", "", // Account, AccountName, Term, PaymentOption
+		fmt.Sprintf("%.2f", totalUpfront), recurringCell, fmt.Sprintf("%.2f", totalSavings),
+		"", "", "", "", // CommitmentID, Success, Error, Timestamp
+		"", "", // ExistingCoverage, ProjectedCoverage
+	}
 }
 
 // formatIntOrBlank renders an int as its decimal string when non-zero, ""
