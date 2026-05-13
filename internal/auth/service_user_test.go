@@ -126,12 +126,16 @@ func TestService_CreateUser(t *testing.T) {
 			Role:     RoleUser,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		require.NoError(t, err)
-		assert.NotNil(t, user)
-		assert.Equal(t, "newuser@example.com", user.Email)
-		assert.Equal(t, RoleUser, user.Role)
-		assert.True(t, user.Active)
+		require.NotNil(t, result)
+		require.NotNil(t, result.User)
+		assert.Equal(t, "newuser@example.com", result.User.Email)
+		assert.Equal(t, RoleUser, result.User.Role)
+		assert.True(t, result.User.Active)
+		// Non-invite path: no invite-email status.
+		assert.Nil(t, result.InviteEmailSent)
+		assert.Empty(t, result.InviteEmailError)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -153,9 +157,9 @@ func TestService_CreateUser(t *testing.T) {
 			Role:     RoleUser,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		assert.Error(t, err)
-		assert.Nil(t, user)
+		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "email already in use")
 
 		mockStore.AssertExpectations(t)
@@ -174,9 +178,9 @@ func TestService_CreateUser(t *testing.T) {
 			Role:     "invalid-role",
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		assert.Error(t, err)
-		assert.Nil(t, user)
+		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "invalid role")
 
 		mockStore.AssertExpectations(t)
@@ -195,9 +199,9 @@ func TestService_CreateUser(t *testing.T) {
 			Role:     RoleUser,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		assert.Error(t, err)
-		assert.Nil(t, user)
+		assert.Nil(t, result)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -216,9 +220,9 @@ func TestService_CreateUser(t *testing.T) {
 			Role:     RoleUser,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		assert.Error(t, err)
-		assert.Nil(t, user)
+		assert.Nil(t, result)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -243,9 +247,9 @@ func TestService_CreateUser(t *testing.T) {
 			// Password intentionally empty — admin is inviting the user.
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		require.NoError(t, err)
-		require.NotNil(t, user)
+		require.NotNil(t, result)
 		require.NotNil(t, captured)
 
 		// Invited users land inactive and only flip to active after they
@@ -261,11 +265,16 @@ func TestService_CreateUser(t *testing.T) {
 		assert.True(t, captured.PasswordResetExpiry.After(time.Now()))
 		assert.NotEmpty(t, captured.PasswordHash)
 
+		// Email delivery succeeded — caller should see invite_email_sent=true.
+		require.NotNil(t, result.InviteEmailSent)
+		assert.True(t, *result.InviteEmailSent)
+		assert.Empty(t, result.InviteEmailError)
+
 		mockStore.AssertExpectations(t)
 		mockEmail.AssertExpectations(t)
 	})
 
-	t.Run("invite flow still succeeds when email send fails", func(t *testing.T) {
+	t.Run("invite flow surfaces delivery failure without 5xx", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
@@ -280,9 +289,18 @@ func TestService_CreateUser(t *testing.T) {
 			Role:  RoleUser,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
+		// The user row exists, so the caller must not see an error —
+		// otherwise the admin assumes the operation rolled back and may
+		// re-submit, hitting the duplicate-email guard. The delivery
+		// failure is surfaced via the result fields instead so the UI
+		// can show a warning and point the admin at Forgot Password.
 		require.NoError(t, err)
-		assert.NotNil(t, user)
+		require.NotNil(t, result)
+		require.NotNil(t, result.User)
+		require.NotNil(t, result.InviteEmailSent)
+		assert.False(t, *result.InviteEmailSent)
+		assert.NotEmpty(t, result.InviteEmailError)
 
 		mockStore.AssertExpectations(t)
 		mockEmail.AssertExpectations(t)
@@ -577,9 +595,9 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 			Role:     RoleUser,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		assert.Error(t, err)
-		assert.Nil(t, user)
+		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "invalid email format")
 	})
 
@@ -596,9 +614,9 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 			Role:     RoleUser,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		assert.Error(t, err)
-		assert.Nil(t, user)
+		assert.Nil(t, result)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -618,10 +636,11 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 			GroupIDs: []string{"group-1", "group-2"},
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		require.NoError(t, err)
-		assert.NotNil(t, user)
-		assert.Equal(t, []string{"group-1", "group-2"}, user.GroupIDs)
+		require.NotNil(t, result)
+		require.NotNil(t, result.User)
+		assert.Equal(t, []string{"group-1", "group-2"}, result.User.GroupIDs)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -640,10 +659,11 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 			Role:     RoleAdmin,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		require.NoError(t, err)
-		assert.NotNil(t, user)
-		assert.Equal(t, RoleAdmin, user.Role)
+		require.NotNil(t, result)
+		require.NotNil(t, result.User)
+		assert.Equal(t, RoleAdmin, result.User.Role)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -662,10 +682,11 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 			Role:     RoleReadOnly,
 		}
 
-		user, err := service.CreateUser(ctx, req)
+		result, err := service.CreateUser(ctx, req)
 		require.NoError(t, err)
-		assert.NotNil(t, user)
-		assert.Equal(t, RoleReadOnly, user.Role)
+		require.NotNil(t, result)
+		require.NotNil(t, result.User)
+		assert.Equal(t, RoleReadOnly, result.User.Role)
 
 		mockStore.AssertExpectations(t)
 	})

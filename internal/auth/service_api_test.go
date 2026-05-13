@@ -149,13 +149,17 @@ func TestService_CreateUserAPI(t *testing.T) {
 
 		result, err := service.CreateUserAPI(ctx, req)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		require.NotNil(t, result)
 
-		apiUser, ok := result.(*APIUser)
-		assert.True(t, ok)
-		assert.Equal(t, "newuser@example.com", apiUser.Email)
-		assert.Equal(t, RoleUser, apiUser.Role)
-		assert.Equal(t, []string{"group-1"}, apiUser.Groups)
+		resp, ok := result.(*APICreateUserResponse)
+		require.True(t, ok, "CreateUserAPI should wrap the response in APICreateUserResponse")
+		require.NotNil(t, resp.APIUser)
+		assert.Equal(t, "newuser@example.com", resp.Email)
+		assert.Equal(t, RoleUser, resp.Role)
+		assert.Equal(t, []string{"group-1"}, resp.Groups)
+		// Non-invite path: no invite-email status fields.
+		assert.Nil(t, resp.InviteEmailSent)
+		assert.Empty(t, resp.InviteEmailError)
 
 		mockStore.AssertExpectations(t)
 	})

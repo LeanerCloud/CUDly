@@ -3,7 +3,12 @@
  */
 
 import { apiRequest, base64Encode } from './client';
-import type { APIUser, CreateUserRequest, UpdateUserRequest } from './types';
+import type {
+  APIUser,
+  CreateUserRequest,
+  CreateUserResponse,
+  UpdateUserRequest
+} from './types';
 
 /**
  * List all users
@@ -22,7 +27,7 @@ export async function getUser(userId: string): Promise<APIUser> {
 /**
  * Create a new user
  */
-export async function createUser(req: CreateUserRequest): Promise<APIUser> {
+export async function createUser(req: CreateUserRequest): Promise<CreateUserResponse> {
   // Base64 encode password to match backend expectation. Pass an empty
   // string through unmodified so the backend's invite-on-empty-password
   // path triggers — base64-encoding "" would still produce "" but
@@ -31,7 +36,7 @@ export async function createUser(req: CreateUserRequest): Promise<APIUser> {
     ...req,
     password: req.password ? base64Encode(req.password) : ''
   };
-  return apiRequest<APIUser>('/users', {
+  return apiRequest<CreateUserResponse>('/users', {
     method: 'POST',
     body: JSON.stringify(encodedReq)
   });

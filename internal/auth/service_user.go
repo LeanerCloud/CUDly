@@ -116,6 +116,20 @@ func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserR
 	return s.validatePassword(req.Password)
 }
 
+// CreateUserResult bundles the created user with optional invite-email
+// delivery status. InviteEmailSent is nil unless the request triggered
+// an invite (req.Password == ""). When non-nil it reflects whether the
+// invite email actually reached the configured sender — false means the
+// account exists but the recipient has no way to activate it yet and the
+// admin should re-mail the setup link via the Forgot Password flow until
+// a dedicated Resend Invite endpoint exists. InviteEmailError carries
+// the underlying send error in the false case so callers can surface it.
+type CreateUserResult struct {
+	User             *User
+	InviteEmailSent  *bool
+	InviteEmailError string
+}
+
 // CreateUser creates a new user (admin only).
 //
 // If req.Password is empty the user is created in the "invited" state:
@@ -123,7 +137,13 @@ func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserR
 // input can match, and a setup token mailed to req.Email. The recipient
 // activates the account and chooses their own password by following the
 // link, which lands on the existing ConfirmPasswordReset flow.
-func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*User, error) {
+//
+// On an invite request the returned CreateUserResult always carries a
+// non-nil InviteEmailSent so callers can distinguish "delivered" from
+// "stored, but the user is currently unreachable". An invite-email send
+// failure is reported via the result (not as an error) so the user row
+// is still surfaced and the admin can react instead of seeing a 5xx.
+func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*CreateUserResult, error) {
 	if err := s.validateCreateUserRequest(ctx, req); err != nil {
 		return nil, err
 	}
@@ -177,20 +197,29 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*User,
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
+	result := &CreateUserResult{User: user}
+
 	if invite {
 		setupURL := fmt.Sprintf("%s/reset-password?token=%s", s.dashboardURL, inviteToken)
-		if err := s.emailSender.SendUserInviteEmail(ctx, user.Email, setupURL); err != nil {
-			// Mirror the password-reset flow: log but don't fail the
-			// caller — the admin already sees a created user, and the
-			// invite can be re-sent through the password-reset endpoint.
+		err := s.emailSender.SendUserInviteEmail(ctx, user.Email, setupURL)
+		sent := err == nil
+		result.InviteEmailSent = &sent
+		if err != nil {
+			// Don't fail the API call: the user row was created
+			// successfully and a 5xx here would imply the whole
+			// operation rolled back. Surface the failure via the
+			// result instead so the caller can show the admin a
+			// warning toast and point them at the Forgot Password
+			// flow as the recovery path.
+			result.InviteEmailError = err.Error()
 			logging.Errorf("Failed to send user invite email: %v", err)
 		}
-		logging.Infof("User invited: id=%s, role=%s", user.ID, user.Role)
+		logging.Infof("User invited: id=%s, role=%s, email_sent=%t", user.ID, user.Role, sent)
 	} else {
 		logging.Infof("User created: id=%s, role=%s", user.ID, user.Role)
 	}
 
-	return user, nil
+	return result, nil
 }
 
 // UpdateUser updates user details (admin only)

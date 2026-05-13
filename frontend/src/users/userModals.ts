@@ -129,17 +129,30 @@ export async function saveUser(e: Event): Promise<void> {
           return;
         }
       }
-      await api.createUser({
+      const result = await api.createUser({
         email,
         password,
         role,
         groups: selectedGroups
       });
-      showSuccess(
-        password
-          ? 'User created successfully'
-          : `Invitation email sent to ${email} — they will set their password on first login`
-      );
+      // Three outcomes: password-up-front (no invite),
+      // password-omitted + invite delivered, password-omitted + invite
+      // send failed (user row exists but the recipient is unreachable
+      // — surface a warning so the admin knows to re-mail the link via
+      // Forgot Password).
+      if (password) {
+        showSuccess('User created successfully');
+      } else if (result.invite_email_sent === false) {
+        showError(
+          `User ${email} created but the invitation email could not be sent` +
+            (result.invite_email_error ? `: ${result.invite_email_error}` : '') +
+            '. Use the Forgot Password link from the sign-in page to re-mail the setup link.'
+        );
+      } else {
+        showSuccess(
+          `Invitation email sent to ${email} — they will set their password on first login`
+        );
+      }
     }
 
     closeUserModal();
