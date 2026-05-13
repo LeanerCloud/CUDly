@@ -144,10 +144,8 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 			if details, ok := rec.Details.(*common.SavingsPlanDetails); ok {
 				newDetails := *details // Copy the struct
 				newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
+				adjusted = common.ScaleRecommendationCosts(adjusted, ratio)
 				adjusted.Details = &newDetails
-				adjusted.CommitmentCost = rec.CommitmentCost * ratio
-				adjusted.OnDemandCost = rec.OnDemandCost * ratio
-				adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
 			} else {
 				AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
 			}
@@ -167,14 +165,8 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 		newCount := int(float64(rec.Count) * ratio)
 		if newCount > 0 {
 			sizedRatio := float64(newCount) / float64(rec.Count)
+			adjusted = common.ScaleRecommendationCosts(adjusted, sizedRatio)
 			adjusted.Count = newCount
-			adjusted.CommitmentCost = rec.CommitmentCost * sizedRatio
-			adjusted.OnDemandCost = rec.OnDemandCost * sizedRatio
-			adjusted.EstimatedSavings = rec.EstimatedSavings * sizedRatio
-			if rec.RecurringMonthlyCost != nil {
-				scaled := *rec.RecurringMonthlyCost * sizedRatio
-				adjusted.RecurringMonthlyCost = &scaled
-			}
 			result = append(result, adjusted)
 		}
 	}
@@ -390,15 +382,8 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 	} else {
 		ratio = float64(nTarget)
 	}
-	adjusted := rec
+	adjusted := common.ScaleRecommendationCosts(rec, ratio)
 	adjusted.Count = nTarget
-	adjusted.CommitmentCost = rec.CommitmentCost * ratio
-	adjusted.OnDemandCost = rec.OnDemandCost * ratio
-	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
-	if rec.RecurringMonthlyCost != nil {
-		scaled := *rec.RecurringMonthlyCost * ratio
-		adjusted.RecurringMonthlyCost = &scaled
-	}
 
 	// Projection metrics. ProjectedCoverage is TOTAL coverage (existing +
 	// new) so operators can see the figure they actually targeted.
@@ -454,15 +439,8 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 	ratio := targetPct / 100.0
 	newDetails := *details // copy
 	newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
-	adjusted := rec
+	adjusted := common.ScaleRecommendationCosts(rec, ratio)
 	adjusted.Details = &newDetails
-	adjusted.CommitmentCost = rec.CommitmentCost * ratio
-	adjusted.OnDemandCost = rec.OnDemandCost * ratio
-	adjusted.EstimatedSavings = rec.EstimatedSavings * ratio
-	if rec.RecurringMonthlyCost != nil {
-		scaled := *rec.RecurringMonthlyCost * ratio
-		adjusted.RecurringMonthlyCost = &scaled
-	}
 	// Shrinking commitment raises projected utilization by 1/ratio
 	// (used is fixed = orig_commit * RecUtil, bought is orig_commit * ratio).
 	// Clamp to 100 since utilization caps at full use.

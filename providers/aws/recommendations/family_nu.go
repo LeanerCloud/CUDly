@@ -303,14 +303,8 @@ func scaleRDSRecInFamily(rec common.Recommendation, scale float64) (common.Recom
 		return rec, false
 	}
 	ratio := float64(newCount) / float64(oldCount)
+	rec = common.ScaleRecommendationCosts(rec, ratio)
 	rec.Count = newCount
-	rec.CommitmentCost *= ratio
-	rec.OnDemandCost *= ratio
-	rec.EstimatedSavings *= ratio
-	if rec.RecurringMonthlyCost != nil {
-		scaled := *rec.RecurringMonthlyCost * ratio
-		rec.RecurringMonthlyCost = &scaled
-	}
 	return rec, true
 }
 

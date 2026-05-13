@@ -207,6 +207,24 @@ type ServiceDetails interface {
 	GetDetailDescription() string
 }
 
+// ScaleRecommendationCosts multiplies all cost-bearing fields of rec by
+// ratio and returns the result. RecurringMonthlyCost is allocated as a
+// new pointer when present so callers don't mutate the upstream rec's
+// pointer target. Used by sizing paths (ApplyCoverage, ApplyTargetCoverage,
+// family-NU) to keep Count and cost in sync when a recommendation is
+// sized down (or up) from AWS's proposal — without this helper the same
+// four-field scaling pattern was duplicated at every sizing site.
+func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation {
+	rec.CommitmentCost *= ratio
+	rec.OnDemandCost *= ratio
+	rec.EstimatedSavings *= ratio
+	if rec.RecurringMonthlyCost != nil {
+		scaled := *rec.RecurringMonthlyCost * ratio
+		rec.RecurringMonthlyCost = &scaled
+	}
+	return rec
+}
+
 // PurchaseResult represents the outcome of a commitment purchase
 type PurchaseResult struct {
 	Recommendation Recommendation `json:"recommendation"`
