@@ -55,6 +55,22 @@ type APICreateUserRequest struct {
 	Groups   []string `json:"groups,omitempty"`
 }
 
+// APICreateUserResponse is the response type for POST /api/users. It
+// embeds APIUser so existing consumers keep reading the flat
+// {id, email, role, ...} fields and only callers that need the new
+// invite-status information have to look at the extra optional fields.
+//
+// InviteEmailSent is non-nil only when the request created an invited
+// (passwordless) user. true means the invite email was handed to the
+// configured sender; false means the user row exists but the recipient
+// hasn't been told how to activate it and the admin should re-mail the
+// setup link via Forgot Password.
+type APICreateUserResponse struct {
+	*APIUser
+	InviteEmailSent  *bool  `json:"invite_email_sent,omitempty"`
+	InviteEmailError string `json:"invite_email_error,omitempty"`
+}
+
 // APIUpdateUserRequest is the request type for updating users via API
 type APIUpdateUserRequest struct {
 	Email  string   `json:"email,omitempty"`
@@ -170,11 +186,15 @@ func (s *Service) CreateUserAPI(ctx context.Context, reqInterface any) (any, err
 		Role:     req.Role,
 		GroupIDs: req.Groups,
 	}
-	user, err := s.CreateUser(ctx, authReq)
+	result, err := s.CreateUser(ctx, authReq)
 	if err != nil {
 		return nil, err
 	}
-	return userToAPIUser(user), nil
+	return &APICreateUserResponse{
+		APIUser:          userToAPIUser(result.User),
+		InviteEmailSent:  result.InviteEmailSent,
+		InviteEmailError: result.InviteEmailError,
+	}, nil
 }
 
 // UpdateUserAPI updates a user via the API

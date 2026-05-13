@@ -132,6 +132,23 @@ If you have any questions, please contact your administrator.
 This is an automated message from CUDly.
 `
 
+const userInviteTemplate = `Welcome to CUDly
+================
+
+Hello {{.Email}},
+
+An administrator has created a CUDly account for you. To activate it,
+click the link below to set your password:
+
+{{.SetupURL}}
+
+This link will expire in 7 days. If it expires before you set a password,
+ask your administrator to invite you again or use the "Forgot password?"
+link on the sign-in page.
+
+This is an automated message from CUDly.
+`
+
 const riExchangePendingApprovalTemplate = `CUDly - RI Exchange Approval Required
 ======================================
 
@@ -257,6 +274,25 @@ func (s *Sender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role
 	}
 
 	return s.SendToEmail(ctx, email, "Welcome to CUDly", body)
+}
+
+// UserInviteData holds data for invite emails sent to users that an admin
+// created without a password. The recipient sets their own password by
+// following SetupURL.
+type UserInviteData struct {
+	Email    string
+	SetupURL string
+}
+
+// SendUserInviteEmail sends an invitation that links to the password-setup
+// page. Used when an admin creates a user without supplying a password.
+func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string) error {
+	body, err := RenderUserInviteEmail(email, setupURL)
+	if err != nil {
+		return fmt.Errorf("failed to render user invite email: %w", err)
+	}
+
+	return s.SendToEmail(ctx, email, "CUDly - Set your password", body)
 }
 
 // SendRIExchangePendingApproval sends an email with RI exchange approval links

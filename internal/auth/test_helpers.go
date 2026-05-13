@@ -191,6 +191,11 @@ func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboard
 	return args.Error(0)
 }
 
+func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, email, setupURL string) error {
+	args := m.Called(ctx, email, setupURL)
+	return args.Error(0)
+}
+
 // Verify that MockStore implements StoreInterface
 var _ StoreInterface = (*MockStore)(nil)
 

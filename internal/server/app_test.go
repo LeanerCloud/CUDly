@@ -296,6 +296,9 @@ func (n *noopEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr,
 func (n *noopEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
 	return nil
 }
+func (n *noopEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, setupURL string) error {
+	return nil
+}
 func (n *noopEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
 	return nil
 }

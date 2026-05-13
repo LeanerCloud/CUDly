@@ -47,4 +47,5 @@ type StoreInterface interface {
 type EmailSenderInterface interface {
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
 	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
+	SendUserInviteEmail(ctx context.Context, email, setupURL string) error
 }

@@ -278,6 +278,18 @@ export interface CreateUserRequest {
   groups?: string[];
 }
 
+// CreateUserResponse extends APIUser with optional invite-delivery
+// status fields that POST /api/users returns when the request created
+// an invited (passwordless) user. invite_email_sent is undefined for
+// password-up-front creates, true when the invite email was handed to
+// the configured sender, and false when the user row exists but the
+// recipient has not been told how to activate it (admin should re-mail
+// the setup link via Forgot Password).
+export interface CreateUserResponse extends APIUser {
+  invite_email_sent?: boolean;
+  invite_email_error?: string;
+}
+
 export interface UpdateUserRequest {
   email?: string;
   role?: string;

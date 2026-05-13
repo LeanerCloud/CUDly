@@ -70,6 +70,11 @@ func (n *NopSender) SendWelcomeEmail(_ context.Context, _, _, role string) error
 	return nil
 }
 
+func (n *NopSender) SendUserInviteEmail(_ context.Context, _, _ string) error {
+	logging.Debugf("email/nop: SendUserInviteEmail suppressed")
+	return nil
+}
+
 func (n *NopSender) SendRIExchangePendingApproval(_ context.Context, _ RIExchangeNotificationData) error {
 	logging.Debugf("email/nop: SendRIExchangePendingApproval suppressed")
 	return nil

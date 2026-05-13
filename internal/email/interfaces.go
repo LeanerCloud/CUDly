@@ -18,6 +18,7 @@ type SenderInterface interface {
 	SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
 	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
+	SendUserInviteEmail(ctx context.Context, email, setupURL string) error
 	SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error
 	SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error
 	SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error

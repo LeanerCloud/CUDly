@@ -316,6 +316,17 @@ func (s *SMTPSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, 
 	return s.SendToEmail(ctx, email, subject, body)
 }
 
+// SendUserInviteEmail sends an invite-with-setup-link email to a user
+// created without a password.
+func (s *SMTPSender) SendUserInviteEmail(ctx context.Context, email, setupURL string) error {
+	subject := "CUDly - Set your password"
+	body, err := RenderUserInviteEmail(email, setupURL)
+	if err != nil {
+		return fmt.Errorf("failed to render user invite email: %w", err)
+	}
+	return s.SendToEmail(ctx, email, subject, body)
+}
+
 // SendNewRecommendationsNotification sends a notification about new recommendations
 func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error {
 	subject := "New CUDly Recommendations Available"
