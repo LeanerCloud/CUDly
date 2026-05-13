@@ -115,6 +115,42 @@ Your password will remain unchanged.
 This is an automated message from CUDly.
 `
 
+// passwordResetHTMLTemplate renders the same content as the plain-text
+// password reset template with a styled CTA button and CUDly branding.
+// Modelled on purchaseApprovalRequestHTMLTemplate (line 367) — inline styles
+// because most email clients (Outlook, mobile Gmail) ignore class-based CSS.
+// Issue #355.
+const passwordResetHTMLTemplate = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>CUDly - Password Reset Request</title></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#1a202c;">
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f4f6f8;padding:24px 0;">
+<tr><td align="center">
+<table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+<tr><td style="padding:32px 32px 16px 32px;">
+<h1 style="margin:0;font-size:22px;color:#0f172a;">Password Reset Request</h1>
+<p style="margin:16px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">Hello {{.Email}},</p>
+<p style="margin:12px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">We received a request to reset your password for CUDly. Click the button below to choose a new password.</p>
+</td></tr>
+
+<tr><td align="center" style="padding:8px 32px 8px 32px;">
+<a href="{{.ResetURL}}" style="display:inline-block;padding:12px 28px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:6px;">Reset your password</a>
+</td></tr>
+
+<tr><td style="padding:8px 32px 8px 32px;">
+<p style="margin:8px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">This link will expire in 1 hour.</p>
+<p style="margin:8px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">If the button doesn't work, copy and paste this URL into your browser:</p>
+<p style="margin:4px 0 0 0;color:#475569;font-size:12px;word-break:break-all;"><a href="{{.ResetURL}}" style="color:#2563eb;text-decoration:underline;">{{.ResetURL}}</a></p>
+<p style="margin:16px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">If you didn't request a password reset, you can safely ignore this email — your password will remain unchanged.</p>
+</td></tr>
+
+<tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
+<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly.</p>
+</td></tr>
+
+</table>
+</td></tr></table>
+</body></html>`
+
 const welcomeUserTemplate = `Welcome to CUDly
 ================
 
@@ -132,6 +168,38 @@ If you have any questions, please contact your administrator.
 This is an automated message from CUDly.
 `
 
+// welcomeUserHTMLTemplate is the HTML half of welcomeUserTemplate.
+// Inline-styled per email-client constraints. Issue #355.
+const welcomeUserHTMLTemplate = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Welcome to CUDly</title></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#1a202c;">
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f4f6f8;padding:24px 0;">
+<tr><td align="center">
+<table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+<tr><td style="padding:32px 32px 16px 32px;">
+<h1 style="margin:0;font-size:22px;color:#0f172a;">Welcome to CUDly</h1>
+<p style="margin:16px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">Hello {{.Email}},</p>
+<p style="margin:12px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">Your CUDly account has been created with role <strong>{{.Role}}</strong>.</p>
+</td></tr>
+
+<tr><td align="center" style="padding:8px 32px 8px 32px;">
+<a href="{{.DashboardURL}}" style="display:inline-block;padding:12px 28px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:6px;">Open dashboard</a>
+</td></tr>
+
+<tr><td style="padding:8px 32px 8px 32px;">
+<p style="margin:8px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">If the button doesn't work, paste this URL into your browser:</p>
+<p style="margin:4px 0 0 0;color:#475569;font-size:12px;word-break:break-all;"><a href="{{.DashboardURL}}" style="color:#2563eb;text-decoration:underline;">{{.DashboardURL}}</a></p>
+<p style="margin:16px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">If you have any questions, please contact your administrator.</p>
+</td></tr>
+
+<tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
+<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly.</p>
+</td></tr>
+
+</table>
+</td></tr></table>
+</body></html>`
+
 const userInviteTemplate = `Welcome to CUDly
 ================
 
@@ -148,6 +216,38 @@ link on the sign-in page.
 
 This is an automated message from CUDly.
 `
+
+// userInviteHTMLTemplate is the HTML half of userInviteTemplate.
+// Inline-styled per email-client constraints. Issue #355.
+const userInviteHTMLTemplate = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Welcome to CUDly</title></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#1a202c;">
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f4f6f8;padding:24px 0;">
+<tr><td align="center">
+<table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+<tr><td style="padding:32px 32px 16px 32px;">
+<h1 style="margin:0;font-size:22px;color:#0f172a;">You've been invited to CUDly</h1>
+<p style="margin:16px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">Hello {{.Email}},</p>
+<p style="margin:12px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">An administrator has created a CUDly account for you. Click the button below to activate it and set your password.</p>
+</td></tr>
+
+<tr><td align="center" style="padding:8px 32px 8px 32px;">
+<a href="{{.SetupURL}}" style="display:inline-block;padding:12px 28px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:6px;">Set your password</a>
+</td></tr>
+
+<tr><td style="padding:8px 32px 8px 32px;">
+<p style="margin:8px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">This link will expire in 7 days. If it expires before you set a password, ask your administrator to invite you again or use the "Forgot password?" link on the sign-in page.</p>
+<p style="margin:16px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">If the button doesn't work, paste this URL into your browser:</p>
+<p style="margin:4px 0 0 0;color:#475569;font-size:12px;word-break:break-all;"><a href="{{.SetupURL}}" style="color:#2563eb;text-decoration:underline;">{{.SetupURL}}</a></p>
+</td></tr>
+
+<tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
+<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly.</p>
+</td></tr>
+
+</table>
+</td></tr></table>
+</body></html>`
 
 const riExchangePendingApprovalTemplate = `CUDly - RI Exchange Approval Required
 ======================================
@@ -249,14 +349,14 @@ type PasswordResetData struct {
 	ResetURL string
 }
 
-// SendPasswordResetEmail sends a password reset email
+// SendPasswordResetEmail sends a password reset email as multipart/
+// alternative (plain text + styled HTML with a CTA button). Issue #355.
 func (s *Sender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error {
-	body, err := RenderPasswordResetEmail(email, resetURL)
-	if err != nil {
-		return fmt.Errorf("failed to render password reset email: %w", err)
-	}
-
-	return s.SendToEmail(ctx, email, "CUDly - Password Reset Request", body)
+	return sendMultipartVia(
+		ctx, s, email, "CUDly - Password Reset Request", "password-reset",
+		func() (string, error) { return RenderPasswordResetEmail(email, resetURL) },
+		func() (string, error) { return RenderPasswordResetEmailHTML(email, resetURL) },
+	)
 }
 
 // WelcomeUserData holds data for welcome emails
@@ -266,14 +366,14 @@ type WelcomeUserData struct {
 	Role         string
 }
 
-// SendWelcomeEmail sends a welcome email to a new user
+// SendWelcomeEmail sends a welcome email to a new user as multipart/
+// alternative (plain text + styled HTML with a CTA button). Issue #355.
 func (s *Sender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	body, err := RenderWelcomeEmail(email, dashboardURL, role)
-	if err != nil {
-		return fmt.Errorf("failed to render welcome email: %w", err)
-	}
-
-	return s.SendToEmail(ctx, email, "Welcome to CUDly", body)
+	return sendMultipartVia(
+		ctx, s, email, "Welcome to CUDly", "welcome",
+		func() (string, error) { return RenderWelcomeEmail(email, dashboardURL, role) },
+		func() (string, error) { return RenderWelcomeEmailHTML(email, dashboardURL, role) },
+	)
 }
 
 // UserInviteData holds data for invite emails sent to users that an admin
@@ -285,14 +385,14 @@ type UserInviteData struct {
 }
 
 // SendUserInviteEmail sends an invitation that links to the password-setup
-// page. Used when an admin creates a user without supplying a password.
+// page as multipart/alternative (plain text + styled HTML with a CTA button).
+// Used when an admin creates a user without supplying a password. Issue #355.
 func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string) error {
-	body, err := RenderUserInviteEmail(email, setupURL)
-	if err != nil {
-		return fmt.Errorf("failed to render user invite email: %w", err)
-	}
-
-	return s.SendToEmail(ctx, email, "CUDly - Set your password", body)
+	return sendMultipartVia(
+		ctx, s, email, "CUDly - Set your password", "user-invite",
+		func() (string, error) { return RenderUserInviteEmail(email, setupURL) },
+		func() (string, error) { return RenderUserInviteEmailHTML(email, setupURL) },
+	)
 }
 
 // SendRIExchangePendingApproval sends an email with RI exchange approval links
@@ -461,6 +561,30 @@ func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, reci
 		htmlBody = ""
 	}
 	return s.SendToEmailWithCCMultipart(ctx, recipient, data.CCEmails, subject, textBody, htmlBody)
+}
+
+// sendMultipartVia is the generic dual-render send helper used by the
+// invite / password-reset / welcome flows. The two render closures are
+// invoked back-to-back; an HTML render failure is non-fatal and degrades
+// to text-only delivery (matching sendPurchaseApprovalRequestVia's contract).
+// kind is a short label like "user-invite" used in the warn log on degrade.
+// Issue #355.
+func sendMultipartVia(
+	ctx context.Context,
+	s SenderInterface,
+	recipient, subject, kind string,
+	renderText, renderHTML func() (string, error),
+) error {
+	textBody, err := renderText()
+	if err != nil {
+		return fmt.Errorf("failed to render %s email (text): %w", kind, err)
+	}
+	htmlBody, htmlErr := renderHTML()
+	if htmlErr != nil {
+		logging.Warnf("email: HTML %s render failed, falling back to text-only: %v", kind, htmlErr)
+		htmlBody = ""
+	}
+	return s.SendToEmailWithCCMultipart(ctx, recipient, nil, subject, textBody, htmlBody)
 }
 
 // SendPurchaseApprovalRequest sends an email asking the user to approve a direct

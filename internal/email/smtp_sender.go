@@ -296,35 +296,35 @@ func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []
 	return c.Quit()
 }
 
-// SendPasswordResetEmail sends a password reset email
+// SendPasswordResetEmail sends a password reset email as multipart/
+// alternative (text + styled HTML). Issue #355.
 func (s *SMTPSender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error {
-	subject := "Password Reset Request - CUDly"
-	body, err := RenderPasswordResetEmail(email, resetURL)
-	if err != nil {
-		return fmt.Errorf("failed to render password reset email: %w", err)
-	}
-	return s.SendToEmail(ctx, email, subject, body)
+	return sendMultipartVia(
+		ctx, s, email, "Password Reset Request - CUDly", "password-reset",
+		func() (string, error) { return RenderPasswordResetEmail(email, resetURL) },
+		func() (string, error) { return RenderPasswordResetEmailHTML(email, resetURL) },
+	)
 }
 
-// SendWelcomeEmail sends a welcome email to new users
+// SendWelcomeEmail sends a welcome email to new users as multipart/
+// alternative (text + styled HTML). Issue #355.
 func (s *SMTPSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	subject := "Welcome to CUDly!"
-	body, err := RenderWelcomeEmail(email, dashboardURL, role)
-	if err != nil {
-		return fmt.Errorf("failed to render welcome email: %w", err)
-	}
-	return s.SendToEmail(ctx, email, subject, body)
+	return sendMultipartVia(
+		ctx, s, email, "Welcome to CUDly!", "welcome",
+		func() (string, error) { return RenderWelcomeEmail(email, dashboardURL, role) },
+		func() (string, error) { return RenderWelcomeEmailHTML(email, dashboardURL, role) },
+	)
 }
 
 // SendUserInviteEmail sends an invite-with-setup-link email to a user
-// created without a password.
+// created without a password, as multipart/alternative (text + styled HTML).
+// Issue #355.
 func (s *SMTPSender) SendUserInviteEmail(ctx context.Context, email, setupURL string) error {
-	subject := "CUDly - Set your password"
-	body, err := RenderUserInviteEmail(email, setupURL)
-	if err != nil {
-		return fmt.Errorf("failed to render user invite email: %w", err)
-	}
-	return s.SendToEmail(ctx, email, subject, body)
+	return sendMultipartVia(
+		ctx, s, email, "CUDly - Set your password", "user-invite",
+		func() (string, error) { return RenderUserInviteEmail(email, setupURL) },
+		func() (string, error) { return RenderUserInviteEmailHTML(email, setupURL) },
+	)
 }
 
 // SendNewRecommendationsNotification sends a notification about new recommendations
