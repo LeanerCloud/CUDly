@@ -281,80 +281,6 @@ button.danger:hover {
     text-decoration: underline;
 }
 
-/* Collection-error banner (Q6). Upgrades the previous plain-text banner
- * with a warning icon, an expandable `<details>` for long provider
- * errors, and a × dismiss button that sets a session-scoped suppression
- * keyed by the error-message hash.
- */
-.collection-error-banner {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: start;
-    gap: 0.75rem;
-    padding: 0.75rem 1rem;
-    background: #fef7e0;
-    border: 1px solid #f9d68a;
-    border-radius: 4px;
-    color: #5f4500;
-    margin-bottom: 0.75rem;
-}
-
-.collection-error-icon {
-    font-size: 1.2rem;
-    color: var(--cudly-warn-fg);
-    line-height: 1.2;
-}
-
-.collection-error-body {
-    line-height: 1.4;
-}
-
-.collection-error-summary {
-    font-weight: 500;
-}
-
-.collection-error-details {
-    margin-top: 0.35rem;
-    font-size: 0.85rem;
-}
-
-.collection-error-details summary {
-    cursor: pointer;
-    color: var(--cudly-primary);
-    text-decoration: underline;
-    display: inline;
-    list-style: none;
-}
-
-.collection-error-details summary::-webkit-details-marker {
-    display: none;
-}
-
-.collection-error-text {
-    margin: 0.5rem 0 0;
-    padding: 0.5rem 0.75rem;
-    background: rgba(0, 0, 0, 0.04);
-    border-radius: 4px;
-    font-size: 0.8rem;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: var(--cudly-text);
-}
-
-.collection-error-dismiss {
-    background: transparent;
-    border: none;
-    color: var(--cudly-warn-fg);
-    cursor: pointer;
-    font-size: 1.2rem;
-    line-height: 1;
-    padding: 0 0.25rem;
-}
-
-.collection-error-dismiss:hover {
-    color: #5f4500;
-}
-
 /* Toast notifications (bottom-right stack, AutoSpotting-style).
  * Rendered by toast.ts. Default timeout 30s. Kind classes set the
  * left-border + icon colour.
@@ -655,38 +581,6 @@ button.danger:hover {
     color: var(--cudly-text-muted);
     font-style: italic;
     margin: 0.5rem 0;
-}
-
-/* Freshness pill: colour-coded by staleness band. Green < 3h, amber
- * 3–12h, red > 12h. Pair colour with text (band name read by SR via
- * aria-label on the pill) so information isn't carried by colour alone.
- */
-.freshness-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    gap: 0.25rem;
-}
-
-.freshness-badge--fresh {
-    background: var(--cudly-success-bg);
-    color: var(--cudly-success-fg);
-    border: 1px solid #b7e1c1;
-}
-
-.freshness-badge--warn {
-    background: #fef7e0;
-    color: var(--cudly-warn-fg);
-    border: 1px solid #f9d68a;
-}
-
-.freshness-badge--stale {
-    background: var(--cudly-error-bg);
-    color: var(--cudly-error-fg);
-    border: 1px solid #f2b8b5;
 }
 
 /* Recommendations-table affordances: sortable headers, per-column filter

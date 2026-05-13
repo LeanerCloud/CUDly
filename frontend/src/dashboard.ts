@@ -6,12 +6,11 @@ import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
 import { formatCurrency, getDateParts } from './utils';
-import { renderFreshness } from './freshness';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommendation } from './types';
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
-import { groupRecsByCell, pageLevelRange, formatSavingsRange } from './recommendations';
+import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 
 // Register Chart.js components
@@ -105,9 +104,15 @@ export async function loadDashboard(): Promise<void> {
     // block the rest of the dashboard (e.g. analytics not configured).
     void loadSavingsTrendChart();
 
-    // Refresh the freshness indicator on every load so provider switches
-    // + data updates both reflect the latest collection timestamp.
-    void renderFreshness('dashboard-freshness', loadDashboard);
+    // Auto-refresh the recommendations cache if the last collection
+    // is older than 24h (or never ran). The dashboard's KPI tiles +
+    // savings card derive from recs; without this, a user who only
+    // opens Home would never trigger the refresh cycle that the
+    // Opportunities page used to own exclusively. The helper surfaces
+    // collection errors as toasts and dedups concurrent refreshes; on
+    // success it calls loadDashboard() to repaint this page with the
+    // fresh data instead of forcing a recs render.
+    void triggerAutoRefreshIfStale(loadDashboard);
   } catch (error) {
     console.error('Failed to load dashboard:', error);
     const summary = document.getElementById('summary');

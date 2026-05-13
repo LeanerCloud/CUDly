@@ -162,7 +162,9 @@ export function setupRecommendationsHandlers(): void {
  * surfaced as an error toast regardless of whether a new refresh fires (the
  * freshness banner that previously showed this is being removed in #284).
  */
-async function triggerAutoRefreshIfStale(): Promise<void> {
+export async function triggerAutoRefreshIfStale(
+  onReload: () => Promise<void> = loadRecommendations,
+): Promise<void> {
   let freshness;
   try {
     freshness = await getRecommendationsFreshness();
@@ -211,8 +213,11 @@ async function triggerAutoRefreshIfStale(): Promise<void> {
         kind: 'success',
         timeout: 5_000,
       });
-      // Reload UI data so users see fresh recommendations
-      return loadRecommendations();
+      // Reload UI data so users see fresh content. Caller passes a
+      // page-specific reload (loadDashboard from Home, loadRecommend-
+      // ations from Opportunities) so we don't force a recs render on
+      // a page that doesn't display them.
+      return onReload();
     })
     .catch((err: unknown) => {
       inFlight.dismiss();
