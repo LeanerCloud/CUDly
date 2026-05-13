@@ -166,6 +166,36 @@ type Recommendation struct {
 	// Break-even in months (populated by cloud parsers where available; used by scorer filter)
 	BreakEvenMonths float64 `json:"break_even_months,omitempty" csv:"BreakEvenMonths"`
 
+	// Utilization signals — populated by cloud parsers when the API exposes them.
+	// Used by --target-coverage sizing (see cmd/helpers.go: ApplyTargetCoverage).
+	// AverageInstancesUsedPerHour is RI-only (zero for SPs and other commitment types).
+	// RecommendedUtilization is "what AWS projects for the full recommendation"
+	// (%). ProjectedUtilization / ProjectedCoverage are populated by the sizing
+	// step after we pick our own quantity.
+	// RecommendedCount is AWS's pre-sizing count (mirrors Count before
+	// ApplyCoverage / ApplyTargetCoverage mutates Count); zero for SPs since
+	// the SP commitment is dollar-denominated rather than count-denominated.
+	// ExistingCoveragePct is the share of demand already covered by existing
+	// commitments in the same pool (from CE GetReservationCoverage /
+	// GetSavingsPlansCoverage). Zero = "no signal" (CE returned nothing for
+	// this pool, or the fetch step wasn't run); sizing then degenerates to
+	// the no-existing-commitments path. See cmd/helpers.go.
+	AverageInstancesUsedPerHour float64 `json:"average_instances_used_per_hour,omitempty" csv:"AverageInstancesUsedPerHour"`
+	RecommendedUtilization      float64 `json:"recommended_utilization,omitempty" csv:"RecommendedUtilization"`
+	RecommendedCount            int     `json:"recommended_count,omitempty" csv:"RecommendedCount"`
+	ExistingCoveragePct         float64 `json:"existing_coverage_pct,omitempty" csv:"ExistingCoveragePct"`
+	// ExistingCoverageKnown distinguishes "CE returned a value for this
+	// pool" (Known=true, Pct possibly 0.0 meaning the pool has running
+	// instances but no RI coverage yet) from "CE has no data for this
+	// pool" (Known=false, Pct=0.0 by default). Set by
+	// ApplyCoverageMapToRecommendations whenever a pool lookup hits, and
+	// by family-NU sizing when a family-level existing% lands on the rec.
+	// CSV writers use this to render "n/a" for unknown vs "0.0" for
+	// genuine zero-coverage pools.
+	ExistingCoverageKnown bool    `json:"existing_coverage_known,omitempty" csv:"-"`
+	ProjectedUtilization  float64 `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
+	ProjectedCoverage     float64 `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
+
 	// RawRecommendation holds the original cloud API response bytes for audit/debugging.
 	// omitempty ensures nil is absent from JSON (not written as null).
 	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty" csv:"-"`
@@ -175,6 +205,24 @@ type Recommendation struct {
 type ServiceDetails interface {
 	GetServiceType() ServiceType
 	GetDetailDescription() string
+}
+
+// ScaleRecommendationCosts multiplies all cost-bearing fields of rec by
+// ratio and returns the result. RecurringMonthlyCost is allocated as a
+// new pointer when present so callers don't mutate the upstream rec's
+// pointer target. Used by sizing paths (ApplyCoverage, ApplyTargetCoverage,
+// family-NU) to keep Count and cost in sync when a recommendation is
+// sized down (or up) from AWS's proposal — without this helper the same
+// four-field scaling pattern was duplicated at every sizing site.
+func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation {
+	rec.CommitmentCost *= ratio
+	rec.OnDemandCost *= ratio
+	rec.EstimatedSavings *= ratio
+	if rec.RecurringMonthlyCost != nil {
+		scaled := *rec.RecurringMonthlyCost * ratio
+		rec.RecurringMonthlyCost = &scaled
+	}
+	return rec
 }
 
 // PurchaseResult represents the outcome of a commitment purchase
@@ -225,7 +273,16 @@ func NormalizeSource(s string) (string, error) {
 	}
 }
 
-// Commitment represents an existing commitment (RI/SP/CUD/etc)
+// Commitment represents an existing commitment (RI/SP/CUD/etc).
+//
+// Deployment is RDS-specific (Multi-AZ vs Single-AZ); it stays empty for
+// services that don't have a deployment dimension (EC2, ElastiCache,
+// etc). When populated, it carries the same vocabulary as
+// DatabaseDetails.AZConfig on Recommendation ("single-az" / "multi-az")
+// so pool-key matching can collapse both sides via normaliseDeployment
+// in the recommendations package. Without this field, RDS expiry
+// adjustments would silently miss because Recommendation lookup keys
+// are deployment-aware while commitment keys defaulted to empty.
 type Commitment struct {
 	Provider       ProviderType   `json:"provider"`
 	Account        string         `json:"account"`
@@ -234,7 +291,8 @@ type Commitment struct {
 	Service        ServiceType    `json:"service"`
 	Region         string         `json:"region"`
 	ResourceType   string         `json:"resource_type"`
-	Engine         string         `json:"engine,omitempty"` // Database engine for RDS/ElastiCache (e.g., "mysql", "aurora-postgresql")
+	Engine         string         `json:"engine,omitempty"`     // Database engine for RDS/ElastiCache (e.g., "mysql", "aurora-postgresql")
+	Deployment     string         `json:"deployment,omitempty"` // RDS Multi-AZ vs Single-AZ; empty for non-RDS
 	Count          int            `json:"count"`
 	StartDate      time.Time      `json:"start_date"`
 	EndDate        time.Time      `json:"end_date"`

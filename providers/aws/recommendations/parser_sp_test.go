@@ -3,8 +3,12 @@ package recommendations
 import (
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
 func TestGetFilteredPlanTypes(t *testing.T) {
@@ -143,6 +147,59 @@ func TestGetFilteredPlanTypes(t *testing.T) {
 			for _, excluded := range tt.shouldExclude {
 				assert.NotContains(t, result, excluded, "Expected result to NOT contain %s", excluded)
 			}
+		})
+	}
+}
+
+// TestParseSavingsPlanDetail_RecommendedUtilization covers the
+// EstimatedAverageUtilization field added for issue #338 — the SP equivalent
+// of the RI AverageUtilization signal that drives --target-coverage sizing.
+func TestParseSavingsPlanDetail_RecommendedUtilization(t *testing.T) {
+	client := &Client{}
+	params := common.RecommendationParams{
+		Service:       common.ServiceSavingsPlansCompute,
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+	}
+
+	tests := []struct {
+		name               string
+		utilizationStr     *string
+		wantUtilization    float64
+		wantAvgInstancesIs float64
+	}{
+		{
+			name:               "field present and parseable",
+			utilizationStr:     aws.String("87.5"),
+			wantUtilization:    87.5,
+			wantAvgInstancesIs: 0,
+		},
+		{
+			name:               "field nil → zero",
+			utilizationStr:     nil,
+			wantUtilization:    0,
+			wantAvgInstancesIs: 0,
+		},
+		{
+			name:               "field unparseable → zero (parseOptionalFloat logs warn)",
+			utilizationStr:     aws.String("not-a-number"),
+			wantUtilization:    0,
+			wantAvgInstancesIs: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := &types.SavingsPlansPurchaseRecommendationDetail{
+				HourlyCommitmentToPurchase:  aws.String("1.0"),
+				EstimatedAverageUtilization: tt.utilizationStr,
+			}
+			rec := client.parseSavingsPlanDetail(detail, params, types.SupportedSavingsPlansTypeComputeSp)
+			require.NotNil(t, rec)
+			assert.Equal(t, tt.wantUtilization, rec.RecommendedUtilization,
+				"SP utilization should be parsed into rec.RecommendedUtilization")
+			assert.Equal(t, tt.wantAvgInstancesIs, rec.AverageInstancesUsedPerHour,
+				"SP recs leave AverageInstancesUsedPerHour at zero (not applicable for SPs)")
 		})
 	}
 }

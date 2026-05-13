@@ -136,6 +136,11 @@ func (c *Client) parseSavingsPlanDetail(
 	monthlySavings := parseOptionalFloat("EstimatedMonthlySavingsAmount", detail.EstimatedMonthlySavingsAmount)
 	savingsPercent := parseOptionalFloat("EstimatedSavingsPercentage", detail.EstimatedSavingsPercentage)
 	upfrontCost := parseOptionalFloat("UpfrontCost", detail.UpfrontCost)
+	// EstimatedAverageUtilization carries the "if you buy exactly this commitment,
+	// what % of it will AWS expect to be used" signal. Used by --target-coverage
+	// sizing in cmd/helpers.go; zero (nil pointer or parse failure) means "no signal"
+	// and the sizing path leaves the recommendation unchanged.
+	recommendedUtilization := parseOptionalFloat("EstimatedAverageUtilization", detail.EstimatedAverageUtilization)
 	// onDemandCost is the canonical monthly on-demand baseline for this SP
 	// recommendation. AWS Cost Explorer returns the average hourly on-demand
 	// spend over the lookback period in CurrentAverageHourlyOnDemandSpend;
@@ -196,19 +201,20 @@ func (c *Client) parseSavingsPlanDetail(
 	}
 
 	return &common.Recommendation{
-		Provider:             common.ProviderAWS,
-		Service:              serviceSlugForPlanType(planType),
-		PaymentOption:        params.PaymentOption,
-		Term:                 params.Term,
-		CommitmentType:       common.CommitmentSavingsPlan,
-		Count:                1,
-		EstimatedSavings:     monthlySavings,
-		SavingsPercentage:    savingsPercent,
-		CommitmentCost:       upfrontCost,
-		OnDemandCost:         onDemandCost,
-		RecurringMonthlyCost: recurringMonthlyCost,
-		Timestamp:            time.Now(),
-		Account:              accountID,
+		Provider:               common.ProviderAWS,
+		Service:                serviceSlugForPlanType(planType),
+		PaymentOption:          params.PaymentOption,
+		Term:                   params.Term,
+		CommitmentType:         common.CommitmentSavingsPlan,
+		Count:                  1,
+		EstimatedSavings:       monthlySavings,
+		SavingsPercentage:      savingsPercent,
+		CommitmentCost:         upfrontCost,
+		OnDemandCost:           onDemandCost,
+		RecurringMonthlyCost:   recurringMonthlyCost,
+		RecommendedUtilization: recommendedUtilization,
+		Timestamp:              time.Now(),
+		Account:                accountID,
 		Details: &common.SavingsPlanDetails{
 			PlanType:         planTypeStr,
 			HourlyCommitment: hourlyCommitment,

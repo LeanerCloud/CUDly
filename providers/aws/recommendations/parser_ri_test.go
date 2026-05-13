@@ -395,3 +395,71 @@ func TestParseRecommendations_EmptyInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
+
+// TestParseRIUtilizationSignals covers the AverageNumberOfInstancesUsedPerHour
+// and AverageUtilization fields added for issue #338 (--target-coverage).
+// Verifies both successful parses, nil-pointer fallback to zero, and
+// parse-failure fallback to zero — the sizing path in cmd/helpers.go treats
+// zero as "no signal" so the fallback behaviour matters.
+func TestParseRIUtilizationSignals(t *testing.T) {
+	client := &Client{}
+
+	tests := []struct {
+		name             string
+		details          *types.ReservationPurchaseRecommendationDetail
+		wantAvgInstances float64
+		wantUtilization  float64
+	}{
+		{
+			name: "both fields parsed",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				AverageNumberOfInstancesUsedPerHour: aws.String("8.5"),
+				AverageUtilization:                  aws.String("85.3"),
+			},
+			wantAvgInstances: 8.5,
+			wantUtilization:  85.3,
+		},
+		{
+			name:             "both fields nil → both zero",
+			details:          &types.ReservationPurchaseRecommendationDetail{},
+			wantAvgInstances: 0,
+			wantUtilization:  0,
+		},
+		{
+			name: "unparseable AverageNumberOfInstancesUsedPerHour → that field zero, other still parses",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				AverageNumberOfInstancesUsedPerHour: aws.String("not-a-number"),
+				AverageUtilization:                  aws.String("90.0"),
+			},
+			wantAvgInstances: 0,
+			wantUtilization:  90.0,
+		},
+		{
+			name: "unparseable AverageUtilization → that field zero, other still parses",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				AverageNumberOfInstancesUsedPerHour: aws.String("5.0"),
+				AverageUtilization:                  aws.String("garbage"),
+			},
+			wantAvgInstances: 5.0,
+			wantUtilization:  0,
+		},
+		{
+			name: "zero values parse as zero (not treated as missing at parse time)",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				AverageNumberOfInstancesUsedPerHour: aws.String("0"),
+				AverageUtilization:                  aws.String("0.0"),
+			},
+			wantAvgInstances: 0,
+			wantUtilization:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &common.Recommendation{}
+			client.parseRIUtilizationSignals(rec, tt.details)
+			assert.Equal(t, tt.wantAvgInstances, rec.AverageInstancesUsedPerHour)
+			assert.Equal(t, tt.wantUtilization, rec.RecommendedUtilization)
+		})
+	}
+}
