@@ -92,6 +92,23 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 	}, nil
 }
 
+// mapStoreCreateUserError maps a Store.CreateUser error into the auth
+// package's sentinel set so the API handler can surface 4xx instead of
+// 500 for known recoverable failures. Defence-in-depth: the validator
+// pre-checks email-in-use, but two callers can race past it and hit the
+// users_email_key unique constraint. Extracted from CreateUser /
+// SetupAdmin call sites to keep both functions under gocyclo's
+// complexity threshold. Issue #349.
+func mapStoreCreateUserError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isEmailDuplicateError(err) {
+		return ErrEmailInUse
+	}
+	return fmt.Errorf("failed to create user: %w", err)
+}
+
 // CheckAdminExists returns whether an admin user exists
 func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 	return s.store.AdminExists(ctx)
@@ -207,8 +224,8 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 		inviteToken = token
 	}
 
-	if err := s.store.CreateUser(ctx, user); err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
+	if err := mapStoreCreateUserError(s.store.CreateUser(ctx, user)); err != nil {
+		return nil, err
 	}
 
 	result := &CreateUserResult{User: user}
