@@ -10,6 +10,7 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
+import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
@@ -157,6 +158,13 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
  * Load history with filters
  */
 export async function loadHistory(): Promise<void> {
+  // Issue #344 T3: skeleton rows for the purchase-history table. 8
+  // rows matches the typical first-page row count so the skeleton
+  // doesn't shrink dramatically when real data arrives. Column count
+  // (10) mirrors the rendered table — see renderHistoryList.
+  const listEl = document.getElementById('history-list');
+  if (listEl) showSkeletonRows(listEl, 8, 10);
+
   try {
     // Provider/account filters live in state.ts now (mutated by topbar chips).
     const rawProvider = state.getCurrentProvider();
@@ -180,6 +188,7 @@ export async function loadHistory(): Promise<void> {
     console.error('Failed to load history:', error);
     const list = document.getElementById('history-list');
     if (list) {
+      teardownSkeleton(list);
       const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load history: ${escapeHtml(err.message)}</p>`;
     }

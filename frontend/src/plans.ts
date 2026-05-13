@@ -12,6 +12,7 @@ import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
+import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -28,6 +29,14 @@ let pendingPlanRecommendations: api.Recommendation[] = [];
  * Load plans and planned purchases
  */
 export async function loadPlans(): Promise<void> {
+  // Issue #344 T3: skeleton tiles for the plans list + rows for the
+  // planned-purchases table. Synchronous render before fetch so the
+  // page doesn't sit blank during the round-trip.
+  const plansList = document.getElementById('plans-list');
+  if (plansList) showSkeletonTiles(plansList, 3);
+  const plannedContainer = document.getElementById('planned-purchases-list');
+  if (plannedContainer) showSkeletonRows(plannedContainer, 5, 11);
+
   try {
     const data = await api.getPlans() as unknown as PlansResponse;
     let plans = data.plans || [];
@@ -50,6 +59,7 @@ export async function loadPlans(): Promise<void> {
     console.error('Failed to load plans:', error);
     const list = document.getElementById('plans-list');
     if (list) {
+      teardownSkeleton(list);
       const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load plans: ${escapeHtml(err.message)}</p>`;
     }
@@ -71,6 +81,7 @@ async function loadPlannedPurchases(): Promise<void> {
     renderPlannedPurchases(data.purchases || []);
   } catch (error) {
     console.error('Failed to load planned purchases:', error);
+    teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load planned purchases: ${escapeHtml(err.message)}</p>`;
   }

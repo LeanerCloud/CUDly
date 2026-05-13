@@ -20,6 +20,7 @@ import {
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 import { openModal } from './modal';
+import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
@@ -236,6 +237,14 @@ async function triggerAutoRefreshIfStale(): Promise<void> {
  * Load recommendations
  */
 export async function loadRecommendations(): Promise<void> {
+  // Issue #344 T3: skeleton rows for the recommendations table so the
+  // panel reads as "loading" instead of staying blank while the
+  // (potentially multi-second) Promise.all resolves. 5 rows ≈ above-
+  // the-fold count for the typical viewport; col count (10) mirrors the
+  // visible columns in the rendered table.
+  const listEl = document.getElementById('recommendations-list');
+  if (listEl) showSkeletonRows(listEl, 5, 10);
+
   try {
     // Provider + account_ids are still sent to the API as hints so the
     // backend stays bounded for big multi-cloud tenants. Service / Region /
@@ -289,6 +298,7 @@ export async function loadRecommendations(): Promise<void> {
     console.error('Failed to load recommendations:', error);
     const list = document.getElementById('recommendations-list');
     if (list) {
+      teardownSkeleton(list);
       const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
     }
