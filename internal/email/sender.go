@@ -421,6 +421,12 @@ type NotificationData struct {
 	// AWS cancellation windows differ; the call site is responsible for
 	// composing the right wording for the rec set.
 	CancellationWindowNote string
+	// ArcheraEducationURL is the full URL to the "What is Archera Insurance?"
+	// page in the CUDly dashboard (DashboardURL + "/archera-insurance").
+	// When non-empty the templates append a short Archera Insurance mention
+	// with the 7-day enrollment window. Empty silently omits the block so
+	// existing callers that haven't been updated yet are unaffected.
+	ArcheraEducationURL string
 }
 
 // RecommendationSummary is a simplified recommendation for email display

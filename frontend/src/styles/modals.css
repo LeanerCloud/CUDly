@@ -198,3 +198,314 @@
     color: var(--cudly-text-muted);
     font-size: 0.85em;
 }
+
+/* -----------------------------------------------------------------------
+ * Archera Insurance CTA: unobtrusive small-text link shown in the
+ * Purchase modal and Plan-creation modal.
+ * ----------------------------------------------------------------------- */
+.archera-cta {
+    font-size: 0.82rem;
+    color: #888;
+    margin-top: 0.75rem;
+    margin-bottom: 0;
+    line-height: 1.4;
+}
+
+/* The inline link/button inside the CTA paragraph. Styled as a text link
+   so it does not compete visually with the modal's primary action button. */
+.archera-cta-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #1a73e8;
+    font-size: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    font-family: inherit;
+    line-height: inherit;
+}
+
+.archera-cta-link:hover {
+    color: #1557b0;
+    background: none;
+}
+
+/* -----------------------------------------------------------------------
+ * Archera education overlay (#archera-page-container).
+ * Full-viewport panel rendered on top of the existing content, not a
+ * modal (no dimmed backdrop) but a full overlay so the URL stays clean.
+ * ----------------------------------------------------------------------- */
+#archera-page-container {
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    /* 1100 sits above .modal/.modal-overlay (z-index: 1000) so the education
+       page renders on top of open modals, which is how the overlay gets
+       launched (user clicks the CTA link inside a modal). */
+    z-index: 1100;
+    overflow-y: auto;
+}
+
+.archera-page-inner {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+}
+
+.archera-page-inner h1 {
+    font-size: 1.6rem;
+    color: #333;
+    margin: 1rem 0 1.25rem;
+}
+
+.archera-page-inner h2 {
+    font-size: 1.1rem;
+    color: #444;
+    margin: 1.5rem 0 0.5rem;
+}
+
+.archera-page-lead {
+    font-size: 1rem;
+    color: #555;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+}
+
+.archera-page-inner section {
+    margin-bottom: 1.25rem;
+}
+
+.archera-page-inner ul,
+.archera-page-inner ol {
+    padding-left: 1.5rem;
+    color: #555;
+    line-height: 1.7;
+}
+
+.archera-steps {
+    margin-bottom: 1.25rem;
+}
+
+.archera-steps li {
+    margin-bottom: 0.5rem;
+}
+
+.archera-page-crosslink {
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+/* "Back" button in the overlay: plain text, no button chrome. */
+.archera-page-back {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #555;
+    font-size: 0.9rem;
+    cursor: pointer;
+    font-family: inherit;
+    text-decoration: underline;
+}
+
+.archera-page-back:hover {
+    color: #333;
+    background: none;
+}
+
+/* Signup CTA block at the bottom of each education page. */
+.archera-signup-block {
+    margin-top: 2rem;
+    padding: 1.25rem 1.5rem;
+    background: #f0f7ff;
+    border: 1px solid #b3d4fc;
+    border-radius: 6px;
+    text-align: center;
+}
+
+/* Primary signup link styled as a button for prominence. */
+.archera-signup-btn {
+    display: inline-block;
+    background: #1a73e8;
+    color: #fff;
+    text-decoration: none;
+    padding: 0.65rem 1.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.archera-signup-btn:hover {
+    background: #1557b0;
+    color: #fff;
+    text-decoration: none;
+}
+
+.archera-signup-note {
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+
+/* -----------------------------------------------------------------------
+ * Archera Insurance offer modal (#archera-offer-modal-container).
+ * Small centred dialog shown AFTER a successful purchase-approval
+ * submission or plan creation. Two equal-weight choices: "Sign up at
+ * Archera →" (primary) and "No thanks" (secondary). Dimmed backdrop,
+ * outside-click and ESC close. z-index sits above .modal (1000) so the
+ * offer surfaces on top of any modal whose close triggered it.
+ * ----------------------------------------------------------------------- */
+#archera-offer-modal-container {
+    position: fixed;
+    inset: 0;
+    z-index: 1050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.archera-offer-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.archera-offer-panel {
+    position: relative;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    max-width: 440px;
+    width: calc(100% - 2rem);
+    padding: 1.5rem 1.75rem;
+    /* Cap height so an expanded "Learn more" drop-down doesn't push the
+       modal past the viewport — overflow scrolls inside the panel
+       instead. The cap is on the panel (not the body) so the title and
+       actions stay visible while the user scrolls the details body. */
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.archera-offer-title {
+    margin: 0 0 0.6rem;
+    font-size: 1.15rem;
+    color: #222;
+    line-height: 1.35;
+}
+
+.archera-offer-lead {
+    margin: 0 0 0.75rem;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    color: #444;
+}
+
+/* Disclosure line: muted, sits just below the lead so the financial
+   relationship is visible before the user clicks Sign up. */
+.archera-offer-disclosure {
+    margin: 0 0 1rem;
+    font-size: 0.82rem;
+    color: #777;
+    font-style: italic;
+}
+
+.archera-offer-actions {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: flex-end;
+    align-items: center;
+    /* Actions are the last element in the panel now (sit below the
+       Learn-more drop-down), so no bottom margin. A small top margin
+       gives breathing room between the collapsed/expanded drop-down
+       and the buttons. */
+    margin: 0.25rem 0 0;
+}
+
+.archera-offer-skip {
+    background: #fff;
+    color: #444;
+    border: 1px solid #d0d7de;
+    border-radius: 4px;
+    padding: 0.55rem 1rem;
+    font-size: 0.92rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.archera-offer-skip:hover {
+    background: #f4f5f7;
+    color: #222;
+}
+
+.archera-offer-signup {
+    display: inline-block;
+    background: #1a73e8;
+    color: #fff;
+    text-decoration: none;
+    padding: 0.55rem 1.1rem;
+    border-radius: 4px;
+    font-size: 0.92rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.archera-offer-signup:hover {
+    background: #1557b0;
+    color: #fff;
+    text-decoration: none;
+}
+
+/* Learn-more drop-down. Sits ABOVE the action buttons in the panel.
+   Native <details>/<summary> handles open/close + keyboard. Summary
+   text is left-aligned with the chevron on the right (flex/space-between
+   on the summary). The body inherits .archera-page-inner typography so
+   it looks like the standalone education page, sized for the modal
+   width and separated from the offer-modal chrome by a top border. */
+.archera-offer-learnmore {
+    margin: 0 0 1rem;
+    font-size: 0.85rem;
+}
+
+.archera-offer-learnmore-summary {
+    cursor: pointer;
+    color: #1a73e8;
+    font-size: 0.85rem;
+    padding: 0.25rem 0;
+    list-style: none; /* hide default disclosure marker; we render our own ::after */
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+}
+
+.archera-offer-learnmore-summary::-webkit-details-marker { display: none; }
+
+.archera-offer-learnmore-summary::after {
+    content: "▸";
+    display: inline-block;
+    color: #888;
+    transition: transform 0.15s ease;
+}
+
+.archera-offer-learnmore[open] > .archera-offer-learnmore-summary::after {
+    transform: rotate(90deg);
+}
+
+.archera-offer-learnmore-summary:hover { color: #1557b0; }
+
+.archera-offer-learnmore-body {
+    border-top: 1px solid #e0e3e8;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0 0;
+    color: #444;
+    font-size: 0.9rem;
+}
+
+/* Override .archera-page-inner padding inside the modal — the modal
+   already has its own padding, so the embedded body shouldn't add
+   another 1.5rem horizontal gutter. */
+.archera-offer-learnmore .archera-page-inner {
+    max-width: none;
+    padding: 0.5rem 0 0;
+}

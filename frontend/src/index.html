@@ -672,6 +672,18 @@
         </main>
         </div><!-- /.app-body -->
 
+        <!-- Archera Insurance education overlay. Hidden by default;
+             opened by the "Learn more" link inside the offer modal or by
+             a deep-linked email URL (handleArcheraDeeplink). Content is
+             built dynamically by archera.ts. -->
+        <div id="archera-page-container" class="hidden" role="region" aria-label="Archera Insurance information"></div>
+
+        <!-- Archera Insurance offer modal. Hidden by default; shown by
+             openArcheraOfferModal() after a successful purchase-approval
+             submission (handleExecutePurchase) or plan creation (savePlan).
+             Content is built dynamically by archera.ts. -->
+        <div id="archera-offer-modal-container" class="hidden"></div>
+
         <!-- Login Modal is created dynamically by auth.ts -->
 
         <!-- Create/Edit Plan Modal -->

@@ -12,6 +12,7 @@ import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
+import { openArcheraOfferModal } from './archera';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -610,6 +611,11 @@ export async function savePlan(e: Event): Promise<void> {
     closePlanModal();
     await loadPlans();
     showToast({ message: planId ? 'Plan updated successfully' : 'Plan created successfully', kind: 'success', timeout: 5_000 });
+    // Offer Archera Insurance after a newly created plan only — updates
+    // never carry a fresh commitment intent, so the offer would be noise.
+    if (!planId) {
+      openArcheraOfferModal('plan');
+    }
   } catch (error) {
     console.error('Failed to save plan:', error);
     const err = error as Error;
@@ -773,7 +779,9 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   void setupPlanAccountsSection();
 
   const planModal = document.getElementById('plan-modal');
-  if (planModal) openModal(planModal);
+  if (planModal) {
+    openModal(planModal);
+  }
 }
 
 /**
@@ -800,7 +808,9 @@ export function openNewPlanModal(): void {
   void setupPlanAccountsSection();
 
   const planModal = document.getElementById('plan-modal');
-  if (planModal) openModal(planModal);
+  if (planModal) {
+    openModal(planModal);
+  }
 }
 
 /**
