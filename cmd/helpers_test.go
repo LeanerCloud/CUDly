@@ -934,19 +934,23 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 			// avg=8.5, target=95%, existing=0%.
 			// gap=95. n = floor(8.5 * 95/100) = floor(8.075) = 8.
 			// Projected util = 8.5/8 = 106.25 → clamped to 100.
-			name:         "RI: target 95 buys 8 (floor of avg*0.95)",
-			rec:          mkRI(10, 8.5, 0),
-			target:       95,
-			wantCount:    8,
-			wantProjUtil: 100,
+			// Projected cov  = 0 + 8/8.5*100 = 94.117…%
+			name:           "RI: target 95 buys 8 (floor of avg*0.95)",
+			rec:            mkRI(10, 8.5, 0),
+			target:         95,
+			wantCount:      8,
+			wantProjUtil:   100,
+			wantProjCovGTE: 94.0,
 		},
 		{
 			// avg=10, target=50%, existing=0%. n=floor(10*0.5)=5.
-			name:         "RI: target 50 buys half of avg demand",
-			rec:          mkRI(10, 10, 0),
-			target:       50,
-			wantCount:    5,
-			wantProjUtil: 100, // 10/5 clamped
+			// Projected cov = 5/10*100 = 50.0%.
+			name:           "RI: target 50 buys half of avg demand",
+			rec:            mkRI(10, 10, 0),
+			target:         50,
+			wantCount:      5,
+			wantProjUtil:   100, // 10/5 clamped
+			wantProjCovGTE: 50.0,
 		},
 		{
 			// avg=0.4, target=50%, existing=0%.
@@ -962,6 +966,7 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 		},
 		{
 			// avg=0 (no signal) → passed through unchanged, counted in skip summary.
+			// Projection metrics never set on the pass-through path.
 			name:         "RI: no signal → passed through unmodified",
 			rec:          mkRI(5, 0, 0),
 			target:       80,
@@ -971,11 +976,13 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 		{
 			// avg=4, target=80%, existing=0%. n=floor(4*0.8)=3.
 			// Projected util = 4/3 = 133% clamped to 100.
-			name:         "RI: target 80 buys floor(avg*0.8)",
-			rec:          mkRI(5, 4, 0),
-			target:       80,
-			wantCount:    3,
-			wantProjUtil: 100,
+			// Projected cov  = 3/4*100 = 75.0%.
+			name:           "RI: target 80 buys floor(avg*0.8)",
+			rec:            mkRI(5, 4, 0),
+			target:         80,
+			wantCount:      3,
+			wantProjUtil:   100,
+			wantProjCovGTE: 75.0,
 		},
 	}
 
@@ -999,6 +1006,14 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 				if math.Abs(out[0].ProjectedUtilization-tt.wantProjUtil) > 0.01 {
 					t.Errorf("ProjectedUtilization: got %.4f, want %.4f",
 						out[0].ProjectedUtilization, tt.wantProjUtil)
+				}
+			}
+			// Zero means "don't assert" (matches the wantProjUtil convention)
+			// since the pass-through path leaves ProjectedCoverage at zero.
+			if tt.wantProjCovGTE > 0 {
+				if out[0].ProjectedCoverage < tt.wantProjCovGTE-0.01 {
+					t.Errorf("ProjectedCoverage: got %.4f, want >= %.4f",
+						out[0].ProjectedCoverage, tt.wantProjCovGTE)
 				}
 			}
 		})
