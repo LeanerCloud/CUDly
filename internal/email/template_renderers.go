@@ -35,6 +35,16 @@ func RenderPasswordResetEmail(email, resetURL string) (string, error) {
 	})
 }
 
+// RenderPasswordResetEmailHTML renders the HTML half of the password reset
+// email — pair with RenderPasswordResetEmail for multipart/alternative
+// delivery. Issue #355.
+func RenderPasswordResetEmailHTML(email, resetURL string) (string, error) {
+	return renderTemplate("reset-html", passwordResetHTMLTemplate, PasswordResetData{
+		Email:    email,
+		ResetURL: resetURL,
+	})
+}
+
 // RenderWelcomeEmail renders the welcome email template
 func RenderWelcomeEmail(email, dashboardURL, role string) (string, error) {
 	return renderTemplate("welcome", welcomeUserTemplate, WelcomeUserData{
@@ -44,9 +54,28 @@ func RenderWelcomeEmail(email, dashboardURL, role string) (string, error) {
 	})
 }
 
+// RenderWelcomeEmailHTML renders the HTML half of the welcome email.
+// Issue #355.
+func RenderWelcomeEmailHTML(email, dashboardURL, role string) (string, error) {
+	return renderTemplate("welcome-html", welcomeUserHTMLTemplate, WelcomeUserData{
+		Email:        email,
+		DashboardURL: dashboardURL,
+		Role:         role,
+	})
+}
+
 // RenderUserInviteEmail renders the user-invite email template.
 func RenderUserInviteEmail(email, setupURL string) (string, error) {
 	return renderTemplate("user-invite", userInviteTemplate, UserInviteData{
+		Email:    email,
+		SetupURL: setupURL,
+	})
+}
+
+// RenderUserInviteEmailHTML renders the HTML half of the user-invite email.
+// Issue #355.
+func RenderUserInviteEmailHTML(email, setupURL string) (string, error) {
+	return renderTemplate("user-invite-html", userInviteHTMLTemplate, UserInviteData{
 		Email:    email,
 		SetupURL: setupURL,
 	})

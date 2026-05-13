@@ -58,6 +58,16 @@ func NewService(cfg ServiceConfig) *Service {
 		cfg.SessionDuration = time.Duration(DefaultSessionDurationHours) * time.Hour
 	}
 
+	// Empty DashboardURL produces broken setup/reset emails because the
+	// service layer constructs links as fmt.Sprintf("%s/reset-password?...",
+	// dashboardURL, token) — an empty prefix yields "/reset-password?token=..."
+	// which is unclickable in any MUA. Surface this loudly at startup so
+	// operators see the misconfiguration before the first user gets a broken
+	// invite email rather than after. See issue #355.
+	if cfg.DashboardURL == "" {
+		logging.Warnf("auth: DashboardURL is empty — invite and password-reset emails will contain relative links unusable in mail clients. Set DASHBOARD_URL to the customer-facing dashboard origin.")
+	}
+
 	// SECURITY: Validate that dashboard URL uses HTTPS in production
 	// This prevents password reset tokens from being leaked over HTTP
 	if cfg.DashboardURL != "" && !strings.HasPrefix(cfg.DashboardURL, "https://") {

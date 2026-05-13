@@ -360,3 +360,47 @@ func TestRenderPurchaseApprovalRequestEmailHTML_NoApprovers(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, html, "Authorised approver")
 }
+
+// TestRenderPasswordResetEmailHTML covers the HTML half of the password
+// reset email added for issue #355. Verifies the CTA button is present,
+// the absolute URL appears in both the href and the fallback paragraph,
+// and the user's email is in the salutation.
+func TestRenderPasswordResetEmailHTML(t *testing.T) {
+	html, err := RenderPasswordResetEmailHTML("alice@example.com", "https://dashboard.example/reset-password?token=abc")
+	require.NoError(t, err)
+	assert.NotEmpty(t, html)
+
+	// CTA button with the right text and href.
+	assert.Contains(t, html, `href="https://dashboard.example/reset-password?token=abc"`)
+	assert.Contains(t, html, ">Reset your password<")
+
+	// Salutation pulls in the recipient.
+	assert.Contains(t, html, "Hello alice@example.com,")
+
+	// Fallback "paste this URL" block carries the full absolute URL so MUAs
+	// that strip <a> still let the user complete the flow.
+	assert.Contains(t, html, "https://dashboard.example/reset-password?token=abc")
+}
+
+// TestRenderUserInviteEmailHTML — same assertions for the invite flow.
+func TestRenderUserInviteEmailHTML(t *testing.T) {
+	html, err := RenderUserInviteEmailHTML("bob@example.com", "https://dashboard.example/reset-password?token=xyz")
+	require.NoError(t, err)
+	assert.NotEmpty(t, html)
+
+	assert.Contains(t, html, `href="https://dashboard.example/reset-password?token=xyz"`)
+	assert.Contains(t, html, ">Set your password<")
+	assert.Contains(t, html, "Hello bob@example.com,")
+}
+
+// TestRenderWelcomeEmailHTML — same assertions for the welcome flow.
+func TestRenderWelcomeEmailHTML(t *testing.T) {
+	html, err := RenderWelcomeEmailHTML("carol@example.com", "https://dashboard.example", "admin")
+	require.NoError(t, err)
+	assert.NotEmpty(t, html)
+
+	assert.Contains(t, html, `href="https://dashboard.example"`)
+	assert.Contains(t, html, ">Open dashboard<")
+	assert.Contains(t, html, "Hello carol@example.com,")
+	assert.Contains(t, html, "<strong>admin</strong>")
+}
