@@ -174,6 +174,17 @@ func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionU
 		return nil, NewClientError(400, "invalid request body")
 	}
 
+	// The frontend base64-encodes new_password (see frontend/src/api/auth.ts:
+	// resetPassword) — same pattern as login / change-password / update-profile.
+	// Decode it back to plaintext before handing to the service or the bcrypt
+	// hash stored represents the base64 string, leaving the user unable to log
+	// in with the password they thought they set. See issue #356.
+	decoded, err := decodeBase64Password(pwdResetReq.NewPassword)
+	if err != nil {
+		return nil, err
+	}
+	pwdResetReq.NewPassword = decoded
+
 	if err := h.auth.ConfirmPasswordReset(ctx, pwdResetReq); err != nil {
 		return nil, err
 	}
