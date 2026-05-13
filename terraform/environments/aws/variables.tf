@@ -439,8 +439,18 @@ variable "dashboard_url" {
   default     = ""
 
   validation {
-    condition     = var.dashboard_url == "" || can(regex("^https?://[^/]+(?::[0-9]+)?$", var.dashboard_url))
-    error_message = "dashboard_url must be empty OR a scheme + host (+ optional port), with no trailing slash and no path."
+    # Empty short-circuit, or a strict scheme + host (+ optional port).
+    # Pattern breakdown:
+    #   ^https?://                        scheme: http or https
+    #   (?:                               host: one of...
+    #     [A-Za-z0-9.-]+                    hostname / FQDN (letters, digits, dots, dashes)
+    #     |\\[[0-9A-Fa-f:]+\\]              OR bracketed IPv6 literal, e.g. [::1]
+    #   )
+    #   (?::[0-9]+)?                      optional numeric port
+    #   $                                 end-of-string — no path, query (?…),
+    #                                     fragment (#…), or userinfo (user@…)
+    condition     = var.dashboard_url == "" || can(regex("^https?://(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:]+\\])(?::[0-9]+)?$", var.dashboard_url))
+    error_message = "dashboard_url must be empty OR scheme + host (+ optional port). No trailing slash, path, query string, fragment, or userinfo (user@) allowed; the dashboard URL is used as an origin only."
   }
 }
 
