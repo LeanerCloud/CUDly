@@ -180,7 +180,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 	// stay on the Recommendation struct for internal use (SP no-signal
 	// guard, etc.).
 	header := []string{
-		"Service", "Region", "ResourceType", "Engine",
+		"Service", "Region", "ResourceType", "Engine", "Deployment",
 		"Instances", "CoveredInstances",
 		"Count", "RecommendedCount",
 		"Account", "AccountName", "Term", "PaymentOption",
@@ -205,6 +205,7 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			rec.Region,
 			rec.ResourceType,
 			extractEngine(rec),
+			extractDeployment(rec),
 			formatAvgInstancesOrBlank(rec.AverageInstancesUsedPerHour),
 			formatCoveredInstancesOrBlank(rec),
 			fmt.Sprintf("%d", rec.Count),
@@ -239,6 +240,27 @@ func formatIntOrBlank(v int) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", v)
+}
+
+// extractDeployment returns the RDS deployment-option string
+// ("single-az" / "multi-az") for an RDS recommendation, empty for any
+// service that doesn't carry a deployment dimension. Critical for RDS
+// price verification: Multi-AZ list prices are roughly 2x Single-AZ, so
+// operators need to see the deployment alongside the upfront figure to
+// confirm a $X upfront row is for the deployment they expect.
+//
+// Both value and pointer Details are accepted to mirror extractEngine
+// (parser path stores pointers; CSV-loader path constructs values).
+func extractDeployment(rec common.Recommendation) string {
+	switch details := rec.Details.(type) {
+	case *common.DatabaseDetails:
+		if details != nil {
+			return details.AZConfig
+		}
+	case common.DatabaseDetails:
+		return details.AZConfig
+	}
+	return ""
 }
 
 // extractEngine returns the engine / platform string for a recommendation's

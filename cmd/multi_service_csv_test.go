@@ -315,6 +315,34 @@ func TestWriteMultiServiceCSVReport_CoverageColumn(t *testing.T) {
 	assert.Equal(t, "", zeroRow[idxCovered], "missing avg or existing_cov should leave CoveredInstances blank")
 }
 
+// TestExtractDeployment covers the deployment-extraction helper used by
+// the RDS row in the CSV. Single-AZ / Multi-AZ is critical context for
+// pricing verification (Multi-AZ list price is ~2x Single-AZ) so the
+// column should land for every RDS rec regardless of which Details form
+// the upstream path used.
+func TestExtractDeployment(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  common.Recommendation
+		want string
+	}{
+		{"*DatabaseDetails Single-AZ", common.Recommendation{Details: &common.DatabaseDetails{AZConfig: "single-az"}}, "single-az"},
+		{"*DatabaseDetails Multi-AZ", common.Recommendation{Details: &common.DatabaseDetails{AZConfig: "multi-az"}}, "multi-az"},
+		{"DatabaseDetails (value) Multi-AZ", common.Recommendation{Details: common.DatabaseDetails{AZConfig: "multi-az"}}, "multi-az"},
+		{"DatabaseDetails empty AZConfig", common.Recommendation{Details: &common.DatabaseDetails{Engine: "mysql"}}, ""},
+		// Non-RDS Details → blank (column is RDS-only data).
+		{"CacheDetails -> empty", common.Recommendation{Details: &common.CacheDetails{Engine: "redis"}}, ""},
+		{"ComputeDetails -> empty", common.Recommendation{Details: &common.ComputeDetails{Platform: "Linux/UNIX"}}, ""},
+		{"nil Details -> empty", common.Recommendation{}, ""},
+		{"nil *DatabaseDetails -> empty", common.Recommendation{Details: (*common.DatabaseDetails)(nil)}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractDeployment(tt.rec))
+		})
+	}
+}
+
 // TestExtractEngine covers the four cases the helper dispatches on:
 // DatabaseDetails (RDS engine), CacheDetails (ElastiCache engine),
 // ComputeDetails (EC2 platform), and unset/other Details (blank).
