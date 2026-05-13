@@ -313,19 +313,19 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 	}
 
 	avg := rec.AverageInstancesUsedPerHour
-	// Under-buy sizing scales AWS's rec.Count by the fraction of the
-	// current-to-100% gap we want to fill. AWS's rec.Count is the
-	// per-account incremental count needed to reach 100% coverage; we
-	// want to fill (target − existing) of the (100 − existing) gap, so
-	// the scaling factor is (target − existing) / (100 − existing).
+	// Coverage-anchored under-buy: size linearly off the pool's avg demand
+	// and the absolute gap to target. Both inputs come from
+	// GetReservationCoverage (AvgInstancesPerHour from
+	// TotalRunningHours/window; ExistingCoveragePct from
+	// CoverageHoursPercentage) so the buy lines up with the AWS console's
+	// reservations-coverage report: target%-existing% of avg instances.
 	//
-	// This is more robust than the prior avg*gap formula for multi-account
-	// orgs: CE's ExistingCoveragePct is org-wide averaged, while AWS's
-	// rec.Count is computed per-account, so scaling AWS's already-correct
-	// count by a fractional dial holds up even when CE's existing-coverage
-	// signal is averaged below the per-account truth. The avg signal is
-	// retained only as a no-signal guard above and for the projection
-	// metrics below.
+	// The previous formula anchored on AWS's rec.Count
+	// (floor(rec.Count × gap / (100−existing))), which under-bought when
+	// AWS sized rec.Count for less than full coverage (ROI-curated) and
+	// when CE's org-wide existing% disagreed with rec.Count's per-account
+	// derivation. Anchoring on coverage's own avg removes both mismatches.
+	// rec.Count is retained only for the cost-scaling ratio further down.
 	//
 	// Keep the subtraction in percentage units (subtract first, divide
 	// later) so whole-percent values don't lose precision to float
@@ -340,27 +340,21 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 			targetPct, rec.ExistingCoveragePct, rec.Service, rec.Region, rec.ResourceType)
 		return rec, false
 	}
-	// remainingGapPct = 100 − existing. Always positive when gapPct > 0
-	// because gapPct > 0 implies targetPct > existing, and targetPct is
-	// validated to be at most 100, so existing < 100 too.
-	remainingGapPct := 100.0 - rec.ExistingCoveragePct
 	// Floor so we never over-shoot the target on integer-arithmetic edges.
 	// Strict-target semantics: 80% means "at most 80% coverage", not "at
-	// least 80%". Floor under-covers small/odd pools (e.g. AWS rec=2,
-	// target=80 gives 1 RI = 50% rather than 2 RIs = 100%); pools too
-	// small to approximate target are best filtered out via
-	// --min-pool-size upstream.
-	nTarget := int(math.Floor(float64(rec.Count) * gapPct / remainingGapPct))
+	// least 80%". Floor under-covers small/odd pools (e.g. avg=2, target=80
+	// gives 1 RI = 50% rather than 2 RIs = 100%); pools too small to
+	// approximate target are best filtered out via --min-pool-size upstream.
+	nTarget := int(math.Floor(avg * gapPct / 100.0))
 
 	if nTarget == 0 {
-		// Floor produces zero when the gap-of-remaining-gap ratio multiplied
-		// by AWS's rec.Count is less than 1 (small recs or thin gaps).
-		// Drop — buying 1 RI would over-shoot target and the strict-target
-		// intent prefers under-cover (run on-demand) over over-cover
-		// (idle commitment). Use --min-pool-size to filter these out
-		// earlier so they don't show up as drops in the log.
-		AppLogger.Printf("INFO: --target-coverage=%.1f%% sizes %s/%s/%s to 0 instances (rec.Count=%d, gap %.2f%% of remaining %.2f%% produces <1 RI); dropped recommendation\n",
-			targetPct, rec.Service, rec.Region, rec.ResourceType, rec.Count, gapPct, remainingGapPct)
+		// Floor produces zero when avg × gap% < 100 (small pools or thin
+		// gaps). Drop — buying 1 RI would over-shoot target and the
+		// strict-target intent prefers under-cover (run on-demand) over
+		// over-cover (idle commitment). Use --min-pool-size to filter
+		// these out earlier so they don't show up as drops in the log.
+		AppLogger.Printf("INFO: --target-coverage=%.1f%% sizes %s/%s/%s to 0 instances (avg=%.2f, gap=%.2f%% produces <1 RI); dropped recommendation\n",
+			targetPct, rec.Service, rec.Region, rec.ResourceType, avg, gapPct)
 		// Returning (_, false) with avg > 0 signals "drop, don't pass through".
 		// applyTargetCoverageRI's caller branches on
 		// rec.AverageInstancesUsedPerHour to distinguish drop vs no-signal.
@@ -371,11 +365,18 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 	// returned rec represents the sized purchase rather than AWS's pre-sized
 	// proposal. SavingsPercentage is invariant (savings vs on-demand ratio).
 	// rec.Count is the AWS pre-sizing count at this point (parser sets Count
-	// == RecommendedCount and we haven't mutated either yet), so dividing by
-	// it gives the correct scaling factor. AWS's rec.Count is sized to reach
-	// ~100% coverage net of existing commitments, so scaling by nTarget/rec.Count
-	// equivalently scales by gap/(1-existing_cov), which is the correct ratio.
-	ratio := float64(nTarget) / float64(rec.Count)
+	// == RecommendedCount and we haven't mutated either yet). When the
+	// coverage-anchored nTarget exceeds rec.Count (AWS sized below full
+	// coverage), the ratio scales costs up linearly — accurate when per-RI
+	// pricing is constant, which it is within a single pool/term/payment
+	// combination. Guarded against rec.Count==0 (malformed rec) by falling
+	// back to nTarget so a zero-cost rec stays zero-cost rather than NaN.
+	var ratio float64
+	if rec.Count > 0 {
+		ratio = float64(nTarget) / float64(rec.Count)
+	} else {
+		ratio = float64(nTarget)
+	}
 	adjusted := rec
 	adjusted.Count = nTarget
 	adjusted.CommitmentCost = rec.CommitmentCost * ratio

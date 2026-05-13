@@ -931,33 +931,34 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 		wantProjCovGTE float64 // we assert coverage >= this (handles the float clamping)
 	}{
 		{
-			// rec.Count=10, avg=8.5, target=95%, existing=0%.
-			// gap=95, remaining=100. n = floor(10 * 95/100) = floor(9.5) = 9.
-			// Projected util = 8.5/9 = 94.4.
-			name:         "RI: target 95 buys 9 (floor of 10*0.95)",
+			// avg=8.5, target=95%, existing=0%.
+			// gap=95. n = floor(8.5 * 95/100) = floor(8.075) = 8.
+			// Projected util = 8.5/8 = 106.25 → clamped to 100.
+			name:         "RI: target 95 buys 8 (floor of avg*0.95)",
 			rec:          mkRI(10, 8.5, 0),
 			target:       95,
-			wantCount:    9,
-			wantProjUtil: 94.44,
+			wantCount:    8,
+			wantProjUtil: 100,
 		},
 		{
-			// rec.Count=10, target=50%, existing=0%. n=floor(10*0.5)=5.
-			name:         "RI: target 50 covers half the AWS rec",
+			// avg=10, target=50%, existing=0%. n=floor(10*0.5)=5.
+			name:         "RI: target 50 buys half of avg demand",
 			rec:          mkRI(10, 10, 0),
 			target:       50,
 			wantCount:    5,
 			wantProjUtil: 100, // 10/5 clamped
 		},
 		{
-			// rec.Count=5, avg=0.4, target=50%, existing=0%.
-			// n = floor(5 * 50/100) = floor(2.5) = 2.
-			// Tiny pool still gets a rec since AWS sized it; use
-			// --min-pool-size upstream to filter tiny pools out by avg.
-			name:         "RI: tiny avg still buys per rec.Count scaling",
-			rec:          mkRI(5, 0.4, 0),
-			target:       50,
-			wantCount:    2,
-			wantProjUtil: 20, // 0.4/2 = 20% (not clamped, below 100)
+			// avg=0.4, target=50%, existing=0%.
+			// n = floor(0.4 * 50/100) = floor(0.2) = 0 → DROPPED.
+			// Tiny pools where avg×gap%<100 produce 0 RIs under the
+			// coverage-anchored formula. --min-pool-size upstream is the
+			// intended filter for these; the drop here is the fallback
+			// when the upstream filter wasn't applied.
+			name:        "RI: tiny avg below 1-RI threshold drops",
+			rec:         mkRI(5, 0.4, 0),
+			target:      50,
+			wantDropped: true,
 		},
 		{
 			// avg=0 (no signal) → passed through unchanged, counted in skip summary.
@@ -968,12 +969,12 @@ func TestApplyTargetCoverage_RI(t *testing.T) {
 			wantProjUtil: 0, // never set in pass-through
 		},
 		{
-			// rec.Count=5, avg=4, target=80%, existing=0%. n=floor(5*0.8)=4.
-			// Projected util = 4/4 = 100.
-			name:         "RI: target 80 buys 4 of 5 AWS-recommended",
+			// avg=4, target=80%, existing=0%. n=floor(4*0.8)=3.
+			// Projected util = 4/3 = 133% clamped to 100.
+			name:         "RI: target 80 buys floor(avg*0.8)",
 			rec:          mkRI(5, 4, 0),
 			target:       80,
-			wantCount:    4,
+			wantCount:    3,
 			wantProjUtil: 100,
 		},
 	}
@@ -1020,14 +1021,16 @@ func TestApplyTargetCoverage_RI_CostScaling(t *testing.T) {
 		SavingsPercentage:           25,
 		AverageInstancesUsedPerHour: 8,
 	}
-	// target=80, existing=0, rec.Count=10 → gap=80, remaining=100.
-	// n = floor(10 * 80/100) = 8. Ratio = 8/10 = 0.8.
+	// target=80, existing=0, avg=8 → gap=80.
+	// n = floor(8 * 80/100) = 6. Ratio = 6/10 = 0.6 (cost scaling still
+	// uses rec.Count to convert AWS's quoted cost-for-rec.Count into
+	// cost-for-nTarget).
 	out := ApplyTargetCoverage([]common.Recommendation{rec}, 80)
 	require.Len(t, out, 1)
-	assert.Equal(t, 8, out[0].Count)
-	assert.InDelta(t, 800.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by Count/rec.Count")
-	assert.InDelta(t, 1600.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by Count/rec.Count")
-	assert.InDelta(t, 400.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by Count/rec.Count")
+	assert.Equal(t, 6, out[0].Count)
+	assert.InDelta(t, 600.0, out[0].CommitmentCost, 0.001, "CommitmentCost scales by nTarget/rec.Count")
+	assert.InDelta(t, 1200.0, out[0].OnDemandCost, 0.001, "OnDemandCost scales by nTarget/rec.Count")
+	assert.InDelta(t, 300.0, out[0].EstimatedSavings, 0.001, "EstimatedSavings scales by nTarget/rec.Count")
 	assert.Equal(t, 25.0, out[0].SavingsPercentage, "SavingsPercentage is invariant under count scaling")
 }
 
@@ -1092,29 +1095,25 @@ func TestApplyTargetCoverage_RI_ExistingCoverage(t *testing.T) {
 			wantDropped: true,
 		},
 		{
-			// rec.Count=5, existing=70%, target=80%, avg=2.
-			// gap=10, remaining=30. n = floor(5 * 10/30) = floor(1.67) = 1.
-			// Total cov = 70 + 1/2*100 = 120 clamped to 100.
-			name:         "Small gap still buys 1 (rec.Count*ratio)",
-			rec:          mkRI(5, 2, 70),
-			target:       80,
-			wantCount:    1,
-			wantTotalCov: 100,
+			// avg=2, existing=70%, target=80%. gap=10.
+			// n = floor(2 * 10/100) = floor(0.2) = 0 → DROPPED.
+			// Small pool + thin gap: no integer buy can approximate the
+			// target. --min-pool-size upstream is the intended filter.
+			name:        "Small gap on tiny avg drops",
+			rec:         mkRI(5, 2, 70),
+			target:      80,
+			wantDropped: true,
 		},
 		{
-			// rec.Count=10, existing=60%, target=70%, avg=10.
-			// gap=10, remaining=40. n = floor(10 * 10/40) = floor(2.5) = 2.
-			// Total cov = 60 + 2/10*100 = 80, slightly over target — would
-			// be 1 if rec.Count matched the avg×remaining/100 baseline,
-			// but the test fixture sets rec.Count=10 which is larger than
-			// the implied "incremental to 100%" count of 4. In real CE
-			// data, rec.Count is per-account-correct, so the formula is
-			// trusting AWS over the avg+existing-derived count.
-			name:         "Small top-up: scales AWS rec.Count by gap ratio",
+			// avg=10, existing=60%, target=70%. gap=10.
+			// n = floor(10 * 10/100) = 1. Total cov = 60 + 1/10*100 = 70.
+			// Coverage-anchored: 1 RI exactly closes the 10-point gap
+			// because avg=10 and each RI is worth 10% of avg demand.
+			name:         "Small top-up: 1 RI exactly closes 10-pt gap on avg=10",
 			rec:          mkRI(10, 10, 60),
 			target:       70,
-			wantCount:    2,
-			wantTotalCov: 80,
+			wantCount:    1,
+			wantTotalCov: 70,
 		},
 	}
 
@@ -1205,9 +1204,9 @@ func TestApplySizing(t *testing.T) {
 		cfg := Config{TargetCoverage: 80, Coverage: 100}
 		out := applySizing([]common.Recommendation{ri}, cfg, cfg.Coverage)
 		require.Len(t, out, 1)
-		// rec.Count=10, target=80%, existing=0%, avg=8.
-		// n = floor(10 * 80/100) = 8. ProjectedUtilization = 8/8 = 100.
-		assert.Equal(t, 8, out[0].Count)
+		// avg=8, target=80%, existing=0%. gap=80.
+		// n = floor(8 * 80/100) = floor(6.4) = 6. ProjUtil = 8/6 = 133% → 100.
+		assert.Equal(t, 6, out[0].Count)
 		assert.Equal(t, 100.0, out[0].ProjectedUtilization)
 	})
 
@@ -1223,10 +1222,11 @@ func TestApplySizing(t *testing.T) {
 }
 
 // TestApplyTargetCoverage_RI_Target100 covers the target == 100 boundary.
-// With the rec.Count-based formula, target=100 (existing=0) always yields
-// n = floor(rec.Count * 100/100) = rec.Count — operators get AWS's exact
-// recommendation. Tiny-avg pools no longer drop on this branch; use
-// --min-pool-size to filter them upstream.
+// With the coverage-anchored formula, target=100 (existing=0) yields
+// n = floor(avg * 100/100) = floor(avg) — operators get a buy sized to
+// the pool's average concurrent demand, not AWS's rec.Count (which may
+// be sized to peak/ROI-curated). Pools where avg<1 drop; --min-pool-size
+// is the intended upstream filter.
 func TestApplyTargetCoverage_RI_Target100(t *testing.T) {
 	mkRI := func(count int, avg float64) common.Recommendation {
 		return common.Recommendation{
@@ -1245,12 +1245,14 @@ func TestApplyTargetCoverage_RI_Target100(t *testing.T) {
 		wantDropped bool
 		wantCount   int
 	}{
-		// rec.Count=5 → buy 5 regardless of avg.
-		{name: "target 100, rec.Count=5 → buy AWS rec exactly", rec: mkRI(5, 0.999), wantCount: 5},
-		{name: "target 100, rec.Count=5 avg=1 → buy 5", rec: mkRI(5, 1.0), wantCount: 5},
-		// rec.Count=10, target=100 → buy 10 (regardless of avg).
-		{name: "target 100, rec.Count=10 → buy AWS rec exactly", rec: mkRI(10, 8.7), wantCount: 10},
-		{name: "target 100, rec.Count=10 avg=10 → buy 10", rec: mkRI(10, 10.0), wantCount: 10},
+		// avg=0.999 → floor(0.999)=0 → drop.
+		{name: "target 100, avg=0.999 → drop (avg<1)", rec: mkRI(5, 0.999), wantDropped: true},
+		// avg=1.0 → buy 1 (matches avg demand).
+		{name: "target 100, avg=1 → buy 1", rec: mkRI(5, 1.0), wantCount: 1},
+		// avg=8.7 → floor(8.7) = 8.
+		{name: "target 100, avg=8.7 → buy floor(avg)=8", rec: mkRI(10, 8.7), wantCount: 8},
+		// avg=10 → buy 10 (avg=10 means 10 concurrent instances on average).
+		{name: "target 100, avg=10 → buy 10", rec: mkRI(10, 10.0), wantCount: 10},
 	}
 
 	for _, tt := range tests {
