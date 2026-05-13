@@ -202,9 +202,15 @@ func partitionRDSRecsByFamily(recs []common.Recommendation) (map[string][]int, [
 
 // sizeRDSFamilyRecs sizes the recs in one family-key group: returns the
 // sized recs, drops empty/over-target families, and returns the
-// unchanged AWS-recommended counts when there's no coverage signal. The
-// scaling math (target_NU_need / current_rec_NU) and per-rec field
-// rewrite live in scaleRDSRecInFamily.
+// unchanged AWS-recommended counts when there's no coverage signal.
+//
+// First pass scales each rec's Count and cost-bearing fields by the
+// family-wide scale factor; second pass sets the same family-level
+// ProjectedCoverage on every surviving rec so operators see the
+// cumulative family projection (existing% + sum-of-new-NU / totalNU)
+// rather than each rec's standalone contribution. Without the second
+// pass, a family with N recs would show N different ProjectedCoverage
+// values, each missing the other N-1 recs' contributions.
 func sizeRDSFamilyRecs(
 	recs []common.Recommendation,
 	indices []int,
@@ -235,22 +241,61 @@ func sizeRDSFamilyRecs(
 		return nil
 	}
 	scale := targetNU / currentNU
-	out := make([]common.Recommendation, 0, len(indices))
+	sized, totalNewNU := scaleFamilyRecs(recs, indices, scale)
+	annotateFamilyProjection(sized, existingPct, totalNewNU, family.TotalNU)
+	return sized
+}
+
+// scaleFamilyRecs is the first pass of sizeRDSFamilyRecs: applies the
+// family-wide scale factor to each rec's count and cost-bearing fields,
+// returning the surviving recs (newCount > 0) and the cumulative
+// post-scaling NU across them.
+func scaleFamilyRecs(recs []common.Recommendation, indices []int, scale float64) ([]common.Recommendation, float64) {
+	sized := make([]common.Recommendation, 0, len(indices))
+	totalNewNU := 0.0
 	for _, i := range indices {
-		sized, kept := scaleRDSRecInFamily(recs[i], scale, existingPct, family.TotalNU)
-		if kept {
-			out = append(out, sized)
+		rec, kept := scaleRDSRecInFamily(recs[i], scale)
+		if !kept {
+			continue
+		}
+		sized = append(sized, rec)
+		totalNewNU += float64(rec.Count) * rdsInstanceNUFromType(rec.ResourceType)
+	}
+	return sized, totalNewNU
+}
+
+// annotateFamilyProjection is the second pass: computes the cumulative
+// family ProjectedCoverage (existing% plus totalNewNU / familyTotalNU
+// expressed as %) and writes the same value onto every rec along with
+// the matching ExistingCoveragePct and per-rec ProjectedUtilization. The
+// same projection lands on every row so each one reflects "where the
+// family lands" rather than its own slice.
+func annotateFamilyProjection(sized []common.Recommendation, existingPct, totalNewNU, familyTotalNU float64) {
+	familyProj := existingPct + totalNewNU/familyTotalNU*100.0
+	if familyProj > 100 {
+		familyProj = 100
+	}
+	for i := range sized {
+		sized[i].ExistingCoveragePct = existingPct
+		sized[i].ProjectedCoverage = familyProj
+		if sized[i].AverageInstancesUsedPerHour > 0 {
+			util := sized[i].AverageInstancesUsedPerHour / float64(sized[i].Count) * 100.0
+			if util > 100 {
+				util = 100
+			}
+			sized[i].ProjectedUtilization = util
 		}
 	}
-	return out
 }
 
 // scaleRDSRecInFamily applies the family-wide scale factor to one rec:
-// computes newCount = floor(oldCount × scale), scales cost-bearing
-// fields by the same ratio, and rewrites projection metrics for the
-// family-NU view. Returns (rec, false) when newCount is zero so the
-// caller drops the rec (family target left no room for it).
-func scaleRDSRecInFamily(rec common.Recommendation, scale, existingPct, familyTotalNU float64) (common.Recommendation, bool) {
+// computes newCount = floor(oldCount × scale) and scales cost-bearing
+// fields by the same ratio. Returns (rec, false) when newCount is zero
+// so the caller drops the rec (family target left no room for it).
+// Projection / utilization metrics are NOT set here — those need the
+// family-wide cumulative NU which only the caller knows after sizing
+// every rec in the family.
+func scaleRDSRecInFamily(rec common.Recommendation, scale float64) (common.Recommendation, bool) {
 	oldCount := rec.Count
 	newCount := int(math.Floor(float64(oldCount) * scale))
 	if newCount <= 0 {
@@ -264,20 +309,6 @@ func scaleRDSRecInFamily(rec common.Recommendation, scale, existingPct, familyTo
 	if rec.RecurringMonthlyCost != nil {
 		scaled := *rec.RecurringMonthlyCost * ratio
 		rec.RecurringMonthlyCost = &scaled
-	}
-	rec.ExistingCoveragePct = existingPct
-	newNU := float64(newCount) * rdsInstanceNUFromType(rec.ResourceType)
-	projCov := existingPct + newNU/familyTotalNU*100.0
-	if projCov > 100 {
-		projCov = 100
-	}
-	rec.ProjectedCoverage = projCov
-	if rec.AverageInstancesUsedPerHour > 0 {
-		util := rec.AverageInstancesUsedPerHour / float64(newCount) * 100.0
-		if util > 100 {
-			util = 100
-		}
-		rec.ProjectedUtilization = util
 	}
 	return rec, true
 }

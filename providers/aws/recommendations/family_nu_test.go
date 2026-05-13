@@ -283,6 +283,59 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 		assert.Equal(t, common.ServiceSavingsPlans, nonRDS[1].Service)
 	})
 
+	t.Run("ProjectedCoverage is cumulative across recs in a family", func(t *testing.T) {
+		// Two per-account recs in same family/engine/deployment: each rec
+		// must show the family-wide projected coverage (existing + sum-of-
+		// all-recs' new NU / family total NU), not just its own slice.
+		// Without cumulation, two recs each adding 20% of family NU would
+		// each report "existing + 20%" instead of the true "existing + 40%".
+		cov := PoolCoverageMap{
+			rdsPoolKey("us-east-1", "db.t4g.medium", "Aurora PostgreSQL", "Single-AZ"): {
+				Pct: 16.7, AvgInstancesPerHour: 12.0, // 24 NU at .medium (×2 NU)
+			},
+		}
+		// Family total NU = 24. AWS rec api returned two recs (per account)
+		// each .medium size; AWS-implied total = 5+3 = 8 RIs = 16 NU.
+		// existing=16.7%, gap=63.3, targetNU = 63.3/100 × 24 = 15.2.
+		// scale = 15.2/16 = 0.95 → floor(5×0.95)=4, floor(3×0.95)=2.
+		// Total new NU = (4+2) × 2 = 12. Cumulative projection =
+		// 16.7 + 12/24*100 = 16.7 + 50 = 66.7%.
+		recs := []common.Recommendation{
+			{
+				Service:        common.ServiceRDS,
+				CommitmentType: common.CommitmentReservedInstance,
+				Region:         "us-east-1",
+				ResourceType:   "db.t4g.medium",
+				Account:        "production",
+				Count:          5,
+				CommitmentCost: 500,
+				Details:        &common.DatabaseDetails{Engine: "aurora-postgresql", AZConfig: "single-az"},
+			},
+			{
+				Service:        common.ServiceRDS,
+				CommitmentType: common.CommitmentReservedInstance,
+				Region:         "us-east-1",
+				ResourceType:   "db.t4g.medium",
+				Account:        "staging",
+				Count:          3,
+				CommitmentCost: 300,
+				Details:        &common.DatabaseDetails{Engine: "aurora-postgresql", AZConfig: "single-az"},
+			},
+		}
+		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		require.Len(t, sized, 2, "both recs kept after scaling")
+		// Both recs see the SAME cumulative projection.
+		assert.InDelta(t, sized[0].ProjectedCoverage, sized[1].ProjectedCoverage, 0.001,
+			"both recs in the same family must report the same ProjectedCoverage")
+		// And the projection reflects BOTH recs' contributions, not just
+		// either one alone. existing 16.7 + (4+2)*2 / 24 * 100 = 66.7
+		assert.InDelta(t, 66.7, sized[0].ProjectedCoverage, 0.01,
+			"cumulative projection: existing + sum-of-all-recs new NU / family total NU")
+		// Both rec.Count values reflect the scale-down.
+		assert.Equal(t, 4, sized[0].Count, "prod scaled 5→4")
+		assert.Equal(t, 2, sized[1].Count, "staging scaled 3→2")
+	})
+
 	t.Run("multiple sizes in same family scale together", func(t *testing.T) {
 		// Family db.r6g Aurora MySQL eu-west-2 has demand at .large and .xlarge.
 		// avg .large = 5 (20 NU), avg .xlarge = 5 (40 NU). Total = 60 NU; cov = 0.
