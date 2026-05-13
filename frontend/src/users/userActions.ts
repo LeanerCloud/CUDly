@@ -20,6 +20,31 @@ import { renderGroups } from '../groups/groupList';
 import { renderPermissionMatrix } from './permissionMatrix';
 
 /**
+ * Defence-in-depth normaliser for the API contract. The backend's TS-typed
+ * APIUser declares `groups: string[]` as required, but historical bugs
+ * (and unforeseen future ones) can omit the field or send `null`. Renderers
+ * iterate `user.groups`, so a missing field crashes the page with a
+ * generic "Failed to load users and groups" toast that obscures the real
+ * cause. See issue #350 — the backend fix lives there too; this guard is
+ * the second line of defence so a future contract regression degrades
+ * gracefully instead of throwing a TypeError in an Array.map.
+ */
+function normalizeUser(user: api.APIUser): api.APIUser {
+  return {
+    ...user,
+    groups: Array.isArray(user.groups) ? user.groups : [],
+  };
+}
+
+function normalizeGroup(group: api.APIGroup): api.APIGroup {
+  return {
+    ...group,
+    permissions: Array.isArray(group.permissions) ? group.permissions : [],
+    allowed_accounts: Array.isArray(group.allowed_accounts) ? group.allowed_accounts : [],
+  };
+}
+
+/**
  * Ensure the currently-logged-in user is visible in the list.
  * If the API didn't include them (e.g. self-management not wired up yet),
  * prepend a synthetic entry flagged with id='current' so the userList "You"
@@ -49,8 +74,15 @@ export async function loadUsers(): Promise<void> {
       api.listGroups()
     ]);
 
-    setAvailableGroups(groupsResponse.groups);
-    setAllUsers(withCurrentUser(usersResponse.users));
+    // Normalise at the boundary so downstream renderers can trust
+    // user.groups / group.permissions / group.allowed_accounts to be
+    // real arrays (see normalizeUser/normalizeGroup above for the
+    // rationale — issue #350 backend + frontend defence-in-depth).
+    const users = (usersResponse.users ?? []).map(normalizeUser);
+    const groups = (groupsResponse.groups ?? []).map(normalizeGroup);
+
+    setAvailableGroups(groups);
+    setAllUsers(withCurrentUser(users));
 
     // Apply current filters
     applyFilters();
