@@ -577,6 +577,11 @@ func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, toke
 	return args.Error(0)
 }
 
+func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string) error {
+	args := m.Called(ctx, execID, actor)
+	return args.Error(0)
+}
+
 func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token, actor string) error {
 	args := m.Called(ctx, execID, token, actor)
 	return args.Error(0)

@@ -270,9 +270,17 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 		ExecutionID:   "exec-appv",
 		Status:        "pending",
 		ApprovalToken: "correct-token",
+		// Recommendations are non-Selected, so processPurchaseRecommendations
+		// is a no-op and no AWS API call is made.
 		Recommendations: []config.RecommendationRecord{
 			{CloudAccountID: &accountID},
 		},
+	}
+	approved := &config.PurchaseExecution{
+		ExecutionID:     "exec-appv",
+		Status:          "approved",
+		ApprovalToken:   "correct-token",
+		Recommendations: exec.Recommendations,
 	}
 	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
 
@@ -280,7 +288,15 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	// execution; mock returns it twice.
 	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Twice()
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
+	// Atomic approve transition (issue #372 fix).
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "approved").Return(approved, nil)
+	// Synchronous execute chain: empty plan, no accounts → single-account
+	// no-op path, then notification + final save + plan-progress update.
+	plan := &config.PurchasePlan{ID: "", Name: "test-plan"}
+	mockStore.On("GetPurchasePlan", ctx, "").Return(plan, nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.Anything).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -291,6 +307,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv","token":"correct-token","actor_email":"owner@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
 }
 
 func TestProcessMessage_CancelHappyPath(t *testing.T) {

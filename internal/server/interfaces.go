@@ -20,6 +20,7 @@ type PurchaseManagerInterface interface {
 	SendUpcomingPurchaseNotifications(ctx context.Context) (*purchase.NotificationResult, error)
 	ProcessMessage(ctx context.Context, body string) error
 	ApproveExecution(ctx context.Context, execID, token, actor string) error
+	ApproveAndExecute(ctx context.Context, execID, actor string) error
 	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 

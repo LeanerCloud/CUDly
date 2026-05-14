@@ -10,19 +10,19 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ApproveExecution approves a pending execution. actor carries the email
-// of the session-authenticated user who clicked approve (from the
-// HTTP route gated by authorizeApprovalAction) or the actor_email
-// carried by an SQS approve message after verifyAsyncApprovalActor has
-// validated it against the per-account contact_email approver list.
-// Both call paths now enforce the approver gate before reaching this
-// function — actor is empty only on legacy in-process callers (tests,
-// older code paths) and is recorded as nil so we don't claim "approved
+// ApproveExecution is the token-authenticated approve entry point used by
+// the legacy email-link flow and the SQS approve worker. After validating
+// the approval token it hands off to ApproveAndExecute, which performs the
+// atomic status transition and runs the AWS purchase synchronously.
+//
+// actor carries the email of the operator who triggered the approval
+// (session-authed click on the HTTP path; verified actor_email on the SQS
+// path) so it can be stamped onto ApprovedBy. Empty actor is recorded as
+// NULL — the column is nullable TEXT and we don't want to claim "approved
 // by nobody".
 func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string) error {
 	logging.Infof("Approving execution: %s", executionID)
 
-	// Get the execution
 	execution, err := m.config.GetExecutionByID(ctx, executionID)
 	if err != nil {
 		return fmt.Errorf("failed to get execution: %w", err)
@@ -31,7 +31,7 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return fmt.Errorf("execution not found: %s", executionID)
 	}
 
-	// Validate token using constant-time comparison to prevent timing attacks
+	// Validate token using constant-time comparison to prevent timing attacks.
 	if execution.ApprovalToken == "" || token == "" {
 		return fmt.Errorf("invalid approval token")
 	}
@@ -39,25 +39,43 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return fmt.Errorf("invalid approval token")
 	}
 
-	// Check status
-	if execution.Status != "pending" && execution.Status != "notified" {
-		return fmt.Errorf("execution cannot be approved, current status: %s", execution.Status)
+	return m.ApproveAndExecute(ctx, executionID, actor)
+}
+
+// ApproveAndExecute atomically flips a pending/notified execution to
+// "approved" (stamping ApprovedBy) and then runs the purchase
+// synchronously, returning the final outcome. Callers MUST have already
+// authorized the actor — this method does no RBAC or token validation; it
+// is shared between:
+//
+//   - ApproveExecution (token path: token validated by the caller)
+//   - approvePurchaseViaSession (session path: RBAC validated by the caller)
+//
+// Concurrency: TransitionExecutionStatus uses an atomic UPDATE WHERE status
+// IN ('pending','notified'). Two callers racing to approve the same row
+// will see exactly one win — the loser receives a clear "cannot
+// transition" error. Cross-execution concurrency is unaffected: each
+// approval drives its own executeAndFinalize, which already fans out
+// per-account in parallel via executeMultiAccount.
+func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor string) error {
+	updated, err := m.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified"}, "approved")
+	if err != nil {
+		return fmt.Errorf("approve: %w", err)
 	}
 
-	// Update status + attribution (nil when actor is empty — the store
-	// column is nullable TEXT and we don't want to record an empty string
-	// as "approved by nobody").
-	execution.Status = "approved"
 	if actor != "" {
 		a := actor
-		execution.ApprovedBy = &a
-	}
-	if err := m.config.SavePurchaseExecution(ctx, execution); err != nil {
-		return fmt.Errorf("failed to save execution: %w", err)
+		updated.ApprovedBy = &a
+		if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {
+			// Attribution is best-effort once the atomic flip has landed —
+			// dropping ApprovedBy must not stop the purchase from firing.
+			// Log loudly so the audit gap is visible.
+			logging.Errorf("AUDIT GAP: failed to stamp approved_by on %s: %v", executionID, saveErr)
+		}
 	}
 
-	logging.Infof("Execution %s approved", executionID)
-	return nil
+	logging.Infof("Execution %s approved, executing synchronously", executionID)
+	return m.executeAndFinalize(ctx, updated)
 }
 
 // CancelExecution cancels a pending execution. actor carries the email of

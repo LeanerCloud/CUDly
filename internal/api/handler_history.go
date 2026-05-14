@@ -64,13 +64,16 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 
 // historyExecutionStatuses enumerates the PurchaseExecution statuses the
 // History view shows alongside completed purchases. "approved" and
-// "completed" are excluded because an approved execution becomes a
-// purchase_history row once the scheduler processes it, and completed
-// executions live in purchase_history directly — listing them here would
-// duplicate rows. Everything else (pending, notified, failed, expired,
-// cancelled) is a terminal or in-flight state the user needs audit-trail
-// visibility into: a cancelled purchase that simply vanishes is worse UX
-// than a cancelled row with a clear badge.
+// "completed" are excluded because approval now executes synchronously
+// (issue #372): an Approve click drives the row through "approved" inside
+// a single HTTP request and lands on either "completed" (already in
+// purchase_history) or "failed" (which is in this list). Listing
+// "approved" would either duplicate a completed row or surface a ghost
+// row that no longer exists from the user's perspective. The remaining
+// states (pending, notified, failed, expired, cancelled) are terminal or
+// in-flight states the user needs audit-trail visibility into: a
+// cancelled purchase that simply vanishes is worse UX than a cancelled
+// row with a clear badge.
 var historyExecutionStatuses = []string{"pending", "notified", "failed", "expired", "cancelled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
