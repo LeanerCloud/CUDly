@@ -310,21 +310,33 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 		if err != nil {
 			return nil, err
 		}
+		// ApproveExecution now runs the purchase synchronously inside the
+		// same call (issue #372). When it returns nil the AWS API call
+		// has already happened, so the response surfaces "completed"
+		// instead of the transient "approved" the old no-op flow returned.
 		if err := h.purchase.ApproveExecution(ctx, execID, token, actor); err != nil {
 			return nil, err
 		}
-		return map[string]string{"status": "approved"}, nil
+		return map[string]string{"status": "completed"}, nil
 	}
 
 	return h.approvePurchaseViaSession(ctx, req, execution)
 }
 
 // approvePurchaseViaSession is the session-authed branch of approvePurchase.
-// Enforces the approve-any/approve-own RBAC matrix, validates the execution
-// is in an approvable state (pending|notified), flips the row to "approved"
-// and stamps session.Email onto ApprovedBy. Mirrors cancelPurchaseViaSession
-// minus the suppressions cleanup (approve doesn't drop suppressions —
-// suppressions persist through the approval and only clear on cancel/expiry).
+// Enforces the approve-any/approve-own RBAC matrix, then hands off to
+// purchase.Manager.ApproveAndExecute which atomically flips the row to
+// "approved" (stamping session.Email onto ApprovedBy) and runs the
+// purchase synchronously. The synchronous-execute is what closes the gap
+// from issue #372 — pre-fix, approval was a no-op beyond the status flip
+// because no scheduler picked the "approved" row up for the Lambda
+// deployment.
+//
+// Concurrency: ApproveAndExecute uses an atomic transition, so two
+// in-flight Approve clicks on the same execution see exactly one win.
+// Approvals across different executions run independently — each HTTP
+// invocation drives its own executeAndFinalize, which already fans out
+// per-account in parallel via executeMultiAccount.
 func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
@@ -339,20 +351,16 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 
-	// Flip status + stamp ApprovedBy. The optimistic-locking guard inside
-	// the tx (status IN ('pending','notified')) prevents a concurrent
-	// cancel from landing on top of us — if the status drifted, the
-	// UPDATE 0-rows the row count and we 409 cleanly.
-	execution.Status = "approved"
-	if session.Email != "" {
-		actor := session.Email
-		execution.ApprovedBy = &actor
-	}
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be approved: %v", execution.ExecutionID, err))
+	if err := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, session.Email); err != nil {
+		// ApproveAndExecute returns either a transition error (the row
+		// drifted out of pending/notified between our check and the UPDATE
+		// — race with cancel/expire) or an execution error (AWS API failed,
+		// status is now "failed" on disk). Both surface as 409 to the
+		// caller; the History view shows the resulting row state.
+		return nil, NewClientError(409, fmt.Sprintf("execution %s could not be approved: %v", execution.ExecutionID, err))
 	}
 
-	return map[string]string{"status": "approved"}, nil
+	return map[string]string{"status": "completed"}, nil
 }
 
 // authorizeSessionApprove returns nil when the session is permitted to

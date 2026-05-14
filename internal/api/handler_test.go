@@ -759,7 +759,9 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	var body map[string]string
 	err = json.Unmarshal([]byte(resp.Body), &body)
 	require.NoError(t, err)
-	assert.Equal(t, "approved", body["status"])
+	// Issue #372: approve now executes synchronously; response reports
+	// the post-execute state.
+	assert.Equal(t, "completed", body["status"])
 }
 
 func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {

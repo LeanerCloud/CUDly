@@ -266,13 +266,28 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 
 	accountID := "acct-1"
+	// Non-empty PlanID exercises the plan-id propagation through the
+	// approve→execute chain. Earlier versions of this test used "" and
+	// would have silently passed even if the approve handler dropped or
+	// substituted the plan id en route to GetPurchasePlan.
+	planID := "plan-appv"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   "exec-appv",
+		PlanID:        planID,
 		Status:        "pending",
 		ApprovalToken: "correct-token",
+		// Recommendations are non-Selected, so processPurchaseRecommendations
+		// is a no-op and no AWS API call is made.
 		Recommendations: []config.RecommendationRecord{
 			{CloudAccountID: &accountID},
 		},
+	}
+	approved := &config.PurchaseExecution{
+		ExecutionID:     "exec-appv",
+		PlanID:          planID,
+		Status:          "approved",
+		ApprovalToken:   "correct-token",
+		Recommendations: exec.Recommendations,
 	}
 	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
 
@@ -280,7 +295,17 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	// execution; mock returns it twice.
 	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Twice()
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
+	// Atomic approve transition (issue #372 fix).
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "approved").Return(approved, nil)
+	// Synchronous execute chain: GetPurchasePlan is called with the
+	// approved execution's PlanID — pinning the non-empty id here means a
+	// regression that drops it (e.g. passes "" or exec.ExecutionID by
+	// mistake) would mismatch the mock expectation and fail the test.
+	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.Anything).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -291,6 +316,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv","token":"correct-token","actor_email":"owner@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
 }
 
 func TestProcessMessage_CancelHappyPath(t *testing.T) {

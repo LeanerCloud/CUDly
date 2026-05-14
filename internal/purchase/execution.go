@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,56 +204,142 @@ func getMaxAccountParallelism() int {
 	return execution.ConcurrencyFromEnv()
 }
 
+// recPurchaseOutcome carries the result of a single fan-out unit so the
+// aggregator can write back into exec.Recommendations and call
+// savePurchaseHistory from a single goroutine (no concurrent map / slice
+// mutation). The index field is the position in exec.Recommendations.
+type recPurchaseOutcome struct {
+	index    int
+	purchase common.PurchaseResult
+	err      error
+}
+
 func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {
+	opts := common.PurchaseOptions{Source: m.normalizePurchaseSource(exec)}
+
+	// Build the list of selected indices once so the fan-out closure only
+	// has to look up rec[i] (no second pass over the full slice).
+	selected := selectedIndices(exec.Recommendations)
+	if len(selected) == 0 {
+		return 0, 0, nil
+	}
+
+	// Each rec runs in its own goroutine so a multi-rec execution that
+	// spans providers (AWS RI + Azure reservation + GCP CUD) or services
+	// (EC2 + RDS + ElastiCache + OpenSearch within AWS) makes its cloud
+	// API calls in parallel rather than blocking on the slowest one.
+	// Provider client construction inside executeSinglePurchase is
+	// independent per call, so cross-provider parallelism is safe.
+	// Concurrency is capped at getMaxAccountParallelism so the same
+	// operator-level CUDLY_MAX_ACCOUNT_PARALLELISM knob covers both the
+	// outer account fan-out and this inner rec fan-out.
+	results := execution.FanOutWithConcurrency(ctx, indexKeys(selected),
+		func(ctx context.Context, key string) (recPurchaseOutcome, error) {
+			// indexKeys() builds these keys from selectedIndices(), so parse +
+			// bounds errors are not expected at runtime. Surface them as
+			// closure-level errors anyway so the aggregator can correlate
+			// them via execution.Result.Err and never silently dereference a
+			// zero-valued outcome at index 0.
+			i, parseErr := strconv.Atoi(key)
+			if parseErr != nil {
+				return recPurchaseOutcome{}, fmt.Errorf("invalid fan-out key %q: %w", key, parseErr)
+			}
+			if i < 0 || i >= len(exec.Recommendations) {
+				return recPurchaseOutcome{}, fmt.Errorf("fan-out index %d out of range for %d recommendations", i, len(exec.Recommendations))
+			}
+			rec := exec.Recommendations[i]
+			logging.Infof("Purchasing: %dx %s in %s (%s/%s)", rec.Count, rec.ResourceType, rec.Region, rec.Provider, rec.Service)
+			purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, opts)
+			return recPurchaseOutcome{index: i, purchase: purchaseResult, err: err}, nil
+		}, getMaxAccountParallelism())
+
+	return m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
+}
+
+// aggregatePurchaseOutcomes walks the fan-out results serially and writes
+// each rec's outcome back to exec.Recommendations + savePurchaseHistory.
+// Extracted so processPurchaseRecommendations stays under gocyclo:10 and
+// so the aggregation logic is single-threaded — no concurrent writes to
+// totals, purchaseErrors, or exec.Recommendations[i] regardless of how
+// many recs ran in parallel.
+func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, results []execution.Result[recPurchaseOutcome]) (float64, float64, []string) {
 	var totalSavings, totalUpfront float64
 	var purchaseErrors []string
-
-	// Source is set once per execution (web handler writes cudly-web; approval
-	// flow preserves it through the DB round-trip) and propagates into every
-	// per-account/per-rec purchase so the tag is stamped consistently.
-	//
-	// Defence-in-depth: NormalizeSource rejects anything outside the allowed
-	// whitelist. If the DB has been tampered with (or a future code path
-	// assigns an unexpected value), we don't want arbitrary strings landing
-	// on cloud commitments where they'd be expensive to retract. Fall back to
-	// untagged rather than failing the already-approved execution.
-	source := exec.Source
-	if source != "" {
-		normalized, err := common.NormalizeSource(source)
-		if err != nil {
-			logging.Warnf("Invalid purchase source %q on execution %s: %v — proceeding untagged", source, exec.ExecutionID, err)
-			source = ""
-		} else {
-			source = normalized
-		}
-	}
-	opts := common.PurchaseOptions{Source: source}
-
-	for i, rec := range exec.Recommendations {
-		if !rec.Selected {
+	for _, r := range results {
+		// Closure-level error (parse / bounds / framework). r.Value is the
+		// zero recPurchaseOutcome here — its index is 0 and would mis-target
+		// exec.Recommendations[0] if blindly trusted. Record it as a
+		// generic execution failure and skip the per-rec writes.
+		if r.Err != nil {
+			logging.Errorf("Internal fan-out failure during purchase execution: %v", r.Err)
+			purchaseErrors = append(purchaseErrors, fmt.Sprintf("internal fan-out error: %v", r.Err))
 			continue
 		}
-
-		logging.Infof("Purchasing: %dx %s in %s", rec.Count, rec.ResourceType, rec.Region)
-
-		purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, opts)
-		if err != nil {
-			logging.Errorf("Failed to purchase %s: %v", rec.ResourceType, err)
-			exec.Recommendations[i].Error = err.Error()
-			purchaseErrors = append(purchaseErrors, fmt.Sprintf("%s: %v", rec.ResourceType, err))
+		v := r.Value
+		i := v.index
+		// Defence-in-depth: even with the closure's bounds check, never
+		// index past exec.Recommendations here (a future refactor that
+		// mutates the slice between fan-out and aggregation would corrupt
+		// this otherwise).
+		if i < 0 || i >= len(exec.Recommendations) {
+			logging.Errorf("Aggregator received out-of-range index %d (len=%d)", i, len(exec.Recommendations))
+			purchaseErrors = append(purchaseErrors, fmt.Sprintf("aggregator index %d out of range", i))
 			continue
 		}
-
+		rec := exec.Recommendations[i]
+		if v.err != nil {
+			logging.Errorf("Failed to purchase %s: %v", rec.ResourceType, v.err)
+			exec.Recommendations[i].Error = v.err.Error()
+			purchaseErrors = append(purchaseErrors, fmt.Sprintf("%s: %v", rec.ResourceType, v.err))
+			continue
+		}
 		exec.Recommendations[i].Purchased = true
-		exec.Recommendations[i].PurchaseID = purchaseResult.CommitmentID
-
+		exec.Recommendations[i].PurchaseID = v.purchase.CommitmentID
 		totalSavings += rec.Savings
 		totalUpfront += rec.UpfrontCost
-
-		m.savePurchaseHistory(ctx, exec, plan, rec, purchaseResult, accountID)
+		m.savePurchaseHistory(ctx, exec, plan, rec, v.purchase, accountID)
 	}
-
 	return totalSavings, totalUpfront, purchaseErrors
+}
+
+// normalizePurchaseSource canonicalizes exec.Source for downstream tag
+// stamping. Defence-in-depth: NormalizeSource rejects anything outside
+// the allowed whitelist; an unexpected value (DB tampering, future
+// code path) is dropped to "" rather than fed onto a cloud commitment
+// where it would be expensive to retract.
+func (m *Manager) normalizePurchaseSource(exec *config.PurchaseExecution) string {
+	source := exec.Source
+	if source == "" {
+		return ""
+	}
+	normalized, err := common.NormalizeSource(source)
+	if err != nil {
+		logging.Warnf("Invalid purchase source %q on execution %s: %v, proceeding untagged", source, exec.ExecutionID, err)
+		return ""
+	}
+	return normalized
+}
+
+// selectedIndices returns the positions of recs with Selected=true,
+// preserving slice order so the aggregator's pass over the fan-out
+// results writes back to exec.Recommendations deterministically.
+func selectedIndices(recs []config.RecommendationRecord) []int {
+	out := make([]int, 0, len(recs))
+	for i, rec := range recs {
+		if rec.Selected {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// indexKeys formats a slice of indices as string keys for FanOut.
+func indexKeys(idx []int) []string {
+	out := make([]string, len(idx))
+	for i, n := range idx {
+		out[i] = strconv.Itoa(n)
+	}
+	return out
 }
 
 func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec config.RecommendationRecord, result common.PurchaseResult, accountID string) {

@@ -134,6 +134,7 @@ type BreakdownValue struct {
 // the notification email at render time.
 type PurchaseManagerInterface interface {
 	ApproveExecution(ctx context.Context, execID, token, actor string) error
+	ApproveAndExecute(ctx context.Context, execID, actor string) error
 	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 

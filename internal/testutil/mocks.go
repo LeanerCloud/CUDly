@@ -34,6 +34,7 @@ type MockPurchaseManager struct {
 	SendUpcomingPurchaseNotificationsFunc func(ctx context.Context) (*purchase.NotificationResult, error)
 	ProcessMessageFunc                    func(ctx context.Context, body string) error
 	ApproveExecutionFunc                  func(ctx context.Context, execID, token, actor string) error
+	ApproveAndExecuteFunc                 func(ctx context.Context, execID, actor string) error
 	CancelExecutionFunc                   func(ctx context.Context, execID, token, actor string) error
 }
 
@@ -61,6 +62,13 @@ func (m *MockPurchaseManager) ProcessMessage(ctx context.Context, body string) e
 func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string) error {
 	if m.ApproveExecutionFunc != nil {
 		return m.ApproveExecutionFunc(ctx, execID, token, actor)
+	}
+	return nil
+}
+
+func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string) error {
+	if m.ApproveAndExecuteFunc != nil {
+		return m.ApproveAndExecuteFunc(ctx, execID, actor)
 	}
 	return nil
 }

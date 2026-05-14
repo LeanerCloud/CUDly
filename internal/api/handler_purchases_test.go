@@ -70,8 +70,11 @@ func TestHandler_approvePurchase(t *testing.T) {
 	result, err := handler.approvePurchase(ctx, req, execID, "valid-token")
 	require.NoError(t, err)
 
+	// Issue #372: approve now also executes synchronously, so the JSON
+	// response surfaces the final state instead of the transient
+	// "approved" the old no-op flow returned.
 	resultMap := result.(map[string]string)
-	assert.Equal(t, "approved", resultMap["status"])
+	assert.Equal(t, "completed", resultMap["status"])
 }
 
 func TestHandler_cancelPurchase(t *testing.T) {
@@ -267,7 +270,93 @@ func TestHandler_approvePurchase_AcceptsContactEmailSession(t *testing.T) {
 	}
 	result, err := handler.approvePurchase(ctx, req, execID, "valid-token")
 	require.NoError(t, err)
-	assert.Equal(t, "approved", result.(map[string]string)["status"])
+	// Issue #372: response now reflects post-execute state.
+	assert.Equal(t, "completed", result.(map[string]string)["status"])
+}
+
+// TestHandler_approvePurchase_SessionApproveAnyChainsToExecute pins the
+// session-authed branch added by issue #286 + made functional by issue
+// #372: when an admin / approve-any session clicks Approve from the
+// dashboard, the handler must call ApproveAndExecute (NOT
+// ApproveExecution), and the JSON response must surface the post-execute
+// status. This is the regression test for the bug where approval was a
+// no-op beyond the status flip on the Lambda deployment.
+func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	adminEmail := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1"},
+		},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+	// CRITICAL ASSERTION: session-authed approve goes through
+	// ApproveAndExecute, not ApproveExecution. The token-only path runs
+	// ApproveExecution; the dashboard click runs ApproveAndExecute. Both
+	// converge inside the Manager.
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	// Empty token forces the dashboard branch.
+	result, err := handler.approvePurchase(ctx, req, execID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", result.(map[string]string)["status"])
+	mockPurchase.AssertExpectations(t)
+	mockPurchase.AssertNotCalled(t, "ApproveExecution")
+}
+
+// TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409 pins the
+// failure shape: when ApproveAndExecute returns an error (e.g. the AWS
+// purchase fails or the row drifted out of pending/notified mid-flight),
+// the session handler surfaces it as a 409 instead of the optimistic
+// "approved" the pre-fix flow returned. Mirrors the rationale in
+// approvePurchaseViaSession.
+func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	adminEmail := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "valid-token",
+		Status:          "pending",
+		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(errors.New("AWS RI purchase failed"))
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.Error(), "could not be approved")
 }
 
 func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T) {
