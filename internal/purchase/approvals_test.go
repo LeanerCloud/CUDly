@@ -226,6 +226,48 @@ func TestManager_ApproveExecution_TransitionFails(t *testing.T) {
 	store.AssertExpectations(t)
 }
 
+// TestManager_ApproveAndExecute_EmptyPlanID is the regression guard for
+// issue #395. Direct-execute purchases (Opportunities "Purchase" button)
+// arrive with PlanID = "". Before the fix, executePurchase called
+// GetPurchasePlan(ctx, "") which crashed with SQLSTATE 22P02 because the
+// Postgres purchase_plans.id column is UUID. This test asserts the
+// approve+execute path now short-circuits the plan/accounts fetch and the
+// plan-progress update, lands the execution in a terminal state, and
+// never calls GetPurchasePlan / GetPlanAccounts / UpdatePurchasePlan.
+func TestManager_ApproveAndExecute_EmptyPlanID(t *testing.T) {
+	ctx := context.Background()
+	manager, store, sender := newApproveManager(t)
+
+	updated := &config.PurchaseExecution{
+		ExecutionID:   "exec-direct-1",
+		PlanID:        "", // direct-execute shape — no associated plan
+		Status:        "approved",
+		ApprovalToken: "tok",
+	}
+	store.On("TransitionExecutionStatus", ctx, "exec-direct-1", approveFromStatuses, "approved").Return(updated, nil)
+	// No GetPurchasePlan / GetPlanAccounts / UpdatePurchasePlan calls — see AssertNotCalled below.
+	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+
+	err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com")
+	require.NoError(t, err)
+
+	// Crucially, the empty PlanID must never reach the UUID-typed store columns.
+	store.AssertNotCalled(t, "GetPurchasePlan", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "UpdatePurchasePlan", mock.Anything, mock.Anything)
+	// GetPlanAccounts uses the Fn-override pattern in MockConfigStore; leaving
+	// GetPlanAccountsFn nil means the production code path is the one under
+	// test. The early-return on empty PlanID skips the call entirely.
+	assert.Nil(t, store.GetPlanAccountsFn, "test sanity: empty-PlanID branch must not depend on GetPlanAccounts being stubbed")
+
+	// Status reaches a terminal state — completed because no recs failed.
+	assert.Equal(t, "completed", updated.Status)
+	require.NotNil(t, updated.ApprovedBy)
+	assert.Equal(t, "operator@example.com", *updated.ApprovedBy)
+	store.AssertExpectations(t)
+	sender.AssertExpectations(t)
+}
+
 func TestManager_ApproveAndExecute_SkipsTokenCheck(t *testing.T) {
 	// Session-authed path: ApproveAndExecute is called directly without a
 	// token, after the caller has run RBAC. Verifies the entry point works
