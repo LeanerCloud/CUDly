@@ -235,7 +235,18 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	// outer account fan-out and this inner rec fan-out.
 	results := execution.FanOutWithConcurrency(ctx, indexKeys(selected),
 		func(ctx context.Context, key string) (recPurchaseOutcome, error) {
-			i, _ := strconv.Atoi(key)
+			// indexKeys() builds these keys from selectedIndices(), so parse +
+			// bounds errors are not expected at runtime. Surface them as
+			// closure-level errors anyway so the aggregator can correlate
+			// them via execution.Result.Err and never silently dereference a
+			// zero-valued outcome at index 0.
+			i, parseErr := strconv.Atoi(key)
+			if parseErr != nil {
+				return recPurchaseOutcome{}, fmt.Errorf("invalid fan-out key %q: %w", key, parseErr)
+			}
+			if i < 0 || i >= len(exec.Recommendations) {
+				return recPurchaseOutcome{}, fmt.Errorf("fan-out index %d out of range for %d recommendations", i, len(exec.Recommendations))
+			}
 			rec := exec.Recommendations[i]
 			logging.Infof("Purchasing: %dx %s in %s (%s/%s)", rec.Count, rec.ResourceType, rec.Region, rec.Provider, rec.Service)
 			purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, opts)
@@ -255,8 +266,26 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 	var totalSavings, totalUpfront float64
 	var purchaseErrors []string
 	for _, r := range results {
+		// Closure-level error (parse / bounds / framework). r.Value is the
+		// zero recPurchaseOutcome here — its index is 0 and would mis-target
+		// exec.Recommendations[0] if blindly trusted. Record it as a
+		// generic execution failure and skip the per-rec writes.
+		if r.Err != nil {
+			logging.Errorf("Internal fan-out failure during purchase execution: %v", r.Err)
+			purchaseErrors = append(purchaseErrors, fmt.Sprintf("internal fan-out error: %v", r.Err))
+			continue
+		}
 		v := r.Value
 		i := v.index
+		// Defence-in-depth: even with the closure's bounds check, never
+		// index past exec.Recommendations here (a future refactor that
+		// mutates the slice between fan-out and aggregation would corrupt
+		// this otherwise).
+		if i < 0 || i >= len(exec.Recommendations) {
+			logging.Errorf("Aggregator received out-of-range index %d (len=%d)", i, len(exec.Recommendations))
+			purchaseErrors = append(purchaseErrors, fmt.Sprintf("aggregator index %d out of range", i))
+			continue
+		}
 		rec := exec.Recommendations[i]
 		if v.err != nil {
 			logging.Errorf("Failed to purchase %s: %v", rec.ResourceType, v.err)
