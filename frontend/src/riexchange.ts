@@ -18,6 +18,7 @@ import type {
 } from './api';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { canAccess } from './permissions';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -121,6 +122,12 @@ function renderRIsTable(container: HTMLElement): void {
     return;
   }
 
+  // Issue #365: RI exchanges mutate cloud-provider RI state and are
+  // admin-only by default on the backend. Hide the per-row Exchange
+  // button for non-admin sessions so readonly users don't get a 403
+  // on click. Defense in depth, backend still enforces.
+  const canExchange = canAccess('admin', '*');
+
   container.innerHTML = `
     <table>
       <thead>
@@ -132,7 +139,7 @@ function renderRIsTable(container: HTMLElement): void {
           <th>Offering</th>
           <th>Expiry</th>
           <th>Utilization</th>
-          <th>Actions</th>
+          ${canExchange ? '<th>Actions</th>' : ''}
         </tr>
       </thead>
       <tbody>
@@ -150,7 +157,7 @@ function renderRIsTable(container: HTMLElement): void {
             <td>${escapeHtml(ri.offering_type)}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
-            <td><button class="btn-small" data-action="quote-ri" data-ri-id="${escapeHtml(ri.reserved_instance_id)}" data-count="${ri.instance_count}" aria-label="Exchange ${escapeHtml(ri.reserved_instance_id)}">Exchange</button></td>
+            ${canExchange ? `<td><button class="btn-small" data-action="quote-ri" data-ri-id="${escapeHtml(ri.reserved_instance_id)}" data-count="${ri.instance_count}" aria-label="Exchange ${escapeHtml(ri.reserved_instance_id)}">Exchange</button></td>` : ''}
           </tr>`;
         }).join('')}
       </tbody>
@@ -203,6 +210,9 @@ function renderRecommendations(container: HTMLElement): void {
     return;
   }
 
+  // Issue #365: same admin-only gate as the convertible-RI table.
+  const canExchange = canAccess('admin', '*');
+
   container.innerHTML = `
     <table>
       <thead>
@@ -214,7 +224,7 @@ function renderRecommendations(container: HTMLElement): void {
           <th>Utilization</th>
           <th>Normalized Units</th>
           <th>Reason</th>
-          <th>Actions</th>
+          ${canExchange ? '<th>Actions</th>' : ''}
         </tr>
       </thead>
       <tbody>
@@ -230,16 +240,17 @@ function renderRecommendations(container: HTMLElement): void {
             <td class="${utilClass}">${rec.utilization_percent.toFixed(1)}%</td>
             <td>${rec.normalized_used.toFixed(1)} / ${rec.normalized_purchased.toFixed(1)}</td>
             <td>${escapeHtml(rec.reason)}</td>
-            <td>
+            ${canExchange ? `<td>
               <button class="btn-small" data-action="fill-quote" data-index="${idx}">Exchange</button>
-            </td>
+            </td>` : ''}
           </tr>`;
         }).join('')}
       </tbody>
     </table>
   `;
 
-  // Attach "Exchange" handlers
+  // Attach "Exchange" handlers. Same as renderRIsTable: for non-admin
+  // sessions the selector matches zero elements and this loop is a no-op.
   container.querySelectorAll<HTMLButtonElement>('[data-action="fill-quote"]').forEach(btn => {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset['index'] || '0', 10);
