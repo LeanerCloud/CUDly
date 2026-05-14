@@ -42,6 +42,13 @@ jest.mock('../state', () => ({
   setCurrentAccountIDs: jest.fn(),
   subscribeProvider: jest.fn().mockReturnValue(() => {}),
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
+  // Issue #365: plans.ts now reads getCurrentUser via the permissions
+  // helper to decide which row actions to render. Default the existing
+  // suite to admin so every legacy assertion (button-text expectations,
+  // click-handler counts, plan-card layout) keeps passing unchanged.
+  // The permission-gating tests in plans-permissions.test.ts override
+  // this per-case to exercise readonly / user / null sessions.
+  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
 }));
 
 // Mock history module
