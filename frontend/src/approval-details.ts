@@ -263,6 +263,9 @@ export function formatAccountLabel(acct: CloudAccount | undefined, recAccountId:
  * collection, so we don't re-add it here.
  */
 export function computeEffectiveSavingsPct(rec: Recommendation): number | null {
+  if (rec.savings === null || rec.savings === undefined) {
+    return null;
+  }
   if (rec.on_demand_cost !== undefined && rec.on_demand_cost !== null && rec.on_demand_cost > 0) {
     return (rec.savings / rec.on_demand_cost) * 100;
   }
