@@ -445,11 +445,29 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 		CommitmentCost: rec.UpfrontCost,
 	}
 
-	// Add service-specific details
-	if rec.Engine != "" {
-		recommendation.Details = common.DatabaseDetails{
-			Engine: rec.Engine,
-		}
+	// Reconstruct the typed *Details pointer from the persisted JSON
+	// payload (issue #453). The scheduler stores the full
+	// common.ServiceDetails at collection time; this is the read-back
+	// step that yields a *ComputeDetails / *DatabaseDetails /
+	// *CacheDetails / *SavingsPlanDetails (etc.) keyed on rec.Service
+	// so the cloud service client's findOfferingID type-assertion
+	// succeeds with the full per-rec details (Platform, Tenancy,
+	// Scope, AZConfig, HourlyCommitment, …), not just an Engine string.
+	//
+	// Legacy rows persisted before #453 carry an empty rec.Details —
+	// DecodeServiceDetailsFor returns a zero-valued typed pointer for
+	// those, and the cloud client's buildOfferingFilters substitutes
+	// defaults (Platform=Linux/UNIX, Tenancy=default, etc.). Engine is
+	// preserved on the record column too, so we use it as a last-resort
+	// fallback for DB/Cache services to avoid silently mis-purchasing a
+	// legacy non-default-engine rec as the default engine.
+	details, detailsErr := common.DecodeServiceDetailsFor(rec.Service, rec.Details)
+	if detailsErr != nil {
+		return common.PurchaseResult{}, fmt.Errorf("decode service details for %s rec %s: %w", rec.Service, rec.ResourceType, detailsErr)
+	}
+	if details != nil {
+		applyEngineFallback(details, rec.Engine)
+		recommendation.Details = details
 	}
 
 	// Execute the purchase
@@ -587,4 +605,29 @@ func derefFloat64(p *float64) float64 {
 		return 0
 	}
 	return *p
+}
+
+// applyEngineFallback backfills the Engine field on DB / Cache Details
+// from the persisted RecommendationRecord.Engine column when the decoded
+// Details left Engine empty. Legacy rows (persisted before #453) carry
+// an empty Details payload but a populated Engine column — without this
+// backfill, a Postgres RDS rec would silently mis-purchase as whatever
+// engine buildOfferingFilters defaults to. For non-DB/Cache Details
+// types the call is a no-op. Pointer-typed Details get mutated in
+// place; callers pass the pointer that's about to be assigned into
+// recommendation.Details so the caller's variable sees the update.
+func applyEngineFallback(details common.ServiceDetails, engine string) {
+	if engine == "" {
+		return
+	}
+	switch d := details.(type) {
+	case *common.DatabaseDetails:
+		if d.Engine == "" {
+			d.Engine = engine
+		}
+	case *common.CacheDetails:
+		if d.Engine == "" {
+			d.Engine = engine
+		}
+	}
 }

@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -258,16 +259,35 @@ type PurchaseExecution struct {
 
 // RecommendationRecord stores a recommendation with purchase status
 type RecommendationRecord struct {
-	ID           string  `json:"id" dynamodbav:"id"`
-	Provider     string  `json:"provider" dynamodbav:"provider"`
-	Service      string  `json:"service" dynamodbav:"service"`
-	Region       string  `json:"region" dynamodbav:"region"`
-	ResourceType string  `json:"resource_type" dynamodbav:"resource_type"`
-	Engine       string  `json:"engine,omitempty" dynamodbav:"engine,omitempty"`
-	Count        int     `json:"count" dynamodbav:"count"`
-	Term         int     `json:"term" dynamodbav:"term"`
-	Payment      string  `json:"payment" dynamodbav:"payment"`
-	UpfrontCost  float64 `json:"upfront_cost" dynamodbav:"upfront_cost"`
+	ID           string `json:"id" dynamodbav:"id"`
+	Provider     string `json:"provider" dynamodbav:"provider"`
+	Service      string `json:"service" dynamodbav:"service"`
+	Region       string `json:"region" dynamodbav:"region"`
+	ResourceType string `json:"resource_type" dynamodbav:"resource_type"`
+	Engine       string `json:"engine,omitempty" dynamodbav:"engine,omitempty"`
+	// Details preserves the full common.ServiceDetails payload from the
+	// source common.Recommendation so the purchase path can reconstruct
+	// the correct typed *Details pointer at execute time (issue #453).
+	// Stored as raw JSON because RecommendationRecord lives in the
+	// config package, which must NOT import pkg/common (the dependency
+	// graph is config <- common in callers, never the reverse). The
+	// scheduler populates this at collection time via
+	// common.MarshalServiceDetails; the purchase manager reads it via
+	// common.DecodeServiceDetailsFor when it builds the
+	// common.Recommendation handed to the cloud service client.
+	//
+	// Empty for rows persisted before #453 — DecodeServiceDetailsFor
+	// returns a zero-valued typed pointer in that case so the cloud
+	// client's findOfferingID type-assertion still succeeds (the
+	// service-side buildOfferingFilters substitutes default
+	// Platform / Tenancy / Scope / AZConfig values). New rows always
+	// carry the full Details, so non-default platforms (Windows EC2,
+	// Postgres RDS, etc.) round-trip correctly.
+	Details     json.RawMessage `json:"details,omitempty" dynamodbav:"-"`
+	Count       int             `json:"count" dynamodbav:"count"`
+	Term        int             `json:"term" dynamodbav:"term"`
+	Payment     string          `json:"payment" dynamodbav:"payment"`
+	UpfrontCost float64         `json:"upfront_cost" dynamodbav:"upfront_cost"`
 	// MonthlyCost is nil when the provider API did not return a monthly
 	// recurring breakdown (rendered as "—" in the UI, not "$0").
 	// Backward-compatible with DynamoDB: existing items with a numeric 0
