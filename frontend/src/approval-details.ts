@@ -71,6 +71,15 @@ export function renderApprovalDetailsBody(details: PurchaseDetails, accountsById
   return root;
 }
 
+/**
+ * Render the at-a-glance stat row that sits above the per-rec table.
+ * Each stat surfaces one number the user needs to weigh before
+ * clicking Approve: total upfront, monthly + annual savings,
+ * commitment count, distinct providers and distinct accounts touched.
+ * The annual figure is derived from monthly × 12; if it diverges from
+ * the sum of per-row monthly savings it's surfaced as a tooltip on
+ * the stat so the user has a path to the underlying numbers.
+ */
 function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendation[]): HTMLElement {
   const header = document.createElement('div');
   header.className = 'approval-details-header';
@@ -104,6 +113,13 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
   return header;
 }
 
+/**
+ * Build one label/value cell for the header grid. `hover` becomes the
+ * value's title attribute (used to surface the comma-joined provider
+ * list on the "Providers: 3" stat without crowding the visible cell);
+ * `title` is set on the wrapping container for stats whose deeper
+ * context belongs on the whole entry rather than just the value.
+ */
 function headerStat(label: string, value: string, hover?: string, title?: string): HTMLElement {
   const stat = document.createElement('div');
   stat.className = 'approval-details-stat';
@@ -120,6 +136,15 @@ function headerStat(label: string, value: string, hover?: string, title?: string
   return stat;
 }
 
+/**
+ * Render the per-recommendation table with sticky thead and one row
+ * per rec. Wrapped in a scrollable container so a 20-rec execution
+ * spanning AWS + Azure + GCP stays inside the modal viewport without
+ * pushing the action buttons off-screen. Columns mirror the order
+ * documented on issue #374: identity (account / provider / service /
+ * resource / engine / region) -> sizing (count / term / payment) ->
+ * money (upfront / monthly savings / effective savings %).
+ */
 function renderApprovalDetailsTable(recs: Recommendation[], accountsById: AccountsById): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'approval-details-table-wrap';
@@ -154,6 +179,16 @@ function renderApprovalDetailsTable(recs: Recommendation[], accountsById: Accoun
   return wrap;
 }
 
+/**
+ * Render one tbody row from a Recommendation. The account UUID is
+ * resolved against accountsById via formatAccountLabel; engine falls
+ * back to "—" for services that don't carry a DB engine (EC2, ALB);
+ * effective savings % follows the same baseline-preferred /
+ * reconstruction-fallback policy as the recommendations table (see
+ * computeEffectiveSavingsPct). Every interpolated string flows
+ * through escapeHtml so a tampered recommendation field can't inject
+ * markup.
+ */
 function renderRecRow(rec: Recommendation, accountsById: AccountsById): HTMLElement {
   const row = document.createElement('tr');
   const acct = rec.cloud_account_id ? accountsById.get(rec.cloud_account_id) : undefined;
