@@ -8,6 +8,7 @@ import { formatCurrency, formatDate, formatTerm, escapeHtml } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
+import { buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -649,9 +650,15 @@ function wireRowActionHandlers(container: HTMLElement): void {
     btn.addEventListener('click', async () => {
       const id = btn.dataset['approveId'];
       if (!id) return;
+      // Issue #374: show the per-rec details (service / engine /
+      // resource / region / count / term + payment / costs) in the
+      // modal so the user has informed consent before authorising a
+      // financial commitment. buildApprovalDetailsBody falls back to
+      // the legacy text sentence if the GET fails.
+      const detailsBody = await buildApprovalDetailsBody(id);
       const ok = await confirmDialog({
         title: 'Approve this pending purchase?',
-        body: 'This authorises the purchase to execute. Cloud commitments will be charged once the executor picks up the approved row.',
+        body: detailsBody,
         confirmLabel: 'Approve purchase',
         destructive: false,
       });

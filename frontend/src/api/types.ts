@@ -223,17 +223,27 @@ export interface PurchaseResult {
   }>;
 }
 
+// PurchaseDetails matches the shape produced by backend
+// buildPurchaseDetailsResponse (internal/api/handler_purchases.go).
+// `recommendations` carries the per-rec snapshot that was captured at
+// approval-request time so callers can render the deal without
+// re-querying provider APIs. plan_id / plan_name / scheduled_date are
+// only present when the execution belongs to a plan (direct-execute
+// purchases from the recommendations page have plan_id="" and
+// plan_name="").
 export interface PurchaseDetails {
   execution_id: string;
   status: string;
-  created_at: string;
+  plan_id?: string;
+  plan_name?: string;
+  step_number?: number;
+  scheduled_date?: string;
+  total_upfront_cost: number;
+  estimated_savings: number;
+  recommendations: Recommendation[];
+  notification_sent?: string;
   completed_at?: string;
-  results: Array<{
-    recommendation_id: string;
-    status: string;
-    confirmation_id?: string;
-    error?: string;
-  }>;
+  error?: string;
 }
 
 export interface PlannedPurchasesResponse {
