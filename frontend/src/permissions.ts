@@ -6,12 +6,22 @@
  * toast. The backend remains the security boundary (handlers still call
  * `requirePermission`); this helper is a UX-only gate.
  *
- * The role-to-default-permissions map mirrors the backend constants in
+ * The role-to-default-permissions map lives in ./permissions.generated.ts,
+ * which is regenerated from the backend constants in
  * internal/auth/types.go (DefaultAdminPermissions /
- * DefaultUserPermissions / DefaultReadOnlyPermissions). When the
- * backend lists drift, update this file too: the
- * permissions.test.ts unit tests are the canary that fails if the
- * mirror gets out of sync.
+ * DefaultUserPermissions / DefaultReadOnlyPermissions) by
+ * `go run ./cmd/gen-permissions`. A pre-commit hook + CI step re-runs the
+ * generator and `git diff --exit-code` so the committed file never drifts
+ * from the Go source of truth.
+ *
+ * The closed-union `Action` and `Resource` types below are hand-written
+ * and mirror the `Action*` / `Resource*` constants in
+ * internal/auth/types.go. They drift less often than the default sets
+ * (most schema changes add a permission to a role, not a new top-level
+ * constant), so we keep the compile-time safety they give callers and
+ * accept the small bookkeeping cost when a new constant is added on the
+ * Go side. The permissions.test.ts suite exercises the helpers; the
+ * codegen check catches the data drift.
  *
  * Group-grant permissions are not folded in here. The current
  * `state.currentUser` carries only role; group memberships live in
@@ -22,6 +32,7 @@
  */
 
 import * as state from './state';
+import { ADMIN_PERMS, USER_PERMS, READONLY_PERMS } from './permissions.generated';
 
 // Action verbs. Closed enum so typos at call sites become compile
 // errors. Mirrors the constants in internal/auth/types.go.
@@ -52,29 +63,6 @@ export type Resource =
   | 'groups'
   | 'api-keys'
   | '*';
-
-// Default permission sets per role. Strings are `${action}:${resource}`.
-// Kept in lockstep with internal/auth/types.go:367-415. The unit tests
-// enumerate every entry so a drift fails CI.
-const ADMIN_PERMS: ReadonlySet<string> = new Set(['admin:*']);
-
-const USER_PERMS: ReadonlySet<string> = new Set([
-  'view:recommendations',
-  'view:plans',
-  'view:purchases',
-  'view:history',
-  'create:plans',
-  'update:plans',
-  'cancel-own:purchases',
-  'retry-own:purchases',
-  'approve-own:purchases',
-]);
-
-const READONLY_PERMS: ReadonlySet<string> = new Set([
-  'view:recommendations',
-  'view:plans',
-  'view:history',
-]);
 
 /**
  * Return the default permission set for the given role as a readonly
