@@ -238,6 +238,13 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/groups/", Method: "PUT", Handler: r.updateGroupHandler, Auth: AuthAdmin},
 		{PathPrefix: "/api/groups/", Method: "DELETE", Handler: r.deleteGroupHandler, Auth: AuthAdmin},
 
+		// Inventory & Coverage endpoints. Per-commitment list view for
+		// the Inventory & Coverage → Active commitments sub-tab (issue
+		// #340 deferred sub-task). AuthUser gates the read; the
+		// handler also filters by the session's allowed_accounts list
+		// so a restricted-access user sees only their entitled rows.
+		{ExactPath: "/api/inventory/commitments", Method: "GET", Handler: r.listInventoryCommitmentsHandler, Auth: AuthUser},
+
 		// RI Exchange endpoints — GETs are AuthUser (Convertible RIs,
 		// Reshape Recommendations, Exchange History pages all need this);
 		// quote / execute / config writes stay AuthAdmin.
@@ -600,6 +607,10 @@ func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFun
 
 func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.docsHandler(ctx, req, params)
+}
+
+func (r *Router) listInventoryCommitmentsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.listActiveCommitments(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) listConvertibleRIsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

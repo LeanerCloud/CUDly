@@ -200,14 +200,24 @@
                     <button class="sub-tab-btn active" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="true" aria-controls="inventory-ri-exchange">RI Exchange</button>
                 </div>
 
-                <!-- Active commitments — placeholder until T7 wires per-commitment list.
-                     Backend doesn't expose a dedicated list endpoint today; tracked in
-                     issue #340 sub-task list. -->
+                <!-- Active commitments — per-commitment list backed by
+                     /api/inventory/commitments (issue #340 deferred sub-task).
+                     The table is rendered into #active-commitments-list by
+                     loadActiveCommitments in inventory.ts. -->
                 <section id="inventory-active-commitments" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-active-commitments">
-                    <div class="empty-state">
-                        <h3>Active commitments</h3>
-                        <p>Per-commitment inventory view is coming soon. For now, your active commitment count is on the Home dashboard, and RI exchange opportunities are in the RI Exchange tab.</p>
-                    </div>
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Active commitments</h2>
+                            <div class="section-header-actions">
+                                <button id="active-commitments-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">All non-expired Reserved Instances, Savings Plans, and Compute Units committed across your registered accounts. Soonest-expiring first.</p>
+                    </section>
+
+                    <section class="card">
+                        <div id="active-commitments-list"></div>
+                    </section>
                 </section>
 
                 <!-- Coverage — placeholder until T7 wires per-provider donuts. -->
