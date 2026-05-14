@@ -214,6 +214,17 @@ type recPurchaseOutcome struct {
 	err      error
 }
 
+// processPurchaseRecommendations issues a cloud-provider purchase for
+// every Selected recommendation in exec.Recommendations. Recs are
+// fanned out across goroutines (cross-provider and cross-service calls
+// run in parallel) and the per-rec outcomes are aggregated serially by
+// aggregatePurchaseOutcomes so writes to exec.Recommendations[i],
+// purchaseErrors, and savePurchaseHistory are race-free.
+//
+// Returns (totalSavings, totalUpfront, purchaseErrors). An empty
+// purchaseErrors slice means every Selected rec succeeded; a non-empty
+// slice carries one entry per failed rec (the caller flips the
+// execution to "failed" on any non-empty errors).
 func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {
 	opts := common.PurchaseOptions{Source: m.normalizePurchaseSource(exec)}
 
