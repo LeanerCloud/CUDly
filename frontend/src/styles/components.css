@@ -990,6 +990,100 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     gap: 0.5rem;
 }
 
+/* Approval-details modal (issue #374): when the confirmDialog body
+ * carries an .approval-details element, widen the dialog so the 12-col
+ * per-rec table can breathe. The selector targets the parent modal via
+ * :has() so the rest of the confirmDialog callers (Cancel, etc.) keep
+ * the narrow 480px layout. */
+.modal-confirm:has(.approval-details) {
+    max-width: min(1100px, 95vw);
+    min-width: min(720px, 95vw);
+}
+
+.approval-details {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.approval-details-fallback {
+    margin: 0;
+    color: #444;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+
+.approval-details-header {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.5rem 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--cudly-surface-2, #f6f8fa);
+    border: 1px solid var(--cudly-border, #e1e4e8);
+    border-radius: 6px;
+}
+
+.approval-details-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.approval-details-stat-label {
+    font-size: 0.78rem;
+    color: var(--cudly-text-muted, #6a737d);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.approval-details-stat-value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #222;
+}
+
+.approval-details-table-wrap {
+    overflow-x: auto;
+    max-height: 50vh;
+    border: 1px solid var(--cudly-border, #e1e4e8);
+    border-radius: 6px;
+}
+
+.approval-details-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.approval-details-table th,
+.approval-details-table td {
+    padding: 0.45rem 0.65rem;
+    text-align: left;
+    border-bottom: 1px solid var(--cudly-border, #eef0f2);
+    white-space: nowrap;
+}
+
+.approval-details-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--cudly-surface-2, #f6f8fa);
+    font-weight: 600;
+    color: var(--cudly-text-muted, #444);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.approval-details-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.approval-details-table th.num,
+.approval-details-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 /* Provider badges */
 .provider-badge {
     display: inline-block;

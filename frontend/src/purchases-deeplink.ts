@@ -21,6 +21,7 @@
 import { apiRequest } from './api/client';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
+import { buildApprovalDetailsBody } from './approval-details';
 
 type DeeplinkAction = 'approve' | 'cancel';
 
@@ -75,9 +76,20 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
   const titleVerb = dl.action === 'approve' ? 'Approve' : 'Cancel';
   const gerund = dl.action === 'approve' ? 'approve' : 'cancel';
   const confirmLabel = dl.action === 'approve' ? 'Approve purchase' : 'Cancel purchase';
+  // Issue #374: on approve, show the per-rec details (service / engine
+  // / resource / region / count / term + payment / costs) so the user
+  // has informed consent before authorising a financial commitment.
+  // On cancel, the legacy sentence is enough — cancelling a pending
+  // approval is non-destructive to AWS.
+  let body: string | HTMLElement;
+  if (dl.action === 'approve') {
+    body = await buildApprovalDetailsBody(dl.id);
+  } else {
+    body = `You're about to ${gerund} purchase execution ${dl.id}. This action will be recorded against your logged-in account.`;
+  }
   const ok = await confirmDialog({
     title: `${titleVerb} purchase ${dl.id.slice(0, 8)}…?`,
-    body: `You're about to ${gerund} purchase execution ${dl.id}. This action will be recorded against your logged-in account.`,
+    body,
     confirmLabel,
     hideCancelButton: true,
     destructive: dl.action === 'cancel',
