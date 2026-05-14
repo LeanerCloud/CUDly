@@ -662,6 +662,300 @@ describe('Overrides panel — AWS payment selector', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Inline edit on existing override rows: Term, Coverage, Enabled (issue #110)
+// ---------------------------------------------------------------------------
+
+describe('Overrides panel: inline Term/Coverage/Enabled (issue #110)', () => {
+  /**
+   * Render the AWS accounts list and open the per-account overrides modal,
+   * mirroring openOverridesPanel from the Payment-selector describe block.
+   * The body element is what loadOverridesPanel renders into.
+   */
+  async function openOverridesPanel(accountId = 'acc-1'): Promise<HTMLElement> {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: accountId, name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+    ]);
+    await loadAccountsForProvider('aws');
+    const overridesBtn = document.querySelector(
+      `button[aria-label="Service overrides for Prod (111)"]`,
+    ) as HTMLButtonElement | null;
+    expect(overridesBtn).not.toBeNull();
+    overridesBtn!.click();
+    await new Promise(r => setTimeout(r, 0));
+    const panel = document.getElementById('account-overrides-modal-body') as HTMLElement | null;
+    expect(panel).not.toBeNull();
+    return panel!;
+  }
+
+  beforeEach(() => {
+    buildAccountsDOM();
+    jest.clearAllMocks();
+  });
+
+  // ----- Term cell -----
+
+  test('Term: renders <select> with Inherit + 1yr/3yr options for an AWS EC2 row', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2' },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const sel = panel.querySelector('select.override-term-select') as HTMLSelectElement | null;
+    expect(sel).not.toBeNull();
+    const values = Array.from(sel!.options).map(o => o.value);
+    expect(values).toEqual(['', '1', '3']);
+    expect(sel!.value).toBe(''); // Inherit by default when no term set
+    expect(sel!.options[0]!.disabled).toBe(false);
+  });
+
+  test('Term: change from Inherit calls saveAccountServiceOverride with only {term}', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2' },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', term: 3,
+    });
+
+    const panel = await openOverridesPanel('acc-1');
+    const sel = panel.querySelector('select.override-term-select') as HTMLSelectElement;
+    sel.value = '3';
+    sel.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+      'acc-1', 'aws', 'ec2', { term: 3 },
+    );
+  });
+
+  test('Term: RDS row with payment=no-upfront hides term=3 (commitmentOptions parity)', async () => {
+    // RDS has the only AWS hard rule: no 3yr/no-upfront combination. The
+    // Term dropdown for an RDS row currently set to no-upfront must omit
+    // the 3yr option, same way the inline Payment selector omits no-upfront
+    // for RDS term=3 rows.
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'rds', payment: 'no-upfront' },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const sel = panel.querySelector('select.override-term-select') as HTMLSelectElement;
+    const values = Array.from(sel.options).map(o => o.value);
+    expect(values).toEqual(['', '1']);
+    expect(values).not.toContain('3');
+  });
+
+  test('Term: Inherit is disabled when term already set (no clear-field channel)', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', term: 1 },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const sel = panel.querySelector('select.override-term-select') as HTMLSelectElement;
+    expect(sel.value).toBe('1');
+    expect(sel.options[0]!.disabled).toBe(true);
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+  });
+
+  test('Term: save failure reverts the cell and shows an error toast', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2' },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+
+    const panel = await openOverridesPanel('acc-1');
+    const sel = panel.querySelector('select.override-term-select') as HTMLSelectElement;
+    sel.value = '3';
+    sel.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(sel.value).toBe(''); // reverted to previous
+    const toastCalls = mockShowToast.mock.calls.map(c => c[0]) as Array<{ kind?: string; message?: string }>;
+    expect(toastCalls.some(t => t.kind === 'error' && t.message?.includes('term'))).toBe(true);
+  });
+
+  // ----- Coverage cell -----
+
+  test('Coverage: renders numeric <input> with value=50 for preset, placeholder when absent', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', coverage: 50 },
+      { id: 'o2', account_id: 'acc-1', provider: 'aws', service: 'rds' },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const inputs = panel.querySelectorAll<HTMLInputElement>('input.override-coverage-input');
+    expect(inputs.length).toBe(2);
+    expect(inputs[0]!.type).toBe('number');
+    expect(inputs[0]!.value).toBe('50');
+    expect(inputs[1]!.value).toBe('');
+    expect(inputs[1]!.placeholder).toBe('Inherit');
+  });
+
+  test('Coverage: change to 75 calls saveAccountServiceOverride with only {coverage: 75}', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', coverage: 50 },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', coverage: 75,
+    });
+
+    const panel = await openOverridesPanel('acc-1');
+    const inp = panel.querySelector('input.override-coverage-input') as HTMLInputElement;
+    inp.value = '75';
+    inp.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+      'acc-1', 'aws', 'ec2', { coverage: 75 },
+    );
+  });
+
+  test('Coverage: out-of-range value (150) does NOT call save, reverts, and posts error toast', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', coverage: 50 },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const inp = panel.querySelector('input.override-coverage-input') as HTMLInputElement;
+    inp.value = '150';
+    inp.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+    expect(inp.value).toBe('50');
+    const toastCalls = mockShowToast.mock.calls.map(c => c[0]) as Array<{ kind?: string; message?: string }>;
+    expect(toastCalls.some(t => t.kind === 'error' && t.message?.includes('between 0 and 100'))).toBe(true);
+  });
+
+  test('Coverage: negative value does NOT call save, reverts, and posts error toast', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', coverage: 50 },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const inp = panel.querySelector('input.override-coverage-input') as HTMLInputElement;
+    inp.value = '-5';
+    inp.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+    expect(inp.value).toBe('50');
+  });
+
+  test('Coverage: clearing a preset value reverts (no clear-field channel) and posts info toast', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', coverage: 50 },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const inp = panel.querySelector('input.override-coverage-input') as HTMLInputElement;
+    inp.value = '';
+    inp.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+    expect(inp.value).toBe('50');
+    const toastCalls = mockShowToast.mock.calls.map(c => c[0]) as Array<{ kind?: string; message?: string }>;
+    expect(toastCalls.some(t => t.kind === 'info' && t.message?.includes('Delete'))).toBe(true);
+  });
+
+  // ----- Enabled toggle -----
+
+  test('Enabled: checkbox is checked by default for legacy rows (enabled === undefined)', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2' },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const cb = panel.querySelector('input.override-enabled-toggle') as HTMLInputElement;
+    expect(cb).not.toBeNull();
+    expect(cb.type).toBe('checkbox');
+    expect(cb.checked).toBe(true);
+    const tr = cb.closest('tr')!;
+    expect(tr.classList.contains('override-disabled')).toBe(false);
+  });
+
+  test('Enabled: rows with enabled=false render unchecked with .override-disabled dim', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', enabled: false },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    const cb = panel.querySelector('input.override-enabled-toggle') as HTMLInputElement;
+    expect(cb.checked).toBe(false);
+    const tr = cb.closest('tr')!;
+    expect(tr.classList.contains('override-disabled')).toBe(true);
+  });
+
+  test('Enabled: toggle off calls save with {enabled: false} and dims the row', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2' },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', enabled: false,
+    });
+
+    const panel = await openOverridesPanel('acc-1');
+    const cb = panel.querySelector('input.override-enabled-toggle') as HTMLInputElement;
+    const tr = cb.closest('tr')!;
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change'));
+    // After the optimistic visual update, the row should already be dimmed
+    // even before the network roundtrip completes.
+    expect(tr.classList.contains('override-disabled')).toBe(true);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+      'acc-1', 'aws', 'ec2', { enabled: false },
+    );
+  });
+
+  test('Enabled: toggle on calls save with {enabled: true} and removes dim', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', enabled: false },
+    ]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({
+      id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', enabled: true,
+    });
+
+    const panel = await openOverridesPanel('acc-1');
+    const cb = panel.querySelector('input.override-enabled-toggle') as HTMLInputElement;
+    const tr = cb.closest('tr')!;
+    expect(tr.classList.contains('override-disabled')).toBe(true);
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change'));
+    expect(tr.classList.contains('override-disabled')).toBe(false);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledTimes(1);
+    expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+      'acc-1', 'aws', 'ec2', { enabled: true },
+    );
+  });
+
+  // ----- Non-AWS rows -----
+
+  test('Non-AWS rows: term/coverage render as text, enabled checkbox is disabled with tooltip', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', term: 1, coverage: 80 },
+    ]);
+
+    const panel = await openOverridesPanel('acc-1');
+    expect(panel.querySelector('select.override-term-select')).toBeNull();
+    expect(panel.querySelector('input.override-coverage-input')).toBeNull();
+    const cb = panel.querySelector('input.override-enabled-toggle') as HTMLInputElement;
+    expect(cb).not.toBeNull();
+    expect(cb.disabled).toBe(true);
+    expect(cb.title).toContain('AWS-only');
+    // Read-only fallbacks for term and coverage on non-AWS rows.
+    expect(panel.textContent).toContain('1yr');
+    expect(panel.textContent).toContain('80%');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Override creation modal — issue #104
 // ---------------------------------------------------------------------------
 

@@ -589,3 +589,12 @@ select.dirty {
     padding: 0.5rem;
     margin: 0;
 }
+
+/* Issue #110: inline-editable override cells on the per-account
+   overrides panel. */
+.override-coverage-input {
+    width: 5em;
+}
+tr.override-disabled {
+    opacity: 0.55;
+}
