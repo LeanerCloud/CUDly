@@ -6,17 +6,19 @@ import * as api from './api';
 import * as state from './state';
 import { escapeHtml } from './utils';
 import { openModal, closeModal } from './modal';
+import { isAdmin as permissionsIsAdmin } from './permissions';
 
 // Login rate limiting
 let lastLoginAttempt = 0;
 const LOGIN_COOLDOWN_MS = 2000; // 2 seconds between attempts
 
 /**
- * Check if current user is admin
+ * Check if current user is admin. Re-exported from `permissions.ts`
+ * so callers that already import from `auth` keep compiling while the
+ * canonical definition lives alongside `canAccess` (issue #365).
  */
 export function isAdmin(): boolean {
-  const currentUser = state.getCurrentUser();
-  return currentUser?.role === 'admin';
+  return permissionsIsAdmin();
 }
 
 /**
