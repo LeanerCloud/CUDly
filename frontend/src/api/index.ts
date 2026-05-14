@@ -52,7 +52,8 @@ export type {
   ExchangeTarget,
   ExchangeResult,
   RIExchangeConfig,
-  RIExchangeHistoryRecord
+  RIExchangeHistoryRecord,
+  InventoryCommitment
 } from './types';
 
 // Re-export client functions
@@ -158,6 +159,11 @@ export {
   updateConfig,
   updateServiceConfig
 } from './settings';
+
+// Re-export inventory functions
+export {
+  listActiveCommitments
+} from './inventory';
 
 // Re-export RI exchange functions
 export {

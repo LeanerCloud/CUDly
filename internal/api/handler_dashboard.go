@@ -351,6 +351,27 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 	}, nil
 }
 
+// commitmentExpiry returns the moment a purchase's commitment term ends.
+// Computed from Timestamp + Term*365d. Extracted from
+// calculateCommitmentMetrics so the inventory handler can surface the
+// same date in its per-row response without re-deriving the math (and
+// so a future tweak to "what counts as expired" lands in exactly one
+// place). One year is approximated as 365 days — matches the original
+// dashboard arithmetic verbatim; leap-year precision isn't material for
+// a multi-year RI/SP/CUD term.
+func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
+	termDuration := time.Duration(p.Term) * 365 * 24 * time.Hour
+	return p.Timestamp.Add(termDuration)
+}
+
+// isActiveCommitment reports whether the purchase's term has not yet
+// expired as of `now`. The boundary is strict (After): a commitment is
+// active right up to the instant its term ends. Same predicate shared
+// by the dashboard aggregate and the per-commitment inventory endpoint.
+func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
+	return !now.After(commitmentExpiry(p))
+}
+
 // calculateCommitmentMetrics calculates active commitments and savings from purchase history
 func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountID string) (activeCommitments int, committedMonthly, ytdSavings float64) {
 	// Get purchase history (last 1000 purchases should be sufficient)
@@ -365,11 +386,7 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountID stri
 	yearStart := time.Date(currentTime.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
 
 	for _, p := range purchases {
-		// Check if purchase is still active (within term)
-		termYears := time.Duration(p.Term) * 365 * 24 * time.Hour
-		expiryTime := p.Timestamp.Add(termYears)
-
-		if currentTime.After(expiryTime) {
+		if !isActiveCommitment(p, currentTime) {
 			continue // Skip expired commitments
 		}
 

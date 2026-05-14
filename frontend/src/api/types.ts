@@ -556,6 +556,31 @@ export interface RIExchangeHistoryRecord {
   expires_at?: string;
 }
 
+// Inventory & Coverage types (issue #340 deferred sub-task — Active commitments)
+export interface InventoryCommitment {
+  id: string;
+  provider: string;
+  account_id: string;
+  account_name?: string;
+  service: string;
+  resource_type?: string;
+  region: string;
+  count: number;
+  term_years: number;
+  payment_option?: string;
+  start_date: string;
+  end_date: string;
+  upfront_cost: number;
+  monthly_cost: number;
+  estimated_savings: number;
+  /**
+   * Always "active" today — the backend filters expired rows before
+   * responding. The field stays in the shape so a future "expiring
+   * soon" sub-state can land without a breaking API change.
+   */
+  status: string;
+}
+
 // Internal types
 export interface ApiError extends Error {
   status?: number;
