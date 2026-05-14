@@ -89,6 +89,19 @@ export interface PlanRampSchedule {
   start_date?: string;
 }
 
+/**
+ * One penalty (or annotation) that contributed to a plan's health
+ * score. Mirrors the backend `HealthFactor` struct (see
+ * `internal/api/plan_health.go`):
+ *   - `kind` is a stable machine slug (e.g. `overdue`, `failed`,
+ *     `behind_schedule`) so the frontend can colour or filter on it
+ *     without parsing the human-readable note.
+ *   - `weight` is the integer subtracted from the 100-point starting
+ *     score for this factor; positive numbers represent the size of
+ *     the penalty.
+ *   - `note` is the human-readable explanation surfaced in the badge
+ *     tooltip.
+ */
 export interface PlanHealthFactor {
   kind: string;
   weight: number;
