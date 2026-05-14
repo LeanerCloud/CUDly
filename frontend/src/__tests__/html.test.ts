@@ -219,12 +219,24 @@ describe('HTML Structure', () => {
     // Issue #340 sub-task: the Approval queue card sits ABOVE the
     // Savings History + Purchase History sections so pending
     // approvals jump out without scrolling. Verify both the wrapper
-    // section and the inner mount point are present.
-    test('has approval queue section + mount point', () => {
+    // section and the inner mount point are present, AND that the
+    // queue card precedes both history sections in document order.
+    // CR-feedback (PR #387): existence alone doesn't guard the
+    // "at the top of the Purchases tab" requirement.
+    test('has approval queue section + mount point + appears before history sections', () => {
       const section = document.getElementById('purchases-approval-queue-section');
       const mount = document.getElementById('purchases-approval-queue');
+      const savings = document.getElementById('savings-history-section');
+      const history = document.getElementById('purchase-history-section');
       expect(section).toBeTruthy();
       expect(mount).toBeTruthy();
+      expect(savings).toBeTruthy();
+      expect(history).toBeTruthy();
+      // compareDocumentPosition returns a bitmask; FOLLOWING means
+      // the argument is positioned AFTER the receiver in document order.
+      const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING;
+      expect(section!.compareDocumentPosition(savings!) & FOLLOWING).toBeTruthy();
+      expect(section!.compareDocumentPosition(history!) & FOLLOWING).toBeTruthy();
     });
   });
 

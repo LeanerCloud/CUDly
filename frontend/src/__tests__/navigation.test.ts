@@ -37,7 +37,7 @@ jest.mock('../auth', () => ({
 import { loadDashboard } from '../dashboard';
 import { loadRecommendations } from '../recommendations';
 import { loadPlans } from '../plans';
-import { initHistoryDateRange } from '../history';
+import { initHistoryDateRange, loadHistory } from '../history';
 import { loadGlobalSettings } from '../settings';
 import { loadAutomationSettings } from '../riexchange';
 
@@ -121,7 +121,7 @@ describe('Navigation Module', () => {
       expect(loadPlans).toHaveBeenCalled();
     });
 
-    test('switches to history tab and initializes date range', () => {
+    test('switches to history tab and initializes date range + auto-loads history', () => {
       switchTab('purchases');
 
       const historyBtn = document.querySelector('[data-tab="purchases"]');
@@ -131,6 +131,11 @@ describe('Navigation Module', () => {
       expect(historyContent?.classList.contains('active')).toBe(true);
 
       expect(initHistoryDateRange).toHaveBeenCalled();
+      // Issue #340 sub-task: switchTab('purchases') auto-loads
+      // history so the Approval queue card and the Purchase History
+      // table populate on first visit. Guards against a regression
+      // that re-introduces "user must click Load History" friction.
+      expect(loadHistory).toHaveBeenCalled();
     });
 
     test('switches to settings tab and loads settings', () => {

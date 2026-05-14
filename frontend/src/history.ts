@@ -127,10 +127,17 @@ export async function viewPlanHistory(planId: string): Promise<void> {
     snapDateInputsToPurchases(purchases);
   } catch (error) {
     console.error('Failed to load plan history:', error);
+    const err = error as Error;
     const list = document.getElementById('history-list');
     if (list) {
-      const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load plan history: ${escapeHtml(err.message)}</p>`;
+    }
+    // Mirror the loadHistory catch: clear the approval queue on error
+    // so stale pending rows from a previous render don't sit on screen
+    // alongside the failure message and tempt clicks on outdated state.
+    const queue = document.getElementById('purchases-approval-queue');
+    if (queue) {
+      queue.innerHTML = `<p class="error">Failed to load approval queue: ${escapeHtml(err.message)}</p>`;
     }
   }
 }

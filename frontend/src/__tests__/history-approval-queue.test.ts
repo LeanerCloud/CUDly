@@ -224,17 +224,24 @@ describe('Approval queue card (issue #340 sub-task)', () => {
       summary: {},
       purchases: [makeRow({ purchase_id: 'p-pending', created_by_user_id: ADMIN_USER.id })],
     });
-    console.error = jest.fn();
+    // CR-feedback (PR #387): stub console.error via jest.spyOn so the
+    // mock auto-restores after the test, instead of leaking a permanent
+    // override into sibling tests.
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    await loadHistory();
-    const queue = document.getElementById('purchases-approval-queue')!;
-    const btn = queue.querySelector<HTMLButtonElement>('.history-approve-btn');
-    btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    try {
+      await loadHistory();
+      const queue = document.getElementById('purchases-approval-queue')!;
+      const btn = queue.querySelector<HTMLButtonElement>('.history-approve-btn');
+      btn?.click();
+      await new Promise((r) => setTimeout(r, 10));
 
-    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
-    // No reload after failure.
-    expect(api.getHistory).toHaveBeenCalledTimes(1);
+      expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      // No reload after failure.
+      expect(api.getHistory).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   test('pending row appears in BOTH the queue card and the history table (extraction did not drop a view)', async () => {
