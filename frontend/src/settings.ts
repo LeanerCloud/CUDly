@@ -12,6 +12,7 @@ import { showToast } from './toast';
 import { isValidCombination, getValidPaymentOptions, getPaymentLabel } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
+import { canAccess } from './permissions';
 
 /**
  * Issue #196 — after any mutation to an `account_service_overrides` row
@@ -2063,6 +2064,44 @@ async function confirmAndPropagatePayment(select: HTMLSelectElement): Promise<vo
 }
 
 /**
+ * Issue #365: render the global-settings form read-only for sessions
+ * that lack `admin:*`. Disable every form control so the user can't
+ * even start editing, and hide Save / Reset / Delete-override CTAs.
+ * Backend remains authoritative; this is a UX gate.
+ *
+ * The form stays VISIBLE so non-admin sessions can still inspect the
+ * configured providers, default term/payment, and grace windows.
+ */
+function applyReadOnlySettings(formEl: HTMLElement | null): void {
+  if (canAccess('admin', '*')) {
+    // Admin: ensure controls are enabled in case a prior session
+    // (e.g. role downgraded mid-session) left them disabled.
+    if (formEl) {
+      formEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+        'input, select, textarea, button',
+      ).forEach((el) => { el.disabled = false; });
+    }
+    document.querySelectorAll<HTMLButtonElement>('#save-settings-btn, #reset-settings-btn').forEach((el) => {
+      el.hidden = false;
+    });
+    return;
+  }
+
+  // Non-admin: disable every form input + select so accidental edits
+  // are blocked, and hide the destructive / write-back CTAs. The
+  // dirty-tracking baseline already runs on load so no Save prompt
+  // fires even if a control sneaks past the disable.
+  if (formEl) {
+    formEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+      'input, select, textarea, button',
+    ).forEach((el) => { el.disabled = true; });
+  }
+  document.querySelectorAll<HTMLButtonElement>('#save-settings-btn, #reset-settings-btn').forEach((el) => {
+    el.hidden = true;
+  });
+}
+
+/**
  * Load global settings
  */
 export async function loadGlobalSettings(): Promise<void> {
@@ -2159,6 +2198,16 @@ export async function loadGlobalSettings(): Promise<void> {
 
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');
+
+    // Issue #365: settings is reachable for non-admins (General +
+    // Purchasing policies sub-tabs aren't admin-gated). Render the
+    // form read-only for those sessions: disable every input/select/
+    // checkbox via a wrapping fieldset, hide the Save / Reset buttons
+    // entirely, and replace the dirty-tracking baseline with the
+    // post-load values so a non-admin who somehow flips a control
+    // (shouldn't be possible with fieldset[disabled], but defense in
+    // depth) still sees no Save prompt. Backend still 403s writes.
+    applyReadOnlySettings(formEl as HTMLElement | null);
 
     // Establish the clean baseline for dirty tracking
     snapshotAllFields();
