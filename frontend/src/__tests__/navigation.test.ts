@@ -14,7 +14,12 @@ jest.mock('../plans', () => ({
   loadPlans: jest.fn().mockResolvedValue(undefined)
 }));
 jest.mock('../history', () => ({
-  initHistoryDateRange: jest.fn()
+  initHistoryDateRange: jest.fn(),
+  // Issue #340 sub-task: switchTab('purchases') now auto-loads
+  // history so the Approval queue card populates without waiting for
+  // the "Load History" button click. Stub it so the navigation tests
+  // don't make real fetch calls.
+  loadHistory: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../settings', () => ({
   loadGlobalSettings: jest.fn().mockResolvedValue(undefined),

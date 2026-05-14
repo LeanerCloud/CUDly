@@ -215,6 +215,17 @@ describe('HTML Structure', () => {
       const list = document.getElementById('history-list');
       expect(list).toBeTruthy();
     });
+
+    // Issue #340 sub-task: the Approval queue card sits ABOVE the
+    // Savings History + Purchase History sections so pending
+    // approvals jump out without scrolling. Verify both the wrapper
+    // section and the inner mount point are present.
+    test('has approval queue section + mount point', () => {
+      const section = document.getElementById('purchases-approval-queue-section');
+      const mount = document.getElementById('purchases-approval-queue');
+      expect(section).toBeTruthy();
+      expect(mount).toBeTruthy();
+    });
   });
 
   describe('Settings Tab', () => {

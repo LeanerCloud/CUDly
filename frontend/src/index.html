@@ -129,6 +129,20 @@
 
             <!-- History Tab -->
             <div id="purchases-tab" class="tab-content" role="tabpanel" aria-labelledby="purchases-tab-btn">
+                <!-- Approval Queue Card (issue #340 sub-task): surfaces
+                     pending-approval purchases at the top of the Purchases
+                     tab so users don't have to scan the full Purchase
+                     History table for them. Rows render with inline
+                     Approve / Cancel buttons (issues #46 + #286) and the
+                     same click flow as the history table. Auto-loaded on
+                     tab switch via loadHistory(); also re-rendered after
+                     any Approve / Cancel from either view. -->
+                <section id="purchases-approval-queue-section" class="card page-hero">
+                    <h2>Approval queue</h2>
+                    <p class="help-text page-hero-description">Purchases awaiting approval. Review and approve or cancel each one. The same actions are available from the Purchase History table below.</p>
+                    <section id="purchases-approval-queue"></section>
+                </section>
+
                 <!-- Savings History Chart Section -->
                 <section id="savings-history-section" class="card page-hero">
                     <div class="section-header">
