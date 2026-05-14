@@ -9,7 +9,7 @@ import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
-import { isValidCombination, getValidPaymentOptions, getPaymentLabel } from './commitmentOptions';
+import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
 import { canAccess } from './permissions';
@@ -636,6 +636,306 @@ async function handlePaymentOverrideChange(
 }
 
 /**
+ * Build the per-row Term <select> for the overrides panel. Issue #110.
+ *
+ * Mirrors buildPaymentOverrideSelect (#23) verbatim: Inherit option +
+ * provider/service-specific valid options + sparse PUT on change. The
+ * options are filtered by the row's CURRENT payment via
+ * `getValidTermOptions('aws', service, payment)`, so an RDS row with
+ * payment=no-upfront does not list term=3 (the one hard AWS rule per
+ * commitmentOptions.ts).
+ *
+ * When `term` is already set on the row, the Inherit option is disabled
+ * for the same reason as Payment's Inherit: the backend has no
+ * clear-field channel, so reverting to "no term" would require Delete.
+ */
+function buildTermOverrideSelect(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+): HTMLSelectElement {
+  const select = document.createElement('select');
+  select.className = 'override-term-select';
+  select.setAttribute(
+    'aria-label',
+    `Term for ${override.provider}/${override.service} override`,
+  );
+
+  const inheritOpt = document.createElement('option');
+  inheritOpt.value = '';
+  inheritOpt.textContent = 'Inherit (default)';
+  select.appendChild(inheritOpt);
+
+  // Filter the term dropdown to the (term, payment) combinations AWS
+  // supports for THIS service given the row's CURRENT payment. e.g. an
+  // RDS row with payment=no-upfront cannot upgrade to term=3.
+  // When payment is unset, getValidTermOptions falls back to the
+  // service's full term list (the underlying `getValidTermOptions`
+  // returns all terms whose invalidCombinations don't match the given
+  // payment; with payment='' nothing matches, so all terms are valid).
+  const currentPayment = override.payment ?? '';
+  const validTerms = getValidTermOptions(override.provider, override.service, currentPayment);
+
+  for (const { value, label } of validTerms) {
+    const opt = document.createElement('option');
+    opt.value = String(value);
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
+
+  const initial = override.term !== undefined && override.term > 0 ? String(override.term) : '';
+
+  // If the row's CURRENT term isn't in the valid set (e.g., the row was
+  // saved before the filter shipped, or AWS tightened the rules), still
+  // render the current value so the row isn't silently mutated, but
+  // mark it as a problem.
+  const currentIsValid = initial === '' || validTerms.some(t => String(t.value) === initial);
+  if (!currentIsValid) {
+    const stale = document.createElement('option');
+    stale.value = initial;
+    stale.textContent = `${initial}yr (invalid for current payment — Delete the override and recreate)`;
+    stale.dataset['stale'] = 'true';
+    select.appendChild(stale);
+  }
+
+  select.value = initial;
+  select.dataset['previous'] = initial;
+
+  // If a term is already set, "Inherit" is not a clean transition (the
+  // backend has no clear-field channel). Same rationale as Payment.
+  if (initial !== '') {
+    inheritOpt.disabled = true;
+    inheritOpt.title = 'Use Delete to remove the override entirely (clears all fields including term)';
+  }
+
+  select.addEventListener('change', () => {
+    void handleTermOverrideChange(accountId, override, select, panel);
+  });
+
+  return select;
+}
+
+async function handleTermOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  select: HTMLSelectElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const previous = select.dataset['previous'] ?? '';
+  const next = select.value;
+  if (next === previous) return;
+  if (next === '') {
+    // Reverting to Inherit while a term is set is blocked above; defensive
+    // no-op here keeps types narrow if the option becomes selectable later.
+    select.value = previous;
+    return;
+  }
+  const termNum = parseInt(next, 10);
+  if (Number.isNaN(termNum)) {
+    select.value = previous;
+    return;
+  }
+  select.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      term: termNum,
+    });
+    select.dataset['previous'] = next;
+    showToast({
+      message: `Term override updated for ${override.provider}/${override.service}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    select.value = previous;
+    showToast({
+      message: `Failed to update term override: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    select.disabled = false;
+  }
+}
+
+/**
+ * Build the per-row Coverage <input> for the overrides panel. Issue #110.
+ *
+ * Numeric input bound to the row's coverage % (0–100, integer). PUT
+ * fires on the 'change' event (blur or Enter), not 'input', so we don't
+ * issue one PUT per keystroke. Out-of-range or non-numeric input
+ * reverts to the previous value with an error toast.
+ *
+ * Empty value when no coverage is set: placeholder shows "Inherit".
+ * Clearing a previously-set value reverts (same no-clear-field
+ * rationale as Term and Payment).
+ */
+function buildCoverageOverrideInput(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+): HTMLInputElement {
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.max = '100';
+  input.step = '1';
+  input.className = 'override-coverage-input';
+  input.setAttribute(
+    'aria-label',
+    `Coverage for ${override.provider}/${override.service} override`,
+  );
+
+  const initial = override.coverage !== undefined ? String(override.coverage) : '';
+  input.value = initial;
+  input.dataset['previous'] = initial;
+  if (initial === '') {
+    input.placeholder = 'Inherit';
+  }
+
+  input.addEventListener('change', () => {
+    void handleCoverageOverrideChange(accountId, override, input, panel);
+  });
+
+  return input;
+}
+
+async function handleCoverageOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  input: HTMLInputElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const previous = input.dataset['previous'] ?? '';
+  const raw = input.value.trim();
+  if (raw === previous) return;
+  if (raw === '') {
+    // No clear-field channel — clearing a coverage value would leave the
+    // override row in a no-op state. Revert and tell the user.
+    input.value = previous;
+    showToast({
+      message: 'Use Delete to remove the override entirely (clears all fields including coverage).',
+      kind: 'info',
+    });
+    return;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 100) {
+    input.value = previous;
+    showToast({
+      message: 'Coverage must be an integer between 0 and 100.',
+      kind: 'error',
+    });
+    return;
+  }
+  input.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      coverage: n,
+    });
+    input.dataset['previous'] = String(n);
+    showToast({
+      message: `Coverage override updated for ${override.provider}/${override.service}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    input.value = previous;
+    showToast({
+      message: `Failed to update coverage override: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    input.disabled = false;
+  }
+}
+
+/**
+ * Build the per-row Enabled checkbox for the overrides panel. Issue #110.
+ *
+ * Toggles the `enabled` column on `account_service_overrides`. When
+ * unchecked, the override row exists but does not influence
+ * recommendations (the backend's read path filters by `enabled`). The
+ * UI dims the row to make the inactive state obvious.
+ *
+ * Default state: an override with `enabled === undefined` (legacy rows,
+ * or rows never explicitly toggled) is treated as ACTIVE. Only explicit
+ * `enabled: false` renders as unchecked.
+ *
+ * Non-AWS rows render the checkbox disabled with an explanatory tooltip
+ * to preserve column alignment between provider types — Azure/GCP
+ * editing is tracked separately under the provider-aware modal work.
+ */
+function buildEnabledOverrideCheckbox(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+  row: HTMLTableRowElement,
+): HTMLInputElement {
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.className = 'override-enabled-toggle';
+  input.checked = override.enabled !== false;
+  input.dataset['previous'] = input.checked ? 'true' : 'false';
+  input.setAttribute(
+    'aria-label',
+    `Enable ${override.provider}/${override.service} override`,
+  );
+
+  if (override.provider !== 'aws') {
+    input.disabled = true;
+    input.title = 'Per-provider override editing is AWS-only — Azure/GCP coming with the provider-aware modal';
+    return input;
+  }
+
+  input.addEventListener('change', () => {
+    void handleEnabledOverrideChange(accountId, override, input, panel, row);
+  });
+
+  return input;
+}
+
+async function handleEnabledOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  input: HTMLInputElement,
+  panel: HTMLElement,
+  row: HTMLTableRowElement,
+): Promise<void> {
+  const next = input.checked;
+  const previousStr = input.dataset['previous'] ?? 'true';
+  const previous = previousStr === 'true';
+  if (next === previous) return;
+  input.disabled = true;
+  // Optimistically reflect the new state in the row's visual treatment
+  // so the user sees feedback before the network round-trip completes;
+  // we revert on error below.
+  row.classList.toggle('override-disabled', !next);
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      enabled: next,
+    });
+    input.dataset['previous'] = next ? 'true' : 'false';
+    showToast({
+      message: `${override.provider}/${override.service} override ${next ? 'enabled' : 'disabled'}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    input.checked = previous;
+    row.classList.toggle('override-disabled', !previous);
+    showToast({
+      message: `Failed to update enabled state: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    input.disabled = false;
+  }
+}
+
+/**
  * Load and render the service overrides panel for an account.
  *
  * Empty state (no overrides yet for this account) auto-opens the create
@@ -736,7 +1036,11 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
     table.className = 'overrides-table';
     const thead = table.createTHead();
     const hrow = thead.insertRow();
-    ['Service', 'Term', 'Payment', 'Coverage', ''].forEach(h => {
+    // Column order: Service | Term | Payment | Coverage | Enabled | <action>
+    // Enabled is second-to-last (immediately before the action cell) so the
+    // descriptive columns keep the layout users learned from PR #72/#23.
+    // Issue #110.
+    ['Service', 'Term', 'Payment', 'Coverage', 'Enabled', ''].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       hrow.appendChild(th);
@@ -744,13 +1048,23 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
     const tbody = table.createTBody();
     overrides.forEach(o => {
       const tr = tbody.insertRow();
-      [
-        `${o.provider}/${o.service}`,
-        o.term !== undefined ? `${o.term}yr` : '\u2014',
-      ].forEach(text => {
-        const td = tr.insertCell();
-        td.textContent = text;
-      });
+      // Reflect the row's enabled state visually from the initial render so
+      // disabled overrides are obvious without waiting for a toggle event.
+      if (o.enabled === false) {
+        tr.classList.add('override-disabled');
+      }
+
+      const serviceTd = tr.insertCell();
+      serviceTd.textContent = `${o.provider}/${o.service}`;
+
+      // Term cell: editable <select> for AWS (issue #110); read-only text
+      // for Azure/GCP until the provider-aware modal lands.
+      const termTd = tr.insertCell();
+      if (o.provider === 'aws') {
+        termTd.appendChild(buildTermOverrideSelect(accountId, o, panel));
+      } else {
+        termTd.textContent = o.term !== undefined ? `${o.term}yr` : '\u2014';
+      }
 
       // Payment cell: editable <select> for AWS (the only provider whose
       // reservations support distinct payment options); read-only text for
@@ -762,8 +1076,20 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
         paymentTd.textContent = o.payment ?? '\u2014';
       }
 
+      // Coverage cell: editable numeric <input> for AWS (issue #110);
+      // read-only text for Azure/GCP.
       const coverageTd = tr.insertCell();
-      coverageTd.textContent = o.coverage !== undefined ? `${o.coverage}%` : '\u2014';
+      if (o.provider === 'aws') {
+        coverageTd.appendChild(buildCoverageOverrideInput(accountId, o, panel));
+      } else {
+        coverageTd.textContent = o.coverage !== undefined ? `${o.coverage}%` : '\u2014';
+      }
+
+      // Enabled cell: per-row checkbox toggling account_service_overrides.enabled.
+      // AWS-editable, disabled (with tooltip) for non-AWS to keep the column
+      // alignment consistent across provider types. Issue #110.
+      const enabledTd = tr.insertCell();
+      enabledTd.appendChild(buildEnabledOverrideCheckbox(accountId, o, panel, tr));
 
       const actionTd = tr.insertCell();
       const resetBtn = document.createElement('button');
