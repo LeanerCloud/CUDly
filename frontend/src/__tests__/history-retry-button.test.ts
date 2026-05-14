@@ -101,6 +101,10 @@ function setupDOM(): void {
   document.body.appendChild(mkSelect('history-account-filter'));
   document.body.appendChild(mkDiv('history-summary'));
   document.body.appendChild(mkDiv('history-list'));
+  // Issue #340 sub-task: loadHistory now also paints the approval-queue
+  // card. The container must exist so renderApprovalQueue's
+  // getElementById lookup succeeds.
+  document.body.appendChild(mkDiv('purchases-approval-queue'));
 }
 
 function makeRow(overrides: Record<string, unknown>) {

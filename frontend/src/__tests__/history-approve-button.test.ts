@@ -98,6 +98,10 @@ function setupDOM(): void {
   document.body.appendChild(mkSelect('history-account-filter'));
   document.body.appendChild(mkDiv('history-summary'));
   document.body.appendChild(mkDiv('history-list'));
+  // Issue #340 sub-task: loadHistory now also paints the approval-queue
+  // card. The container must exist so renderApprovalQueue's
+  // getElementById lookup succeeds.
+  document.body.appendChild(mkDiv('purchases-approval-queue'));
 }
 
 function makeRow(overrides: Record<string, unknown>) {
@@ -137,7 +141,11 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    const buttons = document.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
+    // Scope to the Purchase History table only. The Approval queue
+    // card (issue #340 sub-task) ALSO renders Approve buttons for
+    // pending rows, so a document-wide query would double-count.
+    const list = document.getElementById('history-list')!;
+    const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['approveId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
     expect(ids).toHaveLength(3);
@@ -156,7 +164,11 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    const buttons = document.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
+    // Scope to the Purchase History table only. The Approval queue
+    // card (issue #340 sub-task) ALSO renders Approve buttons for
+    // pending rows, so a document-wide query would double-count.
+    const list = document.getElementById('history-list')!;
+    const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['approveId']);
     expect(ids).toEqual(['exec-mine']);
   });
@@ -188,7 +200,10 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    const ids = Array.from(document.querySelectorAll<HTMLButtonElement>('.history-approve-btn'))
+    // Scope to history-list. The queue card also paints the same
+    // notified row, but this test is about the table-side filter.
+    const list = document.getElementById('history-list')!;
+    const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-approve-btn'))
       .map((b) => b.dataset['approveId']);
     expect(ids).toEqual(['exec-notified']);
   });
@@ -202,8 +217,10 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    const approveBtns = document.querySelectorAll<HTMLButtonElement>('.history-approve-btn[data-approve-id]');
-    const cancelBtns = document.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]');
+    // Scope to history-list. The queue card also renders the pair.
+    const list = document.getElementById('history-list')!;
+    const approveBtns = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn[data-approve-id]');
+    const cancelBtns = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]');
     expect(approveBtns).toHaveLength(1);
     expect(cancelBtns).toHaveLength(1);
     expect(approveBtns[0]?.dataset['approveId']).toBe('exec-1');
@@ -285,8 +302,13 @@ describe('History inline Approve button (issue #286)', () => {
     });
 
     await loadHistory();
-    const approveBtn = document.querySelector<HTMLButtonElement>('.history-approve-btn');
-    const cancelBtn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
+    // Scope to history-list for the disable assertion. The click
+    // handler scopes its disable to the clicked button's containing
+    // <td> (sameRowActions), so we need both buttons from the SAME row
+    // of the SAME view to verify the pair-disable behaviour.
+    const list = document.getElementById('history-list')!;
+    const approveBtn = list.querySelector<HTMLButtonElement>('.history-approve-btn');
+    const cancelBtn = list.querySelector<HTMLButtonElement>('.history-cancel-btn');
     expect(approveBtn).not.toBeNull();
     expect(cancelBtn).not.toBeNull();
     expect(approveBtn?.disabled).toBe(false);

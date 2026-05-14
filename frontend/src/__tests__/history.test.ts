@@ -48,6 +48,7 @@ describe('History Module', () => {
       <input type="date" id="history-end">
       <div id="history-summary"></div>
       <div id="history-list"></div>
+      <div id="purchases-approval-queue"></div>
     `;
 
     jest.clearAllMocks();

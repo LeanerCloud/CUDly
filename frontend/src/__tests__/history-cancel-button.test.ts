@@ -98,6 +98,10 @@ function setupDOM(): void {
   document.body.appendChild(mkSelect('history-account-filter'));
   document.body.appendChild(mkDiv('history-summary'));
   document.body.appendChild(mkDiv('history-list'));
+  // Issue #340 sub-task: loadHistory now also paints the approval-queue
+  // card. The container must exist so renderApprovalQueue's
+  // getElementById lookup succeeds.
+  document.body.appendChild(mkDiv('purchases-approval-queue'));
 }
 
 function makeRow(overrides: Record<string, unknown>) {
@@ -137,7 +141,10 @@ describe('History inline Cancel button (issue #46)', () => {
 
     await loadHistory();
 
-    const buttons = document.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
+    // Scope to history-list. The queue card (issue #340 sub-task)
+    // also renders Cancel buttons for pending rows.
+    const list = document.getElementById('history-list')!;
+    const buttons = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
     expect(ids).toHaveLength(3);
@@ -156,7 +163,10 @@ describe('History inline Cancel button (issue #46)', () => {
 
     await loadHistory();
 
-    const buttons = document.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
+    // Scope to history-list. The queue card (issue #340 sub-task)
+    // also renders Cancel buttons for pending rows.
+    const list = document.getElementById('history-list')!;
+    const buttons = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(['exec-mine']);
   });
@@ -188,7 +198,10 @@ describe('History inline Cancel button (issue #46)', () => {
 
     await loadHistory();
 
-    const ids = Array.from(document.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
+    // Scope to history-list. The queue card also paints the same
+    // notified row.
+    const list = document.getElementById('history-list')!;
+    const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(['exec-notified']);
   });

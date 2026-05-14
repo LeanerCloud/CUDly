@@ -122,14 +122,22 @@ export async function viewPlanHistory(planId: string): Promise<void> {
     const data = await api.getHistory({ planId }) as unknown as HistoryResponse;
     renderHistorySummary(data.summary || {});
     const purchases = data.purchases || [];
+    renderApprovalQueue(purchases);
     renderHistoryList(purchases);
     snapDateInputsToPurchases(purchases);
   } catch (error) {
     console.error('Failed to load plan history:', error);
+    const err = error as Error;
     const list = document.getElementById('history-list');
     if (list) {
-      const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load plan history: ${escapeHtml(err.message)}</p>`;
+    }
+    // Mirror the loadHistory catch: clear the approval queue on error
+    // so stale pending rows from a previous render don't sit on screen
+    // alongside the failure message and tempt clicks on outdated state.
+    const queue = document.getElementById('purchases-approval-queue');
+    if (queue) {
+      queue.innerHTML = `<p class="error">Failed to load approval queue: ${escapeHtml(err.message)}</p>`;
     }
   }
 }
@@ -166,6 +174,13 @@ export async function loadHistory(): Promise<void> {
   // Term / Upfront Cost / Monthly Savings / Plan.
   const listEl = document.getElementById('history-list');
   if (listEl) showSkeletonRows(listEl, 8, 11);
+  // Pending-approval queue card (issue #340 sub-task): 3 rows x 8
+  // cols matches the queue table shape (Date / Provider / Service /
+  // Count / Upfront / Monthly Savings / Created by / Actions). The
+  // queue is typically much shorter than the full history list, so
+  // 3 rows is a sensible skeleton size.
+  const queueEl = document.getElementById('purchases-approval-queue');
+  if (queueEl) showSkeletonRows(queueEl, 3, 8);
 
   try {
     // Provider/account filters live in state.ts now (mutated by topbar chips).
@@ -185,14 +200,21 @@ export async function loadHistory(): Promise<void> {
     };
     const data = await api.getHistory(filters) as unknown as HistoryResponse;
     renderHistorySummary(data.summary || {});
-    renderHistoryList(data.purchases || []);
+    const purchases = data.purchases || [];
+    renderApprovalQueue(purchases);
+    renderHistoryList(purchases);
   } catch (error) {
     console.error('Failed to load history:', error);
+    const err = error as Error;
     const list = document.getElementById('history-list');
     if (list) {
       teardownSkeleton(list);
-      const err = error as Error;
       list.innerHTML = `<p class="error">Failed to load history: ${escapeHtml(err.message)}</p>`;
+    }
+    const queue = document.getElementById('purchases-approval-queue');
+    if (queue) {
+      teardownSkeleton(queue);
+      queue.innerHTML = `<p class="error">Failed to load approval queue: ${escapeHtml(err.message)}</p>`;
     }
   }
 }
@@ -421,6 +443,26 @@ function sameRowActions(btn: HTMLButtonElement): HTMLButtonElement[] {
   );
 }
 
+// renderPendingActionButtons returns the inline Approve / Cancel
+// button HTML for a pending|notified row, or "" when neither verb is
+// available to the current session. Extracted from renderActionCell
+// so the approval-queue card can emit identical buttons without
+// duplicating the predicate logic or the DOM contract. Each predicate
+// is checked independently so a custom role with only one of the
+// verbs renders just that button; Approve sits to the left as the
+// affirmative action.
+function renderPendingActionButtons(p: HistoryPurchase): string {
+  if (!p.purchase_id) return '';
+  const buttons: string[] = [];
+  if (canApprovePendingRow(p)) {
+    buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtml(p.purchase_id)}">Approve</button>`);
+  }
+  if (canCancelPendingRow(p)) {
+    buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`);
+  }
+  return buttons.join(' ');
+}
+
 // renderActionCell returns the HTML for the Plan / action column on a
 // single history row. The column doubles as the per-row action surface
 // because pending / failed rows rarely have a meaningful plan_name (the
@@ -438,21 +480,9 @@ function renderActionCell(p: HistoryPurchase): string {
   // Pending → render Approve + Cancel side-by-side when the session
   // qualifies for both (the typical case after issue #286 — the same
   // approve-own / cancel-own grant lives in DefaultUserPermissions).
-  // Each predicate is checked independently so a custom role with only
-  // one of the verbs renders just that button. Approve sits to the
-  // left as the affirmative action; Cancel keeps its existing class
-  // and styling so the cancel-button click handler keeps working.
-  if (p.purchase_id) {
-    const buttons: string[] = [];
-    if (canApprovePendingRow(p)) {
-      buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtml(p.purchase_id)}">Approve</button>`);
-    }
-    if (canCancelPendingRow(p)) {
-      buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`);
-    }
-    if (buttons.length > 0) {
-      return buttons.join(' ');
-    }
+  const pendingButtons = renderPendingActionButtons(p);
+  if (pendingButtons) {
+    return pendingButtons;
   }
 
   // Failed → either ops-hint (no retry possible), Retry (with optional
@@ -590,18 +620,26 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     });
   });
 
-  // Wire the inline Cancel button on pending/notified rows the current
-  // session may cancel (issue #46). confirmDialog → POST → reload. The
-  // backend remains the security boundary; the canCancelPendingRow
-  // helper above is a UX gate that hides the button when the call would
-  // 403, but a stale cache could still surface a 403 — handle it the
-  // same way as any other failure.
-  //
-  // The cancel POST and the follow-up reload are split into separate
-  // try/catch blocks: a successful cancel + failed reload must not show
-  // a "Failed to cancel" toast (the purchase IS cancelled), and the
-  // user should see success-toast first so they don't think their
-  // click was lost while we re-fetch the table.
+  wireRowActionHandlers(container);
+
+  // Scroll + flash the deep-link target if the URL hash carries a
+  // ?execution=<id>. The suppression badge on the Recommendations
+  // view links here so the user lands on the relevant row without
+  // scrolling through the whole list.
+  applyExecutionDeepLink();
+}
+
+// wireRowActionHandlers binds the Approve / Cancel / Retry click handlers
+// against the buttons inside `container`. Scoped to the container (NOT
+// the document) so multiple mounted lists (Purchase History table +
+// Approval queue card) don't cross-fire: clicking the queue's Approve
+// button binds and dispatches against the queue's button instance only.
+//
+// All three handlers terminate with a `loadHistory()` reload on success,
+// which re-renders BOTH the history table and the queue card from the
+// same fetched dataset. That means a successful approve from the queue
+// card removes the row from BOTH views in one shot.
+function wireRowActionHandlers(container: HTMLElement): void {
   // Wire the inline Approve button on pending rows the current session
   // may approve (issue #286). One flow: confirmDialog → POST /approve
   // (no token — bearer-session auth on apiRequest) → reload + toast.
@@ -645,6 +683,18 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     });
   });
 
+  // Wire the inline Cancel button on pending/notified rows the current
+  // session may cancel (issue #46). confirmDialog → POST → reload. The
+  // backend remains the security boundary; the canCancelPendingRow
+  // helper above is a UX gate that hides the button when the call would
+  // 403, but a stale cache could still surface a 403 — handle it the
+  // same way as any other failure.
+  //
+  // The cancel POST and the follow-up reload are split into separate
+  // try/catch blocks: a successful cancel + failed reload must not show
+  // a "Failed to cancel" toast (the purchase IS cancelled), and the
+  // user should see success-toast first so they don't think their
+  // click was lost while we re-fetch the table.
   container.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset['cancelId'];
@@ -740,10 +790,80 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       }
     });
   });
+}
 
-  // Scroll + flash the deep-link target if the URL hash carries a
-  // ?execution=<id>. The suppression badge on the Recommendations
-  // view links here so the user lands on the relevant row without
-  // scrolling through the whole list.
-  applyExecutionDeepLink();
+// isPendingRow returns true when a history row represents a purchase
+// awaiting approval. The Approval queue card filters on this predicate.
+// Mirrors the badge / button-eligibility logic elsewhere in this file:
+// "pending" is the freshly-created state, "notified" is the post-SES
+// state; both render the same Approve / Cancel affordances.
+function isPendingRow(p: HistoryPurchase): boolean {
+  const s = (p.status || '').toLowerCase();
+  return s === 'pending' || s === 'notified';
+}
+
+// renderApprovalQueue paints the pending-approval card at the top of the
+// Purchases tab (issue #340 sub-task). Filters the full history slice
+// down to pending|notified rows and renders a compact action-focused
+// table. When the filtered slice is empty, the card shows a friendly
+// "No pending approvals" message so the section stays visible (stable
+// layout, screen-reader-discoverable) without rendering an empty table.
+//
+// The row-action buttons reuse renderPendingActionButtons and the click
+// handlers are wired by the shared wireRowActionHandlers helper, so
+// approving from the queue card runs the exact same flow as approving
+// from the history table (confirmDialog → API → toast → reload). The
+// reload re-renders both views from one fetch, which removes the
+// approved row from BOTH lists in one shot.
+export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
+  const container = document.getElementById('purchases-approval-queue');
+  if (!container) return;
+
+  const pending = (purchases || []).filter(isPendingRow);
+
+  if (pending.length === 0) {
+    container.innerHTML = '<p class="empty">No pending approvals.</p>';
+    return;
+  }
+
+  const rows = pending.map(p => {
+    const actions = renderPendingActionButtons(p);
+    const actionsCell = actions || '<span class="muted">-</span>';
+    const createdBy = p.created_by_user_id ? escapeHtml(p.created_by_user_id) : '<span class="muted">-</span>';
+    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
+    return `
+      <tr${execIdAttr}>
+        <td>${formatDate(p.timestamp)}</td>
+        <td>${providerCell(p)}</td>
+        <td>${escapeHtml(p.service)}</td>
+        <td>${p.count}</td>
+        <td>${formatCurrency(p.upfront_cost)}</td>
+        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${createdBy}</td>
+        <td>${actionsCell}</td>
+      </tr>
+    `;
+  }).join('');
+
+  container.innerHTML = `
+    <table class="approval-queue-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Provider</th>
+          <th>Service</th>
+          <th>Count</th>
+          <th>Upfront Cost</th>
+          <th>Monthly Savings</th>
+          <th>Created by</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  `;
+
+  wireRowActionHandlers(container);
 }
