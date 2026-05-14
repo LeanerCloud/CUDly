@@ -337,13 +337,21 @@ body {
     margin-top: 1.5rem;
 }
 
-/* Admin-only elements (visibility controlled by JS) */
+/* Admin-only elements (visibility controlled by JS).
+ *
+ * `display: revert` (instead of `display: block`) lets each element
+ * fall back to its UA / cascade default when shown: <section> renders
+ * as block, <button> as inline-block, and the sidebar tab buttons
+ * inherit the inline-flex from `.app-sidebar-nav .tab-btn`. Before
+ * the revert switch the sidebar Admin tab (issue #365) would have
+ * forced display:block and broken the sidebar's flex layout.
+ */
 .admin-only {
     display: none;
 }
 
 .admin-only.visible {
-    display: block;
+    display: revert;
 }
 
 /* Honour the user's OS-level reduced-motion preference (issue #340).
