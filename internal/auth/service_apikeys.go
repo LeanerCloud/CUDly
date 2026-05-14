@@ -275,21 +275,32 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, err
 	}
 
-	// Update last used timestamp (async to avoid blocking)
+	// Record usage (last_used_at + counters) async so request latency is
+	// unaffected. The store does an atomic single-row UPDATE — see
+	// PostgresStore.RecordAPIKeyUsage for the rolling-24h-window logic.
 	go func() {
 		updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := s.UpdateLastUsed(updateCtx, key.ID); err != nil {
-			logging.Warnf("Failed to update API key last used timestamp: %v", err)
+		if err := s.RecordUsage(updateCtx, key.ID); err != nil {
+			logging.Warnf("Failed to record API key usage: %v", err)
 		}
 	}()
 
 	return key, user, nil
 }
 
-// UpdateLastUsed updates the last used timestamp for an API key atomically
+// UpdateLastUsed updates only the last used timestamp for an API key.
+// Retained for backwards compatibility; new code paths should use
+// RecordUsage so the request_count_* counters stay current.
 func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 	return s.store.UpdateAPIKeyLastUsed(ctx, keyID)
+}
+
+// RecordUsage updates last_used_at and increments both the lifetime and
+// rolling-24h request counters for the key. See
+// PostgresStore.RecordAPIKeyUsage for the atomic SQL.
+func (s *Service) RecordUsage(ctx context.Context, keyID string) error {
+	return s.store.RecordAPIKeyUsage(ctx, keyID)
 }
 
 // ComputeEffectivePermissions computes the intersection of API key permissions and user permissions

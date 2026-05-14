@@ -316,6 +316,10 @@ export interface APIKeyInfo {
   created_at: string;
   last_used_at?: string;
   permissions?: api.Permission[];
+  // Usage counters (issue #344 deferred sub-task). Optional for the
+  // same reason as in api/types.ts — see comment there.
+  request_count_total?: number;
+  request_count_24h?: number;
 }
 
 export interface CreateAPIKeyResponse {

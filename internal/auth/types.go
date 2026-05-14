@@ -82,6 +82,12 @@ type UserAPIKey struct {
 	CreatedAt   time.Time    `json:"created_at" dynamodbav:"CreatedAt"`
 	LastUsedAt  *time.Time   `json:"last_used_at,omitempty" dynamodbav:"LastUsedAt"`
 	IsActive    bool         `json:"is_active" dynamodbav:"IsActive"`
+	// Usage counters (issue #344 deferred sub-task — migration 000051).
+	// Both default to 0 for legacy rows. RequestCount24h is reset by the
+	// store's RecordAPIKeyUsage path once its window-start is older than
+	// 24h, so it really is a "last 24h" number, not "last calendar day".
+	RequestCountTotal int64 `json:"request_count_total" dynamodbav:"RequestCountTotal"`
+	RequestCount24h   int64 `json:"request_count_24h" dynamodbav:"RequestCount24h"`
 }
 
 // AuthContext represents the complete authorization context for a user

@@ -4,10 +4,12 @@
 
 import * as api from './api';
 import type { APIKeyInfo, CreateAPIKeyResponse } from './types';
+import type { APIKeysUsageStats } from './api/types';
 import { formatDateTime } from './utils';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
 import { openModal, closeModal } from './modal';
+import { showSkeletonRows, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 
 // State for modal management
 let currentApiKeys: APIKeyInfo[] = [];
@@ -22,8 +24,20 @@ let currentApiKeys: APIKeyInfo[] = [];
  * Read the documented `api_keys` field, then fall back to a bare array
  * (some other deployments/proxies might unwrap) and finally to `[]` so
  * a contract drift can never crash the page.
+ *
+ * The usage-stats summary loads in parallel — a failure in either path
+ * only takes down its own region, never both. See loadApiKeysUsageStats
+ * for the section header's lifecycle.
  */
 export async function loadApiKeys(): Promise<void> {
+  const listContainer = document.getElementById('apikeys-list');
+  if (listContainer) {
+    showSkeletonRows(listContainer, 3, 7);
+  }
+  // Kick the summary off in parallel — it has its own container + error
+  // path so we don't await it inside the list flow.
+  void loadApiKeysUsageStats();
+
   try {
     const response = await api.getApiKeys();
     const list = (response as { api_keys?: APIKeyInfo[] } | undefined)?.api_keys
@@ -33,8 +47,124 @@ export async function loadApiKeys(): Promise<void> {
     renderApiKeysList();
   } catch (error) {
     console.error('Failed to load API keys:', error);
+    if (listContainer) teardownSkeleton(listContainer);
+    renderApiKeysListError(listContainer, 'Failed to load API keys');
     showError('Failed to load API keys');
   }
+}
+
+/**
+ * Replace the API keys list region with an inline error message so the
+ * shimmer skeleton doesn't sit beside a stale empty table after a
+ * failed fetch. Uses textContent (no innerHTML) to stay XSS-safe and
+ * matches the patterns used by other modules (e.g. dashboard.ts).
+ */
+function renderApiKeysListError(container: HTMLElement | null, message: string): void {
+  if (!container) return;
+  container.replaceChildren();
+  const p = document.createElement('p');
+  p.className = 'error';
+  p.textContent = message;
+  container.appendChild(p);
+}
+
+/**
+ * Load and render the section-level usage summary (totals + top keys).
+ * Fails closed: on error the summary slot shows an inline message and
+ * the rest of the section still works.
+ */
+export async function loadApiKeysUsageStats(): Promise<void> {
+  const container = document.getElementById('apikeys-usage-summary');
+  if (!container) return;
+  showSkeletonBlock(container, '100%', '4rem');
+  try {
+    const stats = await api.getApiKeysUsageStats();
+    renderApiKeysUsageSummary(stats);
+  } catch (error) {
+    console.error('Failed to load API keys usage stats:', error);
+    teardownSkeleton(container);
+    const p = document.createElement('p');
+    p.className = 'error';
+    p.textContent = 'Failed to load usage summary';
+    container.appendChild(p);
+  }
+}
+
+/**
+ * Render the section-level summary card: total active keys, total
+ * requests (24h + lifetime), and a top-3 most-active row. Built with
+ * createElement only (no innerHTML) to match the codebase XSS posture.
+ */
+export function renderApiKeysUsageSummary(stats: APIKeysUsageStats): void {
+  const container = document.getElementById('apikeys-usage-summary');
+  if (!container) return;
+  container.replaceChildren();
+  delete container.dataset['skeletonActive'];
+
+  const card = document.createElement('div');
+  card.className = 'apikeys-usage-summary card';
+
+  const tiles = document.createElement('div');
+  tiles.className = 'apikeys-usage-tiles';
+  tiles.appendChild(buildSummaryTile('Active keys', String(stats.total_active)));
+  tiles.appendChild(buildSummaryTile('Requests (24h)', formatCount(stats.total_requests_24h)));
+  tiles.appendChild(buildSummaryTile('Requests (lifetime)', formatCount(stats.total_requests_lifetime)));
+  card.appendChild(tiles);
+
+  if (stats.top_keys && stats.top_keys.length > 0) {
+    const heading = document.createElement('h5');
+    heading.className = 'apikeys-usage-top-heading';
+    heading.textContent = 'Most active (24h)';
+    card.appendChild(heading);
+
+    const list = document.createElement('ul');
+    list.className = 'apikeys-usage-top-list';
+    for (const top of stats.top_keys) {
+      const li = document.createElement('li');
+      const name = document.createElement('strong');
+      name.textContent = top.name;
+      const code = document.createElement('code');
+      code.textContent = `${top.key_prefix}...`;
+      const count = document.createElement('span');
+      count.className = 'apikeys-usage-top-count';
+      count.textContent = `${formatCount(top.request_count_24h)} req`;
+      li.appendChild(name);
+      li.appendChild(document.createTextNode(' '));
+      li.appendChild(code);
+      li.appendChild(document.createTextNode(' — '));
+      li.appendChild(count);
+      list.appendChild(li);
+    }
+    card.appendChild(list);
+  }
+
+  container.appendChild(card);
+}
+
+function buildSummaryTile(label: string, value: string): HTMLElement {
+  const tile = document.createElement('div');
+  tile.className = 'apikeys-usage-tile';
+  const labelEl = document.createElement('div');
+  labelEl.className = 'apikeys-usage-tile-label';
+  labelEl.textContent = label;
+  const valueEl = document.createElement('div');
+  valueEl.className = 'apikeys-usage-tile-value';
+  valueEl.textContent = value;
+  tile.appendChild(labelEl);
+  tile.appendChild(valueEl);
+  return tile;
+}
+
+/**
+ * Format a request count for display. Uses the standard "k" / "M"
+ * abbreviation for large values so the summary tile doesn't have to
+ * fit "1,234,567" — the table still shows the exact number.
+ */
+function formatCount(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '0';
+  if (n < 1000) return String(Math.trunc(n));
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
 }
 
 /**
@@ -69,6 +199,8 @@ export function renderApiKeysList(): void {
           <th>Status</th>
           <th>Created</th>
           <th>Last Used</th>
+          <th>Requests (24h)</th>
+          <th>Requests (total)</th>
           <th>Expires</th>
           <th>Actions</th>
         </tr>
@@ -78,6 +210,8 @@ export function renderApiKeysList(): void {
           const isExpired = key.expires_at && new Date(key.expires_at) < new Date();
           const statusClass = !key.is_active ? 'badge-danger' : isExpired ? 'badge-warning' : 'badge-success';
           const statusText = !key.is_active ? 'Revoked' : isExpired ? 'Expired' : 'Active';
+          const count24h = formatRequestCount(key.request_count_24h);
+          const countTotal = formatRequestCount(key.request_count_total);
 
           return `
             <tr>
@@ -86,6 +220,8 @@ export function renderApiKeysList(): void {
               <td><span class="badge ${statusClass}">${statusText}</span></td>
               <td>${formatDateTime(key.created_at)}</td>
               <td>${key.last_used_at ? formatDateTime(key.last_used_at) : '<span class="text-muted">Never</span>'}</td>
+              <td class="apikeys-count-cell">${count24h}</td>
+              <td class="apikeys-count-cell">${countTotal}</td>
               <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
               <td>
                 ${key.is_active && !isExpired ? `<button class="btn-small btn-warning revoke-key-btn" data-key-id="${escapeHtml(key.id)}">Revoke</button>` : ''}
@@ -98,6 +234,11 @@ export function renderApiKeysList(): void {
     </table>
   `;
 
+  // Clear the skeleton marker before the render — the existing
+  // innerHTML write (kept intact for diff minimality) replaces all
+  // children, and we don't want a stale `data-skeleton-active`
+  // attribute lingering on the live table.
+  delete container.dataset['skeletonActive'];
   container.innerHTML = table;
 
   // Add event delegation after rendering
@@ -397,4 +538,19 @@ function escapeHtml(text: string): string {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+/**
+ * Format a per-row request count for display in the table cells.
+ * Renders the exact integer (no abbreviation) so a row with "1,234,567"
+ * is unambiguous — the section-level summary card uses a separate
+ * `formatCount` that abbreviates large values to fit the tile width.
+ *
+ * Defends against missing fields (older cached responses without the
+ * counters from migration 000051) and non-finite inputs by coercing
+ * to 0 — never returns "undefined" or "NaN" to the rendered table.
+ */
+function formatRequestCount(n: number | undefined): string {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '0';
+  return Math.trunc(n).toLocaleString('en-US');
 }

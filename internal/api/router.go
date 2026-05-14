@@ -201,7 +201,10 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/auth/profile", Method: "PUT", Handler: r.updateProfileHandler, Auth: AuthUser},
 		{ExactPath: "/api/auth/change-password", Method: "POST", Handler: r.changePasswordHandler, Auth: AuthUser},
 
-		// API Key endpoints (self-service — any authenticated user)
+		// API Key endpoints (self-service — any authenticated user).
+		// Usage-stats route is declared before the generic prefix
+		// matches so the more-specific path wins.
+		{ExactPath: "/api/api-keys/usage-stats", Method: "GET", Handler: r.listAPIKeysUsageStatsHandler, Auth: AuthUser},
 		{ExactPath: "/api/api-keys", Method: "GET", Handler: r.listAPIKeysHandler, Auth: AuthUser},
 		{ExactPath: "/api/api-keys", Method: "POST", Handler: r.createAPIKeyHandler, Auth: AuthUser},
 		{PathPrefix: "/api/api-keys/", PathSuffix: "/revoke", Method: "POST", Handler: r.revokeAPIKeyHandler, Auth: AuthUser},
@@ -536,6 +539,10 @@ func (r *Router) changePasswordHandler(ctx context.Context, req *events.LambdaFu
 
 func (r *Router) listAPIKeysHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listAPIKeys(ctx, req)
+}
+
+func (r *Router) listAPIKeysUsageStatsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.listAPIKeysUsageStats(ctx, req)
 }
 
 func (r *Router) createAPIKeyHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

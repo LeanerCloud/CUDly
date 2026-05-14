@@ -175,6 +175,7 @@ type AuthServiceInterface interface {
 	// API Key management
 	CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error)
 	ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error)
+	GetAPIKeysUsageStatsAPI(ctx context.Context, userID string) (any, error)
 	DeleteAPIKeyAPI(ctx context.Context, userID, keyID string) error
 	RevokeAPIKeyAPI(ctx context.Context, userID, keyID string) error
 	ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error)

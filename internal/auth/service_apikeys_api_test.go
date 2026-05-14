@@ -293,7 +293,7 @@ func TestService_ValidateUserAPIKeyAPI(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("UpdateAPIKeyLastUsed", mock.Anything, "key-1").Return(nil).Maybe()
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1").Return(nil).Maybe()
 
 		resultKey, resultUser, err := service.ValidateUserAPIKeyAPI(ctx, apiKey)
 
@@ -346,4 +346,86 @@ func TestService_ValidateUserAPIKeyAPI(t *testing.T) {
 		assert.Nil(t, resultUser)
 		mockStore.AssertExpectations(t)
 	})
+}
+
+func TestService_GetAPIKeysUsageStatsAPI(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	t.Run("aggregates totals and surfaces top keys by 24h", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		keys := []*UserAPIKey{
+			{ID: "key-a", UserID: "user-123", Name: "Quiet", KeyPrefix: "qaaaaaaa", IsActive: true, CreatedAt: now, RequestCount24h: 0, RequestCountTotal: 50},
+			{ID: "key-b", UserID: "user-123", Name: "Busy", KeyPrefix: "bbbbbbbb", IsActive: true, CreatedAt: now, RequestCount24h: 25, RequestCountTotal: 1000},
+			{ID: "key-c", UserID: "user-123", Name: "Medium", KeyPrefix: "ccccccccc", IsActive: true, CreatedAt: now, RequestCount24h: 5, RequestCountTotal: 200},
+			{ID: "key-d", UserID: "user-123", Name: "Inactive", KeyPrefix: "dddddddd", IsActive: false, CreatedAt: now, RequestCount24h: 0, RequestCountTotal: 12},
+		}
+
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.GetAPIKeysUsageStatsAPI(ctx, "user-123")
+		require.NoError(t, err)
+		resp := result.(*APIKeysUsageStatsResponse)
+
+		assert.Equal(t, 3, resp.TotalActive)
+		assert.Equal(t, int64(30), resp.TotalRequests24h)
+		assert.Equal(t, int64(1262), resp.TotalRequestsLifetime)
+		require.Len(t, resp.TopKeys, 2, "only keys with non-zero 24h count appear in top list")
+		assert.Equal(t, "key-b", resp.TopKeys[0].ID)
+		assert.Equal(t, int64(25), resp.TopKeys[0].RequestCount24h)
+		assert.Equal(t, "key-c", resp.TopKeys[1].ID)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("returns empty top-keys when no usage at all", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		keys := []*UserAPIKey{
+			{ID: "key-a", UserID: "user-123", Name: "k", KeyPrefix: "aaaa", IsActive: true, CreatedAt: now},
+		}
+
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.GetAPIKeysUsageStatsAPI(ctx, "user-123")
+		require.NoError(t, err)
+		resp := result.(*APIKeysUsageStatsResponse)
+
+		assert.Equal(t, 1, resp.TotalActive)
+		assert.Equal(t, int64(0), resp.TotalRequests24h)
+		assert.Equal(t, int64(0), resp.TotalRequestsLifetime)
+		assert.Empty(t, resp.TopKeys)
+	})
+
+	t.Run("propagates store error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return([]*UserAPIKey(nil), assert.AnError)
+
+		result, err := service.GetAPIKeysUsageStatsAPI(ctx, "user-123")
+		assert.Error(t, err)
+		assert.Nil(t, result)
+	})
+}
+
+func TestSortAPIKeysByActivity(t *testing.T) {
+	a := &UserAPIKey{ID: "a", RequestCount24h: 10, RequestCountTotal: 100}
+	b := &UserAPIKey{ID: "b", RequestCount24h: 25, RequestCountTotal: 50}
+	c := &UserAPIKey{ID: "c", RequestCount24h: 10, RequestCountTotal: 500}
+	d := &UserAPIKey{ID: "d", RequestCount24h: 0, RequestCountTotal: 1000}
+
+	in := []*UserAPIKey{a, b, c, d}
+	sortAPIKeysByActivity(in)
+
+	assert.Equal(t, []string{"b", "c", "a", "d"}, []string{in[0].ID, in[1].ID, in[2].ID, in[3].ID},
+		"24h desc first, then lifetime desc as tiebreaker")
 }

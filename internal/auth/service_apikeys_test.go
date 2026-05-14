@@ -492,7 +492,7 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("UpdateAPIKeyLastUsed", mock.Anything, "key-1").Return(nil).Maybe()
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1").Return(nil).Maybe()
 
 		resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
 
@@ -658,6 +658,32 @@ func TestService_UpdateLastUsed(t *testing.T) {
 
 		err := service.UpdateLastUsed(ctx, "key-1")
 
+		assert.Error(t, err)
+		mockStore.AssertExpectations(t)
+	})
+}
+
+func TestService_RecordUsage(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("delegates to store RecordAPIKeyUsage", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+
+		mockStore.On("RecordAPIKeyUsage", ctx, "key-1").Return(nil)
+
+		err := service.RecordUsage(ctx, "key-1")
+		require.NoError(t, err)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("propagates store error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+
+		mockStore.On("RecordAPIKeyUsage", ctx, "key-1").Return(assert.AnError)
+
+		err := service.RecordUsage(ctx, "key-1")
 		assert.Error(t, err)
 		mockStore.AssertExpectations(t)
 	})
