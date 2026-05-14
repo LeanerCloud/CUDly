@@ -21,9 +21,16 @@
 package common
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
+
+// jsonNullBytes is the JSON encoding of nil. Cached so the null-payload
+// check below doesn't allocate on every call (this is the read-back step
+// of every purchase, so it's worth avoiding the string conversion that
+// would otherwise happen on the same path).
+var jsonNullBytes = []byte("null")
 
 // MarshalServiceDetails encodes a ServiceDetails value into a raw JSON
 // payload suitable for the RecommendationRecord.Details JSONB column.
@@ -40,7 +47,7 @@ func MarshalServiceDetails(details ServiceDetails) (json.RawMessage, error) {
 	// json.Marshal(nilPointer) returns "null" — fold that to a nil
 	// RawMessage so downstream callers can treat absent and explicitly-
 	// null identically (DecodeServiceDetailsFor below ignores both).
-	if string(b) == "null" {
+	if bytes.Equal(b, jsonNullBytes) {
 		return nil, nil
 	}
 	return b, nil
@@ -76,7 +83,7 @@ func DecodeServiceDetailsFor(service string, raw json.RawMessage) (ServiceDetail
 		// might be on different versions during a rolling deploy).
 		return nil, nil
 	}
-	if len(raw) == 0 || string(raw) == "null" {
+	if len(raw) == 0 || bytes.Equal(raw, jsonNullBytes) {
 		// Legacy row or genuinely absent payload — hand back a zero-
 		// valued typed pointer so the service client's type-assertion
 		// succeeds. buildOfferingFilters tolerates zero fields and
