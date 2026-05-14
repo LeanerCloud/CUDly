@@ -21,6 +21,7 @@ import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { canAccess } from './permissions';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
@@ -2484,22 +2485,31 @@ function mountBottomActionBox(): HTMLElement | null {
   capacityLabel.appendChild(capacityInput);
   box.appendChild(capacityLabel);
 
-  // Purchase one-off — preserved ID
+  // Purchase one-off (preserved ID). Issue #365: hide for sessions
+  // that lack `execute:purchases` (admin only by default; user and
+  // readonly never see the button). The element stays in the DOM so
+  // the click handler stays wired and the existing `updateBottomAction
+  // Box` updates still flow through; `.hidden` toggles via the HTML
+  // hidden attribute which renders as `display: none`.
   const purchaseBtn = document.createElement('button');
   purchaseBtn.type = 'button';
   purchaseBtn.className = 'btn btn-primary';
   purchaseBtn.id = 'bulk-purchase-btn';
   purchaseBtn.textContent = 'Purchase';
   purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
+  purchaseBtn.hidden = !canAccess('execute', 'purchases');
   box.appendChild(purchaseBtn);
 
-  // Create Purchase Plan — relocated from old top bar
+  // Create Purchase Plan (relocated from old top bar). Issue #365:
+  // hide for sessions that lack `create:plans` (readonly loses it;
+  // admin + user keep it).
   const planBtn = document.createElement('button');
   planBtn.type = 'button';
   planBtn.className = 'btn btn-secondary';
   planBtn.id = 'create-plan-btn';
   planBtn.textContent = 'Create Plan';
   planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
+  planBtn.hidden = !canAccess('create', 'plans');
   box.appendChild(planBtn);
 
   // a11y hint for the disabled-button state (#273 CR follow-up).

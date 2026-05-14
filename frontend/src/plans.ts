@@ -14,6 +14,7 @@ import { populateTermSelect, populatePaymentSelect, isValidCombination, normaliz
 import { openModal, closeModal } from './modal';
 import { openArcheraOfferModal } from './archera';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { canAccess } from './permissions';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -37,6 +38,13 @@ export async function loadPlans(): Promise<void> {
   // loadPlans) get the same loading affordance.
   const plansList = document.getElementById('plans-list');
   if (plansList) showSkeletonTiles(plansList, 3);
+
+  // Issue #365: hide the top-level "New Plan" button for sessions that
+  // can't create plans. Readonly users hit a 403 on click otherwise.
+  // The button itself stays in the DOM (HTML keeps the static markup)
+  // so admin/user sessions get the same layout they always did.
+  const newPlanBtn = document.getElementById('new-plan-btn');
+  if (newPlanBtn) newPlanBtn.hidden = !canAccess('create', 'plans');
 
   try {
     const data = await api.getPlans() as unknown as PlansResponse;
@@ -156,6 +164,13 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
     ? formatCurrency(purchase.upfront_cost)
     : '—';
 
+  // Issue #365: gate row actions by the same plan-management permissions
+  // a click on each button would require. Readonly users see no buttons
+  // (status badge only); user role sees Run/Pause/Resume/Edit but not
+  // Disable; admins see everything.
+  const canManagePlan = canAccess('update', 'plans');
+  const canDisablePlan = canAccess('delete', 'plans');
+
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
@@ -172,11 +187,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="savings">${formatCurrency(purchase.estimated_savings)}/mo</td>
       <td><span class="status-badge ${statusClass}">${purchase.status}</span></td>
       <td class="actions">
-        ${canRun ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
-        ${isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}
-        ${isPaused ? `<button data-action="resume" data-id="${purchase.id}" class="btn-small" title="Resume">⏵</button>` : ''}
-        <button data-action="edit" data-id="${purchase.id}" class="btn-small" title="Edit Plan">✎</button>
-        <button data-action="disable" data-id="${purchase.id}" class="btn-small danger" title="Disable Plan">✕</button>
+        ${canManagePlan && canRun ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
+        ${canManagePlan && isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}
+        ${canManagePlan && isPaused ? `<button data-action="resume" data-id="${purchase.id}" class="btn-small" title="Resume">⏵</button>` : ''}
+        ${canManagePlan ? `<button data-action="edit" data-id="${purchase.id}" class="btn-small" title="Edit Plan">✎</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${purchase.id}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
       </td>
     </tr>
   `;
@@ -356,6 +371,12 @@ function renderPlans(plans: LocalPlan[]): void {
     return;
   }
 
+  // Issue #365: cache permission checks once per render rather than
+  // per-card so a 100-plan list doesn't bounce through the helper
+  // 600 times. Action buttons hidden for sessions that lack the verb.
+  const canManagePlan = canAccess('update', 'plans');
+  const canDeletePlan = canAccess('delete', 'plans');
+
   container.innerHTML = plans.map(rawPlan => {
     // Cast to BackendPlan to handle the actual API response format
     const plan = rawPlan as unknown as BackendPlan;
@@ -377,10 +398,12 @@ function renderPlans(plans: LocalPlan[]): void {
           <div class="plan-status">
             <span class="status-badge ${status.class}">${status.label}</span>
             ${overdueBadge}
+            ${canManagePlan ? `
             <label class="toggle-label">
               <input type="checkbox" data-action="toggle-plan" data-id="${plan.id}" ${plan.enabled ? 'checked' : ''}>
               <span class="slider"></span>
             </label>
+            ` : ''}
           </div>
         </div>
         <div class="plan-body">
@@ -417,10 +440,10 @@ function renderPlans(plans: LocalPlan[]): void {
             ` : ''}
           </div>
           <div class="plan-actions">
-            <button data-action="add-purchases" data-id="${plan.id}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>
-            <button data-action="edit-plan" data-id="${plan.id}">Edit</button>
+            ${canManagePlan ? `<button data-action="add-purchases" data-id="${plan.id}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>` : ''}
+            ${canManagePlan ? `<button data-action="edit-plan" data-id="${plan.id}">Edit</button>` : ''}
             <button data-action="view-history" data-id="${plan.id}" class="secondary">History</button>
-            <button data-action="delete-plan" data-id="${plan.id}" class="danger">Delete</button>
+            ${canDeletePlan ? `<button data-action="delete-plan" data-id="${plan.id}" class="danger">Delete</button>` : ''}
           </div>
         </div>
       </div>

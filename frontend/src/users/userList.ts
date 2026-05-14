@@ -15,6 +15,7 @@ import {
 } from './state';
 import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError } from './utils';
 import { openEditUserModal, deleteUser, loadUsers } from './userActions';
+import { getRolePermissions } from '../permissions';
 
 /**
  * Render user statistics
@@ -142,21 +143,14 @@ function groupName(groupId: string): string {
 /**
  * Compute the effective permissions for a user: union of role defaults and
  * all group permissions. Returns permissions as {action}:{resource} strings.
+ *
+ * Role defaults come from the shared permissions module so the badge here
+ * and the global UI gates stay in lockstep (issue #365). Group-grant
+ * permissions are layered on top here because this admin-only page is the
+ * one place `availableGroups` is loaded.
  */
 function effectivePermissions(user: APIUser): string[] {
-  const perms = new Set<string>();
-
-  // Role defaults (mirror of backend auth/types.go DefaultUserPermissions /
-  // DefaultReadOnlyPermissions / DefaultAdminPermissions)
-  if (user.role === 'admin') {
-    perms.add('admin:*');
-  } else if (user.role === 'readonly') {
-    ['recommendations', 'plans', 'history'].forEach(r => perms.add(`view:${r}`));
-  } else {
-    ['recommendations', 'plans', 'purchases', 'history'].forEach(r => perms.add(`view:${r}`));
-    perms.add('create:plans');
-    perms.add('update:plans');
-  }
+  const perms = new Set<string>(getRolePermissions(user.role));
 
   // Group permissions
   user.groups.forEach(gid => {

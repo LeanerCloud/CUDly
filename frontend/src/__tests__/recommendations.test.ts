@@ -83,6 +83,12 @@ jest.mock('../state', () => ({
   // issue #318: column visibility (default: all visible — empty hidden set)
   getHiddenColumns: jest.fn().mockReturnValue(new Set()),
   setHiddenColumns: jest.fn(),
+  // Issue #365: mountBottomActionBox calls canAccess() which reads the
+  // current user role. Default to admin so the bottom-bar button-presence
+  // tests below see both #bulk-purchase-btn and #create-plan-btn
+  // unconditionally. Permission-gating coverage lives in
+  // recommendations-permissions.test.ts.
+  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
 }));
 
 // Mock utils

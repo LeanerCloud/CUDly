@@ -463,6 +463,14 @@ describe('HTML Structure', () => {
       expect(section?.classList.contains('admin-only')).toBe(true);
     });
 
+    // Issue #365: sidebar Admin tab is admin-gated so a non-admin
+    // session never sees a link into a page they can't use.
+    test('sidebar Admin button is admin-only', () => {
+      const btn = document.getElementById('admin-tab-btn');
+      expect(btn).toBeTruthy();
+      expect(btn?.classList.contains('admin-only')).toBe(true);
+    });
+
     test('has create user button', () => {
       const btn = document.getElementById('create-user-btn');
       expect(btn).toBeTruthy();
