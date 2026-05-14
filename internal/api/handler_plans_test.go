@@ -32,6 +32,10 @@ func TestHandler_listPlans(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	// listPlans now fetches recent executions to compute the per-plan
+	// health score. Empty slice keeps every plan at the score ceiling.
+	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return([]config.PurchaseExecution{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -44,6 +48,119 @@ func TestHandler_listPlans(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, result.Plans, 2)
+	// Both plans have no penalties: enabled with empty ramp_schedule
+	// (TotalSteps=0) → completed-plan short-circuit only triggers when
+	// CurrentStep >= TotalSteps AND TotalSteps > 0. For these test
+	// plans, no penalties fire, so the score is 100.
+	for _, p := range result.Plans {
+		assert.Equal(t, 100, p.HealthScore, "expected ceiling score for plan %s", p.ID)
+		assert.Empty(t, p.HealthFactors, "expected no health factors for plan %s", p.ID)
+	}
+	mockStore.AssertExpectations(t)
+}
+
+func TestHandler_listPlans_AppliesHealthFactors(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	past := time.Now().AddDate(0, 0, -3)
+	plans := []config.PurchasePlan{
+		{
+			ID:                "11111111-1111-1111-1111-111111111111",
+			Name:              "Overdue Plan",
+			Enabled:           true,
+			NextExecutionDate: &past,
+			RampSchedule: config.RampSchedule{
+				Type:        "weekly",
+				CurrentStep: 1,
+				TotalSteps:  4,
+			},
+		},
+		{
+			ID:      "22222222-2222-2222-2222-222222222222",
+			Name:    "Healthy Plan",
+			Enabled: true,
+			RampSchedule: config.RampSchedule{
+				Type:        "immediate",
+				CurrentStep: 0,
+				TotalSteps:  1,
+			},
+		},
+	}
+	executions := []config.PurchaseExecution{
+		{PlanID: "11111111-1111-1111-1111-111111111111", Status: "failed"},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return(executions, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+	}
+	result, err := handler.listPlans(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 2)
+
+	// Overdue plan: -30 (overdue) -10 (1 failure) = 60
+	assert.Equal(t, 60, result.Plans[0].HealthScore)
+	require.Len(t, result.Plans[0].HealthFactors, 2)
+	assert.Equal(t, "overdue", result.Plans[0].HealthFactors[0].Kind)
+	assert.Equal(t, "failed_executions", result.Plans[0].HealthFactors[1].Kind)
+
+	// Healthy plan: no penalties.
+	assert.Equal(t, 100, result.Plans[1].HealthScore)
+	assert.Empty(t, result.Plans[1].HealthFactors)
+	mockStore.AssertExpectations(t)
+}
+
+func TestHandler_listPlans_ExecutionFetchErrorIsTolerated(t *testing.T) {
+	// If the executions lookup fails, plans must still render — every
+	// plan defaults to a 100 score (no penalties applied) rather than
+	// erroring the whole list. Regression guard for the swallowed-err
+	// branch in listPlans.
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	plans := []config.PurchasePlan{
+		{ID: "11111111-1111-1111-1111-111111111111", Name: "Test Plan", Enabled: true},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return([]config.PurchaseExecution(nil), errors.New("db down"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+	}
+	result, err := handler.listPlans(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Plans, 1)
+	assert.Equal(t, 100, result.Plans[0].HealthScore)
 }
 
 func TestHandler_createPlan(t *testing.T) {

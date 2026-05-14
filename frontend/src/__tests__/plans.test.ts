@@ -495,6 +495,112 @@ describe('Plans Module', () => {
       const list = document.getElementById('plans-list');
       expect(list?.innerHTML).toContain('Null Services Plan');
     });
+
+    // Plan health badge — green band, no factors -> simple tooltip.
+    test('renders green health badge for high scores', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-h-1',
+            name: 'Healthy Plan',
+            enabled: true,
+            auto_purchase: true,
+            services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 } },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+            health_score: 95,
+            health_factors: []
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const badge = document.querySelector<HTMLElement>('[data-testid="plan-health-badge"]');
+      expect(badge).not.toBeNull();
+      expect(badge?.classList.contains('plan-health-badge--good')).toBe(true);
+      expect(badge?.textContent).toBe('95');
+      expect(badge?.getAttribute('title')).toContain('95/100');
+    });
+
+    test('renders amber health badge for mid-band scores', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-h-2',
+            name: 'Mid Plan',
+            enabled: true,
+            auto_purchase: true,
+            services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 } },
+            ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, current_step: 1, total_steps: 4 },
+            health_score: 65,
+            health_factors: [
+              { kind: 'behind_schedule', weight: 20, note: 'Ramp is 1 step(s) behind schedule' },
+              { kind: 'failed_executions', weight: 10, note: '1 failed execution(s)' }
+            ]
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const badge = document.querySelector<HTMLElement>('[data-testid="plan-health-badge"]');
+      expect(badge).not.toBeNull();
+      expect(badge?.classList.contains('plan-health-badge--warn')).toBe(true);
+      expect(badge?.textContent).toBe('65');
+      const title = badge?.getAttribute('title') || '';
+      expect(title).toContain('behind schedule');
+      expect(title).toContain('failed execution');
+    });
+
+    test('renders red health badge for low scores', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-h-3',
+            name: 'Bad Plan',
+            enabled: false,
+            auto_purchase: false,
+            services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 } },
+            ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, current_step: 1, total_steps: 4 },
+            health_score: 25,
+            health_factors: [
+              { kind: 'disabled_midway', weight: 25, note: 'Disabled at step 1 of 4' },
+              { kind: 'failed_executions', weight: 30, note: '3 failed execution(s)' }
+            ]
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const badge = document.querySelector<HTMLElement>('[data-testid="plan-health-badge"]');
+      expect(badge).not.toBeNull();
+      expect(badge?.classList.contains('plan-health-badge--bad')).toBe(true);
+      expect(badge?.textContent).toBe('25');
+    });
+
+    test('omits health badge when score is missing (legacy API response)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-h-4',
+            name: 'No Score Plan',
+            enabled: true,
+            auto_purchase: true,
+            services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 } },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 }
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      expect(document.querySelector('[data-testid="plan-health-badge"]')).toBeNull();
+    });
   });
 
   describe('loadPlannedPurchases', () => {

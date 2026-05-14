@@ -34,7 +34,30 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 		}
 	}
 
-	return &PlansResponse{Plans: plans}, nil
+	// Fetch the recent executions used to compute per-plan health
+	// scores. Single store call, grouped in-memory by plan_id so the
+	// per-plan loop is O(plans + executions) rather than N round-trips
+	// to the database. A fetch error is logged and swallowed — the
+	// plans list itself must still render; consumers see HealthScore =
+	// 100 (no penalties) for every plan when the execution lookup
+	// fails, which is a safe pessimistic default for a UI signal.
+	executions, execErr := h.config.GetExecutionsByStatuses(ctx, planHealthExecutionStatuses, config.DefaultListLimit)
+	if execErr != nil {
+		executions = nil
+	}
+	byPlan := groupExecutionsByPlan(executions)
+
+	out := make([]PlanWithHealth, 0, len(plans))
+	for i := range plans {
+		score, factors := computePlanHealth(&plans[i], byPlan[plans[i].ID], now)
+		out = append(out, PlanWithHealth{
+			PurchasePlan:  plans[i],
+			HealthScore:   score,
+			HealthFactors: factors,
+		})
+	}
+
+	return &PlansResponse{Plans: out}, nil
 }
 
 // calculateNextExecutionDate calculates the next execution date for a plan

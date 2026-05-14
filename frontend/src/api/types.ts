@@ -89,6 +89,12 @@ export interface PlanRampSchedule {
   start_date?: string;
 }
 
+export interface PlanHealthFactor {
+  kind: string;
+  weight: number;
+  note: string;
+}
+
 export interface Plan {
   id: string;
   name: string;
@@ -101,6 +107,11 @@ export interface Plan {
   updated_at: string;
   next_execution_date?: string;
   last_execution_date?: string;
+  // Response-only fields populated by the GET /plans handler. Optional
+  // so this type still matches CreatePlanRequest-shaped fixtures and
+  // older API responses served during a partial deploy.
+  health_score?: number;
+  health_factors?: PlanHealthFactor[];
 }
 
 export interface CreatePlanRequest {

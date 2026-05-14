@@ -123,6 +123,12 @@ export interface LocalPlan {
   next_execution_date?: string;
   custom_step_percent?: number;
   custom_interval_days?: number;
+  // Optional response-only fields from the /plans health-score
+  // envelope. Optional so older API responses still type-check during
+  // a partial deploy and unit-test fixtures don't have to populate
+  // them.
+  health_score?: number;
+  health_factors?: api.PlanHealthFactor[];
 }
 
 export interface SavePlanData {

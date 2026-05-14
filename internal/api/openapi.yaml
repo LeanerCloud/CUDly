@@ -1973,7 +1973,42 @@ components:
         plans:
           type: array
           items:
-            $ref: '#/components/schemas/PurchasePlan'
+            $ref: '#/components/schemas/PlanWithHealth'
+
+    HealthFactor:
+      type: object
+      description: |
+        One penalty applied to a plan's health score. Surfaced in the UI
+        badge tooltip so a low score is actionable rather than opaque.
+      properties:
+        kind:
+          type: string
+          description: Stable machine slug (overdue, failed_executions, etc.)
+        weight:
+          type: integer
+          description: How many points this factor subtracted from 100.
+        note:
+          type: string
+          description: Human-readable explanation.
+
+    PlanWithHealth:
+      allOf:
+        - $ref: '#/components/schemas/PurchasePlan'
+        - type: object
+          properties:
+            health_score:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: |
+                0-100 health score reflecting how well the plan is
+                executing (ramp progress vs. schedule, age, failed/
+                cancelled execution ratio). See HealthFactor for the
+                per-penalty breakdown.
+            health_factors:
+              type: array
+              items:
+                $ref: '#/components/schemas/HealthFactor'
 
     PlanRequest:
       type: object

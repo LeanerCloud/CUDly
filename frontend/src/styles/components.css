@@ -1301,6 +1301,41 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-primary);
 }
 
+/* Plan health pill (Plans tab — rendered inside .plan-status next to
+ * the existing Active/Manual/Disabled badge). The numeric score (0-100)
+ * is the only content; the colour band carries the rest of the signal.
+ * The tooltip on hover/focus enumerates which factors subtracted from
+ * 100 so the user can act on a bad score.
+ */
+.plan-health-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.25rem;
+    height: 1.5rem;
+    padding: 0 0.5rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: help;
+}
+
+.plan-health-badge--good {
+    background: var(--cudly-success-bg);
+    color: var(--cudly-success-fg, #137333);
+}
+
+.plan-health-badge--warn {
+    background: #fef7e0;
+    color: #8a6d0c;
+}
+
+.plan-health-badge--bad {
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
+}
+
 /* Subline rendered under the Pending badge in the Purchase History Status
  * column. Surfaces the approver's email address (the recipient of the
  * approval email) so the user knows which inbox to check.

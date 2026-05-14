@@ -545,6 +545,11 @@ func TestHandler_HandleRequest_ListPlans(t *testing.T) {
 
 	plans := []config.PurchasePlan{{ID: "11111111-1111-1111-1111-111111111111"}}
 	mockStore.On("ListPurchasePlans", mock.Anything).Return(plans, nil)
+	// listPlans now fetches recent executions for the per-plan health
+	// score. Empty slice keeps scoring at the ceiling and doesn't
+	// affect the HTTP-shape assertions below.
+	mockStore.On("GetExecutionsByStatuses", mock.Anything, planHealthExecutionStatuses, config.DefaultListLimit).
+		Return([]config.PurchaseExecution{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 

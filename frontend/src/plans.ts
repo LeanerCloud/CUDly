@@ -273,6 +273,35 @@ interface BackendPlan {
     total_steps: number;
   };
   next_execution_date?: string;
+  // Optional health-score fields populated by the GET /plans envelope.
+  // Optional so older API responses (and unit-test fixtures that don't
+  // set them) keep type-checking; the badge simply doesn't render when
+  // the score is absent.
+  health_score?: number;
+  health_factors?: { kind: string; weight: number; note: string }[];
+}
+
+// Returns the modifier class for the plan-health badge based on the
+// score band: >=80 good (green), 50..79 warn (amber), <50 bad (red).
+// Kept as a tiny pure helper so the test asserting the class-mapping
+// doesn't have to spin up the whole renderPlans pipeline.
+function planHealthBandClass(score: number): 'good' | 'warn' | 'bad' {
+  if (score >= 80) return 'good';
+  if (score >= 50) return 'warn';
+  return 'bad';
+}
+
+// Renders the plan-health pill markup for the plan card header.
+// Empty string when the score is missing (older API responses,
+// pre-rollout) so the card layout doesn't get a hole.
+function renderPlanHealthBadge(plan: BackendPlan): string {
+  if (typeof plan.health_score !== 'number') return '';
+  const band = planHealthBandClass(plan.health_score);
+  const factors = plan.health_factors ?? [];
+  const tooltip = factors.length === 0
+    ? `Plan health ${plan.health_score}/100`
+    : `Plan health ${plan.health_score}/100 — ${factors.map(f => f.note).join(' · ')}`;
+  return `<span class="plan-health-badge plan-health-badge--${band}" title="${escapeHtml(tooltip)}" data-testid="plan-health-badge">${plan.health_score}</span>`;
 }
 
 // Pretty label for a service slug used inside the plan card.
@@ -398,6 +427,7 @@ function renderPlans(plans: LocalPlan[]): void {
           <div class="plan-status">
             <span class="status-badge ${status.class}">${status.label}</span>
             ${overdueBadge}
+            ${renderPlanHealthBadge(plan)}
             ${canManagePlan ? `
             <label class="toggle-label">
               <input type="checkbox" data-action="toggle-plan" data-id="${plan.id}" ${plan.enabled ? 'checked' : ''}>

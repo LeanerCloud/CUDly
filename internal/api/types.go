@@ -367,9 +367,16 @@ type RecommendationDetailResponse struct {
 	ProvenanceNote   string       `json:"provenance_note"`
 }
 
-// PlansResponse holds the purchase plans response
+// PlansResponse holds the purchase plans response.
+//
+// Plans are wrapped in PlanWithHealth so the list endpoint can attach
+// a response-only health score + per-factor breakdown without polluting
+// the persisted config.PurchasePlan struct. The wrapper embeds the plan
+// inline, so JSON consumers see every field they used to see, plus the
+// new health_score / health_factors keys. See plan_health.go for the
+// scoring formula.
 type PlansResponse struct {
-	Plans []config.PurchasePlan `json:"plans"`
+	Plans []PlanWithHealth `json:"plans"`
 }
 
 // CurrentUserResponse holds the current user response
