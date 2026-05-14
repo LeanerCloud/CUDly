@@ -29,24 +29,36 @@ import (
 // executePurchase runs the purchase for a single execution. Returns wasMultiAccount=true when
 // fan-out was used (per-account records are already saved; caller should skip root record save).
 func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) (wasMultiAccount bool, err error) {
-	logging.Infof("Executing purchase for plan %s, step %d", exec.PlanID, exec.StepNumber)
+	logging.Infof("Executing purchase for plan %q, step %d", exec.PlanID, exec.StepNumber)
 
-	plan, err := m.config.GetPurchasePlan(ctx, exec.PlanID)
-	if err != nil {
-		return false, fmt.Errorf("failed to get plan: %w", err)
-	}
-	if plan == nil {
-		return false, fmt.Errorf("plan not found: %s", exec.PlanID)
-	}
-
-	// Fan out across plan accounts when accounts are configured.
-	if exec.CloudAccountID == nil {
-		accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
+	// Direct-execute purchases (Opportunities "Purchase" button) arrive
+	// with no associated plan. PlanID is empty and the Postgres UUID
+	// column rejects "" with SQLSTATE 22P02, so skip the plan/accounts
+	// fetch entirely and synthesise a placeholder plan whose Name is the
+	// only field downstream history/notification code reads. By
+	// definition direct-execute purchases target a single account, so
+	// fall straight through to the legacy single-account path.
+	var plan *config.PurchasePlan
+	if exec.PlanID == "" {
+		plan = &config.PurchasePlan{Name: "Direct purchase"}
+	} else {
+		plan, err = m.config.GetPurchasePlan(ctx, exec.PlanID)
 		if err != nil {
-			return false, fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
+			return false, fmt.Errorf("failed to get plan: %w", err)
 		}
-		if len(accounts) > 0 {
-			return true, m.executeMultiAccount(ctx, exec, plan, accounts)
+		if plan == nil {
+			return false, fmt.Errorf("plan not found: %s", exec.PlanID)
+		}
+
+		// Fan out across plan accounts when accounts are configured.
+		if exec.CloudAccountID == nil {
+			accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
+			if err != nil {
+				return false, fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
+			}
+			if len(accounts) > 0 {
+				return true, m.executeMultiAccount(ctx, exec, plan, accounts)
+			}
 		}
 	}
 
@@ -511,8 +523,14 @@ func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
 	return svc, ok
 }
 
-// updatePlanProgress advances the ramp schedule after a purchase
+// updatePlanProgress advances the ramp schedule after a purchase.
+// Direct-execute purchases (Opportunities flow) have no plan to advance —
+// PlanID is empty and the Postgres UUID column would reject the query
+// with SQLSTATE 22P02, so short-circuit cleanly before hitting the store.
 func (m *Manager) updatePlanProgress(ctx context.Context, planID string) error {
+	if planID == "" {
+		return nil
+	}
 	plan, err := m.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
 		return err
