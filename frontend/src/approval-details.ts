@@ -58,11 +58,9 @@ export function renderApprovalDetailsBody(details: PurchaseDetails, accountsById
     // Direct-execute paths (capacity_percent flow) can sometimes
     // race the JSONB write — surface the legacy sentence so the user
     // can still confirm rather than blocking the click on a missing
-    // payload.
-    const fallback = document.createElement('p');
-    fallback.className = 'approval-details-fallback';
-    fallback.textContent = 'This authorises the purchase to execute. Cloud commitments will be charged once the executor picks up the approved row.';
-    root.appendChild(fallback);
+    // payload. Shared helper keeps the fallback text identical to
+    // the network-failure branch.
+    root.appendChild(buildApprovalDetailsFallback());
     return root;
   }
 
@@ -93,7 +91,10 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
   for (const rec of recs) {
     if (rec.provider) providers.add(rec.provider);
     if (rec.cloud_account_id) accounts.add(rec.cloud_account_id);
-    totalMonthly += rec.savings;
+    // Defensive ?? 0: the wire type is wider than the TS one and a
+    // legacy row could carry null; a single NaN here would poison
+    // the entire header total.
+    totalMonthly += rec.savings ?? 0;
   }
   const totalAnnual = totalMonthly * 12;
 
@@ -103,9 +104,17 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
   // table footer stay numerically in sync with the per-row column.
   const monthly = details.estimated_savings ?? totalMonthly;
 
+  // Epsilon-tolerant comparison: strict !== on two floats that come
+  // from independent sums (backend estimated_savings vs frontend
+  // per-rec sum) will trigger on rounding noise as small as 1e-14,
+  // making the "from per-row sum" tooltip fire on rows that are
+  // conceptually equal. 0.005 keeps the tooltip silent up to the
+  // sub-cent level, well below the precision formatCurrency renders.
+  const annualMismatch = Math.abs(totalAnnual - monthly * 12) > 0.005;
+
   header.appendChild(headerStat('Upfront', formatCurrency(upfront)));
   header.appendChild(headerStat('Monthly savings', formatCurrency(monthly)));
-  header.appendChild(headerStat('Annual savings', formatCurrency(monthly * 12), undefined, totalAnnual !== monthly * 12 ? `${formatCurrency(totalAnnual)} from per-row sum` : undefined));
+  header.appendChild(headerStat('Annual savings', formatCurrency(monthly * 12), undefined, annualMismatch ? `${formatCurrency(totalAnnual)} from per-row sum` : undefined));
   header.appendChild(headerStat('Commitments', String(recs.length)));
   header.appendChild(headerStat('Providers', String(providers.size), Array.from(providers).join(', ')));
   header.appendChild(headerStat('Accounts', String(accounts.size)));
@@ -193,7 +202,9 @@ function renderRecRow(rec: Recommendation, accountsById: AccountsById): HTMLElem
   const row = document.createElement('tr');
   const acct = rec.cloud_account_id ? accountsById.get(rec.cloud_account_id) : undefined;
   const accountLabel = formatAccountLabel(acct, rec.cloud_account_id);
-  const engineLabel = rec.engine && rec.engine !== '' ? rec.engine : '—';
+  // rec.engine is a string for DB-shaped services and "" otherwise;
+  // both `undefined` and "" are falsy so the single check is enough.
+  const engineLabel = rec.engine ? rec.engine : '—';
   const effSavings = computeEffectiveSavingsPct(rec);
   // innerHTML is safe here because every interpolated value goes
   // through escapeHtml or is a numeric/preformatted constant. Using
@@ -273,18 +284,36 @@ export function computeEffectiveSavingsPct(rec: Recommendation): number | null {
  */
 export async function buildApprovalDetailsBody(executionId: string): Promise<HTMLElement> {
   try {
+    // listAccounts is caught inline so the modal still renders the
+    // full details when the accounts endpoint is unreachable; the
+    // per-rec table degrades to "acct xxxxxxxx…" stubs instead of
+    // failing the whole confirmation. console.warn keeps the failure
+    // traceable rather than silently dropping the error.
     const [details, accounts] = await Promise.all([
       api.getPurchaseDetails(executionId),
-      api.listAccounts().catch(() => [] as CloudAccount[]),
+      api.listAccounts().catch((err) => {
+        console.warn('Failed to load accounts for approval modal — falling back to UUID-prefixed labels:', err);
+        return [] as CloudAccount[];
+      }),
     ]);
     const accountsById = new Map<string, CloudAccount>();
     for (const acct of accounts) accountsById.set(acct.id, acct);
     return renderApprovalDetailsBody(details, accountsById);
   } catch (err) {
     console.error('Failed to load purchase details for approval modal:', err);
-    const fallback = document.createElement('div');
-    fallback.className = 'approval-details-fallback';
-    fallback.textContent = 'This authorises the purchase to execute. Cloud commitments will be charged once the executor picks up the approved row.';
-    return fallback;
+    return buildApprovalDetailsFallback();
   }
+}
+
+/**
+ * Build the legacy approval sentence as a standalone fallback
+ * element. Extracted so the two failure paths (empty recommendations
+ * + fetch failure) render identical text and class hooks; previously
+ * the literal string lived in two places and could drift.
+ */
+function buildApprovalDetailsFallback(): HTMLElement {
+  const fallback = document.createElement('div');
+  fallback.className = 'approval-details-fallback';
+  fallback.textContent = 'This authorises the purchase to execute. Cloud commitments will be charged once the executor picks up the approved row.';
+  return fallback;
 }

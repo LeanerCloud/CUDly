@@ -154,6 +154,33 @@ describe('renderApprovalDetailsBody', () => {
     expect(rows[1]?.querySelectorAll('td')[11]?.textContent).toBe('—');
   });
 
+  it('annual-savings tooltip does NOT fire on floating-point rounding noise', () => {
+    // (0.1 + 0.2) === 0.30000000000000004 in IEEE-754. Sum the per-rec
+    // savings to that exact value but feed details.estimated_savings the
+    // "tidy" 0.3 the backend Math.Sum would produce. Strict !== would
+    // fire the tooltip on the 4e-17 mismatch; epsilon-tolerant compare
+    // must NOT.
+    const recs = [
+      makeRec({ id: 'r1', savings: 0.1 }),
+      makeRec({ id: 'r2', savings: 0.2 }),
+    ];
+    const details = makeDetails(recs, { estimated_savings: 0.3 });
+    const body = renderApprovalDetailsBody(details, new Map());
+    const stats = body.querySelectorAll('.approval-details-stat');
+    // Stat index 2 is Annual savings.
+    expect(stats[2]?.getAttribute('title')).toBeNull();
+  });
+
+  it('annual-savings tooltip DOES fire when backend and per-row sum genuinely disagree', () => {
+    const recs = [makeRec({ savings: 10 })];
+    // Backend says $5/mo but the per-rec sum says $10/mo. Honest
+    // mismatch — the tooltip should surface the per-row $120/yr.
+    const details = makeDetails(recs, { estimated_savings: 5 });
+    const body = renderApprovalDetailsBody(details, new Map());
+    const stats = body.querySelectorAll('.approval-details-stat');
+    expect(stats[2]?.getAttribute('title')).toBe('$120 from per-row sum');
+  });
+
   it('counts distinct providers and accounts in the header', () => {
     const recs = [
       makeRec({ id: 'r1', provider: 'aws', cloud_account_id: 'acct-1' }),
