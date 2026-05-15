@@ -165,6 +165,31 @@ function updatePasswordRequirements(password: string, prefix = 'req-'): void {
   updateRequirement(`${prefix}special`, requirements.special);
 }
 
+const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/;
+
+/**
+ * Return a user-facing description of which password complexity rules
+ * the supplied password fails, or "" when the password satisfies every
+ * rule. Length is treated as its own message (an empty password isn't
+ * missing "one of N character classes", it's just too short); the
+ * complexity rules are joined into a single sentence that names ONLY
+ * the rules that actually failed, in priority order. Closes issue #458.
+ */
+export function describePasswordValidationError(password: string): string {
+  if (password.length < 12) {
+    return 'Password must be at least 12 characters long';
+  }
+  const missing: string[] = [];
+  if (!/[A-Z]/.test(password)) missing.push('one uppercase letter');
+  if (!/[a-z]/.test(password)) missing.push('one lowercase letter');
+  if (!/[0-9]/.test(password)) missing.push('one number');
+  if (!SPECIAL_CHAR_RE.test(password)) missing.push('one special character');
+  if (missing.length === 0) return '';
+  if (missing.length === 1) return `Password must contain ${missing[0]}`;
+  const last = missing.pop() as string;
+  return `Password must contain ${missing.join(', ')} and ${last}`;
+}
+
 function updateRequirement(id: string, isMet: boolean): void {
   const element = document.getElementById(id);
   if (!element) return;
@@ -196,23 +221,10 @@ async function handleResetPasswordSubmit(e: Event, token: string): Promise<void>
   const newPassword = newPasswordInput?.value || '';
   const confirmPassword = confirmPasswordInput?.value || '';
 
-  if (newPassword.length < 12) {
+  const requirementError = describePasswordValidationError(newPassword);
+  if (requirementError) {
     if (errorDiv) {
-      errorDiv.textContent = 'Password must be at least 12 characters long';
-      errorDiv.classList.remove('hidden');
-    }
-    return;
-  }
-
-  // Validate password complexity
-  const hasUppercase = /[A-Z]/.test(newPassword);
-  const hasLowercase = /[a-z]/.test(newPassword);
-  const hasNumber = /[0-9]/.test(newPassword);
-  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPassword);
-
-  if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-    if (errorDiv) {
-      errorDiv.textContent = 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character';
+      errorDiv.textContent = requirementError;
       errorDiv.classList.remove('hidden');
     }
     return;
@@ -365,22 +377,10 @@ async function handleAdminSetupSubmit(e: Event): Promise<void> {
   const password = (document.getElementById('setup-password') as HTMLInputElement)?.value || '';
   const confirmPassword = (document.getElementById('setup-confirm-password') as HTMLInputElement)?.value || '';
 
-  if (password.length < 12) {
+  const requirementError = describePasswordValidationError(password);
+  if (requirementError) {
     if (errorDiv) {
-      errorDiv.textContent = 'Password must be at least 12 characters long';
-      errorDiv.classList.remove('hidden');
-    }
-    return;
-  }
-
-  const hasUppercase = /[A-Z]/.test(password);
-  const hasLowercase = /[a-z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
-
-  if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-    if (errorDiv) {
-      errorDiv.textContent = 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character';
+      errorDiv.textContent = requirementError;
       errorDiv.classList.remove('hidden');
     }
     return;
@@ -724,16 +724,9 @@ async function saveProfile(e: Event): Promise<void> {
   }
 
   if (newPassword) {
-    if (newPassword.length < 12) {
-      alert('New password must be at least 12 characters long');
-      return;
-    }
-    const hasUppercase = /[A-Z]/.test(newPassword);
-    const hasLowercase = /[a-z]/.test(newPassword);
-    const hasNumber = /[0-9]/.test(newPassword);
-    const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPassword);
-    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-      alert('Password must contain uppercase, lowercase, number, and special character');
+    const requirementError = describePasswordValidationError(newPassword);
+    if (requirementError) {
+      alert(requirementError);
       return;
     }
     if (newPassword !== confirmPassword) {
