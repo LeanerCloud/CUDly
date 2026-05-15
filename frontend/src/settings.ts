@@ -2312,6 +2312,50 @@ function paymentLabel(value: string): string {
   }
 }
 
+// Human-readable display names for each (provider, service) tuple,
+// keyed to match the SERVICE_FIELDS constant. Source of truth: the
+// <h5> titles on each Service Default card in index.html. Used by
+// buildAffectedList so the "Propagate to N services" confirmation
+// pop-up reads "AWS EC2 Reserved Instances" instead of the backend
+// identifier "aws ec2" (#467).
+//
+// Missing entries fall back to a UPPER + raw service slug, which is
+// strictly an improvement-of-niceness — anything missing here renders
+// the way the old code rendered everything. Keep this table in sync
+// when SERVICE_FIELDS grows.
+const SERVICE_DISPLAY_NAMES: Record<string, Record<string, string>> = {
+  aws: {
+    'ec2': 'EC2 Reserved Instances',
+    'rds': 'RDS Reserved Instances',
+    'elasticache': 'ElastiCache Reserved Nodes',
+    'opensearch': 'OpenSearch Reserved Instances',
+    'redshift': 'Redshift Reserved Nodes',
+    'savings-plans-compute': 'Compute Savings Plans',
+    'savings-plans-ec2instance': 'EC2 Instance Savings Plans',
+    'savings-plans-sagemaker': 'SageMaker Savings Plans',
+    'savings-plans-database': 'Database Savings Plans',
+  },
+  azure: {
+    'vm': 'Virtual Machine Reservations',
+    'sql': 'SQL Database Reservations',
+    'cosmosdb': 'CosmosDB Reservations',
+    'redis': 'Redis Cache Reservations',
+    'search': 'Cognitive Search Reservations',
+  },
+  gcp: {
+    'compute': 'Compute Engine CUDs',
+    'sql': 'Cloud SQL CUDs',
+    'memorystore': 'Memorystore CUDs',
+    'storage': 'Cloud Storage CUDs',
+  },
+};
+
+function serviceDisplayName(provider: string, service: string): string {
+  const providerLabel = provider.toUpperCase();
+  const display = SERVICE_DISPLAY_NAMES[provider]?.[service];
+  return display ? `${providerLabel} ${display}` : `${providerLabel} ${service}`;
+}
+
 function buildAffectedList(affected: { provider: string; service: string }[]): HTMLDivElement {
   // Build the diff list via DOM APIs (not innerHTML) so we don't need an
   // escapeHtml import; provider + service values come from the SERVICE_FIELDS
@@ -2325,7 +2369,7 @@ function buildAffectedList(affected: { provider: string; service: string }[]): H
   const ul = document.createElement('ul');
   affected.forEach((f) => {
     const li = document.createElement('li');
-    li.textContent = `${f.provider.toUpperCase()} ${f.service}`;
+    li.textContent = serviceDisplayName(f.provider, f.service);
     ul.appendChild(li);
   });
   wrap.appendChild(ul);
@@ -2356,8 +2400,13 @@ async function confirmAndPropagateTerm(select: HTMLSelectElement): Promise<void>
     updateDirtyMarkers();
   } else {
     // User cancelled — restore the default select to its prior value so
-    // the visible state matches what's persisted/saved.
+    // the visible state matches what's persisted/saved. Re-run the
+    // dirty-marker diff (setting .value via JS doesn't fire 'input', so
+    // setupDirtyTracking's listener wouldn't catch the revert) so the
+    // field highlight and global "Unsaved changes" badge clear when the
+    // restored value matches the saved snapshot. Issue #468.
     select.value = previousValue;
+    updateDirtyMarkers();
   }
 }
 
@@ -2385,7 +2434,11 @@ async function confirmAndPropagatePayment(select: HTMLSelectElement): Promise<vo
     select.dataset['previous'] = newValue;
     updateDirtyMarkers();
   } else {
+    // Mirror the Term branch: re-run the dirty-marker diff after the
+    // JS-driven value restore so the visible state matches the saved
+    // snapshot. Issue #468.
     select.value = previousValue;
+    updateDirtyMarkers();
   }
 }
 
