@@ -294,6 +294,27 @@ body {
     display: none;
 }
 
+/* Inline field-level error — sits underneath a single <input> rather
+   than wrapping a whole form section like .error-message does. Used
+   for live range / format validation messages so a user typing an
+   out-of-range value sees the bound immediately instead of on Save
+   (issue #465). */
+.field-error {
+    display: block;
+    color: var(--cudly-error-fg);
+    font-size: 0.85em;
+    margin-top: 0.25rem;
+}
+
+.field-error.hidden {
+    display: none;
+}
+
+[aria-invalid="true"] {
+    border-color: var(--cudly-error);
+    outline-color: var(--cudly-error);
+}
+
 /* Success message */
 .success-message {
     padding: 1rem;

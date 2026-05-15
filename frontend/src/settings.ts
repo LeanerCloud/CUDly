@@ -180,6 +180,64 @@ function byId<T extends HTMLElement>(id: string): T | null {
 }
 
 /**
+ * Wire inline range validation on a numeric `<input>` driven by its
+ * existing `min` / `max` HTML5 attributes. Surfaces a single
+ * "Must be between X and Y" message under the field as the user types
+ * (and on blur) instead of waiting for Save Settings to reject the
+ * value — addresses #465 by collapsing the two-trip "must be ≥ X" /
+ * "must be ≤ Y" pattern into a single inline indication.
+ *
+ * The element's min/max attributes are the source of truth so the
+ * range stays in sync with the HTML. An empty value clears the error
+ * (the input may have its own "required" enforcement; we don't fight
+ * that here).
+ */
+function wireInlineRangeValidation(inputId: string, signal?: AbortSignal): void {
+  const input = document.getElementById(inputId) as HTMLInputElement | null;
+  if (!input) return;
+  const min = parseFloat(input.getAttribute('min') ?? '');
+  const max = parseFloat(input.getAttribute('max') ?? '');
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+
+  const errorId = `${inputId}-range-error`;
+  let errorEl = document.getElementById(errorId);
+  if (!errorEl) {
+    errorEl = document.createElement('small');
+    errorEl.id = errorId;
+    errorEl.className = 'field-error hidden';
+    errorEl.setAttribute('role', 'alert');
+    input.insertAdjacentElement('afterend', errorEl);
+    // Append (don't overwrite) any pre-existing aria-describedby so the
+    // input's existing help text (e.g. unit hints) stays announced.
+    const existingDescribedBy = input.getAttribute('aria-describedby');
+    input.setAttribute(
+      'aria-describedby',
+      existingDescribedBy ? `${existingDescribedBy} ${errorId}` : errorId,
+    );
+  }
+
+  const check = (): void => {
+    const raw = input.value.trim();
+    if (raw === '') {
+      input.removeAttribute('aria-invalid');
+      errorEl!.classList.add('hidden');
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < min || n > max) {
+      input.setAttribute('aria-invalid', 'true');
+      errorEl!.textContent = `Must be between ${min} and ${max}`;
+      errorEl!.classList.remove('hidden');
+    } else {
+      input.removeAttribute('aria-invalid');
+      errorEl!.classList.add('hidden');
+    }
+  };
+  input.addEventListener('input', check, { signal });
+  input.addEventListener('blur', check, { signal });
+}
+
+/**
  * setInputValue writes a value to an <input>/<textarea> looked up by id, no-op
  * if the element is missing. Consolidates the repetitive
  * `byId<HTMLInputElement>('x'); if (el) el.value = v;` pattern used across
@@ -2080,6 +2138,13 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
     termEl?.addEventListener('change', () => syncPaymentConstraintsForService(field), { signal });
   });
 
+  // Inline range validation on numeric settings — surfaces a single
+  // "Must be between X and Y" message under the field as the user
+  // types, instead of waiting for Save Settings (#465).
+  wireInlineRangeValidation('setting-notification-days', signal);
+  wireInlineRangeValidation('setting-recs-stale-hours', signal);
+  wireInlineRangeValidation('setting-default-coverage', signal);
+
   // Set up dirty-field tracking
   setupDirtyTracking(signal);
 
@@ -2675,9 +2740,26 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     gracePeriodDays[provider] = v.value;
   }
 
-  // Validate recommendations_cache_stale_hours before building the save payload.
-  // Use Number() so fractional input like "1.5" fails Number.isInteger instead of silently
-  // truncating to 1 as parseInt would.
+  // Validate the three numeric inputs before building the save payload.
+  // Use Number() (not parseInt) so fractional input like "1.5" fails
+  // Number.isInteger() instead of silently truncating to 1. Each range
+  // is the same one declared on the <input>'s min/max attributes —
+  // wireInlineRangeValidation surfaces these inline as the user types
+  // (#465); this is the defensive guard for clients that bypass it.
+  const rawNotifyDays = Number(byId<HTMLInputElement>('setting-notification-days')?.value ?? '3');
+  if (!Number.isFinite(rawNotifyDays) || !Number.isInteger(rawNotifyDays) || rawNotifyDays < 1 || rawNotifyDays > 30) {
+    showToast({ message: 'Notification days before purchase must be a whole number between 1 and 30', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+  const rawCoverage = Number(byId<HTMLInputElement>('setting-default-coverage')?.value ?? '80');
+  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
+    showToast({ message: 'Target coverage must be a whole number between 0 and 100', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
   const rawStaleHours = Number(byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24');
   if (!Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
     showToast({ message: 'Cache stale threshold must be a whole number between 0 and 8760 hours (0 = disable)', kind: 'error' });
@@ -2693,8 +2775,8 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     collection_schedule: byId<HTMLSelectElement>('setting-collection-schedule')?.value || 'daily',
     default_term: parseInt(byId<HTMLSelectElement>('setting-default-term')?.value || '3', 10),
     default_payment: (byId<HTMLSelectElement>('setting-default-payment')?.value || 'all-upfront') as api.PaymentOption,
-    default_coverage: parseInt(byId<HTMLInputElement>('setting-default-coverage')?.value || '80', 10),
-    notification_days_before: parseInt(byId<HTMLInputElement>('setting-notification-days')?.value || '3', 10),
+    default_coverage: rawCoverage,
+    notification_days_before: rawNotifyDays,
     grace_period_days: gracePeriodDays,
     recommendations_cache_stale_hours: rawStaleHours,
     recommendations_lookback_days: parseInt(byId<HTMLSelectElement>('setting-recs-lookback-days')?.value || '7', 10),
