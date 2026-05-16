@@ -2346,7 +2346,13 @@ const SERVICE_DISPLAY_NAMES: Record<string, Record<string, string>> = {
     'compute': 'Compute Engine CUDs',
     'sql': 'Cloud SQL CUDs',
     'memorystore': 'Memorystore CUDs',
-    'storage': 'Cloud Storage CUDs',
+    // GCP Cloud Storage doesn't have a Committed Use Discount product
+    // (CUDs only apply to Compute Engine / Bigtable / NetApp / etc.),
+    // so the label is intentionally plain "Cloud Storage" — kept in
+    // sync with the matching <h5> on the Service Default card so the
+    // Global-Defaults confirmation pop-up still mirrors the card title
+    // (CodeRabbit on #472).
+    'storage': 'Cloud Storage',
   },
 };
 
