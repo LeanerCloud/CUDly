@@ -181,18 +181,28 @@ function byId<T extends HTMLElement>(id: string): T | null {
 
 /**
  * Wire inline range validation on a numeric `<input>` driven by its
- * existing `min` / `max` HTML5 attributes. Surfaces a single
- * "Must be between X and Y" message under the field as the user types
- * (and on blur) instead of waiting for Save Settings to reject the
- * value — addresses #465 by collapsing the two-trip "must be ≥ X" /
- * "must be ≤ Y" pattern into a single inline indication.
+ * existing `min` / `max` HTML5 attributes. Surfaces a single message
+ * under the field as the user types (and on blur) instead of waiting
+ * for Save Settings to reject the value — addresses #465 by collapsing
+ * the two-trip "must be ≥ X" / "must be ≤ Y" pattern into one inline
+ * indication.
+ *
+ * When `requireInteger` is true the validator additionally rejects
+ * fractional values like `1.5` (matching the save-time guards), and
+ * the message reads "Must be a whole number between X and Y" to
+ * explain why an in-range fraction is still rejected. Without it the
+ * inline path accepts 1.5 while save-time rejects it — exactly the
+ * two-trip behaviour this PR sets out to fix (CodeRabbit on #471).
  *
  * The element's min/max attributes are the source of truth so the
  * range stays in sync with the HTML. An empty value clears the error
  * (the input may have its own "required" enforcement; we don't fight
  * that here).
  */
-function wireInlineRangeValidation(inputId: string, signal?: AbortSignal): void {
+function wireInlineRangeValidation(
+  inputId: string,
+  { signal, requireInteger = false }: { signal?: AbortSignal; requireInteger?: boolean } = {},
+): void {
   const input = document.getElementById(inputId) as HTMLInputElement | null;
   if (!input) return;
   const min = parseFloat(input.getAttribute('min') ?? '');
@@ -205,7 +215,12 @@ function wireInlineRangeValidation(inputId: string, signal?: AbortSignal): void 
     errorEl = document.createElement('small');
     errorEl.id = errorId;
     errorEl.className = 'field-error hidden';
-    errorEl.setAttribute('role', 'alert');
+    // role=status + aria-live=polite (not role=alert/aria-live=assertive)
+    // so screen readers wait for a typing pause before announcing — an
+    // assertive live region would interrupt the user on every keystroke
+    // while the value is still in flux (WCAG SCR32). CodeRabbit on #471.
+    errorEl.setAttribute('role', 'status');
+    errorEl.setAttribute('aria-live', 'polite');
     input.insertAdjacentElement('afterend', errorEl);
     // Append (don't overwrite) any pre-existing aria-describedby so the
     // input's existing help text (e.g. unit hints) stays announced.
@@ -215,22 +230,32 @@ function wireInlineRangeValidation(inputId: string, signal?: AbortSignal): void 
       existingDescribedBy ? `${existingDescribedBy} ${errorId}` : errorId,
     );
   }
+  // Capture as const so the closure doesn't need a non-null assertion.
+  const error = errorEl;
+  const message = requireInteger
+    ? `Must be a whole number between ${min} and ${max}`
+    : `Must be between ${min} and ${max}`;
 
   const check = (): void => {
     const raw = input.value.trim();
     if (raw === '') {
       input.removeAttribute('aria-invalid');
-      errorEl!.classList.add('hidden');
+      error.classList.add('hidden');
       return;
     }
     const n = Number(raw);
-    if (!Number.isFinite(n) || n < min || n > max) {
+    const invalid =
+      !Number.isFinite(n) ||
+      (requireInteger && !Number.isInteger(n)) ||
+      n < min ||
+      n > max;
+    if (invalid) {
       input.setAttribute('aria-invalid', 'true');
-      errorEl!.textContent = `Must be between ${min} and ${max}`;
-      errorEl!.classList.remove('hidden');
+      error.textContent = message;
+      error.classList.remove('hidden');
     } else {
       input.removeAttribute('aria-invalid');
-      errorEl!.classList.add('hidden');
+      error.classList.add('hidden');
     }
   };
   input.addEventListener('input', check, { signal });
@@ -2139,11 +2164,14 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   });
 
   // Inline range validation on numeric settings — surfaces a single
-  // "Must be between X and Y" message under the field as the user
-  // types, instead of waiting for Save Settings (#465).
-  wireInlineRangeValidation('setting-notification-days', signal);
-  wireInlineRangeValidation('setting-recs-stale-hours', signal);
-  wireInlineRangeValidation('setting-default-coverage', signal);
+  // "Must be a whole number between X and Y" message under the field
+  // as the user types, instead of waiting for Save Settings (#465).
+  // All three fields are integer-only at the backend, so pass
+  // requireInteger so the inline check rejects fractional input that
+  // the save-time guard would otherwise catch on a second trip.
+  wireInlineRangeValidation('setting-notification-days', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-default-coverage', { signal, requireInteger: true });
 
   // Set up dirty-field tracking
   setupDirtyTracking(signal);
