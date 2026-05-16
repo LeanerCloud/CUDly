@@ -148,13 +148,19 @@ function setupPasswordToggle(container: HTMLElement | Document = document): void
   });
 }
 
+// Special-character set used by every password-strength check in this
+// module (live indicator + submit-time validator). Module-level constant
+// so the regex isn't recompiled on every keystroke AND so the live
+// indicator and validator can't silently drift apart (#470 review).
+const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/;
+
 function updatePasswordRequirements(password: string, prefix = 'req-'): void {
   const requirements = {
     length: password.length >= 12,
     uppercase: /[A-Z]/.test(password),
     lowercase: /[a-z]/.test(password),
     number: /[0-9]/.test(password),
-    special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
+    special: SPECIAL_CHAR_RE.test(password)
   };
 
   // Update each requirement indicator
@@ -164,8 +170,6 @@ function updatePasswordRequirements(password: string, prefix = 'req-'): void {
   updateRequirement(`${prefix}number`, requirements.number);
   updateRequirement(`${prefix}special`, requirements.special);
 }
-
-const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/;
 
 /**
  * Return a user-facing description of which password complexity rules
@@ -186,7 +190,7 @@ export function describePasswordValidationError(password: string): string {
   if (!SPECIAL_CHAR_RE.test(password)) missing.push('one special character');
   if (missing.length === 0) return '';
   if (missing.length === 1) return `Password must contain ${missing[0]}`;
-  const last = missing.pop() as string;
+  const last = missing.pop()!;
   return `Password must contain ${missing.join(', ')} and ${last}`;
 }
 
