@@ -397,9 +397,11 @@ type EmptyServiceConfigResponse struct{}
 
 // PublicInfoResponse holds public information about the CUDly instance
 type PublicInfoResponse struct {
-	Version         string `json:"version"`
-	AdminExists     bool   `json:"admin_exists"`
-	APIKeySecretURL string `json:"api_key_secret_url,omitempty"`
+	Version     string `json:"version"`
+	AdminExists bool   `json:"admin_exists"`
+	// APIKeySecretURL was removed: the Secrets Manager ARN embeds the AWS
+	// account ID and region, which must not be served to unauthenticated
+	// callers (issue #437).
 }
 
 // DashboardSummaryResponse holds the dashboard summary data

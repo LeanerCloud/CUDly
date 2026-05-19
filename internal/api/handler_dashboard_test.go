@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -496,8 +497,6 @@ func TestHandler_getPublicInfo(t *testing.T) {
 
 		assert.Equal(t, "1.0.0", result.Version)
 		assert.True(t, result.AdminExists)
-		assert.Contains(t, result.APIKeySecretURL, "us-east-1")
-		assert.Contains(t, result.APIKeySecretURL, "secretsmanager")
 	})
 
 	t.Run("with auth service and no admin", func(t *testing.T) {
@@ -512,7 +511,6 @@ func TestHandler_getPublicInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, result.AdminExists)
-		assert.Empty(t, result.APIKeySecretURL)
 	})
 
 	t.Run("auth service check error still returns response", func(t *testing.T) {
@@ -539,37 +537,6 @@ func TestHandler_getPublicInfo(t *testing.T) {
 		assert.False(t, result.AdminExists)
 	})
 
-	t.Run("ARN parsing for different regions", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
-
-		handler := &Handler{
-			auth:       mockAuth,
-			secretsARN: "arn:aws:secretsmanager:eu-west-1:987654321098:secret:my-secret-xyz789",
-		}
-
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
-
-		assert.Contains(t, result.APIKeySecretURL, "eu-west-1")
-	})
-
-	t.Run("invalid ARN format", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
-
-		handler := &Handler{
-			auth:       mockAuth,
-			secretsARN: "invalid-arn",
-		}
-
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
-
-		// Invalid ARN should result in empty URL
-		assert.Empty(t, result.APIKeySecretURL)
-	})
-
 	t.Run("with rate limiting - allowed", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		mockRateLimiter := new(MockRateLimiter)
@@ -584,6 +551,30 @@ func TestHandler_getPublicInfo(t *testing.T) {
 		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
 		require.NoError(t, err)
 		assert.True(t, result.AdminExists)
+	})
+
+	// Regression test: issue #437 - Secrets Manager ARN (which embeds AWS
+	// account ID and region) must NOT appear in the unauthenticated response
+	// regardless of whether secretsARN is configured.
+	t.Run("regression #437: secrets ARN not leaked to unauthenticated callers", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
+
+		handler := &Handler{
+			auth:       mockAuth,
+			secretsARN: "arn:aws:secretsmanager:eu-west-1:987654321098:secret:my-secret-xyz789",
+		}
+
+		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
+		require.NoError(t, err)
+
+		// Marshal to JSON and confirm the ARN is absent from the wire format.
+		wire, err := json.Marshal(result)
+		require.NoError(t, err)
+		assert.NotContains(t, string(wire), "987654321098",
+			"AWS account ID must not appear in unauthenticated /api/info response")
+		assert.NotContains(t, string(wire), "secretsmanager",
+			"Secrets Manager ARN must not appear in unauthenticated /api/info response")
 	})
 
 }

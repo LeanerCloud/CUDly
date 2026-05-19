@@ -4,7 +4,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
@@ -322,6 +321,11 @@ func (h *Handler) planIntersectsAllowed(ctx context.Context, planID string, allo
 
 // getPublicInfo returns public information about the CUDly instance (no auth required)
 // No rate limiting — this is hit by Terraform deployment checks and the frontend on every page load.
+//
+// Security: the Secrets Manager ARN (which contains the AWS account ID and
+// region) is intentionally NOT included in this response. It was previously
+// returned as api_key_secret_url but that leaked cloud identity to
+// unauthenticated callers (issue #437).
 func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PublicInfoResponse, error) {
 	// Check if admin exists
 	adminExists := false
@@ -332,22 +336,9 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 		}
 	}
 
-	// Build the API key secret URL for the console
-	var apiKeySecretURL string
-	if h.secretsARN != "" {
-		// Extract region from ARN: arn:aws:secretsmanager:region:account:secret:name
-		parts := strings.Split(h.secretsARN, ":")
-		if len(parts) >= 4 {
-			region := parts[3]
-			apiKeySecretURL = fmt.Sprintf("https://%s.console.aws.amazon.com/secretsmanager/secret?name=%s&region=%s",
-				region, h.secretsARN, region)
-		}
-	}
-
 	return &PublicInfoResponse{
-		Version:         "1.0.0",
-		AdminExists:     adminExists,
-		APIKeySecretURL: apiKeySecretURL,
+		Version:     "1.0.0",
+		AdminExists: adminExists,
 	}, nil
 }
 
