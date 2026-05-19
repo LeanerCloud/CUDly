@@ -11,7 +11,7 @@
  *   - Reset-to-defaults restores every input to 7.
  */
 
-import { loadGlobalSettings, saveGlobalSettings, resetSettings } from '../settings';
+import { loadGlobalSettings, saveGlobalSettings, resetSettings, setupSettingsHandlers } from '../settings';
 
 jest.mock('../api', () => ({
   getConfig: jest.fn(),
@@ -252,5 +252,102 @@ describe('Settings → Purchasing grace-period inputs', () => {
     expect((document.getElementById('setting-grace-aws') as HTMLInputElement).value).toBe('7');
     expect((document.getElementById('setting-grace-azure') as HTMLInputElement).value).toBe('7');
     expect((document.getElementById('setting-grace-gcp') as HTMLInputElement).value).toBe('7');
+  });
+});
+
+/**
+ * Settings → Purchasing: per-provider grace inputs flow through
+ * wireInlineRangeValidation (follow-up to #471's "Out of scope" carve-out).
+ *
+ * Verifies the same inline contract the three top-level numeric inputs
+ * now use: aria-invalid + a sibling .field-error appears as the user
+ * types an out-of-range or fractional value, and clears when the value
+ * comes back in range or the field is emptied. Save remains blocked
+ * for invalid input but uses showToast (not alert/window.alert), so
+ * the inline indicator stays the primary feedback channel.
+ */
+describe('Settings → Purchasing grace inputs: inline range validation', () => {
+  let alertSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    seedDOM();
+    setupSettingsHandlers();
+    alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    alertSpy.mockRestore();
+  });
+
+  function fire(el: HTMLInputElement, type: 'input' | 'blur'): void {
+    el.dispatchEvent(new Event(type));
+  }
+
+  function errorEl(inputId: string): HTMLElement | null {
+    return document.getElementById(`${inputId}-range-error`);
+  }
+
+  it.each([
+    ['setting-grace-aws', '31'],
+    ['setting-grace-azure', '31'],
+    ['setting-grace-gcp', '-1'],
+  ])('typing out-of-range value into %s shows inline error', (inputId, value) => {
+    const input = document.getElementById(inputId) as HTMLInputElement;
+    input.value = value;
+    fire(input, 'input');
+
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    const err = errorEl(inputId);
+    expect(err).not.toBeNull();
+    expect(err!.classList.contains('hidden')).toBe(false);
+    expect(err!.textContent).toBe('Must be a whole number between 0 and 30');
+  });
+
+  it('typing a fractional value (7.5) is rejected inline (requireInteger)', () => {
+    const input = document.getElementById('setting-grace-azure') as HTMLInputElement;
+    input.value = '7.5';
+    fire(input, 'input');
+
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(errorEl('setting-grace-azure')!.textContent).toBe('Must be a whole number between 0 and 30');
+  });
+
+  it('clearing the field removes aria-invalid and hides the inline error', () => {
+    const input = document.getElementById('setting-grace-aws') as HTMLInputElement;
+    input.value = '99';
+    fire(input, 'input');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+
+    input.value = '';
+    fire(input, 'input');
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(errorEl('setting-grace-aws')!.classList.contains('hidden')).toBe(true);
+  });
+
+  it('typing a valid in-range value removes aria-invalid', () => {
+    const input = document.getElementById('setting-grace-gcp') as HTMLInputElement;
+    input.value = '99';
+    fire(input, 'input');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+
+    input.value = '15';
+    fire(input, 'input');
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(errorEl('setting-grace-gcp')!.classList.contains('hidden')).toBe(true);
+  });
+
+  it('save with a grace input still invalid is blocked and never calls window.alert', async () => {
+    (document.getElementById('setting-grace-aws') as HTMLInputElement).value = '31';
+
+    await saveGlobalSettings(new Event('submit'));
+
+    expect(api.updateConfig).not.toHaveBeenCalled();
+    expect(alertSpy).not.toHaveBeenCalled();
+    // The save-time toast carries the same text the inline indicator renders.
+    expect(mockShowToast).toHaveBeenCalled();
+    const toastArg = mockShowToast.mock.calls[0]![0] as { message: string; kind: string };
+    expect(toastArg.message).toBe('AWS grace period: Must be a whole number between 0 and 30');
+    expect(toastArg.kind).toBe('error');
   });
 });
