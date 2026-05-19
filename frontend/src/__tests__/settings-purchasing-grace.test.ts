@@ -156,8 +156,11 @@ describe('Settings → Purchasing grace-period inputs', () => {
     expect(api.updateConfig).not.toHaveBeenCalled();
     expect(mockShowToast).toHaveBeenCalled();
     const toastArg = mockShowToast.mock.calls[0]![0] as { message: string; kind: string };
-    expect(toastArg.message).toMatch(/AWS grace period/i);
+    // Issue #478: validation message follows the aggregated format
+    // and names every affected provider. Single-provider failure still
+    // includes the provider name in parentheses.
     expect(toastArg.message).toMatch(/between 0 and 30/i);
+    expect(toastArg.message).toMatch(/\(AWS\)/);
     expect(toastArg.kind).toBe('error');
   });
 
@@ -169,8 +172,8 @@ describe('Settings → Purchasing grace-period inputs', () => {
     expect(api.updateConfig).not.toHaveBeenCalled();
     expect(mockShowToast).toHaveBeenCalled();
     const toastArg = mockShowToast.mock.calls[0]![0] as { message: string };
-    expect(toastArg.message).toMatch(/AZURE grace period/i);
     expect(toastArg.message).toMatch(/whole number/i);
+    expect(toastArg.message).toMatch(/\(AZURE\)/);
   });
 
   it('rejects negative input with a targeted toast', async () => {
@@ -181,7 +184,49 @@ describe('Settings → Purchasing grace-period inputs', () => {
     expect(api.updateConfig).not.toHaveBeenCalled();
     expect(mockShowToast).toHaveBeenCalled();
     const toastArg = mockShowToast.mock.calls[0]![0] as { message: string };
-    expect(toastArg.message).toMatch(/GCP grace period/i);
+    expect(toastArg.message).toMatch(/\(GCP\)/);
+  });
+
+  // Issue #478: when multiple providers have out-of-range values,
+  // surface a single toast that names every affected provider rather
+  // than bailing on the first failure.
+  it('aggregates every out-of-range provider in a single toast (#478)', async () => {
+    (document.getElementById('setting-grace-aws') as HTMLInputElement).value = '-1';
+    (document.getElementById('setting-grace-azure') as HTMLInputElement).value = '99';
+    (document.getElementById('setting-grace-gcp') as HTMLInputElement).value = '7.5';
+
+    await saveGlobalSettings(new Event("submit"));
+
+    expect(api.updateConfig).not.toHaveBeenCalled();
+    // Exactly one toast for the validation failure — not three.
+    const errorToasts = mockShowToast.mock.calls.filter(c => {
+      const arg = c[0] as { kind?: string };
+      return arg.kind === 'error';
+    });
+    expect(errorToasts).toHaveLength(1);
+    const toastArg = errorToasts[0]![0] as { message: string };
+    // All three providers named, in input order.
+    expect(toastArg.message).toMatch(/AWS, AZURE, GCP/);
+    expect(toastArg.message).toMatch(/whole number between 0 and 30/i);
+  });
+
+  it('aggregates two affected providers (AWS + GCP, Azure valid) (#478)', async () => {
+    (document.getElementById('setting-grace-aws') as HTMLInputElement).value = '-5';
+    (document.getElementById('setting-grace-azure') as HTMLInputElement).value = '7';
+    (document.getElementById('setting-grace-gcp') as HTMLInputElement).value = '50';
+
+    await saveGlobalSettings(new Event("submit"));
+
+    expect(api.updateConfig).not.toHaveBeenCalled();
+    const errorToasts = mockShowToast.mock.calls.filter(c => {
+      const arg = c[0] as { kind?: string };
+      return arg.kind === 'error';
+    });
+    expect(errorToasts).toHaveLength(1);
+    const toastArg = errorToasts[0]![0] as { message: string };
+    // AWS and GCP listed, Azure absent.
+    expect(toastArg.message).toMatch(/AWS, GCP/);
+    expect(toastArg.message).not.toMatch(/AZURE/);
   });
 
   it('empty input defaults to 7 in the save payload', async () => {
