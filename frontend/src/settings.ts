@@ -2863,13 +2863,16 @@ export async function resetSettings(): Promise<void> {
   const lookbackSelect = byId<HTMLSelectElement>('setting-recs-lookback-days');
   if (lookbackSelect) lookbackSelect.value = '7';
 
-  // Issue #466: setting el.value via JS does not fire 'change'/'input',
-  // so neither the auto-collect → schedule-row visibility toggle nor the
-  // dirty-tracking listeners run on their own here. Drive both manually
-  // so the user sees (a) the Collection Schedule controls now that
-  // Auto-collect is back ON, and (b) the same "Unsaved changes"
-  // affordance any interactive field-edit would produce — otherwise a
-  // user who clicks Reset and navigates away loses their reset silently.
+  // Issue #466: setting el.value / .checked via JS does not fire
+  // 'change'/'input', so none of the change-event-driven visibility
+  // togglers nor the dirty-tracking listeners run on their own here.
+  // Drive all of them manually so the user sees (a) the provider
+  // settings sections re-render to match the reset checkbox states,
+  // (b) the Collection Schedule controls now that Auto-collect is
+  // back ON, and (c) the same "Unsaved changes" affordance any
+  // interactive field-edit would produce. Otherwise a user who
+  // clicks Reset and navigates away loses their reset silently.
+  updateProviderSettingsVisibility();
   updateCollectionScheduleVisibility();
   updateDirtyMarkers();
 }

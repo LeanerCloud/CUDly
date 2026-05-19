@@ -205,22 +205,16 @@ describe('loadRecommendations — Enabled Providers filter (#463)', () => {
     await loadRecommendations();
 
     // Only the gcp row's id should appear in the rendered list markup.
+    // buildListMarkup emits per-row checkboxes with data-rec-id="<id>"
+    // (see recommendations.ts ~L2142); assert against that attribute so
+    // the test exercises the actual rendered DOM instead of relying on
+    // a fallback.
     const list = document.getElementById('recommendations-list');
     expect(list).not.toBeNull();
-    const text = list?.textContent ?? '';
-    // The id attribute on a <tr data-id="…"> isn't visible in textContent;
-    // assert via the rendered DOM tree instead.
-    const rows = list?.querySelectorAll('[data-id]') ?? [];
-    const renderedIds = Array.from(rows).map(el => el.getAttribute('data-id'));
-    // Defensive: if buildListMarkup uses a different attribute name, fall
-    // back to scanning the resolved set on state.setRecommendations.
-    if (renderedIds.length > 0) {
-      expect(renderedIds).toContain('r3');
-      expect(renderedIds).not.toContain('r1');
-      expect(renderedIds).not.toContain('r2');
-    } else {
-      // Fall-through assertion: text-level check.
-      expect(text).not.toContain('m5.large from r1');
-    }
+    const checkboxes = list?.querySelectorAll('input[data-rec-id]') ?? [];
+    const renderedIds = Array.from(checkboxes).map(el => el.getAttribute('data-rec-id'));
+    expect(renderedIds).toContain('r3');
+    expect(renderedIds).not.toContain('r1');
+    expect(renderedIds).not.toContain('r2');
   });
 });
