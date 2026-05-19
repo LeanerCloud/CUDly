@@ -315,12 +315,16 @@
                             </div>
                             <div class="setting-row">
                                 <div class="setting-info">
-                                    <label for="setting-auto-collect">Auto-collect Recommendations</label>
+                                    <!-- Plain span (not <label for=>) so clicking the descriptive text doesn't
+                                         flip the toggle. The toggle's own <label class="toggle-label"> wraps the
+                                         input and provides the click target. aria-labelledby on the input keeps
+                                         the descriptive text as the toggle's accessible name. Issue #464. -->
+                                    <span id="setting-auto-collect-label">Auto-collect Recommendations</span>
                                     <span class="info-icon">&#9432;<span class="tooltip-text">Automatically fetch recommendations from cloud providers on a schedule.</span></span>
                                 </div>
                                 <div class="setting-input">
                                     <label class="toggle-label">
-                                        <input type="checkbox" id="setting-auto-collect" checked>
+                                        <input type="checkbox" id="setting-auto-collect" aria-labelledby="setting-auto-collect-label" checked>
                                         <span class="slider"></span>
                                     </label>
                                 </div>
@@ -409,7 +413,7 @@
 
                     <fieldset class="settings-category" id="purchasing-recommendations-lookback">
                         <legend>Recommendations Lookback</legend>
-                        <p class="settings-help">Controls how far back AWS Cost Explorer looks when computing fresh recommendations. Must be 7, 30, or 60 days (AWS Cost Explorer API constraint). GCP CUD Recommender has no equivalent parameter and always uses its own internal window.</p>
+                        <p class="settings-help">Controls how far back AWS Cost Explorer looks when computing fresh recommendations. Must be 7, 30, or 60 days (AWS Cost Explorer API constraint). Azure Cost Management and GCP CUD Recommender have no equivalent parameter — each uses its own internal window — so this setting affects AWS only.</p>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label for="setting-recs-lookback-days"><span class="provider-badge aws">AWS</span> lookback period</label>
@@ -570,7 +574,7 @@
                                 <label>Term: <select id="gcp-memorystore-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                             </div>
                             <div class="service-default-card">
-                                <h5>Cloud Storage CUDs</h5>
+                                <h5>Cloud Storage</h5>
                                 <label>Term: <select id="gcp-storage-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                             </div>
                         </div>
