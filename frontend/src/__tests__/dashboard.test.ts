@@ -858,6 +858,31 @@ describe('Dashboard Module', () => {
       expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
     });
 
+    test('cancels queued reload when Home becomes inactive before microtask flush', async () => {
+      // Covers the re-check inside the microtask: a chip change fires
+      // while Home is active, but the user switches tabs before the
+      // microtask runs. The deferred fetch should be cancelled.
+      const tab = document.getElementById('home-tab')!;
+      tab.classList.add('active');
+
+      setupDashboardHandlers();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (api.getDashboardSummary as jest.Mock).mockClear();
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+
+      // Queue the reload while Home is active.
+      accountCb();
+      // Synchronously deactivate Home before the microtask flushes.
+      tab.classList.remove('active');
+
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getDashboardSummary).not.toHaveBeenCalled();
+      expect(api.getSavingsAnalytics).not.toHaveBeenCalled();
+    });
+
     test('bug-was-fixed: switching accounts triggers fetches with distinct account_ids and chart re-queries', async () => {
       const tab = document.getElementById('home-tab')!;
       tab.classList.add('active');
