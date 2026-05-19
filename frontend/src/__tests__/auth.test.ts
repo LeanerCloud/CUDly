@@ -562,10 +562,15 @@ describe('Auth Module', () => {
 
       // Length applies to empty string ("" < 12) so on reset it should
       // be `unmet`, and the inline error must be cleared + hidden.
+      // Re-query the error div because the close-and-reopen cycle
+      // re-renders the modal; the pre-reopen reference points at the
+      // detached element and would silently pass the assertions even
+      // if the new modal regressed (CodeRabbit on #470).
       expect(document.getElementById('profile-req-length')?.classList.contains('unmet')).toBe(true);
       expect(document.getElementById('profile-req-uppercase')?.classList.contains('unmet')).toBe(true);
-      expect(errorDiv.textContent).toBe('');
-      expect(errorDiv.classList.contains('hidden')).toBe(true);
+      const reopenedErrorDiv = document.getElementById('profile-password-error') as HTMLElement;
+      expect(reopenedErrorDiv.textContent).toBe('');
+      expect(reopenedErrorDiv.classList.contains('hidden')).toBe(true);
     });
 
     test('save profile updates user info on success', async () => {
