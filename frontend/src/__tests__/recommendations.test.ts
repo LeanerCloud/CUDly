@@ -101,7 +101,13 @@ jest.mock('../utils', () => ({
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
-  populateAccountFilter: jest.fn(() => Promise.resolve())
+  populateAccountFilter: jest.fn(() => Promise.resolve()),
+  // CURRENCY_DEFAULT_DIGITS must be re-exported by the mock so that
+  // recommendations.ts (which imports it for its filter precision logic)
+  // sees the same default-digit count as the real utils.ts. Without this,
+  // displayPrecision's currency-column branches return undefined and the
+  // filter exact-match path breaks.
+  CURRENCY_DEFAULT_DIGITS: 0,
 }));
 
 import * as api from '../api';
@@ -935,7 +941,9 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
       const header = document.querySelector<HTMLTableCellElement>('th[data-sort="upfront_cost"]');
       header?.click();
-      expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'desc' });
+      // Issue #480: first click on a non-savings/non-on-demand numeric column
+      // uses the platform-default ascending direction (low → high).
+      expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'asc' });
     });
 
     test('Payment column header renders and is sortable (#282)', async () => {
@@ -945,8 +953,9 @@ describe('Recommendations Module', () => {
       expect(paymentTh).not.toBeNull();
       expect(paymentTh?.textContent).toContain('Payment');
       // Clicking the Payment header should call setRecommendationsSort with 'payment'.
+      // Issue #480: text columns default to 'asc' on first click (alpha order).
       (paymentTh as HTMLElement)?.click();
-      expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'payment', direction: 'desc' });
+      expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'payment', direction: 'asc' });
     });
 
     test('Payment column cell renders human-readable labels (#282)', async () => {
@@ -2145,7 +2154,11 @@ describe('Bundle B: column header filter triggers', () => {
     expect(values).toContain('sagemaker');
   });
 
-  test('Term popover labels show formatted terms; ticking commits string filter values', async () => {
+  test('Term popover labels show formatted terms; unticking one commits the remaining-values filter', async () => {
+    // Issue #482: opening a popover for a column with no active filter
+    // now renders all checkboxes as checked (reflecting the "no narrowing
+    // applied" semantic). The user's narrowing action is therefore an
+    // UNCHECK, not a check.
     await loadRecommendations();
     const termBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="term"]');
     termBtn?.click();
@@ -2154,11 +2167,13 @@ describe('Bundle B: column header filter triggers', () => {
     );
     const labels = items.map((l) => l.querySelector('span')?.textContent);
     expect(labels.sort()).toEqual(['1 Year', '3 Years']);
-    // Tick the "3 Years" checkbox
-    const threeYearLabel = items.find((l) => l.textContent === '3 Years');
-    const cb = threeYearLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
-    expect(cb?.dataset['value']).toBe('3');
-    cb!.checked = true;
+    // Both boxes start checked (no active filter → all included). Untick
+    // "1 Year"; remaining checked = ["3"] → filter narrows to that.
+    const oneYearLabel = items.find((l) => l.textContent === '1 Year');
+    const cb = oneYearLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(cb?.dataset['value']).toBe('1');
+    expect(cb?.checked).toBe(true);
+    cb!.checked = false;
     cb!.dispatchEvent(new Event('change'));
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('term', { kind: 'set', values: ['3'] });
   });
@@ -2190,7 +2205,12 @@ describe('Bundle B: column header filter triggers', () => {
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('savings', { kind: 'expr', expr: '>100' });
   });
 
-  test('Clear button drops the filter for that column', async () => {
+  test('Clear button on a categorical column commits an explicit empty allow-list', async () => {
+    // Issue #482: Clear is distinct from "All". It represents the user's
+    // explicit "no values selected" intent and now persists as
+    // {set, values: []} so the table shows 0 rows. Previously Clear
+    // and All collapsed to the same null state, making them visually
+    // indistinguishable per the bug report.
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
       provider: { kind: 'set', values: ['aws'] },
     });
@@ -2199,7 +2219,23 @@ describe('Bundle B: column header filter triggers', () => {
     providerBtn?.click();
     const clearBtn = document.querySelector<HTMLButtonElement>('.column-filter-popover .column-filter-clear');
     clearBtn?.click();
-    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('provider', null);
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('provider', { kind: 'set', values: [] });
+  });
+
+  test('Clear button on a numeric column clears the expression filter (null)', async () => {
+    // Numeric columns still use null on Clear: the empty-set semantic
+    // only applies to categorical filters because the set-membership
+    // model maps naturally to "no values allowed". Numeric "clear" just
+    // means "no expression applied".
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      savings: { kind: 'expr', expr: '>100' },
+    });
+    await loadRecommendations();
+    const savingsBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="savings"]');
+    savingsBtn?.click();
+    const clearBtn = document.querySelector<HTMLButtonElement>('.column-filter-popover .column-filter-clear');
+    clearBtn?.click();
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('savings', null);
   });
 
   test('Clear-filters badge appears when at least one filter is active', async () => {
@@ -2282,33 +2318,53 @@ describe('Bundle B: column header filter triggers', () => {
       expect(groupBox).toBeNull();
     });
 
-    test('clicking group toggle commits a filter with all SP slug values', async () => {
+    test('clicking group toggle from a non-SP filter expands it to include all SP slug values', async () => {
+      // Issue #482: with no active filter, every checkbox renders as
+      // checked (including the SP-group toggle). To exercise the "tick
+      // the SP group to add SPs" flow, start from a filter that already
+      // restricts service to a non-SP subset.
+      //
+      // Use a 5-distinct-value visible set (ec2, rds, + 3 SPs) so adding
+      // SPs lands at 4-of-5 selected, strictly partial, so the commit
+      // does NOT collapse to the "all selected" null state.
+      const widerRecs = [
+        { id: 'rec-ec2', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',                        resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+        { id: 'rec-rds', provider: 'aws', cloud_account_id: 'a1', service: 'rds',                        resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 120, upfront_cost: 600 },
+        { id: 'rec-spc', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',      resource_type: 'sp',        region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+        { id: 'rec-spe', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-ec2instance',  resource_type: 'sp',        region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 700 },
+        { id: 'rec-sps', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker',    resource_type: 'sp',        region: 'us-east-1', count: 1, term: 1, savings: 250, upfront_cost: 900 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: widerRecs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(widerRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(widerRecs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
       await loadRecommendations();
       const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
       serviceBtn?.click();
       const groupBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="sp-group"]');
       expect(groupBox).not.toBeNull();
+      expect(groupBox?.checked).toBe(false);
       // Browser flips checked → true on first click; simulate that.
       groupBox!.checked = true;
       groupBox!.dispatchEvent(new Event('change'));
 
-      // Filter committed with the three SP values (in any order). Asserting
-      // on the mock rather than cb.checked because rerenderRecommendations
-      // → resyncOpenPopover resets cb state from the (mocked) filter
-      // accessor — the mock call args are the canonical signal of what
-      // the click handler did.
+      // Filter committed with ec2 + the three SP values (in any order).
+      // Total selected = 4 of 5 distinct, so the commit stays as a set.
       const calls = (state.setRecommendationsColumnFilter as jest.Mock).mock.calls;
       const lastCall = calls[calls.length - 1];
       expect(lastCall[0]).toBe('service');
       expect(lastCall[1]?.kind).toBe('set');
       expect((lastCall[1]?.values as string[]).sort()).toEqual([
+        'ec2',
         'savings-plans-compute',
         'savings-plans-ec2instance',
         'savings-plans-sagemaker',
       ]);
     });
 
-    test('clicking group toggle (off) clears the SP filter', async () => {
+    test('clicking group toggle (off) persists an empty allow-list (0-row state)', async () => {
       // Pre-set the filter so the SP tri-state renders as checked.
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
         service: { kind: 'set', values: ['savings-plans-compute', 'savings-plans-ec2instance', 'savings-plans-sagemaker'] },
@@ -2322,9 +2378,12 @@ describe('Bundle B: column header filter triggers', () => {
       groupBox!.checked = false;
       groupBox!.dispatchEvent(new Event('change'));
 
-      // No SP boxes selected → commit() treats "no selections" as "no
-      // narrowing" and persists null (filter cleared).
-      expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('service', null);
+      // CR pass #2: unchecking the SP group when no non-SP boxes are
+      // currently selected leaves zero checkboxes ticked. The individual
+      // commit() path now persists that as an explicit empty allow-list
+      // (matching (All)-off / Clear), not null — so the table renders 0
+      // rows rather than silently snapping back to "no narrowing applied".
+      expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('service', { kind: 'set', values: [] });
     });
 
     test('group toggle resyncs to indeterminate when only some SPs are filter-active', async () => {
@@ -2340,19 +2399,26 @@ describe('Bundle B: column header filter triggers', () => {
     });
 
     test('individual SP checkbox change commits the partial-SP filter', async () => {
+      // Issue #482: start from a single-SP filter so the popover opens
+      // with only `savings-plans-compute` checked; ticking another SP
+      // box exercises the partial-set commit path.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['savings-plans-compute'] },
+      });
       await loadRecommendations();
       const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
       serviceBtn?.click();
-      const cbCompute = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-value="savings-plans-compute"]');
-      cbCompute!.checked = true;
-      cbCompute!.dispatchEvent(new Event('change'));
-      // 1 of 4 service distinct values selected → filter committed with
-      // just that slug.
+      const cbEc2sp = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-value="savings-plans-ec2instance"]');
+      expect(cbEc2sp?.checked).toBe(false);
+      cbEc2sp!.checked = true;
+      cbEc2sp!.dispatchEvent(new Event('change'));
+      // 2 of 4 service distinct values selected → filter committed with
+      // both SP slugs.
       const calls = (state.setRecommendationsColumnFilter as jest.Mock).mock.calls;
       const lastCall = calls[calls.length - 1];
       expect(lastCall[0]).toBe('service');
       expect(lastCall[1]?.kind).toBe('set');
-      expect(lastCall[1]?.values).toEqual(['savings-plans-compute']);
+      expect((lastCall[1]?.values as string[]).sort()).toEqual(['savings-plans-compute', 'savings-plans-ec2instance']);
     });
   });
 });
@@ -5326,5 +5392,622 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
       // Must not be the empty / single-element trivial case.
       expect(first.length).toBe(3);
     }
+  });
+});
+
+// Helper used by the issue-#479/#480/#481/#482/#483/#484 describes below to
+// set up the same DOM the top-level "Recommendations Module" describe seeds
+// in its beforeEach. Each describe block runs at module scope and therefore
+// doesn't inherit that hook.
+function setupOpportunitiesTabDom(): void {
+  document.body.replaceChildren();
+  const recsTab = document.createElement('div');
+  recsTab.id = 'opportunities-tab';
+  recsTab.className = 'tab-content active';
+  const summary = document.createElement('div');
+  summary.id = 'recommendations-summary';
+  const list = document.createElement('div');
+  list.id = 'recommendations-list';
+  recsTab.appendChild(summary);
+  recsTab.appendChild(list);
+  document.body.appendChild(recsTab);
+  const purchaseModal = document.createElement('div');
+  purchaseModal.id = 'purchase-modal';
+  purchaseModal.className = 'hidden';
+  const purchaseDetails = document.createElement('div');
+  purchaseDetails.id = 'purchase-details';
+  purchaseModal.appendChild(purchaseDetails);
+  document.body.appendChild(purchaseModal);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #479: Select-all checkbox tri-state.
+// The header checkbox renders with the right .checked / .indeterminate state
+// reflecting current selection vs. the set of best-variant-per-cell recs
+// (the set the select-all click actually populates).
+// ---------------------------------------------------------------------------
+describe('Issue #479: Select-all header checkbox tri-state', () => {
+  const recs = [
+    { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+    { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+  ];
+
+  beforeEach(() => {
+    setupOpportunitiesTabDom();
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+  });
+
+  test('with no selection, header checkbox is unchecked and not indeterminate', async () => {
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    await loadRecommendations();
+    const cb = document.getElementById('select-all-recs') as HTMLInputElement;
+    expect(cb.checked).toBe(false);
+    expect(cb.indeterminate).toBe(false);
+  });
+
+  test('with a partial selection, header checkbox is indeterminate', async () => {
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1']));
+    await loadRecommendations();
+    const cb = document.getElementById('select-all-recs') as HTMLInputElement;
+    expect(cb.indeterminate).toBe(true);
+    expect(cb.checked).toBe(false);
+  });
+
+  test('with every best-variant selected, header checkbox is checked and not indeterminate', async () => {
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1', 'r2']));
+    await loadRecommendations();
+    const cb = document.getElementById('select-all-recs') as HTMLInputElement;
+    expect(cb.checked).toBe(true);
+    expect(cb.indeterminate).toBe(false);
+  });
+
+  test('clicking when all selected clears selection (the previously-broken second-click path)', async () => {
+    // Repro from the issue: with all rows selected, the header checkbox
+    // used to render as unchecked, so the second click flipped it to
+    // checked and re-selected everything (no-op). Now it renders as
+    // checked, so the second click flips to unchecked and clears.
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1', 'r2']));
+    await loadRecommendations();
+    const cb = document.getElementById('select-all-recs') as HTMLInputElement;
+    expect(cb.checked).toBe(true);
+    // Simulate the browser's pre-change flip from true → false.
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change'));
+    expect(state.clearSelectedRecommendations).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #480: First-click sort direction per column.
+// Text columns and most numerics default to 'asc' (A→Z / low → high).
+// `savings` and `on_demand_monthly` keep 'desc' as the platform default.
+// ---------------------------------------------------------------------------
+describe('Issue #480: per-column default sort direction', () => {
+  const recs = [
+    { id: 'r1', provider: 'aws',   cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront', savings: 100, upfront_cost: 0,    monthly_cost: 50,  on_demand_cost: 80  },
+    { id: 'r2', provider: 'azure', cloud_account_id: 'a2', service: 'vm',  resource_type: 'D2s_v3',    region: 'eastus',    count: 1, term: 1, payment: 'no-upfront', savings: 150, upfront_cost: 1000, monthly_cost: 100, on_demand_cost: 130 },
+  ];
+
+  beforeEach(() => {
+    setupOpportunitiesTabDom();
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+  });
+
+  test.each<[string, 'asc' | 'desc']>([
+    ['provider',              'asc'],
+    ['account',               'asc'],
+    ['service',               'asc'],
+    ['resource_type',         'asc'],
+    ['region',                'asc'],
+    ['count',                 'asc'],
+    ['term',                  'asc'],
+    ['payment',               'asc'],
+    ['upfront_cost',          'asc'],
+    ['monthly_cost',          'asc'],
+    ['effective_savings_pct', 'asc'],
+    ['savings',               'desc'],  // exception per QA notes
+    ['on_demand_monthly',     'desc'],  // exception per QA notes
+  ])('first click on %s header sorts %s', async (col, expectedDir) => {
+    // Pin the active sort to a column distinct from the one we click so
+    // the click is treated as a "first click on a previously-unsorted
+    // column" rather than a toggle on the active column. Pick `region`
+    // unless `region` itself is the column under test, in which case
+    // pick `provider`.
+    const initialColumn = col === 'region' ? 'provider' : 'region';
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: initialColumn, direction: 'asc' });
+    await loadRecommendations();
+    const header = document.querySelector<HTMLTableCellElement>(`th[data-sort="${col}"]`);
+    expect(header).not.toBeNull();
+    header!.click();
+    expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: col, direction: expectedDir });
+  });
+
+  test('second click on the same column toggles the direction', async () => {
+    // Provider's first click goes to asc (covered above). After
+    // state reports the active sort, the next click flips to desc.
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'provider', direction: 'asc' });
+    await loadRecommendations();
+    const header = document.querySelector<HTMLTableCellElement>('th[data-sort="provider"]');
+    header!.click();
+    expect(state.setRecommendationsSort).toHaveBeenLastCalledWith({ column: 'provider', direction: 'desc' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #481: Sort column + direction persisted across page refresh via
+// URL query params (?sort=<col>&dir=<asc|desc>).
+// ---------------------------------------------------------------------------
+describe('Issue #481: URL persistence of sort state', () => {
+  const recs = [
+    { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+  ];
+
+  beforeEach(() => {
+    setupOpportunitiesTabDom();
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+    // Reset URL between tests.
+    window.history.replaceState({}, '', '/');
+  });
+
+  test('valid ?sort=col&dir=asc seeds setRecommendationsSort on load', async () => {
+    window.history.replaceState({}, '', '/?sort=upfront_cost&dir=asc');
+    await loadRecommendations();
+    expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'asc' });
+  });
+
+  test('valid ?sort=col&dir=desc seeds setRecommendationsSort on load', async () => {
+    window.history.replaceState({}, '', '/?sort=provider&dir=desc');
+    await loadRecommendations();
+    expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'provider', direction: 'desc' });
+  });
+
+  test('invalid ?sort=<unknown> is silently ignored', async () => {
+    window.history.replaceState({}, '', '/?sort=not_a_column&dir=asc');
+    await loadRecommendations();
+    expect(state.setRecommendationsSort).not.toHaveBeenCalledWith(
+      expect.objectContaining({ column: 'not_a_column' }),
+    );
+  });
+
+  test('invalid ?dir=foo is silently ignored', async () => {
+    window.history.replaceState({}, '', '/?sort=provider&dir=foo');
+    await loadRecommendations();
+    expect(state.setRecommendationsSort).not.toHaveBeenCalledWith(
+      expect.objectContaining({ direction: 'foo' }),
+    );
+  });
+
+  test('clicking a header writes the active sort to the URL', async () => {
+    await loadRecommendations();
+    const header = document.querySelector<HTMLTableCellElement>('th[data-sort="upfront_cost"]');
+    header!.click();
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('sort')).toBe('upfront_cost');
+    expect(params.get('dir')).toBe('asc');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #482: "All" checkbox tri-state + null-filter renders as all-checked.
+// ---------------------------------------------------------------------------
+describe('Issue #482: column filter "All" tri-state semantics', () => {
+  const recs = [
+    { id: 'r1', provider: 'aws',   cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+    { id: 'r2', provider: 'azure', cloud_account_id: 'a2', service: 'vm',  resource_type: 'D2s_v3',    region: 'eastus',    count: 1, term: 1, savings: 150, upfront_cost: 800 },
+    { id: 'r3', provider: 'gcp',   cloud_account_id: 'a3', service: 'gce', resource_type: 'n2-standard-2', region: 'us-central1', count: 1, term: 1, savings: 200, upfront_cost: 600 },
+  ];
+
+  beforeEach(() => {
+    setupOpportunitiesTabDom();
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+  });
+
+  test('opening a popover on an unfiltered column renders every value as checked', async () => {
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click();
+    const cbs = Array.from(document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'));
+    expect(cbs.length).toBe(3);
+    cbs.forEach((cb) => expect(cb.checked).toBe(true));
+    const allBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="all"]');
+    expect(allBox?.checked).toBe(true);
+    expect(allBox?.indeterminate).toBe(false);
+  });
+
+  test('partial selection makes the (All) box indeterminate', async () => {
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click();
+    const allBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="all"]');
+    expect(allBox?.checked).toBe(false);
+    expect(allBox?.indeterminate).toBe(true);
+  });
+
+  test('clicking (All) when it is checked unchecks every value AND persists an explicit empty allow-list', async () => {
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click();
+    const allBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="all"]');
+    expect(allBox?.checked).toBe(true);
+    // Browser flips → unchecked on click of an already-checked tri-state.
+    allBox!.checked = false;
+    allBox!.dispatchEvent(new Event('change'));
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('provider', { kind: 'set', values: [] });
+  });
+
+  test('clicking (All) when it is unchecked checks every value AND clears the filter (null)', async () => {
+    // Start from a partial selection so the table still renders (any row
+    // passes — provider 'aws' is in the allow-list). We rely on the
+    // popover for THIS column showing only the aws box checked and the
+    // azure/gcp boxes unchecked → (All) tri-state is unchecked-not-
+    // indeterminate-not-checked, but since 1 of 3 is checked it's
+    // indeterminate. To exercise the explicit "(All) unchecked → click"
+    // path we set a second column's filter to narrow the visible set
+    // while leaving provider's checkboxes all-unchecked. Easier: use a
+    // {set, values: []} filter on a DIFFERENT column so the provider
+    // popover renders with no provider-narrowing applied (all checked).
+    // Then directly UNCHECK the (All) box to take it from checked → empty.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      // narrowing on service so the table is not empty when provider
+      // has no explicit filter
+      service: { kind: 'set', values: ['ec2', 'vm', 'gce'] },
+    });
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click();
+    const allBox = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="all"]');
+    // No provider filter → resync shows everything ticked.
+    expect(allBox?.checked).toBe(true);
+    // Browser flips → unchecked on click of a checked tri-state.
+    allBox!.checked = false;
+    allBox!.dispatchEvent(new Event('change'));
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('provider', { kind: 'set', values: [] });
+    // Now flip it back — (All) unchecked → checked path. After the previous
+    // commitAll's rerender, the mock setRecommendationsColumnFilter has
+    // updated state, but jest mocks don't propagate writes; the popover
+    // would still render based on the still-mocked getRecommendationsColumnFilters
+    // return value. Simulate the intended state explicitly.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: [] },
+      service: { kind: 'set', values: ['ec2', 'vm', 'gce'] },
+    });
+    // Re-open the popover by toggling the trigger twice; without this the
+    // popover keeps the previous resync's checkbox states.
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click(); // close
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click(); // reopen
+    const allBox2 = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-role="all"]');
+    expect(allBox2?.checked).toBe(false);
+    expect(allBox2?.indeterminate).toBe(false);
+    allBox2!.checked = true;
+    allBox2!.dispatchEvent(new Event('change'));
+    expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('provider', null);
+  });
+
+  test('checking every individual value collapses to null (the existing "all selected = no narrowing" rule)', async () => {
+    // Start narrowed to 2 of 3 (aws, azure); checking the 3rd (gcp) box
+    // takes us to all-3 → commit() collapses to null. One toggle keeps
+    // the mock state interaction trivial — see Bundle B's notes about
+    // resync re-reading the (mocked) filter after each commit.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws', 'azure'] },
+    });
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click();
+    const gcpCb = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-value="gcp"]')!;
+    expect(gcpCb.checked).toBe(false);
+    gcpCb.checked = true;
+    gcpCb.dispatchEvent(new Event('change'));
+    // All 3 now checked → commit collapses to null.
+    expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('provider', null);
+  });
+
+  // CR pass #2 regression: unchecking the last individual value used to
+  // collapse to `null` (no filter), which silently snapped the popover
+  // back to all-checked. After the fix, the individual-checkbox commit
+  // mirrors the (All) / Clear path: an empty allow-list is persisted, so
+  // the table renders 0 rows just like Clear.
+  test('unchecking every individual value persists an explicit empty allow-list (not null)', async () => {
+    // Start narrowed to a single value so the popover opens with exactly
+    // one checkbox checked. Then untick it — commit() should produce
+    // {kind: 'set', values: []}, NOT null.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click();
+    const awsCb = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-value="aws"]')!;
+    expect(awsCb.checked).toBe(true);
+    awsCb.checked = false;
+    awsCb.dispatchEvent(new Event('change'));
+    // Zero of 3 checked — must NOT collapse to null.
+    expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('provider', { kind: 'set', values: [] });
+    // Sanity: the call site MUST be the {set, values: []} branch, not the
+    // null branch. Guards against future refactors that re-introduce the
+    // `selected.length === 0 → null` shortcut.
+    const calls = (state.setRecommendationsColumnFilter as jest.Mock).mock.calls
+      .filter((c) => c[0] === 'provider');
+    const last = calls[calls.length - 1];
+    expect(last[1]).not.toBeNull();
+    expect(last[1]).toEqual({ kind: 'set', values: [] });
+  });
+
+  // CR pass #2 regression: with the empty allow-list persisted, applying
+  // the filter to the recommendations must render zero rows — i.e. the
+  // unchecking-last-value path reaches the same 0-row terminal state as
+  // the (All) / Clear path.
+  test('an empty allow-list filter renders 0 rows (applyColumnFilters returns [])', async () => {
+    const { applyColumnFilters } = await import('../recommendations');
+    const filtered = applyColumnFilters(
+      recs as unknown as Parameters<typeof applyColumnFilters>[0],
+      { provider: { kind: 'set', values: [] } },
+    );
+    expect(filtered).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #483: Scrolling inside the popover does NOT dismiss it.
+// ---------------------------------------------------------------------------
+describe('Issue #483: popover stays open while user scrolls its contents', () => {
+  const recs = [
+    { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+  ];
+
+  beforeEach(() => {
+    setupOpportunitiesTabDom();
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+  });
+
+  test('a scroll event whose target is inside the popover does not dismiss it', async () => {
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!.click();
+    const popover = document.querySelector('.column-filter-popover');
+    expect(popover).not.toBeNull();
+    const list = popover!.querySelector('.column-filter-list');
+    expect(list).not.toBeNull();
+    // Simulate the user scrolling inside the popover's list. The capture-
+    // phase scroll listener on window used to fire and close the popover;
+    // it now ignores scrolls whose target is inside openPopover.el.
+    const scrollEvt = new Event('scroll', { bubbles: true });
+    list!.dispatchEvent(scrollEvt);
+    expect(document.querySelector('.column-filter-popover')).not.toBeNull();
+  });
+
+  test('a scroll event outside the popover still dismisses it', async () => {
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!.click();
+    expect(document.querySelector('.column-filter-popover')).not.toBeNull();
+    // Scroll the document body (outside the popover) — should still close.
+    const scrollEvt = new Event('scroll', { bubbles: true });
+    document.body.dispatchEvent(scrollEvt);
+    expect(document.querySelector('.column-filter-popover')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #484: Numeric filter exact-match against the displayed rounded value.
+// ---------------------------------------------------------------------------
+describe('Issue #484: numeric filter matches the displayed rounded value', () => {
+  // Choose a savings value whose raw form rounds to a different display
+  // value depending on which precision we use. Under hourly period, the
+  // display rounds to PERIOD_DECIMALS.hourly (4) decimals.
+  //
+  // raw monthly = 123.456789 → daily = monthly/30 = 4.1152263; hourly =
+  // monthly/720 = 0.171467... Use a monthly that's clean enough to keep
+  // the assertions readable while still distinguishing exact rounding.
+  const recs = [
+    { id: 'r-exact',   provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 123.456789, upfront_cost: 500 },
+    { id: 'r-other',   provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 250,        upfront_cost: 800 },
+  ];
+
+  beforeEach(() => {
+    setupOpportunitiesTabDom();
+    jest.clearAllMocks();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getRecommendationsSort as jest.Mock).mockReturnValue({ column: 'savings', direction: 'desc' });
+    (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+  });
+
+  test('typing the rounded-display value of a row matches that row at daily period', async () => {
+    // Under daily period (PERIOD_DECIMALS.daily = 2), raw monthly
+    // 123.456789 / 30 = 4.1152263 → displays as "$4.12" (2 dp). Filter
+    // expression "4.12" must match the row even though the raw scaled
+    // value (4.1152263) doesn't equal 4.12.
+    (state.getCostPeriod as jest.Mock).mockReturnValue('daily');
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      savings: { kind: 'expr', expr: '4.12' },
+    });
+    const { applyColumnFilters } = await import('../recommendations');
+    // Cast through unknown to match the LocalRecommendation shape used
+    // by the function; the test recs include all the fields the filter
+    // actually reads (savings).
+    const filtered = applyColumnFilters(recs as unknown as Parameters<typeof applyColumnFilters>[0], state.getRecommendationsColumnFilters());
+    expect(filtered.map((r) => r.id)).toEqual(['r-exact']);
+  });
+
+  test('typing a value that does NOT match the rounded display excludes the row', async () => {
+    (state.getCostPeriod as jest.Mock).mockReturnValue('daily');
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      savings: { kind: 'expr', expr: '4.11' },
+    });
+    const { applyColumnFilters } = await import('../recommendations');
+    const filtered = applyColumnFilters(recs as unknown as Parameters<typeof applyColumnFilters>[0], state.getRecommendationsColumnFilters());
+    expect(filtered.map((r) => r.id)).toEqual([]);
+  });
+
+  test('comparison operators apply against the rounded value too (>5 with a raw 4.999 stays excluded)', async () => {
+    // Raw monthly 4.999 rounds to 5.00 at monthly period (0 dp → 5).
+    // Under "monthly" period the display precision for savings is 0
+    // decimals, so 4.999 displays as "$5" → ">4" includes it, ">5"
+    // does not (since rounded = 5 and 5 > 5 is false).
+    const sub = [
+      { id: 'r-near-5', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 4.999, upfront_cost: 0 },
+    ];
+    (state.getCostPeriod as jest.Mock).mockReturnValue('monthly');
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      savings: { kind: 'expr', expr: '>4' },
+    });
+    const { applyColumnFilters } = await import('../recommendations');
+    expect(applyColumnFilters(sub as unknown as Parameters<typeof applyColumnFilters>[0], state.getRecommendationsColumnFilters()).map((r) => r.id)).toEqual(['r-near-5']);
+
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      savings: { kind: 'expr', expr: '>5' },
+    });
+    expect(applyColumnFilters(sub as unknown as Parameters<typeof applyColumnFilters>[0], state.getRecommendationsColumnFilters()).map((r) => r.id)).toEqual([]);
+  });
+
+  test('integer columns continue to match exact integer values', async () => {
+    const sub = [
+      { id: 'r-5',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5,  term: 1, savings: 100, upfront_cost: 0 },
+      { id: 'r-10', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 10, term: 1, savings: 100, upfront_cost: 0 },
+    ];
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      count: { kind: 'expr', expr: '5' },
+    });
+    const { applyColumnFilters } = await import('../recommendations');
+    expect(applyColumnFilters(sub as unknown as Parameters<typeof applyColumnFilters>[0], state.getRecommendationsColumnFilters()).map((r) => r.id)).toEqual(['r-5']);
+  });
+
+  // CR pass #2 regression: `displayPrecision` for currency columns MUST
+  // agree with the fraction-digit count `formatCurrency` actually renders,
+  // so that an exact-match filter on the displayed string ("$123") matches
+  // the row whose underlying value rounds to that string at the active
+  // period. Both sources must agree, so the test pins the symmetry at the
+  // canonical `CURRENCY_DEFAULT_DIGITS` constant — which formatCurrency
+  // uses as its default and displayPrecision now imports — rather than at
+  // a hard-coded literal that would silently drift if the default ever
+  // changes.
+  describe('displayPrecision agrees with formatCurrency for currency columns', () => {
+    function fractionDigitsOf(s: string): number {
+      // Strip leading currency symbol(s) and any locale group separators,
+      // then count digits after a decimal point. Returns 0 for "$123",
+      // 2 for "$123.45", etc.
+      const stripped = s.replace(/[^0-9.]/g, '');
+      const dot = stripped.indexOf('.');
+      return dot < 0 ? 0 : stripped.length - dot - 1;
+    }
+
+    test('upfront_cost: displayPrecision matches formatCurrency at every period', async () => {
+      const recsMod = await import('../recommendations');
+      // utils is jest.mock()'d at the top of this file (so the
+      // recommendations module sees a stubbed formatCurrency). For this
+      // test we want the REAL formatCurrency to assert the fraction-digit
+      // contract holds against actual production behaviour, so we pull it
+      // via jest.requireActual rather than the mocked import.
+      const utilsActual = jest.requireActual<typeof import('../utils')>('../utils');
+      const displayPrecision = recsMod.displayPrecision;
+      const formatCurrency = utilsActual.formatCurrency;
+      // upfront_cost is always rendered via plain formatCurrency (no
+      // period scaling). The fraction digit count must therefore be
+      // period-independent and equal to formatCurrency's own output.
+      const sample = 123.456789;
+      const renderedDigits = fractionDigitsOf(formatCurrency(sample));
+      const periods: CostPeriod[] = ['hourly', 'daily', 'monthly', 'yearly'];
+      for (const period of periods) {
+        expect(displayPrecision('upfront_cost', period)).toBe(renderedDigits);
+      }
+    });
+
+    test('monthly_cost: displayPrecision at monthly period matches formatCurrency', async () => {
+      const recsMod = await import('../recommendations');
+      // utils is jest.mock()'d at the top of this file (so the
+      // recommendations module sees a stubbed formatCurrency). For this
+      // test we want the REAL formatCurrency to assert the fraction-digit
+      // contract holds against actual production behaviour, so we pull it
+      // via jest.requireActual rather than the mocked import.
+      const utilsActual = jest.requireActual<typeof import('../utils')>('../utils');
+      const displayPrecision = recsMod.displayPrecision;
+      const formatCurrency = utilsActual.formatCurrency;
+      const sample = 123.456789;
+      const renderedDigits = fractionDigitsOf(formatCurrency(sample));
+      // At monthly period, formatCostForPeriod delegates to formatCurrency
+      // → displayPrecision must agree with formatCurrency's digit count.
+      expect(displayPrecision('monthly_cost', 'monthly')).toBe(renderedDigits);
+    });
+
+    test('on_demand_monthly: displayPrecision at monthly period matches formatCurrency', async () => {
+      const recsMod = await import('../recommendations');
+      // utils is jest.mock()'d at the top of this file (so the
+      // recommendations module sees a stubbed formatCurrency). For this
+      // test we want the REAL formatCurrency to assert the fraction-digit
+      // contract holds against actual production behaviour, so we pull it
+      // via jest.requireActual rather than the mocked import.
+      const utilsActual = jest.requireActual<typeof import('../utils')>('../utils');
+      const displayPrecision = recsMod.displayPrecision;
+      const formatCurrency = utilsActual.formatCurrency;
+      const sample = 123.456789;
+      const renderedDigits = fractionDigitsOf(formatCurrency(sample));
+      expect(displayPrecision('on_demand_monthly', 'monthly')).toBe(renderedDigits);
+    });
+
+    test('monthly_cost / on_demand_monthly non-monthly periods use PERIOD_DECIMALS-based precision', async () => {
+      // Non-monthly periods bypass formatCurrency (see formatCostForPeriod)
+      // and use `toFixed(PERIOD_DECIMALS[period])`. Verify the precision
+      // values are non-zero where expected so the exact-match filter
+      // matches the displayed string (e.g. "$0.1715" at hourly).
+      const { displayPrecision } = await import('../recommendations');
+      // hourly: 4 dp, daily: 2 dp, yearly: 0 dp (per PERIOD_DECIMALS).
+      expect(displayPrecision('monthly_cost', 'hourly')).toBe(4);
+      expect(displayPrecision('monthly_cost', 'daily')).toBe(2);
+      expect(displayPrecision('monthly_cost', 'yearly')).toBe(0);
+      expect(displayPrecision('on_demand_monthly', 'hourly')).toBe(4);
+      expect(displayPrecision('on_demand_monthly', 'daily')).toBe(2);
+      expect(displayPrecision('on_demand_monthly', 'yearly')).toBe(0);
+    });
   });
 });
