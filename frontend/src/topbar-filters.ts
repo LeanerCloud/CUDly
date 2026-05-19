@@ -28,6 +28,52 @@ const PROVIDER_OPTIONS: ChipSelectOption[] = [
   { value: 'gcp', label: 'GCP' },
 ];
 
+// Issue #477: URL query params used to persist the global filter across
+// hard refresh. URL is preferred over localStorage so the filter state is
+// shareable via copy-paste link and avoids the cross-tab confusion that
+// shared localStorage would create. Empty values omit the param entirely
+// so `/opportunities` stays clean when nothing is filtered.
+const URL_PARAM_PROVIDER = 'provider';
+const URL_PARAM_ACCOUNT = 'account';
+
+// Closed set used to reject invalid `?provider=` values that would otherwise
+// flow into setCurrentProvider — which is typed `'' | 'aws' | 'azure' | 'gcp'`.
+const VALID_PROVIDERS: ReadonlySet<string> = new Set(['', 'aws', 'azure', 'gcp']);
+
+/**
+ * Read provider + account from the current URL. Invalid provider values
+ * (anything outside VALID_PROVIDERS) fall back to ''. The account id is
+ * returned verbatim — validation against the user's actual account list
+ * happens implicitly via the chip-select option matcher.
+ */
+function readFiltersFromURL(): { provider: '' | 'aws' | 'azure' | 'gcp'; account: string } {
+  const params = new URLSearchParams(window.location.search);
+  const rawProvider = params.get(URL_PARAM_PROVIDER) ?? '';
+  const provider = VALID_PROVIDERS.has(rawProvider)
+    ? (rawProvider as '' | 'aws' | 'azure' | 'gcp')
+    : '';
+  const account = params.get(URL_PARAM_ACCOUNT) ?? '';
+  return { provider, account };
+}
+
+/**
+ * Write provider + account back into `window.location.search` via
+ * replaceState (not pushState — filter changes are a setting, not a new
+ * navigation entry; the browser back button should not unwind individual
+ * chip clicks). Empty values are omitted so the URL stays clean.
+ */
+function writeFiltersToURL(provider: string, accountIDs: readonly string[]): void {
+  const params = new URLSearchParams(window.location.search);
+  if (provider) params.set(URL_PARAM_PROVIDER, provider);
+  else params.delete(URL_PARAM_PROVIDER);
+  const accountId = accountIDs[0] ?? '';
+  if (accountId) params.set(URL_PARAM_ACCOUNT, accountId);
+  else params.delete(URL_PARAM_ACCOUNT);
+  const qs = params.toString();
+  const url = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+  window.history.replaceState(window.history.state, '', url);
+}
+
 let providerChip: ChipSelectHandle | null = null;
 let accountChip: ChipSelectHandle | null = null;
 
@@ -81,6 +127,24 @@ export function initTopbarFilters(): void {
     return;
   }
 
+  // Issue #477: hydrate provider + account from URL query params BEFORE
+  // building the chips so each chip's `value:` seed picks up the persisted
+  // selection. Direct state setters here would fire the subscribers, but
+  // the subscribers are registered later in setupRecommendationsHandlers
+  // (after init() returns) so this is a no-op for listeners and just seeds
+  // the read path for the chip mount below.
+  const { provider: urlProvider, account: urlAccount } = readFiltersFromURL();
+  if (state.getCurrentProvider() !== urlProvider) {
+    state.setCurrentProvider(urlProvider);
+  }
+  const currentAccountIDs = state.getCurrentAccountIDs();
+  const accountChanged =
+    (urlAccount && currentAccountIDs[0] !== urlAccount) ||
+    (!urlAccount && currentAccountIDs.length > 0);
+  if (accountChanged) {
+    state.setCurrentAccountIDs(urlAccount ? [urlAccount] : []);
+  }
+
   // Tear down any prior chips before re-mount (idempotent).
   while (slot.firstChild) slot.removeChild(slot.firstChild);
   providerChip = null;
@@ -97,6 +161,9 @@ export function initTopbarFilters(): void {
       // the prior provider.
       state.setCurrentAccountIDs([]);
       state.setCurrentProvider(newProvider as '' | 'aws' | 'azure' | 'gcp');
+      // Issue #477: persist the new selection (and the now-cleared account)
+      // to the URL so a hard refresh restores the same view.
+      writeFiltersToURL(newProvider, []);
       // Refresh account options for the new provider; chip resets to
       // "All Accounts".
       void populateAccountOptions(newProvider).then(() => {
@@ -113,6 +180,8 @@ export function initTopbarFilters(): void {
     value: state.getCurrentAccountIDs()[0] ?? '',
     onChange: (newAccountId) => {
       state.setCurrentAccountIDs(newAccountId ? [newAccountId] : []);
+      // Issue #477: keep URL in sync with the new account selection.
+      writeFiltersToURL(state.getCurrentProvider(), newAccountId ? [newAccountId] : []);
     },
   });
 

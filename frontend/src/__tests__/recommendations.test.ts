@@ -89,6 +89,11 @@ jest.mock('../state', () => ({
   // unconditionally. Permission-gating coverage lives in
   // recommendations-permissions.test.ts.
   getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
+  // Issue #477: setupRecommendationsHandlers subscribes to provider/account
+  // changes; expose jest.fn() shims so tests can capture the callback and
+  // simulate a change without going through the real listener set.
+  subscribeProvider: jest.fn(),
+  subscribeAccount: jest.fn(),
 }));
 
 // Mock utils
@@ -1647,43 +1652,78 @@ describe('Recommendations Module', () => {
   });
 
   describe('setupRecommendationsHandlers', () => {
+    function makeDiv(id: string): HTMLDivElement {
+      const el = document.createElement('div');
+      el.id = id;
+      return el;
+    }
+
     beforeEach(() => {
-      document.body.innerHTML = `
-        <select id="recommendations-provider-filter">
-          <option value="">All Providers</option>
-          <option value="aws">AWS</option>
-          <option value="azure">Azure</option>
-        </select>
-        <select id="service-filter">
-          <optgroup label="AWS Services">
-            <option value="ec2">EC2</option>
-          </optgroup>
-          <optgroup label="Azure Services">
-            <option value="vm">Virtual Machines</option>
-          </optgroup>
-        </select>
-        <select id="region-filter">
-          <option value="">All Regions</option>
-        </select>
-        <input type="number" id="min-savings-filter" value="">
-        <div id="recommendations-list"></div>
-        <div id="recommendations-summary"></div>
-      `;
+      // Issue #477: Opportunities now subscribes to the global provider/account
+      // filter and reloads on change. The DOM only needs the opportunities-tab
+      // wrapper (active-class toggled per test) plus the elements the loader
+      // touches (recommendations-list, recommendations-summary).
+      while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
+      document.body.appendChild(makeDiv('opportunities-tab'));
+      document.body.appendChild(makeDiv('recommendations-list'));
+      document.body.appendChild(makeDiv('recommendations-summary'));
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
         regions: []
       });
+      // Outer describe enables fake timers; we want real timers here so the
+      // subscriber callback's promise chain inside loadRecommendations can
+      // settle. afterEach() at the outer level resets via useRealTimers.
+      jest.useRealTimers();
     });
 
-    // The legacy top filter bar tests (provider-filter / service-filter /
-    // region-filter / min-savings-filter change handlers + service-filter
-    // visibility-toggle) are obsolete: Bundle B replaced those DOM elements
-    // with per-column header-mounted popovers. See the column-filter +
-    // bottom-action-box tests below for their successors.
-    test('setupRecommendationsHandlers is a no-op (Bundle B)', () => {
-      // Should not throw, even with the legacy filter-bar DOM absent.
-      expect(() => setupRecommendationsHandlers()).not.toThrow();
+    test('subscribes to provider changes and reloads when opportunities-tab is active', async () => {
+      const tab = document.getElementById('opportunities-tab')!;
+      tab.classList.add('active');
+
+      setupRecommendationsHandlers();
+
+      // Capture the callback registered with subscribeProvider and invoke it
+      // directly (state is jest.mock()'d for this file, so the real listener
+      // set never fires; the test verifies the wiring shape).
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0];
+      expect(typeof providerCb).toBe('function');
+      (api.getRecommendations as jest.Mock).mockClear();
+      providerCb();
+      // loadRecommendations awaits Promise.all internally; flush microtasks.
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getRecommendations).toHaveBeenCalled();
+    });
+
+    test('subscribes to account changes and reloads when opportunities-tab is active', async () => {
+      const tab = document.getElementById('opportunities-tab')!;
+      tab.classList.add('active');
+
+      setupRecommendationsHandlers();
+
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0];
+      expect(typeof accountCb).toBe('function');
+      (api.getRecommendations as jest.Mock).mockClear();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getRecommendations).toHaveBeenCalled();
+    });
+
+    test('does NOT reload when opportunities-tab is inactive', async () => {
+      // No .active class — user is on Home / Plans / Purchases.
+      setupRecommendationsHandlers();
+
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0];
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0];
+      (api.getRecommendations as jest.Mock).mockClear();
+      providerCb();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getRecommendations).not.toHaveBeenCalled();
     });
   });
 });
