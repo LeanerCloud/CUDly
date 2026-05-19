@@ -480,39 +480,101 @@ function setupLoginModalHandlers(modal: HTMLElement): void {
   setupPasswordToggle(modal);
 }
 
+// Basic email shape check used to short-circuit obviously-malformed input
+// client-side before sending it to the server. Intentionally permissive: it
+// only catches "obviously not an email" (missing @, missing TLD, whitespace).
+// The backend's regex remains the authoritative validator.
+const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Pre-flight validation for the login form. Returns a user-facing message
+ * naming the specific problem, or null if the inputs are submittable.
+ *
+ * Issue #455: empty fields previously produced "Invalid email format" or
+ * "Invalid email or password" which hid which field was actually blank.
+ * Issue #456 (case 3.3): malformed-email + valid-password previously came
+ * back from the server as "authentication failed", which made it look like
+ * a credential problem rather than a typo in the email.
+ */
+function validateLoginInputs(email: string, password: string): string | null {
+  if (email === '' && password === '') {
+    return 'Enter email and password';
+  }
+  if (email === '') {
+    return 'Enter email address';
+  }
+  if (password === '') {
+    return 'Enter password';
+  }
+  if (!EMAIL_SHAPE_RE.test(email)) {
+    return 'Incorrect email format';
+  }
+  return null;
+}
+
+/**
+ * Translate the known generic backend error strings into clearer
+ * user-facing copy. The mapping deliberately collapses both
+ * "authentication failed" (user not found) and "invalid email or
+ * password" (wrong password) into the same client-side message so we do
+ * not regress the account-enumeration mitigation called out in #456.
+ * Anything else (MFA prompts, rate-limit, server errors) passes through
+ * unchanged so operational signals are not suppressed.
+ */
+function mapServerLoginError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('invalid email format')) {
+    return 'Incorrect email format';
+  }
+  if (lower.includes('authentication failed') || lower.includes('invalid email or password')) {
+    return 'Incorrect email or password';
+  }
+  return message;
+}
+
+function showLoginError(message: string): void {
+  const errorDiv = document.getElementById('login-error');
+  if (errorDiv) {
+    errorDiv.textContent = message;
+    errorDiv.classList.remove('hidden');
+  }
+}
+
 async function handleLogin(e: Event): Promise<void> {
   e.preventDefault();
+
+  const emailInput = document.getElementById('login-email') as HTMLInputElement | null;
+  const passwordInput = document.getElementById('login-password') as HTMLInputElement | null;
+  const email = emailInput?.value.trim() || '';
+  const password = passwordInput?.value || '';
+
+  // Client-side pre-flight (issues #455 + #456). Runs before the rate-limit
+  // check so an accidental click on an empty form does not burn the
+  // cooldown window the user needs for their real attempt.
+  const preflightError = validateLoginInputs(email, password);
+  if (preflightError !== null) {
+    showLoginError(preflightError);
+    return;
+  }
 
   // Rate limiting check
   const now = Date.now();
   if (now - lastLoginAttempt < LOGIN_COOLDOWN_MS) {
-    const errorDiv = document.getElementById('login-error');
-    if (errorDiv) {
-      errorDiv.textContent = 'Please wait before trying again';
-      errorDiv.classList.remove('hidden');
-    }
+    showLoginError('Please wait before trying again');
     return;
   }
   lastLoginAttempt = now;
 
-  const errorDiv = document.getElementById('login-error');
-  errorDiv?.classList.add('hidden');
+  document.getElementById('login-error')?.classList.add('hidden');
 
   try {
-    const emailInput = document.getElementById('login-email') as HTMLInputElement | null;
-    const passwordInput = document.getElementById('login-password') as HTMLInputElement | null;
-    const email = emailInput?.value.trim() || '';
-    const password = passwordInput?.value || '';
     await api.login(email, password);
 
     document.getElementById('login-modal')?.remove();
     location.reload();
   } catch (error) {
     const err = error as Error;
-    if (errorDiv) {
-      errorDiv.textContent = err.message;
-      errorDiv.classList.remove('hidden');
-    }
+    showLoginError(mapServerLoginError(err.message));
   }
 }
 
