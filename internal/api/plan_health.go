@@ -52,12 +52,18 @@ type HealthFactor struct {
 // HealthScore + HealthFactors. The wrapper keeps the score fields out
 // of the persisted struct so they can't accidentally drift into
 // DynamoDB / Postgres columns. The embedded value (not pointer) keeps
-// JSON serialisation flat — clients see the same fields as before plus
+// JSON serialisation flat: clients see the same fields as before plus
 // the new ones, no extra "plan" envelope nesting.
+//
+// HealthFactors deliberately omits `omitempty`: the openapi contract
+// marks the field required so generated clients treat it as
+// non-nullable. Callers populate the slice to `[]HealthFactor{}` (not
+// nil) when there are no penalties so the wire format is `[]` rather
+// than `null` or absent.
 type PlanWithHealth struct {
 	config.PurchasePlan
 	HealthScore   int            `json:"health_score"`
-	HealthFactors []HealthFactor `json:"health_factors,omitempty"`
+	HealthFactors []HealthFactor `json:"health_factors"`
 }
 
 // computePlanHealth returns the 0-100 health score and the slice of
@@ -260,22 +266,20 @@ func groupExecutionsByPlan(executions []config.PurchaseExecution) map[string][]c
 	return out
 }
 
-// planHealthExecutionStatuses is the union of statuses the score
-// formula cares about. Kept as a package-level slice so the handler
-// and tests reference the same set (rather than duplicating string
-// literals at each call site).
+// planHealthExecutionStatuses is the set of execution statuses the
+// score formula actually penalizes. Kept as a package-level slice so
+// the handler and tests reference the same set (rather than
+// duplicating string literals at each call site).
 //
-// Includes "completed" so a single GetExecutionsByStatuses call covers
-// every execution that affects the score; the count-since-start
-// denominator for "behind schedule" is computed from plan fields
-// directly, but having the completed rows in scope keeps the door open
-// for richer factors (e.g. "no completions in the last N days")
-// without a second DB hit.
+// Intentionally narrow: failed and cancelled are the only statuses
+// the penalty checks read (failedExecutionsPenalty,
+// cancelledExecutionsPenalty). Including non-penalized statuses
+// (completed/pending/notified/expired) would let high-volume noisy
+// rows displace genuine penalty rows out of the capped
+// DefaultListLimit fetch, skewing scores for active plans. If a
+// future penalty needs a new status, add it here (and the matching
+// check in computePlanHealth) in the same change.
 var planHealthExecutionStatuses = []string{
-	"completed",
 	"failed",
-	"expired",
 	"cancelled",
-	"pending",
-	"notified",
 }

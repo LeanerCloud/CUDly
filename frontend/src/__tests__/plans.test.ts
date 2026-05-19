@@ -582,6 +582,64 @@ describe('Plans Module', () => {
       expect(badge?.textContent).toBe('25');
     });
 
+    test('renders green health badge at the good-band boundary (score=80)', async () => {
+      // Boundary guard: planHealthBandClass uses `>= 80` for good, so
+      // a score of exactly 80 must land in the green band. A regression
+      // that flipped to `> 80` would skew this row to amber.
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-h-boundary-good',
+            name: 'Boundary Good',
+            enabled: true,
+            auto_purchase: true,
+            services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 } },
+            ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, current_step: 1, total_steps: 4 },
+            health_score: 80,
+            health_factors: []
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const badge = document.querySelector<HTMLElement>('[data-testid="plan-health-badge"]');
+      expect(badge).not.toBeNull();
+      expect(badge?.classList.contains('plan-health-badge--good')).toBe(true);
+      expect(badge?.textContent).toBe('80');
+    });
+
+    test('renders amber health badge at the warn-band boundary (score=50)', async () => {
+      // Boundary guard: planHealthBandClass uses `>= 50` for warn, so
+      // a score of exactly 50 must land in the amber band. A
+      // regression that flipped to `> 50` would skew this row to red.
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-h-boundary-warn',
+            name: 'Boundary Warn',
+            enabled: true,
+            auto_purchase: true,
+            services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 } },
+            ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, current_step: 1, total_steps: 4 },
+            health_score: 50,
+            health_factors: [
+              { kind: 'failed_executions', weight: 50, note: '5 failed execution(s)' }
+            ]
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const badge = document.querySelector<HTMLElement>('[data-testid="plan-health-badge"]');
+      expect(badge).not.toBeNull();
+      expect(badge?.classList.contains('plan-health-badge--warn')).toBe(true);
+      expect(badge?.textContent).toBe('50');
+    });
+
     test('omits health badge when score is missing (legacy API response)', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [

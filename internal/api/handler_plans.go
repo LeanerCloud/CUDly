@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -37,12 +38,16 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 	// Fetch the recent executions used to compute per-plan health
 	// scores. Single store call, grouped in-memory by plan_id so the
 	// per-plan loop is O(plans + executions) rather than N round-trips
-	// to the database. A fetch error is logged and swallowed — the
+	// to the database. A fetch error is logged and swallowed: the
 	// plans list itself must still render; consumers see HealthScore =
 	// 100 (no penalties) for every plan when the execution lookup
-	// fails, which is a safe pessimistic default for a UI signal.
+	// fails, which is a safe pessimistic default for a UI signal. We
+	// log at warn level (not error) because the request itself still
+	// succeeds end-to-end; the score column is the only thing
+	// degraded.
 	executions, execErr := h.config.GetExecutionsByStatuses(ctx, planHealthExecutionStatuses, config.DefaultListLimit)
 	if execErr != nil {
+		logging.Warnf("listPlans: GetExecutionsByStatuses failed; falling back to default health score for %d plan(s): %v", len(plans), execErr)
 		executions = nil
 	}
 	byPlan := groupExecutionsByPlan(executions)
@@ -50,6 +55,14 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 	out := make([]PlanWithHealth, 0, len(plans))
 	for i := range plans {
 		score, factors := computePlanHealth(&plans[i], byPlan[plans[i].ID], now)
+		// Normalize nil to empty slice so the JSON response always
+		// carries `health_factors: []` rather than `null` or absent.
+		// The openapi schema marks health_factors required, and
+		// generated clients (plus a handful of frontend assertions
+		// that .map over factors) treat it as a guaranteed array.
+		if factors == nil {
+			factors = []HealthFactor{}
+		}
 		out = append(out, PlanWithHealth{
 			PurchasePlan:  plans[i],
 			HealthScore:   score,

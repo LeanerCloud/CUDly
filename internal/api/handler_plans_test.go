@@ -161,6 +161,12 @@ func TestHandler_listPlans_ExecutionFetchErrorIsTolerated(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Plans, 1)
 	assert.Equal(t, 100, result.Plans[0].HealthScore)
+	// Assert both mocks were called as expected: this is the only
+	// place that exercises the "exec fetch fails" branch, so without
+	// these checks a regression that silently skipped the fetch (or
+	// the auth check) would still pass.
+	mockStore.AssertExpectations(t)
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_createPlan(t *testing.T) {

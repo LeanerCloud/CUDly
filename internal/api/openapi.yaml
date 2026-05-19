@@ -1977,6 +1977,7 @@ components:
 
     HealthFactor:
       type: object
+      required: [kind, weight, note]
       description: |
         One penalty applied to a plan's health score. Surfaced in the UI
         badge tooltip so a low score is actionable rather than opaque.
@@ -1995,6 +1996,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/PurchasePlan'
         - type: object
+          required: [health_score, health_factors]
           properties:
             health_score:
               type: integer
@@ -2007,6 +2009,7 @@ components:
                 per-penalty breakdown.
             health_factors:
               type: array
+              minItems: 0
               items:
                 $ref: '#/components/schemas/HealthFactor'
 

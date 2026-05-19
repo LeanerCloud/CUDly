@@ -294,14 +294,22 @@ function planHealthBandClass(score: number): 'good' | 'warn' | 'bad' {
 // Renders the plan-health pill markup for the plan card header.
 // Empty string when the score is missing (older API responses,
 // pre-rollout) so the card layout doesn't get a hole.
+//
+// Accessibility: the badge carries both `title` (native mouse-hover
+// tooltip) and `aria-label` (same text exposed to assistive tech), and
+// is reachable via `tabindex="0"` so keyboard-only users can land on
+// it and have the screen reader announce the score + factors. Both
+// strings derive from the same `escapeHtml(tooltip)` value to avoid
+// double-escaping mismatches between the two channels.
 function renderPlanHealthBadge(plan: BackendPlan): string {
   if (typeof plan.health_score !== 'number') return '';
   const band = planHealthBandClass(plan.health_score);
   const factors = plan.health_factors ?? [];
   const tooltip = factors.length === 0
     ? `Plan health ${plan.health_score}/100`
-    : `Plan health ${plan.health_score}/100 — ${factors.map(f => f.note).join(' · ')}`;
-  return `<span class="plan-health-badge plan-health-badge--${band}" title="${escapeHtml(tooltip)}" data-testid="plan-health-badge">${plan.health_score}</span>`;
+    : `Plan health ${plan.health_score}/100: ${factors.map(f => f.note).join(' / ')}`;
+  const escapedTooltip = escapeHtml(tooltip);
+  return `<span class="plan-health-badge plan-health-badge--${band}" title="${escapedTooltip}" aria-label="${escapedTooltip}" tabindex="0" data-testid="plan-health-badge">${plan.health_score}</span>`;
 }
 
 // Pretty label for a service slug used inside the plan card.
