@@ -573,8 +573,12 @@ async function handleLogin(e: Event): Promise<void> {
     document.getElementById('login-modal')?.remove();
     location.reload();
   } catch (error) {
-    const err = error as Error;
-    showLoginError(mapServerLoginError(err.message));
+    // `error` is `unknown` per TS strict catch typing. Extract a string
+    // defensively so a non-Error rejection (e.g. a thrown string or a
+    // plain object) does not produce `undefined.toLowerCase()` inside
+    // `mapServerLoginError`.
+    const message = error instanceof Error ? error.message : String(error);
+    showLoginError(mapServerLoginError(message));
   }
 }
 

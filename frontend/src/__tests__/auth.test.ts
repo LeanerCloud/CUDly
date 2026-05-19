@@ -192,6 +192,25 @@ describe('Auth Module', () => {
       expect(text).toBe('MFA code required');
     });
 
+    test('non-Error rejection (string) is handled defensively', async () => {
+      // Guards against a non-Error rejection causing undefined.toLowerCase()
+      // inside the server-error mapper.
+      (api.login as jest.Mock).mockImplementation(() => Promise.reject('boom'));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'somepassword');
+      expect(text).toBe('boom');
+    });
+
+    test('non-Error rejection (plain object) is handled defensively', async () => {
+      (api.login as jest.Mock).mockImplementation(() => Promise.reject({ code: 500 }));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'somepassword');
+      // String({...}) returns "[object Object]" — the exact stringification is
+      // less important than the fact that no exception is thrown and the
+      // login-error div is populated with something.
+      expect(text).toBe('[object Object]');
+    });
+
     test('reloads page after successful login', async () => {
       (api.login as jest.Mock).mockResolvedValue({});
       await showLoginModal();
