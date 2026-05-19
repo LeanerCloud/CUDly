@@ -97,11 +97,30 @@ export async function init(): Promise<void> {
  * Setup event listeners
  */
 export function setupEventListeners(): void {
-  // Tab switching
-  document.querySelectorAll<HTMLButtonElement>('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+  // Tab switching. The sidebar nav items are anchor tags (issue #462)
+  // so the browser's "Open Link in New Tab" affordance works. For
+  // un-modified left clicks we preventDefault and route via the SPA;
+  // middle-clicks, Ctrl/Cmd/Shift-clicks fall through so the browser
+  // can handle "open in new tab/window" natively.
+  document.querySelectorAll<HTMLElement>('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const mouseEvent = e as MouseEvent;
+      // Bail out on modifier-key or middle-click so the browser can
+      // do its default new-tab/new-window behaviour for anchor elements.
+      if (
+        mouseEvent.button !== 0 ||
+        mouseEvent.metaKey ||
+        mouseEvent.ctrlKey ||
+        mouseEvent.shiftKey ||
+        mouseEvent.altKey
+      ) {
+        return;
+      }
       const tab = btn.dataset['tab'];
-      if (tab) switchTab(tab);
+      if (tab) {
+        e.preventDefault();
+        switchTab(tab);
+      }
     });
   });
 
