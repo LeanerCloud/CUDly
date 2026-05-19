@@ -293,14 +293,25 @@ func TestService_ValidateUserAPIKeyAPI(t *testing.T) {
 
 		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1").Return(nil).Maybe()
+		// Use a signalling channel + .Once() so the test fails (rather than
+		// silently passes) if ValidateUserAPIKeyAPI ever stops recording
+		// usage, and so we don't have to busy-sleep waiting for the async
+		// goroutine that runs inside ValidateUserAPIKey.
+		usageRecorded := make(chan struct{}, 1)
+		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1").
+			Run(func(mock.Arguments) { usageRecorded <- struct{}{} }).
+			Return(nil).Once()
 
 		resultKey, resultUser, err := service.ValidateUserAPIKeyAPI(ctx, apiKey)
 
 		require.NoError(t, err)
 		assert.Equal(t, apiKeyRecord, resultKey)
 		assert.Equal(t, user, resultUser)
-		time.Sleep(10 * time.Millisecond) // Allow goroutine to complete
+		select {
+		case <-usageRecorded:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected RecordAPIKeyUsage to be called")
+		}
 		mockStore.AssertExpectations(t)
 	})
 
