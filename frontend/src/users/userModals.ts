@@ -3,6 +3,7 @@
  */
 
 import * as api from '../api';
+import { describePasswordValidationError } from '../auth';
 import {
   currentEditingUser,
   setCurrentEditingUser,
@@ -116,16 +117,9 @@ export async function saveUser(e: Event): Promise<void> {
       // first login. Only run client-side strength checks when a
       // password was actually entered.
       if (password) {
-        if (password.length < 12) {
-          showError('Password must be at least 12 characters');
-          return;
-        }
-        const hasUppercase = /[A-Z]/.test(password);
-        const hasLowercase = /[a-z]/.test(password);
-        const hasNumber = /[0-9]/.test(password);
-        const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
-        if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-          showError('Password must contain uppercase, lowercase, number, and special character');
+        const requirementError = describePasswordValidationError(password);
+        if (requirementError) {
+          showError(requirementError);
           return;
         }
       }

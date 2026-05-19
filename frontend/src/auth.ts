@@ -148,13 +148,19 @@ function setupPasswordToggle(container: HTMLElement | Document = document): void
   });
 }
 
+// Special-character set used by every password-strength check in this
+// module (live indicator + submit-time validator). Module-level constant
+// so the regex isn't recompiled on every keystroke AND so the live
+// indicator and validator can't silently drift apart (#470 review).
+const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/;
+
 function updatePasswordRequirements(password: string, prefix = 'req-'): void {
   const requirements = {
     length: password.length >= 12,
     uppercase: /[A-Z]/.test(password),
     lowercase: /[a-z]/.test(password),
     number: /[0-9]/.test(password),
-    special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
+    special: SPECIAL_CHAR_RE.test(password)
   };
 
   // Update each requirement indicator
@@ -163,6 +169,29 @@ function updatePasswordRequirements(password: string, prefix = 'req-'): void {
   updateRequirement(`${prefix}lowercase`, requirements.lowercase);
   updateRequirement(`${prefix}number`, requirements.number);
   updateRequirement(`${prefix}special`, requirements.special);
+}
+
+/**
+ * Return a user-facing description of which password complexity rules
+ * the supplied password fails, or "" when the password satisfies every
+ * rule. Length is treated as its own message (an empty password isn't
+ * missing "one of N character classes", it's just too short); the
+ * complexity rules are joined into a single sentence that names ONLY
+ * the rules that actually failed, in priority order. Closes issue #458.
+ */
+export function describePasswordValidationError(password: string): string {
+  if (password.length < 12) {
+    return 'Password must be at least 12 characters long';
+  }
+  const missing: string[] = [];
+  if (!/[A-Z]/.test(password)) missing.push('one uppercase letter');
+  if (!/[a-z]/.test(password)) missing.push('one lowercase letter');
+  if (!/[0-9]/.test(password)) missing.push('one number');
+  if (!SPECIAL_CHAR_RE.test(password)) missing.push('one special character');
+  if (missing.length === 0) return '';
+  if (missing.length === 1) return `Password must contain ${missing[0]}`;
+  const last = missing.pop()!;
+  return `Password must contain ${missing.join(', ')} and ${last}`;
 }
 
 function updateRequirement(id: string, isMet: boolean): void {
@@ -196,23 +225,10 @@ async function handleResetPasswordSubmit(e: Event, token: string): Promise<void>
   const newPassword = newPasswordInput?.value || '';
   const confirmPassword = confirmPasswordInput?.value || '';
 
-  if (newPassword.length < 12) {
+  const requirementError = describePasswordValidationError(newPassword);
+  if (requirementError) {
     if (errorDiv) {
-      errorDiv.textContent = 'Password must be at least 12 characters long';
-      errorDiv.classList.remove('hidden');
-    }
-    return;
-  }
-
-  // Validate password complexity
-  const hasUppercase = /[A-Z]/.test(newPassword);
-  const hasLowercase = /[a-z]/.test(newPassword);
-  const hasNumber = /[0-9]/.test(newPassword);
-  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPassword);
-
-  if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-    if (errorDiv) {
-      errorDiv.textContent = 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character';
+      errorDiv.textContent = requirementError;
       errorDiv.classList.remove('hidden');
     }
     return;
@@ -365,22 +381,10 @@ async function handleAdminSetupSubmit(e: Event): Promise<void> {
   const password = (document.getElementById('setup-password') as HTMLInputElement)?.value || '';
   const confirmPassword = (document.getElementById('setup-confirm-password') as HTMLInputElement)?.value || '';
 
-  if (password.length < 12) {
+  const requirementError = describePasswordValidationError(password);
+  if (requirementError) {
     if (errorDiv) {
-      errorDiv.textContent = 'Password must be at least 12 characters long';
-      errorDiv.classList.remove('hidden');
-    }
-    return;
-  }
-
-  const hasUppercase = /[A-Z]/.test(password);
-  const hasLowercase = /[a-z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
-
-  if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-    if (errorDiv) {
-      errorDiv.textContent = 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character';
+      errorDiv.textContent = requirementError;
       errorDiv.classList.remove('hidden');
     }
     return;
@@ -717,7 +721,7 @@ async function openProfileModal(): Promise<void> {
           <label>
             New Password (leave blank to keep current)
             <div class="password-input-wrapper">
-              <input type="password" id="profile-new-password" placeholder="Enter new password">
+              <input type="password" id="profile-new-password" placeholder="Enter new password" autocomplete="new-password">
               <button type="button" class="toggle-password" data-target="profile-new-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -726,10 +730,34 @@ async function openProfileModal(): Promise<void> {
               </button>
             </div>
           </label>
+
+          <div id="profile-password-requirements" class="password-requirements">
+            <div class="requirement" id="profile-req-length">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">At least 12 characters</span>
+            </div>
+            <div class="requirement" id="profile-req-uppercase">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One uppercase letter (A-Z)</span>
+            </div>
+            <div class="requirement" id="profile-req-lowercase">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One lowercase letter (a-z)</span>
+            </div>
+            <div class="requirement" id="profile-req-number">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One number (0-9)</span>
+            </div>
+            <div class="requirement" id="profile-req-special">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One special character (!@#$%^&*)</span>
+            </div>
+          </div>
+
           <label>
             Confirm New Password
             <div class="password-input-wrapper">
-              <input type="password" id="profile-confirm-password" placeholder="Confirm new password">
+              <input type="password" id="profile-confirm-password" placeholder="Confirm new password" autocomplete="new-password">
               <button type="button" class="toggle-password" data-target="profile-confirm-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -738,6 +766,7 @@ async function openProfileModal(): Promise<void> {
               </button>
             </div>
           </label>
+          <div id="profile-password-error" class="error-message hidden"></div>
           <div class="modal-buttons">
             <button type="button" id="profile-cancel">Cancel</button>
             <button type="submit" class="primary">Save Changes</button>
@@ -751,6 +780,17 @@ async function openProfileModal(): Promise<void> {
     document.getElementById('profile-cancel')?.addEventListener('click', closeProfileModal);
     document.getElementById('profile-form')?.addEventListener('submit', (e) => void saveProfile(e));
 
+    // Live password-strength indicator. Mirrors the reset / admin-setup
+    // flows so the user sees criterion check-marks as they type instead
+    // of only on submit. Uses a flow-specific prefix so the IDs never
+    // collide with other modals that might be mounted on the same page.
+    const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement | null;
+    if (newPasswordInput) {
+      newPasswordInput.addEventListener('input', () => {
+        updatePasswordRequirements(newPasswordInput.value, 'profile-req-');
+      });
+    }
+
     // Setup password toggle
     setupPasswordToggle(modal);
   }
@@ -760,6 +800,15 @@ async function openProfileModal(): Promise<void> {
   (document.getElementById('profile-current-password') as HTMLInputElement).value = '';
   (document.getElementById('profile-new-password') as HTMLInputElement).value = '';
   (document.getElementById('profile-confirm-password') as HTMLInputElement).value = '';
+
+  // Reset live indicators and any stale error so the previous open
+  // doesn't bleed into this one (modal is created once and reused).
+  updatePasswordRequirements('', 'profile-req-');
+  const errorDiv = document.getElementById('profile-password-error');
+  if (errorDiv) {
+    errorDiv.textContent = '';
+    errorDiv.classList.add('hidden');
+  }
 
   // Show modal
   openModal(modal);
@@ -784,26 +833,36 @@ async function saveProfile(e: Event): Promise<void> {
   const newPassword = (document.getElementById('profile-new-password') as HTMLInputElement).value;
   const confirmPassword = (document.getElementById('profile-confirm-password') as HTMLInputElement).value;
 
+  // Clear any stale password-validation error from a prior submit so we
+  // start with a clean slate on every attempt.
+  const passwordErrorDiv = document.getElementById('profile-password-error');
+  if (passwordErrorDiv) {
+    passwordErrorDiv.textContent = '';
+    passwordErrorDiv.classList.add('hidden');
+  }
+
   if (!currentPassword) {
     alert('Please enter your current password to save changes');
     return;
   }
 
   if (newPassword) {
-    if (newPassword.length < 12) {
-      alert('New password must be at least 12 characters long');
-      return;
-    }
-    const hasUppercase = /[A-Z]/.test(newPassword);
-    const hasLowercase = /[a-z]/.test(newPassword);
-    const hasNumber = /[0-9]/.test(newPassword);
-    const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPassword);
-    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
-      alert('Password must contain uppercase, lowercase, number, and special character');
+    // Password-validation failures render inline (matches reset and
+    // admin-setup flows) so the criterion text appears next to the
+    // requirements indicator the user is already looking at.
+    const requirementError = describePasswordValidationError(newPassword);
+    if (requirementError) {
+      if (passwordErrorDiv) {
+        passwordErrorDiv.textContent = requirementError;
+        passwordErrorDiv.classList.remove('hidden');
+      }
       return;
     }
     if (newPassword !== confirmPassword) {
-      alert('New passwords do not match');
+      if (passwordErrorDiv) {
+        passwordErrorDiv.textContent = 'New passwords do not match';
+        passwordErrorDiv.classList.remove('hidden');
+      }
       return;
     }
   }
