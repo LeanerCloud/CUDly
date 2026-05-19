@@ -105,7 +105,7 @@ go install github.com/LeanerCloud/CUDly/cmd@latest
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-s, --services` | Comma-separated service list. Per-RI services: `rds`, `elasticache`, `ec2`, `opensearch`, `redshift`, `memorydb`. Per-plan-type Savings Plans: `savings-plans-compute`, `savings-plans-ec2instance`, `savings-plans-sagemaker`, `savings-plans-database`. Fan-out aliases: `savingsplans` and `sp` expand to all four SP plan types. | rds |
+| `-s, --services` | Comma-separated service list. Per-RI services: `rds`, `elasticache`, `ec2`, `opensearch`, `redshift`, `memorydb`. Per-plan-type Savings Plans: `savings-plans-compute`, `savings-plans-ec2instance`, `savings-plans-sagemaker`, `savings-plans-database`. Fan-out aliases: `savingsplans`, `savings-plans`, and `sp` expand to all four SP plan types. | rds |
 | `--all-services` | Process all supported services | false |
 
 ### Purchase Configuration
@@ -260,7 +260,7 @@ Only process specific regions with instance limits:
 ### Example 8: All Savings Plans via Fan-out Alias
 
 ```bash
-# `savingsplans` (and `sp`) is shorthand that fans out to every SP
+# `savingsplans` (and `savings-plans`, `sp`) is shorthand that fans out to every SP
 # plan type — equivalent to listing all four per-plan-type slugs.
 ./cudly --services savingsplans \
   --term 3 \
@@ -270,7 +270,7 @@ Only process specific regions with instance limits:
 > **Per-plan-type vs alias**: prefer the explicit per-plan-type slugs
 > (`savings-plans-compute`, `savings-plans-ec2instance`,
 > `savings-plans-sagemaker`, `savings-plans-database`) when you want
-> precise scope. Use the `savingsplans` / `sp` alias only when you
+> precise scope. Use the `savingsplans` / `savings-plans` / `sp` alias only when you
 > intentionally want all four SP plan types together.
 
 ## Coverage Percentage
