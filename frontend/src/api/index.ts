@@ -80,7 +80,13 @@ export {
   checkAdminExists,
   setupAdmin,
   changePassword,
-  getPublicInfo
+  getPublicInfo,
+  // MFA lifecycle (issue #497)
+  MFALoginError,
+  setupMFA,
+  enableMFA,
+  disableMFA,
+  regenerateMFARecoveryCodes,
 } from './auth';
 
 // Re-export dashboard functions

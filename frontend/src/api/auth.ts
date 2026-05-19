@@ -3,15 +3,57 @@
  */
 
 import { apiRequest, getAuthHeaders, setAuthToken, setCsrfToken, clearAuth, addContentHashHeader, base64Encode, getApiBase } from './client';
-import type { LoginResponse, User, PublicInfo } from './types';
+import type {
+  LoginResponse,
+  User,
+  PublicInfo,
+  MFASetupResponse,
+  MFARecoveryCodesResponse,
+  MFALoginErrorCode,
+} from './types';
 
 /**
- * Login with email and password
+ * Login error raised when the server returns one of the MFA-related
+ * machine codes (`mfa_required` / `invalid_mfa_code`). Carrying the
+ * code as a typed property lets the caller branch without
+ * substring-matching the human message. See issue #497.
  */
-export async function login(email: string, password: string): Promise<LoginResponse> {
+export class MFALoginError extends Error {
+  readonly code: MFALoginErrorCode;
+  constructor(code: MFALoginErrorCode) {
+    super(code);
+    this.name = 'MFALoginError';
+    this.code = code;
+    // Restore prototype chain for instanceof checks across the
+    // ts-jest compile boundary (Error subclasses lose this without
+    // an explicit setPrototypeOf).
+    Object.setPrototypeOf(this, MFALoginError.prototype);
+  }
+}
+
+function isMFALoginErrorCode(s: unknown): s is MFALoginErrorCode {
+  return s === 'mfa_required' || s === 'invalid_mfa_code';
+}
+
+/**
+ * Login with email and password, optionally including a 6-digit TOTP
+ * code or recovery code when the server is requiring MFA. The caller
+ * is expected to detect `MFALoginError` and re-submit with `mfaCode`
+ * set rather than treating MFA as a hard failure (issue #497).
+ *
+ * On success: stores the session token + CSRF token via the client
+ * module's setAuthToken / setCsrfToken side-effects. On failure:
+ * throws `MFALoginError` for the two MFA sentinels, plain `Error`
+ * for everything else.
+ */
+export async function login(email: string, password: string, mfaCode?: string): Promise<LoginResponse> {
   const API_BASE = getApiBase();
   // Base64 encode password to match backend expectation
-  const body = JSON.stringify({ email, password: base64Encode(password) });
+  const payload: Record<string, string> = { email, password: base64Encode(password) };
+  if (mfaCode) {
+    payload.mfa_code = mfaCode;
+  }
+  const body = JSON.stringify(payload);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
   // Add content hash for CloudFront OAC
@@ -24,7 +66,10 @@ export async function login(email: string, password: string): Promise<LoginRespo
   });
 
   if (!response.ok) {
-    const data = await response.json() as { error?: string };
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    if (isMFALoginErrorCode(data.error)) {
+      throw new MFALoginError(data.error);
+    }
     throw new Error(data.error || 'Login failed');
   }
 
@@ -226,6 +271,92 @@ export async function changePassword(currentPassword: string, newPassword: strin
       new_password: base64Encode(newPassword)
     })
   });
+}
+
+// ----------------------------------------------------------------
+// MFA enrollment / lifecycle helpers (issue #497).
+//
+// Runtime-validates each response so a malicious or misconfigured
+// server can't inject unexpected shapes that the UI is not prepared
+// to handle (same pattern as getResetTokenStatus above).
+// ----------------------------------------------------------------
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string');
+}
+
+/**
+ * Begin an MFA enrollment. Requires the user's current password as
+ * defence-in-depth. Returns the freshly-generated secret + the
+ * otpauth:// provisioning URI the UI renders as a QR code.
+ */
+export async function setupMFA(password: string): Promise<MFASetupResponse> {
+  const data = await apiRequest<unknown>('/auth/mfa/setup', {
+    method: 'POST',
+    body: JSON.stringify({ password: base64Encode(password) }),
+  });
+  if (data === null || typeof data !== 'object') {
+    throw new Error('setupMFA response was not an object');
+  }
+  const { secret, provisioning_uri } = data as { secret?: unknown; provisioning_uri?: unknown };
+  if (typeof secret !== 'string' || secret === '') {
+    throw new Error('setupMFA response missing secret');
+  }
+  if (typeof provisioning_uri !== 'string' || !provisioning_uri.startsWith('otpauth://')) {
+    throw new Error('setupMFA response missing valid provisioning_uri');
+  }
+  return { secret, provisioning_uri };
+}
+
+/**
+ * Finalize an MFA enrollment by proving the user has the secret
+ * loaded in their authenticator. Returns the plaintext recovery
+ * codes — the UI must surface them once and not store them.
+ */
+export async function enableMFA(code: string): Promise<MFARecoveryCodesResponse> {
+  const data = await apiRequest<unknown>('/auth/mfa/enable', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+  if (data === null || typeof data !== 'object') {
+    throw new Error('enableMFA response was not an object');
+  }
+  const { recovery_codes } = data as { recovery_codes?: unknown };
+  if (!isStringArray(recovery_codes)) {
+    throw new Error('enableMFA response missing recovery_codes');
+  }
+  return { recovery_codes };
+}
+
+/**
+ * Turn off MFA. Requires both the current password AND a fresh
+ * proof-of-possession (TOTP code or an unused recovery code).
+ */
+export async function disableMFA(password: string, code: string): Promise<void> {
+  await apiRequest<void>('/auth/mfa/disable', {
+    method: 'POST',
+    body: JSON.stringify({ password: base64Encode(password), code }),
+  });
+}
+
+/**
+ * Replace all stored recovery codes with a fresh batch. Requires a
+ * current TOTP code (NOT a recovery code — the backend rejects the
+ * recovery-code path here on purpose; see service_mfa.go).
+ */
+export async function regenerateMFARecoveryCodes(code: string): Promise<MFARecoveryCodesResponse> {
+  const data = await apiRequest<unknown>('/auth/mfa/regenerate-recovery-codes', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+  if (data === null || typeof data !== 'object') {
+    throw new Error('regenerateMFARecoveryCodes response was not an object');
+  }
+  const { recovery_codes } = data as { recovery_codes?: unknown };
+  if (!isStringArray(recovery_codes)) {
+    throw new Error('regenerateMFARecoveryCodes response missing recovery_codes');
+  }
+  return { recovery_codes };
 }
 
 /**
