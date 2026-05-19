@@ -283,10 +283,72 @@ export async function triggerAutoRefreshIfStale(
     });
 }
 
+// Issue #481: URL <-> sort-state sync. State stays the source of truth;
+// the URL is a serialised reflection so refresh / bookmark / share keep
+// the user's chosen column + direction.
+//
+// VALID_SORT_COLUMNS gates URL params against the closed enumeration of
+// column ids; invalid params are silently ignored (no toast, no crash).
+const VALID_SORT_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set([
+  'provider', 'account', 'service', 'resource_type', 'region',
+  'count', 'term', 'payment', 'savings', 'upfront_cost',
+  'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
+]);
+
+/**
+ * If the URL carries `?sort=<col>&dir=<asc|desc>` with valid values, seed
+ * state.setRecommendationsSort with the parsed pair. Idempotent: safe to
+ * call on every loadRecommendations entry. Silently ignores anything
+ * malformed so a stale bookmark with an old column name doesn't crash the
+ * page or look broken.
+ */
+function readSortFromUrl(): void {
+  if (typeof window === 'undefined' || !window.location) return;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const col = params.get('sort');
+    const dir = params.get('dir');
+    if (!col || !dir) return;
+    if (!VALID_SORT_COLUMNS.has(col as state.RecommendationsColumnId)) return;
+    if (dir !== 'asc' && dir !== 'desc') return;
+    state.setRecommendationsSort({
+      column: col as state.RecommendationsSortColumn,
+      direction: dir,
+    });
+  } catch {
+    // URLSearchParams parsing should never throw on well-formed input, but
+    // be defensive: a malformed location.search shouldn't break the page.
+  }
+}
+
+/**
+ * Mirror the active sort to the URL via history.replaceState so the user
+ * can refresh / bookmark / share without losing it. Uses replaceState (not
+ * pushState) so the back button isn't polluted by every header click.
+ */
+function writeSortToUrl(sort: state.RecommendationsSort): void {
+  if (typeof window === 'undefined' || !window.location || !window.history) return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('sort', sort.column);
+    url.searchParams.set('dir', sort.direction);
+    window.history.replaceState(window.history.state, '', url.toString());
+  } catch {
+    // history.replaceState can throw on file:// URLs / iframes with a
+    // different origin; failing silently is the right call (sort still
+    // applies in-memory, just not persisted across this refresh).
+  }
+}
+
 /**
  * Load recommendations
  */
 export async function loadRecommendations(): Promise<void> {
+  // Issue #481: seed sort state from the URL before the first render so a
+  // refreshed / bookmarked page renders with the user's chosen sort, not
+  // the module default ("savings desc"). Idempotent on subsequent reloads.
+  readSortFromUrl();
+
   // Issue #344 T3: skeleton rows for the recommendations table so the
   // panel reads as "loading" instead of staying blank while the
   // (potentially multi-second) Promise.all resolves. 5 rows ≈ above-
@@ -1144,6 +1206,14 @@ export interface ColumnDef {
   key: state.RecommendationsColumnId;
   label: string;
   kind: 'numeric' | 'categorical';
+  // Issue #480: direction applied on the first click of a previously-
+  // unsorted column. Text columns and most numerics get 'asc' (A→Z, low →
+  // high) per platform convention. Two exceptions stay 'desc': `savings`
+  // (savings tables open "biggest wins first") and `on_demand_monthly`
+  // (per QA, current behaviour reads correctly there). Subsequent
+  // clicks on the active column still toggle desc <-> asc regardless of
+  // this default.
+  defaultSortDirection?: 'asc' | 'desc';
 }
 
 export const COLUMN_DEFS: readonly ColumnDef[] = [
@@ -1155,12 +1225,20 @@ export const COLUMN_DEFS: readonly ColumnDef[] = [
   { key: 'count',                 label: 'Count',             kind: 'numeric'     },
   { key: 'term',                  label: 'Term',              kind: 'categorical' },
   { key: 'payment',               label: 'Payment',           kind: 'categorical' },
-  { key: 'savings',               label: 'Monthly Savings',   kind: 'numeric'     },
+  { key: 'savings',               label: 'Monthly Savings',   kind: 'numeric',     defaultSortDirection: 'desc' },
   { key: 'upfront_cost',          label: 'Upfront Cost',      kind: 'numeric'     },
   { key: 'monthly_cost',          label: 'Monthly Cost',      kind: 'numeric'     },
-  { key: 'on_demand_monthly',     label: 'On-Demand Monthly', kind: 'numeric'     },
+  { key: 'on_demand_monthly',     label: 'On-Demand Monthly', kind: 'numeric',     defaultSortDirection: 'desc' },
   { key: 'effective_savings_pct', label: 'Effective %',       kind: 'numeric'     },
 ];
+
+// Issue #480: per-column default sort direction. Defaults to 'asc' unless
+// the COLUMN_DEFS entry overrides it. Looked up by sort-header onActivate
+// when transitioning from a different sort column.
+function defaultSortDirectionFor(col: state.RecommendationsColumnId): 'asc' | 'desc' {
+  const def = COLUMN_DEFS.find((c) => c.key === col);
+  return def?.defaultSortDirection ?? 'asc';
+}
 
 // Static labels for columns whose header is period-invariant. Derived from
 // COLUMN_DEFS so the source-of-truth still drives what's displayed; the
@@ -1308,7 +1386,12 @@ export function applyColumnFilters(
       } else {
         const parsed = parseNumericFilter(f.expr);
         if (!parsed.ok) continue; // ignore broken expressions; UI shows the error
-        const cellNum = numericCellValue(r, col);
+        // Issue #484: compare against the rounded display value so exact-match
+        // ("123.45") works for rows whose raw value rounds to the typed value,
+        // and ">N" / "<N" / "N..M" all behave consistently with what the user
+        // sees in the cell. NaN passes through roundForDisplay unchanged.
+        const period = state.getCostPeriod();
+        const cellNum = roundForDisplay(numericCellValue(r, col), displayPrecision(col, period));
         if (!parsed.predicate(cellNum)) return false;
       }
     }
@@ -1366,6 +1449,51 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
   }
 }
 
+// Issue #484: number of decimal places the cell renders with for the active
+// period. Filter predicates compare against this rounded value so a user
+// typing the value they see (e.g. "123.45") matches the row that visibly
+// shows that value, regardless of how many decimals the raw backend value
+// has. Mirrors the precision used by formatCostForPeriod / formatCurrency /
+// pctText so display and filter logic stay in sync.
+function displayPrecision(col: state.RecommendationsColumnId, period: CostPeriod): number {
+  switch (col) {
+    case 'count':
+      return 0;
+    case 'effective_savings_pct':
+      // Header shows pct.toFixed(1): 1 decimal place.
+      return 1;
+    case 'savings':
+    case 'monthly_cost':
+    case 'on_demand_monthly':
+      // formatCostForPeriod uses formatCurrency (default 0 fraction digits)
+      // for monthly and toFixed(PERIOD_DECIMALS[period]) otherwise.
+      return period === 'monthly' ? 0 : PERIOD_DECIMALS[period];
+    case 'upfront_cost':
+      // formatCurrency default: 0 fraction digits.
+      return 0;
+    // Categorical columns never reach the numeric filter path; default
+    // is irrelevant but match formatCurrency's 0-decimal default for safety.
+    case 'provider':
+    case 'account':
+    case 'service':
+    case 'resource_type':
+    case 'region':
+    case 'term':
+    case 'payment':
+      return 0;
+  }
+}
+
+// Issue #484: round `n` to `precision` decimals using the same half-up
+// behaviour as Number.prototype.toFixed (the rendering path used by
+// formatCurrency / formatCostForPeriod / toFixed in pctText). Returns NaN
+// unchanged so missing data still fails every predicate (preserves the
+// "NaN-as-missing" contract from numericCellValue).
+function roundForDisplay(n: number, precision: number): number {
+  if (!Number.isFinite(n)) return n;
+  return Number(n.toFixed(precision));
+}
+
 // ---------------------------------------------------------------------------
 // Column-filter popover (portal pattern)
 //
@@ -1406,7 +1534,7 @@ let openPopover: PopoverState | null = null;
 // torn down on close.
 let outsideClickHandler: ((e: MouseEvent) => void) | null = null;
 let escKeyHandler: ((e: KeyboardEvent) => void) | null = null;
-let scrollCloseHandler: (() => void) | null = null;
+let scrollCloseHandler: ((e: Event) => void) | null = null;
 let resizeHandler: (() => void) | null = null;
 
 function getColumnTriggerButton(column: state.RecommendationsColumnId): HTMLButtonElement | null {
@@ -1620,10 +1748,18 @@ function buildPopoverContent(
       spBox.checked = checked === spSlugs.length && spSlugs.length > 0;
     };
 
+    // Individual-checkbox commit (issue #482; preserves existing collapse
+    // semantics for the SP-group toggle, where "uncheck every value"
+    // should fall back to "no narrowing" rather than to an empty allow-
+    // list. See commitAll / Clear below for the explicit empty-set path
+    // used by the (All) box and the Clear button.):
+    //   - N=size selected → null (no narrowing applied)
+    //   - N=0 selected → null (also no narrowing; the individual flow
+    //     never produces the "show zero rows" state by itself)
+    //   - 0<N<size → {set, selected}
     const commit = (): void => {
       const selected: string[] = [];
       checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
-      // No selections OR all selections == "no narrowing", clear the filter.
       if (selected.length === 0 || selected.length === checkboxes.size) {
         state.setRecommendationsColumnFilter(column, null);
       } else {
@@ -1634,14 +1770,31 @@ function buildPopoverContent(
       rerenderRecommendations();
     };
 
+    // (All) and Clear use commitAll(target) directly:
+    //   - target=true → no narrowing (null); resync renders all individual
+    //     boxes checked. Matches issue #482's "All selects every value".
+    //   - target=false → explicit empty allow-list ({set, []}), table shows
+    //     0 rows. Matches issue #482's requirement that Clear/uncheck-All is
+    //     distinct from no-filter.
+    const commitAll = (target: boolean): void => {
+      checkboxes.forEach((cb) => { cb.checked = target; });
+      if (target) {
+        state.setRecommendationsColumnFilter(column, null);
+      } else {
+        state.setRecommendationsColumnFilter(column, { kind: 'set', values: [] });
+      }
+      updateAllTriState();
+      updateSPTriState();
+      rerenderRecommendations();
+    };
+
     checkboxes.forEach((cb) => {
       cb.addEventListener('change', commit);
     });
     allBox.addEventListener('change', () => {
-      const target = allBox.checked;
-      checkboxes.forEach((cb) => { cb.checked = target; });
-      // After (All) flips, update underlying filter once.
-      commit();
+      // Browser resolves indeterminate to checked on click, so allBox.checked
+      // after the click is the desired target.
+      commitAll(allBox.checked);
     });
     if (spBox) {
       spBox.addEventListener('change', () => {
@@ -1668,12 +1821,18 @@ function buildPopoverContent(
   clearBtn.className = 'column-filter-clear';
   clearBtn.textContent = 'Clear';
   clearBtn.addEventListener('click', () => {
-    state.setRecommendationsColumnFilter(column, null);
     if (input) {
+      // Numeric column: Clear drops the expression entirely (no filter).
+      state.setRecommendationsColumnFilter(column, null);
       input.value = '';
       if (errorEl) errorEl.textContent = '';
     } else {
+      // Issue #482: Clear on a categorical filter sets an explicit empty
+      // allow-list rather than null, so it's distinguishable from "no
+      // filter applied" (which renders as all-checked). The popover's
+      // checkboxes flip unchecked; the table renders 0 rows.
       checkboxes.forEach((cb) => { cb.checked = false; });
+      state.setRecommendationsColumnFilter(column, { kind: 'set', values: [] });
     }
     rerenderRecommendations();
   });
@@ -1697,12 +1856,19 @@ function resyncOpenPopover(): void {
     return;
   }
   // Categorical: tick checkboxes whose value is in the active filter.
-  const values: ReadonlySet<string> = f && f.kind === 'set' ? new Set(f.values) : new Set();
-  // Special case: if no filter is set, every checkbox should be unchecked
-  // (the (All) tri-state checkbox follows from this).
-  openPopover.checkboxes.forEach((cb, value) => {
-    cb.checked = f != null && values.has(value);
-  });
+  // Issue #482: when no filter is set (f == null), render every checkbox
+  // as checked and the (All) box as checked. This reflects the user
+  // mental model that "no narrowing applied" means "every value is
+  // included", distinct from an explicit empty allow-list ({set, []})
+  // which renders every box as unchecked.
+  if (f == null) {
+    openPopover.checkboxes.forEach((cb) => { cb.checked = true; });
+  } else {
+    const values: ReadonlySet<string> = f.kind === 'set' ? new Set(f.values) : new Set();
+    openPopover.checkboxes.forEach((cb, value) => {
+      cb.checked = values.has(value);
+    });
+  }
   // Update (All) tri-state.
   const allBox = openPopover.el.querySelector<HTMLInputElement>('input[data-role="all"]');
   if (allBox) {
@@ -1748,8 +1914,16 @@ function attachPopoverGlobalListeners(): void {
       closePopover(true);
     }
   };
-  scrollCloseHandler = (): void => {
-    if (openPopover) closePopover();
+  scrollCloseHandler = (e: Event): void => {
+    if (!openPopover) return;
+    // Issue #483: ignore scrolls that originate inside the popover itself
+    // (the outer popover scroll container or the inner column-filter-list).
+    // Capture-phase scroll events from inner scrollables bubble up to the
+    // window listener; without this guard, scrolling the popover's own
+    // contents dismisses it before the user can reach values below the fold.
+    const target = e.target as Node | null;
+    if (target && openPopover.el.contains(target)) return;
+    closePopover();
   };
   resizeHandler = (): void => {
     if (!openPopover) return;
@@ -2453,12 +2627,29 @@ function buildListMarkup(
     }
   }
 
+  // Issue #479: select-all header checkbox renders as a proper tri-state
+  // reflecting current selection vs. the set of best-variant-per-cell
+  // recommendations (the set that selectAll's onChange actually populates,
+  // see openColumnPopover wiring + #224). Indeterminate is set via JS in
+  // renderRecommendationsList's post-render hook because HTML attributes
+  // can't express the indeterminate state.
+  const bestVariants = pickBestVariantPerCell(recommendations);
+  const bestVariantIds = new Set(bestVariants.map((r) => r.id));
+  let selectedBestCount = 0;
+  selectedRecs.forEach((id) => { if (bestVariantIds.has(id)) selectedBestCount++; });
+  const allSelected = bestVariants.length > 0 && selectedBestCount === bestVariants.length;
+  const selectAllCheckedAttr = allSelected ? ' checked' : '';
+  // Threaded to the renderer via a data attribute so the post-render hook
+  // can flip the .indeterminate property without re-deriving the counts.
+  const selectAllIndeterminate = selectedBestCount > 0 && selectedBestCount < bestVariants.length;
+  const selectAllDataIndeterminate = ` data-indeterminate="${selectAllIndeterminate ? 'true' : 'false'}"`;
+
   return `
     <table>
       <thead>
         <tr>
           <th class="checkbox-col">
-            <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations">
+            <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations"${selectAllCheckedAttr}${selectAllDataIndeterminate}>
           </th>
           ${visibleCols.map((c) => sortHeader(c.key)).join('')}
         </tr>
@@ -3406,11 +3597,20 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       const col = th.dataset['sort'];
       if (!col) return;
       const prev = state.getRecommendationsSort();
+      // Issue #480: first click on a different column uses that column's
+      // per-config default direction (asc for text/most numerics; desc for
+      // `savings` and `on_demand_monthly`). Subsequent clicks on the active
+      // column toggle desc <-> asc.
       const direction: 'asc' | 'desc' =
         prev.column === col && prev.direction === 'desc' ? 'asc'
           : prev.column === col && prev.direction === 'asc' ? 'desc'
-          : 'desc';
+          : defaultSortDirectionFor(col as state.RecommendationsColumnId);
       state.setRecommendationsSort({ column: col as state.RecommendationsSortColumn, direction });
+      // Issue #481: persist sort to the URL so refreshes / bookmarks /
+      // shareable links restore the user's column + direction. Catches the
+      // common UX surprise of "I sorted by Account, refreshed, now I'm back
+      // at Savings desc".
+      writeSortToUrl({ column: col as state.RecommendationsSortColumn, direction });
       renderRecommendationsList(recommendations);
     };
     th.addEventListener('click', onActivate);
@@ -3425,6 +3625,12 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // Add event listeners
   const selectAllCheckbox = document.getElementById('select-all-recs') as HTMLInputElement | null;
   if (selectAllCheckbox) {
+    // Issue #479: indeterminate is a DOM property only, so apply it from
+    // the data attribute the renderer threaded through. Without this, a
+    // partial selection shows no visual cue and clicking the header
+    // repeatedly becomes a no-op because the checkbox's .checked never
+    // flips.
+    selectAllCheckbox.indeterminate = selectAllCheckbox.dataset['indeterminate'] === 'true';
     selectAllCheckbox.addEventListener('change', () => {
       if (selectAllCheckbox.checked) {
         // Issue #224: select-all picks ONE variant per cell (highest-effective-
