@@ -5,6 +5,11 @@
  * SECURITY mitigation noted in client.ts goes silently false.
  */
 
+const originalLocation = window.location;
+afterEach(() => {
+  Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+});
+
 function loadAuth(): { api: typeof import('../api'); handler: (e: StorageEvent) => void; reload: jest.Mock; addSpy: jest.SpyInstance } {
   let out: ReturnType<typeof loadAuth> | undefined;
   jest.isolateModules(() => {
