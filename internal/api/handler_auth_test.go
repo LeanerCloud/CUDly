@@ -594,6 +594,32 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid or expired token")
 }
+
+// Issue #459: ConfirmPasswordReset errors must surface as a 4xx client
+// error with the original message preserved, so the frontend renders a
+// specific reason rather than the opaque "Failed to reset password" that
+// a generic 500 produces. Without the NewClientError wrap in the handler,
+// the error escaped as a plain error and got mapped to 500 / "Internal
+// server error" by the response writer.
+func TestHandler_resetPassword_ErrorIsClientError(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
+		Return(errors.New("this is your current password, choose a different one"))
+
+	handler := &Handler{auth: mockAuth}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte("ReUsedPassW0rd!"))
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "valid-token", "new_password": "` + encoded + `"}`}
+	_, err := handler.resetPassword(ctx, req)
+	require.Error(t, err)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ConfirmPasswordReset failures to be wrapped in a clientError")
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "current password")
+}
 func TestHandler_updateProfile_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

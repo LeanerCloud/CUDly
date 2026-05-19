@@ -540,19 +540,60 @@ function showForgotPasswordForm(modal: HTMLElement): void {
 
 async function handlePasswordReset(): Promise<void> {
   const emailInput = document.getElementById('reset-email') as HTMLInputElement | null;
+  const errorDiv = document.getElementById('login-error');
   const email = emailInput?.value.trim() || '';
+
+  // Reset any previous error before validating.
+  errorDiv?.classList.add('hidden');
+
   if (!email) {
-    alert('Please enter your email address');
+    if (errorDiv) {
+      errorDiv.textContent = 'Please enter your email address';
+      errorDiv.classList.remove('hidden');
+    }
     return;
   }
 
   try {
     await api.requestPasswordReset(email);
-    alert('If an account exists with that email, you will receive a password reset link.');
+    // Issue #457: previously this surfaced as an alert() that, when
+    // closed, left the underlying modal open with nothing for the user
+    // to do. Swap the modal body in place with a confirmation panel +
+    // single Close button so the user has one explicit exit that
+    // returns them to login (option 2 from the issue, agreed cleaner).
+    showResetEmailConfirmation();
   } catch (error) {
     console.error('Password reset error:', error);
-    alert('Failed to send reset email. Please try again.');
+    if (errorDiv) {
+      errorDiv.textContent = 'Failed to send reset email. Please try again.';
+      errorDiv.classList.remove('hidden');
+    }
   }
+}
+
+// showResetEmailConfirmation swaps the inner #login-form body with a
+// confirmation panel after a successful forgot-password submission.
+// The wrapping #login-modal stays in the DOM so the user has a single
+// explicit Close action; fixes issue #457 (lingering modal after the
+// confirmation pop-up closed).
+function showResetEmailConfirmation(): void {
+  const form = document.querySelector('#login-modal #login-form');
+  if (!form) return;
+
+  // Static template, no user-controlled interpolation; same pattern
+  // the surrounding modal code uses for every panel.
+  form.innerHTML = `
+    <h3>Check your email</h3>
+    <p>If an account exists with that email, you will receive a password reset link shortly.</p>
+    <p class="help-text">The link is valid for one hour. If you don't see it, check your spam folder.</p>
+    <button type="button" id="reset-confirmation-close" class="primary">Close</button>
+  `;
+
+  document.getElementById('reset-confirmation-close')?.addEventListener('click', () => {
+    // Reloading returns the user to the login modal in a clean state
+    // (same exit-path as the existing back-to-login-link).
+    location.reload();
+  });
 }
 
 /**

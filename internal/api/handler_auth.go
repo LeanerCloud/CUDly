@@ -186,7 +186,13 @@ func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionU
 	pwdResetReq.NewPassword = decoded
 
 	if err := h.auth.ConfirmPasswordReset(ctx, pwdResetReq); err != nil {
-		return nil, err
+		// Surface the specific reason as a 4xx so the frontend can show
+		// it verbatim ("this is your current password, choose a different
+		// one", "password has been used recently", "invalid or expired
+		// reset token", etc.). Without this wrap, validation/history
+		// errors map to a generic 500 / opaque "Failed to reset
+		// password" toast on the client. See issue #459.
+		return nil, NewClientError(400, err.Error())
 	}
 
 	return map[string]string{"status": "password reset successful"}, nil

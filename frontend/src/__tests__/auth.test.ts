@@ -161,7 +161,7 @@ describe('Auth Module', () => {
       expect(sendBtn).toBeTruthy();
     });
 
-    test('password reset sends request', async () => {
+    test('password reset swaps modal body to confirmation panel (issue #457)', async () => {
       (api.requestPasswordReset as jest.Mock).mockResolvedValue({});
       await showLoginModal();
 
@@ -179,10 +179,38 @@ describe('Auth Module', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(api.requestPasswordReset).toHaveBeenCalledWith('test@example.com');
-      expect(window.alert).toHaveBeenCalledWith('If an account exists with that email, you will receive a password reset link.');
+      // No alert(): the lingering-modal bug came from stacking an
+      // alert on top of the modal; we now swap the modal body in place.
+      expect(window.alert).not.toHaveBeenCalled();
+      // Modal still in DOM with a confirmation panel, NOT the email form.
+      const modal = document.getElementById('login-modal');
+      expect(modal).toBeTruthy();
+      expect(document.getElementById('reset-email')).toBeNull();
+      expect(document.getElementById('send-reset-btn')).toBeNull();
+      const closeBtn = document.getElementById('reset-confirmation-close');
+      expect(closeBtn).toBeTruthy();
+      expect(modal?.textContent).toContain('Check your email');
     });
 
-    test('password reset handles empty email', async () => {
+    test('confirmation Close button reloads to return to login (issue #457)', async () => {
+      (api.requestPasswordReset as jest.Mock).mockResolvedValue({});
+      await showLoginModal();
+
+      const forgotLink = document.getElementById('forgot-password-link');
+      forgotLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const resetEmail = document.getElementById('reset-email') as HTMLInputElement;
+      resetEmail.value = 'test@example.com';
+      document.getElementById('send-reset-btn')?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      document.getElementById('reset-confirmation-close')?.click();
+
+      expect(window.location.reload).toHaveBeenCalled();
+    });
+
+    test('password reset handles empty email inline (no alert)', async () => {
       await showLoginModal();
 
       const forgotLink = document.getElementById('forgot-password-link');
@@ -195,11 +223,15 @@ describe('Auth Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      expect(window.alert).toHaveBeenCalledWith('Please enter your email address');
+      // Issue #457: error is now inline in the modal, not via alert().
+      const errorDiv = document.getElementById('login-error');
+      expect(errorDiv?.textContent).toBe('Please enter your email address');
+      expect(errorDiv?.classList.contains('hidden')).toBe(false);
+      expect(window.alert).not.toHaveBeenCalled();
       expect(api.requestPasswordReset).not.toHaveBeenCalled();
     });
 
-    test('password reset handles API error', async () => {
+    test('password reset handles API error inline (no alert)', async () => {
       (api.requestPasswordReset as jest.Mock).mockRejectedValue(new Error('Network error'));
       console.error = jest.fn();
       await showLoginModal();
@@ -217,7 +249,10 @@ describe('Auth Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to send reset email. Please try again.');
+      const errorDiv = document.getElementById('login-error');
+      expect(errorDiv?.textContent).toBe('Failed to send reset email. Please try again.');
+      expect(errorDiv?.classList.contains('hidden')).toBe(false);
+      expect(window.alert).not.toHaveBeenCalled();
     });
 
     test('back to login link reloads page', async () => {
