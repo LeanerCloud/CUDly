@@ -110,6 +110,11 @@ describe('Sidebar nav - issue #462 anchor markup', () => {
 describe('Sidebar nav click handling - issue #462', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Explicitly reset the DOM so any leftover .tab-btn anchors from
+    // earlier tests do not accumulate click listeners across runs.
+    // setup.ts also clears innerHTML in afterEach; doing it here too
+    // makes the test self-contained.
+    document.body.innerHTML = '';
     const a = document.createElement('a');
     a.className = 'tab-btn';
     a.setAttribute('href', '/opportunities');
@@ -132,13 +137,29 @@ describe('Sidebar nav click handling - issue #462', () => {
     expect(switchTab).toHaveBeenCalledWith('opportunities');
   });
 
-  test('Ctrl/Cmd-click falls through to the browser (no preventDefault, no switchTab)', () => {
+  test('Ctrl-click falls through to the browser (no preventDefault, no switchTab)', () => {
     const link = document.querySelector('a.tab-btn') as HTMLAnchorElement;
     const evt = new MouseEvent('click', {
       bubbles: true,
       cancelable: true,
       button: 0,
       ctrlKey: true,
+    });
+    link.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(false);
+    expect(switchTab).not.toHaveBeenCalled();
+  });
+
+  test('Cmd-click (metaKey on macOS) falls through to the browser', () => {
+    // macOS uses metaKey (Cmd) instead of ctrlKey for the "open in new
+    // tab" affordance. Cover this branch independently of ctrlKey so a
+    // regression on either platform can't slip through.
+    const link = document.querySelector('a.tab-btn') as HTMLAnchorElement;
+    const evt = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      metaKey: true,
     });
     link.dispatchEvent(evt);
     expect(evt.defaultPrevented).toBe(false);

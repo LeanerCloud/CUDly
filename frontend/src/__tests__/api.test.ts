@@ -145,6 +145,7 @@ describe('Authentication', () => {
       // Also clears any legacy sessionStorage entries from older builds.
       expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('authToken');
       expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('apiKey');
+      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('csrfToken');
       expect(isAuthenticated()).toBe(false);
     });
   });
