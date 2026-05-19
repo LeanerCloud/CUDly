@@ -51,6 +51,109 @@ describe('Topbar filters', () => {
     expect(chips?.length).toBe(2);
   });
 
+  // Issue #477: URL hydration + writeback tests.
+  //
+  // jsdom honours history.replaceState() — setting it before initTopbarFilters
+  // simulates a hard refresh on a page that was previously filtered. We assert
+  // the chip-select's seed `value:` was hydrated from the URL by checking the
+  // post-init state via the state setters that the chip's onChange would fire.
+  describe('URL persistence', () => {
+    afterEach(() => {
+      // Reset URL so cross-test bleed doesn't pollute the next test.
+      window.history.replaceState({}, '', '/opportunities');
+    });
+
+    test('hydrates provider + account from URL query params before chips mount', () => {
+      window.history.replaceState({}, '', '/opportunities?provider=aws&account=acct-7');
+
+      initTopbarFilters();
+
+      expect(state.getCurrentProvider()).toBe('aws');
+      expect(state.getCurrentAccountIDs()).toEqual(['acct-7']);
+    });
+
+    test('ignores invalid provider values from URL (falls back to All)', () => {
+      window.history.replaceState({}, '', '/opportunities?provider=bogus&account=acct-1');
+
+      initTopbarFilters();
+
+      expect(state.getCurrentProvider()).toBe('');
+      // Account is opaque — passes through.
+      expect(state.getCurrentAccountIDs()).toEqual(['acct-1']);
+    });
+
+    test('account-chip change writes back to URL query params', async () => {
+      window.history.replaceState({}, '', '/opportunities');
+      (api.listAccounts as jest.Mock).mockResolvedValue([
+        { id: 'acct-99', name: 'prod', external_id: '999' },
+      ]);
+
+      initTopbarFilters();
+      // Drain the async populateAccountOptions so the account chip carries
+      // the real option list before we exercise its trigger.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Account chip is the second `.chip-select` trigger.
+      const triggers = document.querySelectorAll<HTMLButtonElement>('.chip-select');
+      const accountTrigger = triggers[1] as HTMLButtonElement;
+      accountTrigger.click();
+
+      const opt = Array.from(
+        document.querySelectorAll<HTMLLIElement>('.chip-select-option'),
+      ).find((el) => el.dataset['value'] === 'acct-99');
+      expect(opt).toBeDefined();
+      opt!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get('account')).toBe('acct-99');
+    });
+
+    test('selecting "All Accounts" removes the account query param', async () => {
+      // Start with an account already selected via URL.
+      window.history.replaceState({}, '', '/opportunities?account=acct-7');
+      (api.listAccounts as jest.Mock).mockResolvedValue([
+        { id: 'acct-7', name: 'old', external_id: '7' },
+      ]);
+
+      initTopbarFilters();
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Account chip is the second `.chip-select`.
+      const triggers = document.querySelectorAll<HTMLButtonElement>('.chip-select');
+      const accountTrigger = triggers[1] as HTMLButtonElement;
+      accountTrigger.click();
+      const allOpt = Array.from(
+        document.querySelectorAll<HTMLLIElement>('.chip-select-option'),
+      ).find((el) => el.dataset['value'] === '');
+      expect(allOpt).toBeDefined();
+      allOpt!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+      const params = new URLSearchParams(window.location.search);
+      expect(params.has('account')).toBe(false);
+    });
+
+    test('provider change writes provider AND clears account in URL', async () => {
+      window.history.replaceState({}, '', '/opportunities?account=acct-7');
+
+      initTopbarFilters();
+      await new Promise((r) => setTimeout(r, 0));
+
+      const triggers = document.querySelectorAll<HTMLButtonElement>('.chip-select');
+      const providerTrigger = triggers[0] as HTMLButtonElement;
+      providerTrigger.click();
+      const gcpOpt = Array.from(
+        document.querySelectorAll<HTMLLIElement>('.chip-select-option'),
+      ).find((el) => el.dataset['value'] === 'gcp');
+      expect(gcpOpt).toBeDefined();
+      gcpOpt!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get('provider')).toBe('gcp');
+      // Account was cleared by the #185 ordering rule; URL must reflect that.
+      expect(params.has('account')).toBe(false);
+    });
+  });
+
   // Issue #185 ordering invariant: a provider change clears
   // state.currentAccountIDs BEFORE awaiting the new account-list refetch.
   // The implementation lives in topbar-filters.ts::initTopbarFilters'

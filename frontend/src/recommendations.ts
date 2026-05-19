@@ -137,17 +137,61 @@ export function clearPurchaseModalRecommendations(): void {
 }
 
 /**
- * Setup recommendations event handlers
+ * True when the Opportunities tab is the currently-visible tab. The reload-
+ * on-filter-change subscriptions below skip the fetch when this is false so
+ * we don't burn an API call (and a skeleton flash) for a section the user
+ * isn't looking at — `switchTab('opportunities')` will run loadRecommend-
+ * ations() on next entry anyway.
+ */
+function isOpportunitiesTabActive(): boolean {
+  return document.getElementById('opportunities-tab')?.classList.contains('active') === true;
+}
+
+/**
+ * Setup recommendations event handlers (issue #477).
+ *
+ * The legacy per-section provider/account `<select>` elements were retired
+ * in issue #344 in favour of the global topbar chips. Each section reloads
+ * itself by subscribing to state.subscribeProvider / state.subscribeAccount;
+ * Bundle B had removed the legacy listeners without adding the new
+ * subscriptions, so Opportunities only re-queried on a full route-enter
+ * (issue #477 repro: change filter, list doesn't update).
+ *
+ * Mirrors the dashboard.ts pattern — except we guard on the active-tab
+ * check so the fetch only fires when the user is actually looking at
+ * Opportunities. The provider-change ordering invariant (#185 — clear
+ * accounts before refetching the account list) is enforced upstream in
+ * topbar-filters.ts.
+ *
+ * Per-column header-mounted popovers (Bundle B) continue to handle the
+ * in-page filter UX; their listeners are attached per-render inside
+ * renderRecommendationsList.
  */
 export function setupRecommendationsHandlers(): void {
-  // The legacy top filter bar (#recommendations-provider-filter,
-  // #recommendations-account-filter, #service-filter, #region-filter,
-  // #min-savings-filter) is gone — Bundle B replaced those with per-column
-  // header-mounted popovers driven by state.RecommendationsColumnFilters.
-  // No DOM listeners need wiring here anymore; the column-filter trigger
-  // listeners are attached per-render inside renderRecommendationsList,
-  // and Provider/Account-driven API re-fetch is handled by their popover
-  // commit hooks (see Bundle B follow-up).
+  // Coalesce duplicate reloads. The topbar provider-change handler in
+  // topbar-filters.ts updates BOTH state slots in sequence (clear accounts
+  // then set provider, per the #185 ordering rule), which fires the
+  // account-subscriber AND the provider-subscriber from a single user
+  // action. Without coalescing we'd kick off two loadRecommendations()
+  // calls back-to-back — extra API load plus a stale-overwrite risk if
+  // the first response lands after the second.
+  //
+  // Microtask scheduling: both subscriber fires are synchronous within
+  // the same setCurrentProvider/setCurrentAccountIDs call chain, so a
+  // microtask runs once after the chain settles. setTimeout(_, 0) would
+  // also work but adds a macrotask delay the user could perceive on
+  // slow machines.
+  let reloadQueued = false;
+  const scheduleReload = (): void => {
+    if (!isOpportunitiesTabActive() || reloadQueued) return;
+    reloadQueued = true;
+    queueMicrotask(() => {
+      reloadQueued = false;
+      if (isOpportunitiesTabActive()) void loadRecommendations();
+    });
+  };
+  state.subscribeProvider(scheduleReload);
+  state.subscribeAccount(scheduleReload);
 }
 
 /**
