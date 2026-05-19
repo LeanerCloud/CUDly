@@ -980,25 +980,57 @@ func nonZeroPtr(v float64) *float64 {
 	return nil
 }
 
+// extractEngine pulls the engine string out of a polymorphic
+// common.ServiceDetails value when one is present, supporting both value
+// and pointer receivers as the provider parsers historically used either
+// shape. Returns "" for any other Details type (or nil). Extracted from
+// convertRecommendations to keep that function under the gocyclo budget
+// (min-complexity: 10 in .pre-commit-config.yaml).
+func extractEngine(details common.ServiceDetails) string {
+	if details == nil {
+		return ""
+	}
+	switch d := details.(type) {
+	case common.DatabaseDetails:
+		return d.Engine
+	case *common.DatabaseDetails:
+		return d.Engine
+	case common.CacheDetails:
+		return d.Engine
+	case *common.CacheDetails:
+		return d.Engine
+	}
+	return ""
+}
+
+// marshalRecDetails encodes the full ServiceDetails payload into a raw
+// JSON blob so the purchase manager can reconstruct the correct typed
+// *Details pointer later (issue #453). Without this, every persisted
+// rec round-trips through the DB as "service + engine" only — losing
+// EC2 platform / tenancy / scope, RDS AZ-config, SP plan-type / hourly
+// commitment, etc. — and findOfferingID either picks the wrong offering
+// (Windows recs purchased as Linux/UNIX) or fails the type-assertion
+// outright. Marshal errors are non-fatal: the row still gets persisted
+// without Details and falls through to the graceful-degradation path in
+// common.DecodeServiceDetailsFor. Extracted from convertRecommendations
+// to keep that function under the gocyclo budget.
+func marshalRecDetails(rec common.Recommendation, providerName string) []byte {
+	blob, err := common.MarshalServiceDetails(rec.Details)
+	if err != nil {
+		logging.Warnf("Failed to marshal service details for %s/%s rec (%s): %v — persisting without Details",
+			providerName, rec.Service, rec.ResourceType, err)
+		return nil
+	}
+	return blob
+}
+
 // convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice
 func (s *Scheduler) convertRecommendations(recs []common.Recommendation, providerName string) []config.RecommendationRecord {
 	records := make([]config.RecommendationRecord, 0, len(recs))
 
 	for _, rec := range recs {
-		// Extract engine from service details if available
-		engine := ""
-		if rec.Details != nil {
-			switch d := rec.Details.(type) {
-			case common.DatabaseDetails:
-				engine = d.Engine
-			case *common.DatabaseDetails:
-				engine = d.Engine
-			case common.CacheDetails:
-				engine = d.Engine
-			case *common.CacheDetails:
-				engine = d.Engine
-			}
-		}
+		engine := extractEngine(rec.Details)
+		detailsBlob := marshalRecDetails(rec, providerName)
 
 		// Parse term to integer (e.g., "3yr" -> 3)
 		term := 3
@@ -1054,6 +1086,7 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			Region:       rec.Region,
 			ResourceType: rec.ResourceType,
 			Engine:       engine,
+			Details:      detailsBlob, // full ServiceDetails payload (issue #453)
 			Count:        rec.Count,
 			Term:         term,
 			Payment:      rec.PaymentOption,
