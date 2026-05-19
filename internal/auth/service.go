@@ -164,7 +164,17 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 	return user, nil
 }
 
-// verifyPasswordAndMFA verifies password and MFA code if enabled
+// verifyPasswordAndMFA verifies password and MFA code if enabled.
+//
+// Security: all error paths after a successful password check use the same
+// generic message ("invalid email or password") to prevent MFA enrollment
+// status enumeration (issue #388). An attacker who submits the correct
+// password but no MFA code must not be able to distinguish that case from a
+// wrong-password attempt — doing so reveals that the account has MFA enabled
+// and that the password was correct.
+//
+// Internal log messages do distinguish the paths so operators can diagnose
+// failed logins from server logs without leaking information to HTTP clients.
 func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req LoginRequest) error {
 	// Use a generic error for missing password hash to avoid leaking account state
 	// (a distinct message would reveal that the account exists but has no password set)
@@ -179,16 +189,24 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 
 	if user.MFAEnabled {
 		if req.MFACode == "" {
-			return fmt.Errorf("MFA code required")
+			// Password was correct but MFA code not supplied. Return the same
+			// generic message as a wrong-password attempt so callers cannot
+			// infer that the password was accepted (issue #388).
+			logging.Debugf("login: MFA code not supplied for MFA-enabled account")
+			return fmt.Errorf("invalid email or password")
 		}
 		if user.MFASecret == "" {
-			return fmt.Errorf("MFA is enabled but not configured")
+			// MFA is marked enabled but no secret exists — misconfiguration.
+			// Treat as an auth failure with the same generic message.
+			logging.Warnf("login: MFA enabled but secret not configured for account")
+			return fmt.Errorf("invalid email or password")
 		}
 		// verifyTOTP is panic-safe: a malformed secret causes generateTOTP to return ""
 		// (base32 decode error), resulting in a comparison miss rather than a panic.
 		if !verifyTOTP(user.MFASecret, req.MFACode) {
 			s.recordFailedLogin(ctx, user)
-			return fmt.Errorf("invalid MFA code")
+			logging.Debugf("login: invalid MFA code supplied")
+			return fmt.Errorf("invalid email or password")
 		}
 	}
 

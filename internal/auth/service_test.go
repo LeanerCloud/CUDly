@@ -327,7 +327,9 @@ func TestService_Login_MFA(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "MFA code required")
+		// Regression test for #388: must return a generic message even when the
+		// password is correct and MFA is enabled, to prevent enrollment enumeration.
+		assert.Contains(t, err.Error(), "invalid email or password")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -409,7 +411,9 @@ func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "invalid MFA code")
+	// Regression test for #388: invalid MFA code must return the same generic
+	// message as wrong password to prevent MFA enrollment status enumeration.
+	assert.Contains(t, err.Error(), "invalid email or password")
 }
 
 func TestLogin_WithMFA_MissingCode(t *testing.T) {
@@ -443,7 +447,9 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "MFA code required")
+	// Regression test for #388: must return a generic message even though the
+	// password was correct — "MFA code required" would reveal MFA enrollment status.
+	assert.Contains(t, err.Error(), "invalid email or password")
 }
 
 func TestLogin_WithMFA_NoSecret(t *testing.T) {
@@ -477,7 +483,74 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "MFA is enabled but not configured")
+	// Regression test for #388: misconfigured MFA must return the same generic
+	// message to avoid leaking MFA enrollment state.
+	assert.Contains(t, err.Error(), "invalid email or password")
+}
+
+// TestLogin_MFAErrorsAreGeneric is the primary regression test for issue #388.
+// It verifies that ALL MFA-related failure paths return the same generic message
+// as a wrong-password attempt so an attacker cannot enumerate MFA enrollment.
+func TestLogin_MFAErrorsAreGeneric(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestService()
+	hash, err := s.hashPassword("CorrectPassword")
+	if err != nil {
+		t.Fatalf("failed to hash password: %v", err)
+	}
+
+	mfaUser := &User{
+		ID:           "mfa-user-001",
+		Email:        "mfa-user@example.com",
+		PasswordHash: hash,
+		Active:       true,
+		MFAEnabled:   true,
+		MFASecret:    "JBSWY3DPEHPK3PXP",
+		Role:         RoleUser,
+	}
+
+	cases := []struct {
+		name    string
+		mfaCode string
+		secret  string
+		desc    string
+	}{
+		{"no_code_supplied", "", "JBSWY3DPEHPK3PXP", "missing MFA code reveals enrollment (issue #388)"},
+		{"wrong_code", "000000", "JBSWY3DPEHPK3PXP", "wrong MFA code reveals enrollment (issue #388)"},
+		{"no_secret_configured", "123456", "", "misconfigured MFA reveals enrollment (issue #388)"},
+	}
+
+	const genericMsg = "invalid email or password"
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			mockEmail := new(MockEmailSender)
+			svc := createTestService(mockStore, mockEmail)
+
+			user := *mfaUser
+			user.MFASecret = tc.secret
+			mockStore.On("GetUserByEmail", ctx, user.Email).Return(&user, nil)
+			mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Maybe()
+
+			resp, loginErr := svc.Login(ctx, LoginRequest{
+				Email:    user.Email,
+				Password: "CorrectPassword",
+				MFACode:  tc.mfaCode,
+			})
+			if loginErr == nil {
+				t.Errorf("case %q: expected error, got successful login (regression of #388)", tc.name)
+				return
+			}
+			if resp != nil {
+				t.Errorf("case %q: expected nil response on error, got %+v", tc.name, resp)
+			}
+			if loginErr.Error() != genericMsg {
+				t.Errorf("case %q: %s\nwant error %q\ngot  %q", tc.name, tc.desc, genericMsg, loginErr.Error())
+			}
+		})
+	}
 }
 
 // Test UpdateUserProfile
