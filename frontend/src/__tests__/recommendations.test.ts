@@ -1725,6 +1725,31 @@ describe('Recommendations Module', () => {
 
       expect(api.getRecommendations).not.toHaveBeenCalled();
     });
+
+    // CR pass 1 (PR #488): the topbar provider-change handler updates BOTH
+    // account and provider state slots in sequence, firing both subscribers
+    // from a single user action. Coalesce via queueMicrotask so the user
+    // sees exactly one reload, not two — and avoid the stale-overwrite race
+    // where the first response lands after the second.
+    test('coalesces back-to-back account+provider changes into a single reload', async () => {
+      const tab = document.getElementById('opportunities-tab')!;
+      tab.classList.add('active');
+
+      setupRecommendationsHandlers();
+
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0];
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0];
+      (api.getRecommendations as jest.Mock).mockClear();
+
+      // Simulate the topbar's #185 ordering: clear account first, then set
+      // provider. Both callbacks fire synchronously; coalescing must collapse
+      // them into one microtask-deferred reload.
+      accountCb();
+      providerCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getRecommendations).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

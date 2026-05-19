@@ -168,12 +168,30 @@ function isOpportunitiesTabActive(): boolean {
  * renderRecommendationsList.
  */
 export function setupRecommendationsHandlers(): void {
-  state.subscribeProvider(() => {
-    if (isOpportunitiesTabActive()) void loadRecommendations();
-  });
-  state.subscribeAccount(() => {
-    if (isOpportunitiesTabActive()) void loadRecommendations();
-  });
+  // Coalesce duplicate reloads. The topbar provider-change handler in
+  // topbar-filters.ts updates BOTH state slots in sequence (clear accounts
+  // then set provider, per the #185 ordering rule), which fires the
+  // account-subscriber AND the provider-subscriber from a single user
+  // action. Without coalescing we'd kick off two loadRecommendations()
+  // calls back-to-back — extra API load plus a stale-overwrite risk if
+  // the first response lands after the second.
+  //
+  // Microtask scheduling: both subscriber fires are synchronous within
+  // the same setCurrentProvider/setCurrentAccountIDs call chain, so a
+  // microtask runs once after the chain settles. setTimeout(_, 0) would
+  // also work but adds a macrotask delay the user could perceive on
+  // slow machines.
+  let reloadQueued = false;
+  const scheduleReload = (): void => {
+    if (!isOpportunitiesTabActive() || reloadQueued) return;
+    reloadQueued = true;
+    queueMicrotask(() => {
+      reloadQueued = false;
+      if (isOpportunitiesTabActive()) void loadRecommendations();
+    });
+  };
+  state.subscribeProvider(scheduleReload);
+  state.subscribeAccount(scheduleReload);
 }
 
 /**
