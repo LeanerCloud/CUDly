@@ -103,6 +103,14 @@ func (c *Config) validateRequiredFields() error {
 	if c.Password == "" && c.PasswordSecret == "" {
 		return fmt.Errorf("either DB_PASSWORD or DB_PASSWORD_SECRET must be set")
 	}
+	// Warn when both are set: plaintext DB_PASSWORD is visible in Lambda/ECS config
+	// (readable by lambda:GetFunction) without needing secretsmanager:GetSecretValue.
+	// Prefer DB_PASSWORD_SECRET for production deployments.
+	if c.Password != "" && c.PasswordSecret != "" {
+		fmt.Fprintf(os.Stderr, "WARNING: both DB_PASSWORD and DB_PASSWORD_SECRET are set; "+
+			"DB_PASSWORD_SECRET will be used. Remove DB_PASSWORD from environment to avoid "+
+			"storing plaintext credentials in Lambda/ECS task configuration.\n")
+	}
 	return nil
 }
 

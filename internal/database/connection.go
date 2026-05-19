@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"sync"
 	"time"
 
@@ -191,14 +192,21 @@ func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Conf
 
 // buildPoolConfig creates a pgxpool.Config from our Config
 func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
-	// Build connection string
-	dsn := config.DSN(password)
+	// Parse a redacted DSN so that any pgxpool.ParseConfig error never
+	// echoes the plaintext password into the error chain (pgconn.parseConfig
+	// includes the input URI in its error message). After successful parsing
+	// the real password is injected directly into ConnConfig.Password so it
+	// is never present in a string that could be logged.
+	redactedDSN := config.DSN("REDACTED")
 
-	// Parse DSN into pgxpool config
-	poolConfig, err := pgxpool.ParseConfig(dsn)
+	poolConfig, err := pgxpool.ParseConfig(redactedDSN)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse DSN: %w", err)
 	}
+
+	// Overwrite the placeholder with the real password. ConnConfig.Password
+	// is used by pgx at connect time and is never serialised back to a string.
+	poolConfig.ConnConfig.Password = password
 
 	// Set pool configuration
 	if config.MaxConnections > math.MaxInt32 {
@@ -368,16 +376,32 @@ func parseLogLevel(level string) tracelog.LogLevel {
 // stdLogger implements pgx tracelog.Logger using the logging package
 type stdLogger struct{}
 
-func (l *stdLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string, data map[string]any) {
-	// Filter out sensitive data from logs
-	safeData := make(map[string]any)
+// isSensitiveKey reports whether a pgx data-map key should always be redacted.
+func isSensitiveKey(k string) bool {
+	return k == "password" || k == "secret" || k == "token"
+}
+
+// sanitizeLogData returns a copy of data with sensitive fields removed.
+// At debug level, the pgx "args" key (SQL bound parameters) is also removed
+// unless DB_LOG_BIND_PARAMETERS=true is set, because bound values can carry
+// session tokens, bcrypt hashes, or approval tokens.
+func sanitizeLogData(level tracelog.LogLevel, data map[string]any) map[string]any {
+	bindParams := os.Getenv("DB_LOG_BIND_PARAMETERS") == "true"
+	safe := make(map[string]any, len(data))
 	for k, v := range data {
-		// Skip potentially sensitive fields
-		if k == "password" || k == "secret" || k == "token" {
+		if isSensitiveKey(k) {
 			continue
 		}
-		safeData[k] = v
+		if k == "args" && level == tracelog.LogLevelDebug && !bindParams {
+			continue
+		}
+		safe[k] = v
 	}
+	return safe
+}
+
+func (l *stdLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string, data map[string]any) {
+	safeData := sanitizeLogData(level, data)
 
 	switch level {
 	case tracelog.LogLevelDebug:
