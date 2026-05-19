@@ -281,7 +281,8 @@ func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []
 		return err
 	}
 
-	if err = c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+	// MinVersion guards against TLS 1.0/1.1 negotiation (issue #410).
+	if err = c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
 		return err
 	}
 
@@ -410,7 +411,10 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 // back to the legacy static s.notifyEmail when the caller didn't resolve
 // recipients (e.g. no admin users configured yet).
 func (s *SMTPSender) SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error {
-	subject := fmt.Sprintf("CUDly - New Account Registration: %s (%s)", data.AccountName, data.Provider)
+	// Sanitize user-controlled fields before interpolating into the Subject header
+	// to prevent SMTP header injection (issue #401).
+	subject := fmt.Sprintf("CUDly - New Account Registration: %s (%s)",
+		sanitizeHeader(data.AccountName), sanitizeHeader(data.Provider))
 	body, err := RenderRegistrationReceivedEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render registration received email: %w", err)
