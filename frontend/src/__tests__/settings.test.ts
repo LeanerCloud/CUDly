@@ -111,7 +111,19 @@ describe('Settings Module', () => {
         <!-- GCP term selects -->
         <select id="gcp-compute-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="gcp-sql-term"><option value="1">1</option><option value="3">3</option></select>
+        <!-- Per-provider grace-period inputs (issue #466 reset-to-defaults assertions
+             call populateGraceInput which needs these in the DOM). -->
+        <input type="number" id="setting-grace-aws" value="7" min="0" max="30">
+        <input type="number" id="setting-grace-azure" value="7" min="0" max="30">
+        <input type="number" id="setting-grace-gcp" value="7" min="0" max="30">
+        <!-- Issue #466: reflectDirtyState (in settings-subnav.ts) toggles
+             .has-unsaved on #admin-tab-btn and .dirty/.settings-savebar on
+             every .settings-buttons element. Seed both so the reset-to-
+             defaults expansion + unsaved-indicator assertions have DOM to
+             check. -->
+        <div class="settings-buttons"></div>
       </form>
+      <button id="admin-tab-btn"></button>
       <div id="settings-error" class="hidden"></div>
       <!-- Test element for copyToClipboard -->
       <code id="test-copy-element">test-value</code>
@@ -735,6 +747,42 @@ describe('Settings Module', () => {
 
       expect((document.getElementById('setting-recs-stale-hours') as HTMLInputElement).value).toBe('24');
       expect((document.getElementById('setting-recs-lookback-days') as HTMLSelectElement).value).toBe('7');
+    });
+
+    // Issue #466: Reset to Defaults must expand the Collection Schedule
+    // section (auto-collect re-flips ON, so the dependent controls need to
+    // be visible) AND mark the settings form as dirty so the user sees
+    // the "Unsaved changes" affordance and remembers to click Save.
+    test('expands the Collection Schedule row when re-enabling Auto-collect (#466)', async () => {
+      mockConfirmDialog.mockResolvedValueOnce(true);
+      // Pre-reset state: auto-collect off, schedule row hidden.
+      (document.getElementById('setting-auto-collect') as HTMLInputElement).checked = false;
+      const scheduleRow = document.getElementById('collection-schedule-row');
+      scheduleRow?.classList.add('hidden');
+
+      await resetSettings();
+
+      expect((document.getElementById('setting-auto-collect') as HTMLInputElement).checked).toBe(true);
+      expect(scheduleRow?.classList.contains('hidden')).toBe(false);
+    });
+
+    test('surfaces "Unsaved changes" indicator after reset (#466)', async () => {
+      mockConfirmDialog.mockResolvedValueOnce(true);
+      // Clear any prior dirty flag from a previous test.
+      const tabBtn = document.getElementById('admin-tab-btn');
+      tabBtn?.classList.remove('has-unsaved');
+      document.querySelectorAll('.settings-buttons').forEach(el => el.classList.remove('dirty'));
+
+      await resetSettings();
+
+      // reflectDirtyState toggles .has-unsaved on #admin-tab-btn and .dirty
+      // on .settings-buttons whenever any tracked field differs from the
+      // saved snapshot. After Reset, every field has been overwritten
+      // relative to the (still-empty) module-level snapshot, so the
+      // indicator must be active.
+      expect(tabBtn?.classList.contains('has-unsaved')).toBe(true);
+      const saveBar = document.querySelector('.settings-buttons') as HTMLElement | null;
+      expect(saveBar?.classList.contains('dirty')).toBe(true);
     });
   });
 

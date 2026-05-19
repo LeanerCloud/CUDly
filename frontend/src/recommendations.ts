@@ -289,7 +289,26 @@ export async function loadRecommendations(): Promise<void> {
       // defaultBulkPurchaseState — the module-level cache is the source of truth).
     }
     accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
-    state.setRecommendations((data.recommendations || []) as unknown as api.Recommendation[]);
+
+    // Issue #463: gate the Opportunities list by the Settings →
+    // General → Enabled Providers preference. The backend currently
+    // returns all collected recs irrespective of `enabled_providers`,
+    // so a user who toggled Azure off in Settings still sees Azure
+    // rows on Opportunities. Apply a strict client-side filter on the
+    // provider field — Settings is the source of truth.
+    //
+    // Permissive default: if `enabled_providers` is empty/undefined
+    // (older configs or a tenant that never touched the toggles),
+    // fall through with no filter rather than surfacing a blank
+    // Opportunities page. The Settings load path renders the same
+    // permissive default on the checkboxes (line ~2510).
+    const enabledProviders = cfgResponse?.global?.enabled_providers;
+    const rawRecs = (data.recommendations || []) as unknown as api.Recommendation[];
+    const visibleByPreference: api.Recommendation[] = enabledProviders && enabledProviders.length > 0
+      ? rawRecs.filter(r => enabledProviders.includes(r.provider as api.Provider))
+      : rawRecs;
+
+    state.setRecommendations(visibleByPreference);
     state.clearSelectedRecommendations();
 
     // Cache the API-derived summary so renderRecommendationsList can
@@ -300,7 +319,7 @@ export async function loadRecommendations(): Promise<void> {
     // the card pinned to the unfiltered totals — the same divergence
     // #272 was supposed to close.
     lastRecommendationsSummary = data.summary || {};
-    renderRecommendationsList(data.recommendations || []);
+    renderRecommendationsList(visibleByPreference as unknown as LocalRecommendation[]);
 
     // Auto-refresh on page open (#284): check freshness and trigger an
     // async background refresh if the cache is cold or older than 24h.

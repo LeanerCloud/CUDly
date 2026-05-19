@@ -2722,16 +2722,35 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   // settings object so we can reject out-of-range input early with a
   // targeted error instead of letting the API surface "invalid range"
   // without saying which input.
+  //
+  // Issue #478: aggregate every out-of-range provider into a single
+  // toast instead of bailing on the first failure. Previously, a user
+  // with bad values in AWS + Azure + GCP saw three separate Save
+  // attempts before all errors surfaced — one per click. Now: one
+  // toast naming every affected provider, in input order (AWS, Azure,
+  // GCP). Both error kinds readGraceInput can emit ("enter a whole
+  // number of days", "must be between 0 and 30 days") collapse to
+  // the same actionable instruction, so the aggregated message reads
+  // cleanly as a single rule even when providers fail for different
+  // reasons.
   const gracePeriodDays: Record<string, number> = {};
+  const graceErrors: string[] = [];
   for (const [provider, id] of [['aws', 'setting-grace-aws'], ['azure', 'setting-grace-azure'], ['gcp', 'setting-grace-gcp']] as const) {
     const v = readGraceInput(id);
     if (v.err) {
-      showToast({ message: `${provider.toUpperCase()} grace period: ${v.err}`, kind: 'error' });
-      if (saveBtn) saveBtn.disabled = false;
-      saveInFlight = false;
-      return;
+      graceErrors.push(provider.toUpperCase());
+      continue;
     }
     gracePeriodDays[provider] = v.value;
+  }
+  if (graceErrors.length > 0) {
+    showToast({
+      message: `Grace period must be a whole number between 0 and 30 days (${graceErrors.join(', ')}).`,
+      kind: 'error',
+    });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
   }
 
   // Validate recommendations_cache_stale_hours before building the save payload.
@@ -2843,6 +2862,19 @@ export async function resetSettings(): Promise<void> {
   if (staleHoursInput) staleHoursInput.value = '24';
   const lookbackSelect = byId<HTMLSelectElement>('setting-recs-lookback-days');
   if (lookbackSelect) lookbackSelect.value = '7';
+
+  // Issue #466: setting el.value / .checked via JS does not fire
+  // 'change'/'input', so none of the change-event-driven visibility
+  // togglers nor the dirty-tracking listeners run on their own here.
+  // Drive all of them manually so the user sees (a) the provider
+  // settings sections re-render to match the reset checkbox states,
+  // (b) the Collection Schedule controls now that Auto-collect is
+  // back ON, and (c) the same "Unsaved changes" affordance any
+  // interactive field-edit would produce. Otherwise a user who
+  // clicks Reset and navigates away loses their reset silently.
+  updateProviderSettingsVisibility();
+  updateCollectionScheduleVisibility();
+  updateDirtyMarkers();
 }
 
 /**
