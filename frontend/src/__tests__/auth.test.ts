@@ -452,8 +452,120 @@ describe('Auth Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      expect(window.alert).toHaveBeenCalledWith('New passwords do not match');
+      // Password mismatch is surfaced inline (parity with reset / setup
+      // flows). `alert` must not fire for this path.
+      const errorDiv = document.getElementById('profile-password-error') as HTMLElement;
+      expect(errorDiv.textContent).toBe('New passwords do not match');
+      expect(errorDiv.classList.contains('hidden')).toBe(false);
+      expect(window.alert).not.toHaveBeenCalled();
       expect(api.apiRequest).not.toHaveBeenCalled();
+    });
+
+    test('save profile shows inline error when new password fails complexity rules', async () => {
+      updateUserUI();
+
+      const userEmail = document.getElementById('user-email-display') as HTMLElement;
+      userEmail.click();
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const currentPasswordInput = document.getElementById('profile-current-password') as HTMLInputElement;
+      const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement;
+      const confirmPasswordInput = document.getElementById('profile-confirm-password') as HTMLInputElement;
+
+      currentPasswordInput.value = 'oldpassword';
+      // Too short — fails the length rule first.
+      newPasswordInput.value = 'short';
+      confirmPasswordInput.value = 'short';
+
+      const form = document.getElementById('profile-form');
+      form?.dispatchEvent(new Event('submit', { cancelable: true }));
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const errorDiv = document.getElementById('profile-password-error') as HTMLElement;
+      expect(errorDiv.textContent).toBe('Password must be at least 12 characters long');
+      expect(errorDiv.classList.contains('hidden')).toBe(false);
+      expect(window.alert).not.toHaveBeenCalled();
+      expect(api.apiRequest).not.toHaveBeenCalled();
+    });
+
+    test('profile modal renders live password-requirement indicators', async () => {
+      updateUserUI();
+
+      const userEmail = document.getElementById('user-email-display') as HTMLElement;
+      userEmail.click();
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // All five indicators must be present and prefixed `profile-req-`
+      // so they cannot collide with the reset / setup flows.
+      expect(document.getElementById('profile-req-length')).toBeTruthy();
+      expect(document.getElementById('profile-req-uppercase')).toBeTruthy();
+      expect(document.getElementById('profile-req-lowercase')).toBeTruthy();
+      expect(document.getElementById('profile-req-number')).toBeTruthy();
+      expect(document.getElementById('profile-req-special')).toBeTruthy();
+    });
+
+    test('typing into new password toggles requirement classes live', async () => {
+      updateUserUI();
+
+      const userEmail = document.getElementById('user-email-display') as HTMLElement;
+      userEmail.click();
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement;
+
+      // A fully-valid password should mark every rule as met.
+      newPasswordInput.value = 'Abcdefghijk1!';
+      newPasswordInput.dispatchEvent(new Event('input'));
+
+      expect(document.getElementById('profile-req-length')?.classList.contains('met')).toBe(true);
+      expect(document.getElementById('profile-req-uppercase')?.classList.contains('met')).toBe(true);
+      expect(document.getElementById('profile-req-lowercase')?.classList.contains('met')).toBe(true);
+      expect(document.getElementById('profile-req-number')?.classList.contains('met')).toBe(true);
+      expect(document.getElementById('profile-req-special')?.classList.contains('met')).toBe(true);
+
+      // Drop every rule simultaneously — short, no upper, no number, no
+      // special. Lowercase is the only remaining match.
+      newPasswordInput.value = 'abc';
+      newPasswordInput.dispatchEvent(new Event('input'));
+
+      expect(document.getElementById('profile-req-length')?.classList.contains('unmet')).toBe(true);
+      expect(document.getElementById('profile-req-uppercase')?.classList.contains('unmet')).toBe(true);
+      expect(document.getElementById('profile-req-lowercase')?.classList.contains('met')).toBe(true);
+      expect(document.getElementById('profile-req-number')?.classList.contains('unmet')).toBe(true);
+      expect(document.getElementById('profile-req-special')?.classList.contains('unmet')).toBe(true);
+    });
+
+    test('reopening profile modal resets stale indicators and error', async () => {
+      updateUserUI();
+
+      const userEmail = document.getElementById('user-email-display') as HTMLElement;
+      userEmail.click();
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Dirty the indicators and the inline error.
+      const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement;
+      newPasswordInput.value = 'Abcdefghijk1!';
+      newPasswordInput.dispatchEvent(new Event('input'));
+      const errorDiv = document.getElementById('profile-password-error') as HTMLElement;
+      errorDiv.textContent = 'old error';
+      errorDiv.classList.remove('hidden');
+
+      // Close and re-open.
+      const cancelBtn = document.getElementById('profile-cancel');
+      cancelBtn?.click();
+      userEmail.click();
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Length applies to empty string ("" < 12) so on reset it should
+      // be `unmet`, and the inline error must be cleared + hidden.
+      expect(document.getElementById('profile-req-length')?.classList.contains('unmet')).toBe(true);
+      expect(document.getElementById('profile-req-uppercase')?.classList.contains('unmet')).toBe(true);
+      expect(errorDiv.textContent).toBe('');
+      expect(errorDiv.classList.contains('hidden')).toBe(true);
     });
 
     test('save profile updates user info on success', async () => {

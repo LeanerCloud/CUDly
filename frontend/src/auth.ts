@@ -655,7 +655,7 @@ async function openProfileModal(): Promise<void> {
           <label>
             New Password (leave blank to keep current)
             <div class="password-input-wrapper">
-              <input type="password" id="profile-new-password" placeholder="Enter new password">
+              <input type="password" id="profile-new-password" placeholder="Enter new password" autocomplete="new-password">
               <button type="button" class="toggle-password" data-target="profile-new-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -664,10 +664,34 @@ async function openProfileModal(): Promise<void> {
               </button>
             </div>
           </label>
+
+          <div id="profile-password-requirements" class="password-requirements">
+            <div class="requirement" id="profile-req-length">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">At least 12 characters</span>
+            </div>
+            <div class="requirement" id="profile-req-uppercase">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One uppercase letter (A-Z)</span>
+            </div>
+            <div class="requirement" id="profile-req-lowercase">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One lowercase letter (a-z)</span>
+            </div>
+            <div class="requirement" id="profile-req-number">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One number (0-9)</span>
+            </div>
+            <div class="requirement" id="profile-req-special">
+              <span class="req-icon">&#9675;</span>
+              <span class="req-text">One special character (!@#$%^&*)</span>
+            </div>
+          </div>
+
           <label>
             Confirm New Password
             <div class="password-input-wrapper">
-              <input type="password" id="profile-confirm-password" placeholder="Confirm new password">
+              <input type="password" id="profile-confirm-password" placeholder="Confirm new password" autocomplete="new-password">
               <button type="button" class="toggle-password" data-target="profile-confirm-password" aria-label="Show password">
                 <svg class="eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -676,6 +700,7 @@ async function openProfileModal(): Promise<void> {
               </button>
             </div>
           </label>
+          <div id="profile-password-error" class="error-message hidden"></div>
           <div class="modal-buttons">
             <button type="button" id="profile-cancel">Cancel</button>
             <button type="submit" class="primary">Save Changes</button>
@@ -689,6 +714,17 @@ async function openProfileModal(): Promise<void> {
     document.getElementById('profile-cancel')?.addEventListener('click', closeProfileModal);
     document.getElementById('profile-form')?.addEventListener('submit', (e) => void saveProfile(e));
 
+    // Live password-strength indicator. Mirrors the reset / admin-setup
+    // flows so the user sees criterion check-marks as they type instead
+    // of only on submit. Uses a flow-specific prefix so the IDs never
+    // collide with other modals that might be mounted on the same page.
+    const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement | null;
+    if (newPasswordInput) {
+      newPasswordInput.addEventListener('input', () => {
+        updatePasswordRequirements(newPasswordInput.value, 'profile-req-');
+      });
+    }
+
     // Setup password toggle
     setupPasswordToggle(modal);
   }
@@ -698,6 +734,15 @@ async function openProfileModal(): Promise<void> {
   (document.getElementById('profile-current-password') as HTMLInputElement).value = '';
   (document.getElementById('profile-new-password') as HTMLInputElement).value = '';
   (document.getElementById('profile-confirm-password') as HTMLInputElement).value = '';
+
+  // Reset live indicators and any stale error so the previous open
+  // doesn't bleed into this one (modal is created once and reused).
+  updatePasswordRequirements('', 'profile-req-');
+  const errorDiv = document.getElementById('profile-password-error');
+  if (errorDiv) {
+    errorDiv.textContent = '';
+    errorDiv.classList.add('hidden');
+  }
 
   // Show modal
   openModal(modal);
@@ -722,19 +767,36 @@ async function saveProfile(e: Event): Promise<void> {
   const newPassword = (document.getElementById('profile-new-password') as HTMLInputElement).value;
   const confirmPassword = (document.getElementById('profile-confirm-password') as HTMLInputElement).value;
 
+  // Clear any stale password-validation error from a prior submit so we
+  // start with a clean slate on every attempt.
+  const passwordErrorDiv = document.getElementById('profile-password-error');
+  if (passwordErrorDiv) {
+    passwordErrorDiv.textContent = '';
+    passwordErrorDiv.classList.add('hidden');
+  }
+
   if (!currentPassword) {
     alert('Please enter your current password to save changes');
     return;
   }
 
   if (newPassword) {
+    // Password-validation failures render inline (matches reset and
+    // admin-setup flows) so the criterion text appears next to the
+    // requirements indicator the user is already looking at.
     const requirementError = describePasswordValidationError(newPassword);
     if (requirementError) {
-      alert(requirementError);
+      if (passwordErrorDiv) {
+        passwordErrorDiv.textContent = requirementError;
+        passwordErrorDiv.classList.remove('hidden');
+      }
       return;
     }
     if (newPassword !== confirmPassword) {
-      alert('New passwords do not match');
+      if (passwordErrorDiv) {
+        passwordErrorDiv.textContent = 'New passwords do not match';
+        passwordErrorDiv.classList.remove('hidden');
+      }
       return;
     }
   }
