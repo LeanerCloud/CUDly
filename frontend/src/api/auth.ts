@@ -128,11 +128,25 @@ export interface ResetTokenStatus {
   flow: 'reset' | 'invite';
 }
 
+// Whitelists for runtime validation of the token-status response. Kept
+// in sync with the ResetTokenStatus union above — if the union grows,
+// these arrays must grow with it (the satisfies clause makes that a
+// type-error rather than a silent drift).
+const VALID_RESET_TOKEN_STATES = ['valid', 'expired', 'used'] as const satisfies readonly ResetTokenStatus['state'][];
+const VALID_RESET_TOKEN_FLOWS  = ['reset', 'invite']           as const satisfies readonly ResetTokenStatus['flow'][];
+const VALID_RESET_TOKEN_STATE_SET: ReadonlySet<ResetTokenStatus['state']> = new Set(VALID_RESET_TOKEN_STATES);
+const VALID_RESET_TOKEN_FLOW_SET:  ReadonlySet<ResetTokenStatus['flow']>  = new Set(VALID_RESET_TOKEN_FLOWS);
+
 /**
  * Probe a reset token's state before rendering the form. On any
  * network or non-OK response, throws so the caller can fall back to
  * rendering the form (a safer default than hiding the form on a
  * transient failure).
+ *
+ * The server response is validated at runtime: a malicious or
+ * misconfigured server cannot inject arbitrary state/flow values
+ * that downstream code (modal-routing, copy selection) is not
+ * prepared to handle. Any deviation throws a descriptive error.
  */
 export async function getResetTokenStatus(token: string): Promise<ResetTokenStatus> {
   const API_BASE = getApiBase();
@@ -141,11 +155,18 @@ export async function getResetTokenStatus(token: string): Promise<ResetTokenStat
   if (!response.ok) {
     throw new Error(`reset-password status check failed: ${response.status}`);
   }
-  const data = await response.json() as { state?: string; flow?: string };
-  if (!data.state || !data.flow) {
-    throw new Error('reset-password status response missing state/flow');
+  const data = await response.json() as unknown;
+  if (data === null || typeof data !== 'object') {
+    throw new Error(`reset-password status response was not an object: ${JSON.stringify(data)}`);
   }
-  return { state: data.state as ResetTokenStatus['state'], flow: data.flow as ResetTokenStatus['flow'] };
+  const { state, flow } = data as { state?: unknown; flow?: unknown };
+  if (typeof state !== 'string' || !VALID_RESET_TOKEN_STATE_SET.has(state as ResetTokenStatus['state'])) {
+    throw new Error(`reset-password status response has invalid state: ${JSON.stringify(state)}`);
+  }
+  if (typeof flow !== 'string' || !VALID_RESET_TOKEN_FLOW_SET.has(flow as ResetTokenStatus['flow'])) {
+    throw new Error(`reset-password status response has invalid flow: ${JSON.stringify(flow)}`);
+  }
+  return { state: state as ResetTokenStatus['state'], flow: flow as ResetTokenStatus['flow'] };
 }
 
 /**
