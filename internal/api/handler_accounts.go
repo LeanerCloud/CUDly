@@ -321,6 +321,9 @@ func validateAuthMode(req CloudAccountRequest) error {
 		if req.GCPAuthMode != "" && !validGCPAuthModes[req.GCPAuthMode] {
 			return NewClientError(400, "invalid gcp_auth_mode")
 		}
+		if err := validateGCPClientEmail(req.GCPClientEmail); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -349,6 +352,12 @@ func validateAuthMode(req CloudAccountRequest) error {
 func validateAWSAuthMode(req CloudAccountRequest) error {
 	if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
 		return NewClientError(400, "invalid aws_auth_mode")
+	}
+	if err := validateAWSRoleARN(req.AWSRoleARN); err != nil {
+		return err
+	}
+	if err := validateAWSWebIdentityTokenFile(req.AWSWebIdentityTokenFile); err != nil {
+		return err
 	}
 	requiresExternalID := (req.AWSAuthMode == "role_arn" || req.AWSAuthMode == "bastion") &&
 		strings.TrimSpace(req.AWSRoleARN) != ""
