@@ -118,6 +118,99 @@ describe('Auth Module', () => {
       expect(errorDiv?.textContent).toBe('Invalid credentials');
     });
 
+    // Pre-flight + server-error mapping tests (issues #455 and #456).
+    // Helper: submit the login form with the given values and return the
+    // resulting error-div text. Uses the same async settle pattern as the
+    // surrounding tests.
+    async function submitLogin(email: string, password: string): Promise<string | null | undefined> {
+      const emailInput = document.getElementById('login-email') as HTMLInputElement;
+      const passwordInput = document.getElementById('login-password') as HTMLInputElement;
+      const loginForm = document.getElementById('login-form');
+      emailInput.value = email;
+      passwordInput.value = password;
+      loginForm?.dispatchEvent(new Event('submit', { cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const errorDiv = document.getElementById('login-error');
+      return errorDiv?.textContent;
+    }
+
+    test('empty email shows "Enter email address" without calling api.login', async () => {
+      await showLoginModal();
+      const text = await submitLogin('', 'somepassword');
+      expect(text).toBe('Enter email address');
+      expect(api.login).not.toHaveBeenCalled();
+    });
+
+    test('empty password shows "Enter password" without calling api.login', async () => {
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', '');
+      expect(text).toBe('Enter password');
+      expect(api.login).not.toHaveBeenCalled();
+    });
+
+    test('both empty shows single "Enter email and password" message', async () => {
+      await showLoginModal();
+      const text = await submitLogin('', '');
+      expect(text).toBe('Enter email and password');
+      expect(api.login).not.toHaveBeenCalled();
+    });
+
+    test('malformed email shows "Incorrect email format" without calling api.login', async () => {
+      await showLoginModal();
+      const text = await submitLogin('not-an-email', 'somepassword');
+      expect(text).toBe('Incorrect email format');
+      expect(api.login).not.toHaveBeenCalled();
+    });
+
+    test('backend "authentication failed" maps to "Incorrect email or password"', async () => {
+      (api.login as jest.Mock).mockRejectedValue(new Error('authentication failed'));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'wrongpassword');
+      expect(text).toBe('Incorrect email or password');
+    });
+
+    test('backend "invalid email or password" maps to "Incorrect email or password"', async () => {
+      (api.login as jest.Mock).mockRejectedValue(new Error('invalid email or password'));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'wrongpassword');
+      expect(text).toBe('Incorrect email or password');
+    });
+
+    test('backend "invalid email format" maps to "Incorrect email format"', async () => {
+      (api.login as jest.Mock).mockRejectedValue(new Error('invalid email format'));
+      await showLoginModal();
+      // Bypass client-side check with an email that passes the regex but
+      // that the backend would reject (e.g. extra-strict server policy).
+      const text = await submitLogin('shape-ok@example.com', 'somepassword');
+      expect(text).toBe('Incorrect email format');
+    });
+
+    test('unknown backend error passes through unchanged (e.g. MFA prompt)', async () => {
+      (api.login as jest.Mock).mockRejectedValue(new Error('MFA code required'));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'somepassword');
+      expect(text).toBe('MFA code required');
+    });
+
+    test('non-Error rejection (string) is handled defensively', async () => {
+      // Guards against a non-Error rejection causing undefined.toLowerCase()
+      // inside the server-error mapper.
+      (api.login as jest.Mock).mockImplementation(() => Promise.reject('boom'));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'somepassword');
+      expect(text).toBe('boom');
+    });
+
+    test('non-Error rejection (plain object) is handled defensively', async () => {
+      (api.login as jest.Mock).mockImplementation(() => Promise.reject({ code: 500 }));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'somepassword');
+      // String({...}) returns "[object Object]" — the exact stringification is
+      // less important than the fact that no exception is thrown and the
+      // login-error div is populated with something.
+      expect(text).toBe('[object Object]');
+    });
+
     test('reloads page after successful login', async () => {
       (api.login as jest.Mock).mockResolvedValue({});
       await showLoginModal();
