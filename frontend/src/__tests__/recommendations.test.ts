@@ -101,7 +101,13 @@ jest.mock('../utils', () => ({
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
-  populateAccountFilter: jest.fn(() => Promise.resolve())
+  populateAccountFilter: jest.fn(() => Promise.resolve()),
+  // CURRENCY_DEFAULT_DIGITS must be re-exported by the mock so that
+  // recommendations.ts (which imports it for its filter precision logic)
+  // sees the same default-digit count as the real utils.ts. Without this,
+  // displayPrecision's currency-column branches return undefined and the
+  // filter exact-match path breaks.
+  CURRENCY_DEFAULT_DIGITS: 0,
 }));
 
 import * as api from '../api';
@@ -2358,7 +2364,7 @@ describe('Bundle B: column header filter triggers', () => {
       ]);
     });
 
-    test('clicking group toggle (off) clears the SP filter', async () => {
+    test('clicking group toggle (off) persists an empty allow-list (0-row state)', async () => {
       // Pre-set the filter so the SP tri-state renders as checked.
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
         service: { kind: 'set', values: ['savings-plans-compute', 'savings-plans-ec2instance', 'savings-plans-sagemaker'] },
@@ -2372,9 +2378,12 @@ describe('Bundle B: column header filter triggers', () => {
       groupBox!.checked = false;
       groupBox!.dispatchEvent(new Event('change'));
 
-      // No SP boxes selected → commit() treats "no selections" as "no
-      // narrowing" and persists null (filter cleared).
-      expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('service', null);
+      // CR pass #2: unchecking the SP group when no non-SP boxes are
+      // currently selected leaves zero checkboxes ticked. The individual
+      // commit() path now persists that as an explicit empty allow-list
+      // (matching (All)-off / Clear), not null — so the table renders 0
+      // rows rather than silently snapping back to "no narrowing applied".
+      expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('service', { kind: 'set', values: [] });
     });
 
     test('group toggle resyncs to indeterminate when only some SPs are filter-active', async () => {
@@ -5730,6 +5739,49 @@ describe('Issue #482: column filter "All" tri-state semantics', () => {
     // All 3 now checked → commit collapses to null.
     expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('provider', null);
   });
+
+  // CR pass #2 regression: unchecking the last individual value used to
+  // collapse to `null` (no filter), which silently snapped the popover
+  // back to all-checked. After the fix, the individual-checkbox commit
+  // mirrors the (All) / Clear path: an empty allow-list is persisted, so
+  // the table renders 0 rows just like Clear.
+  test('unchecking every individual value persists an explicit empty allow-list (not null)', async () => {
+    // Start narrowed to a single value so the popover opens with exactly
+    // one checkbox checked. Then untick it — commit() should produce
+    // {kind: 'set', values: []}, NOT null.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]')!.click();
+    const awsCb = document.querySelector<HTMLInputElement>('.column-filter-popover input[data-value="aws"]')!;
+    expect(awsCb.checked).toBe(true);
+    awsCb.checked = false;
+    awsCb.dispatchEvent(new Event('change'));
+    // Zero of 3 checked — must NOT collapse to null.
+    expect(state.setRecommendationsColumnFilter).toHaveBeenLastCalledWith('provider', { kind: 'set', values: [] });
+    // Sanity: the call site MUST be the {set, values: []} branch, not the
+    // null branch. Guards against future refactors that re-introduce the
+    // `selected.length === 0 → null` shortcut.
+    const calls = (state.setRecommendationsColumnFilter as jest.Mock).mock.calls
+      .filter((c) => c[0] === 'provider');
+    const last = calls[calls.length - 1];
+    expect(last[1]).not.toBeNull();
+    expect(last[1]).toEqual({ kind: 'set', values: [] });
+  });
+
+  // CR pass #2 regression: with the empty allow-list persisted, applying
+  // the filter to the recommendations must render zero rows — i.e. the
+  // unchecking-last-value path reaches the same 0-row terminal state as
+  // the (All) / Clear path.
+  test('an empty allow-list filter renders 0 rows (applyColumnFilters returns [])', async () => {
+    const { applyColumnFilters } = await import('../recommendations');
+    const filtered = applyColumnFilters(
+      recs as unknown as Parameters<typeof applyColumnFilters>[0],
+      { provider: { kind: 'set', values: [] } },
+    );
+    expect(filtered).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -5869,5 +5921,93 @@ describe('Issue #484: numeric filter matches the displayed rounded value', () =>
     });
     const { applyColumnFilters } = await import('../recommendations');
     expect(applyColumnFilters(sub as unknown as Parameters<typeof applyColumnFilters>[0], state.getRecommendationsColumnFilters()).map((r) => r.id)).toEqual(['r-5']);
+  });
+
+  // CR pass #2 regression: `displayPrecision` for currency columns MUST
+  // agree with the fraction-digit count `formatCurrency` actually renders,
+  // so that an exact-match filter on the displayed string ("$123") matches
+  // the row whose underlying value rounds to that string at the active
+  // period. Both sources must agree, so the test pins the symmetry at the
+  // canonical `CURRENCY_DEFAULT_DIGITS` constant — which formatCurrency
+  // uses as its default and displayPrecision now imports — rather than at
+  // a hard-coded literal that would silently drift if the default ever
+  // changes.
+  describe('displayPrecision agrees with formatCurrency for currency columns', () => {
+    function fractionDigitsOf(s: string): number {
+      // Strip leading currency symbol(s) and any locale group separators,
+      // then count digits after a decimal point. Returns 0 for "$123",
+      // 2 for "$123.45", etc.
+      const stripped = s.replace(/[^0-9.]/g, '');
+      const dot = stripped.indexOf('.');
+      return dot < 0 ? 0 : stripped.length - dot - 1;
+    }
+
+    test('upfront_cost: displayPrecision matches formatCurrency at every period', async () => {
+      const recsMod = await import('../recommendations');
+      // utils is jest.mock()'d at the top of this file (so the
+      // recommendations module sees a stubbed formatCurrency). For this
+      // test we want the REAL formatCurrency to assert the fraction-digit
+      // contract holds against actual production behaviour, so we pull it
+      // via jest.requireActual rather than the mocked import.
+      const utilsActual = jest.requireActual<typeof import('../utils')>('../utils');
+      const displayPrecision = recsMod.displayPrecision;
+      const formatCurrency = utilsActual.formatCurrency;
+      // upfront_cost is always rendered via plain formatCurrency (no
+      // period scaling). The fraction digit count must therefore be
+      // period-independent and equal to formatCurrency's own output.
+      const sample = 123.456789;
+      const renderedDigits = fractionDigitsOf(formatCurrency(sample));
+      const periods: CostPeriod[] = ['hourly', 'daily', 'monthly', 'yearly'];
+      for (const period of periods) {
+        expect(displayPrecision('upfront_cost', period)).toBe(renderedDigits);
+      }
+    });
+
+    test('monthly_cost: displayPrecision at monthly period matches formatCurrency', async () => {
+      const recsMod = await import('../recommendations');
+      // utils is jest.mock()'d at the top of this file (so the
+      // recommendations module sees a stubbed formatCurrency). For this
+      // test we want the REAL formatCurrency to assert the fraction-digit
+      // contract holds against actual production behaviour, so we pull it
+      // via jest.requireActual rather than the mocked import.
+      const utilsActual = jest.requireActual<typeof import('../utils')>('../utils');
+      const displayPrecision = recsMod.displayPrecision;
+      const formatCurrency = utilsActual.formatCurrency;
+      const sample = 123.456789;
+      const renderedDigits = fractionDigitsOf(formatCurrency(sample));
+      // At monthly period, formatCostForPeriod delegates to formatCurrency
+      // → displayPrecision must agree with formatCurrency's digit count.
+      expect(displayPrecision('monthly_cost', 'monthly')).toBe(renderedDigits);
+    });
+
+    test('on_demand_monthly: displayPrecision at monthly period matches formatCurrency', async () => {
+      const recsMod = await import('../recommendations');
+      // utils is jest.mock()'d at the top of this file (so the
+      // recommendations module sees a stubbed formatCurrency). For this
+      // test we want the REAL formatCurrency to assert the fraction-digit
+      // contract holds against actual production behaviour, so we pull it
+      // via jest.requireActual rather than the mocked import.
+      const utilsActual = jest.requireActual<typeof import('../utils')>('../utils');
+      const displayPrecision = recsMod.displayPrecision;
+      const formatCurrency = utilsActual.formatCurrency;
+      const sample = 123.456789;
+      const renderedDigits = fractionDigitsOf(formatCurrency(sample));
+      expect(displayPrecision('on_demand_monthly', 'monthly')).toBe(renderedDigits);
+    });
+
+    test('monthly_cost / on_demand_monthly non-monthly periods use PERIOD_DECIMALS-based precision', async () => {
+      // Non-monthly periods bypass formatCurrency (see formatCostForPeriod)
+      // and use `toFixed(PERIOD_DECIMALS[period])`. Verify the precision
+      // values are non-zero where expected so the exact-match filter
+      // matches the displayed string (e.g. "$0.1715" at hourly).
+      const { displayPrecision } = await import('../recommendations');
+      // hourly: 4 dp, daily: 2 dp, yearly: 0 dp (per PERIOD_DECIMALS).
+      expect(displayPrecision('monthly_cost', 'hourly')).toBe(4);
+      expect(displayPrecision('monthly_cost', 'daily')).toBe(2);
+      expect(displayPrecision('monthly_cost', 'yearly')).toBe(0);
+      expect(displayPrecision('on_demand_monthly', 'hourly')).toBe(4);
+      expect(displayPrecision('on_demand_monthly', 'daily')).toBe(2);
+      expect(displayPrecision('on_demand_monthly', 'yearly')).toBe(0);
+    });
   });
 });

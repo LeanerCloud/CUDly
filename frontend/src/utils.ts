@@ -5,17 +5,27 @@
 import type { CloudAccount, AccountListFilters } from './api';
 
 /**
+ * Default number of fraction digits used by formatCurrency when the caller
+ * doesn't pass an explicit `digits` value. Exported so downstream code (e.g.
+ * the Opportunities-table filter precision logic in recommendations.ts) can
+ * stay in lock-step with the formatter rather than hard-coding `0` and
+ * silently drifting if this default ever changes.
+ */
+export const CURRENCY_DEFAULT_DIGITS = 0;
+
+/**
  * Format a number as currency.
  *
- * `digits` controls fraction digits (defaults to 0 — the dashboard KPI
- * format). Callers that need cents, e.g. Purchase History summary cards
- * and RI Exchange cost chips, pass `digits: 2`. Having a single helper
- * keeps "$0" / "$0.00" / "$0.00/hr" from diverging across the app.
+ * `digits` controls fraction digits (defaults to `CURRENCY_DEFAULT_DIGITS`,
+ * currently 0 — the dashboard KPI format). Callers that need cents, e.g.
+ * Purchase History summary cards and RI Exchange cost chips, pass `digits:
+ * 2`. Having a single helper keeps "$0" / "$0.00" / "$0.00/hr" from
+ * diverging across the app.
  */
 export function formatCurrency(
   value: number | null | undefined,
   currency: string = '$',
-  digits: number = 0
+  digits: number = CURRENCY_DEFAULT_DIGITS
 ): string {
   if (value === null || value === undefined || isNaN(value)) {
     return `${currency}${(0).toFixed(digits)}`;

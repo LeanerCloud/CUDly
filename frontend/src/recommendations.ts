@@ -5,7 +5,7 @@
 import * as api from './api';
 import * as state from './state';
 import type { CostPeriod } from './state';
-import { formatCurrency, formatTerm, escapeHtml } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS } from './utils';
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import { showToast } from './toast';
 import {
@@ -1100,9 +1100,12 @@ const PERIOD_DECIMALS: Record<CostPeriod, number> = {
 export function formatCostForPeriod(monthly: number | null | undefined, period: CostPeriod): string {
   const scaled = scaleCost(monthly, period);
   if (scaled === null) return '—';
-  // For the non-monthly periods use fixed-decimal formatting rather than
-  // formatCurrency (which always uses 2 decimals). Monthly keeps the
-  // existing formatCurrency behaviour for backward compatibility.
+  // For the non-monthly periods we want explicit per-period decimal
+  // precision (PERIOD_DECIMALS), so we side-step formatCurrency (which
+  // uses CURRENCY_DEFAULT_DIGITS for any caller that doesn't override).
+  // Monthly keeps the existing formatCurrency behaviour for backward
+  // compatibility (and to stay in lock-step with the rest of the
+  // dashboard's monthly $ formatting).
   if (period === 'monthly') return formatCurrency(scaled);
   return `$${scaled.toFixed(PERIOD_DECIMALS[period])}`;
 }
@@ -1455,7 +1458,14 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
 // shows that value, regardless of how many decimals the raw backend value
 // has. Mirrors the precision used by formatCostForPeriod / formatCurrency /
 // pctText so display and filter logic stay in sync.
-function displayPrecision(col: state.RecommendationsColumnId, period: CostPeriod): number {
+//
+// For currency columns we deliberately reuse `CURRENCY_DEFAULT_DIGITS` from
+// utils.ts rather than hard-coding `0`: that constant is the single source
+// of truth for `formatCurrency`'s default fraction digits, so if the
+// dashboard ever switches to a 2-decimal default the filter precision will
+// follow automatically instead of silently diverging (the bug #484 was
+// meant to close).
+export function displayPrecision(col: state.RecommendationsColumnId, period: CostPeriod): number {
   switch (col) {
     case 'count':
       return 0;
@@ -1465,14 +1475,14 @@ function displayPrecision(col: state.RecommendationsColumnId, period: CostPeriod
     case 'savings':
     case 'monthly_cost':
     case 'on_demand_monthly':
-      // formatCostForPeriod uses formatCurrency (default 0 fraction digits)
+      // formatCostForPeriod uses formatCurrency (CURRENCY_DEFAULT_DIGITS)
       // for monthly and toFixed(PERIOD_DECIMALS[period]) otherwise.
-      return period === 'monthly' ? 0 : PERIOD_DECIMALS[period];
+      return period === 'monthly' ? CURRENCY_DEFAULT_DIGITS : PERIOD_DECIMALS[period];
     case 'upfront_cost':
-      // formatCurrency default: 0 fraction digits.
-      return 0;
+      // Always formatted via formatCurrency with default digits.
+      return CURRENCY_DEFAULT_DIGITS;
     // Categorical columns never reach the numeric filter path; default
-    // is irrelevant but match formatCurrency's 0-decimal default for safety.
+    // is irrelevant but match formatCurrency's default-digit count for safety.
     case 'provider':
     case 'account':
     case 'service':
@@ -1480,7 +1490,7 @@ function displayPrecision(col: state.RecommendationsColumnId, period: CostPeriod
     case 'region':
     case 'term':
     case 'payment':
-      return 0;
+      return CURRENCY_DEFAULT_DIGITS;
   }
 }
 
@@ -1748,19 +1758,16 @@ function buildPopoverContent(
       spBox.checked = checked === spSlugs.length && spSlugs.length > 0;
     };
 
-    // Individual-checkbox commit (issue #482; preserves existing collapse
-    // semantics for the SP-group toggle, where "uncheck every value"
-    // should fall back to "no narrowing" rather than to an empty allow-
-    // list. See commitAll / Clear below for the explicit empty-set path
-    // used by the (All) box and the Clear button.):
-    //   - N=size selected → null (no narrowing applied)
-    //   - N=0 selected → null (also no narrowing; the individual flow
-    //     never produces the "show zero rows" state by itself)
-    //   - 0<N<size → {set, selected}
+    // Individual-checkbox commit (issue #482):
+    //   - N=size selected → null (no narrowing applied; all values pass)
+    //   - 0<=N<size → {set, selected}; N=0 explicitly stores an empty
+    //     allow-list so unchecking the last value reaches the same
+    //     zero-row state as the (All) checkbox and the Clear button,
+    //     rather than snapping back to "all checked".
     const commit = (): void => {
       const selected: string[] = [];
       checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
-      if (selected.length === 0 || selected.length === checkboxes.size) {
+      if (selected.length === checkboxes.size) {
         state.setRecommendationsColumnFilter(column, null);
       } else {
         state.setRecommendationsColumnFilter(column, { kind: 'set', values: selected });
