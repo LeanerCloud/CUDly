@@ -158,7 +158,8 @@ CodeRabbit:
 
 ```bash
 # Right after `gh pr create ...` returns the PR URL:
-PR_NUM=<the number gh just printed>
+# Derive PR_NUM from the current branch context (avoids brittle hand-copying).
+PR_NUM=$(gh pr view --repo LeanerCloud/CUDly --json number --jq '.number')
 ISSUE_NUM=<the issue this PR closes>
 
 LABELS=$(gh issue view "$ISSUE_NUM" --repo LeanerCloud/CUDly --json labels \
@@ -166,7 +167,16 @@ LABELS=$(gh issue view "$ISSUE_NUM" --repo LeanerCloud/CUDly --json labels \
         + (if [.labels[].name] | any(. == "triaged") then ["triaged"] else [] end)
         | join(",")')
 
-gh pr edit "$PR_NUM" --repo LeanerCloud/CUDly --add-label "$LABELS"
+# Guard against empty $LABELS — gh pr edit --add-label "" fails, which would
+# silently break this MANDATORY flow. If the closing issue has no triage
+# labels in the selected classes, surface the gap deterministically instead.
+if [ -n "$LABELS" ]; then
+  gh pr edit "$PR_NUM" --repo LeanerCloud/CUDly --add-label "$LABELS"
+else
+  echo "WARN: issue #$ISSUE_NUM has no priority/severity/urgency/impact/effort/type labels"
+  echo "      Triage the issue first, then re-run the label-mirror step."
+  echo "      Surface this gap in the PR body or as a comment on issue #$ISSUE_NUM."
+fi
 
 # Verify
 gh pr view "$PR_NUM" --repo LeanerCloud/CUDly --json labels \
