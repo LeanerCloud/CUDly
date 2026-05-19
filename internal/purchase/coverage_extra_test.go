@@ -954,6 +954,31 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 				}
 			},
 		},
+		{
+			// Legacy umbrella slug ("savings-plans") that mapSavingsPlansSlug
+			// still accepts for purchase_execution rows persisted before the
+			// rename in PR #94. DecodeServiceDetailsFor must also recognise
+			// this alias so a stored "savings-plans" rec round-trips through
+			// the codec the same way as the canonical "savingsplans" form.
+			// Regression guard: without the "savings-plans" case in
+			// newDetailsForService, DecodeServiceDetailsFor returns (nil,
+			// false) and recommendation.Details is nil — the SP client's
+			// findOfferingID type-assertion then fails with "invalid service
+			// details" on legacy rows, re-introducing #453 for SP umbrella.
+			name:        "sp_legacy_umbrella",
+			service:     "savings-plans",
+			serviceType: common.ServiceSavingsPlans,
+			region:      "us-east-1",
+			resource:    "LegacySP",
+			details:     &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 0.75},
+			assertDetails: func(t *testing.T, d common.ServiceDetails) {
+				sp, ok := d.(*common.SavingsPlanDetails)
+				if assert.True(t, ok, "legacy SP umbrella must decode to *common.SavingsPlanDetails, got %T", d) {
+					assert.Equal(t, "Compute", sp.PlanType)
+					assert.InDelta(t, 0.75, sp.HourlyCommitment, 0.001)
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
