@@ -32,10 +32,12 @@ var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 var gcpClientEmailRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.iam\.gserviceaccount\.com$`)
 
 // awsRoleARNRegex matches a valid IAM role ARN across commercial, China, and GovCloud
-// partitions. Requiring the 12-digit account ID and a non-empty role name blocks
-// obviously malformed strings before they reach stscreds.NewAssumeRoleProvider
-// (issue #413).
-var awsRoleARNRegex = regexp.MustCompile(`^arn:(aws|aws-cn|aws-us-gov):iam::[0-9]{12}:role/.+$`)
+// partitions. The role-name portion is restricted to the IAM-permitted character
+// set ([A-Za-z0-9+=,.@_-]) for both the optional path segments and the final
+// name. Limiting the trailing portion prevents whitespace, newlines, or other
+// control characters from sneaking past validation and reaching
+// stscreds.NewAssumeRoleProvider (issue #413).
+var awsRoleARNRegex = regexp.MustCompile(`^arn:(aws|aws-cn|aws-us-gov):iam::[0-9]{12}:role/(?:[A-Za-z0-9+=,.@_-]+/)*[A-Za-z0-9+=,.@_-]+$`)
 
 // awsWebIdentityTokenFilePrefixes lists the only path prefixes accepted for
 // aws_web_identity_token_file. Restricting to known EKS/Kubernetes mount points

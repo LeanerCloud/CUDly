@@ -358,7 +358,8 @@ func TestValidateGCPClientEmail(t *testing.T) {
 			err := validateGCPClientEmail(tt.email)
 			if tt.wantError {
 				assert.Error(t, err)
-				if ce, ok := IsClientError(err); ok {
+				ce, ok := IsClientError(err)
+				if assert.True(t, ok, "expected ClientError") {
 					assert.Equal(t, 400, ce.code)
 				}
 			} else {
@@ -382,11 +383,19 @@ func TestValidateAWSRoleARN(t *testing.T) {
 		{"valid govcloud ARN", "arn:aws-us-gov:iam::123456789012:role/MyRole", false},
 		{"valid china ARN", "arn:aws-cn:iam::123456789012:role/MyRole", false},
 		{"valid ARN with path", "arn:aws:iam::123456789012:role/path/to/MyRole", false},
+		{"valid ARN with IAM-allowed special chars", "arn:aws:iam::123456789012:role/My+Role=v1,name.test@example_role-A", false},
 		{"missing colons (common typo)", "arn:aws:iam:123456789012:role/Foo", true},
 		{"non-ARN string", "not-an-arn", true},
 		{"wrong service (sts)", "arn:aws:sts::123456789012:role/Foo", true},
 		{"account ID too short", "arn:aws:iam::12345:role/Foo", true},
 		{"unknown partition", "arn:aws-eu:iam::123456789012:role/Foo", true},
+		// The strict character class rejects anything outside the IAM-permitted
+		// set so attackers cannot smuggle whitespace, newlines, or HTML metachars
+		// past validation into downstream consumers.
+		{"whitespace in role name", "arn:aws:iam::123456789012:role/My Role", true},
+		{"newline in role name", "arn:aws:iam::123456789012:role/My\nRole", true},
+		{"angle-bracket injection", "arn:aws:iam::123456789012:role/<script>", true},
+		{"trailing slash (empty role name)", "arn:aws:iam::123456789012:role/", true},
 	}
 
 	for _, tt := range tests {
@@ -394,7 +403,8 @@ func TestValidateAWSRoleARN(t *testing.T) {
 			err := validateAWSRoleARN(tt.arn)
 			if tt.wantError {
 				assert.Error(t, err)
-				if ce, ok := IsClientError(err); ok {
+				ce, ok := IsClientError(err)
+				if assert.True(t, ok, "expected ClientError") {
 					assert.Equal(t, 400, ce.code)
 				}
 			} else {
@@ -430,7 +440,8 @@ func TestValidateAWSWebIdentityTokenFile(t *testing.T) {
 			err := validateAWSWebIdentityTokenFile(tt.path)
 			if tt.wantError {
 				assert.Error(t, err)
-				if ce, ok := IsClientError(err); ok {
+				ce, ok := IsClientError(err)
+				if assert.True(t, ok, "expected ClientError") {
 					assert.Equal(t, 400, ce.code)
 				}
 			} else {
