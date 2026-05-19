@@ -119,11 +119,19 @@
     background: transparent;
     border: none;
     color: var(--cudly-text-muted);
+    /* Sidebar items are <a href> for native "Open in new tab" support
+     * (issue #462). Suppress the default anchor underline + visited
+     * color so the rendered look matches the previous <button> rows. */
+    text-decoration: none;
     font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     cursor: pointer;
     width: 100%;
     transition: background-color 0.15s, color 0.15s;
+}
+
+.app-sidebar-nav .tab-btn:visited {
+    color: var(--cudly-text-muted);
 }
 
 .app-sidebar-nav .tab-btn:hover {

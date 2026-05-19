@@ -44,8 +44,10 @@ describe('Authentication', () => {
   });
 
   describe('initAuth', () => {
-    test('loads auth token from sessionStorage', () => {
-      sessionStorageMock.getItem.mockImplementation((key: string) => {
+    test('loads auth token from localStorage', () => {
+      // Issue #462: tokens live in localStorage so cross-tab sessions
+      // bootstrap from an existing login instead of forcing re-auth.
+      localStorageMock.getItem.mockImplementation((key: string) => {
         if (key === 'authToken') return 'test-token';
         return null;
       });
@@ -53,8 +55,8 @@ describe('Authentication', () => {
       expect(isAuthenticated()).toBe(true);
     });
 
-    test('loads api key from sessionStorage', () => {
-      sessionStorageMock.getItem.mockImplementation((key: string) => {
+    test('loads api key from localStorage', () => {
+      localStorageMock.getItem.mockImplementation((key: string) => {
         if (key === 'apiKey') return 'test-key';
         return null;
       });
@@ -62,40 +64,57 @@ describe('Authentication', () => {
       expect(isAuthenticated()).toBe(true);
     });
 
-    test('migrates token from localStorage to sessionStorage', () => {
+    test('fresh tab inherits an existing valid session (issue #462)', () => {
+      // Simulate a second tab opened on the same origin: localStorage
+      // already carries a valid token written by the first tab. The
+      // bootstrap path must NOT prompt for login.
       localStorageMock.getItem.mockImplementation((key: string) => {
+        if (key === 'authToken') return 'existing-session-token';
+        return null;
+      });
+      // Nothing in sessionStorage to migrate.
+      sessionStorageMock.getItem.mockReturnValue(null);
+      initAuth();
+      expect(isAuthenticated()).toBe(true);
+    });
+
+    test('migrates legacy sessionStorage entries to localStorage', () => {
+      // Users upgrading from the pre-#462 build had their token in
+      // sessionStorage. Migration copies it into localStorage and
+      // removes the sessionStorage entry so we don't re-migrate.
+      sessionStorageMock.getItem.mockImplementation((key: string) => {
         if (key === 'authToken') return 'legacy-token';
         return null;
       });
       initAuth();
-      expect(sessionStorageMock.setItem).toHaveBeenCalledWith('authToken', 'legacy-token');
-      expect(localStorageMock.removeItem).toHaveBeenCalledWith('authToken');
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('authToken', 'legacy-token');
+      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('authToken');
     });
   });
 
   describe('setAuthToken', () => {
-    test('sets token and stores in sessionStorage', () => {
+    test('sets token and stores in localStorage', () => {
       setAuthToken('new-token');
-      expect(sessionStorageMock.setItem).toHaveBeenCalledWith('authToken', 'new-token');
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('authToken', 'new-token');
       expect(isAuthenticated()).toBe(true);
     });
 
     test('clears token when empty', () => {
       setAuthToken('');
-      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('authToken');
+      expect(localStorageMock.removeItem).toHaveBeenCalledWith('authToken');
     });
   });
 
   describe('setApiKey', () => {
-    test('sets key and stores in sessionStorage', () => {
+    test('sets key and stores in localStorage', () => {
       setApiKey('new-key');
-      expect(sessionStorageMock.setItem).toHaveBeenCalledWith('apiKey', 'new-key');
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('apiKey', 'new-key');
       expect(isAuthenticated()).toBe(true);
     });
 
     test('clears key when empty', () => {
       setApiKey('');
-      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('apiKey');
+      expect(localStorageMock.removeItem).toHaveBeenCalledWith('apiKey');
     });
   });
 
@@ -116,15 +135,16 @@ describe('Authentication', () => {
   });
 
   describe('clearAuth', () => {
-    test('removes all credentials from sessionStorage and localStorage', () => {
+    test('removes all credentials from localStorage and any legacy sessionStorage', () => {
       setAuthToken('token');
       setApiKey('key');
       clearAuth();
-      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('authToken');
-      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('apiKey');
-      // Also clears legacy localStorage items
       expect(localStorageMock.removeItem).toHaveBeenCalledWith('authToken');
       expect(localStorageMock.removeItem).toHaveBeenCalledWith('apiKey');
+      expect(localStorageMock.removeItem).toHaveBeenCalledWith('csrfToken');
+      // Also clears any legacy sessionStorage entries from older builds.
+      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('authToken');
+      expect(sessionStorageMock.removeItem).toHaveBeenCalledWith('apiKey');
       expect(isAuthenticated()).toBe(false);
     });
   });
@@ -423,7 +443,9 @@ describe('API Requests', () => {
           body: JSON.stringify({ email: 'test@example.com', password: btoa('password') })
         })
       );
-      expect(sessionStorageMock.setItem).toHaveBeenCalledWith('authToken', 'new-token');
+      // Issue #462: tokens are persisted to localStorage so a second
+      // tab on the same origin inherits the session.
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('authToken', 'new-token');
     });
 
     test('includes x-amz-content-sha256 header for CloudFront OAC', async () => {
@@ -571,7 +593,9 @@ describe('API Requests', () => {
           body: JSON.stringify({ email: 'admin@example.com', password: btoa('password') })
         })
       );
-      expect(sessionStorageMock.setItem).toHaveBeenCalledWith('authToken', 'admin-token');
+      // Issue #462: tokens are persisted to localStorage so a second
+      // tab on the same origin inherits the session.
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('authToken', 'admin-token');
     });
   });
 });

@@ -7,11 +7,27 @@ import type { ApiError, RequestOptions } from './types';
 const API_BASE = '/api';
 
 // State for authentication
-// SECURITY: Tokens are stored in sessionStorage (not localStorage) to reduce XSS risk
-// sessionStorage is cleared when the browser tab closes, limiting exposure window
+// SECURITY: Tokens are stored in localStorage scoped to the dashboard origin
+// (issue #462). localStorage was chosen over sessionStorage so a second tab
+// opened on the same origin inherits the active session; admins need to
+// compare Settings vs. Opportunities side by side without re-authenticating.
+// Tradeoff: the XSS exposure window widens from "tab close" to "explicit
+// logout". Mitigations:
+//   - cross-tab logout via the `storage` event (signing out in one tab
+//     clears state and reloads the others within ~1s).
+//   - same-origin only; no third-party iframes have access.
+//   - HttpOnly session cookies remain the cleaner long-term option (see
+//     issue #462 discussion); that is a larger refactor and is tracked
+//     separately.
 let authToken = '';
 let apiKey = '';
 let csrfToken = '';
+
+// Keys we mirror to/from localStorage. Listed once so the storage-event
+// listener and the migration block stay in sync.
+const STORAGE_KEYS = ['authToken', 'apiKey', 'csrfToken'] as const;
+
+let storageListenerInstalled = false;
 
 /**
  * Calculate SHA256 hash of a string using Web Crypto API
@@ -35,32 +51,60 @@ export async function addContentHashHeader(headers: Record<string, string>, body
 }
 
 /**
- * Initialize authentication from sessionStorage
- * SECURITY: Using sessionStorage instead of localStorage reduces XSS exposure
- * - sessionStorage is cleared when the tab/window closes
- * - Data is not shared between tabs (isolates sessions)
- * Migration: Will attempt localStorage first for backward compatibility, then clear it
+ * Initialize authentication from localStorage.
+ *
+ * Issue #462: tokens were previously kept in sessionStorage so a fresh
+ * tab on the same origin would force a re-login. We moved them to
+ * localStorage to support multi-tab workflows. See the SECURITY comment
+ * at the top of the module for the tradeoff and mitigations.
+ *
+ * Migration: any token still living in sessionStorage from the previous
+ * release is copied into localStorage and then removed, so users stay
+ * signed in across the upgrade.
  */
 export function initAuth(): void {
-  // Migrate from localStorage to sessionStorage if needed (backward compatibility)
-  const localToken = localStorage.getItem('authToken');
-  const localApiKey = localStorage.getItem('apiKey');
-
-  if (localToken || localApiKey) {
-    // Migrate to sessionStorage
-    if (localToken) {
-      sessionStorage.setItem('authToken', localToken);
-      localStorage.removeItem('authToken');
+  // Migrate sessionStorage → localStorage for users upgrading from the
+  // pre-#462 build. Removes the sessionStorage entry afterwards.
+  for (const key of STORAGE_KEYS) {
+    const fromSession = sessionStorage.getItem(key);
+    if (fromSession && !localStorage.getItem(key)) {
+      localStorage.setItem(key, fromSession);
     }
-    if (localApiKey) {
-      sessionStorage.setItem('apiKey', localApiKey);
-      localStorage.removeItem('apiKey');
+    if (fromSession) {
+      sessionStorage.removeItem(key);
     }
   }
 
-  authToken = sessionStorage.getItem('authToken') || '';
-  apiKey = sessionStorage.getItem('apiKey') || '';
-  csrfToken = sessionStorage.getItem('csrfToken') || '';
+  authToken = localStorage.getItem('authToken') || '';
+  apiKey = localStorage.getItem('apiKey') || '';
+  csrfToken = localStorage.getItem('csrfToken') || '';
+
+  installStorageListener();
+}
+
+/**
+ * Sync sign-out across tabs (issue #462). When another tab clears the
+ * auth keys (logout), reset our in-memory state and reload so the UI
+ * lands on the login modal instead of leaving a stale logged-in view.
+ * Idempotent; only registers once per page load.
+ */
+function installStorageListener(): void {
+  if (storageListenerInstalled) return;
+  if (typeof window === 'undefined' || !window.addEventListener) return;
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (!e.key || !(STORAGE_KEYS as readonly string[]).includes(e.key)) return;
+    // Only react to a *cleared* key (newValue === null); partial
+    // updates (e.g. token refresh) propagate via the in-memory state
+    // and don't need a reload.
+    if (e.newValue !== null) return;
+    authToken = '';
+    apiKey = '';
+    csrfToken = '';
+    if (typeof window.location?.reload === 'function') {
+      window.location.reload();
+    }
+  });
+  storageListenerInstalled = true;
 }
 
 /**
@@ -69,9 +113,9 @@ export function initAuth(): void {
 export function setAuthToken(token: string): void {
   authToken = token;
   if (token) {
-    sessionStorage.setItem('authToken', token);
+    localStorage.setItem('authToken', token);
   } else {
-    sessionStorage.removeItem('authToken');
+    localStorage.removeItem('authToken');
   }
 }
 
@@ -81,9 +125,9 @@ export function setAuthToken(token: string): void {
 export function setCsrfToken(token: string): void {
   csrfToken = token;
   if (token) {
-    sessionStorage.setItem('csrfToken', token);
+    localStorage.setItem('csrfToken', token);
   } else {
-    sessionStorage.removeItem('csrfToken');
+    localStorage.removeItem('csrfToken');
   }
 }
 
@@ -93,9 +137,9 @@ export function setCsrfToken(token: string): void {
 export function setApiKey(key: string): void {
   apiKey = key;
   if (key) {
-    sessionStorage.setItem('apiKey', key);
+    localStorage.setItem('apiKey', key);
   } else {
-    sessionStorage.removeItem('apiKey');
+    localStorage.removeItem('apiKey');
   }
 }
 
@@ -107,18 +151,19 @@ export function isAuthenticated(): boolean {
 }
 
 /**
- * Clear all authentication
+ * Clear all authentication. Removing from localStorage triggers the
+ * `storage` event in any other open tab on the same origin, which is
+ * how cross-tab sign-out propagates (see installStorageListener).
  */
 export function clearAuth(): void {
   authToken = '';
   apiKey = '';
   csrfToken = '';
-  sessionStorage.removeItem('authToken');
-  sessionStorage.removeItem('apiKey');
-  sessionStorage.removeItem('csrfToken');
-  // Also clear any legacy localStorage items
-  localStorage.removeItem('authToken');
-  localStorage.removeItem('apiKey');
+  for (const key of STORAGE_KEYS) {
+    localStorage.removeItem(key);
+    // Also clear any leftover sessionStorage entries from older builds.
+    sessionStorage.removeItem(key);
+  }
 }
 
 /**
