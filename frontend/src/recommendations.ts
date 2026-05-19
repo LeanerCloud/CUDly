@@ -808,8 +808,15 @@ function groupsInSortOrder(
       const aNullish = scoreA === Number.POSITIVE_INFINITY;
       const bNullish = scoreB === Number.POSITIVE_INFINITY;
       if (aNullish !== bNullish) return aNullish ? 1 : -1;
-      const diff = (scoreA - scoreB) * direction;
-      if (diff !== 0) return diff;
+      // Both-nullish case: `Infinity - Infinity` would yield NaN and
+      // `NaN !== 0` would short-circuit the cellKey tiebreaker below,
+      // leaving two all-null cells in implementation-defined order.
+      // Skip the numeric diff when both sides are sentinel-null so the
+      // tiebreaker runs (matches the well-defined-order intent of #494).
+      if (!aNullish) {
+        const diff = (scoreA - scoreB) * direction;
+        if (diff !== 0) return diff;
+      }
     } else if (typeof scoreA === 'string' && typeof scoreB === 'string') {
       const diff = scoreA.localeCompare(scoreB) * direction;
       if (diff !== 0) return diff;

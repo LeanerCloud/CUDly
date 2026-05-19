@@ -4855,6 +4855,18 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     ).map((tr) => tr.getAttribute('data-cell-key') ?? '');
   }
 
+  /**
+   * Find a key fragment in the rendered order and assert it is actually
+   * present. Returns the index. Prevents false-positive `<` comparisons that
+   * would silently pass when `findIndex` returns `-1` for both sides (per CR
+   * review on the initial commit).
+   */
+  function indexOrFail(order: string[], keyFragment: string): number {
+    const idx = order.findIndex((k) => k.includes(keyFragment));
+    expect(idx).toBeGreaterThanOrEqual(0);
+    return idx;
+  }
+
   /** Set up the DOM + standard mocks; caller provides the rec list + sort. */
   function setupTestFixture(
     recs: LocalRecommendation[],
@@ -4911,10 +4923,10 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     // Expected: 1yr-only first (termMin=1, termMax=1), mixed second (termMin=1,
     // termMax=3), 3yr-only last (termMin=3). The encoded score termMin*100 +
     // termMax distinguishes the 1yr-only and mixed cells via termMax.
-    expect(order.findIndex((k) => k.includes('bbb-1y-only')))
-      .toBeLessThan(order.findIndex((k) => k.includes('aaa-mixed')));
-    expect(order.findIndex((k) => k.includes('aaa-mixed')))
-      .toBeLessThan(order.findIndex((k) => k.includes('ccc-3y-only')));
+    expect(indexOrFail(order, 'bbb-1y-only'))
+      .toBeLessThan(indexOrFail(order, 'aaa-mixed'));
+    expect(indexOrFail(order, 'aaa-mixed'))
+      .toBeLessThan(indexOrFail(order, 'ccc-3y-only'));
   });
 
   test('Term desc: order is the exact reverse of ascending', async () => {
@@ -4944,10 +4956,10 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     await loadRecommendations();
 
     const order = renderedCellOrder();
-    expect(order.findIndex((k) => k.includes('ccc-3y-only')))
-      .toBeLessThan(order.findIndex((k) => k.includes('aaa-mixed')));
-    expect(order.findIndex((k) => k.includes('aaa-mixed')))
-      .toBeLessThan(order.findIndex((k) => k.includes('bbb-1y-only')));
+    expect(indexOrFail(order, 'ccc-3y-only'))
+      .toBeLessThan(indexOrFail(order, 'aaa-mixed'));
+    expect(indexOrFail(order, 'aaa-mixed'))
+      .toBeLessThan(indexOrFail(order, 'bbb-1y-only'));
   });
 
   // -------------------------------------------------------------------------
@@ -4977,10 +4989,10 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     // Expected semantic order: no-upfront < partial-upfront < all-upfront.
     // Previous alphabetic comparator would have produced all-upfront <
     // no-upfront < partial-upfront, which this test would fail under.
-    expect(order.findIndex((k) => k.includes('noup-cell')))
-      .toBeLessThan(order.findIndex((k) => k.includes('partial-cell')));
-    expect(order.findIndex((k) => k.includes('partial-cell')))
-      .toBeLessThan(order.findIndex((k) => k.includes('allup-cell')));
+    expect(indexOrFail(order, 'noup-cell'))
+      .toBeLessThan(indexOrFail(order, 'partial-cell'));
+    expect(indexOrFail(order, 'partial-cell'))
+      .toBeLessThan(indexOrFail(order, 'allup-cell'));
   });
 
   // -------------------------------------------------------------------------
@@ -5006,10 +5018,10 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
 
     const order = renderedCellOrder();
     // Expected: upfrontMin asc -> 0 < 300 < 800.
-    expect(order.findIndex((k) => k.includes('low-upfront')))
-      .toBeLessThan(order.findIndex((k) => k.includes('mid-upfront')));
-    expect(order.findIndex((k) => k.includes('mid-upfront')))
-      .toBeLessThan(order.findIndex((k) => k.includes('high-upfront')));
+    expect(indexOrFail(order, 'low-upfront'))
+      .toBeLessThan(indexOrFail(order, 'mid-upfront'));
+    expect(indexOrFail(order, 'mid-upfront'))
+      .toBeLessThan(indexOrFail(order, 'high-upfront'));
   });
 
   // -------------------------------------------------------------------------
@@ -5035,10 +5047,10 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
 
     const order = renderedCellOrder();
     // Expected: 20 < 60 < 90.
-    expect(order.findIndex((k) => k.includes('low-monthly')))
-      .toBeLessThan(order.findIndex((k) => k.includes('mid-monthly')));
-    expect(order.findIndex((k) => k.includes('mid-monthly')))
-      .toBeLessThan(order.findIndex((k) => k.includes('high-monthly')));
+    expect(indexOrFail(order, 'low-monthly'))
+      .toBeLessThan(indexOrFail(order, 'mid-monthly'));
+    expect(indexOrFail(order, 'mid-monthly'))
+      .toBeLessThan(indexOrFail(order, 'high-monthly'));
   });
 
   test('Monthly Cost: cells with all-null monthly_cost sort last in both asc and desc', async () => {
@@ -5056,8 +5068,8 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     setupTestFixture(recs, { column: 'monthly_cost', direction: 'asc' });
     await loadRecommendations();
     let order = renderedCellOrder();
-    expect(order.findIndex((k) => k.includes('finite-monthly')))
-      .toBeLessThan(order.findIndex((k) => k.includes('allnull-monthly')));
+    expect(indexOrFail(order, 'finite-monthly'))
+      .toBeLessThan(indexOrFail(order, 'allnull-monthly'));
 
     // Descending: all-null cells STAY last regardless of direction - the
     // POSITIVE_INFINITY null-sentinel logic flips them out of the normal
@@ -5066,8 +5078,40 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     setupTestFixture(recs, { column: 'monthly_cost', direction: 'desc' });
     await loadRecommendations();
     order = renderedCellOrder();
-    expect(order.findIndex((k) => k.includes('finite-monthly')))
-      .toBeLessThan(order.findIndex((k) => k.includes('allnull-monthly')));
+    expect(indexOrFail(order, 'finite-monthly'))
+      .toBeLessThan(indexOrFail(order, 'allnull-monthly'));
+  });
+
+  test('Monthly Cost: two all-null cells sort deterministically via cellKey tiebreaker', async () => {
+    // Both cells have ALL null monthly_cost - their scores are both
+    // POSITIVE_INFINITY. The naive numeric diff would be Infinity - Infinity
+    // = NaN; the comparator MUST short-circuit to the cellKey tiebreaker so
+    // the two cells render in a stable order across repeated invocations.
+    // Closes the gap surfaced by CodeRabbit on the initial #494 commit.
+    const cellA = multiVariantCell({
+      resourceType: 'aaa-null', payment1y: 'all-upfront', payment3y: 'all-upfront',
+      upfront1y: 1000, upfront3y: 3000, monthly1y: null, monthly3y: null,
+    });
+    const cellB = multiVariantCell({
+      resourceType: 'bbb-null', payment1y: 'all-upfront', payment3y: 'all-upfront',
+      upfront1y: 2000, upfront3y: 6000, monthly1y: null, monthly3y: null,
+    });
+    const recs = [...cellB, ...cellA];  // intentionally wrong insertion order
+
+    setupTestFixture(recs, { column: 'monthly_cost', direction: 'asc' });
+    await loadRecommendations();
+    const first = renderedCellOrder();
+    expect(first.length).toBe(2);
+    // cellKey contains the resource_type slug, so cellKey for 'aaa-null'
+    // sorts before 'bbb-null' under localeCompare.
+    expect(indexOrFail(first, 'aaa-null'))
+      .toBeLessThan(indexOrFail(first, 'bbb-null'));
+
+    // Re-run to confirm determinism (would fail under Infinity - Infinity = NaN).
+    setupTestFixture(recs, { column: 'monthly_cost', direction: 'asc' });
+    await loadRecommendations();
+    const second = renderedCellOrder();
+    expect(second).toEqual(first);
   });
 
   // -------------------------------------------------------------------------
@@ -5099,10 +5143,10 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
 
     const order = renderedCellOrder();
     // Expected asc: 5% < 15% < 25%.
-    expect(order.findIndex((k) => k.includes('low-pct')))
-      .toBeLessThan(order.findIndex((k) => k.includes('mid-pct')));
-    expect(order.findIndex((k) => k.includes('mid-pct')))
-      .toBeLessThan(order.findIndex((k) => k.includes('high-pct')));
+    expect(indexOrFail(order, 'low-pct'))
+      .toBeLessThan(indexOrFail(order, 'mid-pct'));
+    expect(indexOrFail(order, 'mid-pct'))
+      .toBeLessThan(indexOrFail(order, 'high-pct'));
   });
 
   test('Effective %: cells with all-null pct sort last regardless of direction', async () => {
@@ -5127,14 +5171,14 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     setupTestFixture(recs, { column: 'effective_savings_pct', direction: 'asc' });
     await loadRecommendations();
     let order = renderedCellOrder();
-    expect(order.findIndex((k) => k.includes('finite-pct')))
-      .toBeLessThan(order.findIndex((k) => k.includes('allnull-pct')));
+    expect(indexOrFail(order, 'finite-pct'))
+      .toBeLessThan(indexOrFail(order, 'allnull-pct'));
 
     setupTestFixture(recs, { column: 'effective_savings_pct', direction: 'desc' });
     await loadRecommendations();
     order = renderedCellOrder();
-    expect(order.findIndex((k) => k.includes('finite-pct')))
-      .toBeLessThan(order.findIndex((k) => k.includes('allnull-pct')));
+    expect(indexOrFail(order, 'finite-pct'))
+      .toBeLessThan(indexOrFail(order, 'allnull-pct'));
   });
 
   // -------------------------------------------------------------------------
@@ -5184,10 +5228,10 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
     //   selected-1y cell  (score = 1*100+1 = 101)
     //   mixed cell        (score = 1*100+3 = 103)
     //   selected-3y cell  (score = 3*100+3 = 303)
-    expect(order.findIndex((k) => k.includes('sel1y-cell')))
-      .toBeLessThan(order.findIndex((k) => k.includes('mixed-cell')));
-    expect(order.findIndex((k) => k.includes('mixed-cell')))
-      .toBeLessThan(order.findIndex((k) => k.includes('sel3y-cell')));
+    expect(indexOrFail(order, 'sel1y-cell'))
+      .toBeLessThan(indexOrFail(order, 'mixed-cell'));
+    expect(indexOrFail(order, 'mixed-cell'))
+      .toBeLessThan(indexOrFail(order, 'sel3y-cell'));
   });
 
   test('Sort is deterministic across repeated renders for each affected column', async () => {
