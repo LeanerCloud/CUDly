@@ -76,6 +76,7 @@ export {
   getCurrentUser,
   requestPasswordReset,
   resetPassword,
+  getResetTokenStatus,
   checkAdminExists,
   setupAdmin,
   changePassword,

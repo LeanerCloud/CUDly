@@ -155,6 +155,13 @@ type AuthServiceInterface interface {
 	CheckAdminExists(ctx context.Context) (bool, error)
 	RequestPasswordReset(ctx context.Context, email string) error
 	ConfirmPasswordReset(ctx context.Context, req PasswordResetConfirm) error
+	// ResetTokenStatus returns the runtime state of a reset token
+	// without consuming it. Used by the GET /api/auth/reset-password/
+	// status endpoint so the frontend can branch on expired / used
+	// tokens before rendering the reset-password form (issues #460,
+	// #461). state is one of "valid" | "expired" | "used"; flow is
+	// "reset" | "invite".
+	ResetTokenStatus(ctx context.Context, token string) (state string, flow string, err error)
 	GetUser(ctx context.Context, userID string) (*User, error)
 	UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error
 	// User management - uses auth.API* types

@@ -198,6 +198,7 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/auth/setup-admin", Method: "POST", Handler: r.setupAdminHandler, Auth: AuthPublic},
 		{ExactPath: "/api/auth/forgot-password", Method: "POST", Handler: r.forgotPasswordHandler, Auth: AuthPublic},
 		{ExactPath: "/api/auth/reset-password", Method: "POST", Handler: r.resetPasswordHandler, Auth: AuthPublic},
+		{ExactPath: "/api/auth/reset-password/status", Method: "GET", Handler: r.resetPasswordStatusHandler, Auth: AuthPublic},
 		{ExactPath: "/api/auth/profile", Method: "PUT", Handler: r.updateProfileHandler, Auth: AuthUser},
 		{ExactPath: "/api/auth/change-password", Method: "POST", Handler: r.changePasswordHandler, Auth: AuthUser},
 
@@ -531,6 +532,10 @@ func (r *Router) forgotPasswordHandler(ctx context.Context, req *events.LambdaFu
 
 func (r *Router) resetPasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.resetPassword(ctx, req)
+}
+
+func (r *Router) resetPasswordStatusHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.resetPasswordStatus(ctx, req)
 }
 
 func (r *Router) updateProfileHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

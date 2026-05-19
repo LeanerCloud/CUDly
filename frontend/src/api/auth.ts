@@ -114,6 +114,41 @@ export async function resetPassword(token: string, newPassword: string): Promise
 }
 
 /**
+ * ResetTokenStatus describes the runtime state of a reset token. The
+ * frontend calls getResetTokenStatus() before rendering the reset-
+ * password form so it can show an "expired" or "already used" view
+ * instead of a form that can never submit (issues #460, #461).
+ *
+ * state: "valid" | "expired" | "used"  (the server collapses "never
+ *        existed" into "used" since the row is wiped on consumption)
+ * flow:  "reset" | "invite"             (drives "Reset" vs "Set" copy)
+ */
+export interface ResetTokenStatus {
+  state: 'valid' | 'expired' | 'used';
+  flow: 'reset' | 'invite';
+}
+
+/**
+ * Probe a reset token's state before rendering the form. On any
+ * network or non-OK response, throws so the caller can fall back to
+ * rendering the form (a safer default than hiding the form on a
+ * transient failure).
+ */
+export async function getResetTokenStatus(token: string): Promise<ResetTokenStatus> {
+  const API_BASE = getApiBase();
+  const url = `${API_BASE}/auth/reset-password/status?token=${encodeURIComponent(token)}`;
+  const response = await fetch(url, { method: 'GET' });
+  if (!response.ok) {
+    throw new Error(`reset-password status check failed: ${response.status}`);
+  }
+  const data = await response.json() as { state?: string; flow?: string };
+  if (!data.state || !data.flow) {
+    throw new Error('reset-password status response missing state/flow');
+  }
+  return { state: data.state as ResetTokenStatus['state'], flow: data.flow as ResetTokenStatus['flow'] };
+}
+
+/**
  * Check if admin exists
  */
 export async function checkAdminExists(key: string): Promise<boolean> {

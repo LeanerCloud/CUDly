@@ -907,6 +907,11 @@ func (a *authServiceAdapter) ConfirmPasswordReset(ctx context.Context, req api.P
 	return a.service.ConfirmPasswordReset(ctx, authReq)
 }
 
+func (a *authServiceAdapter) ResetTokenStatus(ctx context.Context, token string) (string, string, error) {
+	state, flow, err := a.service.ResetTokenStatus(ctx, token)
+	return string(state), string(flow), err
+}
+
 func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.User, error) {
 	user, err := a.service.GetUser(ctx, userID)
 	if err != nil {

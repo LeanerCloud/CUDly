@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -450,6 +451,112 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "current password")
 		assert.NotContains(t, err.Error(), "used recently")
+
+		mockStore.AssertExpectations(t)
+	})
+}
+
+// TestService_ResetTokenStatus covers the read-only token-status probe
+// the frontend uses to branch on expired / used tokens before rendering
+// the reset-password form (issues #460, #461).
+func TestService_ResetTokenStatus(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("valid token on active user is valid + reset flow", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		expiry := time.Now().Add(time.Hour)
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
+			Return(&User{ID: "u1", Active: true, PasswordResetExpiry: &expiry}, nil).Once()
+
+		state, flow, err := service.ResetTokenStatus(ctx, "valid-token")
+		require.NoError(t, err)
+		assert.Equal(t, ResetTokenStateValid, state)
+		assert.Equal(t, ResetTokenFlowReset, flow)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("valid token on inactive user is valid + invite flow", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		expiry := time.Now().Add(time.Hour)
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
+			Return(&User{ID: "u2", Active: false, PasswordResetExpiry: &expiry}, nil).Once()
+
+		state, flow, err := service.ResetTokenStatus(ctx, "valid-invite-token")
+		require.NoError(t, err)
+		assert.Equal(t, ResetTokenStateValid, state)
+		assert.Equal(t, ResetTokenFlowInvite, flow)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("expired token reports expired", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		expiry := time.Now().Add(-time.Hour)
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
+			Return(&User{ID: "u3", Active: true, PasswordResetExpiry: &expiry}, nil).Once()
+
+		state, flow, err := service.ResetTokenStatus(ctx, "expired-token")
+		require.NoError(t, err)
+		assert.Equal(t, ResetTokenStateExpired, state)
+		assert.Equal(t, ResetTokenFlowReset, flow)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("unknown or consumed token reports used", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
+			Return(nil, nil).Once()
+
+		state, flow, err := service.ResetTokenStatus(ctx, "stale-token")
+		require.NoError(t, err)
+		assert.Equal(t, ResetTokenStateUsed, state)
+		// Default flow when there is no user row to inspect.
+		assert.Equal(t, ResetTokenFlowReset, flow)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("pgx.ErrNoRows from store maps to used", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
+			Return(nil, pgx.ErrNoRows).Once()
+
+		state, flow, err := service.ResetTokenStatus(ctx, "bogus-token")
+		require.NoError(t, err)
+		assert.Equal(t, ResetTokenStateUsed, state)
+		assert.Equal(t, ResetTokenFlowReset, flow)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("empty token short-circuits to used", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		// No store call expected; the empty-token branch returns
+		// before consulting the store.
+		state, flow, err := service.ResetTokenStatus(ctx, "")
+		require.NoError(t, err)
+		assert.Equal(t, ResetTokenStateUsed, state)
+		assert.Equal(t, ResetTokenFlowReset, flow)
 
 		mockStore.AssertExpectations(t)
 	})

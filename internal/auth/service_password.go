@@ -331,6 +331,74 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetCon
 	return nil
 }
 
+// ResetTokenState describes the runtime state of a password-reset token.
+// One of "valid", "expired", "used". "used" doubles as the fallback for
+// tokens that never existed: the row is wiped on consumption (one-time
+// use), so the store cannot reliably distinguish "consumed" from
+// "never issued". Surfacing both as "used" matches the dominant
+// real-world case (stale link from an old email) and lets the frontend
+// branch on a single state.
+type ResetTokenState string
+
+const (
+	// ResetTokenStateValid means the token matches an issued, unexpired row.
+	ResetTokenStateValid ResetTokenState = "valid"
+	// ResetTokenStateExpired means the token matches but its expiry has passed.
+	ResetTokenStateExpired ResetTokenState = "expired"
+	// ResetTokenStateUsed covers both consumed and never-issued tokens.
+	ResetTokenStateUsed ResetTokenState = "used"
+)
+
+// ResetTokenFlow describes whether the matched token belongs to an
+// invite flow (user had Active = false at issue time, still false now)
+// or a normal password-reset flow. The frontend uses this to swap
+// "Set your password" vs "Reset your password" wording (issue #461).
+type ResetTokenFlow string
+
+const (
+	// ResetTokenFlowReset is the default flow for active users.
+	ResetTokenFlowReset ResetTokenFlow = "reset"
+	// ResetTokenFlowInvite is the bootstrap flow for not-yet-active users.
+	ResetTokenFlowInvite ResetTokenFlow = "invite"
+)
+
+// ResetTokenStatus returns the state of a reset token without consuming
+// it. The frontend calls this before rendering the reset-password form
+// so it can show an "expired" or "already used" view instead of a form
+// the user can never submit (issues #460, #461). For "used" / never-
+// issued, flow defaults to "reset" since there is no user to inspect.
+func (s *Service) ResetTokenStatus(ctx context.Context, token string) (ResetTokenState, ResetTokenFlow, error) {
+	if token == "" {
+		return ResetTokenStateUsed, ResetTokenFlowReset, nil
+	}
+
+	tokenHash := hashSessionToken(token)
+	user, err := s.store.GetUserByResetToken(ctx, tokenHash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ResetTokenStateUsed, ResetTokenFlowReset, nil
+		}
+		return "", "", err
+	}
+	if user == nil {
+		return ResetTokenStateUsed, ResetTokenFlowReset, nil
+	}
+
+	if user.PasswordResetExpiry == nil || time.Now().After(*user.PasswordResetExpiry) {
+		flow := ResetTokenFlowReset
+		if !user.Active {
+			flow = ResetTokenFlowInvite
+		}
+		return ResetTokenStateExpired, flow, nil
+	}
+
+	flow := ResetTokenFlowReset
+	if !user.Active {
+		flow = ResetTokenFlowInvite
+	}
+	return ResetTokenStateValid, flow, nil
+}
+
 func (s *Service) validateResetToken(ctx context.Context, token string) (*User, error) {
 	tokenHash := hashSessionToken(token)
 
