@@ -160,17 +160,20 @@ function populateGraceInput(id: string, value: number | undefined): void {
 // readGraceInput parses the grace-period input, returning the numeric
 // value or an error message (out of range, not a number). Empty input
 // defaults to 7.
+//
+// The error wording mirrors what wireInlineRangeValidation renders
+// under the field on input/blur, so the inline indicator and the
+// save-time toast carry the same text — a user who ignores the inline
+// red mark and clicks Save shouldn't see a differently-phrased message
+// describing the same failure (CodeRabbit follow-up to #471).
 function readGraceInput(id: string): { value: number; err?: undefined } | { value: 0; err: string } {
   const el = document.getElementById(id) as HTMLInputElement | null;
   if (!el) return { value: 7 };
   const raw = el.value.trim();
   if (raw === '') return { value: 7 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || !Number.isInteger(n)) {
-    return { value: 0, err: 'enter a whole number of days' };
-  }
-  if (n < 0 || n > 30) {
-    return { value: 0, err: 'must be between 0 and 30 days' };
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 30) {
+    return { value: 0, err: 'Must be a whole number between 0 and 30' };
   }
   return { value: n };
 }
@@ -2166,12 +2169,21 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   // Inline range validation on numeric settings — surfaces a single
   // "Must be a whole number between X and Y" message under the field
   // as the user types, instead of waiting for Save Settings (#465).
-  // All three fields are integer-only at the backend, so pass
-  // requireInteger so the inline check rejects fractional input that
-  // the save-time guard would otherwise catch on a second trip.
+  // All fields are integer-only at the backend, so pass requireInteger
+  // so the inline check rejects fractional input that the save-time
+  // guard would otherwise catch on a second trip.
+  //
+  // Every numeric input on the Settings page is wired through this
+  // helper — the three top-level inputs covered by #471, plus the
+  // per-provider grace inputs (originally on a separate readGraceInput
+  // save-time-only toast contract) — so the inline-error UX is uniform
+  // across Settings.
   wireInlineRangeValidation('setting-notification-days', { signal, requireInteger: true });
   wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true });
   wireInlineRangeValidation('setting-default-coverage', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-gcp', { signal, requireInteger: true });
 
   // Set up dirty-field tracking
   setupDirtyTracking(signal);
