@@ -89,3 +89,11 @@ const (
 	// MFADigits is the number of digits in MFA codes
 	MFADigits = 6
 )
+
+// ApprovalTokenTTL is the lifetime of a purchase approval token (issue #397).
+// Tokens older than this are rejected by ApproveExecution and
+// loadCancelableExecution. 7 days gives approvers a full business week to act
+// without the window being infinite. Mirror the RI exchange model which uses a
+// 6-hour TTL; purchase approvals are higher-stakes so a longer window is
+// appropriate but must still be bounded.
+const ApprovalTokenTTL = 7 * 24 * time.Hour

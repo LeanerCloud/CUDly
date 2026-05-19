@@ -2126,6 +2126,129 @@ func TestHandler_retryPurchase_AlreadyRetried_RBACBeforeLeak(t *testing.T) {
 	}
 }
 
+// --- Regression tests for issue #408 (crypto/rand token in retry path) ---
+
+// TestPersistRetryExecution_ApprovalTokenNotUUID is the regression guard for
+// issue #408. Before the fix, persistRetryExecution set ApprovalToken via
+// uuid.New().String(), producing a 36-char UUID (122 bits, known format).
+// After the fix it uses common.GenerateApprovalToken(), producing a 64-char
+// hex string (256 bits). We assert the length and character set rather than
+// a specific value so the test never needs updating when entropy sources differ.
+func TestPersistRetryExecution_ApprovalTokenNotUUID(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "ses throttle",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin", Email: "admin@example.com"}
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+
+	// 64 hex characters = 32 bytes = 256 bits. UUID format is 36 chars
+	// (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx). This length check is the
+	// simplest distinguisher without importing crypto/rand in test code.
+	assert.Len(t, newExec.ApprovalToken, 64,
+		"retry approval token must be 64-char hex (256-bit crypto/rand), not a 36-char UUID")
+
+	// Also verify it is all hex (no hyphens — UUID has 4 hyphens).
+	for _, ch := range newExec.ApprovalToken {
+		assert.True(t, (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'),
+			"approval token must be lowercase hex, got char %q", ch)
+	}
+}
+
+// TestPersistRetryExecution_ApprovalTokenExpiresAtSet is the regression guard
+// for issue #397 on the retry path: the new execution must carry a non-nil
+// ApprovalTokenExpiresAt within the expected TTL window.
+func TestPersistRetryExecution_ApprovalTokenExpiresAtSet(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		Error:           "ses throttle",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
+	}
+	session := &Session{UserID: retryCallerID, Role: "admin", Email: "admin@example.com"}
+
+	before := time.Now()
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	after := time.Now()
+
+	require.NotNil(t, newExec.ApprovalTokenExpiresAt,
+		"retry execution must have ApprovalTokenExpiresAt set (issue #397)")
+
+	// Deadline must be strictly in the future from the test's perspective.
+	assert.True(t, newExec.ApprovalTokenExpiresAt.After(after),
+		"ApprovalTokenExpiresAt must be beyond now")
+	// And must not exceed the TTL from before by more than a minute's slop.
+	upperBound := before.Add(config.ApprovalTokenTTL).Add(time.Minute)
+	assert.True(t, newExec.ApprovalTokenExpiresAt.Before(upperBound),
+		"ApprovalTokenExpiresAt must not exceed ApprovalTokenTTL")
+}
+
+// --- Regression tests for issue #398 (token from POST body) ---
+
+// TestResolveApprovalToken_PostBodyTakesPriority is the regression guard for
+// issue #398. A POST with a token in the JSON body must use the body token,
+// preventing the token from appearing in Lambda URL access logs (which record
+// rawQueryString but not the body).
+func TestResolveApprovalToken_PostBodyTakesPriority(t *testing.T) {
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "POST"},
+		},
+		Body:                  `{"token":"body-token"}`,
+		QueryStringParameters: map[string]string{"token": "qs-token"},
+	}
+	assert.Equal(t, "body-token", resolveApprovalToken(req),
+		"POST body token must take priority over query-string token (issue #398)")
+}
+
+// TestResolveApprovalToken_GetFallsBackToQueryString verifies the backward-
+// compat path: a GET request (e.g. a legacy email link that bypasses the
+// frontend SPA) reads the token from the query string.
+func TestResolveApprovalToken_GetFallsBackToQueryString(t *testing.T) {
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET"},
+		},
+		QueryStringParameters: map[string]string{"token": "qs-token"},
+	}
+	assert.Equal(t, "qs-token", resolveApprovalToken(req),
+		"GET request must read token from query string")
+}
+
+// TestResolveApprovalToken_PostNoBody falls back to query string when the POST
+// body is empty (e.g. session-authed approve that sends no body).
+func TestResolveApprovalToken_PostNoBody(t *testing.T) {
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "POST"},
+		},
+		Body:                  "",
+		QueryStringParameters: map[string]string{"token": "qs-token"},
+	}
+	assert.Equal(t, "qs-token", resolveApprovalToken(req),
+		"POST with empty body must fall back to query-string token")
+}
+
+// TestResolveApprovalToken_PostBodyNoToken falls back to query string when the
+// POST body exists but does not contain a "token" field.
+func TestResolveApprovalToken_PostBodyNoToken(t *testing.T) {
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "POST"},
+		},
+		Body:                  `{"other_field":"value"}`,
+		QueryStringParameters: map[string]string{"token": "qs-token"},
+	}
+	assert.Equal(t, "qs-token", resolveApprovalToken(req),
+		"POST body without token field must fall back to query-string token")
+}
+
 func TestResolveOpsHint(t *testing.T) {
 	tests := []struct {
 		name     string

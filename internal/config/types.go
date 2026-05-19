@@ -255,6 +255,15 @@ type PurchaseExecution struct {
 	// carries the scaled counts, so backend math is unaffected by this
 	// field. Defaults to 100 for legacy and scheduler-driven executions.
 	CapacityPercent int `json:"capacity_percent,omitempty" dynamodbav:"capacity_percent,omitempty"`
+	// ApprovalTokenExpiresAt is the UTC deadline after which the
+	// ApprovalToken must be rejected by ApproveExecution and
+	// loadCancelableExecution (issue #397). Set at execution creation to
+	// ScheduledDate + ApprovalTokenTTL. NULL on rows created before
+	// migration 000051 — legacy rows are treated as not-yet-expired
+	// (backward-compatible: the TTL-checking gate only fires when the
+	// field is non-nil). Migration 000051 adds the column; new rows
+	// always carry a non-nil value.
+	ApprovalTokenExpiresAt *time.Time `json:"approval_token_expires_at,omitempty" dynamodbav:"approval_token_expires_at,omitempty"`
 }
 
 // RecommendationRecord stores a recommendation with purchase status

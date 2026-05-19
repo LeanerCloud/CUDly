@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -37,6 +38,13 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	}
 	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return fmt.Errorf("invalid approval token")
+	}
+
+	// Enforce token TTL (issue #397). Legacy rows that pre-date migration
+	// 000051 have ApprovalTokenExpiresAt == nil and are passed through
+	// for backward compatibility; all new rows carry a non-nil deadline.
+	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
+		return fmt.Errorf("approval token has expired")
 	}
 
 	return m.ApproveAndExecute(ctx, executionID, actor)
@@ -131,6 +139,13 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return nil, fmt.Errorf("invalid approval token")
 	}
+
+	// Enforce token TTL (issue #397). Same backward-compat nil-guard as
+	// ApproveExecution: legacy rows without ApprovalTokenExpiresAt pass through.
+	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
+		return nil, fmt.Errorf("approval token has expired")
+	}
+
 	if execution.Status == "completed" || execution.Status == "cancelled" {
 		return nil, fmt.Errorf("execution cannot be cancelled, current status: %s", execution.Status)
 	}

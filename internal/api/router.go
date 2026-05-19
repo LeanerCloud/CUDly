@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -456,13 +457,34 @@ func (r *Router) getPurchaseDetailsHandler(ctx context.Context, req *events.Lamb
 	return r.h.getPurchaseDetails(ctx, req, params["id"])
 }
 
+// resolveApprovalToken extracts the approval token for approve/cancel actions
+// (issue #398). For POST requests the token is read from the JSON request body
+// so it does not appear in the Lambda Function URL access logs (which log the
+// rawQueryString but not the body). The query string is still accepted as a
+// fallback so legacy GET clicks from email links (which carry the token in the
+// URL and land on the same handler via AuthPublic GET routes) continue to work
+// during the transition period.
+//
+// Priority: POST body > query string.
+func resolveApprovalToken(req *events.LambdaFunctionURLRequest) string {
+	if req.RequestContext.HTTP.Method == "POST" && req.Body != "" {
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal([]byte(req.Body), &body); err == nil && body.Token != "" {
+			return body.Token
+		}
+	}
+	return req.QueryStringParameters["token"]
+}
+
 func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	token := req.QueryStringParameters["token"]
+	token := resolveApprovalToken(req)
 	return r.h.approvePurchase(ctx, req, params["id"], token)
 }
 
 func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	token := req.QueryStringParameters["token"]
+	token := resolveApprovalToken(req)
 	return r.h.cancelPurchase(ctx, req, params["id"], token)
 }
 
