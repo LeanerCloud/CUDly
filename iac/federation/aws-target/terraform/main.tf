@@ -129,14 +129,10 @@ resource "aws_iam_role" "cudly" {
           }
           Action = "sts:AssumeRoleWithWebIdentity"
           Condition = {
-            StringEquals = merge(
-              {
-                "${local.oidc_condition_host}:aud" = local.audience
-              },
-              var.oidc_subject_claim != "" ? {
-                "${local.oidc_condition_host}:sub" = var.oidc_subject_claim
-              } : {}
-            )
+            StringEquals = {
+              "${local.oidc_condition_host}:aud" = local.audience
+              "${local.oidc_condition_host}:sub" = var.oidc_subject_claim
+            }
           }
         }
       ],
