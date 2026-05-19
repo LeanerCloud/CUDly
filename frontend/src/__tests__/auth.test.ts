@@ -560,6 +560,10 @@ describe('Auth Module', () => {
       userEmail.click();
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      // Re-query after reopen so we assert on the live DOM node, not a
+      // potentially stale pre-close reference.
+      const reopenedErrorDiv = document.getElementById('profile-password-error') as HTMLElement;
+
       // Length applies to empty string ("" < 12) so on reset it should
       // be `unmet`, and the inline error must be cleared + hidden.
       // Re-query the error div because the close-and-reopen cycle
@@ -568,7 +572,6 @@ describe('Auth Module', () => {
       // if the new modal regressed (CodeRabbit on #470).
       expect(document.getElementById('profile-req-length')?.classList.contains('unmet')).toBe(true);
       expect(document.getElementById('profile-req-uppercase')?.classList.contains('unmet')).toBe(true);
-      const reopenedErrorDiv = document.getElementById('profile-password-error') as HTMLElement;
       expect(reopenedErrorDiv.textContent).toBe('');
       expect(reopenedErrorDiv.classList.contains('hidden')).toBe(true);
     });
