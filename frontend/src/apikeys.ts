@@ -163,7 +163,13 @@ function buildSummaryTile(label: string, value: string): HTMLElement {
 function formatCount(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '0';
   if (n < 1000) return String(Math.trunc(n));
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  if (n < 1_000_000) {
+    // Round to the chosen precision FIRST so we can detect the
+    // 999,500..999,999 band that rounds up to 1000k and promote
+    // it to the M branch instead of emitting "1000k".
+    const k = Number((n / 1000).toFixed(n < 10_000 ? 1 : 0));
+    if (k < 1000) return `${k}k`;
+  }
   return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
 }
 

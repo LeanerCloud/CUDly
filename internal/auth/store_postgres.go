@@ -769,9 +769,13 @@ func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) 
 // based on whether the rolling 24h window is still current.
 //
 // The single UPDATE does the window decision inline:
-//   - if window_start IS NULL OR (NOW() - window_start) > 24h, start a
+//   - if window_start IS NULL OR (NOW() - window_start) >= 24h, start a
 //     fresh window (window_start = NOW(), count = 1).
 //   - otherwise increment the existing count.
+//
+// `>=` (rather than `>`) makes the rollover trigger precisely at the
+// 24-hour boundary, matching the migration comment that says the
+// window resets "once the window age crosses 24h".
 //
 // Doing it in one statement keeps the update atomic per row, so two
 // concurrent calls can't both see "stale window" and reset to 1 in
@@ -783,13 +787,13 @@ func (s *PostgresStore) RecordAPIKeyUsage(ctx context.Context, keyID string) err
 		    request_count_total = request_count_total + 1,
 		    request_count_24h = CASE
 		        WHEN request_count_24h_window_start IS NULL
-		             OR NOW() - request_count_24h_window_start > INTERVAL '24 hours'
+		             OR NOW() - request_count_24h_window_start >= INTERVAL '24 hours'
 		        THEN 1
 		        ELSE request_count_24h + 1
 		    END,
 		    request_count_24h_window_start = CASE
 		        WHEN request_count_24h_window_start IS NULL
-		             OR NOW() - request_count_24h_window_start > INTERVAL '24 hours'
+		             OR NOW() - request_count_24h_window_start >= INTERVAL '24 hours'
 		        THEN NOW()
 		        ELSE request_count_24h_window_start
 		    END
