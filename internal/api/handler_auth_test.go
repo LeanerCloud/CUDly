@@ -576,6 +576,99 @@ func TestHandler_resetPassword_InvalidBody(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid request body")
 }
 
+// Issues #460 + #461: token-status endpoint surfaces expired / used
+// state before the user types into a form that can never submit.
+func TestHandler_resetPasswordStatus_Valid(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ResetTokenStatus", ctx, "good-token").Return("valid", "reset", nil).Once()
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "good-token"}}
+	result, err := handler.resetPasswordStatus(ctx, req)
+	require.NoError(t, err)
+
+	resp := result.(map[string]string)
+	assert.Equal(t, "valid", resp["state"])
+	assert.Equal(t, "reset", resp["flow"])
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_resetPasswordStatus_Invite(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ResetTokenStatus", ctx, "invite-token").Return("valid", "invite", nil).Once()
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "invite-token"}}
+	result, err := handler.resetPasswordStatus(ctx, req)
+	require.NoError(t, err)
+
+	resp := result.(map[string]string)
+	assert.Equal(t, "valid", resp["state"])
+	assert.Equal(t, "invite", resp["flow"])
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_resetPasswordStatus_Expired(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ResetTokenStatus", ctx, "old-token").Return("expired", "reset", nil).Once()
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "old-token"}}
+	result, err := handler.resetPasswordStatus(ctx, req)
+	require.NoError(t, err)
+
+	resp := result.(map[string]string)
+	assert.Equal(t, "expired", resp["state"])
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_resetPasswordStatus_Used(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ResetTokenStatus", ctx, "stale-token").Return("used", "reset", nil).Once()
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "stale-token"}}
+	result, err := handler.resetPasswordStatus(ctx, req)
+	require.NoError(t, err)
+
+	resp := result.(map[string]string)
+	assert.Equal(t, "used", resp["state"])
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_resetPasswordStatus_MissingToken(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	handler := &Handler{auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{}}
+	_, err := handler.resetPasswordStatus(ctx, req)
+	require.Error(t, err)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "token is required")
+}
+
+func TestHandler_resetPasswordStatus_NoAuthService(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{auth: nil}
+
+	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "anything"}}
+	_, err := handler.resetPasswordStatus(ctx, req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication service not configured")
+}
+
 func TestHandler_resetPassword_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

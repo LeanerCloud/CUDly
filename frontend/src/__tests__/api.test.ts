@@ -14,6 +14,7 @@ import {
   logout,
   getCurrentUser,
   requestPasswordReset,
+  getResetTokenStatus,
   checkAdminExists,
   setupAdmin,
   getDashboardSummary,
@@ -544,6 +545,59 @@ describe('API Requests', () => {
           body: JSON.stringify({ email: 'test@example.com' })
         })
       );
+    });
+  });
+
+  // CR pass-1: the token-status response is consumed by branching UI
+  // (modal-routing, copy selection) that only handles the closed unions
+  // 'valid'|'expired'|'used' and 'reset'|'invite'. A malicious or
+  // misconfigured server returning e.g. {state:'pwned'} would otherwise
+  // be silently accepted via the unchecked `as` cast and cause downstream
+  // logic to fall through to the form (or worse). Validate at the boundary.
+  describe('getResetTokenStatus (runtime validation)', () => {
+    test('parses a valid response', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ state: 'valid', flow: 'reset' })
+      });
+
+      await expect(getResetTokenStatus('tok')).resolves.toEqual({ state: 'valid', flow: 'reset' });
+    });
+
+    test('throws when state is not in the closed union', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ state: 'pwned', flow: 'reset' })
+      });
+
+      await expect(getResetTokenStatus('tok')).rejects.toThrow(/invalid state.*pwned/);
+    });
+
+    test('throws when flow is not in the closed union', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ state: 'valid', flow: 'phish' })
+      });
+
+      await expect(getResetTokenStatus('tok')).rejects.toThrow(/invalid flow.*phish/);
+    });
+
+    test('throws when state is not a string (e.g. a number)', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ state: 42, flow: 'reset' })
+      });
+
+      await expect(getResetTokenStatus('tok')).rejects.toThrow(/invalid state/);
+    });
+
+    test('throws when the body is not an object', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve('not-an-object')
+      });
+
+      await expect(getResetTokenStatus('tok')).rejects.toThrow(/was not an object/);
     });
   });
 

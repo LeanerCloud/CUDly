@@ -172,6 +172,45 @@ func isResetPasswordClientError(err error) bool {
 		strings.Contains(s, "password must")
 }
 
+// resetPasswordStatus returns the runtime state of a reset token without
+// consuming it. The frontend hits this before rendering the reset-
+// password form so it can show an "expired" or "already used" view
+// instead of a form that can never submit (issues #460, #461).
+//
+// Response shape is uniform: 200 with {state, flow} for every state,
+// including "used" (covers both consumed and never-issued tokens; the
+// row is wiped on consumption, so the store can't distinguish them).
+// A non-200 means an infrastructure failure, not a token-state signal.
+func (h *Handler) resetPasswordStatus(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	// Same rate-limit bucket as the submit endpoint: a token-probing
+	// attacker would otherwise get a free oracle to test tokens.
+	if err := h.checkRateLimit(ctx, req, "reset_password"); err != nil {
+		return nil, err
+	}
+
+	token := ""
+	if req != nil {
+		token = req.QueryStringParameters["token"]
+	}
+	if token == "" {
+		return nil, NewClientError(400, "token is required")
+	}
+
+	state, flow, err := h.auth.ResetTokenStatus(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]string{
+		"state": state,
+		"flow":  flow,
+	}, nil
+}
+
 func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")

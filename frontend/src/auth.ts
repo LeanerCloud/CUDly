@@ -22,7 +22,14 @@ export function isAdmin(): boolean {
 }
 
 /**
- * Show reset password modal (for password reset links)
+ * Show reset password modal (for password reset links).
+ *
+ * Probes the token state first (issues #460, #461) so the user lands
+ * on the right view: a form for valid tokens, an "expired link" view
+ * for expired tokens, an "already used" view for stale/consumed
+ * tokens. On a status-check failure the form is rendered as a
+ * fallback so the user still has a path forward; submit-time
+ * validation still catches bad tokens server-side.
  */
 export async function showResetPasswordModal(token: string): Promise<void> {
   // Remove any existing modal to prevent duplicates
@@ -30,10 +37,40 @@ export async function showResetPasswordModal(token: string): Promise<void> {
 
   const modal = document.createElement('div');
   modal.id = 'reset-password-modal';
+  document.body.appendChild(modal);
+
+  let status: { state: string; flow: string };
+  try {
+    status = await api.getResetTokenStatus(token);
+  } catch {
+    // Fallback: render the form unconditionally so an offline
+    // status endpoint does not strand users who have a valid token.
+    renderResetForm(modal, token, 'reset');
+    return;
+  }
+
+  if (status.state === 'expired') {
+    renderExpiredView(modal, status.flow);
+    return;
+  }
+  if (status.state === 'used') {
+    renderUsedView(modal, status.flow);
+    return;
+  }
+  // 'valid' (or any unexpected state defaults to the form path).
+  renderResetForm(modal, token, status.flow);
+}
+
+// renderResetForm builds the password-entry form. Heading/submit copy
+// flips between "Reset" and "Set" based on flow (issue #461 invite
+// path). Static template, no user-controlled interpolation.
+function renderResetForm(modal: HTMLElement, token: string, flow: string): void {
+  const heading = flow === 'invite' ? 'Set Your Password' : 'Reset Your Password';
+  const submitLabel = flow === 'invite' ? 'Set Password' : 'Reset Password';
   modal.innerHTML = `
     <div class="modal-overlay">
       <div class="modal-content">
-        <h2>Reset Your Password</h2>
+        <h2>${heading}</h2>
 
         <form id="reset-password-form">
           <label>New Password:
@@ -85,12 +122,11 @@ export async function showResetPasswordModal(token: string): Promise<void> {
 
           <div id="reset-error" class="error-message hidden"></div>
           <div id="reset-success" class="success-message hidden"></div>
-          <button type="submit" class="primary">Reset Password</button>
+          <button type="submit" class="primary">${submitLabel}</button>
         </form>
       </div>
     </div>
   `;
-  document.body.appendChild(modal);
 
   const form = document.getElementById('reset-password-form');
   const passwordInput = document.getElementById('new-password') as HTMLInputElement;
@@ -99,15 +135,96 @@ export async function showResetPasswordModal(token: string): Promise<void> {
     form.addEventListener('submit', (e) => void handleResetPasswordSubmit(e, token));
   }
 
-  // Add real-time password validation
   if (passwordInput) {
     passwordInput.addEventListener('input', () => {
       updatePasswordRequirements(passwordInput.value);
     });
   }
 
-  // Add password visibility toggle
   setupPasswordToggle(modal);
+}
+
+// renderExpiredView replaces the reset modal with a "link expired"
+// view + CTA to request a new reset email (issue #460). The email
+// tied to the expired token is not embedded in the URL, so the CTA
+// hands the user back to the forgot-password form where they re-type
+// their email.
+function renderExpiredView(modal: HTMLElement, flow: string): void {
+  const heading = flow === 'invite'
+    ? 'Invitation link expired'
+    : 'Password reset link expired';
+  const windowCopy = flow === 'invite'
+    ? 'Invitation links are valid for 7 days.'
+    : 'Password reset links are valid for one hour.';
+  modal.innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-content">
+        <h2>${heading}</h2>
+        <p>${windowCopy}</p>
+        <p>Request a new link to continue.</p>
+        <button type="button" id="reset-expired-request-new" class="primary">Send a new reset email</button>
+        <p><a href="#" id="reset-expired-back-to-login">Back to login</a></p>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('reset-expired-request-new')?.addEventListener('click', () => {
+    void openForgotPasswordFromExpired();
+  });
+  document.getElementById('reset-expired-back-to-login')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    void closeResetModalAndShowLogin();
+  });
+}
+
+// renderUsedView covers both consumed and never-existed tokens (the
+// server collapses them into one state because the row is wiped on
+// consumption; issue #461). Offers two exit paths: log in with the
+// password they already set, or restart the forgot-password flow.
+function renderUsedView(modal: HTMLElement, flow: string): void {
+  const heading = flow === 'invite'
+    ? 'Invitation link already used'
+    : 'Password reset link already used';
+  const body = flow === 'invite'
+    ? "This invitation link has already been used. Sign in with the password you set, or use Forgot Password if you do not remember it."
+    : "This password reset link has already been used. Sign in with the password you set, or use Forgot Password if you do not remember it.";
+  modal.innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-content">
+        <h2>${heading}</h2>
+        <p>${body}</p>
+        <button type="button" id="reset-used-go-to-login" class="primary">Go to login</button>
+        <p><a href="#" id="reset-used-forgot-password">Forgot password?</a></p>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('reset-used-go-to-login')?.addEventListener('click', () => {
+    void closeResetModalAndShowLogin();
+  });
+  document.getElementById('reset-used-forgot-password')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    void openForgotPasswordFromExpired();
+  });
+}
+
+async function closeResetModalAndShowLogin(): Promise<void> {
+  document.getElementById('reset-password-modal')?.remove();
+  // Clear ?token= so a reload does not bounce back into the reset flow.
+  window.history.replaceState({}, document.title, window.location.pathname);
+  await showLoginModal();
+}
+
+async function openForgotPasswordFromExpired(): Promise<void> {
+  document.getElementById('reset-password-modal')?.remove();
+  window.history.replaceState({}, document.title, window.location.pathname);
+  await showLoginModal();
+  // Trigger the forgot-password swap inside the freshly-shown login
+  // modal, matching the path a user would take by clicking the
+  // "Forgot password?" link manually.
+  document.getElementById('forgot-password-link')?.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true })
+  );
 }
 
 function setupPasswordToggle(container: HTMLElement | Document = document): void {

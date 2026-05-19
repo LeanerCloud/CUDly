@@ -662,6 +662,11 @@ func (m *MockAuthService) ConfirmPasswordReset(ctx context.Context, req Password
 	return args.Error(0)
 }
 
+func (m *MockAuthService) ResetTokenStatus(ctx context.Context, token string) (string, string, error) {
+	args := m.Called(ctx, token)
+	return args.String(0), args.String(1), args.Error(2)
+}
+
 func (m *MockAuthService) GetUser(ctx context.Context, userID string) (*User, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {

@@ -482,6 +482,9 @@ func (m *mockAuthForExchange) RequestPasswordReset(_ context.Context, _ string) 
 func (m *mockAuthForExchange) ConfirmPasswordReset(_ context.Context, _ PasswordResetConfirm) error {
 	return nil
 }
+func (m *mockAuthForExchange) ResetTokenStatus(_ context.Context, _ string) (string, string, error) {
+	return "valid", "reset", nil
+}
 func (m *mockAuthForExchange) GetUser(_ context.Context, _ string) (*User, error) { return nil, nil }
 func (m *mockAuthForExchange) UpdateUserProfile(_ context.Context, _, _, _, _ string) error {
 	return nil
