@@ -185,7 +185,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontCell}</td>
       <td class="savings">${formatCurrency(purchase.estimated_savings)}/mo</td>
-      <td><span class="status-badge ${statusClass}">${purchase.status}</span></td>
+      <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
       <td class="actions">
         ${canManagePlan && canRun ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
         ${canManagePlan && isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}

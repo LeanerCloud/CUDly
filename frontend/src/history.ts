@@ -316,7 +316,9 @@ function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilt
 
 function providerCell(p: HistoryPurchase): string {
   if (!p.provider || p.provider === 'multiple') return '<span class="provider-badge">Multiple</span>';
-  return `<span class="provider-badge ${p.provider}">${p.provider.toUpperCase()}</span>`;
+  // Whitelist provider to prevent stored XSS via class attribute injection (#443).
+  const safeProvider = (VALID_PROVIDERS as string[]).includes(p.provider) ? p.provider : 'unknown';
+  return `<span class="provider-badge ${safeProvider}">${safeProvider.toUpperCase()}</span>`;
 }
 
 // canCancelPendingRow returns true when the current session is permitted
