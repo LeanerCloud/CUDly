@@ -114,7 +114,9 @@ func TestService_ChangePassword(t *testing.T) {
 
 		err := service.ChangePassword(ctx, "user-123", req)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "used recently")
+		// Issue #459: current-password match now returns a distinct,
+		// more actionable message than the generic "used recently".
+		assert.Contains(t, err.Error(), "current password")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -412,6 +414,45 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("current password reuse returns distinct message (issue #459)", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		// User's CURRENT password (not in history yet; only moves to
+		// history on a successful change/reset). The reset form is the
+		// common entry point where users accidentally re-type their
+		// existing password; the error message must tell them so.
+		currentPassword := "ActiveS3cur3Pass1!"
+		currentHash, _ := service.hashPassword(currentPassword)
+
+		expiry := time.Now().Add(time.Hour)
+		testUser := &User{
+			ID:                  "user-123",
+			Email:               "test@example.com",
+			PasswordHash:        currentHash,
+			PasswordResetToken:  "hashed-token",
+			PasswordResetExpiry: &expiry,
+			Active:              true,
+		}
+
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).Return(testUser, nil).Once()
+		// Token is invalidated even on validation failure (one-time use).
+		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
+
+		req := PasswordResetConfirm{
+			Token:       "valid-reset-token",
+			NewPassword: currentPassword,
+		}
+
+		err := service.ConfirmPasswordReset(ctx, req)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "current password")
+		assert.NotContains(t, err.Error(), "used recently")
+
+		mockStore.AssertExpectations(t)
+	})
 }
 
 // Test password validation rules
@@ -675,13 +716,18 @@ func TestCheckPasswordHistory(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("password matches current hash", func(t *testing.T) {
+	t.Run("password matches current hash returns current-password message", func(t *testing.T) {
+		// Issue #459: current-password match returns a distinct copy
+		// from "used recently" so the frontend can render a useful
+		// toast ("This is your current password") rather than the
+		// opaque generic.
 		currentPassword := "CurrentS3cur3!"
 		currentHash, _ := service.hashPassword(currentPassword)
 
 		err := service.checkPasswordHistory(currentPassword, currentHash, []string{})
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "used recently")
+		assert.Contains(t, err.Error(), "current password")
+		assert.NotContains(t, err.Error(), "used recently")
 	})
 
 	t.Run("password found in history", func(t *testing.T) {

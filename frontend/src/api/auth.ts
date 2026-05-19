@@ -101,8 +101,15 @@ export async function resetPassword(token: string, newPassword: string): Promise
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Failed to reset password' }));
-    throw new Error(error.message || 'Failed to reset password');
+    // Backend's NewClientError emits {error: "<msg>"} (see internal/api/
+    // handler.go writeError). We previously only read `message`, so the
+    // specific reason (e.g. "this is your current password, choose a
+    // different one") never reached the toast and users saw the opaque
+    // fallback. Read `error` first; keep `message` as a defensive
+    // fallback for any other shape. See issue #459.
+    const data = await response.json().catch(() => ({})) as { error?: string; message?: string };
+    const msg = data.error || data.message;
+    throw new Error(msg || 'Failed to reset password');
   }
 }
 

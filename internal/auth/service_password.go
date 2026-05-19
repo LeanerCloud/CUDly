@@ -83,12 +83,15 @@ func containsSequentialChars(password string, n int) bool {
 	return false
 }
 
-// checkPasswordHistory verifies that the new password hasn't been used recently
-// Checks both the current password hash and the password history
+// checkPasswordHistory verifies that the new password hasn't been used recently.
+// Checks the current password hash and the prior-password history separately so
+// the caller can render a more useful message for the dominant case (user
+// re-typing their existing password on the reset form): see issue #459.
 func (s *Service) checkPasswordHistory(newPassword string, currentHash string, passwordHistory []string) error {
-	// Check against current password first
+	// Check against current password first; distinct message so the user
+	// can tell "I typed my current one" from "this matches an old one".
 	if currentHash != "" && s.verifyPassword(newPassword, currentHash) {
-		return fmt.Errorf("password has been used recently, please choose a different password")
+		return fmt.Errorf("this is your current password, choose a different one")
 	}
 
 	// Check against all stored password hashes in history
