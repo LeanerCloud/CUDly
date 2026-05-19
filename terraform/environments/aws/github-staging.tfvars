@@ -24,7 +24,9 @@ lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 14
 lambda_enable_function_url    = true
 lambda_function_url_auth_type = "NONE"
-lambda_allowed_origins        = ["*"]
+# Restrict CORS to the staging Lambda Function URL itself. Wildcard + allow_credentials
+# reflects any Origin with credentials allowed, enabling cross-site request forgery.
+lambda_allowed_origins = ["https://33pz7pombdqwu3bdlxp4lqxyra0bsriy.lambda-url.us-east-1.on.aws"]
 
 # Fargate Configuration (when compute_platform = "fargate")
 fargate_cpu           = 1024

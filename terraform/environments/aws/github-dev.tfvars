@@ -24,7 +24,10 @@ lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 7
 lambda_enable_function_url    = true
 lambda_function_url_auth_type = "NONE"
-lambda_allowed_origins        = ["*"]
+# Set to the dev Lambda Function URL after first apply. Wildcard is rejected by the
+# module (allow_credentials=true + * = any-origin CSRF).
+# Example: ["https://<fn-url-id>.lambda-url.us-east-1.on.aws"]
+lambda_allowed_origins = ["https://localhost:3000"]
 
 # Fargate Configuration (when compute_platform = "fargate")
 fargate_cpu           = 256

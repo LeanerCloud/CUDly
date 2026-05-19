@@ -24,8 +24,10 @@ lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 30
 lambda_enable_function_url    = true
 lambda_function_url_auth_type = "NONE"
-# TODO: restrict to actual production domain, e.g. ["https://cudly.example.com"]
-lambda_allowed_origins = ["*"]
+# Set to the production CloudFront distribution domain or the Lambda Function URL.
+# Wildcard origins are rejected by the module (allow_credentials=true + * = any-origin CSRF).
+# Example: ["https://app.cudly.io"] or ["https://<fn-url-id>.lambda-url.us-east-1.on.aws"]
+lambda_allowed_origins = ["https://app.cudly.io"]
 
 # Fargate Configuration (when compute_platform = "fargate")
 fargate_cpu           = 1024
