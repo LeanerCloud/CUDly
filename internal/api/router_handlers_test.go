@@ -906,3 +906,65 @@ func TestHandler_getRIExchangeHistory_SinceTime(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 }
+
+// ---------------------------------------------------------------------------
+// Rate-limit regression tests for AuthPublic action endpoints (issue #400)
+// ---------------------------------------------------------------------------
+
+// TestRouter_approveRIExchangeHandler_RateLimited verifies that the
+// approveRIExchangeHandler router wrapper enforces the approve_cancel_public
+// rate-limit bucket before dispatching to the business-logic handler.
+func TestRouter_approveRIExchangeHandler_RateLimited(t *testing.T) {
+	ctx := context.Background()
+
+	mockRL := new(MockRateLimiter)
+	mockRL.On("AllowWithIP", ctx, "9.8.7.6", "approve_cancel_public").Return(false, nil)
+
+	h := &Handler{rateLimiter: mockRL}
+	r := newTestRouter(h)
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				SourceIP: "9.8.7.6",
+			},
+		},
+		QueryStringParameters: map[string]string{"token": "tok"},
+	}
+	_, err := r.approveRIExchangeHandler(ctx, req, map[string]string{"id": "550e8400-e29b-41d4-a716-446655440000"})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 429, ce.code)
+
+	mockRL.AssertExpectations(t)
+}
+
+// TestRouter_rejectRIExchangeHandler_RateLimited verifies that the
+// rejectRIExchangeHandler router wrapper enforces the approve_cancel_public
+// rate-limit bucket before dispatching to the business-logic handler.
+func TestRouter_rejectRIExchangeHandler_RateLimited(t *testing.T) {
+	ctx := context.Background()
+
+	mockRL := new(MockRateLimiter)
+	mockRL.On("AllowWithIP", ctx, "1.1.1.1", "approve_cancel_public").Return(false, nil)
+
+	h := &Handler{rateLimiter: mockRL}
+	r := newTestRouter(h)
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				SourceIP: "1.1.1.1",
+			},
+		},
+		QueryStringParameters: map[string]string{"token": "tok"},
+	}
+	_, err := r.rejectRIExchangeHandler(ctx, req, map[string]string{"id": "550e8400-e29b-41d4-a716-446655440000"})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 429, ce.code)
+
+	mockRL.AssertExpectations(t)
+}
