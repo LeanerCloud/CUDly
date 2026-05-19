@@ -320,7 +320,7 @@ func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFuncti
 		return resp
 	}
 
-	if h.requiresCSRFValidation(method, path) {
+	if h.requiresCSRFValidation(method, path, req) {
 		if err := h.validateCSRF(ctx, req); err != nil {
 			logging.Warnf("CSRF validation failed: %v", err)
 			resp, _ := h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)

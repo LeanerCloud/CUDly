@@ -448,21 +448,22 @@ func TestHandler_validateCSRF_ValidCSRF(t *testing.T) {
 
 func TestHandler_requiresCSRFValidation(t *testing.T) {
 	h := &Handler{}
+	noSessionReq := &events.LambdaFunctionURLRequest{Headers: map[string]string{}}
 
 	// GET never requires CSRF
-	assert.False(t, h.requiresCSRFValidation("GET", "/api/plans"))
+	assert.False(t, h.requiresCSRFValidation("GET", "/api/plans", noSessionReq))
 
 	// POST on login is exempt
-	assert.False(t, h.requiresCSRFValidation("POST", "/api/auth/login"))
+	assert.False(t, h.requiresCSRFValidation("POST", "/api/auth/login", noSessionReq))
 
 	// POST on a protected endpoint requires CSRF
-	assert.True(t, h.requiresCSRFValidation("POST", "/api/plans"))
+	assert.True(t, h.requiresCSRFValidation("POST", "/api/plans", noSessionReq))
 
 	// DELETE on protected endpoint requires CSRF
-	assert.True(t, h.requiresCSRFValidation("DELETE", "/api/plans/123"))
+	assert.True(t, h.requiresCSRFValidation("DELETE", "/api/plans/123", noSessionReq))
 
-	// POST on approve (token-based) is exempt
-	assert.False(t, h.requiresCSRFValidation("POST", "/api/purchases/approve/uuid"))
+	// POST on approve with no session (token-only email-link flow) is exempt
+	assert.False(t, h.requiresCSRFValidation("POST", "/api/purchases/approve/uuid", noSessionReq))
 }
 
 // ---------------------------------------------------------------------------
