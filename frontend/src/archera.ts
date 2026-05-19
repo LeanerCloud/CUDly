@@ -2,10 +2,13 @@
  * Archera Insurance integration: post-action offer modal + education page.
  *
  * This module provides:
- *   - openArcheraOfferModal(context): small modal shown AFTER a successful
- *     purchase-approval submission or plan creation. Offers "Sign up at
- *     Archera →" (opens archera.ai in a new tab) or "No thanks". Carries
- *     a "Learn more" link to the full education page below the buttons.
+ *   - openArcheraOfferModal(context): small modal shown AFTER a completed
+ *     purchase execution. Offers "Sign up at Archera =" (opens archera.ai
+ *     in a new tab) or "No thanks". Carries a "Learn more" link to the
+ *     full education page below the buttons.
+ *   - maybeOfferArcheraAfterExecution(): detector run on dashboard load.
+ *     Fetches recent purchase history, finds the most recent completed
+ *     execution not yet offered, and calls openArcheraOfferModal once.
  *   - openArcheraPage(): the full education page rendered as a
  *     full-viewport overlay (#archera-page-container). Opened from the
  *     offer modal's "Learn more" link and from deep-linked email URLs.
@@ -21,6 +24,9 @@
  *
  * No backend, routing, or IaC changes (frontend-only).
  */
+
+import * as api from './api';
+import type { HistoryResponse, HistoryPurchase } from './types';
 
 /** Canonical Archera signup URL with CUDly attribution. */
 export const ARCHERA_SIGNUP_URL = 'https://archera.ai/signup?mode=cudly';
@@ -519,4 +525,110 @@ function buildSignupBlock(): HTMLElement {
   div.appendChild(note);
 
   return div;
+}
+
+// ---------------------------------------------------------------------------
+// Post-execution offer detector
+// ---------------------------------------------------------------------------
+
+/**
+ * localStorage key for the set of purchase_id strings the Archera offer has
+ * already been shown for. Stored as a JSON string array; capped at
+ * ARCHERA_OFFERED_FOR_CAP entries (FIFO) to prevent unbounded growth.
+ */
+export const ARCHERA_OFFERED_FOR_KEY = 'cudly.archera.offeredForExecutions';
+
+/**
+ * Number of days to look back when searching for completed executions that
+ * warrant an Archera offer. Matches the "7 days from each purchase to sign
+ * up at Archera" enrollment window described on the education page.
+ */
+export const ARCHERA_OFFER_WINDOW_DAYS = 7;
+
+/** Maximum entries kept in the offered-for localStorage set (FIFO). */
+const ARCHERA_OFFERED_FOR_CAP = 50;
+
+/**
+ * Read the offered-for set from localStorage.
+ * Returns an empty array when localStorage is unavailable or the value is
+ * missing/malformed (private browsing, quota-exceeded, corrupted JSON).
+ */
+function readOfferedForSet(): string[] {
+  try {
+    const raw = localStorage.getItem(ARCHERA_OFFERED_FOR_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return (parsed as unknown[]).filter((x): x is string => typeof x === 'string');
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Write the offered-for set back to localStorage.
+ * Silently ignores write failures (private browsing, quota-exceeded).
+ */
+function writeOfferedForSet(ids: string[]): void {
+  try {
+    // Enforce FIFO cap: keep only the most recent ARCHERA_OFFERED_FOR_CAP entries.
+    const capped = ids.slice(-ARCHERA_OFFERED_FOR_CAP);
+    localStorage.setItem(ARCHERA_OFFERED_FOR_KEY, JSON.stringify(capped));
+  } catch {
+    // Non-fatal; the modal may re-fire on the next load, which is acceptable.
+  }
+}
+
+/**
+ * Detector run on every dashboard load.
+ *
+ * Fetches executions from the past ARCHERA_OFFER_WINDOW_DAYS days via the
+ * existing purchase-history endpoint (no new backend endpoint). Finds the
+ * most recent completed execution the user has not been offered Archera for,
+ * and calls openArcheraOfferModal('purchase') exactly once. Tracks shown
+ * executions in localStorage under ARCHERA_OFFERED_FOR_KEY (FIFO, capped at
+ * ARCHERA_OFFERED_FOR_CAP entries) so the modal is not repeated.
+ *
+ * Errors are swallowed: a history-fetch failure must not block app init.
+ */
+export async function maybeOfferArcheraAfterExecution(): Promise<void> {
+  try {
+    const start = new Date();
+    start.setDate(start.getDate() - ARCHERA_OFFER_WINDOW_DAYS);
+    const startStr = start.toISOString().split('T')[0] ?? '';
+
+    const raw = await api.getHistory({ start: startStr });
+    // api.getHistory is typed as returning PurchaseHistory[], but the server
+    // actually returns a HistoryResponse envelope ({summary, purchases}).
+    // history.ts casts it the same way; we follow the same pattern.
+    const data = raw as unknown as HistoryResponse;
+    const purchases: HistoryPurchase[] = data.purchases ?? [];
+
+    // Keep only completed executions with a trackable purchase_id.
+    const completed = purchases.filter(
+      (p): p is HistoryPurchase & { purchase_id: string } =>
+        typeof p.purchase_id === 'string' &&
+        p.purchase_id.length > 0 &&
+        (p.status || 'completed') === 'completed',
+    );
+    if (completed.length === 0) return;
+
+    // Most recent first.
+    completed.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
+    const latest = completed[0];
+    if (!latest) return;
+
+    const offeredFor = readOfferedForSet();
+    if (offeredFor.includes(latest.purchase_id)) return;
+
+    // Record before opening so a re-entrant call can't double-fire.
+    offeredFor.push(latest.purchase_id);
+    writeOfferedForSet(offeredFor);
+
+    openArcheraOfferModal('purchase');
+  } catch {
+    // Non-fatal: history fetch failure must not block app init.
+  }
 }

@@ -18,10 +18,14 @@ import {
   openArcheraOfferModal,
   closeArcheraOfferModal,
   handleArcheraDeeplink,
+  maybeOfferArcheraAfterExecution,
   ARCHERA_SIGNUP_URL,
   ARCHERA_PAGE_A_PATH,
   ARCHERA_PAGE_B_PATH,
+  ARCHERA_OFFERED_FOR_KEY,
+  ARCHERA_OFFER_WINDOW_DAYS,
 } from '../archera';
+import * as api from '../api';
 
 // ---------------------------------------------------------------------------
 // Mocks required by recommendations.ts and plans.ts
@@ -37,6 +41,7 @@ jest.mock('../api', () => ({
   getPlannedPurchases: jest.fn().mockResolvedValue({ purchases: [] }),
   listPlanAccounts: jest.fn().mockResolvedValue([]),
   setPlanAccounts: jest.fn().mockResolvedValue(undefined),
+  getHistory: jest.fn().mockResolvedValue({ purchases: [] }),
 }));
 
 jest.mock('../api/recommendations', () => ({
@@ -467,5 +472,141 @@ describe('handleArcheraDeeplink', () => {
     const container = document.getElementById('archera-page-container')!;
     expect(container.classList.contains('hidden')).toBe(false);
     expect(container.querySelector('h1')?.textContent).toBe('Archera Insurance');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// maybeOfferArcheraAfterExecution
+// ---------------------------------------------------------------------------
+
+describe('maybeOfferArcheraAfterExecution', () => {
+  const mockGetHistory = api.getHistory as jest.Mock;
+
+  // Build a completed purchase within the offer window.
+  function recentCompleted(id: string, daysAgo = 1): Record<string, unknown> {
+    const ts = new Date();
+    ts.setDate(ts.getDate() - daysAgo);
+    return { purchase_id: id, timestamp: ts.toISOString(), status: 'completed' };
+  }
+
+  // Helper: configure localStorage.getItem mock to return a specific JSON array.
+  function seedOfferedFor(ids: string[]): void {
+    (localStorage.getItem as jest.Mock).mockImplementation((key: string) => {
+      if (key === ARCHERA_OFFERED_FOR_KEY) return JSON.stringify(ids);
+      return null;
+    });
+  }
+
+  // Helper: extract what was written to the offered-for key from setItem calls.
+  function captureOfferedForWrite(): string[] {
+    const calls = (localStorage.setItem as jest.Mock).mock.calls as [string, string][];
+    const last = calls.filter(([k]) => k === ARCHERA_OFFERED_FOR_KEY).pop();
+    if (!last) return [];
+    return JSON.parse(last[1]) as string[];
+  }
+
+  beforeEach(() => {
+    buildArcheraOfferContainer();
+    buildArcheraContainer();
+    mockGetHistory.mockReset();
+    // Default: no offered-for set stored.
+    (localStorage.getItem as jest.Mock).mockReturnValue(null);
+  });
+
+  it('returns early without opening modal when no executions in the window', async () => {
+    mockGetHistory.mockResolvedValue({ purchases: [] });
+    await maybeOfferArcheraAfterExecution();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('opens modal for the most recent completed execution not yet offered', async () => {
+    mockGetHistory.mockResolvedValue({ purchases: [recentCompleted('exec-1')] });
+    await maybeOfferArcheraAfterExecution();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(false);
+  });
+
+  it('does not re-open modal for an execution already in the localStorage offered-for set', async () => {
+    seedOfferedFor(['exec-1']);
+    mockGetHistory.mockResolvedValue({ purchases: [recentCompleted('exec-1')] });
+    await maybeOfferArcheraAfterExecution();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('does not open modal for non-completed executions (failed, pending, expired)', async () => {
+    const ts = new Date().toISOString();
+    mockGetHistory.mockResolvedValue({
+      purchases: [
+        { purchase_id: 'exec-fail', timestamp: ts, status: 'failed' },
+        { purchase_id: 'exec-pend', timestamp: ts, status: 'pending' },
+        { purchase_id: 'exec-exp', timestamp: ts, status: 'expired' },
+      ],
+    });
+    await maybeOfferArcheraAfterExecution();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('passes start date of ARCHERA_OFFER_WINDOW_DAYS ago to getHistory', async () => {
+    mockGetHistory.mockResolvedValue({ purchases: [] });
+    await maybeOfferArcheraAfterExecution();
+    const expected = new Date();
+    expected.setDate(expected.getDate() - ARCHERA_OFFER_WINDOW_DAYS);
+    const expectedStr = expected.toISOString().split('T')[0];
+    expect(mockGetHistory).toHaveBeenCalledWith(expect.objectContaining({ start: expectedStr }));
+  });
+
+  it('records the offered execution in localStorage so it is not shown again', async () => {
+    mockGetHistory.mockResolvedValue({ purchases: [recentCompleted('exec-2')] });
+    await maybeOfferArcheraAfterExecution();
+    const stored = captureOfferedForWrite();
+    expect(stored).toContain('exec-2');
+  });
+
+  it('enforces FIFO cap of 50 entries in the localStorage set', async () => {
+    // Pre-fill with 50 entries so next write must evict the oldest.
+    const existing = Array.from({ length: 50 }, (_, i) => `old-exec-${i}`);
+    seedOfferedFor(existing);
+    mockGetHistory.mockResolvedValue({ purchases: [recentCompleted('exec-new')] });
+    await maybeOfferArcheraAfterExecution();
+    const stored = captureOfferedForWrite();
+    // Total length must not exceed 50.
+    expect(stored.length).toBeLessThanOrEqual(50);
+    // The new entry must be present.
+    expect(stored).toContain('exec-new');
+    // The oldest entry must have been evicted.
+    expect(stored).not.toContain('old-exec-0');
+  });
+
+  it('swallows getHistory errors and does not open modal', async () => {
+    mockGetHistory.mockRejectedValue(new Error('network error'));
+    // Should not throw.
+    await expect(maybeOfferArcheraAfterExecution()).resolves.toBeUndefined();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('fires for the most recent completed purchase when multiple exist', async () => {
+    const older = recentCompleted('exec-older', 3);
+    const newer = recentCompleted('exec-newer', 1);
+    mockGetHistory.mockResolvedValue({ purchases: [older, newer] });
+    await maybeOfferArcheraAfterExecution();
+    // exec-newer should be recorded (most recent) — not exec-older.
+    const stored = captureOfferedForWrite();
+    expect(stored).toContain('exec-newer');
+    expect(stored).not.toContain('exec-older');
+  });
+
+  it('skips executions that lack a purchase_id', async () => {
+    // A row without purchase_id (legacy) must not be offered.
+    const ts = new Date().toISOString();
+    mockGetHistory.mockResolvedValue({
+      purchases: [{ timestamp: ts, status: 'completed' }], // no purchase_id
+    });
+    await maybeOfferArcheraAfterExecution();
+    const container = document.getElementById('archera-offer-modal-container')!;
+    expect(container.classList.contains('hidden')).toBe(true);
   });
 });

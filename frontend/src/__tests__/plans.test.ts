@@ -64,6 +64,12 @@ jest.mock('../commitmentOptions', () => ({
   normalizePaymentValue: jest.fn((value) => value)
 }));
 
+// Mock archera: savePlan must NOT call openArcheraOfferModal after #499.
+const mockOpenArcheraOfferModal = jest.fn();
+jest.mock('../archera', () => ({
+  openArcheraOfferModal: (...args: unknown[]) => mockOpenArcheraOfferModal(...args),
+}));
+
 // Q7: plans.ts migrated alert() → showToast and destructive confirm() →
 // confirmDialog. Mock both so tests can assert calls and control confirm.
 const mockShowToast = jest.fn<{ dismiss: () => void }, [unknown]>(() => ({ dismiss: jest.fn() }));
@@ -93,6 +99,7 @@ import { populateTermSelect, populatePaymentSelect, isValidCombination } from '.
 
 describe('Plans Module', () => {
   beforeEach(() => {
+    mockOpenArcheraOfferModal.mockClear();
     // Reset DOM with full form structure
     document.body.innerHTML = `
       <div id="plans-list"></div>
@@ -1056,6 +1063,33 @@ describe('Plans Module', () => {
       expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({
         ramp_schedule: 'monthly-10pct'
       }));
+    });
+
+    test('does NOT open Archera offer modal on plan create (fix #499)', async () => {
+      // After #499 the modal must be surfaced only after execution completes,
+      // never at plan-save time. Regression guard: ensure the removed call
+      // does not come back.
+      (api.createPlan as jest.Mock).mockResolvedValue({});
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (document.getElementById('plan-id') as HTMLInputElement).value = '';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await savePlan(event);
+
+      expect(mockOpenArcheraOfferModal).not.toHaveBeenCalled();
+    });
+
+    test('does NOT open Archera offer modal on plan update (fix #499)', async () => {
+      (api.updatePlan as jest.Mock).mockResolvedValue({});
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (document.getElementById('plan-id') as HTMLInputElement).value = 'plan-123';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await savePlan(event);
+
+      expect(mockOpenArcheraOfferModal).not.toHaveBeenCalled();
     });
   });
 
