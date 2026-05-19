@@ -21,6 +21,20 @@ type User struct {
 	Active              bool       `json:"active" dynamodbav:"Active"`
 	MFAEnabled          bool       `json:"mfa_enabled" dynamodbav:"MFAEnabled"`
 	MFASecret           string     `json:"-" dynamodbav:"MFASecret,omitempty"`
+	// MFA enrollment carrier fields (issue #497). Populated by
+	// MFASetup and consumed by MFAEnable; both cleared on successful
+	// enable / disable. Persisting the pending secret here (instead
+	// of in a signed token returned to the client) keeps the wire
+	// shape simple and avoids introducing a new HMAC signing key.
+	// An abandoned enrollment expires harmlessly because the active
+	// MFASecret + MFAEnabled fields stay untouched until enable
+	// succeeds.
+	MFAPendingSecret          string     `json:"-" dynamodbav:"MFAPendingSecret,omitempty"`
+	MFAPendingSecretExpiresAt *time.Time `json:"-" dynamodbav:"MFAPendingSecretExpiresAt,omitempty"`
+	// MFARecoveryCodes holds bcrypt hashes of single-use recovery
+	// codes generated at enable / regenerate time. The matching hash
+	// is removed from the slice when consumed during login or disable.
+	MFARecoveryCodes []string `json:"-" dynamodbav:"MFARecoveryCodes,omitempty"`
 	// Account lockout fields for brute-force protection
 	FailedLoginAttempts int        `json:"-" dynamodbav:"FailedLoginAttempts,omitempty"`
 	LockedUntil         *time.Time `json:"-" dynamodbav:"LockedUntil,omitempty"`

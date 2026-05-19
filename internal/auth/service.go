@@ -164,7 +164,20 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 	return user, nil
 }
 
-// verifyPasswordAndMFA verifies password and MFA code if enabled
+// verifyPasswordAndMFA verifies password and MFA code if enabled.
+//
+// Returns ErrMFARequired (sentinel) when the user has MFA enabled but
+// the request didn't carry a code, so the API handler can map to a
+// machine-readable response (`{"error":"mfa_required"}`) rather than
+// a generic 401. Returns ErrInvalidMFACode (sentinel) when the code
+// was provided but didn't match TOTP or any stored recovery code.
+//
+// Accepts either a TOTP code OR a single-use recovery code as proof
+// of MFA. Consumed recovery codes are removed from the user row on
+// success — the success path persists the updated codes slice via
+// UpdateUser before returning. A failed recovery-code attempt does
+// NOT consume anything (the consumeRecoveryCode call only mutates
+// the slice on a match).
 func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req LoginRequest) error {
 	// Use a generic error for missing password hash to avoid leaking account state
 	// (a distinct message would reveal that the account exists but has no password set)
@@ -179,17 +192,31 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 
 	if user.MFAEnabled {
 		if req.MFACode == "" {
-			return fmt.Errorf("MFA code required")
+			return ErrMFARequired
 		}
 		if user.MFASecret == "" {
 			return fmt.Errorf("MFA is enabled but not configured")
 		}
 		// verifyTOTP is panic-safe: a malformed secret causes generateTOTP to return ""
 		// (base32 decode error), resulting in a comparison miss rather than a panic.
-		if !verifyTOTP(user.MFASecret, req.MFACode) {
-			s.recordFailedLogin(ctx, user)
-			return fmt.Errorf("invalid MFA code")
+		if verifyTOTP(user.MFASecret, req.MFACode) {
+			return nil
 		}
+		// TOTP miss — try a recovery code. consumeRecoveryCode mutates
+		// the user's slice on a match; persist the slice so the
+		// consumed code can't be reused.
+		if s.consumeRecoveryCode(user, req.MFACode) {
+			if err := s.store.UpdateUser(ctx, user); err != nil {
+				logging.Warnf("Failed to persist recovery-code consumption for user %s: %v", user.ID, err)
+				// The recovery code already verified; still allow
+				// login but warn — repeated use of the same code on
+				// the next login will fail because the slice is
+				// stale, which is the safe failure mode.
+			}
+			return nil
+		}
+		s.recordFailedLogin(ctx, user)
+		return ErrInvalidMFACode
 	}
 
 	return nil

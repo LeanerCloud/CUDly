@@ -995,3 +995,150 @@ func TestHandler_resetPassword_ServerSideErrorPassesThrough(t *testing.T) {
 	assert.False(t, ok, "server-side errors must NOT be wrapped as ClientError; got ok=true")
 	assert.Contains(t, err.Error(), "database connection lost")
 }
+
+// ---------------------------------------------------------------
+// MFA enrollment / lifecycle handler tests (issue #497).
+// ---------------------------------------------------------------
+
+// b64 is a tiny helper to keep the password-encoding noise out of
+// the test bodies. The frontend always base64-encodes passwords on
+// the wire; the handlers decode before delegating to auth.
+func b64(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+func authedReq(token, body string) *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer " + token},
+		Body:    body,
+	}
+}
+
+func TestHandler_login_MFARequired_ReturnsMFASentinel(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrMFARequired_test()).Once()
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Body: `{"email":"u@x.com","password":"` + b64("p") + `"}`,
+	}
+	_, err := handler.login(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+	assert.Equal(t, "mfa_required", ce.Error())
+}
+
+func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrInvalidMFACode_test()).Once()
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Body: `{"email":"u@x.com","password":"` + b64("p") + `","mfa_code":"000000"}`,
+	}
+	_, err := handler.login(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+	assert.Equal(t, "invalid_mfa_code", ce.Error())
+}
+
+func TestHandler_mfaSetup_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+	mockAuth.On("MFASetupAPI", ctx, "user-1", "pw").
+		Return("SECRET123", "otpauth://totp/CUDly:u@x.com?secret=SECRET123", nil)
+
+	handler := &Handler{auth: mockAuth}
+	resp, err := handler.mfaSetup(ctx, authedReq("tok", `{"password":"`+b64("pw")+`"}`))
+	require.NoError(t, err)
+	assert.Equal(t, "SECRET123", resp.Secret)
+	assert.Contains(t, resp.ProvisioningURI, "otpauth://")
+}
+
+func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+	mockAuth.On("MFASetupAPI", ctx, "user-1", "wrong").
+		Return("", "", errors.New("invalid password"))
+
+	handler := &Handler{auth: mockAuth}
+	_, err := handler.mfaSetup(ctx, authedReq("tok", `{"password":"`+b64("wrong")+`"}`))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "invalid password")
+}
+
+func TestHandler_mfaEnable_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+	mockAuth.On("MFAEnableAPI", ctx, "user-1", "123456").
+		Return([]string{"AAAA-BBBB", "CCCC-DDDD"}, nil)
+
+	handler := &Handler{auth: mockAuth}
+	resp, err := handler.mfaEnable(ctx, authedReq("tok", `{"code":"123456"}`))
+	require.NoError(t, err)
+	assert.Len(t, resp.RecoveryCodes, 2)
+}
+
+func TestHandler_mfaEnable_NoSession(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "bad").Return(nil, errors.New("invalid session"))
+	handler := &Handler{auth: mockAuth}
+
+	_, err := handler.mfaEnable(ctx, authedReq("bad", `{"code":"123456"}`))
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+func TestHandler_mfaDisable_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+	mockAuth.On("MFADisableAPI", ctx, "user-1", "pw", "123456").Return(nil)
+
+	handler := &Handler{auth: mockAuth}
+	_, err := handler.mfaDisable(ctx, authedReq("tok", `{"password":"`+b64("pw")+`","code":"123456"}`))
+	require.NoError(t, err)
+}
+
+func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+	mockAuth.On("MFARegenerateRecoveryCodesAPI", ctx, "user-1", "123456").
+		Return([]string{"AAAA-BBBB"}, nil)
+
+	handler := &Handler{auth: mockAuth}
+	resp, err := handler.mfaRegenerateRecoveryCodes(ctx, authedReq("tok", `{"code":"123456"}`))
+	require.NoError(t, err)
+	assert.Len(t, resp.RecoveryCodes, 1)
+}
+
+// ErrMFARequired_test / ErrInvalidMFACode_test return the sentinel
+// errors from the auth package via a non-importing path so the api
+// package's _test.go files don't need to import the whole auth
+// package just for two values. Both are exported sentinels in the
+// auth package (errors.go); the api package's login handler maps
+// them via errors.Is(). Here we just wrap them so the mocked Login
+// returns the same value the real service would.
+func ErrMFARequired_test() error    { return mfaRequiredSentinel }
+func ErrInvalidMFACode_test() error { return mfaInvalidSentinel }

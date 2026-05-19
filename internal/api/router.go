@@ -202,6 +202,13 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/auth/reset-password/status", Method: "GET", Handler: r.resetPasswordStatusHandler, Auth: AuthPublic},
 		{ExactPath: "/api/auth/profile", Method: "PUT", Handler: r.updateProfileHandler, Auth: AuthUser},
 		{ExactPath: "/api/auth/change-password", Method: "POST", Handler: r.changePasswordHandler, Auth: AuthUser},
+		// MFA enrollment / lifecycle (issue #497). All require an
+		// authenticated session; setup + disable additionally require
+		// a fresh password re-verify in the body.
+		{ExactPath: "/api/auth/mfa/setup", Method: "POST", Handler: r.mfaSetupHandler, Auth: AuthUser},
+		{ExactPath: "/api/auth/mfa/enable", Method: "POST", Handler: r.mfaEnableHandler, Auth: AuthUser},
+		{ExactPath: "/api/auth/mfa/disable", Method: "POST", Handler: r.mfaDisableHandler, Auth: AuthUser},
+		{ExactPath: "/api/auth/mfa/regenerate-recovery-codes", Method: "POST", Handler: r.mfaRegenerateRecoveryCodesHandler, Auth: AuthUser},
 
 		// API Key endpoints (self-service — any authenticated user)
 		{ExactPath: "/api/api-keys", Method: "GET", Handler: r.listAPIKeysHandler, Auth: AuthUser},
@@ -566,6 +573,22 @@ func (r *Router) updateProfileHandler(ctx context.Context, req *events.LambdaFun
 
 func (r *Router) changePasswordHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.changePassword(ctx, req)
+}
+
+func (r *Router) mfaSetupHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.mfaSetup(ctx, req)
+}
+
+func (r *Router) mfaEnableHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.mfaEnable(ctx, req)
+}
+
+func (r *Router) mfaDisableHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.mfaDisable(ctx, req)
+}
+
+func (r *Router) mfaRegenerateRecoveryCodesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.mfaRegenerateRecoveryCodes(ctx, req)
 }
 
 func (r *Router) listAPIKeysHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

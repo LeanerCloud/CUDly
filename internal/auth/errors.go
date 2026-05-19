@@ -18,4 +18,11 @@ var (
 	ErrInvalidRole    = errors.New("invalid role")
 	ErrAdminExists    = errors.New("admin user already exists")
 	ErrPasswordPolicy = errors.New("password does not meet policy")
+
+	// MFA login-gate sentinels — used by the login API handler to map
+	// to machine-readable response codes (mfa_required /
+	// invalid_mfa_code) so the frontend can branch on the error class
+	// without substring-matching the human message. See issue #497.
+	ErrMFARequired    = errors.New("mfa_required")
+	ErrInvalidMFACode = errors.New("invalid_mfa_code")
 )

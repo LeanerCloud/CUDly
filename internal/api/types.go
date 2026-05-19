@@ -170,6 +170,13 @@ type AuthServiceInterface interface {
 	DeleteUser(ctx context.Context, userID string) error
 	ListUsersAPI(ctx context.Context) (any, error)
 	ChangePasswordAPI(ctx context.Context, userID, currentPassword, newPassword string) error
+	// MFA lifecycle (issue #497). All four require the user to be
+	// already authenticated; setup + disable additionally require a
+	// fresh password re-verify carried in the request body.
+	MFASetupAPI(ctx context.Context, userID, password string) (secret, provisioningURI string, err error)
+	MFAEnableAPI(ctx context.Context, userID, code string) (recoveryCodes []string, err error)
+	MFADisableAPI(ctx context.Context, userID, password, codeOrRecovery string) error
+	MFARegenerateRecoveryCodesAPI(ctx context.Context, userID, code string) (recoveryCodes []string, err error)
 	// Group management - uses auth.API* types
 	CreateGroupAPI(ctx context.Context, req any) (any, error)
 	UpdateGroupAPI(ctx context.Context, groupID string, req any) (any, error)
@@ -390,6 +397,60 @@ type CurrentUserResponse struct {
 // AdminExistsResponse holds the admin exists check response
 type AdminExistsResponse struct {
 	AdminExists bool `json:"admin_exists"`
+}
+
+// MFA enrollment + lifecycle DTOs (issue #497). Passwords carried by
+// these requests are base64-encoded by the frontend (same convention
+// as login / change-password / reset-password); the handler decodes
+// before handing to the auth service.
+
+// MFASetupRequest begins an MFA enrollment. Current password is
+// required as defence-in-depth — a stolen session alone shouldn't
+// be enough to swap a user's MFA secret.
+type MFASetupRequest struct {
+	Password string `json:"password"`
+}
+
+// MFASetupResponse returns the freshly-generated secret + the
+// otpauth:// URI the frontend renders as a QR code. The secret is
+// already persisted server-side as the pending secret; clients do
+// not need to round-trip it back on enable.
+type MFASetupResponse struct {
+	Secret          string `json:"secret"`
+	ProvisioningURI string `json:"provisioning_uri"`
+}
+
+// MFAEnableRequest finalizes an enrollment by proving the user
+// loaded the secret into their authenticator (the supplied code is
+// validated against the pending secret).
+type MFAEnableRequest struct {
+	Code string `json:"code"`
+}
+
+// MFAEnableResponse returns the plaintext recovery codes exactly
+// once. Backend stores only bcrypt hashes.
+type MFAEnableResponse struct {
+	RecoveryCodes []string `json:"recovery_codes"`
+}
+
+// MFADisableRequest turns off MFA. Requires the current password AND
+// a fresh proof-of-possession (TOTP code or unused recovery code).
+type MFADisableRequest struct {
+	Password string `json:"password"`
+	Code     string `json:"code"`
+}
+
+// MFARegenerateRequest replaces all stored recovery codes. Requires
+// a fresh TOTP code (NOT a recovery code — see service for the
+// rationale).
+type MFARegenerateRequest struct {
+	Code string `json:"code"`
+}
+
+// MFARegenerateResponse mirrors MFAEnableResponse — plaintext codes
+// returned exactly once.
+type MFARegenerateResponse struct {
+	RecoveryCodes []string `json:"recovery_codes"`
 }
 
 // EmptyServiceConfigResponse represents an empty service config

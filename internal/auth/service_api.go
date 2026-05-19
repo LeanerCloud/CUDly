@@ -350,3 +350,31 @@ func (s *Service) ListGroupsAPI(ctx context.Context) (any, error) {
 func (s *Service) HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error) {
 	return s.HasPermission(ctx, userID, action, resource, nil)
 }
+
+// MFASetupAPI starts an MFA enrollment via the API. Returns the
+// freshly-generated secret + provisioning URI (the otpauth:// URI
+// the frontend renders as a QR code). Wraps MFASetup; thin shim
+// exists so the api package can refer to a stable signature without
+// importing the auth package's internal MFASetupResult type.
+func (s *Service) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) {
+	result, err := s.MFASetup(ctx, userID, password)
+	if err != nil {
+		return "", "", err
+	}
+	return result.Secret, result.ProvisioningURI, nil
+}
+
+// MFAEnableAPI finalizes an enrollment via the API.
+func (s *Service) MFAEnableAPI(ctx context.Context, userID, code string) ([]string, error) {
+	return s.MFAEnable(ctx, userID, code)
+}
+
+// MFADisableAPI turns off MFA via the API.
+func (s *Service) MFADisableAPI(ctx context.Context, userID, password, codeOrRecovery string) error {
+	return s.MFADisable(ctx, userID, password, codeOrRecovery)
+}
+
+// MFARegenerateRecoveryCodesAPI replaces stored recovery codes via the API.
+func (s *Service) MFARegenerateRecoveryCodesAPI(ctx context.Context, userID, code string) ([]string, error) {
+	return s.MFARegenerateRecoveryCodes(ctx, userID, code)
+}

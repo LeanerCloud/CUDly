@@ -327,7 +327,7 @@ func TestService_Login_MFA(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "MFA code required")
+		assert.ErrorIs(t, err, ErrMFARequired)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -409,7 +409,7 @@ func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "invalid MFA code")
+	assert.ErrorIs(t, err, ErrInvalidMFACode)
 }
 
 func TestLogin_WithMFA_MissingCode(t *testing.T) {
@@ -443,7 +443,7 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "MFA code required")
+	assert.ErrorIs(t, err, ErrMFARequired)
 }
 
 func TestLogin_WithMFA_NoSecret(t *testing.T) {

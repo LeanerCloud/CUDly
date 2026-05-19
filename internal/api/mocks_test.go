@@ -706,6 +706,33 @@ func (m *MockAuthService) ChangePasswordAPI(ctx context.Context, userID, current
 	return args.Error(0)
 }
 
+// MFA lifecycle mock methods (issue #497).
+func (m *MockAuthService) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) {
+	args := m.Called(ctx, userID, password)
+	return args.String(0), args.String(1), args.Error(2)
+}
+
+func (m *MockAuthService) MFAEnableAPI(ctx context.Context, userID, code string) ([]string, error) {
+	args := m.Called(ctx, userID, code)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func (m *MockAuthService) MFADisableAPI(ctx context.Context, userID, password, codeOrRecovery string) error {
+	args := m.Called(ctx, userID, password, codeOrRecovery)
+	return args.Error(0)
+}
+
+func (m *MockAuthService) MFARegenerateRecoveryCodesAPI(ctx context.Context, userID, code string) ([]string, error) {
+	args := m.Called(ctx, userID, code)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // Group management mock methods
 func (m *MockAuthService) CreateGroupAPI(ctx context.Context, req interface{}) (interface{}, error) {
 	args := m.Called(ctx, req)

@@ -520,3 +520,13 @@ func (m *mockAuthForExchange) ValidateUserAPIKeyAPI(_ context.Context, _ string)
 func (m *mockAuthForExchange) GetAllowedAccountsAPI(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }
+func (m *mockAuthForExchange) MFASetupAPI(_ context.Context, _, _ string) (string, string, error) {
+	return "", "", nil
+}
+func (m *mockAuthForExchange) MFAEnableAPI(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}
+func (m *mockAuthForExchange) MFADisableAPI(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockAuthForExchange) MFARegenerateRecoveryCodesAPI(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}
