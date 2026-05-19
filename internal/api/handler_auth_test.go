@@ -857,3 +857,48 @@ func TestHandler_resetPassword_InvalidBase64(t *testing.T) {
 	// short-circuited before any service call fired.
 	mockAuth.AssertNotCalled(t, "ConfirmPasswordReset", mock.Anything, mock.Anything)
 }
+
+// TestHandler_resetPassword_ClientErrorSubstrings verifies that user-correctable
+// errors from ConfirmPasswordReset are mapped to 400 ClientError so the frontend
+// can surface the specific reason (e.g. "password must contain..." criteria).
+func TestHandler_resetPassword_ClientErrorSubstrings(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
+		Return(errors.New("password must contain a number"))
+
+	handler := &Handler{auth: mockAuth}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte("weakpass"))
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "tok-xyz", "new_password": "` + encoded + `"}`}
+	_, err := handler.resetPassword(ctx, req)
+	require.Error(t, err)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "user-correctable ConfirmPasswordReset error must be a ClientError, got %T: %v", err, err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "password must contain a number")
+}
+
+// TestHandler_resetPassword_ServerSideErrorPassesThrough verifies that server-side
+// errors from ConfirmPasswordReset (DB outages, crypto failures, etc.) are NOT
+// wrapped as 400 ClientError so the framework's default 500-mapping can fire.
+func TestHandler_resetPassword_ServerSideErrorPassesThrough(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
+		Return(errors.New("database connection lost"))
+
+	handler := &Handler{auth: mockAuth}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte("ValidPass1!"))
+	req := &events.LambdaFunctionURLRequest{Body: `{"token": "tok-xyz", "new_password": "` + encoded + `"}`}
+	_, err := handler.resetPassword(ctx, req)
+	require.Error(t, err)
+
+	_, ok := IsClientError(err)
+	assert.False(t, ok, "server-side errors must NOT be wrapped as ClientError; got ok=true")
+	assert.Contains(t, err.Error(), "database connection lost")
+}

@@ -159,6 +159,19 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 	return map[string]string{"status": "if the email exists, a reset link has been sent"}, nil
 }
 
+// isResetPasswordClientError reports whether err originates from a user-correctable
+// condition during password reset. The substring list is intentionally narrow and
+// is matched against the error messages produced by internal/auth/service_password.go.
+// When adding a new client-correctable error in the service, add its substring here too.
+func isResetPasswordClientError(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "current password") ||
+		strings.Contains(s, "used recently") ||
+		strings.Contains(s, "invalid or expired reset token") ||
+		strings.Contains(s, "reset token has expired") ||
+		strings.Contains(s, "password must")
+}
+
 func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
@@ -186,13 +199,10 @@ func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionU
 	pwdResetReq.NewPassword = decoded
 
 	if err := h.auth.ConfirmPasswordReset(ctx, pwdResetReq); err != nil {
-		// Surface the specific reason as a 4xx so the frontend can show
-		// it verbatim ("this is your current password, choose a different
-		// one", "password has been used recently", "invalid or expired
-		// reset token", etc.). Without this wrap, validation/history
-		// errors map to a generic 500 / opaque "Failed to reset
-		// password" toast on the client. See issue #459.
-		return nil, NewClientError(400, err.Error())
+		if isResetPasswordClientError(err) {
+			return nil, NewClientError(400, err.Error())
+		}
+		return nil, err
 	}
 
 	return map[string]string{"status": "password reset successful"}, nil
