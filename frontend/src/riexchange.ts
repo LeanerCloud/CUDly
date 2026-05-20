@@ -19,6 +19,8 @@ import type {
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+import { showToast } from './toast';
+import { getCurrentUser } from './state';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -889,6 +891,25 @@ export async function saveAutomationSettings(): Promise<void> {
 // Exchange History
 // ──────────────────────────────────────────────
 
+// canApproveRIExchangeRow returns true when the current session may approve
+// the given pending RI exchange via the inline Approve button (issue #300).
+// UX gate only — the backend authorizeSessionApproveRIExchange remains the
+// security boundary; a false-positive here surfaces as a 403 toast on click.
+//
+// Heuristic mirrors canApprovePendingRow in history.ts:
+//   * status must be "pending";
+//   * admin -> always yes;
+//   * non-admin matching created_by_user_id -> yes (approve-own);
+//   * legacy rows without created_by_user_id -> no (email-link path only).
+function canApproveRIExchangeRow(rec: RIExchangeHistoryRecord): boolean {
+  if ((rec.status || '').toLowerCase() !== 'pending') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (!rec.created_by_user_id) return false;
+  return rec.created_by_user_id === user.id;
+}
+
 async function loadExchangeHistory(): Promise<void> {
   const container = document.getElementById('ri-exchange-history-list');
   if (!container) return;
@@ -938,6 +959,9 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
     const exchangeIdCell = rec.exchange_id
       ? '<span class="monospace">' + escapeHtml(rec.exchange_id) + '</span>'
       : '&mdash;';
+    const approveBtn = canApproveRIExchangeRow(rec)
+      ? '<button type="button" class="btn-link riexchange-approve-btn" data-approve-id="' + escapeHtml(rec.id) + '">Approve</button>'
+      : '';
     return '<tr>'
       + '<td>' + escapeHtml(formatDateTime(rec.created_at)) + '</td>'
       + '<td>' + escapeHtml(String(rec.source_count)) + 'x ' + escapeHtml(rec.source_instance_type) + '</td>'
@@ -946,12 +970,13 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>$' + escapeHtml(rec.payment_due) + '</td>'
       + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span></td>'
       + '<td>' + exchangeIdCell + '</td>'
+      + '<td>' + approveBtn + '</td>'
       + '</tr>';
   }).join('');
 
   const tableHTML = '<table>'
     + '<thead><tr>'
-    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th>Count</th><th>Payment</th><th>Status</th><th>Exchange ID</th>'
+    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th>Count</th><th>Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
     + '</tr></thead>'
     + '<tbody>' + rowsHTML + '</tbody>'
     + '</table>';
@@ -961,5 +986,33 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
   wrapper.innerHTML = tableHTML;
   while (wrapper.firstChild) {
     container.appendChild(wrapper.firstChild);
+  }
+
+  // Wire Approve button click handlers
+  container.querySelectorAll<HTMLButtonElement>('.riexchange-approve-btn[data-approve-id]').forEach(btn => {
+    btn.addEventListener('click', () => handleRIExchangeApproveClick(btn));
+  });
+}
+
+async function handleRIExchangeApproveClick(btn: HTMLButtonElement): Promise<void> {
+  const id = btn.dataset.approveId;
+  if (!id) return;
+
+  const confirmed = await confirmDialog({
+    title: 'Approve RI Exchange',
+    body: 'Approve this pending RI exchange? The exchange will execute immediately.',
+    confirmLabel: 'Approve',
+  });
+  if (!confirmed) return;
+
+  btn.disabled = true;
+  try {
+    await api.approveRIExchange(id);
+    showToast({ kind: 'success', message: 'RI exchange approved and executing.' });
+    await loadExchangeHistory();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    showToast({ kind: 'error', message: 'Failed to approve exchange: ' + msg });
+    btn.disabled = false;
   }
 }

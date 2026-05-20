@@ -576,14 +576,75 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	return &RIExchangeHistoryResponse{Records: records}, nil
 }
 
-// approveRIExchange handles approval of a pending RI exchange via token.
-func (h *Handler) approveRIExchange(ctx context.Context, id, token string) (any, error) {
-	record, err := h.validateExchangeApproval(ctx, id, token)
+// approveRIExchange handles approval of a pending RI exchange.
+//
+// Three-mode dispatch mirroring approvePurchase (issue #286, issue #300):
+//
+//  1. Session present AND RBAC-authorized (admin / approve-any / approve-own
+//     match) -> session-authed approve, regardless of whether a token is also
+//     in the URL. Closes issue #300.
+//  2. token != "" -> legacy email-link flow. validateExchangeApproval enforces
+//     the token-equality check; the permission-denied fall-through ensures a
+//     logged-in user without approve-* can still use an email link they hold.
+//  3. token == "" AND no qualifying session -> 403 via
+//     approveRIExchangeViaSession's requireSession gate.
+func (h *Handler) approveRIExchange(ctx context.Context, req *events.LambdaFunctionURLRequest, id, token string) (any, error) {
+	if session := h.tryGetSession(ctx, req); session != nil {
+		// Quick RBAC pre-check (no record fetch needed): does this session hold
+		// ANY approve right? If yes, hand off to approveRIExchangeViaSession
+		// which will re-check ownership with the actual record. If 403, fall
+		// through to the token branch so email-link holders can still approve.
+		switch err := h.sessionHasApproveRight(ctx, session); {
+		case err == nil:
+			return h.approveRIExchangeViaSession(ctx, req, id, session)
+		case isPermissionDenied(err):
+			// Logged-in user without approve-* may still hold a valid email token.
+		default:
+			return nil, err
+		}
+	}
+
+	if token != "" {
+		record, err := h.validateExchangeApproval(ctx, id, token)
+		if err != nil {
+			return nil, err
+		}
+
+		transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing")
+		if err != nil {
+			return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+		}
+		if transitioned == nil {
+			return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+		}
+
+		return h.executeApprovedExchange(ctx, id, record)
+	}
+
+	return h.approveRIExchangeViaSession(ctx, req, id, nil)
+}
+
+// approveRIExchangeViaSession is the session-authed branch of approveRIExchange
+// (issue #300). Enforces the approve-any/approve-own RBAC matrix, then atomically
+// transitions pending -> processing and executes the exchange. Stamps
+// session.Email onto the approved_by column as an audit trail.
+//
+// The session parameter may be non-nil (already validated by the caller) or nil
+// (requireSession will validate it and return 401 if absent).
+func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, id string, session *Session) (any, error) {
+	var err error
+	if session == nil {
+		session, err = h.requireSession(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	record, err := h.fetchAndAuthorizeRIExchange(ctx, session, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Atomic transition: pending -> processing (checks expiry in WHERE clause)
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing")
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
@@ -592,7 +653,112 @@ func (h *Handler) approveRIExchange(ctx context.Context, id, token string) (any,
 		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
 	}
 
-	return h.executeApprovedExchange(ctx, id, record)
+	result, execErr := h.executeApprovedExchange(ctx, id, record)
+
+	// Stamp approver attribution (best-effort: the exchange itself already
+	// executed, so a stamp failure is logged but not surfaced to the caller).
+	if execErr == nil {
+		if stampErr := h.config.StampRIExchangeApprovedBy(ctx, id, session.Email); stampErr != nil {
+			logging.Errorf("failed to stamp approved_by on exchange %s: %v", id, stampErr)
+		}
+	}
+
+	return result, execErr
+}
+
+// fetchAndAuthorizeRIExchange looks up the pending exchange record by id, checks
+// that it is in "pending" state, and then verifies that session is authorised to
+// approve it. Extracted from approveRIExchangeViaSession to keep that function
+// under the cyclomatic-complexity limit.
+func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Session, id string) (*config.RIExchangeRecord, error) {
+	if err := validateUUID(id); err != nil {
+		return nil, err
+	}
+
+	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+	}
+	if record == nil {
+		return nil, NewClientError(404, "exchange record not found")
+	}
+
+	if record.Status != "pending" {
+		return nil, NewClientError(409, fmt.Sprintf("exchange %s cannot be approved (status=%s)", id, record.Status))
+	}
+
+	if err := h.authorizeSessionApproveRIExchange(ctx, session, record); err != nil {
+		return nil, err
+	}
+
+	return record, nil
+}
+
+// sessionHasApproveRight returns nil when the session holds ANY approve right
+// on purchases (admin / approve-any / approve-own) without checking ownership.
+// Used by the three-mode dispatch in approveRIExchange to decide whether to route
+// to approveRIExchangeViaSession before fetching the record.
+func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) error {
+	if session.Role == "admin" {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasOwn {
+		return nil
+	}
+	return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
+}
+
+// authorizeSessionApproveRIExchange returns nil when the session is permitted to
+// approve the given RI exchange record under the approve-any / approve-own RBAC rules
+// (issue #300). Mirrors authorizeSessionApprove from handler_purchases.go.
+//
+// The RI exchange shares ResourcePurchases because approval is conceptually
+// "approving a purchase action on a different resource type" per the issue spec,
+// which prefers reusing the existing verbs to keep the matrix small.
+func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
+	if session.Role == "admin" {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+
+	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if !hasOwn {
+		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
+	}
+
+	// approve-own: only allow if the session user created this exchange.
+	if record.CreatedByUserID == nil || *record.CreatedByUserID != session.UserID {
+		return NewClientError(403, "permission denied: cannot approve another user's pending exchange")
+	}
+
+	return nil
 }
 
 // validateExchangeApproval validates ID, token, and record state for an exchange approval.

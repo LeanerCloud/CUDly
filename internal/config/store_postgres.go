@@ -1181,8 +1181,8 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 			source_instance_type, source_count, target_offering_id,
 			target_instance_type, target_count, payment_due,
 			status, approval_token, error, mode, completed_at, expires_at,
-			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			created_at, updated_at, created_by_user_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -1205,6 +1205,7 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 		record.ExpiresAt,
 		record.CreatedAt,
 		record.UpdatedAt,
+		record.CreatedByUserID,
 	)
 
 	if err != nil {
@@ -1221,7 +1222,8 @@ func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RI
 		       source_instance_type, source_count, target_offering_id,
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
-		       created_at, updated_at, completed_at, expires_at
+		       created_at, updated_at, completed_at, expires_at,
+		       created_by_user_id, approved_by
 		FROM ri_exchange_history
 		WHERE id = $1
 	`
@@ -1245,7 +1247,8 @@ func (s *PostgresStore) GetRIExchangeRecordByToken(ctx context.Context, token st
 		       source_instance_type, source_count, target_offering_id,
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
-		       created_at, updated_at, completed_at, expires_at
+		       created_at, updated_at, completed_at, expires_at,
+		       created_by_user_id, approved_by
 		FROM ri_exchange_history
 		WHERE approval_token = $1
 	`
@@ -1269,7 +1272,8 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 		       source_instance_type, source_count, target_offering_id,
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
-		       created_at, updated_at, completed_at, expires_at
+		       created_at, updated_at, completed_at, expires_at,
+		       created_by_user_id, approved_by
 		FROM ri_exchange_history
 		WHERE created_at >= $1
 		ORDER BY created_at DESC
@@ -1291,7 +1295,8 @@ func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id strin
 		          source_instance_type, source_count, target_offering_id,
 		          target_instance_type, target_count, payment_due::text,
 		          status, approval_token, error, mode,
-		          created_at, updated_at, completed_at, expires_at
+		          created_at, updated_at, completed_at, expires_at,
+		          created_by_user_id, approved_by
 	`
 
 	records, err := s.queryRIExchangeRecords(ctx, query, id, fromStatus, toStatus)
@@ -1343,6 +1348,27 @@ func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, excha
 		return fmt.Errorf("ri exchange record not found: %s", id)
 	}
 
+	return nil
+}
+
+// StampRIExchangeApprovedBy sets the approved_by column on an RI exchange row
+// (issue #300). Called after CompleteRIExchange when approval came from a
+// session-authed user. The stamping is best-effort (log + continue on failure
+// so the exchange itself isn't rolled back just because the audit stamp failed).
+func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+	query := `
+		UPDATE ri_exchange_history
+		SET approved_by = $2
+		WHERE id = $1
+	`
+
+	result, err := s.db.Exec(ctx, query, id, approverEmail)
+	if err != nil {
+		return fmt.Errorf("failed to stamp approved_by on ri exchange %s: %w", id, err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("ri exchange record not found when stamping approved_by: %s", id)
+	}
 	return nil
 }
 
@@ -1408,7 +1434,8 @@ func (s *PostgresStore) GetStaleProcessingExchanges(ctx context.Context, olderTh
 		       source_instance_type, source_count, target_offering_id,
 		       target_instance_type, target_count, payment_due::text,
 		       status, approval_token, error, mode,
-		       created_at, updated_at, completed_at, expires_at
+		       created_at, updated_at, completed_at, expires_at,
+		       created_by_user_id, approved_by
 		FROM ri_exchange_history
 		WHERE status = 'processing' AND updated_at < NOW() - $1::interval
 	`
@@ -1429,6 +1456,7 @@ func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string
 		var record RIExchangeRecord
 		var approvalToken, errStr sql.NullString
 		var completedAt, expiresAt sql.NullTime
+		var createdByUserID, approvedBy sql.NullString
 
 		err := rows.Scan(
 			&record.ID,
@@ -1450,6 +1478,8 @@ func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string
 			&record.UpdatedAt,
 			&completedAt,
 			&expiresAt,
+			&createdByUserID,
+			&approvedBy,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan ri exchange record: %w", err)
@@ -1466,6 +1496,12 @@ func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string
 		}
 		if expiresAt.Valid {
 			record.ExpiresAt = &expiresAt.Time
+		}
+		if createdByUserID.Valid {
+			record.CreatedByUserID = &createdByUserID.String
+		}
+		if approvedBy.Valid {
+			record.ApprovedBy = &approvedBy.String
 		}
 
 		records = append(records, record)

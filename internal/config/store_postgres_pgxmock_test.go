@@ -499,6 +499,7 @@ func riExchangeRow(now time.Time) []interface{} {
 		sql.NullString{},
 		"manual",
 		now, now, sql.NullTime{}, sql.NullTime{},
+		sql.NullString{}, sql.NullString{}, // created_by_user_id, approved_by
 	}
 }
 
@@ -508,6 +509,7 @@ var riExchangeCols = []string{
 	"target_instance_type", "target_count", "payment_due",
 	"status", "approval_token", "error", "mode",
 	"created_at", "updated_at", "completed_at", "expires_at",
+	"created_by_user_id", "approved_by",
 }
 
 func TestPGXMock_GetRIExchangeRecord_Success(t *testing.T) {
@@ -541,6 +543,7 @@ func TestPGXMock_GetRIExchangeRecord_WithTimestamps(t *testing.T) {
 		sql.NullString{Valid: true, String: "some error"},
 		"auto",
 		now, now, sql.NullTime{Valid: true, Time: now}, sql.NullTime{Valid: true, Time: now},
+		sql.NullString{}, sql.NullString{}, // created_by_user_id, approved_by
 	}
 	rows := pgxmock.NewRows(riExchangeCols).AddRow(row...)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)

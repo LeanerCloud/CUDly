@@ -94,3 +94,13 @@ export async function getRIExchangeHistory(
   const resp = await apiRequest<{ records: RIExchangeHistoryRecord[] }>(`/ri-exchange/history${qs}`);
   return resp.records ?? [];
 }
+
+/**
+ * Approve a pending RI exchange via session auth (issue #300).
+ * Mirrors the purchase approvePurchase API method.
+ */
+export async function approveRIExchange(id: string): Promise<void> {
+  await apiRequest<unknown>(`/ri-exchange/approve/${encodeURIComponent(id)}`, {
+    method: 'POST',
+  });
+}

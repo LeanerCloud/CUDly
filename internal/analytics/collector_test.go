@@ -221,6 +221,9 @@ func (m *mockConfigStore) CompleteRIExchange(ctx context.Context, id string, exc
 func (m *mockConfigStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
 	return nil
 }
+func (m *mockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+	return nil
+}
 func (m *mockConfigStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
 	return "0", nil
 }

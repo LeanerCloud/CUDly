@@ -705,7 +705,7 @@ func (r *Router) approveRIExchangeHandler(ctx context.Context, req *events.Lambd
 	if err := r.h.checkRateLimit(ctx, req, "approve_cancel_public"); err != nil {
 		return nil, err
 	}
-	return r.h.approveRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
+	return r.h.approveRIExchange(ctx, req, params["id"], req.QueryStringParameters["token"])
 }
 
 func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
