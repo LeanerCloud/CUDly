@@ -392,7 +392,12 @@ async function handleExecutePurchase(): Promise<void> {
     // the moment the user has committed their intent. Gated on the
     // executePurchase success path so a failed submission shows no offer.
     openArcheraOfferModal('purchase');
-    await loadDashboard();
+    try {
+      await loadDashboard();
+    } catch (dashErr) {
+      const err = dashErr as Error;
+      showToast({ message: `Purchase submitted, but dashboard refresh failed: ${err.message}`, kind: 'warning' });
+    }
   } catch (error) {
     const err = error as Error;
     showToast({ message: `Failed to send purchase for approval: ${err.message}`, kind: 'error' });
@@ -525,11 +530,13 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     openArcheraOfferModal('purchase');
   }
 
-  await loadDashboard();
-
-  if (executeBtn) {
-    executeBtn.disabled = false;
-    executeBtn.textContent = 'Send for Approval';
+  try {
+    await loadDashboard();
+  } finally {
+    if (executeBtn) {
+      executeBtn.disabled = false;
+      executeBtn.textContent = 'Send for Approval';
+    }
   }
 }
 
