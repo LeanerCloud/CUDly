@@ -264,6 +264,7 @@ func TestAzureProvider_GetSupportedServices(t *testing.T) {
 	assert.Contains(t, services, common.ServiceRelationalDB)
 	assert.Contains(t, services, common.ServiceNoSQL)
 	assert.Contains(t, services, common.ServiceCache)
+	assert.Contains(t, services, common.ServiceDataWarehouse)
 }
 
 func TestAzureProvider_IsConfigured(t *testing.T) {
@@ -1152,6 +1153,7 @@ func TestAzureProvider_GetServiceClientForAccount(t *testing.T) {
 			common.ServiceRelationalDB,
 			common.ServiceCache,
 			common.ServiceNoSQL,
+			common.ServiceDataWarehouse,
 		}
 		for _, svc := range services {
 			t.Run(string(svc), func(t *testing.T) {
