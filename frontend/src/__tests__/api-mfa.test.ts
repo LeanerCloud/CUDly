@@ -53,8 +53,9 @@ describe('login() MFA error branch', () => {
   });
 
   test('non-MFA login error throws plain Error', async () => {
-    mockFetchErr(401, { error: 'invalid email or password' });
-    await expect(login('u@x.com', 'pw')).rejects.toThrow('invalid email or password');
+    const errMsg = 'Check your email address and password and try again';
+    mockFetchErr(401, { error: errMsg });
+    await expect(login('u@x.com', 'pw')).rejects.toThrow(errMsg);
     await expect(login('u@x.com', 'pw')).rejects.not.toBeInstanceOf(MFALoginError);
   });
 
