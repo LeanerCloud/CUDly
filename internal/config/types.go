@@ -480,6 +480,18 @@ type PurchaseHistoryRecord struct {
 	// empty otherwise. Excluded from DB persistence (computed at read
 	// time so updates to the persistent-failure map land instantly).
 	OpsHint string `json:"ops_hint,omitempty" dynamodbav:"-"`
+	// IsAuditGap marks a synthesised "completed" row whose purchase_history
+	// write failed after a successful purchase (issue #621). Such a row is
+	// reconstructed from the execution so the purchase stays visible, but its
+	// execution-level dollars are excluded from the committed totals: a
+	// partially-saved multi-rec execution can have BOTH some real
+	// purchase_history rows AND this synthesised row, so adding the full
+	// execution total would double-count the recs that did save. The dollars
+	// are surfaced via the individual purchase_history rows that succeeded;
+	// this row is the audit flag, not a money source. Real purchase_history
+	// rows loaded from the DB always leave this false. Excluded from DB
+	// persistence (set only at read time on synthesised rows).
+	IsAuditGap bool `json:"is_audit_gap,omitempty" dynamodbav:"-"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

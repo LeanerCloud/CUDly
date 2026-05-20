@@ -27,6 +27,16 @@ function normalizeStatus(p: HistoryPurchase): string {
   return p.status || 'completed';
 }
 
+// isInFlight reports whether a status is an approved-but-not-yet-finalised
+// execution (issue #621): the synchronous AWS purchase is mid-execution or got
+// interrupted (Lambda timeout / crash). These rows MUST NOT render as the green
+// "Completed" badge — doing so would tell the user a purchase finished when it
+// may not have, tempting a re-approval / double-spend. They are grouped under
+// the "Pending" filter chip (not "Completed") for the same reason.
+function isInFlightStatus(s: string): boolean {
+  return s === 'approved' || s === 'running' || s === 'paused';
+}
+
 // readDeepLinkExecutionID returns the value of the ?execution=<id>
 // query parameter inside the current location hash, or '' when
 // absent. The app uses hash routing ("#history"), so the "query" piece
@@ -259,6 +269,12 @@ function statusBadgeHTML(status: string): string {
     case 'pending':
     case 'notified':
       return '<span class="badge badge-warning">Pending</span>';
+    case 'approved':
+    case 'running':
+    case 'paused':
+      // In-flight (issue #621): not finished — never show the green Completed
+      // badge for these, or the user may think the purchase is done.
+      return '<span class="badge badge-warning">In Progress</span>';
     case 'cancelled':
       return '<span class="badge badge-muted">Cancelled</span>';
     case 'failed':
@@ -281,7 +297,7 @@ function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilt
   };
   for (const p of purchases) {
     const s = normalizeStatus(p).toLowerCase();
-    if (s === 'pending' || s === 'notified') counts.pending++;
+    if (s === 'pending' || s === 'notified' || isInFlightStatus(s)) counts.pending++;
     else if (s === 'cancelled') counts.cancelled++;
     else if (s === 'failed') counts.failed++;
     else if (s === 'expired') counts.expired++;
@@ -538,7 +554,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   // empty "Cancelled" slice after reloading with a fresh query.
   if (activeStatusFilter !== 'all' && !purchases.some(p => {
     const s = normalizeStatus(p).toLowerCase();
-    if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified';
+    if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified' || isInFlightStatus(s);
     if (activeStatusFilter === 'completed') return s === 'completed' || !p.status;
     return s === activeStatusFilter;
   })) {
@@ -553,7 +569,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   const visible = purchases.filter(p => {
     if (activeStatusFilter === 'all') return true;
     const s = normalizeStatus(p).toLowerCase();
-    if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified';
+    if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified' || isInFlightStatus(s);
     if (activeStatusFilter === 'completed') return s === 'completed' || !p.status;
     return s === activeStatusFilter;
   });

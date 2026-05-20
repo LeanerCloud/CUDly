@@ -270,6 +270,31 @@ describe('History Module', () => {
       expect(list?.innerHTML).toContain('Failed to load history');
     });
 
+    // Issue #621: an approved/running/paused execution is in-flight — its
+    // synchronous AWS purchase may have been interrupted (Lambda timeout /
+    // crash). It MUST render as "In Progress", never the green "Completed"
+    // badge, or the user could think the purchase finished and re-approve it
+    // (double-spend). Pre-fix these statuses fell through to the Completed
+    // default in statusBadgeHTML.
+    test('renders approved/running/paused as In Progress, not Completed', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          { purchase_id: 'appr-1', status: 'approved', provider: 'aws', region: 'us-east-1' },
+          { purchase_id: 'run-1', status: 'running', provider: 'aws', region: 'us-east-1' },
+          { purchase_id: 'paus-1', status: 'paused', provider: 'aws', region: 'us-east-1' },
+        ],
+      });
+
+      await loadHistory();
+
+      const list = document.getElementById('history-list');
+      const html = list?.innerHTML || '';
+      const inProgressBadges = (html.match(/In Progress/g) || []).length;
+      expect(inProgressBadges).toBe(3);
+      expect(html).not.toContain('>Completed<');
+    });
+
     test('handles empty provider filter', async () => {
       (api.getHistory as jest.Mock).mockResolvedValue({
         summary: {},

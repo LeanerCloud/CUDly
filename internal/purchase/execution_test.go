@@ -1175,3 +1175,65 @@ func TestSingleCloudAccountIDFromRecs(t *testing.T) {
 		})
 	}
 }
+
+// TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible is the issue
+// #621 secondary-path regression guard. When the AWS purchase SUCCEEDS but the
+// purchase_history insert fails, the execution must NOT be silently marked a
+// clean "completed" with no trace: it stays "completed" (the money WAS
+// committed, so flagging it failed would tempt a double-spend re-approval) but
+// carries an audit-gap Error so the History view can surface it. Pre-fix,
+// savePurchaseHistory swallowed the error and the purchase vanished from the UI.
+func TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockSTS := new(MockSTSClient)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	// Direct purchase (no plan) → single-account path, no updatePlanProgress.
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-auditgap",
+		PlanID:      "",
+		StepNumber:  1,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 500.0, Selected: true},
+		},
+	}
+
+	saveErr := errors.New("insert failed: monthly_cost violates not-null constraint")
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(saveErr)
+	// The execution record itself must still be persisted (with the audit marker).
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
+		Account: aws.String("123456789012"),
+	}, nil)
+	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+		Success:      true,
+		CommitmentID: "ri-auditgap",
+	}, nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		stsClient:       mockSTS,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	// executeAndFinalize must NOT return an error: the purchase succeeded.
+	err := manager.executeAndFinalize(ctx, exec)
+	require.NoError(t, err, "a failed history write must not surface as a purchase failure (re-approval / double-spend risk)")
+
+	assert.Equal(t, "completed", exec.Status, "purchase succeeded, so the execution stays completed")
+	assert.NotEmpty(t, exec.Error, "history-save failure must be recorded so the row stays visible in History (issue #621)")
+	assert.Contains(t, exec.Error, "ri-auditgap")
+	assert.Contains(t, exec.Error, "history record failed to save")
+
+	mockStore.AssertExpectations(t)
+	mockFactory.AssertExpectations(t)
+}
