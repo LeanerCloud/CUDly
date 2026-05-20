@@ -651,6 +651,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		EmailSender:            app.Email,
 		STSClient:              sts.NewFromConfig(awsCfg),
 		AssumeRoleSTS:          sts.NewFromConfig(awsCfg),
+		AmbientAWSCreds:        awsCfg.Credentials,
 		CredentialStore:        credStore,
 		NotificationDaysBefore: app.appConfig.NotificationDaysBefore,
 		DefaultTerm:            app.appConfig.DefaultTerm,
@@ -686,7 +687,8 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		app.Config,
 		func(ctx context.Context, acct *config.CloudAccount) (aws.Config, error) {
 			stsClient := sts.NewFromConfig(awsCfg)
-			prov, err := credentials.ResolveAWSCredentialProvider(ctx, acct, credStore, stsClient)
+			prov, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, acct, credStore, stsClient,
+				credentials.AWSResolveOptions{AmbientProvider: awsCfg.Credentials})
 			if err != nil {
 				return aws.Config{}, err
 			}
