@@ -205,7 +205,10 @@ func TestParseEC2Details(t *testing.T) {
 		validate    func(t *testing.T, rec *common.Recommendation)
 	}{
 		{
-			name: "Complete EC2 details with AZ scope",
+			// CE returns Tenancy="shared" for default; parser must normalise to
+			// the EC2 API canonical value "default" (types.TenancyDefault).
+			// Scope with an AZ must be "Availability Zone" (types.ScopeAvailabilityZone).
+			name: "Complete EC2 details with AZ scope, CE tenancy=shared",
 			details: &types.ReservationPurchaseRecommendationDetail{
 				InstanceDetails: &types.InstanceDetails{
 					EC2InstanceDetails: &types.EC2InstanceDetails{
@@ -226,8 +229,10 @@ func TestParseEC2Details(t *testing.T) {
 				require.True(t, ok, "Details should be ComputeDetails type")
 				assert.Equal(t, "m5.large", ec2Details.InstanceType)
 				assert.Equal(t, "Linux/UNIX", ec2Details.Platform)
-				assert.Equal(t, "shared", ec2Details.Tenancy)
-				assert.Equal(t, "availability-zone", ec2Details.Scope)
+				// CE "shared" must be written as EC2 API canonical "default"
+				assert.Equal(t, "default", ec2Details.Tenancy)
+				// AZ present -> "Availability Zone" (not "availability-zone")
+				assert.Equal(t, "Availability Zone", ec2Details.Scope)
 			},
 		},
 		{
@@ -247,7 +252,8 @@ func TestParseEC2Details(t *testing.T) {
 			validate: func(t *testing.T, rec *common.Recommendation) {
 				ec2Details, ok := rec.Details.(*common.ComputeDetails)
 				require.True(t, ok)
-				assert.Equal(t, "region", ec2Details.Scope)
+				// No AZ -> "Region" (not "region")
+				assert.Equal(t, "Region", ec2Details.Scope)
 			},
 		},
 		{
@@ -267,7 +273,8 @@ func TestParseEC2Details(t *testing.T) {
 			validate: func(t *testing.T, rec *common.Recommendation) {
 				ec2Details, ok := rec.Details.(*common.ComputeDetails)
 				require.True(t, ok)
-				assert.Equal(t, "region", ec2Details.Scope)
+				// Empty AZ string treated same as nil -> "Region"
+				assert.Equal(t, "Region", ec2Details.Scope)
 			},
 		},
 		{
@@ -288,11 +295,14 @@ func TestParseEC2Details(t *testing.T) {
 				ec2Details, ok := rec.Details.(*common.ComputeDetails)
 				require.True(t, ok)
 				assert.Equal(t, "Windows", ec2Details.Platform)
+				// "dedicated" is already the canonical EC2 API value
 				assert.Equal(t, "dedicated", ec2Details.Tenancy)
 			},
 		},
 		{
-			name: "EC2 without tenancy defaults to shared",
+			// nil Tenancy in CE response must yield EC2 API canonical "default"
+			// (not "shared" as the old parser wrote).
+			name: "EC2 without tenancy defaults to default",
 			details: &types.ReservationPurchaseRecommendationDetail{
 				InstanceDetails: &types.InstanceDetails{
 					EC2InstanceDetails: &types.EC2InstanceDetails{
@@ -307,7 +317,7 @@ func TestParseEC2Details(t *testing.T) {
 			validate: func(t *testing.T, rec *common.Recommendation) {
 				ec2Details, ok := rec.Details.(*common.ComputeDetails)
 				require.True(t, ok)
-				assert.Equal(t, "shared", ec2Details.Tenancy)
+				assert.Equal(t, "default", ec2Details.Tenancy)
 			},
 		},
 		{

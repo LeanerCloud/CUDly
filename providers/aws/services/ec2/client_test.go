@@ -516,3 +516,143 @@ func TestClient_GetDurationValue(t *testing.T) {
 		})
 	}
 }
+
+// TestCanonicalizeEC2Tenancy verifies that legacy lowercase/hyphenated tenancy
+// values written by pre-fix/598 parser versions are mapped to the canonical EC2
+// API enum values so that already-persisted recommendations still purchase correctly.
+func TestCanonicalizeEC2Tenancy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Legacy values from the old parser (CE "shared" passed through as-is)
+		{"legacy shared -> default", "shared", "default"},
+		// Already-canonical values must pass through unchanged
+		{"canonical default -> default", "default", "default"},
+		{"canonical dedicated -> dedicated", "dedicated", "dedicated"},
+		// Mixed-case inputs should also normalise
+		{"uppercase SHARED -> default", "SHARED", "default"},
+		{"uppercase DEFAULT -> default", "DEFAULT", "default"},
+		{"uppercase DEDICATED -> dedicated", "DEDICATED", "dedicated"},
+		// Unknown values are returned unchanged (defensive)
+		{"unknown host passthrough", "host", "host"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := canonicalizeEC2Tenancy(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCanonicalizeEC2Scope verifies that legacy lowercase/hyphenated scope
+// values written by pre-fix/598 parser versions are mapped to the canonical EC2
+// API enum values so that already-persisted recommendations still purchase correctly.
+func TestCanonicalizeEC2Scope(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Legacy values from the old parser
+		{"legacy region -> Region", "region", "Region"},
+		{"legacy availability-zone -> Availability Zone", "availability-zone", "Availability Zone"},
+		// Already-canonical values must pass through unchanged
+		{"canonical Region -> Region", "Region", "Region"},
+		{"canonical Availability Zone -> Availability Zone", "Availability Zone", "Availability Zone"},
+		// Space-separated variant (defensive)
+		{"lowercase availability zone -> Availability Zone", "availability zone", "Availability Zone"},
+		// Unknown values are returned unchanged (defensive)
+		{"unknown passthrough", "unknown-scope", "unknown-scope"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := canonicalizeEC2Scope(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestBuildOfferingFilters_LegacyCanonicalization verifies that buildOfferingFilters
+// canonicalizes legacy tenancy and scope values from pre-fix/598 persisted recs
+// so that DescribeReservedInstancesOfferings returns matches instead of zero results.
+func TestBuildOfferingFilters_LegacyCanonicalization(t *testing.T) {
+	t.Parallel()
+	client := &Client{region: "us-east-1"}
+
+	tests := []struct {
+		name        string
+		tenancy     string
+		scope       string
+		wantTenancy string
+		wantScope   string
+	}{
+		{
+			name:        "legacy shared+region -> default+Region",
+			tenancy:     "shared",
+			scope:       "region",
+			wantTenancy: "default",
+			wantScope:   "Region",
+		},
+		{
+			name:        "legacy availability-zone -> Availability Zone",
+			tenancy:     "default",
+			scope:       "availability-zone",
+			wantTenancy: "default",
+			wantScope:   "Availability Zone",
+		},
+		{
+			name:        "canonical values pass through unchanged",
+			tenancy:     "default",
+			scope:       "Region",
+			wantTenancy: "default",
+			wantScope:   "Region",
+		},
+		{
+			name:        "dedicated tenancy canonical",
+			tenancy:     "dedicated",
+			scope:       "Availability Zone",
+			wantTenancy: "dedicated",
+			wantScope:   "Availability Zone",
+		},
+		{
+			name:        "empty tenancy and scope use defaults",
+			tenancy:     "",
+			scope:       "",
+			wantTenancy: "default",
+			wantScope:   "Region",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := common.Recommendation{
+				ResourceType:  "m5.large",
+				PaymentOption: "all-upfront",
+				Term:          "1yr",
+			}
+			details := &common.ComputeDetails{
+				Platform: "Linux/UNIX",
+				Tenancy:  tt.tenancy,
+				Scope:    tt.scope,
+			}
+
+			filters := client.buildOfferingFilters(rec, details)
+
+			filterMap := make(map[string]string)
+			for _, f := range filters {
+				if f.Name != nil && len(f.Values) > 0 {
+					filterMap[*f.Name] = f.Values[0]
+				}
+			}
+
+			assert.Equal(t, tt.wantTenancy, filterMap["instance-tenancy"], "tenancy filter mismatch")
+			assert.Equal(t, tt.wantScope, filterMap["scope"], "scope filter mismatch")
+		})
+	}
+}
