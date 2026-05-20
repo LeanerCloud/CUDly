@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
@@ -960,4 +961,217 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 	mockFactory.AssertExpectations(t)
 	mockProviderInst.AssertExpectations(t)
 	mockServiceClient.AssertExpectations(t)
+}
+
+// TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds asserts that the
+// single-account path resolves per-account credentials via resolveAccountProvider
+// when exec.Recommendations all share the same cloud_account_id (direct-execute
+// Azure purchase -- PlanID is empty, exec.CloudAccountID is nil).
+//
+// This is the regression test for issue #602: before the fix, nil was passed as
+// provCfg, which caused DefaultAzureCredential to fall through its entire chain
+// (EnvironmentCredential, WorkloadIdentity, ManagedIdentity, CLI) and fail in
+// the Lambda runtime where none of these are available.
+//
+// After the fix, singleCloudAccountIDFromRecs derives the account from the recs,
+// GetCloudAccount fetches the CloudAccount record, and resolveAccountProvider
+// constructs a provider.ProviderConfig with explicit creds. The factory receives
+// a non-nil provCfg, which the assertion captures via MatchedBy.
+func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockSTS := new(MockSTSClient)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	acctID := "azure-acct-1"
+	// Direct-execute: no PlanID, no exec-level CloudAccountID.
+	// All recs share the same cloud_account_id so singleCloudAccountIDFromRecs
+	// returns &acctID.
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-azure-direct",
+		PlanID:      "",
+		StepNumber:  0,
+		Source:      common.PurchaseSourceWeb,
+		Recommendations: []config.RecommendationRecord{
+			{
+				Provider:       "azure",
+				Service:        "compute",
+				ResourceType:   "Standard_B1ls",
+				Region:         "eastus",
+				Count:          1,
+				Savings:        10.0,
+				UpfrontCost:    50.0,
+				Selected:       true,
+				CloudAccountID: &acctID,
+			},
+		},
+	}
+
+	azureAccount := &config.CloudAccount{
+		ID:                  acctID,
+		Provider:            "azure",
+		AzureAuthMode:       "managed_identity",
+		AzureSubscriptionID: "sub-111",
+	}
+
+	// GetCloudAccount is called with the account ID derived from the recs.
+	mockStore.On("GetCloudAccount", ctx, acctID).Return(azureAccount, nil)
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
+		Account: aws.String("123456789012"),
+	}, nil)
+
+	// The core assertion: factory must receive a non-nil provCfg.
+	// Before the fix, nil was passed and Azure SDK fell back to DefaultAzureCredential.
+	// After the fix, resolveAzureProvider populates ProviderOverride on the config.
+	mockFactory.On("CreateAndValidateProvider", ctx, "azure",
+		mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+			return cfg != nil && cfg.ProviderOverride != nil
+		}),
+	).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "eastus").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("common.PurchaseOptions"),
+	).Return(common.PurchaseResult{Success: true, CommitmentID: "azure-res-1"}, nil)
+
+	// credStore needed because AzureAuthMode is "managed_identity"; for managed
+	// identity, ResolveAzureTokenCredentialWithOpts returns a ManagedIdentityCredential
+	// without touching the store. We still supply a non-nil credStore so the
+	// guard `if account.AzureAuthMode != "managed_identity" && m.credStore == nil`
+	// is not triggered.
+	mockCredStore := &MockCredentialStore{}
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		stsClient:       mockSTS,
+		providerFactory: mockFactory,
+		credStore:       mockCredStore,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	_, err := manager.executePurchase(ctx, exec)
+	require.NoError(t, err)
+
+	mockStore.AssertExpectations(t)
+	mockFactory.AssertExpectations(t)
+}
+
+// TestExecutePurchase_SingleAccount_CredResolutionError asserts that a failure
+// to resolve credentials for a single-account path surfaces as an error rather
+// than silently falling back to ambient credentials (nil provCfg).
+func TestExecutePurchase_SingleAccount_CredResolutionError(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	acctID := "bad-acct"
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-cred-err",
+		PlanID:      "",
+		Recommendations: []config.RecommendationRecord{
+			{
+				Provider:       "azure",
+				Service:        "compute",
+				ResourceType:   "Standard_B1ls",
+				Region:         "eastus",
+				Count:          1,
+				Selected:       true,
+				CloudAccountID: &acctID,
+			},
+		},
+	}
+
+	// GetCloudAccount returns a DB error.
+	dbErr := errors.New("connection refused")
+	mockStore.On("GetCloudAccount", ctx, acctID).Return(nil, dbErr)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	_, err := manager.executePurchase(ctx, exec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credential resolution failed for account "+acctID)
+	assert.Contains(t, err.Error(), "connection refused")
+
+	mockStore.AssertExpectations(t)
+}
+
+// TestSingleCloudAccountIDFromRecs covers the helper that derives a shared
+// cloud_account_id from a recommendation slice.
+func TestSingleCloudAccountIDFromRecs(t *testing.T) {
+	aid1 := "acct-1"
+	aid2 := "acct-2"
+
+	tests := []struct {
+		name string
+		recs []config.RecommendationRecord
+		want *string
+	}{
+		{
+			name: "empty slice returns nil",
+			recs: []config.RecommendationRecord{},
+			want: nil,
+		},
+		{
+			name: "all nil account IDs returns nil",
+			recs: []config.RecommendationRecord{
+				{CloudAccountID: nil},
+				{CloudAccountID: nil},
+			},
+			want: nil,
+		},
+		{
+			name: "single rec with account ID returns it",
+			recs: []config.RecommendationRecord{
+				{CloudAccountID: &aid1},
+			},
+			want: &aid1,
+		},
+		{
+			name: "all recs share same account ID returns it",
+			recs: []config.RecommendationRecord{
+				{CloudAccountID: &aid1},
+				{CloudAccountID: &aid1},
+			},
+			want: &aid1,
+		},
+		{
+			name: "mixed nil and same non-nil returns the non-nil ID",
+			recs: []config.RecommendationRecord{
+				{CloudAccountID: nil},
+				{CloudAccountID: &aid1},
+				{CloudAccountID: &aid1},
+			},
+			want: &aid1,
+		},
+		{
+			name: "two distinct account IDs returns nil (multi-account, not this path)",
+			recs: []config.RecommendationRecord{
+				{CloudAccountID: &aid1},
+				{CloudAccountID: &aid2},
+			},
+			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := singleCloudAccountIDFromRecs(tc.recs)
+			if tc.want == nil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, *tc.want, *got)
+			}
+		})
+	}
 }

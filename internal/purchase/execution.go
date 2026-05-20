@@ -64,7 +64,12 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 
 	// Single-account (legacy) path.
 	accountID := m.getAWSAccountID(ctx)
-	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, nil)
+	provCfg, err := m.resolveSingleAccountProvider(ctx, exec)
+	if err != nil {
+		return false, err
+	}
+
+	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
 
 	if len(purchaseErrors) > 0 {
 		return false, fmt.Errorf("some purchases failed: %v", purchaseErrors)
@@ -142,6 +147,49 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		logging.Errorf("Failed to send confirmation for account %s: %v", account.ID, err)
 	}
 	return nil
+}
+
+// resolveSingleAccountProvider derives per-account credentials for the
+// single-account execution path. Returns (nil, nil) when no account can be
+// identified (ambient credentials are used in that case), or when no recs are
+// selected (approval-only flows where credentials are not needed).
+//
+// The account is taken from exec.CloudAccountID when set (plan-with-single-
+// account executions), or derived from the shared cloud_account_id on the
+// recommendations when all selected recs agree on exactly one account (direct-
+// execute purchases where PlanID is empty and exec.CloudAccountID is nil).
+//
+// A non-nil error means credentials were found but could not be resolved; the
+// caller must NOT fall back to ambient credentials on error.
+func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, error) {
+	// Skip credential resolution when nothing is selected. Approval-only
+	// flows may carry an account ID on the recs solely for the contact-email
+	// gate; attempting resolution there would fail on accounts with no
+	// provider field set and add a pointless DB round-trip.
+	if len(selectedIndices(exec.Recommendations)) == 0 {
+		return nil, nil
+	}
+
+	cloudAccountID := exec.CloudAccountID
+	if cloudAccountID == nil {
+		cloudAccountID = singleCloudAccountIDFromRecs(exec.Recommendations)
+	}
+	if cloudAccountID == nil {
+		return nil, nil
+	}
+
+	account, err := m.config.GetCloudAccount(ctx, *cloudAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
+	}
+	if account == nil {
+		return nil, nil
+	}
+	provCfg, err := m.resolveAccountProvider(ctx, *account)
+	if err != nil {
+		return nil, fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
+	}
+	return provCfg, nil
 }
 
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
@@ -352,6 +400,28 @@ func indexKeys(idx []int) []string {
 		out[i] = strconv.Itoa(n)
 	}
 	return out
+}
+
+// singleCloudAccountIDFromRecs returns the shared cloud_account_id when
+// all recommendations in the slice agree on exactly one non-empty account ID.
+// Returns nil when the slice is empty, all IDs are absent, or more than one
+// distinct ID is present (the caller falls back to ambient credentials in the
+// first two cases and to fan-out in the last).
+func singleCloudAccountIDFromRecs(recs []config.RecommendationRecord) *string {
+	var found *string
+	for i := range recs {
+		id := recs[i].CloudAccountID
+		if id == nil || *id == "" {
+			continue
+		}
+		if found == nil {
+			found = id
+		} else if *found != *id {
+			// More than one distinct account — not the single-account path.
+			return nil
+		}
+	}
+	return found
 }
 
 func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec config.RecommendationRecord, result common.PurchaseResult, accountID string) {
