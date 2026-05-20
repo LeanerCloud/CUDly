@@ -24,7 +24,10 @@ lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 14
 lambda_enable_function_url    = true
 lambda_function_url_auth_type = "NONE"
-lambda_allowed_origins        = ["*"]
+# TODO(env-not-deployed): staging environment is not yet provisioned. Update this
+# to the actual staging origin when the env exists. Until then the .invalid TLD
+# ensures any accidental terraform apply fails fast on hostname resolution.
+lambda_allowed_origins = ["https://staging-not-yet-deployed.invalid"]
 
 # Fargate Configuration (when compute_platform = "fargate")
 fargate_cpu           = 1024

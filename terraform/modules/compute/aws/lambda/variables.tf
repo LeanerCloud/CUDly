@@ -96,13 +96,27 @@ variable "function_url_auth_type" {
 }
 
 variable "allowed_origins" {
-  description = "Allowed origins for CORS. Must be non-empty — Lambda Function URL CORS is infrastructure-enforced and rejects all requests with empty allow_origins."
+  description = <<-EOT
+    Explicit CORS origin allowlist for the Lambda Function URL. Must be non-empty
+    and must not contain the wildcard "*". The Function URL CORS block uses
+    allow_credentials = true; AWS reflects the inbound Origin header verbatim for
+    each listed origin, which the browser treats as a trusted cross-origin endpoint.
+    A wildcard origin combined with credentials is equivalent to any-origin CSRF:
+    any website can read the response with credentials included.
+    Set this to the actual CloudFront or frontend domain for each environment,
+    e.g. ["https://app.example.com"] or ["https://<lambda-url-id>.lambda-url.us-east-1.on.aws"].
+  EOT
   type        = list(string)
   default     = []
 
   validation {
     condition     = length(var.allowed_origins) > 0
     error_message = "allowed_origins must not be empty for Lambda Function URL CORS — set an explicit origin list in tfvars."
+  }
+
+  validation {
+    condition     = !contains(var.allowed_origins, "*")
+    error_message = "allowed_origins must not contain \"*\". The Function URL uses allow_credentials=true; a wildcard origin reflects any inbound Origin header with credentials allowed, enabling cross-site request forgery from any website."
   }
 }
 
