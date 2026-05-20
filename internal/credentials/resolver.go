@@ -76,9 +76,17 @@ type STSClientFactory func(provider aws.CredentialsProvider) STSClient
 // self-resolve correctly; without them, bastion mode falls back to the
 // pre-self-loading behaviour (trusts the caller-supplied STS client) for
 // backward compatibility.
+//
+// AmbientProvider, when set, is returned for role_arn accounts whose
+// AWSRoleARN is empty (the "Self" account shape: auth_mode=role_arn with no
+// role ARN). This mirrors the scheduler's collectAWSForAccount logic, which
+// treats the same shape as an ambient-credentials case.
 type AWSResolveOptions struct {
 	AccountLookup    AccountLookupFunc
 	STSClientFactory STSClientFactory
+	// AmbientProvider is the host Lambda / EC2 instance credentials provider.
+	// Required when resolving a Self account (role_arn with empty AWSRoleARN).
+	AmbientProvider aws.CredentialsProvider
 }
 
 // ResolveAWSCredentialProvider is a back-compat wrapper that calls
@@ -113,7 +121,7 @@ func ResolveAWSCredentialProviderWithOpts(
 	case "access_keys":
 		return resolveAccessKeyProvider(ctx, account, store)
 	case "role_arn":
-		return resolveRoleARNProvider(ctx, account, stsClient, nil)
+		return resolveRoleARNProvider(ctx, account, stsClient, opts.AmbientProvider)
 	case "bastion":
 		return resolveBastionProvider(ctx, account, store, stsClient, opts)
 	case "workload_identity_federation":
@@ -145,14 +153,25 @@ func resolveAccessKeyProvider(ctx context.Context, account *config.CloudAccount,
 // assumes account.AWSRoleARN using stsClient. stscreds.AssumeRoleProvider
 // transparently refreshes credentials before they expire, avoiding the
 // 1-hour STS token expiry problem of static credentials.
+//
+// When AWSRoleARN is empty (the "Self" account shape: auth_mode=role_arn with
+// no role ARN), the ambient provider is returned directly so collection and
+// execution agree on what this shape means. If ambient is nil in that case,
+// a descriptive error is returned.
 func resolveRoleARNProvider(
 	_ context.Context,
 	account *config.CloudAccount,
 	stsClient STSClient,
-	_ aws.CredentialsProvider,
+	ambient aws.CredentialsProvider,
 ) (aws.CredentialsProvider, error) {
 	if account.AWSRoleARN == "" {
-		return nil, fmt.Errorf("credentials: aws_role_arn is required for role_arn auth mode (account %s)", account.ID)
+		// Self-account: auth_mode=role_arn with no role ARN means "use the
+		// CUDly Lambda's own credentials to access this account." The
+		// scheduler's collectAWSForAccount handles the same shape identically.
+		if ambient != nil {
+			return ambient, nil
+		}
+		return nil, fmt.Errorf("credentials: aws_role_arn is empty and no ambient credentials available (account %s)", account.ID)
 	}
 
 	sessionSuffix := account.ID

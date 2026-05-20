@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -34,6 +35,9 @@ type ManagerConfig struct {
 	DefaultCoverage        float64
 	DefaultRampSchedule    string
 	DashboardURL           string
+	// AmbientAWSCreds is the host Lambda / EC2 instance credentials provider,
+	// used when resolving a Self account (auth_mode=role_arn with empty role ARN).
+	AmbientAWSCreds aws.CredentialsProvider
 	// OIDCSigner and OIDCIssuerURL enable the secret-free Azure
 	// federated credential path. When both are set, Azure accounts in
 	// workload_identity_federation mode with no stored PEM are routed
@@ -49,6 +53,7 @@ type Manager struct {
 	email           email.SenderInterface
 	stsClient       STSClient
 	assumeRoleSTS   credentials.STSClient
+	ambientAWSCreds aws.CredentialsProvider
 	credStore       credentials.CredentialStore
 	providerFactory provider.FactoryInterface
 	notifyDays      int
@@ -91,6 +96,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		email:           cfg.EmailSender,
 		stsClient:       cfg.STSClient,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		ambientAWSCreds: cfg.AmbientAWSCreds,
 		credStore:       cfg.CredentialStore,
 		providerFactory: factory,
 		notifyDays:      cfg.NotificationDaysBefore,

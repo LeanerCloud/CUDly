@@ -147,16 +147,76 @@ func TestResolveAWSCredentialProvider_RoleARN(t *testing.T) {
 	assert.NotNil(t, provider)
 }
 
-func TestResolveAWSCredentialProvider_RoleARN_NoARN(t *testing.T) {
+// TestResolveAWSCredentialProvider_RoleARN_NoARN_NilAmbient verifies that the
+// back-compat wrapper (which passes nil ambient) returns the descriptive error
+// for a Self-account shape when there is no ambient provider available.
+func TestResolveAWSCredentialProvider_RoleARN_NoARN_NilAmbient(t *testing.T) {
 	account := &config.CloudAccount{
 		ID:          "acct1",
 		AWSAuthMode: "role_arn",
-		AWSRoleARN:  "", // missing
+		AWSRoleARN:  "", // Self-account shape
 	}
 
+	// Back-compat wrapper passes nil ambient, so we expect the nil-ambient error.
 	_, err := ResolveAWSCredentialProvider(context.Background(), account, newMockStore(), &mockSTSClient{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "aws_role_arn is required")
+	assert.Contains(t, err.Error(), "aws_role_arn is empty and no ambient credentials available")
+}
+
+// TestResolveAWSCredentialProvider_SelfAccount_WithAmbient verifies that a
+// Self-account (auth_mode=role_arn, empty AWSRoleARN) returns the ambient
+// credentials provider when one is supplied via AWSResolveOptions.
+func TestResolveAWSCredentialProvider_SelfAccount_WithAmbient(t *testing.T) {
+	account := &config.CloudAccount{
+		ID:          "self-acct",
+		AWSAuthMode: "role_arn",
+		AWSRoleARN:  "", // Self-account shape
+	}
+
+	ambientCreds := aws.CredentialsProviderFunc(func(_ context.Context) (aws.Credentials, error) {
+		return aws.Credentials{
+			AccessKeyID:     "AMBIENTKEY",
+			SecretAccessKey: "ambientsecret",
+			Source:          "test-ambient",
+		}, nil
+	})
+
+	provider, err := ResolveAWSCredentialProviderWithOpts(
+		context.Background(),
+		account,
+		newMockStore(),
+		&mockSTSClient{},
+		AWSResolveOptions{AmbientProvider: ambientCreds},
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	creds, err := provider.Retrieve(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "AMBIENTKEY", creds.AccessKeyID)
+	assert.Equal(t, "test-ambient", creds.Source)
+}
+
+// TestResolveAWSCredentialProvider_SelfAccount_NilAmbient verifies that a
+// Self-account with a nil AmbientProvider in AWSResolveOptions returns the
+// descriptive error instead of a panic or a misleading "aws_role_arn required" message.
+func TestResolveAWSCredentialProvider_SelfAccount_NilAmbient(t *testing.T) {
+	account := &config.CloudAccount{
+		ID:          "self-acct",
+		AWSAuthMode: "role_arn",
+		AWSRoleARN:  "", // Self-account shape
+	}
+
+	_, err := ResolveAWSCredentialProviderWithOpts(
+		context.Background(),
+		account,
+		newMockStore(),
+		&mockSTSClient{},
+		AWSResolveOptions{AmbientProvider: nil},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aws_role_arn is empty and no ambient credentials available")
+	assert.Contains(t, err.Error(), "self-acct")
 }
 
 func TestResolveAWSCredentialProvider_RoleARN_STSError(t *testing.T) {

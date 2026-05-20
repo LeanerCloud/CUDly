@@ -43,7 +43,9 @@ func TestResolveBastionProvider_WithBastionAndRoleARN(t *testing.T) {
 }
 
 func TestResolveBastionProvider_NoRoleARN(t *testing.T) {
-	// bastion mode delegates to resolveRoleARNProvider; a missing ARN surfaces there.
+	// bastion mode (legacy fallback) delegates to resolveRoleARNProvider with nil
+	// ambient; an empty ARN now returns the ambient-creds error instead of the
+	// old "is required" message.
 	account := &config.CloudAccount{
 		ID:           "acct1",
 		AWSAuthMode:  "bastion",
@@ -52,7 +54,7 @@ func TestResolveBastionProvider_NoRoleARN(t *testing.T) {
 	}
 	_, err := ResolveAWSCredentialProvider(context.Background(), account, newMockStore(), &mockSTSClient{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "aws_role_arn is required")
+	assert.Contains(t, err.Error(), "aws_role_arn is empty and no ambient credentials available")
 }
 
 // ---------------------------------------------------------------------------

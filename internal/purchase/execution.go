@@ -212,7 +212,8 @@ func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAc
 	if account.AWSAuthMode != "access_keys" && m.assumeRoleSTS == nil {
 		return nil, fmt.Errorf("credentials: STS client not configured for non-access_keys mode (account %s)", account.ID)
 	}
-	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &account, m.credStore, m.assumeRoleSTS)
+	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &account, m.credStore, m.assumeRoleSTS,
+		credentials.AWSResolveOptions{AmbientProvider: m.ambientAWSCreds})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: resolve AWS for account %s (%s): %w", account.ID, account.Name, err)
 	}
