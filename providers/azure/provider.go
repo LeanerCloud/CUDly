@@ -323,6 +323,9 @@ func resolveDefaultSubscription(accounts []common.Account, explicitSubID string)
 // pre-fetched account list, falling back to accounts[0] for backward
 // compatibility when no account is marked default.
 func getDefaultSubscriptionID(accounts []common.Account) string {
+	if len(accounts) == 0 {
+		return ""
+	}
 	for _, a := range accounts {
 		if a.IsDefault {
 			return a.ID

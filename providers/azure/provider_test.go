@@ -979,6 +979,9 @@ func TestAzureProvider_GetRecommendationsClient_WithSubscriptionLookup(t *testin
 // makeSubscriptionsPager is a test helper that returns a pager with the given
 // subscription IDs and display names (paired by index).
 func makeSubscriptionsPager(ids, names []string) SubscriptionsPager {
+	if len(ids) != len(names) {
+		panic("makeSubscriptionsPager: ids and names length mismatch")
+	}
 	subs := make([]*armsubscriptions.Subscription, len(ids))
 	for i := range ids {
 		id := ids[i]
@@ -1039,6 +1042,7 @@ func TestResolveDefaultSubscription(t *testing.T) {
 
 func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
 	t.Run("single subscription is marked IsDefault", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "")
 		subID := "only-sub"
 		subName := "Only Sub"
 
@@ -1056,6 +1060,7 @@ func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
 	})
 
 	t.Run("configured subscriptionID is marked IsDefault among many", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-env")
 		p := &AzureProvider{
 			cred:           &mockTokenCredential{},
 			subscriptionID: "sub-2",
@@ -1078,6 +1083,7 @@ func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
 	})
 
 	t.Run("multiple subscriptions without explicit config all non-default", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "")
 		p := &AzureProvider{cred: &mockTokenCredential{}}
 		p.SetSubscriptionsClient(&mockSubscriptionsClient{
 			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
@@ -1093,6 +1099,26 @@ func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
 		require.Len(t, accounts, 2)
 		assert.False(t, accounts[0].IsDefault)
 		assert.False(t, accounts[1].IsDefault)
+	})
+
+	t.Run("env subscriptionID is marked IsDefault when config is empty", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-2")
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return makeSubscriptionsPager(
+					[]string{"sub-1", "sub-2", "sub-3"},
+					[]string{"Sub 1", "Sub 2", "Sub 3"},
+				)
+			},
+		})
+
+		accounts, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, accounts, 3)
+		assert.False(t, accounts[0].IsDefault)
+		assert.True(t, accounts[1].IsDefault)
+		assert.False(t, accounts[2].IsDefault)
 	})
 }
 
