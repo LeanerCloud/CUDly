@@ -68,9 +68,24 @@ resource "aws_iam_policy" "networking" {
           "ec2:ReplaceRoute",
           "ec2:RevokeSecurityGroupEgress",
           "ec2:RevokeSecurityGroupIngress",
-          "ec2:RunInstances",
         ]
         Resource = "*"
+      },
+      {
+        # ec2:RunInstances is needed for the fck-nat AutoScaling group
+        # (one t4g.nano per AZ). Scoping to the fck-nat launch template
+        # and restricting allowed instance types prevents the deploy SA
+        # from launching arbitrary large instances and attaching CUDly IAM
+        # roles to exfiltrate credentials or run compute at account cost.
+        Sid      = "EC2RunInstancesFckNAT"
+        Effect   = "Allow"
+        Action   = ["ec2:RunInstances"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "ec2:InstanceType" = ["t4g.nano"]
+          }
+        }
       },
       {
         Sid    = "AutoScalingFckNAT"

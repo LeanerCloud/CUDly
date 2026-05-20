@@ -96,7 +96,12 @@ resource "aws_iam_policy" "data" {
         }
       },
       {
-        Sid    = "RDS"
+        # RDS actions that take a specific resource ARN are scoped to
+        # cudly-* DB instances, subnet groups, and proxies. This prevents
+        # the deploy SA from deleting or modifying unrelated RDS instances
+        # in the same account. DescribeDBEngineVersions does not accept a
+        # resource ARN (account-wide catalogue lookup) and is split below.
+        Sid    = "RDSResourceScoped"
         Effect = "Allow"
         Action = [
           "rds:AddTagsToResource",
@@ -105,7 +110,6 @@ resource "aws_iam_policy" "data" {
           "rds:CreateDBSubnetGroup",
           "rds:DeleteDBInstance",
           "rds:DeleteDBSubnetGroup",
-          "rds:DescribeDBEngineVersions",
           "rds:DescribeDBInstances",
           "rds:DescribeDBSubnetGroups",
           "rds:ListTagsForResource",
@@ -120,6 +124,20 @@ resource "aws_iam_policy" "data" {
           "rds:RegisterDBProxyTargets",
           "rds:RemoveTagsFromResource",
         ]
+        Resource = [
+          "arn:aws:rds:*:*:db:cudly-*",
+          "arn:aws:rds:*:*:subgrp:cudly-*",
+          "arn:aws:rds:*:*:proxy:cudly-*",
+          "arn:aws:rds:*:*:target-group:cudly-*",
+          "arn:aws:rds:*:*:snapshot:cudly-*",
+        ]
+      },
+      {
+        # DescribeDBEngineVersions is a catalogue lookup that doesn't
+        # accept a resource ARN at the API level. Read-only, no state change.
+        Sid      = "RDSDescribeEngineVersions"
+        Effect   = "Allow"
+        Action   = ["rds:DescribeDBEngineVersions"]
         Resource = "*"
       },
       {
