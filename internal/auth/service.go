@@ -140,18 +140,18 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 		return nil, fmt.Errorf("authentication failed")
 	}
 	if user == nil {
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf("Check your email address and password and try again")
 	}
 
 	if !user.Active {
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf("Check your email address and password and try again")
 	}
 
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf("Check your email address and password and try again")
 	}
 	// NOTE: when LockedUntil is set but the window has already expired, the user falls
 	// through here with FailedLoginAttempts and LockedUntil still set in memory.
@@ -182,12 +182,12 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 	// Use a generic error for missing password hash to avoid leaking account state
 	// (a distinct message would reveal that the account exists but has no password set)
 	if user.PasswordHash == "" {
-		return fmt.Errorf("invalid email or password")
+		return fmt.Errorf("Check your email address and password and try again")
 	}
 
 	if !s.verifyPassword(req.Password, user.PasswordHash) {
 		s.recordFailedLogin(ctx, user)
-		return fmt.Errorf("invalid email or password")
+		return fmt.Errorf("Check your email address and password and try again")
 	}
 
 	if user.MFAEnabled {

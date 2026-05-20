@@ -638,9 +638,10 @@ function validateLoginInputs(email: string, password: string): string | null {
 /**
  * Translate the known generic backend error strings into clearer
  * user-facing copy. The mapping deliberately collapses both
- * "authentication failed" (user not found) and "invalid email or
- * password" (wrong password) into the same client-side message so we do
- * not regress the account-enumeration mitigation called out in #456.
+ * "authentication failed" (user not found) and "check your email address
+ * and password" (wrong password / inactive / locked) into the same
+ * client-side message so we do not regress the account-enumeration
+ * mitigation called out in #456 / #550.
  * Anything else (MFA prompts, rate-limit, server errors) passes through
  * unchanged so operational signals are not suppressed.
  */
@@ -649,8 +650,11 @@ function mapServerLoginError(message: string): string {
   if (lower.includes('invalid email format')) {
     return 'Incorrect email format';
   }
-  if (lower.includes('authentication failed') || lower.includes('invalid email or password')) {
-    return 'Incorrect email or password';
+  if (
+    lower.includes('authentication failed') ||
+    lower.includes('check your email address and password')
+  ) {
+    return 'Check your email address and password and try again';
   }
   return message;
 }

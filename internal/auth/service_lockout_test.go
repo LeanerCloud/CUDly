@@ -36,7 +36,7 @@ func TestLogin_AccountLockout_BeforePasswordCheck(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "invalid email or password") // Generic error to prevent user enumeration
+	assert.Contains(t, err.Error(), "Check your email address and password and try again") // Generic error to prevent user enumeration
 
 	mockStore.AssertExpectations(t)
 	// Verify UpdateUser was NOT called - lockout check happens first
@@ -298,7 +298,7 @@ func TestLogin_AccountLockout_GenericErrorMessage(t *testing.T) {
 
 	// Error message should be generic to prevent user enumeration
 	// Should NOT reveal that account is locked
-	assert.Equal(t, "invalid email or password", err.Error())
+	assert.Equal(t, "Check your email address and password and try again", err.Error())
 
 	mockStore.AssertExpectations(t)
 }
@@ -358,4 +358,85 @@ func TestRecordFailedLogin(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+}
+
+// TestLogin_OWASPEnumerationInvariant guards against regression that re-introduces
+// distinct error messages for the 5 authentication failure modes (OWASP ASVS V3.3.4
+// / V14.2). All 5 paths MUST return an identical string so the login endpoint cannot
+// be used as an email-existence oracle.
+//
+// If this test fails after a code change, that change almost certainly re-introduced
+// a username-enumeration vulnerability and MUST be reverted or fixed before landing.
+func TestLogin_OWASPEnumerationInvariant(t *testing.T) {
+	const wantMsg = "Check your email address and password and try again"
+	ctx := context.Background()
+
+	lockUntil := time.Now().Add(10 * time.Minute)
+
+	type scenario struct {
+		name    string
+		getUser func(t *testing.T) *User // nil means "user not found"
+	}
+
+	scenarios := []scenario{
+		{
+			name:    "user not found",
+			getUser: func(t *testing.T) *User { return nil },
+		},
+		{
+			name: "inactive account",
+			getUser: func(t *testing.T) *User {
+				u := createTestUser(t, "Correct1!")
+				u.Active = false
+				return u
+			},
+		},
+		{
+			name: "account locked (within lockout window)",
+			getUser: func(t *testing.T) *User {
+				u := createTestUser(t, "Correct1!")
+				u.LockedUntil = &lockUntil
+				return u
+			},
+		},
+		{
+			name: "empty password hash (no password set)",
+			getUser: func(t *testing.T) *User {
+				u := createTestUser(t, "Correct1!")
+				u.PasswordHash = ""
+				return u
+			},
+		},
+		{
+			name: "wrong password",
+			getUser: func(t *testing.T) *User {
+				return createTestUser(t, "Correct1!")
+			},
+		},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			mockEmail := new(MockEmailSender)
+			service := createTestService(mockStore, mockEmail)
+
+			user := sc.getUser(t)
+			mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(user, nil).Once()
+			mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Maybe()
+
+			req := LoginRequest{
+				Email:    "test@example.com",
+				Password: "WrongPassword9!",
+			}
+
+			_, err := service.Login(ctx, req)
+			require.Error(t, err, "expected login to fail for scenario %q", sc.name)
+			assert.Equal(t, wantMsg, err.Error(),
+				"scenario %q must return the uniform copy; distinct messages leak enumeration signal", sc.name)
+
+			mockStore.AssertExpectations(t)
+			mockEmail.AssertExpectations(t)
+		})
+	}
 }

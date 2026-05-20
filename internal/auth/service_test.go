@@ -54,7 +54,7 @@ func TestService_Login(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "invalid email or password")
+		assert.Contains(t, err.Error(), "Check your email address and password and try again")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -77,7 +77,7 @@ func TestService_Login(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "invalid email or password")
+		assert.Contains(t, err.Error(), "Check your email address and password and try again")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -101,7 +101,7 @@ func TestService_Login(t *testing.T) {
 		resp, err := service.Login(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "invalid email or password")
+		assert.Contains(t, err.Error(), "Check your email address and password and try again")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -778,7 +778,7 @@ func TestService_Login_LockedUser(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "invalid email or password")
+	assert.Contains(t, err.Error(), "Check your email address and password and try again")
 
 	mockStore.AssertExpectations(t)
 }
@@ -804,7 +804,7 @@ func TestService_Login_EmptyPasswordHash(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, resp)
 	// Must return generic error, not a message that leaks account state
-	assert.Contains(t, err.Error(), "invalid email or password")
+	assert.Contains(t, err.Error(), "Check your email address and password and try again")
 
 	mockStore.AssertExpectations(t)
 }

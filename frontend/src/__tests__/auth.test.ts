@@ -184,18 +184,20 @@ describe('Auth Module', () => {
       expect(api.login).not.toHaveBeenCalled();
     });
 
-    test('backend "authentication failed" maps to "Incorrect email or password"', async () => {
+    test('backend "authentication failed" maps to softened copy', async () => {
       (api.login as jest.Mock).mockRejectedValue(new Error('authentication failed'));
       await showLoginModal();
       const text = await submitLogin('user@example.com', 'wrongpassword');
-      expect(text).toBe('Incorrect email or password');
+      expect(text).toBe('Check your email address and password and try again');
     });
 
-    test('backend "invalid email or password" maps to "Incorrect email or password"', async () => {
-      (api.login as jest.Mock).mockRejectedValue(new Error('invalid email or password'));
+    test('backend "Check your email address and password and try again" passes through unchanged', async () => {
+      (api.login as jest.Mock).mockRejectedValue(
+        new Error('Check your email address and password and try again'),
+      );
       await showLoginModal();
       const text = await submitLogin('user@example.com', 'wrongpassword');
-      expect(text).toBe('Incorrect email or password');
+      expect(text).toBe('Check your email address and password and try again');
     });
 
     test('backend "invalid email format" maps to "Incorrect email format"', async () => {
