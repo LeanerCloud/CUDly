@@ -1027,12 +1027,14 @@ func TestResolveDefaultSubscription(t *testing.T) {
 	})
 
 	t.Run("single subscription gets IsDefault when no explicit ID", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "")
 		accounts := []common.Account{{ID: "only-sub"}}
 		resolveDefaultSubscription(accounts, "")
 		assert.True(t, accounts[0].IsDefault)
 	})
 
 	t.Run("multiple subscriptions with no explicit ID stay non-default", func(t *testing.T) {
+		t.Setenv("AZURE_SUBSCRIPTION_ID", "")
 		accounts := []common.Account{{ID: "sub-1"}, {ID: "sub-2"}}
 		resolveDefaultSubscription(accounts, "")
 		assert.False(t, accounts[0].IsDefault)
@@ -1132,12 +1134,12 @@ func TestGetDefaultSubscriptionID(t *testing.T) {
 		assert.Equal(t, "sub-2", getDefaultSubscriptionID(accounts))
 	})
 
-	t.Run("falls back to accounts[0] when none marked default", func(t *testing.T) {
+	t.Run("returns empty string when none marked default", func(t *testing.T) {
 		accounts := []common.Account{
 			{ID: "sub-1", IsDefault: false},
 			{ID: "sub-2", IsDefault: false},
 		}
-		assert.Equal(t, "sub-1", getDefaultSubscriptionID(accounts))
+		assert.Equal(t, "", getDefaultSubscriptionID(accounts))
 	})
 }
 

@@ -320,8 +320,8 @@ func resolveDefaultSubscription(accounts []common.Account, explicitSubID string)
 }
 
 // getDefaultSubscriptionID returns the ID of the default subscription from a
-// pre-fetched account list, falling back to accounts[0] for backward
-// compatibility when no account is marked default.
+// pre-fetched account list, or an empty string when no account is marked
+// default (e.g. ambiguous multi-subscription tenants with no explicit config).
 func getDefaultSubscriptionID(accounts []common.Account) string {
 	if len(accounts) == 0 {
 		return ""
@@ -331,21 +331,33 @@ func getDefaultSubscriptionID(accounts []common.Account) string {
 			return a.ID
 		}
 	}
-	return accounts[0].ID
+	return ""
+}
+
+// resolveSubscriptionIDFromCtx calls GetAccounts and returns the default
+// subscription ID, or a descriptive error if none can be resolved.
+func (p *AzureProvider) resolveSubscriptionIDFromCtx(ctx context.Context) (string, error) {
+	accounts, err := p.GetAccounts(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve default Azure subscription: %w", err)
+	}
+	if len(accounts) == 0 {
+		return "", fmt.Errorf("no Azure subscriptions found")
+	}
+	id := getDefaultSubscriptionID(accounts)
+	if id == "" {
+		return "", fmt.Errorf("multiple Azure subscriptions found; set AzureSubscriptionID or AZURE_SUBSCRIPTION_ID")
+	}
+	return id, nil
 }
 
 // GetRegions returns all available Azure regions using the Subscriptions API
 func (p *AzureProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
-	// Get first subscription to query available locations
-	accounts, err := p.GetAccounts(ctx)
+	// Resolve the subscription to query available locations.
+	subscriptionID, err := p.resolveSubscriptionIDFromCtx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("no Azure subscriptions found to query regions: %w", err)
 	}
-	if len(accounts) == 0 {
-		return nil, fmt.Errorf("no Azure subscriptions found to query regions")
-	}
-
-	subscriptionID := getDefaultSubscriptionID(accounts)
 
 	// Use injected client if available (for testing)
 	var subClient SubscriptionsClient
@@ -423,11 +435,11 @@ func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.Ser
 	// Use explicit subscription ID if configured; otherwise resolve from accounts.
 	subscriptionID := p.subscriptionID
 	if subscriptionID == "" {
-		accounts, err := p.GetAccounts(ctx)
-		if err != nil || len(accounts) == 0 {
-			return nil, fmt.Errorf("no Azure subscriptions found")
+		var err error
+		subscriptionID, err = p.resolveSubscriptionIDFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
-		subscriptionID = getDefaultSubscriptionID(accounts)
 	}
 
 	return p.newServiceClientForSubscription(service, subscriptionID, region)
@@ -477,11 +489,11 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 	// Use explicit subscription ID if configured; otherwise resolve from accounts.
 	subscriptionID := p.subscriptionID
 	if subscriptionID == "" {
-		accounts, err := p.GetAccounts(ctx)
-		if err != nil || len(accounts) == 0 {
-			return nil, fmt.Errorf("no Azure subscriptions found")
+		var err error
+		subscriptionID, err = p.resolveSubscriptionIDFromCtx(ctx)
+		if err != nil {
+			return nil, err
 		}
-		subscriptionID = getDefaultSubscriptionID(accounts)
 	}
 
 	return NewRecommendationsClient(p.cred, subscriptionID)
