@@ -79,9 +79,19 @@ func TestRecommendationsClientAdapter_GetRecommendationsForService(t *testing.T)
 		projectID: "test-project",
 	}
 
-	// This will fail without credentials, but we're testing the structure
-	_, err := adapter.GetRecommendationsForService(ctx, common.ServiceCompute)
-	assert.Error(t, err) // Expected to fail without credentials/API access
+	// Without real GCP credentials the regions call will fail. Since issue
+	// #247, permission errors (403) return ([], nil) instead of an error, so
+	// we can only assert that the call does not panic. Non-permission errors
+	// (network timeout, invalid project) still propagate as errors — but we
+	// cannot predict which path the test environment will take without
+	// mocking the provider. Structure is verified in fields/context tests.
+	recs, err := adapter.GetRecommendationsForService(ctx, common.ServiceCompute)
+	if err != nil {
+		// non-permission failure: function returned an error as expected
+		return
+	}
+	// permission failure path (issue #247): returns empty slice, no error
+	assert.NotNil(t, recs)
 }
 
 func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
@@ -91,9 +101,14 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 		projectID: "test-project",
 	}
 
-	// This will fail without credentials, but we're testing the structure
-	_, err := adapter.GetAllRecommendations(ctx)
-	assert.Error(t, err) // Expected to fail without credentials/API access
+	// Same environment-sensitivity caveat as GetRecommendationsForService.
+	// Assert no panic; accept either ([], nil) for permission errors or
+	// (nil, err) for other failures.
+	recs, err := adapter.GetAllRecommendations(ctx)
+	if err != nil {
+		return
+	}
+	assert.NotNil(t, recs)
 }
 
 func TestRecommendationsClientAdapter_Fields(t *testing.T) {
