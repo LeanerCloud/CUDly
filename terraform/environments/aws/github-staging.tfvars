@@ -24,9 +24,10 @@ lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 14
 lambda_enable_function_url    = true
 lambda_function_url_auth_type = "NONE"
-# Restrict CORS to the staging Lambda Function URL itself. Wildcard + allow_credentials
-# reflects any Origin with credentials allowed, enabling cross-site request forgery.
-lambda_allowed_origins = ["https://33pz7pombdqwu3bdlxp4lqxyra0bsriy.lambda-url.us-east-1.on.aws"]
+# TODO(env-not-deployed): staging environment is not yet provisioned. Update this
+# to the actual staging origin when the env exists. Until then the .invalid TLD
+# ensures any accidental terraform apply fails fast on hostname resolution.
+lambda_allowed_origins = ["https://staging-not-yet-deployed.invalid"]
 
 # Fargate Configuration (when compute_platform = "fargate")
 fargate_cpu           = 1024
