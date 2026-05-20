@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // CloudAccountRequest is the request body for create/update account endpoints.
@@ -517,6 +518,13 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 }
 
 // deleteAccount handles DELETE /api/accounts/:id.
+//
+// Preflights the delete against pending/notified purchase_executions
+// (issue #606). Migration 000053 also enforces ON DELETE RESTRICT at the
+// DB level so a race that slips past the preflight still can't orphan a
+// pending execution — but the preflight gives the frontend a structured
+// 409 (with the count + execution_ids) so it can offer a Cancel-All-Then-
+// Delete affordance instead of surfacing a raw FK-violation 500.
 func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
@@ -533,7 +541,52 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 		return nil, err
 	}
 
+	// Preflight: refuse the delete if pending/notified executions still
+	// reference this account. The frontend uses the pending_count + the
+	// pending_execution_ids list to drive the Cancel-All-Then-Delete UX.
+	pendingCount, err := h.config.CountPendingExecutionsForAccount(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+	if pendingCount > 0 {
+		execIDs, listErr := h.config.ListPendingExecutionIDsForAccount(ctx, id)
+		if listErr != nil {
+			// Count succeeded but list failed — still surface the 409 so the
+			// operator gets a clear "cancel them first" message instead of
+			// the raw FK error from the eventual DB delete. The list payload
+			// is omitted; the frontend falls back to a generic message.
+			return nil, NewClientErrorWithDetails(409,
+				fmt.Sprintf("cannot delete account: %d pending purchase(s) must be cancelled first", pendingCount),
+				map[string]any{
+					"pending_count": pendingCount,
+					"reason":        "pending_executions",
+				})
+		}
+		return nil, NewClientErrorWithDetails(409,
+			fmt.Sprintf("cannot delete account: %d pending purchase(s) must be cancelled first", pendingCount),
+			map[string]any{
+				"pending_count":         pendingCount,
+				"pending_execution_ids": execIDs,
+				"reason":                "pending_executions",
+			})
+	}
+
 	if err := h.config.DeleteCloudAccount(ctx, id); err != nil {
+		// Race: the preflight count was 0 but a pending execution row was
+		// inserted concurrently before we issued the DELETE. Migration 000053
+		// enforces ON DELETE RESTRICT, so Postgres raises SQLSTATE 23503
+		// (foreign_key_violation). Map this to the same structured 409 the
+		// preflight branch returns so the frontend's Cancel-All-Then-Delete
+		// affordance still kicks in — minus the count/ids, which we can't
+		// supply without re-querying (and the operator can just retry).
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return nil, NewClientErrorWithDetails(409,
+				"cannot delete account: pending purchase(s) must be cancelled first",
+				map[string]any{
+					"reason": "pending_executions",
+				})
+		}
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 

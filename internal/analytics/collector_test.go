@@ -196,6 +196,14 @@ func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	return 0, nil
 }
 
+func (m *mockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	return 0, nil
+}
+
+func (m *mockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }

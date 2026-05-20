@@ -95,6 +95,14 @@ func (m *mockConfigStoreForHealth) CleanupOldExecutions(ctx context.Context, ret
 	return 0, nil
 }
 
+func (m *mockConfigStoreForHealth) CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	return 0, nil
+}
+
+func (m *mockConfigStoreForHealth) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }

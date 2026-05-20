@@ -901,6 +901,55 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 	return &executions[0], nil
 }
 
+// CountPendingExecutionsForAccount returns the number of pending/notified
+// purchase executions still referencing this cloud account. The deleteAccount
+// handler calls this before issuing DELETE FROM cloud_accounts so it can
+// short-circuit with a 409 instead of letting migration 000053's ON DELETE
+// RESTRICT bubble up as an opaque FK-violation error. See issue #606.
+func (s *PostgresStore) CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM purchase_executions
+		WHERE cloud_account_id = $1
+		  AND status IN ('pending', 'notified')
+	`, accountID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count pending executions for account: %w", err)
+	}
+	return n, nil
+}
+
+// ListPendingExecutionIDsForAccount returns the execution IDs that the
+// frontend's Cancel-All-Then-Delete flow needs to POST cancel for. Capped
+// at 1000 rows — a single account with more pending executions than that
+// is an unusual operator-cleanup task rather than a button-click flow.
+func (s *PostgresStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT execution_id FROM purchase_executions
+		WHERE cloud_account_id = $1
+		  AND status IN ('pending', 'notified')
+		ORDER BY scheduled_date ASC
+		LIMIT 1000
+	`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending execution ids for account: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan pending execution id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate pending execution ids: %w", err)
+	}
+	return ids, nil
+}
+
 // queryExecutions is a helper to query and scan purchase executions
 func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args ...any) ([]PurchaseExecution, error) {
 	rows, err := s.db.Query(ctx, query, args...)
