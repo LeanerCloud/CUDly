@@ -149,7 +149,7 @@ func (c *SynapseClient) GetRecommendations(ctx context.Context, params common.Re
 func (c *SynapseClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	pager, err := c.createReservationsPager()
 	if err != nil {
-		return []common.Commitment{}, nil
+		return nil, fmt.Errorf("synapse: create reservations pager: %w", err)
 	}
 
 	return c.collectSynapseReservations(ctx, pager)
@@ -217,6 +217,20 @@ func (c *SynapseClient) convertSynapseReservation(detail *armconsumption.Reserva
 	return commitment
 }
 
+// parseReservationTermYears maps a term string to an integer year count.
+// Returns an error for any value outside the explicit allowlist so that
+// callers fail closed rather than silently coercing to a 1-year purchase.
+func parseReservationTermYears(term string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(term)) {
+	case "", "1", "1yr", "1y":
+		return 1, nil
+	case "3", "3yr", "3y":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("unsupported reservation term: %s", term)
+	}
+}
+
 // PurchaseCommitment purchases Synapse reserved capacity via the Azure
 // Reservations API. The reserved resource type is "SqlDW" which covers
 // Dedicated SQL Pool DWU reservations.
@@ -228,15 +242,42 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		Timestamp:      time.Now(),
 	}
 
+	if strings.TrimSpace(rec.ResourceType) == "" {
+		result.Error = fmt.Errorf("resource type is required")
+		return result, result.Error
+	}
+	if rec.Count <= 0 {
+		result.Error = fmt.Errorf("quantity must be greater than zero")
+		return result, result.Error
+	}
+
+	termYears, err := parseReservationTermYears(rec.Term)
+	if err != nil {
+		result.Error = err
+		return result, result.Error
+	}
+
 	reservationOrderID := uuid.New().String()
+	commitmentID, err := c.doPurchaseRequest(ctx, rec, opts, reservationOrderID, termYears)
+	if err != nil {
+		result.Error = err
+		return result, result.Error
+	}
+
+	result.Success = true
+	result.CommitmentID = commitmentID
+	result.Cost = rec.CommitmentCost
+	return result, nil
+}
+
+// doPurchaseRequest marshals the reservation request body, signs it with a
+// bearer token, and executes the PUT against the Azure Reservations API.
+// It is extracted from PurchaseCommitment to keep that function's cyclomatic
+// complexity within the project limit.
+func (c *SynapseClient) doPurchaseRequest(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions, reservationOrderID string, termYears int) (string, error) {
 	apiVersion := "2022-11-01"
 	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
 		reservationOrderID, apiVersion)
-
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
-	}
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -257,22 +298,19 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to marshal request: %w", err)
-		return result, result.Error
+		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "PUT", purchaseURL, strings.NewReader(string(bodyBytes)))
 	if err != nil {
-		result.Error = fmt.Errorf("failed to create request: %w", err)
-		return result, result.Error
+		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	token, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: []string{"https://management.azure.com/.default"},
 	})
 	if err != nil {
-		result.Error = fmt.Errorf("failed to get access token: %w", err)
-		return result, result.Error
+		return "", fmt.Errorf("failed to get access token: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token.Token)
@@ -280,23 +318,15 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to purchase reservation: %w", err)
-		return result, result.Error
+		return "", fmt.Errorf("failed to purchase reservation: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		result.Error = fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
-		return result, result.Error
+		return "", fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
 	}
-
-	result.Success = true
-	result.CommitmentID = reservationOrderID
-	result.Cost = rec.CommitmentCost
-
-	return result, nil
+	return reservationOrderID, nil
 }
 
 // ValidateOffering validates that a Synapse SKU is in the known set.
@@ -316,9 +346,9 @@ func (c *SynapseClient) ValidateOffering(ctx context.Context, rec common.Recomme
 // GetOfferingDetails retrieves Synapse reservation offering details from the
 // Azure Retail Prices API.
 func (c *SynapseClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := parseReservationTermYears(rec.Term)
+	if err != nil {
+		return nil, err
 	}
 
 	p, err := c.getSynapsePricing(ctx, rec.ResourceType, c.region, termYears)
@@ -413,8 +443,7 @@ func (c *SynapseClient) getSynapsePricing(ctx context.Context, sku, region strin
 
 	hoursInTerm := 8760.0 * float64(termYears)
 	if reservationPrice == 0 {
-		// Azure Synapse reservations typically offer around 40% savings
-		reservationPrice = onDemandPrice * hoursInTerm * 0.60
+		return nil, fmt.Errorf("pricing data unavailable for Synapse SKU %s in region %s: no reservation price returned by API", sku, region)
 	}
 
 	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
