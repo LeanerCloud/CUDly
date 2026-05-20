@@ -20,6 +20,10 @@ on:
       confirm:
         description: 'Type "destroy" to confirm destruction of ALL staging resources'
         required: true
+      branch:
+        description: 'Branch to check out Terraform code from (defaults to the branch this workflow is dispatched from)'
+        required: false
+        default: ''
 
 permissions:
   id-token: write
@@ -55,7 +59,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: feat/multicloud-web-frontend
+          ref: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -117,7 +121,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: feat/multicloud-web-frontend
+          ref: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -182,7 +186,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: feat/multicloud-web-frontend
+          ref: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
 
       - name: Azure Login
         uses: azure/login@v3
@@ -246,7 +250,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: feat/multicloud-web-frontend
+          ref: ${{ inputs.branch != '' && inputs.branch || github.ref_name }}
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v3
