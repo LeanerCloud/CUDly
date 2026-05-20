@@ -35,17 +35,17 @@ jobs:
 
       - name: Checkout
         if: steps.precheck.outputs.should_run == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Go
         if: steps.precheck.outputs.should_run == 'true'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
 
       - name: Configure AWS credentials via OIDC (read-only role)
         if: steps.precheck.outputs.should_run == 'true'
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ secrets.AWS_CICD_READONLY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload report artifact
         if: always() && steps.precheck.outputs.should_run == 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aws-sanity-report
           path: ${{ env.REPORT_PATH }}
