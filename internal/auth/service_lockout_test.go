@@ -434,6 +434,9 @@ func TestLogin_OWASPEnumerationInvariant(t *testing.T) {
 			require.Error(t, err, "expected login to fail for scenario %q", sc.name)
 			assert.Equal(t, wantMsg, err.Error(),
 				"scenario %q must return the uniform copy; distinct messages leak enumeration signal", sc.name)
+
+		mockStore.AssertExpectations(t)
+		mockEmail.AssertExpectations(t)
 		})
 	}
 }
