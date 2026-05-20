@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
@@ -276,15 +277,10 @@ func (h *Handler) loadApproveExecution(ctx context.Context, execID string) (*con
 		return nil, NewClientError(404, "execution not found")
 	}
 	// Preflight (issue #609): reject non-AWS orphan executions before the
-	// cloud SDK is reached. AWS has the ambient-host-account fallback so
-	// only non-AWS providers are blocked. Empty provider = legacy AWS row.
-	if execution.CloudAccountID == nil && len(execution.Recommendations) > 0 {
-		if p := execution.Recommendations[0].Provider; p != "" && p != "aws" {
-			return nil, NewClientError(409, fmt.Sprintf(
-				"execution %s references an account that no longer exists (provider: %s). Cancel this purchase — it cannot execute.",
-				execution.ExecutionID, p,
-			))
-		}
+	// cloud SDK is reached. Delegates to the centralized predicate in the
+	// purchase package so the logic is maintained in one place.
+	if err := purchase.OrphanExecutionError(execution); err != nil {
+		return nil, NewClientError(409, err.Error())
 	}
 	return execution, nil
 }

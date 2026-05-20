@@ -562,6 +562,28 @@ func TestManager_ApproveExecution_AWSOrphanFallsThrough(t *testing.T) {
 	sender.AssertExpectations(t)
 }
 
+// TestOrphanExecutionError_RecLevelAccountIDPreventsOrphan is the regression
+// guard for CR pass-1 actionable 2: an execution with a nil execution-level
+// CloudAccountID and a non-AWS provider must NOT be treated as an orphan when
+// at least one recommendation carries its own non-nil CloudAccountID. The
+// multi-rec fan-out path stores account affinity at the rec level and leaves
+// the execution-level field nil.
+func TestOrphanExecutionError_RecLevelAccountIDPreventsOrphan(t *testing.T) {
+	accountID := "acct-azure-multi-001"
+	execution := &config.PurchaseExecution{
+		ExecutionID: "exec-multi-rec",
+		// Execution-level CloudAccountID is nil — fan-out shape.
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", Provider: "azure", CloudAccountID: &accountID},
+			{ID: "r2", Provider: "azure", CloudAccountID: &accountID},
+		},
+	}
+	// Despite execution-level nil + non-AWS provider, the rec-level account
+	// ID means the execution is NOT orphaned. OrphanExecutionError must return nil.
+	err := OrphanExecutionError(execution)
+	assert.NoError(t, err, "rec-level CloudAccountID must prevent orphan classification")
+}
+
 // TestManager_CancelExecution_ExpiredToken is the cancel-path regression
 // guard for issue #397.
 func TestManager_CancelExecution_ExpiredToken(t *testing.T) {
