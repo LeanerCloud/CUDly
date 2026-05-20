@@ -620,7 +620,9 @@ func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
 	if s.stsClient == nil {
 		return ""
 	}
-	out, err := s.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	stsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, err := s.stsClient.GetCallerIdentity(stsCtx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		logging.Warnf("ambient host-account lookup: STS GetCallerIdentity failed: %v", err)
 		return ""

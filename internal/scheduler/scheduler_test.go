@@ -1932,6 +1932,16 @@ func (f *fakeSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerI
 	return &sts.GetCallerIdentityOutput{Account: aws.String(f.accountID)}, nil
 }
 
+// slowSTSClient simulates an STS endpoint that hangs longer than the
+// 3-second deadline applied by resolveAmbientHostAccountID. It blocks
+// until ctx is cancelled so the test can verify timeout behaviour.
+type slowSTSClient struct{}
+
+func (s *slowSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerIdentityInput, _ ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 // Issue #604: AWS ambient-path tagging fix — when the Lambda's STS
 // identity matches a registered cloud_accounts row (regardless of
 // enabled flag), rec rows should be tagged with that account's UUID
@@ -2095,4 +2105,25 @@ func TestScheduler_ResolveAmbientHostAccountID_StoreError(t *testing.T) {
 	}
 	got := scheduler.resolveAmbientHostAccountID(context.Background())
 	assert.Empty(t, got, "store error must collapse to empty result (don't fail the collection)")
+}
+
+// Issue #604 / CR pass-1: resolveAmbientHostAccountID must not block
+// scheduler startup when STS is slow. The function wraps the call in a
+// 3-second context; a hung STS must therefore return "" well inside that
+// window rather than stalling forever.
+func TestScheduler_ResolveAmbientHostAccountID_STSTimeout(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	scheduler := &Scheduler{
+		config:    mockStore,
+		stsClient: &slowSTSClient{},
+	}
+
+	start := time.Now()
+	got := scheduler.resolveAmbientHostAccountID(context.Background())
+	elapsed := time.Since(start)
+
+	assert.Empty(t, got, "STS timeout must return empty so the collection falls through to nil tagging")
+	// The internal deadline is 3 s; allow a small margin for scheduling jitter.
+	assert.Less(t, elapsed, 4*time.Second, "resolveAmbientHostAccountID must not block beyond its internal 3s deadline")
+	mockStore.AssertNotCalled(t, "GetCloudAccountByExternalID", mock.Anything, mock.Anything, mock.Anything)
 }
