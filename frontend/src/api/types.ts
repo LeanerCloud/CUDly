@@ -241,6 +241,11 @@ export interface PublicInfo {
   version: string;
   admin_exists: boolean;
   api_key_secret_url?: string;
+  /** AWS account ID of the CUDly Lambda (from STS GetCallerIdentity). Present
+   *  only on AWS-hosted deployments; omitted on Azure/GCP or when STS is
+   *  unreachable. Used by formatAccountLabel to distinguish genuine
+   *  ambient-credential executions from orphan rows (issue #608). */
+  deployment_aws_account_id?: string;
 }
 
 // Purchase types

@@ -2386,3 +2386,11 @@ components:
           type: boolean
         api_key_secret_url:
           type: string
+        deployment_aws_account_id:
+          type: string
+          description: >
+            AWS account ID of the CUDly Lambda deployment (from STS GetCallerIdentity).
+            Present only on AWS-hosted deployments; omitted on Azure/GCP or when STS
+            is unreachable. Used by the frontend to distinguish legitimate ambient-credential
+            executions (cloud_account_id IS NULL because the rec targets this account)
+            from orphan rows whose account was deleted (issue #608).
