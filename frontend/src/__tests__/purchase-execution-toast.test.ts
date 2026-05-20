@@ -259,6 +259,7 @@ describe('handleExecutePurchase — single-record path', () => {
     btn.click();
     await new Promise((r) => setTimeout(r, 0));
 
+    expect(archera.openArcheraOfferModal).toHaveBeenCalledTimes(1);
     expect(archera.openArcheraOfferModal).toHaveBeenCalledWith('purchase');
   });
 
@@ -476,6 +477,7 @@ describe('handleFanOutExecute — fan-out path', () => {
     btn.click();
     await new Promise((r) => setTimeout(r, 0));
 
+    expect(archera.openArcheraOfferModal).toHaveBeenCalledTimes(1);
     expect(archera.openArcheraOfferModal).toHaveBeenCalledWith('purchase');
   });
 });

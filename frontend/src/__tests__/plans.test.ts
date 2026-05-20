@@ -1077,6 +1077,9 @@ describe('Plans Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await savePlan(event);
 
+      // Guard against false positives: confirm the save actually ran (not a
+      // short-circuit) so the "modal not called" assertion is meaningful.
+      expect(api.createPlan).toHaveBeenCalledTimes(1);
       expect(mockOpenArcheraOfferModal).not.toHaveBeenCalled();
     });
 
@@ -1089,6 +1092,8 @@ describe('Plans Module', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await savePlan(event);
 
+      // Guard against false positives: confirm the update actually ran.
+      expect(api.updatePlan).toHaveBeenCalledWith('plan-123', expect.any(Object));
       expect(mockOpenArcheraOfferModal).not.toHaveBeenCalled();
     });
   });
