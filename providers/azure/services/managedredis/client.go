@@ -17,8 +17,10 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/redis/armredis/v3"
+	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 )
 
 // HTTPClient interface for HTTP operations (enables mocking)
@@ -35,7 +37,7 @@ type RecommendationsPager interface {
 // ReservationsDetailsPager interface for reservations details pager (enables mocking)
 type ReservationsDetailsPager interface {
 	More() bool
-	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error)
+	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error)
 }
 
 // RedisCachesPager interface for Redis caches pager (enables mocking)
@@ -159,13 +161,13 @@ func (c *ManagedRedisClient) GetExistingCommitments(ctx context.Context) ([]comm
 
 	pager, err := c.reservationDetailsPager()
 	if err != nil {
-		return commitments, nil
+		return nil, fmt.Errorf("failed to initialize reservations details pager: %w", err)
 	}
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("failed to fetch reservations details page: %w", err)
 		}
 		for _, detail := range page.Value {
 			if cm := c.reservationDetailToCommitment(detail); cm != nil {
@@ -179,6 +181,8 @@ func (c *ManagedRedisClient) GetExistingCommitments(ctx context.Context) ([]comm
 
 // reservationDetailsPager returns the pager to use for reservation details,
 // preferring the injected mock over a real SDK pager.
+// The subscription-scope NewListPager is used so that all reservation orders
+// are queried rather than a single hardcoded order ID.
 func (c *ManagedRedisClient) reservationDetailsPager() (ReservationsDetailsPager, error) {
 	if c.reservationsPager != nil {
 		return c.reservationsPager, nil
@@ -188,8 +192,7 @@ func (c *ManagedRedisClient) reservationDetailsPager() (ReservationsDetailsPager
 		return nil, err
 	}
 	scope := fmt.Sprintf("subscriptions/%s", c.subscriptionID)
-	return client.NewListByReservationOrderPager(scope, "00000000-0000-0000-0000-000000000000",
-		&armconsumption.ReservationsDetailsClientListByReservationOrderOptions{}), nil
+	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
 // reservationDetailToCommitment converts a single reservation detail to a Commitment.
@@ -226,7 +229,7 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		Timestamp:      time.Now(),
 	}
 
-	reservationOrderID := fmt.Sprintf("redis-managed-reservation-%d", time.Now().Unix())
+	reservationOrderID := uuid.New().String()
 	apiVersion := "2022-11-01"
 	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
 		reservationOrderID, apiVersion)
@@ -526,15 +529,30 @@ func parsePriceItems(items []struct {
 }
 
 // convertRecommendation converts an Azure Consumption API recommendation to the common format.
-func (c *ManagedRedisClient) convertRecommendation(_ context.Context, _ armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+// Returns nil when the input is nil or cannot be parsed (e.g. an unsupported SDK Kind).
+func (c *ManagedRedisClient) convertRecommendation(_ context.Context, rec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+	f := recommendations.Extract(rec)
+	if f == nil {
+		return nil
+	}
+	var recurringCost float64
+	if f.RecurringMonthlyCost != nil {
+		recurringCost = *f.RecurringMonthlyCost
+	}
 	return &common.Recommendation{
-		Provider:       common.ProviderAzure,
-		Service:        common.ServiceMemoryDB,
-		Account:        c.subscriptionID,
-		Region:         c.region,
-		CommitmentType: common.CommitmentReservedInstance,
-		Timestamp:      time.Now(),
-		Term:           "1yr",
-		PaymentOption:  "upfront",
+		Provider:             common.ProviderAzure,
+		Service:              common.ServiceMemoryDB,
+		Account:              c.subscriptionID,
+		Region:               f.Region,
+		ResourceType:         f.ResourceType,
+		Count:                f.Count,
+		OnDemandCost:         f.OnDemandCost,
+		CommitmentCost:       f.CommitmentCost,
+		EstimatedSavings:     f.EstimatedSavings,
+		RecurringMonthlyCost: &recurringCost,
+		CommitmentType:       common.CommitmentReservedInstance,
+		Term:                 f.Term,
+		PaymentOption:        "upfront",
+		Timestamp:            time.Now(),
 	}
 }
