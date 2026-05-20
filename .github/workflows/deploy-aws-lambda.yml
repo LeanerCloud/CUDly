@@ -227,14 +227,32 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-and-deploy]
     if: always() && needs.build-and-deploy.result == 'success'
+    # Bind to the same named environment as build-and-deploy so that
+    # vars.AWS_ROLE_TO_ASSUME resolves to the per-environment scoped value.
+    environment: ${{ needs.prepare.outputs.environment }}
 
     steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Get Function URL
         id: get-url
+        env:
+          FUNCTION_NAME: ${{ needs.build-and-deploy.outputs.function_name }}
         run: |
-          FUNCTION_URL="${{ needs.build-and-deploy.outputs.function_url }}"
-          if [ -z "$FUNCTION_URL" ]; then
-            echo "Failed to get function URL from deploy outputs"
+          if [ -z "$FUNCTION_NAME" ]; then
+            echo "Failed to get function name from deploy outputs"
+            exit 1
+          fi
+          FUNCTION_URL=$(aws lambda get-function-url-config \
+            --function-name "$FUNCTION_NAME" \
+            --query 'FunctionUrl' \
+            --output text)
+          if [ -z "$FUNCTION_URL" ] || [ "$FUNCTION_URL" = "None" ]; then
+            echo "Failed to get function URL from AWS Lambda API for $FUNCTION_NAME"
             exit 1
           fi
           echo "url=$FUNCTION_URL" >> $GITHUB_OUTPUT
