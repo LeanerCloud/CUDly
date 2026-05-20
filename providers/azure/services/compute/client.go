@@ -90,6 +90,12 @@ type ComputeClient struct {
 	// matches cache/cosmosdb/database from PR #81).
 	skuCacheOnce sync.Once
 	skuCacheMap  map[string]vmSKUEntry
+
+	// Optional injected pager for ListExchangeableReservations. When nil
+	// (the production default) the method creates a real
+	// armreservations.ReservationClient. Tests inject a stub to run
+	// hermetically without Azure credentials.
+	exchangeablePager ExchangeableReservationPager
 }
 
 // NewClient creates a new Azure Compute client

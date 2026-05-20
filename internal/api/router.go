@@ -257,6 +257,7 @@ func (r *Router) registerRoutes() {
 		// RI Exchange endpoints — GETs are AuthUser (Convertible RIs,
 		// Reshape Recommendations, Exchange History pages all need this);
 		// quote / execute / config writes stay AuthAdmin.
+		{ExactPath: "/api/ri-exchange/azure-instances", Method: "GET", Handler: r.listExchangeableAzureRIsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/instances", Method: "GET", Handler: r.listConvertibleRIsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/utilization", Method: "GET", Handler: r.getRIUtilizationHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/reshape-recommendations", Method: "GET", Handler: r.getReshapeRecommendationsHandler, Auth: AuthUser},
@@ -667,6 +668,10 @@ func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLR
 
 func (r *Router) listInventoryCommitmentsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listActiveCommitments(ctx, req, req.QueryStringParameters)
+}
+
+func (r *Router) listExchangeableAzureRIsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.listExchangeableAzureRIs(ctx, req)
 }
 
 func (r *Router) listConvertibleRIsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

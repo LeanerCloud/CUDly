@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
+	azurecompute "github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
@@ -490,6 +492,116 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 var _ = mock.Anything
 var _ = time.Now
 var _ = config.RIExchangeRecord{}
+
+// --- Azure exchangeable RI tests ---
+
+// stubAzureExchangeClient is a minimal implementation of azureExchangeClient
+// for unit tests.
+type stubAzureExchangeClient struct {
+	reservations []azurecompute.ExchangeableReservation
+	err          error
+}
+
+func (s *stubAzureExchangeClient) ListExchangeableReservations(_ context.Context) ([]azurecompute.ExchangeableReservation, error) {
+	return s.reservations, s.err
+}
+
+func TestListExchangeableAzureRIs_RequiresPermission(t *testing.T) {
+	h := &Handler{} // no auth configured
+	_, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication")
+}
+
+func TestListExchangeableAzureRIs_EmptyList(t *testing.T) {
+	stub := &stubAzureExchangeClient{reservations: []azurecompute.ExchangeableReservation{}}
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		azureExchangeFactory: func(_ string) azureExchangeClient {
+			return stub
+		},
+	}
+
+	res, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+	})
+	require.NoError(t, err)
+	resp, ok := res.(*ExchangeableAzureRIsResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Reservations)
+}
+
+func TestListExchangeableAzureRIs_PopulatedList(t *testing.T) {
+	want := []azurecompute.ExchangeableReservation{
+		{
+			ReservationOrderID:  "order-1111",
+			ReservationID:       "/providers/Microsoft.Capacity/reservationOrders/order-1111/reservations/res-aaaa",
+			SKU:                 "Standard_D2s_v3",
+			Quantity:            2,
+			Region:              "eastus",
+			Term:                "P1Y",
+			InstanceFlexibility: "On",
+			DisplayName:         "my-reservation",
+		},
+	}
+	stub := &stubAzureExchangeClient{reservations: want}
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		azureExchangeFactory: func(_ string) azureExchangeClient {
+			return stub
+		},
+	}
+
+	res, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+	})
+	require.NoError(t, err)
+	resp, ok := res.(*ExchangeableAzureRIsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Reservations, 1)
+	r := resp.Reservations[0]
+	assert.Equal(t, "order-1111", r.ReservationOrderID)
+	assert.Equal(t, "Standard_D2s_v3", r.SKU)
+	assert.Equal(t, int32(2), r.Quantity)
+	assert.Equal(t, "eastus", r.Region)
+	assert.Equal(t, "P1Y", r.Term)
+	assert.Equal(t, "On", r.InstanceFlexibility)
+}
+
+func TestListExchangeableAzureRIs_ClientError(t *testing.T) {
+	stub := &stubAzureExchangeClient{err: fmt.Errorf("azure api unavailable")}
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		azureExchangeFactory: func(_ string) azureExchangeClient {
+			return stub
+		},
+	}
+
+	_, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "azure api unavailable")
+}
+
+func TestListExchangeableAzureRIs_SubscriptionIDPassedToFactory(t *testing.T) {
+	var capturedSubID string
+	stub := &stubAzureExchangeClient{reservations: []azurecompute.ExchangeableReservation{}}
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		azureExchangeFactory: func(subID string) azureExchangeClient {
+			capturedSubID = subID
+			return stub
+		},
+	}
+
+	_, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"subscription_id": "sub-abc"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "sub-abc", capturedSubID)
+}
 
 // mockAuthForExchange is a minimal auth mock that returns an admin session.
 type mockAuthForExchange struct{}

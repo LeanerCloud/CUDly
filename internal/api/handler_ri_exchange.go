@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -21,6 +22,7 @@ import (
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
+	azurecompute "github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 )
 
 // reshapeEC2Client is the narrow slice of the EC2 client that
@@ -62,6 +64,58 @@ func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient {
 		return h.reshapeRecsFactory(cfg)
 	}
 	return awsprovider.NewRecommendationsClientDirect(cfg)
+}
+
+// azureExchangeClient is the narrow interface that listExchangeableAzureRIs
+// needs from the Azure compute client. Satisfied by
+// *azurecompute.ComputeClient; a stub can be injected via
+// Handler.azureExchangeFactory for tests.
+type azureExchangeClient interface {
+	ListExchangeableReservations(ctx context.Context) ([]azurecompute.ExchangeableReservation, error)
+}
+
+// buildAzureExchangeClient returns the injected factory result when one has
+// been set (test path), or constructs a real Azure compute client otherwise
+// (production path). Returns an error when the real Azure credential cannot
+// be obtained.
+func (h *Handler) buildAzureExchangeClient(subscriptionID string) (azureExchangeClient, error) {
+	if h.azureExchangeFactory != nil {
+		return h.azureExchangeFactory(subscriptionID), nil
+	}
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("azure: obtain default credential: %w", err)
+	}
+	// Region is left empty -- ListExchangeableReservations uses the tenant-
+	// wide armreservations API which is not scoped to a region.
+	return azurecompute.NewClient(cred, subscriptionID, ""), nil
+}
+
+// listExchangeableAzureRIs returns all active Azure VM reservations that are
+// eligible for the cross-SKU/cross-region exchange flow (InstanceFlexibility
+// == On, ProvisioningState == Succeeded). Requires "view:purchases" permission.
+//
+// The optional ?subscription_id= query parameter scopes the client to a
+// specific subscription for the capacity-provider registration check; the
+// listing itself is tenant-wide.
+func (h *Handler) listExchangeableAzureRIs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+		return nil, err
+	}
+
+	subscriptionID := req.QueryStringParameters["subscription_id"]
+
+	client, err := h.buildAzureExchangeClient(subscriptionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
+	}
+
+	reservations, err := client.ListExchangeableReservations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list exchangeable Azure reservations: %w", err)
+	}
+
+	return &ExchangeableAzureRIsResponse{Reservations: reservations}, nil
 }
 
 // getBaseAWSConfig returns the cached base AWS config, loading it once via sync.Once.
@@ -412,6 +466,12 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 // ConvertibleRIsResponse holds the list of convertible RIs.
 type ConvertibleRIsResponse struct {
 	Instances []ec2svc.ConvertibleRI `json:"instances"`
+}
+
+// ExchangeableAzureRIsResponse holds the list of Azure VM reservations that
+// are eligible for the cross-SKU/cross-region exchange flow.
+type ExchangeableAzureRIsResponse struct {
+	Reservations []azurecompute.ExchangeableReservation `json:"reservations"`
 }
 
 // RIUtilizationResponse holds per-RI utilization data.
