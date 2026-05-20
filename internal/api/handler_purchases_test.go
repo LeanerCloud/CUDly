@@ -409,6 +409,65 @@ func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T)
 	mockPurchase.AssertNotCalled(t, "ApproveExecution")
 }
 
+// TestRouter_approvePurchaseHandler_RateLimited is a regression test for issue #400.
+// The approve endpoint is AuthPublic (token-only); without rate limiting any
+// attacker can flood approve attempts to brute-force a valid token.
+// Once the "approve_cancel_public" bucket is exhausted the router wrapper must
+// return a 429 before dispatching to the business-logic handler.
+func TestRouter_approvePurchaseHandler_RateLimited(t *testing.T) {
+	ctx := context.Background()
+
+	mockRL := new(MockRateLimiter)
+	// Simulate the rate limit already exceeded.
+	mockRL.On("AllowWithIP", ctx, "1.2.3.4", "approve_cancel_public").Return(false, nil)
+
+	h := &Handler{rateLimiter: mockRL}
+	r := newTestRouter(h)
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				SourceIP: "1.2.3.4",
+			},
+		},
+		QueryStringParameters: map[string]string{"token": "any-token"},
+	}
+	_, err := r.approvePurchaseHandler(ctx, req, map[string]string{"id": "12345678-1234-1234-1234-123456789abc"})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 429, ce.code)
+
+	mockRL.AssertExpectations(t)
+}
+
+// TestRouter_cancelPurchaseHandler_RateLimited is a regression test for issue #400.
+func TestRouter_cancelPurchaseHandler_RateLimited(t *testing.T) {
+	ctx := context.Background()
+
+	mockRL := new(MockRateLimiter)
+	mockRL.On("AllowWithIP", ctx, "5.6.7.8", "approve_cancel_public").Return(false, nil)
+
+	h := &Handler{rateLimiter: mockRL}
+	r := newTestRouter(h)
+
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				SourceIP: "5.6.7.8",
+			},
+		},
+		QueryStringParameters: map[string]string{"token": "any-token"},
+	}
+	_, err := r.cancelPurchaseHandler(ctx, req, map[string]string{"id": "45645645-6456-4564-5645-645645645645"})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 429, ce.code)
+
+	mockRL.AssertExpectations(t)
+}
+
 func TestHandler_resolveApprovalRecipients_ContactBecomesTo(t *testing.T) {
 	ctx := context.Background()
 	contactA := "contact-a@example.com"

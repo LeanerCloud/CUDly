@@ -486,11 +486,17 @@ func resolveApprovalToken(req *events.LambdaFunctionURLRequest) string {
 }
 
 func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if err := r.h.checkRateLimit(ctx, req, "approve_cancel_public"); err != nil {
+		return nil, err
+	}
 	token := resolveApprovalToken(req)
 	return r.h.approvePurchase(ctx, req, params["id"], token)
 }
 
 func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if err := r.h.checkRateLimit(ctx, req, "approve_cancel_public"); err != nil {
+		return nil, err
+	}
 	token := resolveApprovalToken(req)
 	return r.h.cancelPurchase(ctx, req, params["id"], token)
 }
@@ -696,10 +702,16 @@ func (r *Router) getRIExchangeHistoryHandler(ctx context.Context, req *events.La
 }
 
 func (r *Router) approveRIExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if err := r.h.checkRateLimit(ctx, req, "approve_cancel_public"); err != nil {
+		return nil, err
+	}
 	return r.h.approveRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
 }
 
 func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if err := r.h.checkRateLimit(ctx, req, "approve_cancel_public"); err != nil {
+		return nil, err
+	}
 	return r.h.rejectRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
 }
 

@@ -320,6 +320,34 @@ func TestRejectRIExchange_MissingToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "rejection token is required")
 }
 
+// TestRejectRIExchange_EmptyStoredToken is a regression test for issue #399.
+// A record with an empty ApprovalToken must be rejected with 403 rather than
+// being cancelled by any caller passing an empty token string, because
+// crypto/subtle.ConstantTimeCompare([]byte(""), []byte("")) == 1.
+func TestRejectRIExchange_EmptyStoredToken(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	h := &Handler{config: mockStore}
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440005"
+
+	// Record exists but was persisted without an ApprovalToken.
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:            id,
+		ApprovalToken: "", // empty stored token
+		Status:        "pending",
+	}, nil)
+
+	// Passing an empty token must NOT match the empty stored token.
+	_, err := h.rejectRIExchange(ctx, id, "sometoken")
+	assert.Error(t, err)
+	ce, ok := IsClientError(err)
+	assert.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, err.Error(), "does not support rejection")
+
+	mockStore.AssertExpectations(t)
+}
+
 // fakeReshapeEC2Stub is a unit-test stub for reshapeEC2Client.
 // Returns a single convertible RI so the downstream
 // AnalyzeReshapingWithRecs actually invokes purchaseRecLookupFromStore's

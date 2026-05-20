@@ -720,6 +720,10 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 		return nil, NewClientError(404, "exchange record not found")
 	}
 
+	if record.ApprovalToken == "" {
+		return nil, NewClientError(403, "this exchange record does not support rejection")
+	}
+
 	if subtle.ConstantTimeCompare([]byte(token), []byte(record.ApprovalToken)) != 1 {
 		return nil, NewClientError(403, "invalid rejection token")
 	}
