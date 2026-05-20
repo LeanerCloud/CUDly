@@ -66,6 +66,17 @@ type StoreInterface interface {
 	// Cloud accounts
 	CreateCloudAccount(ctx context.Context, account *CloudAccount) error
 	GetCloudAccount(ctx context.Context, id string) (*CloudAccount, error)
+	// GetCloudAccountByExternalID looks up a cloud account by its
+	// (provider, external_id) pair. Used by the scheduler's ambient
+	// collector path to tag rec rows with the registered host-account's
+	// UUID when the Lambda's STS identity matches a registered (but
+	// possibly disabled) account — so the approve-modal Account column
+	// shows the account name instead of `(ambient)`. Returns
+	// (nil, nil) when no row matches (the caller treats this as the
+	// genuine orphan case). The underlying
+	// `UNIQUE(provider, external_id)` constraint on cloud_accounts
+	// guarantees the lookup hits an index.
+	GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*CloudAccount, error)
 	UpdateCloudAccount(ctx context.Context, account *CloudAccount) error
 	DeleteCloudAccount(ctx context.Context, id string) error
 	ListCloudAccounts(ctx context.Context, filter CloudAccountFilter) ([]CloudAccount, error)

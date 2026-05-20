@@ -18,6 +18,8 @@ type MockConfigStore struct {
 	mock.Mock
 	// GetCloudAccountFn overrides GetCloudAccount when non-nil (used in not-found tests).
 	GetCloudAccountFn func(ctx context.Context, id string) (*config.CloudAccount, error)
+	// GetCloudAccountByExternalIDFn overrides GetCloudAccountByExternalID when non-nil.
+	GetCloudAccountByExternalIDFn func(ctx context.Context, provider, externalID string) (*config.CloudAccount, error)
 	// DeleteCloudAccountFn overrides DeleteCloudAccount when non-nil (used to assert
 	// delete was/was not invoked).
 	DeleteCloudAccountFn func(ctx context.Context, id string) error
@@ -281,6 +283,12 @@ func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*conf
 		return m.GetCloudAccountFn(ctx, id)
 	}
 	return &config.CloudAccount{ID: id, Provider: "aws", AWSAuthMode: "access_keys"}, nil
+}
+func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*config.CloudAccount, error) {
+	if m.GetCloudAccountByExternalIDFn != nil {
+		return m.GetCloudAccountByExternalIDFn(ctx, provider, externalID)
+	}
+	return nil, nil
 }
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
 	return nil
