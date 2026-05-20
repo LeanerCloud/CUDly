@@ -2,7 +2,6 @@ package recommendations
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
@@ -156,8 +155,24 @@ func (c *Client) parseRedshiftDetails(rec *common.Recommendation, details *types
 	return nil
 }
 
-// parseMemoryDBDetails extracts MemoryDB-specific details
-func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	log.Printf("WARNING: MemoryDB does not provide instance details in Cost Explorer, skipping recommendation")
+// parseMemoryDBDetails extracts MemoryDB-specific details.
+//
+// Cost Explorer does not populate InstanceDetails for MemoryDB reserved nodes:
+// the MemoryDB-specific sub-struct does not exist in the AWS SDK's
+// ReservationPurchaseRecommendationDetail, so the instance type must come from
+// rec.ResourceType, which the upstream caller should have populated from the
+// recommendation summary fields before dispatching here.
+//
+// If rec.ResourceType is empty, the function returns an error so the
+// recommendation is skipped loudly (logged by parseRecommendations) rather
+// than silently substituting a wrong default instance type.
+func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, _ *types.ReservationPurchaseRecommendationDetail) error {
+	if rec.ResourceType == "" {
+		return fmt.Errorf("MemoryDB recommendation has no ResourceType; cannot determine offering — Cost Explorer did not populate instance details")
+	}
+	rec.Details = &common.CacheDetails{
+		Engine:   "redis",
+		NodeType: rec.ResourceType,
+	}
 	return nil
 }
