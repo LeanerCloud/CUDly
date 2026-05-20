@@ -59,8 +59,10 @@ let _offerModalCleanup: (() => void) | null = null;
 
 /**
  * Open the Archera Insurance offer modal. Shown after a successful
- * purchase-approval submission or plan creation, never blocking the
- * action itself. The modal carries two equal-weight choices:
+ * purchase-approval submission, never blocking the action itself. The
+ * 'plan' context is still accepted by the signature but is currently
+ * unused (the plan-save flow no longer offers insurance, per #499).
+ * The modal carries two equal-weight choices:
  *
  *   - "Sign up at Archera →" opens archera.ai in a new tab.
  *   - "No thanks" dismisses the modal.
