@@ -279,7 +279,12 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 	return users, rows.Err()
 }
 
-// GetUserByResetToken retrieves a user by password reset token
+// GetUserByResetToken retrieves a user by password reset token without
+// filtering on expiry. Both callers (ResetTokenStatus and
+// validateResetToken) perform their own expiry check on the returned
+// row, so the SQL must surface expired rows; otherwise an expired
+// token returns pgx.ErrNoRows and ResetTokenStatus misclassifies it
+// as "used" instead of "expired" (QA bug 11.2).
 func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (*User, error) {
 	query := `
 		SELECT id, email, password_hash, salt, role, group_ids, active,
@@ -289,7 +294,6 @@ func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (
 		       created_at, updated_at, last_login_at
 		FROM users
 		WHERE password_reset_token = $1
-		  AND password_reset_expiry > NOW()
 	`
 
 	return s.scanUser(s.db.QueryRow(ctx, query, token))
