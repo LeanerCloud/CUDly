@@ -1327,6 +1327,69 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// ─── CountPendingExecutionsForAccount / ListPendingExecutionIDsForAccount ───
+// Regression coverage for the issue #606 deleteAccount preflight. The handler
+// uses these to convert what would otherwise be a raw ON DELETE RESTRICT
+// FK violation (post-migration 000053) into a structured 409 response.
+
+func TestPGXMock_CountPendingExecutionsForAccount_Success(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(4)
+	mock.ExpectQuery("SELECT COUNT").WithArgs("acct-1").WillReturnRows(rows)
+
+	n, err := store.CountPendingExecutionsForAccount(ctx, "acct-1")
+	require.NoError(t, err)
+	assert.Equal(t, 4, n)
+}
+
+func TestPGXMock_CountPendingExecutionsForAccount_Zero(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(0)
+	mock.ExpectQuery("SELECT COUNT").WithArgs("acct-1").WillReturnRows(rows)
+
+	n, err := store.CountPendingExecutionsForAccount(ctx, "acct-1")
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestPGXMock_ListPendingExecutionIDsForAccount_Success(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"execution_id"}).
+		AddRow("exec-1").
+		AddRow("exec-2")
+	mock.ExpectQuery("SELECT execution_id FROM purchase_executions").
+		WithArgs("acct-1").
+		WillReturnRows(rows)
+
+	ids, err := store.ListPendingExecutionIDsForAccount(ctx, "acct-1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"exec-1", "exec-2"}, ids)
+}
+
+func TestPGXMock_ListPendingExecutionIDsForAccount_Empty(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"execution_id"})
+	mock.ExpectQuery("SELECT execution_id FROM purchase_executions").
+		WithArgs("acct-1").
+		WillReturnRows(rows)
+
+	ids, err := store.ListPendingExecutionIDsForAccount(ctx, "acct-1")
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+}
+
 // ─── errNoRows helper ────────────────────────────────────────────────────────
 
 func errNoRows() error {

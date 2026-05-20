@@ -43,6 +43,20 @@ type StoreInterface interface {
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
 	GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error)
 	GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error)
+	// CountPendingExecutionsForAccount returns the number of purchase_executions
+	// in status 'pending' or 'notified' that reference the given cloud account.
+	// Used by the deleteAccount handler to preflight DB-level FK violations
+	// (migration 000053 tightened the FK to ON DELETE RESTRICT) and emit a
+	// 409 with a count so the frontend can offer Cancel-All-Then-Delete UX
+	// instead of surfacing a raw constraint error. See issue #606.
+	CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error)
+	// ListPendingExecutionIDsForAccount returns the execution IDs of all
+	// pending / notified executions referencing this account, used by the
+	// frontend's Cancel-All-Then-Delete flow when the operator opts to
+	// cancel everything in one go after a 409. Capped at 1000 rows; if a
+	// single account has more pending executions than that, the cleanup
+	// is a one-off operator task rather than a button click anyway.
+	ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error)
 	CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error)
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*PurchaseExecution, error)
 

@@ -42,6 +42,16 @@ type MockConfigStore struct {
 	// not) reached — e.g. confirming invalid-combo rejections short-circuit
 	// before the store write.
 	SaveAccountServiceOverrideFn func(ctx context.Context, override *config.AccountServiceOverride) error
+	// CountPendingExecutionsForAccountFn overrides CountPendingExecutionsForAccount.
+	// Used by the deleteAccount preflight tests (issue #606) to seed a
+	// pending-execution count without standing up a real Postgres mock —
+	// see TestDeleteAccount_PendingExecutions_Returns409.
+	CountPendingExecutionsForAccountFn func(ctx context.Context, accountID string) (int, error)
+	// ListPendingExecutionIDsForAccountFn overrides ListPendingExecutionIDsForAccount.
+	// Currently unused at the api layer (the handler only needs the count),
+	// but exported so future tests covering Cancel-All-Then-Delete server-side
+	// helpers can wire it without re-extending this struct.
+	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
 }
 
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -195,6 +205,22 @@ func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	args := m.Called(ctx, retentionDays)
 	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	if m.CountPendingExecutionsForAccountFn != nil {
+		return m.CountPendingExecutionsForAccountFn(ctx, accountID)
+	}
+	// Default: zero pending, no error. Lets every existing test that doesn't
+	// care about the preflight continue compiling without explicit setup.
+	return 0, nil
+}
+
+func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	if m.ListPendingExecutionIDsForAccountFn != nil {
+		return m.ListPendingExecutionIDsForAccountFn(ctx, accountID)
+	}
+	return nil, nil
 }
 
 func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {

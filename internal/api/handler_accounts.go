@@ -517,6 +517,13 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 }
 
 // deleteAccount handles DELETE /api/accounts/:id.
+//
+// Preflights the delete against pending/notified purchase_executions
+// (issue #606). Migration 000053 also enforces ON DELETE RESTRICT at the
+// DB level so a race that slips past the preflight still can't orphan a
+// pending execution — but the preflight gives the frontend a structured
+// 409 (with the count + execution_ids) so it can offer a Cancel-All-Then-
+// Delete affordance instead of surfacing a raw FK-violation 500.
 func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
@@ -531,6 +538,36 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 	// for both "doesn't exist" and "out of scope" to avoid existence leakage.
 	if _, err := h.requireAccountAccess(ctx, session, id); err != nil {
 		return nil, err
+	}
+
+	// Preflight: refuse the delete if pending/notified executions still
+	// reference this account. The frontend uses the pending_count + the
+	// pending_execution_ids list to drive the Cancel-All-Then-Delete UX.
+	pendingCount, err := h.config.CountPendingExecutionsForAccount(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+	if pendingCount > 0 {
+		execIDs, listErr := h.config.ListPendingExecutionIDsForAccount(ctx, id)
+		if listErr != nil {
+			// Count succeeded but list failed — still surface the 409 so the
+			// operator gets a clear "cancel them first" message instead of
+			// the raw FK error from the eventual DB delete. The list payload
+			// is omitted; the frontend falls back to a generic message.
+			return nil, NewClientErrorWithDetails(409,
+				fmt.Sprintf("cannot delete account: %d pending purchase(s) must be cancelled first", pendingCount),
+				map[string]any{
+					"pending_count": pendingCount,
+					"reason":        "pending_executions",
+				})
+		}
+		return nil, NewClientErrorWithDetails(409,
+			fmt.Sprintf("cannot delete account: %d pending purchase(s) must be cancelled first", pendingCount),
+			map[string]any{
+				"pending_count":         pendingCount,
+				"pending_execution_ids": execIDs,
+				"reason":                "pending_executions",
+			})
 	}
 
 	if err := h.config.DeleteCloudAccount(ctx, id); err != nil {

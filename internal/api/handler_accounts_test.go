@@ -268,6 +268,108 @@ func TestDeleteAccount_Success(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+// TestDeleteAccount_PendingExecutions_Returns409 asserts the issue #606
+// preflight: when at least one purchase_executions row in status
+// pending/notified still references this account, the handler returns a
+// 409 ClientError with the count + execution_ids in the details payload,
+// and never issues the DELETE FROM cloud_accounts that would either
+// trigger migration 000053's RESTRICT (an opaque 500) or — pre-migration —
+// silently orphan the executions.
+func TestDeleteAccount_PendingExecutions_Returns409(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		return 3, nil
+	}
+	pendingIDs := []string{"exec-1", "exec-2", "exec-3"}
+	store.ListPendingExecutionIDsForAccountFn = func(_ context.Context, _ string) ([]string, error) {
+		return pendingIDs, nil
+	}
+	deleteCalled := false
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	result, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %v", err)
+	assert.Equal(t, 409, ce.code, "expected 409 status code")
+	assert.Contains(t, ce.message, "3", "error message should reference the pending count")
+	assert.Contains(t, ce.message, "pending", "error message should mention pending purchases")
+	details := ce.Details()
+	require.NotNil(t, details)
+	assert.EqualValues(t, 3, details["pending_count"])
+	assert.Equal(t, "pending_executions", details["reason"])
+	assert.ElementsMatch(t, pendingIDs, details["pending_execution_ids"])
+	assert.False(t, deleteCalled, "DeleteCloudAccount must NOT be called when pending executions exist")
+}
+
+// TestDeleteAccount_PendingZero_DeletesNormally asserts the happy path:
+// CountPendingExecutionsForAccount returns 0 so the preflight is satisfied
+// and the underlying DeleteCloudAccount call runs to completion.
+func TestDeleteAccount_PendingZero_DeletesNormally(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	countCalled := false
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		countCalled = true
+		return 0, nil
+	}
+	deleteCalled := false
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	result, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.True(t, countCalled, "preflight must run before delete")
+	assert.True(t, deleteCalled, "delete should proceed when no pending executions")
+}
+
+// TestDeleteAccount_PendingListErr_StillReturns409 asserts that a failure
+// listing execution_ids doesn't downgrade the 409 to a 500 — the operator
+// still gets the structured count and the explicit "cancel first" ask,
+// just without the per-execution id payload.
+func TestDeleteAccount_PendingListErr_StillReturns409(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		return 5, nil
+	}
+	store.ListPendingExecutionIDsForAccountFn = func(_ context.Context, _ string) ([]string, error) {
+		return nil, errors.New("transient list failure")
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	details := ce.Details()
+	require.NotNil(t, details)
+	assert.EqualValues(t, 5, details["pending_count"])
+	// pending_execution_ids should be absent on the list-failure fallback path.
+	_, hasIDs := details["pending_execution_ids"]
+	assert.False(t, hasIDs, "pending_execution_ids must be omitted when list call failed")
+}
+
 // TestDeleteAccount_NotFound asserts that deleteAccount returns 404 and never
 // invokes DeleteCloudAccount when the account does not exist. Locks down the
 // existence check added in 031b958cf so a refactor cannot regress the 404 path.

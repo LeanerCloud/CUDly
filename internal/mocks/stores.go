@@ -144,6 +144,21 @@ func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
 }
 
+// CountPendingExecutionsForAccount mocks the CountPendingExecutionsForAccount operation
+func (m *MockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	args := m.Called(ctx, accountID)
+	return args.Int(0), args.Error(1)
+}
+
+// ListPendingExecutionIDsForAccount mocks the ListPendingExecutionIDsForAccount operation
+func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	args := m.Called(ctx, accountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // SavePurchaseHistory mocks the SavePurchaseHistory operation
 func (m *MockConfigStore) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
 	args := m.Called(ctx, record)
