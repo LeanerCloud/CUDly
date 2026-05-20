@@ -70,6 +70,22 @@ resource "aws_iam_policy" "data" {
         }
       },
       {
+        # The IAMPassRoleScopedByService Allow above still matches the deploy
+        # role itself (cudly-terraform-deploy is a cudly-* role) and permits
+        # lambda.amazonaws.com as a target. That leaves open the exact #426
+        # escalation: an actor holding the deploy role calls lambda:CreateFunction
+        # and passes cudly-terraform-deploy as the Lambda execution role, giving
+        # that Lambda the full deploy permissions (CreateRole, PassRole, KMS
+        # destructive, Secrets read, Terraform state R/W) as a persistent
+        # backdoor. An explicit Deny on passing the deploy role always wins over
+        # the conditional Allow, closing the self-pass loop while leaving
+        # legitimate execution-role passes (cudly-* exec roles) intact. (#542)
+        Sid      = "IAMDenyPassDeployRole"
+        Effect   = "Deny"
+        Action   = ["iam:PassRole"]
+        Resource = ["arn:aws:iam::*:role/cudly-terraform-deploy"]
+      },
+      {
         Sid    = "IAMReadForPassRole"
         Effect = "Allow"
         Action = [
@@ -109,7 +125,6 @@ resource "aws_iam_policy" "data" {
           "rds:DescribeDBInstances",
           "rds:DescribeDBSubnetGroups",
           "rds:ListTagsForResource",
-          "rds:CreateDBProxy",
           "rds:DeleteDBProxy",
           "rds:DeregisterDBProxyTargets",
           "rds:DescribeDBProxies",
@@ -120,6 +135,21 @@ resource "aws_iam_policy" "data" {
           "rds:RegisterDBProxyTargets",
           "rds:RemoveTagsFromResource",
         ]
+        Resource = "*"
+      },
+      {
+        # rds:CreateDBProxy has no resource type per the AWS Service
+        # Authorization Reference (Actions defined by Amazon RDS) and can only
+        # be granted on Resource="*"; constraining it to specific ARNs makes IAM
+        # unable to satisfy the request, so the grant is silently non-functional
+        # and any future terraform apply that creates a DB proxy gets
+        # AccessDenied. Keep it in its own wildcard statement so a later move of
+        # the resource-scopeable RDS actions onto cudly-* ARNs (see PR #524's
+        # RDSResourceScoped) does not sweep CreateDBProxy back into a scoped
+        # statement. (#547)
+        Sid      = "RDSCreateProxy"
+        Effect   = "Allow"
+        Action   = ["rds:CreateDBProxy"]
         Resource = "*"
       },
       {
