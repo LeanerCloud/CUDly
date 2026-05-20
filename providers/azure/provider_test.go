@@ -975,3 +975,208 @@ func TestAzureProvider_GetRecommendationsClient_WithSubscriptionLookup(t *testin
 		assert.Contains(t, err.Error(), "no Azure subscriptions found")
 	})
 }
+
+// makeSubscriptionsPager is a test helper that returns a pager with the given
+// subscription IDs and display names (paired by index).
+func makeSubscriptionsPager(ids, names []string) SubscriptionsPager {
+	subs := make([]*armsubscriptions.Subscription, len(ids))
+	for i := range ids {
+		id := ids[i]
+		name := names[i]
+		subs[i] = &armsubscriptions.Subscription{SubscriptionID: &id, DisplayName: &name}
+	}
+	return &mockSubscriptionsPager{
+		pages: []armsubscriptions.ClientListResponse{
+			{SubscriptionListResult: armsubscriptions.SubscriptionListResult{Value: subs}},
+		},
+	}
+}
+
+func TestResolveDefaultSubscription(t *testing.T) {
+	t.Run("empty list is a no-op", func(t *testing.T) {
+		accounts := []common.Account{}
+		resolveDefaultSubscription(accounts, "")
+		assert.Empty(t, accounts)
+	})
+
+	t.Run("explicit sub ID matched", func(t *testing.T) {
+		accounts := []common.Account{
+			{ID: "sub-1"},
+			{ID: "sub-2"},
+		}
+		resolveDefaultSubscription(accounts, "sub-2")
+		assert.False(t, accounts[0].IsDefault)
+		assert.True(t, accounts[1].IsDefault)
+	})
+
+	t.Run("explicit sub ID not in list falls back to single-subscription rule", func(t *testing.T) {
+		accounts := []common.Account{{ID: "sub-1"}}
+		resolveDefaultSubscription(accounts, "sub-missing")
+		// Single subscription fallback.
+		assert.True(t, accounts[0].IsDefault)
+	})
+
+	t.Run("explicit sub ID not in list with multiple subscriptions leaves all non-default", func(t *testing.T) {
+		accounts := []common.Account{{ID: "sub-1"}, {ID: "sub-2"}}
+		resolveDefaultSubscription(accounts, "sub-missing")
+		assert.False(t, accounts[0].IsDefault)
+		assert.False(t, accounts[1].IsDefault)
+	})
+
+	t.Run("single subscription gets IsDefault when no explicit ID", func(t *testing.T) {
+		accounts := []common.Account{{ID: "only-sub"}}
+		resolveDefaultSubscription(accounts, "")
+		assert.True(t, accounts[0].IsDefault)
+	})
+
+	t.Run("multiple subscriptions with no explicit ID stay non-default", func(t *testing.T) {
+		accounts := []common.Account{{ID: "sub-1"}, {ID: "sub-2"}}
+		resolveDefaultSubscription(accounts, "")
+		assert.False(t, accounts[0].IsDefault)
+		assert.False(t, accounts[1].IsDefault)
+	})
+}
+
+func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
+	t.Run("single subscription is marked IsDefault", func(t *testing.T) {
+		subID := "only-sub"
+		subName := "Only Sub"
+
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return makeSubscriptionsPager([]string{subID}, []string{subName})
+			},
+		})
+
+		accounts, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, accounts, 1)
+		assert.True(t, accounts[0].IsDefault)
+	})
+
+	t.Run("configured subscriptionID is marked IsDefault among many", func(t *testing.T) {
+		p := &AzureProvider{
+			cred:           &mockTokenCredential{},
+			subscriptionID: "sub-2",
+		}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return makeSubscriptionsPager(
+					[]string{"sub-1", "sub-2", "sub-3"},
+					[]string{"Sub 1", "Sub 2", "Sub 3"},
+				)
+			},
+		})
+
+		accounts, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, accounts, 3)
+		assert.False(t, accounts[0].IsDefault, "sub-1 should not be default")
+		assert.True(t, accounts[1].IsDefault, "sub-2 should be default")
+		assert.False(t, accounts[2].IsDefault, "sub-3 should not be default")
+	})
+
+	t.Run("multiple subscriptions without explicit config all non-default", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p.SetSubscriptionsClient(&mockSubscriptionsClient{
+			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
+				return makeSubscriptionsPager(
+					[]string{"sub-1", "sub-2"},
+					[]string{"Sub 1", "Sub 2"},
+				)
+			},
+		})
+
+		accounts, err := p.GetAccounts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, accounts, 2)
+		assert.False(t, accounts[0].IsDefault)
+		assert.False(t, accounts[1].IsDefault)
+	})
+}
+
+func TestGetDefaultSubscriptionID(t *testing.T) {
+	t.Run("returns IsDefault account when present", func(t *testing.T) {
+		accounts := []common.Account{
+			{ID: "sub-1", IsDefault: false},
+			{ID: "sub-2", IsDefault: true},
+			{ID: "sub-3", IsDefault: false},
+		}
+		assert.Equal(t, "sub-2", getDefaultSubscriptionID(accounts))
+	})
+
+	t.Run("falls back to accounts[0] when none marked default", func(t *testing.T) {
+		accounts := []common.Account{
+			{ID: "sub-1", IsDefault: false},
+			{ID: "sub-2", IsDefault: false},
+		}
+		assert.Equal(t, "sub-1", getDefaultSubscriptionID(accounts))
+	})
+}
+
+func TestAzureProvider_GetServiceClientForAccount(t *testing.T) {
+	t.Run("returns client for explicit subscription", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+
+		services := []common.ServiceType{
+			common.ServiceCompute,
+			common.ServiceRelationalDB,
+			common.ServiceCache,
+			common.ServiceNoSQL,
+		}
+		for _, svc := range services {
+			t.Run(string(svc), func(t *testing.T) {
+				client, err := p.GetServiceClientForAccount(context.Background(), svc, "eastus", "explicit-sub")
+				require.NoError(t, err)
+				require.NotNil(t, client)
+			})
+		}
+	})
+
+	t.Run("returns error for empty subscriptionID", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		_, err := p.GetServiceClientForAccount(context.Background(), common.ServiceCompute, "eastus", "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "subscriptionID must not be empty")
+	})
+
+	t.Run("returns error for unsupported service", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		_, err := p.GetServiceClientForAccount(context.Background(), common.ServiceType("unknown"), "eastus", "sub-1")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported service")
+	})
+
+	t.Run("returns error when not configured", func(t *testing.T) {
+		p := &AzureProvider{}
+		p.SetCredentialProvider(&mockCredentialProvider{err: errors.New("no cred")})
+		_, err := p.GetServiceClientForAccount(context.Background(), common.ServiceCompute, "eastus", "sub-1")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Azure is not configured")
+	})
+}
+
+func TestAzureProvider_GetRecommendationsClientForAccount(t *testing.T) {
+	t.Run("returns client for explicit subscription", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		client, err := p.GetRecommendationsClientForAccount(context.Background(), "explicit-sub")
+		require.NoError(t, err)
+		require.NotNil(t, client)
+	})
+
+	t.Run("returns error for empty subscriptionID", func(t *testing.T) {
+		p := &AzureProvider{cred: &mockTokenCredential{}}
+		_, err := p.GetRecommendationsClientForAccount(context.Background(), "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "subscriptionID must not be empty")
+	})
+
+	t.Run("returns error when not configured", func(t *testing.T) {
+		p := &AzureProvider{}
+		p.SetCredentialProvider(&mockCredentialProvider{err: errors.New("no cred")})
+		_, err := p.GetRecommendationsClientForAccount(context.Background(), "sub-1")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Azure is not configured")
+	})
+}

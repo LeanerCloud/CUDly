@@ -4,6 +4,7 @@ package azure
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -228,7 +229,13 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-// GetAccounts returns all accessible Azure subscriptions
+// GetAccounts returns all accessible Azure subscriptions.
+//
+// IsDefault is set to true for the subscription that matches (in priority order):
+//  1. The AzureSubscriptionID set in ProviderConfig (or the Profile fallback).
+//  2. The AZURE_SUBSCRIPTION_ID environment variable.
+//  3. The sole subscription, when exactly one is visible (mirrors AWS behaviour
+//     where the STS-identified account is always the default).
 func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("Azure is not configured")
@@ -265,14 +272,63 @@ func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, erro
 				ID:          *sub.SubscriptionID,
 				Name:        *sub.DisplayName,
 				DisplayName: *sub.DisplayName,
-				// Azure doesn't have a clear "default" subscription concept
-				// Users can set AZURE_SUBSCRIPTION_ID environment variable to specify which to use
+				// IsDefault resolved below once the full list is available.
 				IsDefault: false,
 			})
 		}
 	}
 
+	// Resolve which subscription is the default.
+	resolveDefaultSubscription(accounts, p.subscriptionID)
+
 	return accounts, nil
+}
+
+// resolveDefaultSubscription sets IsDefault on the matching account in-place.
+//
+// Priority:
+//  1. explicitSubID (from ProviderConfig.AzureSubscriptionID / Profile).
+//  2. AZURE_SUBSCRIPTION_ID environment variable.
+//  3. When exactly one subscription is visible, mark it default (mirrors AWS
+//     behaviour where the STS-identified account is always the default).
+func resolveDefaultSubscription(accounts []common.Account, explicitSubID string) {
+	if len(accounts) == 0 {
+		return
+	}
+
+	target := explicitSubID
+	if target == "" {
+		target = os.Getenv("AZURE_SUBSCRIPTION_ID")
+	}
+
+	if target != "" {
+		for i := range accounts {
+			if accounts[i].ID == target {
+				accounts[i].IsDefault = true
+				return
+			}
+		}
+		// target was configured but not found in the visible subscriptions;
+		// fall through to the single-subscription rule rather than leaving
+		// all accounts as non-default.
+	}
+
+	// Rule 3: single visible subscription.
+	if len(accounts) == 1 {
+		accounts[0].IsDefault = true
+	}
+}
+
+// getDefaultSubscriptionID returns the ID of the default subscription from a
+// pre-fetched account list, falling back to accounts[0] for backward
+// compatibility when no account is marked default.
+func getDefaultSubscriptionID(accounts []common.Account) string {
+	for _, a := range accounts {
+		if a.IsDefault {
+			return a.ID
+		}
+	}
+	return accounts[0].ID
 }
 
 // GetRegions returns all available Azure regions using the Subscriptions API
@@ -286,7 +342,7 @@ func (p *AzureProvider) GetRegions(ctx context.Context) ([]common.Region, error)
 		return nil, fmt.Errorf("no Azure subscriptions found to query regions")
 	}
 
-	subscriptionID := accounts[0].ID
+	subscriptionID := getDefaultSubscriptionID(accounts)
 
 	// Use injected client if available (for testing)
 	var subClient SubscriptionsClient
@@ -350,22 +406,47 @@ func (p *AzureProvider) GetSupportedServices() []common.ServiceType {
 	}
 }
 
-// GetServiceClient returns a service client for the specified service and region
+// GetServiceClient returns a service client for the specified service and region,
+// using the default subscription.
+//
+// When operating across multiple subscriptions (fan-out), prefer
+// GetServiceClientForAccount: it accepts an explicit subscriptionID and avoids
+// an extra GetAccounts round-trip per iteration.
 func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.ServiceType, region string) (provider.ServiceClient, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("Azure is not configured")
 	}
 
-	// Get subscription ID (use first available if not set)
+	// Use explicit subscription ID if configured; otherwise resolve from accounts.
 	subscriptionID := p.subscriptionID
 	if subscriptionID == "" {
 		accounts, err := p.GetAccounts(ctx)
 		if err != nil || len(accounts) == 0 {
 			return nil, fmt.Errorf("no Azure subscriptions found")
 		}
-		subscriptionID = accounts[0].ID
+		subscriptionID = getDefaultSubscriptionID(accounts)
 	}
 
+	return p.newServiceClientForSubscription(service, subscriptionID, region)
+}
+
+// GetServiceClientForAccount returns a service client for the specified service,
+// region, and subscription ID. Use this when iterating over all subscriptions
+// returned by GetAccounts to avoid O(n) redundant API calls.
+func (p *AzureProvider) GetServiceClientForAccount(ctx context.Context, service common.ServiceType, region, subscriptionID string) (provider.ServiceClient, error) {
+	if !p.IsConfigured() {
+		return nil, fmt.Errorf("Azure is not configured")
+	}
+	if subscriptionID == "" {
+		return nil, fmt.Errorf("subscriptionID must not be empty")
+	}
+	return p.newServiceClientForSubscription(service, subscriptionID, region)
+}
+
+// newServiceClientForSubscription constructs the concrete service client for
+// the given subscription and region. It is the shared backend for both
+// GetServiceClient and GetServiceClientForAccount.
+func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceType, subscriptionID, region string) (provider.ServiceClient, error) {
 	switch service {
 	case common.ServiceCompute:
 		return NewComputeClient(p.cred, subscriptionID, region), nil
@@ -380,22 +461,39 @@ func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.Ser
 	}
 }
 
-// GetRecommendationsClient returns a recommendations client
+// GetRecommendationsClient returns a recommendations client for the default
+// subscription.
+//
+// When operating across multiple subscriptions (fan-out), prefer
+// GetRecommendationsClientForAccount.
 func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.RecommendationsClient, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("Azure is not configured")
 	}
 
-	// Get subscription ID
+	// Use explicit subscription ID if configured; otherwise resolve from accounts.
 	subscriptionID := p.subscriptionID
 	if subscriptionID == "" {
 		accounts, err := p.GetAccounts(ctx)
 		if err != nil || len(accounts) == 0 {
 			return nil, fmt.Errorf("no Azure subscriptions found")
 		}
-		subscriptionID = accounts[0].ID
+		subscriptionID = getDefaultSubscriptionID(accounts)
 	}
 
+	return NewRecommendationsClient(p.cred, subscriptionID)
+}
+
+// GetRecommendationsClientForAccount returns a recommendations client scoped to
+// the given subscription ID. Use this when iterating over all subscriptions
+// returned by GetAccounts to avoid O(n) redundant API calls.
+func (p *AzureProvider) GetRecommendationsClientForAccount(ctx context.Context, subscriptionID string) (provider.RecommendationsClient, error) {
+	if !p.IsConfigured() {
+		return nil, fmt.Errorf("Azure is not configured")
+	}
+	if subscriptionID == "" {
+		return nil, fmt.Errorf("subscriptionID must not be empty")
+	}
 	return NewRecommendationsClient(p.cred, subscriptionID)
 }
 
