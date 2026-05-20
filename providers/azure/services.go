@@ -8,6 +8,7 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cosmosdb"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/managedredis"
 )
 
 // NewComputeClient creates a new Azure Compute (VM) client
@@ -28,6 +29,12 @@ func NewCacheClient(cred azcore.TokenCredential, subscriptionID, region string) 
 // NewCosmosDBClient creates a new Azure Cosmos DB client
 func NewCosmosDBClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
 	return cosmosdb.NewClient(cred, subscriptionID, region)
+}
+
+// NewManagedRedisClient creates a new Azure Managed Redis client (ServiceMemoryDB).
+// Azure Cache for Redis is the Azure equivalent of AWS MemoryDB for Redis.
+func NewManagedRedisClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return managedredis.NewClient(cred, subscriptionID, region)
 }
 
 // NewRecommendationsClient creates a new Azure recommendations client.

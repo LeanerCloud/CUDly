@@ -418,6 +418,7 @@ func (p *AzureProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceRelationalDB,
 		common.ServiceNoSQL,
 		common.ServiceCache,
+		common.ServiceMemoryDB,
 	}
 }
 
@@ -471,6 +472,8 @@ func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceTy
 		return NewCacheClient(p.cred, subscriptionID, region), nil
 	case common.ServiceNoSQL:
 		return NewCosmosDBClient(p.cred, subscriptionID, region), nil
+	case common.ServiceMemoryDB:
+		return NewManagedRedisClient(p.cred, subscriptionID, region), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}
