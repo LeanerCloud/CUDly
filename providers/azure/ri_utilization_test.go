@@ -93,8 +93,9 @@ func TestGetRIUtilization_HappyPath(t *testing.T) {
 	assert.Equal(t, 0.0, b.UtilizationPercent)
 	assert.Equal(t, 744.0, b.UnusedHours) // all hours unused: UsedHours=0, ReservedHours=744
 
-	// Verify the subscription scope was formatted correctly.
-	assert.Equal(t, "subscriptions/sub-123", api.capturedScope)
+	// Verify the subscription scope was formatted correctly (leading slash required
+	// by Azure's Consumption API resourceScope parameter).
+	assert.Equal(t, "/subscriptions/sub-123", api.capturedScope)
 	assert.Equal(t, armconsumption.DatagrainMonthlyGrain, api.capturedGrain)
 }
 

@@ -90,9 +90,12 @@ func (r *RecommendationsClientAdapter) getRIUtilizationViaAPI(
 	api reservationsSummariesAPI,
 	startDate, endDate string,
 ) ([]common.RIUtilization, error) {
-	// Subscription-scoped resource path: Azure's Consumption API accepts
-	// "/subscriptions/{id}" as the resourceScope for the List endpoint.
-	resourceScope := fmt.Sprintf("subscriptions/%s", r.subscriptionID)
+	// Subscription-scoped resource path: Azure's Consumption API requires
+	// "/subscriptions/{id}" (with leading slash) as the resourceScope for the
+	// List endpoint. The REST path is constructed as
+	// "management.azure.com/{resourceScope}/providers/Microsoft.Consumption/..."
+	// so the leading slash is essential for correct URL construction.
+	resourceScope := fmt.Sprintf("/subscriptions/%s", r.subscriptionID)
 
 	pager := api.newListPager(resourceScope, armconsumption.DatagrainMonthlyGrain, startDate, endDate)
 
