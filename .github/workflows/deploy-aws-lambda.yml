@@ -62,6 +62,15 @@ on:
       environment:
         required: true
         type: string
+    secrets:
+      ADMIN_EMAIL:
+        required: true
+      DASHBOARD_URL:
+        required: false
+      FROM_EMAIL:
+        required: false
+      TF_BACKEND_AWS:
+        required: true
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
