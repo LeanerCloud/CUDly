@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // CloudAccountRequest is the request body for create/update account endpoints.
@@ -571,6 +572,21 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 	}
 
 	if err := h.config.DeleteCloudAccount(ctx, id); err != nil {
+		// Race: the preflight count was 0 but a pending execution row was
+		// inserted concurrently before we issued the DELETE. Migration 000053
+		// enforces ON DELETE RESTRICT, so Postgres raises SQLSTATE 23503
+		// (foreign_key_violation). Map this to the same structured 409 the
+		// preflight branch returns so the frontend's Cancel-All-Then-Delete
+		// affordance still kicks in — minus the count/ids, which we can't
+		// supply without re-querying (and the operator can just retry).
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return nil, NewClientErrorWithDetails(409,
+				"cannot delete account: pending purchase(s) must be cancelled first",
+				map[string]any{
+					"reason": "pending_executions",
+				})
+		}
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 

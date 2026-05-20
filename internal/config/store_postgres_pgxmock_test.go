@@ -1343,6 +1343,7 @@ func TestPGXMock_CountPendingExecutionsForAccount_Success(t *testing.T) {
 	n, err := store.CountPendingExecutionsForAccount(ctx, "acct-1")
 	require.NoError(t, err)
 	assert.Equal(t, 4, n)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPGXMock_CountPendingExecutionsForAccount_Zero(t *testing.T) {
@@ -1356,6 +1357,7 @@ func TestPGXMock_CountPendingExecutionsForAccount_Zero(t *testing.T) {
 	n, err := store.CountPendingExecutionsForAccount(ctx, "acct-1")
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPGXMock_ListPendingExecutionIDsForAccount_Success(t *testing.T) {
@@ -1373,6 +1375,7 @@ func TestPGXMock_ListPendingExecutionIDsForAccount_Success(t *testing.T) {
 	ids, err := store.ListPendingExecutionIDsForAccount(ctx, "acct-1")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"exec-1", "exec-2"}, ids)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPGXMock_ListPendingExecutionIDsForAccount_Empty(t *testing.T) {
@@ -1388,6 +1391,7 @@ func TestPGXMock_ListPendingExecutionIDsForAccount_Empty(t *testing.T) {
 	ids, err := store.ListPendingExecutionIDsForAccount(ctx, "acct-1")
 	require.NoError(t, err)
 	assert.Empty(t, ids)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ─── errNoRows helper ────────────────────────────────────────────────────────

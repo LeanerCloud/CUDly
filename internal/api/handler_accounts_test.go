@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -368,6 +369,66 @@ func TestDeleteAccount_PendingListErr_StillReturns409(t *testing.T) {
 	// pending_execution_ids should be absent on the list-failure fallback path.
 	_, hasIDs := details["pending_execution_ids"]
 	assert.False(t, hasIDs, "pending_execution_ids must be omitted when list call failed")
+}
+
+// TestDeleteAccount_FKViolationRace_Returns409 asserts that when the
+// preflight count is 0 but DeleteCloudAccount fails with SQLSTATE 23503
+// (foreign_key_violation — migration 000053 enforces RESTRICT and a
+// pending row was inserted concurrently), the handler maps the raw error
+// to the structured 409 shape the frontend understands, rather than
+// surfacing a 500 from the wrapped fmt.Errorf branch. Issue #606 race
+// regression guard.
+func TestDeleteAccount_FKViolationRace_Returns409(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	// Preflight count is 0 (no pending rows at preflight time).
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		return 0, nil
+	}
+	// But the DELETE itself fails with FK violation (a row was inserted
+	// after the preflight check — exactly the race the migration guards).
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		return &pgconn.PgError{
+			Code:    "23503",
+			Message: "update or delete on table \"cloud_accounts\" violates foreign key constraint",
+		}
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError (409), got %T: %v", err, err)
+	assert.Equal(t, 409, ce.code)
+	details := ce.Details()
+	require.NotNil(t, details)
+	assert.Equal(t, "pending_executions", details["reason"])
+}
+
+// TestDeleteAccount_NonFKError_StillReturns500 asserts that errors which
+// are NOT FK violations continue to bubble up as wrapped errors (500),
+// so we don't accidentally swallow real failures as 409s.
+func TestDeleteAccount_NonFKError_StillReturns500(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		return 0, nil
+	}
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		return errors.New("connection refused")
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	_, ok := IsClientError(err)
+	assert.False(t, ok, "non-FK errors must NOT be classified as ClientError; got %v", err)
 }
 
 // TestDeleteAccount_NotFound asserts that deleteAccount returns 404 and never
