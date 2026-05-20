@@ -650,14 +650,22 @@ describe('Overrides panel — AWS payment selector', () => {
     expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
   });
 
-  test('non-AWS rows render the existing read-only payment cell, no <select>', async () => {
+  test('Azure rows render an editable payment select with provider-appropriate options (issue #109)', async () => {
+    // Issue #109: Azure override rows now get inline payment editing.
+    // Azure uses upfront/monthly (not the AWS no-upfront/partial/all-upfront set).
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
-      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', payment: 'all-upfront' },
+      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', term: 1, payment: 'upfront' },
     ]);
 
     const panel = await openOverridesPanel('acc-1');
-    expect(panel.querySelector('select.override-payment-select')).toBeNull();
-    expect(panel.textContent).toContain('all-upfront');
+    const sel = panel.querySelector('select.override-payment-select') as HTMLSelectElement | null;
+    expect(sel).not.toBeNull();
+    const options = Array.from(sel!.options).map(o => o.value);
+    // Azure has upfront + monthly (not the AWS no-upfront/partial/all-upfront set).
+    expect(options).toContain('upfront');
+    expect(options).toContain('monthly');
+    expect(options).not.toContain('no-upfront');
+    expect(options).not.toContain('all-upfront');
   });
 });
 
@@ -937,21 +945,25 @@ describe('Overrides panel: inline Term/Coverage/Enabled (issue #110)', () => {
 
   // ----- Non-AWS rows -----
 
-  test('Non-AWS rows: term/coverage render as text, enabled checkbox is disabled with tooltip', async () => {
+  test('Azure rows: term/coverage/enabled are all editable (issue #109)', async () => {
+    // Issue #109: Azure override rows now have inline editing on all fields,
+    // same as AWS rows after issue #110.
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
       { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', term: 1, coverage: 80 },
     ]);
 
     const panel = await openOverridesPanel('acc-1');
-    expect(panel.querySelector('select.override-term-select')).toBeNull();
-    expect(panel.querySelector('input.override-coverage-input')).toBeNull();
+    // Term select is present and editable.
+    const termSel = panel.querySelector('select.override-term-select') as HTMLSelectElement | null;
+    expect(termSel).not.toBeNull();
+    expect(termSel!.disabled).toBe(false);
+    // Coverage input is present.
+    const covInput = panel.querySelector('input.override-coverage-input') as HTMLInputElement | null;
+    expect(covInput).not.toBeNull();
+    // Enabled toggle is present and not disabled.
     const cb = panel.querySelector('input.override-enabled-toggle') as HTMLInputElement;
     expect(cb).not.toBeNull();
-    expect(cb.disabled).toBe(true);
-    expect(cb.title).toContain('AWS-only');
-    // Read-only fallbacks for term and coverage on non-AWS rows.
-    expect(panel.textContent).toContain('1yr');
-    expect(panel.textContent).toContain('80%');
+    expect(cb.disabled).toBe(false);
   });
 });
 
@@ -1137,7 +1149,10 @@ describe('Create-override modal', () => {
     expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
   });
 
-  test('non-AWS account: empty state shows passive text, no modal auto-open, no Add button', async () => {
+  test('Azure account: empty state auto-opens the create modal with Azure service list (issue #109)', async () => {
+    // Issue #109: Azure accounts now get the same "Add override" flow as AWS.
+    // The empty-state auto-opens the create modal and the service dropdown
+    // is populated with Azure services (vm, sql, cosmosdb, redis, search).
     (api.listAccounts as jest.Mock).mockResolvedValue([
       { id: 'az-1', name: 'AzureProd', provider: 'azure', external_id: 'sub-x', enabled: true },
     ]);
@@ -1153,15 +1168,21 @@ describe('Create-override modal', () => {
     const panel = document.getElementById('account-overrides-modal-body') as HTMLElement;
     const modal = document.getElementById('override-modal') as HTMLElement;
 
-    // The inner create modal must NOT have auto-opened for a non-AWS account.
-    expect(modal.classList.contains('hidden')).toBe(true);
+    // The inner create modal auto-opens (same as AWS empty state).
+    expect(modal.classList.contains('hidden')).toBe(false);
 
-    // No Add override button on non-AWS for now (issue #104 follow-up).
+    // Add override button is present.
     const addBtn = Array.from(panel.querySelectorAll('button')).find(b => b.textContent === 'Add override');
-    expect(addBtn).toBeUndefined();
+    expect(addBtn).toBeDefined();
 
-    // Passive empty-state copy is what they see.
-    expect(panel.textContent).toContain('No service overrides set');
+    // Service dropdown lists Azure services, not AWS services.
+    const svcSel = document.getElementById('override-service') as HTMLSelectElement;
+    const svcValues = Array.from(svcSel.options).map(o => o.value);
+    expect(svcValues).toContain('vm');
+    expect(svcValues).toContain('sql');
+    expect(svcValues).toContain('cosmosdb');
+    expect(svcValues).not.toContain('ec2');
+    expect(svcValues).not.toContain('rds');
   });
 
   test('all services already overridden disables submit', async () => {
