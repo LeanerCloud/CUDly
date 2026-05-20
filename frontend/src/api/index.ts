@@ -174,6 +174,7 @@ export {
 } from './inventory';
 
 // Re-export RI exchange functions
+export type { ReshapeRecommendationsResponse } from './riexchange';
 export {
   listConvertibleRIs,
   getRIUtilization,
