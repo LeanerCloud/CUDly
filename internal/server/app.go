@@ -396,13 +396,17 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		DashboardURL:    cfg.DashboardURL,
 	})
 
-	// Initialize rate limiter based on runtime environment
-	var rateLimiter api.RateLimiterInterface
+	// Initialize rate limiter based on runtime environment.
+	// Lambda: start with an in-memory limiter immediately so the first cold-start
+	// request is protected. ensureDB() swaps it for the DB-backed limiter once the
+	// database connection is established (distributed state across warm containers).
+	// Fargate/containers: in-memory is the permanent implementation because the
+	// process is long-lived and single-instance.
+	rateLimiter := api.RateLimiterInterface(api.NewInMemoryRateLimiter())
 	if !cfg.IsLambda {
-		rateLimiter = api.NewInMemoryRateLimiter()
 		log.Println("Initialized in-memory rate limiter for single-instance deployment (Fargate/Container)")
 	} else {
-		log.Println("Lambda runtime detected - database rate limiter will be initialized on first request")
+		log.Println("Initialized in-memory rate limiter for Lambda cold-start (will be upgraded to DB-backed on first DB connect)")
 	}
 
 	// Initialize API handler

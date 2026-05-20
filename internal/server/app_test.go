@@ -415,7 +415,10 @@ func TestNewApplicationFromDeps(t *testing.T) {
 		testutil.AssertTrue(t, app.DB == nil, "DB should be nil (lazy init)")
 	})
 
-	t.Run("Lambda path with nil rate limiter", func(t *testing.T) {
+	// Regression test for issue #420: Lambda cold-start must have a non-nil
+	// in-memory rate limiter so the first requests are protected before the
+	// DB connection is established.
+	t.Run("Lambda path with in-memory rate limiter (issue #420)", func(t *testing.T) {
 		lambdaCfg := baseCfg
 		lambdaCfg.IsLambda = true
 
@@ -426,7 +429,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 
 		app, err := NewApplicationFromDeps(ctx, lambdaCfg, deps)
 		testutil.AssertNoError(t, err)
-		testutil.AssertTrue(t, app.RateLimiter == nil, "Rate limiter should be nil for Lambda (initialized after DB connect)")
+		testutil.AssertTrue(t, app.RateLimiter != nil, "Rate limiter must not be nil for Lambda (fix for issue #420: cold-start requests must be rate-limited)")
 	})
 
 	t.Run("nil dbConfig returns error", func(t *testing.T) {

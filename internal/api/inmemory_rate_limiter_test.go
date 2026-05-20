@@ -233,3 +233,62 @@ func TestInMemoryRateLimiter_ConcurrentAccess(t *testing.T) {
 		<-done
 	}
 }
+
+// Regression test for #411: setup_admin must have a dedicated strict rate-limit
+// bucket (5/min/IP) and must NOT fall through to the permissive api_general
+// config (300/min).
+func TestGetDefaultRateLimits_SetupAdminHasDedicatedBucket(t *testing.T) {
+	limits := getDefaultRateLimits()
+
+	cfg, ok := limits["setup_admin"]
+	if !ok {
+		t.Fatal("setup_admin key missing from default rate limits (issue #411)")
+	}
+
+	// setup_admin should be far stricter than api_general (300/min)
+	apiGeneral := limits["api_general"]
+	if cfg.MaxAttempts >= apiGeneral.MaxAttempts {
+		t.Errorf("setup_admin limit (%d) is not stricter than api_general (%d); regression of #411",
+			cfg.MaxAttempts, apiGeneral.MaxAttempts)
+	}
+
+	// Verify the window is present
+	if cfg.Window == 0 {
+		t.Error("setup_admin rate limit has zero window duration")
+	}
+
+	// Verify the window matches the specification from issue #411 (5 per 15 minutes).
+	assert.Equal(t, 15*time.Minute, cfg.Window,
+		"setup_admin window must be 15 minutes per issue #411")
+}
+
+// Regression test for #420: NewInMemoryRateLimiter must be ready at construction
+// time (not after a slow lazy init) so Lambda cold-start first requests are protected.
+func TestNewInMemoryRateLimiter_ReadyImmediately(t *testing.T) {
+	rl := NewInMemoryRateLimiter()
+	ctx := context.Background()
+
+	// The limiter must be usable on the very first call without any further setup.
+	// Previously, Lambda started with a nil rate limiter that allowed all requests
+	// through until the DB connection was established (issue #420).
+	allowed, err := rl.AllowWithIP(ctx, "10.0.0.1", "login")
+	if err != nil {
+		t.Fatalf("AllowWithIP returned unexpected error on first call: %v", err)
+	}
+	if !allowed {
+		t.Fatal("first login attempt should be allowed by a fresh rate limiter")
+	}
+
+	// Exhaust the login limit (5 per 15 min)
+	loginLimit := getDefaultRateLimits()["login"]
+	for i := 1; i < loginLimit.MaxAttempts; i++ {
+		_, _ = rl.AllowWithIP(ctx, "10.0.0.1", "login")
+	}
+	blocked, err := rl.AllowWithIP(ctx, "10.0.0.1", "login")
+	if err != nil {
+		t.Fatalf("unexpected error after exhausting limit: %v", err)
+	}
+	if blocked {
+		t.Errorf("expected login to be blocked after %d attempts; rate limiter was not enforcing (regression of #420)", loginLimit.MaxAttempts)
+	}
+}

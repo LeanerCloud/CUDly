@@ -31,6 +31,10 @@ func getDefaultRateLimits() map[string]RateLimitConfig {
 		"api_general":           NewRateLimitConfig(300, 60),   // 300 requests / minute / IP
 		"admin":                 NewRateLimitConfig(30, 60),    // 30 / minute / user
 		"approve_cancel_public": NewRateLimitConfig(30, 60),    // 30 / minute / IP for public approve/cancel/reject
+		// setup_admin should fire at most once per deployment. Issue #411 specifies
+		// 5 attempts per 15 minutes so a cold-start burst cannot brute-force the
+		// first-run endpoint before the DB-backed limiter is available.
+		"setup_admin": NewRateLimitConfig(5, 15*60), // 5 attempts / 15 minutes / IP
 	}
 }
 
