@@ -344,10 +344,20 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 		}
 	}
 
+	// Resolve the host AWS account ID so the frontend can distinguish a
+	// legitimate ambient-credential execution (cloud_account_id IS NULL
+	// because the rec targets the CUDly Lambda's own account) from an
+	// orphan execution whose account was deleted (issue #608). The call
+	// is best-effort: non-AWS deployments and STS transient failures
+	// return "" and the frontend falls back to the "Account deleted"
+	// warning label, which is safe.
+	deploymentAWSAccountID, _ := h.resolveAWSAccountID(ctx)
+
 	return &PublicInfoResponse{
-		Version:         "1.0.0",
-		AdminExists:     adminExists,
-		APIKeySecretURL: apiKeySecretURL,
+		Version:                "1.0.0",
+		AdminExists:            adminExists,
+		APIKeySecretURL:        apiKeySecretURL,
+		DeploymentAWSAccountID: deploymentAWSAccountID,
 	}, nil
 }
 

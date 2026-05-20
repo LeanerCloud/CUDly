@@ -49,7 +49,7 @@ export type AccountsById = Map<string, CloudAccount>;
  * Exported separately from `buildApprovalDetailsBody` so tests can
  * render the body deterministically — no fetch mocking required.
  */
-export function renderApprovalDetailsBody(details: PurchaseDetails, accountsById: AccountsById): HTMLElement {
+export function renderApprovalDetailsBody(details: PurchaseDetails, accountsById: AccountsById, hostAWSAccountID?: string): HTMLElement {
   const root = document.createElement('div');
   root.className = 'approval-details';
 
@@ -65,7 +65,7 @@ export function renderApprovalDetailsBody(details: PurchaseDetails, accountsById
   }
 
   root.appendChild(renderApprovalDetailsHeader(details, recs));
-  root.appendChild(renderApprovalDetailsTable(recs, accountsById));
+  root.appendChild(renderApprovalDetailsTable(recs, accountsById, hostAWSAccountID));
   return root;
 }
 
@@ -154,7 +154,7 @@ function headerStat(label: string, value: string, hover?: string, title?: string
  * resource / engine / region) -> sizing (count / term / payment) ->
  * money (upfront / monthly savings / effective savings %).
  */
-function renderApprovalDetailsTable(recs: Recommendation[], accountsById: AccountsById): HTMLElement {
+function renderApprovalDetailsTable(recs: Recommendation[], accountsById: AccountsById, hostAWSAccountID?: string): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'approval-details-table-wrap';
 
@@ -181,7 +181,7 @@ function renderApprovalDetailsTable(recs: Recommendation[], accountsById: Accoun
 
   const tbody = document.createElement('tbody');
   for (const rec of recs) {
-    tbody.appendChild(renderRecRow(rec, accountsById));
+    tbody.appendChild(renderRecRow(rec, accountsById, hostAWSAccountID));
   }
   table.appendChild(tbody);
   wrap.appendChild(table);
@@ -198,10 +198,10 @@ function renderApprovalDetailsTable(recs: Recommendation[], accountsById: Accoun
  * through escapeHtml so a tampered recommendation field can't inject
  * markup.
  */
-function renderRecRow(rec: Recommendation, accountsById: AccountsById): HTMLElement {
+function renderRecRow(rec: Recommendation, accountsById: AccountsById, hostAWSAccountID?: string): HTMLElement {
   const row = document.createElement('tr');
   const acct = rec.cloud_account_id ? accountsById.get(rec.cloud_account_id) : undefined;
-  const accountLabel = formatAccountLabel(acct, rec.cloud_account_id);
+  const accountLabel = formatAccountLabel(acct, rec.cloud_account_id, rec.provider ?? '', hostAWSAccountID);
   // rec.engine is a string for DB-shaped services and "" otherwise;
   // both `undefined` and "" are falsy so the single check is enough.
   const engineLabel = rec.engine ? rec.engine : '—';
@@ -234,11 +234,23 @@ function renderRecRow(rec: Recommendation, accountsById: AccountsById): HTMLElem
  *   - When only the UUID is on the rec (account not yet listed because
  *     of a stale cache or a deletion race), show the first 8 chars of
  *     the UUID so the user can still cross-reference.
- *   - When the rec carries no account at all (ambient-credentials
- *     direct-execute path), show "(ambient)" so the user knows it's
- *     hitting whichever account the deployment runs in.
+ *   - When the rec carries no account at all, distinguish two cases
+ *     (issue #608):
+ *       a) provider === 'aws' AND hostAWSAccountID is known: the rec
+ *          targets the CUDly Lambda's own account — label it as the
+ *          host account so the operator sees exactly which account
+ *          will be charged.
+ *       b) Any other combination (Azure/GCP without an account, or AWS
+ *          but host account ID is unavailable): the account was almost
+ *          certainly deleted. Show a warning so the operator knows to
+ *          cancel rather than approve.
  */
-export function formatAccountLabel(acct: CloudAccount | undefined, recAccountId: string | undefined): string {
+export function formatAccountLabel(
+  acct: CloudAccount | undefined,
+  recAccountId: string | undefined,
+  provider: string,
+  hostAWSAccountID: string | undefined,
+): string {
   if (acct) {
     if (acct.external_id) return `${acct.name} (${acct.external_id})`;
     return acct.name;
@@ -246,7 +258,11 @@ export function formatAccountLabel(acct: CloudAccount | undefined, recAccountId:
   if (recAccountId) {
     return `acct ${recAccountId.slice(0, 8)}…`;
   }
-  return '(ambient)';
+  // No account on the rec. Distinguish 'genuine ambient' from 'deleted'.
+  if (provider === 'aws' && hostAWSAccountID) {
+    return `CUDly host (${hostAWSAccountID})`;
+  }
+  return '⚠ Account deleted — purchase cannot execute';
 }
 
 /**
@@ -287,21 +303,26 @@ export function computeEffectiveSavingsPct(rec: Recommendation): number | null {
  */
 export async function buildApprovalDetailsBody(executionId: string): Promise<HTMLElement> {
   try {
-    // listAccounts is caught inline so the modal still renders the
-    // full details when the accounts endpoint is unreachable; the
-    // per-rec table degrades to "acct xxxxxxxx…" stubs instead of
-    // failing the whole confirmation. console.warn keeps the failure
-    // traceable rather than silently dropping the error.
-    const [details, accounts] = await Promise.all([
+    // Fetch purchase details, account list, and public info in parallel.
+    // listAccounts and getPublicInfo are caught inline so the modal still
+    // renders the full details when either endpoint is unreachable; the
+    // per-rec table degrades gracefully. console.warn keeps failures
+    // traceable rather than silently dropping them.
+    const [details, accounts, publicInfo] = await Promise.all([
       api.getPurchaseDetails(executionId),
       api.listAccounts().catch((err) => {
         console.warn('Failed to load accounts for approval modal — falling back to UUID-prefixed labels:', err);
         return [] as CloudAccount[];
       }),
+      api.getPublicInfo().catch((err) => {
+        console.warn('Failed to load public info for approval modal — orphan label will show "Account deleted":', err);
+        return undefined;
+      }),
     ]);
     const accountsById = new Map<string, CloudAccount>();
     for (const acct of accounts) accountsById.set(acct.id, acct);
-    return renderApprovalDetailsBody(details, accountsById);
+    const hostAWSAccountID = publicInfo?.deployment_aws_account_id;
+    return renderApprovalDetailsBody(details, accountsById, hostAWSAccountID);
   } catch (err) {
     console.error('Failed to load purchase details for approval modal:', err);
     return buildApprovalDetailsFallback();

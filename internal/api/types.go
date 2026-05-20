@@ -458,9 +458,10 @@ type EmptyServiceConfigResponse struct{}
 
 // PublicInfoResponse holds public information about the CUDly instance
 type PublicInfoResponse struct {
-	Version         string `json:"version"`
-	AdminExists     bool   `json:"admin_exists"`
-	APIKeySecretURL string `json:"api_key_secret_url,omitempty"`
+	Version                string `json:"version"`
+	AdminExists            bool   `json:"admin_exists"`
+	APIKeySecretURL        string `json:"api_key_secret_url,omitempty"`
+	DeploymentAWSAccountID string `json:"deployment_aws_account_id,omitempty"`
 }
 
 // DashboardSummaryResponse holds the dashboard summary data

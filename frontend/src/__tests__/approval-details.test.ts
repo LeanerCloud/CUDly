@@ -109,12 +109,20 @@ describe('renderApprovalDetailsBody', () => {
     expect(cells[0]?.textContent).toBe('acct 11111111…');
   });
 
-  it('shows "(ambient)" for recs without a cloud_account_id', () => {
-    const rec = makeRec({});
+  it('shows "CUDly host (id)" for AWS recs without cloud_account_id when host account is known', () => {
+    const rec = makeRec({ provider: 'aws' });
     delete rec.cloud_account_id;
-    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map());
+    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '909626172446');
     const cells = body.querySelectorAll('.approval-details-table tbody td');
-    expect(cells[0]?.textContent).toBe('(ambient)');
+    expect(cells[0]?.textContent).toBe('CUDly host (909626172446)');
+  });
+
+  it('shows "Account deleted" warning for Azure recs without cloud_account_id', () => {
+    const rec = makeRec({ provider: 'azure' });
+    delete rec.cloud_account_id;
+    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '909626172446');
+    const cells = body.querySelectorAll('.approval-details-table tbody td');
+    expect(cells[0]?.textContent).toBe('⚠ Account deleted — purchase cannot execute');
   });
 
   it('renders the engine column for RDS-shaped recs and "—" otherwise', () => {
@@ -218,20 +226,33 @@ describe('renderApprovalDetailsBody', () => {
 describe('formatAccountLabel', () => {
   it('returns "Name (external_id)" when both are present', () => {
     const acct = makeAccount({ id: 'a', name: 'Prod', external_id: '999988887777' });
-    expect(formatAccountLabel(acct, 'a')).toBe('Prod (999988887777)');
+    expect(formatAccountLabel(acct, 'a', 'aws', '111122223333')).toBe('Prod (999988887777)');
   });
 
   it('returns just Name when external_id is empty', () => {
     const acct = makeAccount({ id: 'a', name: 'Bastion', external_id: '' });
-    expect(formatAccountLabel(acct, 'a')).toBe('Bastion');
+    expect(formatAccountLabel(acct, 'a', 'aws', '111122223333')).toBe('Bastion');
   });
 
   it('returns "acct <prefix>" when the UUID is unknown', () => {
-    expect(formatAccountLabel(undefined, 'aaaaaaaa-bbbb-cccc')).toBe('acct aaaaaaaa…');
+    expect(formatAccountLabel(undefined, 'aaaaaaaa-bbbb-cccc', 'aws', '111122223333')).toBe('acct aaaaaaaa…');
   });
 
-  it('returns "(ambient)" when no account id was carried', () => {
-    expect(formatAccountLabel(undefined, undefined)).toBe('(ambient)');
+  // issue #608: distinguish genuine ambient from deleted account
+  it('returns "CUDly host (id)" when provider is aws, no recAccountId, and hostAWSAccountID is known', () => {
+    expect(formatAccountLabel(undefined, undefined, 'aws', '909626172446')).toBe('CUDly host (909626172446)');
+  });
+
+  it('returns "Account deleted" warning for azure with no recAccountId', () => {
+    expect(formatAccountLabel(undefined, undefined, 'azure', undefined)).toBe('⚠ Account deleted — purchase cannot execute');
+  });
+
+  it('returns "Account deleted" warning for gcp with no recAccountId', () => {
+    expect(formatAccountLabel(undefined, undefined, 'gcp', undefined)).toBe('⚠ Account deleted — purchase cannot execute');
+  });
+
+  it('returns "Account deleted" warning for aws with no recAccountId when hostAWSAccountID is missing', () => {
+    expect(formatAccountLabel(undefined, undefined, 'aws', undefined)).toBe('⚠ Account deleted — purchase cannot execute');
   });
 });
 
