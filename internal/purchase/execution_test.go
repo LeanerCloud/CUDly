@@ -1033,6 +1033,11 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 			return cfg != nil && cfg.ProviderOverride != nil
 		}),
 	).Return(mockProviderInst, nil)
+	// Issue #626: rec.Service is "compute" (canonical), which must map to
+	// common.ServiceCompute — not the AWS-legacy ServiceEC2 that the old
+	// mapServiceType returned. The mock previously expected ServiceEC2 and
+	// silently encoded the production bug because mocks return success
+	// regardless of the ServiceType passed in.
 	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx,
 		mock.AnythingOfType("common.Recommendation"),
