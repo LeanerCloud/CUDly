@@ -191,6 +191,13 @@ describe('Auth Module', () => {
       expect(text).toBe('Check your email address and password and try again');
     });
 
+    test('backend "invalid email or password" (legacy pre-#550 nodes) maps to softened copy', async () => {
+      (api.login as jest.Mock).mockRejectedValue(new Error('invalid email or password'));
+      await showLoginModal();
+      const text = await submitLogin('user@example.com', 'wrongpassword');
+      expect(text).toBe('Check your email address and password and try again');
+    });
+
     test('backend "Check your email address and password and try again" passes through unchanged', async () => {
       (api.login as jest.Mock).mockRejectedValue(
         new Error('Check your email address and password and try again'),

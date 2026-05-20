@@ -652,6 +652,7 @@ function mapServerLoginError(message: string): string {
   }
   if (
     lower.includes('authentication failed') ||
+    lower.includes('invalid email or password') ||
     lower.includes('check your email address and password')
   ) {
     return 'Check your email address and password and try again';
