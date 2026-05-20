@@ -358,6 +358,37 @@ func TestGetOfferingDetails_3yr_AllUpfront(t *testing.T) {
 	assert.Equal(t, 0.0, details.RecurringCost)
 }
 
+func TestGetOfferingDetails_5yr_AllUpfront(t *testing.T) {
+	c := NewClient(nil, "sub", "eastus")
+	rec := common.Recommendation{
+		Term:          "5yr",
+		PaymentOption: "All Upfront",
+		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
+	}
+
+	details, err := c.GetOfferingDetails(context.Background(), rec)
+	require.NoError(t, err)
+	require.NotNil(t, details)
+
+	assert.Equal(t, "5yr", details.Term)
+	assert.InDelta(t, 43800.0, details.UpfrontCost, 0.001)
+	assert.Equal(t, 0.0, details.RecurringCost)
+	assert.InDelta(t, 43800.0, details.TotalCost, 0.001)
+}
+
+func TestGetOfferingDetails_BadTerm(t *testing.T) {
+	c := NewClient(nil, "sub", "eastus")
+	rec := common.Recommendation{
+		Term:          "99yr",
+		PaymentOption: "No Upfront",
+		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
+	}
+
+	_, err := c.GetOfferingDetails(context.Background(), rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported savings plan term")
+}
+
 func TestGetOfferingDetails_WrongDetails(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	rec := common.Recommendation{Term: "1yr", Details: nil}

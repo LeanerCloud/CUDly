@@ -83,6 +83,9 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Clie
 
 // NewClientWithHTTP creates a new Azure Savings Plans client with a custom HTTP client (for testing).
 func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *Client {
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
 	return &Client{
 		cred:           cred,
 		subscriptionID: subscriptionID,
@@ -391,11 +394,22 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 	}
 
 	// Calculate term hours.
-	hoursInTerm := 8760.0 // 1 year
-	termStr := "1yr"
-	if rec.Term == "3yr" || rec.Term == "P3Y" {
-		hoursInTerm = 26280.0
-		termStr = "3yr"
+	azTerm, err := toAzureTerm(rec.Term)
+	if err != nil {
+		return nil, err
+	}
+
+	var hoursInTerm float64
+	var termStr string
+	switch azTerm {
+	case armbillingbenefits.TermP1Y:
+		hoursInTerm, termStr = 8760.0, "1yr"
+	case armbillingbenefits.TermP3Y:
+		hoursInTerm, termStr = 26280.0, "3yr"
+	case armbillingbenefits.TermP5Y:
+		hoursInTerm, termStr = 43800.0, "5yr"
+	default:
+		return nil, fmt.Errorf("unsupported savings plan term: %s", rec.Term)
 	}
 
 	totalCost := spDetails.HourlyCommitment * hoursInTerm
