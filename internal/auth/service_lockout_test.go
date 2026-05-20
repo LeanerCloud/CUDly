@@ -304,6 +304,64 @@ func TestLogin_AccountLockout_GenericErrorMessage(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
+// TestLogin_AccountLockout_MFAMissingCodePath verifies that repeatedly sending no MFA code
+// still increments the failed-login counter and triggers lockout after MaxFailedLoginAttempts.
+// Regression test for the lockout-bypass via the missing-code path.
+func TestLogin_AccountLockout_MFAMissingCodePath(t *testing.T) {
+	ctx := context.Background()
+
+	s := newTestService()
+	hash, _ := s.hashPassword("CorrectPassword123")
+
+	for attempt := 0; attempt < MaxFailedLoginAttempts; attempt++ {
+		t.Run(fmt.Sprintf("Attempt_%d", attempt+1), func(t *testing.T) {
+			mockStore := new(MockStore)
+			mockEmail := new(MockEmailSender)
+			service := createTestService(mockStore, mockEmail)
+
+			testUser := &User{
+				ID:                  "user-123",
+				Email:               "test@example.com",
+				PasswordHash:        hash,
+				Active:              true,
+				MFAEnabled:          true,
+				MFASecret:           "JBSWY3DPEHPK3PXP",
+				Role:                RoleUser,
+				FailedLoginAttempts: attempt,
+			}
+
+			var updatedUser *User
+			mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(testUser, nil).Once()
+			mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).
+				Run(func(args mock.Arguments) {
+					updatedUser = args.Get(1).(*User)
+				}).
+				Return(nil).Once()
+
+			req := LoginRequest{
+				Email:    "test@example.com",
+				Password: "CorrectPassword123",
+				MFACode:  "", // deliberately omit MFA code
+			}
+
+			_, err := service.Login(ctx, req)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid email or password")
+
+			require.NotNil(t, updatedUser, "recordFailedLogin must have been called")
+			assert.Equal(t, attempt+1, updatedUser.FailedLoginAttempts)
+
+			if attempt+1 >= MaxFailedLoginAttempts {
+				assert.NotNil(t, updatedUser.LockedUntil, "account must be locked after max failures via missing-code path")
+			} else {
+				assert.Nil(t, updatedUser.LockedUntil)
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
 // TestRecordFailedLogin verifies recordFailedLogin function behavior
 func TestRecordFailedLogin(t *testing.T) {
 	ctx := context.Background()

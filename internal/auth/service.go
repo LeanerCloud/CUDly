@@ -189,6 +189,7 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 
 	if user.MFAEnabled {
 		if req.MFACode == "" {
+			s.recordFailedLogin(ctx, user)
 			// Password was correct but MFA code not supplied. Return the same
 			// generic message as a wrong-password attempt so callers cannot
 			// infer that the password was accepted (issue #388).
@@ -196,7 +197,8 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 			return fmt.Errorf("invalid email or password")
 		}
 		if user.MFASecret == "" {
-			// MFA is marked enabled but no secret exists — misconfiguration.
+			s.recordFailedLogin(ctx, user)
+			// MFA is marked enabled but no secret exists - misconfiguration.
 			// Treat as an auth failure with the same generic message.
 			logging.Warnf("login: MFA enabled but secret not configured for account")
 			return fmt.Errorf("invalid email or password")
