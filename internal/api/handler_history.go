@@ -238,7 +238,11 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		// Only audit-gap completed executions reach here (fetchExecutionsAsHistory
 		// skips clean completed rows). exec.Error carries why the history write
 		// failed after a successful purchase — surface it so the purchase is
-		// visible despite the missing purchase_history row (issue #621).
+		// visible despite the missing purchase_history row (issue #621). Flag the
+		// row so the dollar accounting excludes its execution-level total without
+		// relying on StatusDescription being set (which annotateApproved may also
+		// populate).
+		row.IsAuditGap = true
 		annotateApproved(row, exec, approver)
 		if exec.Error != "" {
 			row.StatusDescription = "purchase completed but its history record could not be saved: " + exec.Error
@@ -375,16 +379,17 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 		}
 		summary.TotalCompleted++
 		// Audit-gap completed rows (issue #621) are synthesised execution rows
-		// whose purchase_history write failed; they uniquely carry a
-		// StatusDescription (real purchase_history rows never set it). Count
-		// them as completed (the money WAS committed and they must stay
-		// visible) but exclude their execution-level dollars: a partially-saved
-		// multi-rec execution can have BOTH some purchase_history rows AND this
-		// synthesised row, and adding the full execution total here would
-		// double-count the recs that did save. The dollars are surfaced via the
-		// individual purchase_history rows that succeeded; the synthesised row
-		// is the audit flag, not a money source.
-		if p.StatusDescription != "" {
+		// whose purchase_history write failed. Count them as completed (the
+		// money WAS committed and they must stay visible) but exclude their
+		// execution-level dollars: a partially-saved multi-rec execution can
+		// have BOTH some purchase_history rows AND this synthesised row, and
+		// adding the full execution total here would double-count the recs that
+		// did save. The dollars are surfaced via the individual purchase_history
+		// rows that succeeded; the synthesised row is the audit flag, not a
+		// money source. IsAuditGap is the explicit marker: real purchase_history
+		// rows loaded from the DB always leave it false, so a future change that
+		// annotates completed DB rows can't silently drop them from the totals.
+		if p.IsAuditGap {
 			continue
 		}
 		summary.TotalUpfront += p.UpfrontCost

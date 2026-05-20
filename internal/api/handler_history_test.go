@@ -453,6 +453,7 @@ func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 	assert.Equal(t, "gap-1", row.PurchaseID)
 	assert.Equal(t, "completed", row.Status)
 	assert.Contains(t, row.StatusDescription, "history record could not be saved", "the audit gap must be surfaced to the user")
+	assert.True(t, row.IsAuditGap, "synthesised audit-gap row must carry the explicit IsAuditGap marker")
 	assert.Equal(t, 1, resp.Summary.TotalCompleted, "money was committed, so it counts as completed")
 	// Double-count guard: the synthesised audit-gap row is an audit flag, not a
 	// money source. A partially-saved multi-rec execution can have BOTH some
@@ -461,6 +462,49 @@ func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 	// purchase_history rows that actually saved).
 	assert.Equal(t, 0.0, resp.Summary.TotalUpfront, "audit-gap row must not contribute execution-level dollars (double-count risk)")
 	assert.Equal(t, 0.0, resp.Summary.TotalMonthlySavings)
+}
+
+// TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts guards the
+// financial invariant that dollar exclusion keys off the explicit IsAuditGap
+// marker, NOT off StatusDescription being set. A real purchase_history row
+// loaded from the DB always has IsAuditGap=false, so even if some future code
+// path annotates it with a StatusDescription, its committed dollars must still
+// flow into the totals; undercounting committed spend is as wrong as
+// double-counting it (issue #621).
+func TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	// A genuine completed purchase_history row that happens to carry a
+	// human-readable StatusDescription (IsAuditGap stays false, as it is for
+	// every DB-loaded row). Its dollars are committed and must be counted.
+	completed := []config.PurchaseHistoryRecord{
+		{
+			AccountID:         "acc-1",
+			PurchaseID:        "ri-commitment-1",
+			Status:            "completed",
+			StatusDescription: "approved by ops@example.com",
+			UpfrontCost:       700.0,
+			EstimatedSavings:  70.0,
+		},
+	}
+	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(completed, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	approver := "ops@example.com"
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	resp := result.(HistoryResponse)
+
+	require.Len(t, resp.Purchases, 1)
+	assert.False(t, resp.Purchases[0].IsAuditGap, "DB-loaded completed rows are never audit gaps")
+	assert.Equal(t, 1, resp.Summary.TotalCompleted)
+	assert.Equal(t, 700.0, resp.Summary.TotalUpfront, "a completed DB row with a StatusDescription must still count its committed dollars")
+	assert.Equal(t, 70.0, resp.Summary.TotalMonthlySavings)
 }
 
 // TestHandler_getHistory_CompletedExecutionNotDuplicated guards the dedup path.
@@ -475,7 +519,12 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 	completed := []config.PurchaseHistoryRecord{
 		{AccountID: "acc-1", PurchaseID: "ri-commitment-1", UpfrontCost: 400.0, EstimatedSavings: 40.0},
 	}
-	// Same logical purchase, now also returned as a clean completed execution.
+	// A clean completed execution exists alongside a purchase_history row. The
+	// execution (exec-clean-1) and the purchase_history row (ri-commitment-1)
+	// are separate records with different IDs; the test does not assert they
+	// match. It asserts that ALL clean completed executions are skipped (not
+	// synthesised) because they are assumed already represented by their
+	// purchase_history rows, so the surviving row is the purchase_history one.
 	cleanCompletedExec := []config.PurchaseExecution{
 		{
 			ExecutionID:     "exec-clean-1",
