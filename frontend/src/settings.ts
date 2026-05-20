@@ -1212,6 +1212,17 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
 }
 
 /**
+ * Re-entrancy guard for the deleteAccount + handlePendingExecutions409
+ * flow. A double-click on the Delete button (or a click during the
+ * cancel-loop-then-retry-delete sequence) used to be able to start two
+ * concurrent deletes for the same account, racing on the backend
+ * preflight + cancel + delete sequence. Module-scoped so guards apply
+ * across both helpers; keyed on account ID so different accounts can
+ * still be deleted in parallel.
+ */
+const inflightDeletes = new Set<string>();
+
+/**
  * Delete an account after confirmation.
  *
  * Issue #606 — when the backend preflight detects pending purchase
@@ -1225,6 +1236,10 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
  * cancelling and silently moving on.
  */
 async function deleteAccount(accountId: string, provider: AccountProvider, _container: HTMLElement): Promise<void> {
+  if (inflightDeletes.has(accountId)) {
+    showToast({ message: 'Delete already in progress for this account.', kind: 'info' });
+    return;
+  }
   const ok = await confirmDialog({
     title: 'Delete account?',
     body: 'Delete this account? This also removes its credentials and service overrides. This action cannot be undone.',
@@ -1232,19 +1247,24 @@ async function deleteAccount(accountId: string, provider: AccountProvider, _cont
     destructive: true,
   });
   if (!ok) return;
+  inflightDeletes.add(accountId);
   try {
-    await api.deleteAccount(accountId);
-    await loadAccountsForProvider(provider);
-    return;
-  } catch (err) {
-    const apiErr = err as Error & { status?: number; details?: Record<string, unknown> };
-    if (apiErr.status === 409 && apiErr.details?.['reason'] === 'pending_executions') {
-      await handlePendingExecutions409(accountId, provider, apiErr);
+    try {
+      await api.deleteAccount(accountId);
+      await loadAccountsForProvider(provider);
       return;
+    } catch (err) {
+      const apiErr = err as Error & { status?: number; details?: Record<string, unknown> };
+      if (apiErr.status === 409 && apiErr.details?.['reason'] === 'pending_executions') {
+        await handlePendingExecutions409(accountId, provider, apiErr);
+        return;
+      }
+      console.error('Failed to delete account:', err);
+      showToast({ message: `Failed to delete account: ${(err as Error).message}`, kind: 'error' });
+      void loadAccountsForProvider(provider);
     }
-    console.error('Failed to delete account:', err);
-    showToast({ message: `Failed to delete account: ${(err as Error).message}`, kind: 'error' });
-    void loadAccountsForProvider(provider);
+  } finally {
+    inflightDeletes.delete(accountId);
   }
 }
 
@@ -1260,10 +1280,45 @@ async function handlePendingExecutions409(
   provider: AccountProvider,
   apiErr: Error & { status?: number; details?: Record<string, unknown> },
 ): Promise<void> {
+  // Defense-in-depth re-entrancy guard. deleteAccount already adds to the
+  // set before calling us, in which case `ownsLock` stays false and the
+  // outer try/finally owns cleanup. A direct external caller (e.g. tests
+  // or a future caller invoking this helper standalone) gets a fresh
+  // lock + a finally that releases it.
+  let ownsLock = false;
+  if (!inflightDeletes.has(accountId)) {
+    inflightDeletes.add(accountId);
+    ownsLock = true;
+  }
+  try {
+    await handlePendingExecutions409Inner(accountId, provider, apiErr);
+  } finally {
+    if (ownsLock) inflightDeletes.delete(accountId);
+  }
+}
+
+async function handlePendingExecutions409Inner(
+  accountId: string,
+  provider: AccountProvider,
+  apiErr: Error & { status?: number; details?: Record<string, unknown> },
+): Promise<void> {
   const rawCount = apiErr.details?.['pending_count'];
   const pendingCount = typeof rawCount === 'number' ? rawCount : Number(rawCount) || 0;
   const rawIDs = apiErr.details?.['pending_execution_ids'];
   const pendingIDs = Array.isArray(rawIDs) ? (rawIDs as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+
+  // No IDs to cancel (the server's list-call errored — see the Go-side
+  // PendingListErr_StillReturns409 path). Skip the "Cancel All N Pending"
+  // confirm entirely, since we can't enumerate cancellations, and point
+  // the operator at the History page instead.
+  if (pendingIDs.length === 0) {
+    showToast({
+      message: `Cannot auto-cancel: pending purchase IDs unavailable. Cancel them from the History page and try again.`,
+      kind: 'error',
+      timeout: null,
+    });
+    return;
+  }
 
   const proceed = await confirmDialog({
     title: 'Pending purchases must be cancelled',
@@ -1275,18 +1330,6 @@ async function handlePendingExecutions409(
     // Operator cancelled the second dialog. Refresh to keep the list in
     // sync; the account is unchanged.
     void loadAccountsForProvider(provider);
-    return;
-  }
-
-  if (pendingIDs.length === 0) {
-    // Backend reported a count but the list was unavailable (e.g. the
-    // list call errored on the server). The operator should cancel
-    // pending purchases via the History page instead.
-    showToast({
-      message: `Cannot auto-cancel: pending purchase IDs unavailable. Cancel them from the History page and try again.`,
-      kind: 'error',
-      timeout: null,
-    });
     return;
   }
 

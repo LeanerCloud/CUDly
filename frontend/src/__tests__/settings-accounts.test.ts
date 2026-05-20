@@ -1501,6 +1501,25 @@ describe('deleteAccount — pending-executions 409 handling (issue #606)', () =>
     return err;
   }
 
+  // Variant: backend returned a count but no IDs (the server-side list
+  // call failed — see TestDeleteAccount_PendingListErr_StillReturns409
+  // on the Go side). The UI cannot auto-cancel without the ID list.
+  function pendingExecutionsApiErrorNoIDs(count: number): Error & {
+    status: number;
+    details: Record<string, unknown>;
+  } {
+    const err = new Error(
+      `cannot delete account: ${count} pending purchase(s) must be cancelled first`,
+    ) as Error & { status: number; details: Record<string, unknown> };
+    err.status = 409;
+    err.details = {
+      pending_count: count,
+      reason: 'pending_executions',
+      // No pending_execution_ids on this path.
+    };
+    return err;
+  }
+
   // Click the Delete button on the only row of the rendered accounts table.
   async function clickDeleteOnFirstAccount(): Promise<void> {
     const container = document.getElementById('aws-accounts-list')!;
@@ -1613,6 +1632,40 @@ describe('deleteAccount — pending-executions 409 handling (issue #606)', () =>
     const lastErrorMsg = (errorCalls[errorCalls.length - 1]![0] as { message: string }).message;
     expect(lastErrorMsg).toContain('1 failed');
     expect(lastErrorMsg).toContain('Account NOT deleted');
+  });
+
+  test('409 with empty pending_execution_ids surfaces History-page fallback', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-1', name: 'Prod', external_id: '111111111111', enabled: true, provider: 'aws' },
+    ]);
+    // Only the first "Delete account?" confirm fires. There is no second
+    // confirm because the UI can't enumerate cancellations without IDs.
+    mockConfirmDialog.mockResolvedValueOnce(true);
+    (api.deleteAccount as jest.Mock).mockRejectedValueOnce(
+      pendingExecutionsApiErrorNoIDs(3),
+    );
+
+    await loadAccountsForProvider('aws');
+    await clickDeleteOnFirstAccount();
+    for (let i = 0; i < 5; i++) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    // Exactly one confirm dialog — no second one for cancellation.
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+    // No cancelPurchase calls (we have no IDs to cancel).
+    expect(api.cancelPurchase).not.toHaveBeenCalled();
+    // deleteAccount called only once (initial attempt; no retry).
+    expect(api.deleteAccount).toHaveBeenCalledTimes(1);
+    // Error toast references the History page so the operator knows where
+    // to go next.
+    const errorCalls = mockShowToast.mock.calls.filter(c => {
+      const opts = c[0] as { kind?: string };
+      return opts.kind === 'error';
+    });
+    expect(errorCalls.length).toBeGreaterThan(0);
+    const lastErrorMsg = (errorCalls[errorCalls.length - 1]![0] as { message: string }).message;
+    expect(lastErrorMsg).toEqual(expect.stringContaining('History'));
   });
 
   test('non-409 error path keeps original behaviour (no second dialog)', async () => {
