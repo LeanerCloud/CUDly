@@ -71,6 +71,12 @@ type Handler struct {
 	reshapeEC2Factory  func(aws.Config) reshapeEC2Client
 	reshapeRecsFactory func(aws.Config) reshapeRecsClient
 
+	// Optional Azure exchange client factory injected by tests. When nil
+	// (the production default), buildAzureExchangeClient uses
+	// azidentity.NewDefaultAzureCredential to construct a real
+	// armreservations-backed client.
+	azureExchangeFactory func(subscriptionID string) azureExchangeClient
+
 	// Optional account-resolver injection point used by the reshape
 	// handler integration test. When nil (the production default), the
 	// handler calls h.resolveAWSCloudAccountID which in turn invokes
