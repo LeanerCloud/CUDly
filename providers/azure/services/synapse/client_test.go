@@ -564,6 +564,106 @@ func TestExtractSynapsePricing_noReservation(t *testing.T) {
 	assert.Equal(t, "USD", currency)
 }
 
+// ---- parseReservationTermYears --------------------------------------------
+
+func TestParseReservationTermYears(t *testing.T) {
+	tests := []struct {
+		term    string
+		want    int
+		wantErr bool
+	}{
+		{"", 1, false},
+		{"1", 1, false},
+		{"1yr", 1, false},
+		{"1y", 1, false},
+		{"1YR", 1, false},
+		{"3", 3, false},
+		{"3yr", 3, false},
+		{"3y", 3, false},
+		{"3YR", 3, false},
+		{"2yr", 0, true},
+		{"5yr", 0, true},
+		{"P1Y", 0, true},
+		{"bogus", 0, true},
+	}
+	for _, tc := range tests {
+		got, err := parseReservationTermYears(tc.term)
+		if tc.wantErr {
+			assert.Error(t, err, "term=%q should be an error", tc.term)
+		} else {
+			require.NoError(t, err, "term=%q should not error", tc.term)
+			assert.Equal(t, tc.want, got, "term=%q", tc.term)
+		}
+	}
+}
+
+// ---- PurchaseCommitment input validation ----------------------------------
+
+func TestPurchaseCommitment_emptyResourceType(t *testing.T) {
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
+	rec := common.Recommendation{ResourceType: "", Term: "1yr", Count: 1}
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "resource type is required")
+}
+
+func TestPurchaseCommitment_zeroCount(t *testing.T) {
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
+	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 0}
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "quantity must be greater than zero")
+}
+
+func TestPurchaseCommitment_negativeCount(t *testing.T) {
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
+	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: -1}
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+}
+
+func TestPurchaseCommitment_unsupportedTerm(t *testing.T) {
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
+	rec := common.Recommendation{ResourceType: "DW1000c", Term: "5yr", Count: 1}
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "unsupported reservation term")
+}
+
+// ---- GetOfferingDetails: no reservation price ----------------------------
+
+func TestGetOfferingDetails_noReservationPrice(t *testing.T) {
+	onDemandOnlyJSON := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.50,
+				"unitPrice": 0.50,
+				"armRegionName": "eastus",
+				"type": "Consumption",
+				"skuName": "DW100c"
+			}
+		],
+		"NextPageLink": "",
+		"Count": 1
+	}`
+	mHTTP := &mockHTTPClient{}
+	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, onDemandOnlyJSON), nil)
+	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
+	rec := common.Recommendation{ResourceType: "DW100c", Term: "1yr"}
+	_, err := c.GetOfferingDetails(context.Background(), rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pricing data unavailable")
+}
+
 // ---- applyPurchaseAutomationTag -------------------------------------------
 
 func TestApplyPurchaseAutomationTag_withSource(t *testing.T) {
