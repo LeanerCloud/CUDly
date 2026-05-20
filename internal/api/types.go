@@ -732,9 +732,15 @@ type HistoryResponse struct {
 // non-completed states have committed money yet, so folding them in would
 // inflate "what I have spent".
 type HistorySummary struct {
-	TotalPurchases      int     `json:"total_purchases"`
-	TotalCompleted      int     `json:"total_completed"`
-	TotalPending        int     `json:"total_pending"`
+	TotalPurchases int `json:"total_purchases"`
+	TotalCompleted int `json:"total_completed"`
+	TotalPending   int `json:"total_pending"`
+	// TotalInProgress counts executions that have been approved but whose
+	// synchronous purchase has not finalised (status approved/running/paused).
+	// Tracked separately from pending and excluded from the dollar totals so an
+	// interrupted approval (issue #621) stays visible without inflating
+	// committed spend/savings.
+	TotalInProgress     int     `json:"total_in_progress"`
 	TotalFailed         int     `json:"total_failed"`
 	TotalExpired        int     `json:"total_expired"`
 	TotalUpfront        float64 `json:"total_upfront"`

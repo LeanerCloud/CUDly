@@ -63,18 +63,26 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 }
 
 // historyExecutionStatuses enumerates the PurchaseExecution statuses the
-// History view shows alongside completed purchases. "approved" and
-// "completed" are excluded because approval now executes synchronously
-// (issue #372): an Approve click drives the row through "approved" inside
-// a single HTTP request and lands on either "completed" (already in
-// purchase_history) or "failed" (which is in this list). Listing
-// "approved" would either duplicate a completed row or surface a ghost
-// row that no longer exists from the user's perspective. The remaining
-// states (pending, notified, failed, expired, cancelled) are terminal or
-// in-flight states the user needs audit-trail visibility into: a
-// cancelled purchase that simply vanishes is worse UX than a cancelled
-// row with a clear badge.
-var historyExecutionStatuses = []string{"pending", "notified", "failed", "expired", "cancelled"}
+// History view loads alongside completed purchases. Issue #372 assumed
+// approval executes synchronously (approved -> completed/failed inside one
+// HTTP request) and so excluded "approved"; issue #621 showed that
+// assumption breaks under interruption: a Lambda timeout or a crash mid-
+// execution leaves the row stuck in "approved"/"running"/"paused", in
+// neither purchase_history nor this list, and it silently vanishes — the
+// worst failure mode for a financial action (the user can't tell whether
+// the purchase fired and may re-approve). So we now load those in-flight
+// states too, rendered with a clear "in progress" badge rather than as a
+// (misleading) completed row.
+//
+// "completed" is also loaded, but fetchExecutionsAsHistory synthesises a
+// row for it ONLY when the execution carries a non-empty Error — the
+// audit-gap case where the purchase succeeded but its purchase_history
+// write failed (issue #621 secondary path). A normal completed execution
+// has Error=="" and is skipped here so it surfaces exactly once via its
+// purchase_history rows (no duplicate). The execution row's PurchaseID is
+// the ExecutionID while a purchase_history row's is the CommitmentID, so
+// the keys never collide even when both happen to render.
+var historyExecutionStatuses = []string{"pending", "notified", "approved", "running", "paused", "completed", "failed", "expired", "cancelled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -105,6 +113,14 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context) []config.Purchas
 	approver := h.resolvePendingApproverEmail(ctx)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
 	for _, exec := range executions {
+		// Dedup: a normal completed execution is already represented by its
+		// purchase_history rows. Skip it here so it shows exactly once. Only
+		// completed executions carrying an audit-gap Error (history write
+		// failed after a successful purchase, issue #621) are synthesised —
+		// those have no purchase_history row to collide with.
+		if exec.Status == "completed" && exec.Error == "" {
+			continue
+		}
 		exec = h.expireIfStale(ctx, exec)
 		out = append(out, executionToHistoryRow(exec, approver))
 	}
@@ -207,8 +223,26 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
 	case "cancelled":
 		annotateCancelled(row, exec, approver)
-	case "approved", "completed":
+	case "approved", "running":
+		// In-flight (issue #621): approved/running rows are NOT terminal —
+		// the synchronous AWS purchase is mid-execution or got interrupted
+		// (Lambda timeout / crash). Resolve who approved (so the user knows
+		// who to ask) and overlay an "in progress" note so the UI never
+		// renders this as a finished purchase.
 		annotateApproved(row, exec, approver)
+		row.StatusDescription = "approved — purchase in progress"
+	case "paused":
+		row.Approver = approver
+		row.StatusDescription = "purchase paused — resume or cancel from the plan"
+	case "completed":
+		// Only audit-gap completed executions reach here (fetchExecutionsAsHistory
+		// skips clean completed rows). exec.Error carries why the history write
+		// failed after a successful purchase — surface it so the purchase is
+		// visible despite the missing purchase_history row (issue #621).
+		annotateApproved(row, exec, approver)
+		if exec.Error != "" {
+			row.StatusDescription = "purchase completed but its history record could not be saved: " + exec.Error
+		}
 	}
 }
 
@@ -318,13 +352,19 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 	summary := HistorySummary{TotalPurchases: len(purchases)}
 	for _, p := range purchases {
 		// Non-completed rows count toward TotalPurchases and their specific
-		// bucket (pending / failed / expired) but are excluded from the
-		// dollar totals — the money hasn't been committed for any of those
-		// states. "completed" and unset (legacy DB rows that pre-date the
-		// status field) both count as completed.
+		// bucket (pending / in-progress / failed / expired) but are excluded
+		// from the dollar totals — the money hasn't been committed for any of
+		// those states. "completed" and unset (legacy DB rows that pre-date
+		// the status field) both count as completed.
 		switch p.Status {
 		case "pending", "notified":
 			summary.TotalPending++
+			continue
+		case "approved", "running", "paused":
+			// In-flight (issue #621). Not yet confirmed final — keep out of the
+			// committed dollar totals so an interrupted approval can't inflate
+			// reported spend/savings.
+			summary.TotalInProgress++
 			continue
 		case "failed":
 			summary.TotalFailed++
@@ -334,6 +374,19 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 			continue
 		}
 		summary.TotalCompleted++
+		// Audit-gap completed rows (issue #621) are synthesised execution rows
+		// whose purchase_history write failed; they uniquely carry a
+		// StatusDescription (real purchase_history rows never set it). Count
+		// them as completed (the money WAS committed and they must stay
+		// visible) but exclude their execution-level dollars: a partially-saved
+		// multi-rec execution can have BOTH some purchase_history rows AND this
+		// synthesised row, and adding the full execution total here would
+		// double-count the recs that did save. The dollars are surfaced via the
+		// individual purchase_history rows that succeeded; the synthesised row
+		// is the audit flag, not a money source.
+		if p.StatusDescription != "" {
+			continue
+		}
 		summary.TotalUpfront += p.UpfrontCost
 		summary.TotalMonthlySavings += p.EstimatedSavings
 	}

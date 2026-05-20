@@ -358,9 +358,33 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 		exec.Recommendations[i].PurchaseID = v.purchase.CommitmentID
 		totalSavings += rec.Savings
 		totalUpfront += rec.UpfrontCost
-		m.savePurchaseHistory(ctx, exec, plan, rec, v.purchase, accountID)
+		if histErr := m.savePurchaseHistory(ctx, exec, plan, rec, v.purchase, accountID); histErr != nil {
+			// The purchase SUCCEEDED but its purchase_history row failed to
+			// persist. Do NOT add this to purchaseErrors — that would flip the
+			// execution to "failed" and tempt the user to re-approve a purchase
+			// that already fired (the exact double-spend trap issue #621 warns
+			// about). Instead stamp an audit-gap marker on the execution so it
+			// stays "completed" but visible in the History view despite the
+			// missing purchase_history row.
+			recordHistoryAuditGap(exec, v.purchase.CommitmentID, histErr)
+		}
 	}
 	return totalSavings, totalUpfront, purchaseErrors
+}
+
+// recordHistoryAuditGap stamps exec.Error with a note that a successful
+// purchase's history record could not be saved (issue #621). The execution
+// keeps a successful status; the marker is what makes the row visible in the
+// History view (which synthesises completed executions that carry an Error).
+// Appends rather than overwrites so multiple failed history writes within one
+// execution are all recorded.
+func recordHistoryAuditGap(exec *config.PurchaseExecution, commitmentID string, histErr error) {
+	note := fmt.Sprintf("commitment %s purchased but its history record failed to save: %v", commitmentID, histErr)
+	if exec.Error == "" {
+		exec.Error = note
+	} else {
+		exec.Error += "; " + note
+	}
 }
 
 // normalizePurchaseSource canonicalizes exec.Source for downstream tag
@@ -425,7 +449,12 @@ func singleCloudAccountIDFromRecs(recs []config.RecommendationRecord) *string {
 	return found
 }
 
-func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec config.RecommendationRecord, result common.PurchaseResult, accountID string) {
+// savePurchaseHistory persists one purchase_history row for a successful
+// commitment. It returns the store error (rather than only logging it) so the
+// caller can record an audit gap on the execution: a swallowed failure here
+// used to leave the execution silently "completed" with no purchase_history
+// row, making the purchase invisible in the History view (issue #621).
+func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec config.RecommendationRecord, result common.PurchaseResult, accountID string) error {
 	historyRecord := &config.PurchaseHistoryRecord{
 		AccountID:        accountID,
 		PurchaseID:       result.CommitmentID,
@@ -448,7 +477,9 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 	}
 	if err := m.config.SavePurchaseHistory(ctx, historyRecord); err != nil {
 		logging.Errorf("Failed to save history: %v", err)
+		return err
 	}
+	return nil
 }
 
 func (m *Manager) sendPurchaseNotification(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, totalSavings, totalUpfront float64) error {
