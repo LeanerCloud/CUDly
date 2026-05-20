@@ -428,3 +428,100 @@ func shouldIncludeService(params common.RecommendationParams, service common.Ser
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+// MultiSubscriptionRecommendationsClient aggregates recommendations across
+// multiple Azure subscriptions. It is returned by GetRecommendationsClient
+// when no subscription is pinned and the authenticated principal has access
+// to more than one subscription.
+//
+// Each subscription's adapter runs concurrently under an errgroup so that a
+// single slow or erroring subscription does not delay the others. Per-sub
+// errors are logged and the successful results from other subscriptions are
+// still returned -- consistent with the per-service error-isolation policy
+// inside RecommendationsClientAdapter.GetRecommendations.
+type MultiSubscriptionRecommendationsClient struct {
+	adapters []*RecommendationsClientAdapter
+}
+
+// NewMultiSubscriptionRecommendationsClient builds a client that fans out
+// across all provided accounts. Returns an error when accounts is empty.
+func NewMultiSubscriptionRecommendationsClient(cred azcore.TokenCredential, accounts []common.Account) (*MultiSubscriptionRecommendationsClient, error) {
+	if len(accounts) == 0 {
+		return nil, fmt.Errorf("azure multi-subscription client: at least one account is required")
+	}
+
+	adapters := make([]*RecommendationsClientAdapter, 0, len(accounts))
+	for _, acct := range accounts {
+		adapter, err := NewRecommendationsClientAdapter(cred, acct.ID)
+		if err != nil {
+			// Should not happen -- accounts from GetAccounts always have non-empty IDs.
+			return nil, fmt.Errorf("azure multi-subscription client: failed to create adapter for subscription %q: %w", acct.ID, err)
+		}
+		adapters = append(adapters, adapter)
+	}
+
+	return &MultiSubscriptionRecommendationsClient{adapters: adapters}, nil
+}
+
+// GetRecommendations fans out the request to all subscription adapters and
+// merges the results. Per-subscription errors are logged as warnings; at
+// least one successful subscription must respond, otherwise the error from
+// the last failing subscription is returned.
+func (m *MultiSubscriptionRecommendationsClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+	type subResult struct {
+		subscriptionID string
+		recs           []common.Recommendation
+		err            error
+	}
+
+	results := make([]subResult, len(m.adapters))
+	g, gctx := errgroup.WithContext(ctx)
+
+	for i, adapter := range m.adapters {
+		i, adapter := i, adapter // capture loop vars
+		g.Go(func() error {
+			recs, err := adapter.GetRecommendations(gctx, params)
+			results[i] = subResult{
+				subscriptionID: adapter.subscriptionID,
+				recs:           recs,
+				err:            err,
+			}
+			return nil // isolate per-sub errors; collect them below
+		})
+	}
+
+	_ = g.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var merged []common.Recommendation
+	var lastErr error
+	succeeded := 0
+
+	for _, r := range results {
+		if r.err != nil {
+			logging.Warnf("Azure subscription %q: recommendations error: %v", r.subscriptionID, r.err)
+			lastErr = r.err
+			continue
+		}
+		merged = append(merged, r.recs...)
+		succeeded++
+	}
+
+	if succeeded == 0 && lastErr != nil {
+		return nil, fmt.Errorf("all Azure subscriptions failed; last error: %w", lastErr)
+	}
+
+	return merged, nil
+}
+
+// GetRecommendationsForService fans out a single-service request to all adapters.
+func (m *MultiSubscriptionRecommendationsClient) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
+	return m.GetRecommendations(ctx, common.RecommendationParams{Service: service})
+}
+
+// GetAllRecommendations fans out an all-services request to all adapters.
+func (m *MultiSubscriptionRecommendationsClient) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
+	return m.GetRecommendations(ctx, common.RecommendationParams{})
+}

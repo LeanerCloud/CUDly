@@ -94,6 +94,12 @@ type AzureProvider struct {
 	region              string // Default region for operations
 	subscriptionsClient SubscriptionsClient
 	credProvider        CredentialProvider
+
+	// cachedAccounts caches the result of the ARM subscriptions list so that
+	// GetServiceClient, GetRecommendationsClient, and GetRegions do not each
+	// trigger a separate network round-trip. Protected by accountsMu.
+	accountsMu     sync.RWMutex
+	cachedAccounts []common.Account
 }
 
 // NewAzureProvider creates a new Azure provider instance.
@@ -150,6 +156,92 @@ func (p *AzureProvider) SetCredentialProvider(credProvider CredentialProvider) {
 // SetCredential sets the credential directly (for testing)
 func (p *AzureProvider) SetCredential(cred azcore.TokenCredential) {
 	p.cred = cred
+}
+
+// InvalidateAccountsCache clears the cached subscriptions list. This is
+// primarily useful in tests that need to replace the subscriptionsClient
+// after accounts have already been fetched.
+func (p *AzureProvider) InvalidateAccountsCache() {
+	p.accountsMu.Lock()
+	p.cachedAccounts = nil
+	p.accountsMu.Unlock()
+}
+
+// getOrFetchAccounts returns the cached subscription list, fetching it from
+// the ARM subscriptions API on the first call (or after a cache invalidation).
+// Thread-safe: uses a double-checked locking pattern so concurrent callers
+// each receive the same list without triggering multiple API calls.
+//
+// Error policy: if the API call fails, the cache is NOT populated so that a
+// subsequent call retries. Transient ARM errors therefore do not permanently
+// disable subscription discovery for the lifetime of the provider.
+func (p *AzureProvider) getOrFetchAccounts(ctx context.Context) ([]common.Account, error) {
+	// Fast path: cache populated.
+	p.accountsMu.RLock()
+	if p.cachedAccounts != nil {
+		accounts := p.cachedAccounts
+		p.accountsMu.RUnlock()
+		return accounts, nil
+	}
+	p.accountsMu.RUnlock()
+
+	// Slow path: need to fetch. Acquire write lock and re-check.
+	p.accountsMu.Lock()
+	defer p.accountsMu.Unlock()
+
+	if p.cachedAccounts != nil {
+		return p.cachedAccounts, nil
+	}
+
+	accounts, err := p.fetchAccountsLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.cachedAccounts = accounts
+	return accounts, nil
+}
+
+// fetchAccountsLocked performs the actual ARM API call. Must be called with
+// accountsMu write-locked.
+func (p *AzureProvider) fetchAccountsLocked(ctx context.Context) ([]common.Account, error) {
+	var subClient SubscriptionsClient
+	if p.subscriptionsClient != nil {
+		subClient = p.subscriptionsClient
+	} else {
+		client, err := armsubscriptions.NewClient(p.cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
+		}
+		subClient = &realSubscriptionsClient{client: client}
+	}
+
+	accounts := make([]common.Account, 0)
+	pager := subClient.NewListPager(nil)
+
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list subscriptions: %w", err)
+		}
+
+		for _, sub := range page.Value {
+			if sub.SubscriptionID == nil || sub.DisplayName == nil {
+				continue
+			}
+
+			accounts = append(accounts, common.Account{
+				Provider:    common.ProviderAzure,
+				ID:          *sub.SubscriptionID,
+				Name:        *sub.DisplayName,
+				DisplayName: *sub.DisplayName,
+				// Azure does not have a clear "default" subscription concept.
+				// Users can set AZURE_SUBSCRIPTION_ID to specify which to use.
+				IsDefault: false,
+			})
+		}
+	}
+
+	return accounts, nil
 }
 
 // Name returns the provider name
@@ -228,51 +320,18 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-// GetAccounts returns all accessible Azure subscriptions
+// GetAccounts returns all accessible Azure subscriptions.
+//
+// Results are cached after the first successful call so that repeated
+// invocations (e.g. from GetServiceClient, GetRecommendationsClient, and
+// GetRegions in the same request) do not each trigger a separate ARM API
+// round-trip. The cache is keyed to the provider lifetime; create a new
+// provider to force a refresh.
 func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("Azure is not configured")
 	}
-
-	// Use injected client if available (for testing)
-	var subClient SubscriptionsClient
-	if p.subscriptionsClient != nil {
-		subClient = p.subscriptionsClient
-	} else {
-		client, err := armsubscriptions.NewClient(p.cred, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create subscriptions client: %w", err)
-		}
-		subClient = &realSubscriptionsClient{client: client}
-	}
-
-	accounts := make([]common.Account, 0)
-	pager := subClient.NewListPager(nil)
-
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list subscriptions: %w", err)
-		}
-
-		for _, sub := range page.Value {
-			if sub.SubscriptionID == nil || sub.DisplayName == nil {
-				continue
-			}
-
-			accounts = append(accounts, common.Account{
-				Provider:    common.ProviderAzure,
-				ID:          *sub.SubscriptionID,
-				Name:        *sub.DisplayName,
-				DisplayName: *sub.DisplayName,
-				// Azure doesn't have a clear "default" subscription concept
-				// Users can set AZURE_SUBSCRIPTION_ID environment variable to specify which to use
-				IsDefault: false,
-			})
-		}
-	}
-
-	return accounts, nil
+	return p.getOrFetchAccounts(ctx)
 }
 
 // GetRegions returns all available Azure regions using the Subscriptions API
@@ -350,17 +409,29 @@ func (p *AzureProvider) GetSupportedServices() []common.ServiceType {
 	}
 }
 
-// GetServiceClient returns a service client for the specified service and region
+// GetServiceClient returns a service client for the specified service and region.
+//
+// Subscription resolution order:
+//  1. p.subscriptionID (set from ProviderConfig.AzureSubscriptionID or .Profile)
+//  2. First subscription returned by GetAccounts (cache-backed after the first call)
+//
+// For multi-subscription scenarios the caller should enumerate subscriptions
+// via GetAccounts and create one provider per subscription (using
+// ProviderConfig.AzureSubscriptionID), rather than relying on the fallback.
+// The purchase execution path (internal/purchase) already does this.
 func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.ServiceType, region string) (provider.ServiceClient, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("Azure is not configured")
 	}
 
-	// Get subscription ID (use first available if not set)
+	// Get subscription ID (use first available if not set).
 	subscriptionID := p.subscriptionID
 	if subscriptionID == "" {
-		accounts, err := p.GetAccounts(ctx)
-		if err != nil || len(accounts) == 0 {
+		accounts, err := p.getOrFetchAccounts(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("no Azure subscriptions found: %w", err)
+		}
+		if len(accounts) == 0 {
 			return nil, fmt.Errorf("no Azure subscriptions found")
 		}
 		subscriptionID = accounts[0].ID
@@ -380,23 +451,43 @@ func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.Ser
 	}
 }
 
-// GetRecommendationsClient returns a recommendations client
+// GetRecommendationsClient returns a recommendations client.
+//
+// When a subscription is pinned (ProviderConfig.AzureSubscriptionID / .Profile),
+// a single-subscription RecommendationsClientAdapter is returned -- same
+// behaviour as before this change.
+//
+// When no subscription is pinned, all accessible subscriptions are discovered
+// via GetAccounts (cache-backed) and a MultiSubscriptionRecommendationsClient
+// is returned so recommendations are collected across every subscription the
+// authenticated principal can see. This matches the AWS behaviour where Cost
+// Explorer automatically spans the whole organisation.
 func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.RecommendationsClient, error) {
 	if !p.IsConfigured() {
 		return nil, fmt.Errorf("Azure is not configured")
 	}
 
-	// Get subscription ID
-	subscriptionID := p.subscriptionID
-	if subscriptionID == "" {
-		accounts, err := p.GetAccounts(ctx)
-		if err != nil || len(accounts) == 0 {
-			return nil, fmt.Errorf("no Azure subscriptions found")
-		}
-		subscriptionID = accounts[0].ID
+	// Pinned subscription: return a single-subscription adapter.
+	if p.subscriptionID != "" {
+		return NewRecommendationsClient(p.cred, p.subscriptionID)
 	}
 
-	return NewRecommendationsClient(p.cred, subscriptionID)
+	// No pinned subscription: discover all accessible subscriptions and fan
+	// out across them.
+	accounts, err := p.getOrFetchAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover Azure subscriptions: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, fmt.Errorf("no Azure subscriptions found")
+	}
+
+	if len(accounts) == 1 {
+		// Optimise the common single-subscription case.
+		return NewRecommendationsClient(p.cred, accounts[0].ID)
+	}
+
+	return NewMultiSubscriptionRecommendationsClient(p.cred, accounts)
 }
 
 // Register the Azure provider with the global registry

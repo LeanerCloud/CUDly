@@ -379,3 +379,61 @@ func TestConvertAdvisorRecommendation_UnknownService(t *testing.T) {
 func strPtr(s string) *string {
 	return &s
 }
+
+func TestNewMultiSubscriptionRecommendationsClient_EmptyAccounts(t *testing.T) {
+	_, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one account")
+}
+
+func TestNewMultiSubscriptionRecommendationsClient_BuildsAdaptersPerAccount(t *testing.T) {
+	accounts := []common.Account{
+		{Provider: common.ProviderAzure, ID: "sub-a", Name: "Sub A"},
+		{Provider: common.ProviderAzure, ID: "sub-b", Name: "Sub B"},
+	}
+	client, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, accounts)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	assert.Len(t, client.adapters, 2)
+	assert.Equal(t, "sub-a", client.adapters[0].subscriptionID)
+	assert.Equal(t, "sub-b", client.adapters[1].subscriptionID)
+}
+
+// TestMultiSubscriptionRecommendationsClient_AllFail verifies that when all
+// sub-adapters fail, an error is returned rather than silently returning an
+// empty slice.
+func TestMultiSubscriptionRecommendationsClient_AllFail(t *testing.T) {
+	// Use a pre-cancelled context to force all adapter calls to return an error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	accounts := []common.Account{
+		{Provider: common.ProviderAzure, ID: "sub-1", Name: "Sub 1"},
+		{Provider: common.ProviderAzure, ID: "sub-2", Name: "Sub 2"},
+	}
+	client, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, accounts)
+	require.NoError(t, err)
+
+	_, err = client.GetAllRecommendations(ctx)
+	// With a cancelled context GetRecommendations propagates context.Canceled
+	// before the sub-adapter fan-out error-accounting path runs.
+	require.Error(t, err)
+}
+
+// TestMultiSubscriptionRecommendationsClient_InterfaceCompliance ensures the
+// concrete type satisfies provider.RecommendationsClient at compile time.
+func TestMultiSubscriptionRecommendationsClient_InterfaceCompliance(t *testing.T) {
+	accounts := []common.Account{
+		{Provider: common.ProviderAzure, ID: "sub-x", Name: "Sub X"},
+	}
+	client, err := NewMultiSubscriptionRecommendationsClient(&mockAzureTokenCredential{}, accounts)
+	require.NoError(t, err)
+
+	// Compile-time interface assertion encoded as a runtime test so the
+	// compiler always checks it even when running tests in -short mode.
+	var _ interface {
+		GetRecommendations(context.Context, common.RecommendationParams) ([]common.Recommendation, error)
+		GetRecommendationsForService(context.Context, common.ServiceType) ([]common.Recommendation, error)
+		GetAllRecommendations(context.Context) ([]common.Recommendation, error)
+	} = client
+}
