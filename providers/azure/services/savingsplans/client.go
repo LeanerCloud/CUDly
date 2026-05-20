@@ -422,9 +422,11 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 	case "Partial Upfront", "partial-upfront":
 		upfrontCost = totalCost * 0.5
 		recurringCost = (totalCost * 0.5) / hoursInTerm
-	default: // "No Upfront" / "no-upfront" and anything else
+	case "No Upfront", "no-upfront":
 		upfrontCost = 0
 		recurringCost = totalCost / hoursInTerm
+	default:
+		return nil, fmt.Errorf("unsupported payment option: %s", rec.PaymentOption)
 	}
 
 	return &common.OfferingDetails{
