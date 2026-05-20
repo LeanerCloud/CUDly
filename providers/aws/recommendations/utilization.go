@@ -10,16 +10,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// RIUtilization holds utilization data for a single Reserved Instance.
-type RIUtilization struct {
-	ReservedInstanceID string  `json:"reserved_instance_id"`
-	UtilizationPercent float64 `json:"utilization_percent"`
-	PurchasedHours     float64 `json:"purchased_hours"`
-	TotalActualHours   float64 `json:"total_actual_hours"`
-	UnusedHours        float64 `json:"unused_hours"`
-}
+// RIUtilization is an alias for common.RIUtilization so existing callers that
+// import this package continue to compile without changes. The canonical
+// definition lives in pkg/common so the Azure provider can return the same
+// type without a cross-provider dependency.
+type RIUtilization = common.RIUtilization
 
 // riAccumulator aggregates utilization hours across multiple daily entries for one RI.
 type riAccumulator struct {

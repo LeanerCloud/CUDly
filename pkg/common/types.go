@@ -483,6 +483,41 @@ func (d SavingsPlanDetails) GetDetailDescription() string {
 	return d.PlanType
 }
 
+// RIUtilization holds utilization data for a single Reserved Instance over a
+// lookback period. The struct is defined here (rather than in a provider
+// package) so both AWS and Azure can return the same type and callers can
+// treat either provider's results uniformly without a cross-provider import.
+//
+// AWS field mapping (Cost Explorer GetReservationUtilization):
+//
+//	ReservedInstanceID  <- dimension key (SUBSCRIPTION_ID group value)
+//	PurchasedHours      <- UtilizationsByTime[].Groups[].Utilization.PurchasedHours
+//	TotalActualHours    <- UtilizationsByTime[].Groups[].Utilization.TotalActualHours
+//	UnusedHours         <- UtilizationsByTime[].Groups[].Utilization.UnusedHours
+//	UtilizationPercent  <- derived: (TotalActualHours / PurchasedHours) * 100
+//
+// Azure field mapping (Consumption ReservationsSummaries, monthly grain):
+//
+//	ReservedInstanceID  <- Properties.ReservationID
+//	PurchasedHours      <- Properties.ReservedHours  (sum across periods)
+//	TotalActualHours    <- Properties.UsedHours       (sum across periods)
+//	UnusedHours         <- PurchasedHours - TotalActualHours
+//	UtilizationPercent  <- derived: (TotalActualHours / PurchasedHours) * 100
+//	SKUName             <- Properties.SKUName (Azure-only; empty string for AWS)
+type RIUtilization struct {
+	ReservedInstanceID string  `json:"reserved_instance_id"`
+	UtilizationPercent float64 `json:"utilization_percent"`
+	PurchasedHours     float64 `json:"purchased_hours"`
+	TotalActualHours   float64 `json:"total_actual_hours"`
+	UnusedHours        float64 `json:"unused_hours"`
+	// SKUName is the Azure reservation SKU (e.g. "Standard_D2s_v3"). It is
+	// empty for AWS RIs because Cost Explorer does not return the instance
+	// type on the utilization response. Consumers that need it for Azure
+	// can populate downstream display from this field; AWS consumers can
+	// join on ReservedInstanceID via the EC2 DescribeReservedInstances API.
+	SKUName string `json:"sku_name,omitempty"`
+}
+
 // AuditRecord is one line in the JSON-lines audit log.
 // Status values: "success", "error", "skipped" (dry-run), "skipped_covered" (idempotency).
 type AuditRecord struct {
