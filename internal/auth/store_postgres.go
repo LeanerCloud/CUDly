@@ -97,7 +97,7 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 
 	// Substitute an empty slice for nil so the Postgres TEXT[] column
 	// stays at its default '{}' rather than NULL. The schema declares
-	// the column NOT NULL DEFAULT '{}' (migration 000051); passing a
+	// the column NOT NULL DEFAULT '{}' (migration 000052); passing a
 	// raw nil here triggers "violates not-null constraint" on insert.
 	recoveryCodes := user.MFARecoveryCodes
 	if recoveryCodes == nil {
