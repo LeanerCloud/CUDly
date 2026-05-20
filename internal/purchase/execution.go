@@ -558,22 +558,36 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	return result, nil
 }
 
-// mapServiceType maps a service string to common.ServiceType
+// mapServiceType maps a service string to common.ServiceType.
+//
+// Returns the provider-neutral canonical types (ServiceCompute,
+// ServiceRelationalDB, ServiceCache, ServiceSearch, ServiceDataWarehouse)
+// rather than the legacy AWS-specific aliases (ServiceEC2, ServiceRDS,
+// ServiceElastiCache, ServiceOpenSearch, ServiceRedshift). Both the AWS
+// and Azure provider switches accept the canonical types; only the AWS
+// switch accepts the legacy aliases (see providers/aws/provider.go +
+// providers/azure/provider.go). Returning the AWS alias here caused
+// every Azure VM purchase to fail at provider.GetServiceClient with
+// "unsupported service: ec2" because rec.Service="compute" on an Azure
+// rec was mapped to ServiceEC2 and the Azure provider's switch only
+// accepts ServiceCompute.
+//
+// ServiceMemoryDB stays as-is because Azure has no MemoryDB equivalent.
 func (m *Manager) mapServiceType(service string) common.ServiceType {
 	if svc, ok := mapSavingsPlansSlug(service); ok {
 		return svc
 	}
 	switch service {
 	case "ec2", "compute":
-		return common.ServiceEC2
+		return common.ServiceCompute
 	case "rds", "relational-db":
-		return common.ServiceRDS
+		return common.ServiceRelationalDB
 	case "elasticache", "cache":
-		return common.ServiceElastiCache
+		return common.ServiceCache
 	case "opensearch", "search":
-		return common.ServiceOpenSearch
+		return common.ServiceSearch
 	case "redshift", "data-warehouse":
-		return common.ServiceRedshift
+		return common.ServiceDataWarehouse
 	case "memorydb":
 		return common.ServiceMemoryDB
 	default:

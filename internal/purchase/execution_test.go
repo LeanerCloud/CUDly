@@ -68,7 +68,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 
 	// Mock provider factory to return a mock provider
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "us-east-1").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
@@ -128,7 +128,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 		Account: aws.String("123456789012"),
 	}, nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "us-east-1").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx,
 		mock.AnythingOfType("common.Recommendation"),
 		common.PurchaseOptions{Source: common.PurchaseSourceWeb},
@@ -178,7 +178,7 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 		Account: aws.String("123456789012"),
 	}, nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "us-east-1").Return(mockServiceClient, nil)
 	// Expect EMPTY source, not "cudly-evil" — NormalizeSource must have wiped it.
 	mockServiceClient.On("PurchaseCommitment", ctx,
 		mock.AnythingOfType("common.Recommendation"),
@@ -518,7 +518,7 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Times(2)
 
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockProvider.On("GetServiceClient", ctx, common.ServiceCompute, "us-east-1").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success: true, CommitmentID: "ri-99999",
 	}, nil)
@@ -746,7 +746,7 @@ func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 	// Only account-V reaches the provider; account-I fails at credential resolution.
 	// Use .Once() so testify fails if the factory is called for account-I as well.
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil).Once()
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Once()
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "us-east-1").Return(mockServiceClient, nil).Once()
 	mockServiceClient.On("PurchaseCommitment", ctx,
 		mock.AnythingOfType("common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
@@ -911,7 +911,7 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 	}
 
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil).Twice()
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Twice()
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "us-east-1").Return(mockServiceClient, nil).Twice()
 
 	// Each PurchaseCommitment call blocks for perCallDelay. Under serial
 	// execution the total elapsed time would exceed serialBoundary; under
@@ -1033,7 +1033,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 			return cfg != nil && cfg.ProviderOverride != nil
 		}),
 	).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "eastus").Return(mockServiceClient, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx,
 		mock.AnythingOfType("common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
