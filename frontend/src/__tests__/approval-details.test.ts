@@ -203,6 +203,34 @@ describe('renderApprovalDetailsBody', () => {
     expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('2'); // Accounts
   });
 
+  // Regression for CR pass-1 (PR #611): host-account rows must be
+  // counted in the header, and orphan "Account deleted" rows must not.
+  it('counts "Accounts: 1" for an all-host-account purchase (host AWS account, no cloud_account_id)', () => {
+    const rec = makeRec({ provider: 'aws' });
+    delete rec.cloud_account_id;
+    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '909626172446');
+    const stats = body.querySelectorAll('.approval-details-stat');
+    // Stat index 5 = Accounts.
+    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('1');
+  });
+
+  it('counts "Accounts: 2" for a purchase with one host row and one named-account row', () => {
+    const hostRec = makeRec({ id: 'r1', provider: 'aws' });
+    delete hostRec.cloud_account_id;
+    const namedRec = makeRec({ id: 'r2', provider: 'aws', cloud_account_id: 'acct-uuid-1' });
+    const body = renderApprovalDetailsBody(makeDetails([hostRec, namedRec]), new Map(), '909626172446');
+    const stats = body.querySelectorAll('.approval-details-stat');
+    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('2');
+  });
+
+  it('does NOT count an orphan row (cloud_account_id nil AND provider !== aws) in the Accounts total', () => {
+    const orphanRec = makeRec({ provider: 'azure' });
+    delete orphanRec.cloud_account_id;
+    const body = renderApprovalDetailsBody(makeDetails([orphanRec]), new Map(), '909626172446');
+    const stats = body.querySelectorAll('.approval-details-stat');
+    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('0');
+  });
+
   it('falls back to a legacy text sentence when recommendations are empty', () => {
     const details = makeDetails([]);
     const body = renderApprovalDetailsBody(details, new Map());

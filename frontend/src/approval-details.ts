@@ -64,7 +64,7 @@ export function renderApprovalDetailsBody(details: PurchaseDetails, accountsById
     return root;
   }
 
-  root.appendChild(renderApprovalDetailsHeader(details, recs));
+  root.appendChild(renderApprovalDetailsHeader(details, recs, hostAWSAccountID));
   root.appendChild(renderApprovalDetailsTable(recs, accountsById, hostAWSAccountID));
   return root;
 }
@@ -78,7 +78,7 @@ export function renderApprovalDetailsBody(details: PurchaseDetails, accountsById
  * the sum of per-row monthly savings it's surfaced as a tooltip on
  * the stat so the user has a path to the underlying numbers.
  */
-function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendation[]): HTMLElement {
+function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendation[], hostAWSAccountID?: string): HTMLElement {
   const header = document.createElement('div');
   header.className = 'approval-details-header';
 
@@ -90,7 +90,12 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
   let totalMonthly = 0;
   for (const rec of recs) {
     if (rec.provider) providers.add(rec.provider);
-    if (rec.cloud_account_id) accounts.add(rec.cloud_account_id);
+    // Mirror the table's formatAccountLabel logic: if the rec has no
+    // cloud_account_id but is an AWS rec and we know the host account,
+    // count the host account — otherwise skip (orphan "Account deleted"
+    // rows must not inflate the count).
+    const effectiveAccountID = rec.cloud_account_id ?? (rec.provider === 'aws' && hostAWSAccountID ? hostAWSAccountID : null);
+    if (effectiveAccountID) accounts.add(effectiveAccountID);
     // Defensive ?? 0: the wire type is wider than the TS one and a
     // legacy row could carry null; a single NaN here would poison
     // the entire header total.
