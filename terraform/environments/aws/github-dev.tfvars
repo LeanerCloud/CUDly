@@ -18,11 +18,14 @@ compute_platform    = "lambda"
 enable_docker_build = true # Build and push image via terraform apply on the runner
 
 # Lambda Configuration
-lambda_memory_size            = 2048
-lambda_timeout                = 60
-lambda_reserved_concurrency   = -1
-lambda_log_retention_days     = 7
-lambda_enable_function_url    = true
+lambda_memory_size          = 2048
+lambda_timeout              = 60
+lambda_reserved_concurrency = -1
+lambda_log_retention_days   = 7
+lambda_enable_function_url  = true
+# TODO(#424): flip to "AWS_IAM" once enable_cdn = true and CloudFront is deployed for this env.
+# Switching to AWS_IAM without a CloudFront OAC in place makes the Function URL unreachable (HTTP 403).
+# Steps: set enable_cdn = true, update lambda_allowed_origins to the CloudFront domain, then flip this.
 lambda_function_url_auth_type = "NONE"
 # Current deployed dev origin (Lambda Function URL) + local Webpack dev server.
 # Wildcard is rejected by the module (allow_credentials=true + * = any-origin CSRF).

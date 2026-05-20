@@ -204,3 +204,32 @@ module "compute_fargate" {
   # Build dependency must be explicit — image_uri is computed before docker push completes
   depends_on = [module.networking, module.database, module.secrets, module.build]
 }
+
+# ==============================================
+# Lambda Function URL: CloudFront OAC permission
+# ==============================================
+#
+# This permission lives at the environment layer (not inside the lambda module)
+# because both module.compute_lambda and module.frontend must be fully resolved
+# before the permission can reference both the Lambda function name and the
+# CloudFront distribution ARN. Placing it inside either module would create a
+# dependency cycle (Lambda URL is module.frontend's origin; distribution ARN
+# would need to feed back into the lambda module).
+#
+# Created only when:
+#   - compute platform is lambda (function URL is active)
+#   - auth_type is AWS_IAM (IAM gate is enforced on the Function URL)
+#   - CDN module is deployed (distribution ARN is available)
+#
+# When enable_cdn = false the Function URL remains "NONE" in all current envs so
+# this resource is always count = 0 until both conditions are true together.
+resource "aws_lambda_permission" "function_url_cloudfront" {
+  count = var.compute_platform == "lambda" && var.lambda_function_url_auth_type == "AWS_IAM" && var.enable_cdn ? 1 : 0
+
+  statement_id           = "FunctionURLAllowCloudFront"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = module.compute_lambda[0].function_name
+  principal              = "cloudfront.amazonaws.com"
+  source_arn             = module.frontend[0].cloudfront_distribution_arn
+  function_url_auth_type = "AWS_IAM"
+}
