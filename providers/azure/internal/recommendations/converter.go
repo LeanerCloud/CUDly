@@ -109,8 +109,12 @@ func extractLegacy(rec *armconsumption.LegacyReservationRecommendation) *Extract
 		out.CommitmentCost = *props.TotalCostWithReservedInstances
 	}
 	if props.NetSavings != nil {
-		// See package godoc — pass-through; existing downstream consumers
-		// treat EstimatedSavings as lookback-period ≈ monthly.
+		// NetSavings is the savings from buying the full recommended quantity.
+		// Azure Advisor sizes recommendations for 100% coverage of the
+		// subscription's historical demand; downstream consumers treat this as
+		// the lookback-period monthly baseline. This is the 100%-coverage
+		// contract the dashboard scaler in summarizeRecommendationsWithCoverage
+		// depends on (issue #215 audit).
 		out.EstimatedSavings = *props.NetSavings
 	}
 	// Azure Reservation recommendations are always all-upfront (single payment,

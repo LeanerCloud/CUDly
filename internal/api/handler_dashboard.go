@@ -128,9 +128,20 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // Coverage > 100 is capped at 100 so a misconfigured override cannot
 // inflate the headline "potential savings" beyond the raw rec total.
 //
-// Note: assumes recs are generated at 100% coverage. A follow-up on
-// dashboard accuracy (see #196 references) will revisit if rec
-// generation becomes coverage-aware.
+// CONTRACT: every rec's Savings field represents 100%-coverage potential
+// savings. All three upstream APIs satisfy this contract:
+//   - AWS Cost Explorer GetReservationPurchaseRecommendation returns a
+//     recommended quantity sized for ~100% coverage of historical demand
+//     (cmd/helpers.go ApplyCoverage comment, issue #215 audit).
+//   - Azure Consumption Reservation Recommendations (NetSavings) returns
+//     the savings from purchasing the full recommended quantity.
+//   - GCP Recommender PrimaryImpact.CostProjection returns the projected
+//     savings from the recommended committed-use discount.
+//
+// The read-side scaling here (by the operator-configured coverage %) is
+// therefore correct: it projects "how much would I save if I only bought
+// RIs to cover X% of my instances" against the 100%-coverage baseline
+// that every provider gives us. Verified by TestSummarizeRecommendationsWithCoverage_100PctContract.
 func summarizeRecommendationsWithCoverage(
 	recs []config.RecommendationRecord,
 	coverageByKey map[string]float64,

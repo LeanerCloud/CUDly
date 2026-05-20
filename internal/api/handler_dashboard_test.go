@@ -259,6 +259,56 @@ func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
 	}
 }
 
+// TestSummarizeRecommendationsWithCoverage_100PctContract pins the read-side
+// scaling math against the 100%-coverage contract documented on
+// summarizeRecommendationsWithCoverage (issue #215).
+//
+// All three upstream APIs (AWS CE, Azure Advisor, GCP Recommender) return
+// savings sized for 100% coverage of historical demand. The per-account
+// coverage override in coverageByKey is therefore a user-intent projection:
+// "if I only commit to X% of my instances, my savings would be rec.Savings * X/100."
+//
+// This test seeds two accounts at known savings baselines and asserts that
+// the dashboard total equals the sum of the per-account scaled amounts.
+// A bug in the scaling formula (e.g., double-applying coverage, off-by-factor-100)
+// would be caught here.
+func TestSummarizeRecommendationsWithCoverage_100PctContract(t *testing.T) {
+	acctA := "acct-A"
+	acctB := "acct-B"
+	keyA := config.AccountConfigKey(acctA, "aws", "ec2")
+	keyB := config.AccountConfigKey(acctB, "aws", "ec2")
+
+	// Both recs carry the 100%-coverage savings from AWS CE.
+	recs := []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Savings: 1000.0, CloudAccountID: &acctA},
+		{Provider: "aws", Service: "ec2", Savings: 500.0, CloudAccountID: &acctB},
+	}
+
+	// Operator configured: cover 70% of acct-A, 90% of acct-B.
+	coverage := map[string]float64{keyA: 70, keyB: 90}
+
+	total, byService := summarizeRecommendationsWithCoverage(recs, coverage)
+
+	wantA := 1000.0 * 70.0 / 100.0 // 700
+	wantB := 500.0 * 90.0 / 100.0  // 450
+	wantTotal := wantA + wantB     // 1150
+
+	assert.InDelta(t, wantTotal, total, 0.001,
+		"dashboard total = sum of per-account (rec.Savings * coverage/100); "+
+			"double-applying coverage or factor-100 bug would produce the wrong figure")
+	assert.InDelta(t, wantTotal, byService["ec2"].PotentialSavings, 0.001)
+
+	// Sanity: full coverage (100%) returns the raw savings unchanged.
+	fullTotal, _ := summarizeRecommendationsWithCoverage(recs, map[string]float64{keyA: 100, keyB: 100})
+	assert.InDelta(t, 1500.0, fullTotal, 0.001,
+		"coverage=100 must not scale savings down (100/100 = 1)")
+
+	// Sanity: nil coverage map returns the raw total without scaling.
+	rawTotal, _ := summarizeRecommendationsWithCoverage(recs, nil)
+	assert.InDelta(t, 1500.0, rawTotal, 0.001,
+		"nil coverage map must return un-scaled savings (issue #201 contract)")
+}
+
 func TestHandler_getUpcomingPurchases(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
