@@ -96,12 +96,21 @@ jest.mock('../confirmDialog', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
 }));
 
+// Archera offer modal: after issue #499 follow-up the offer must fire on the
+// success path of the approval-submission call (right after the user approves
+// the pre-purchase confirmation), not after the async execution completes.
+jest.mock('../archera', () => ({
+  handleArcheraDeeplink: jest.fn(),
+  openArcheraOfferModal: jest.fn(),
+}));
+
 // ── imports ───────────────────────────────────────────────────────────────────
 
 import { setupEventListeners } from '../app';
 import * as api from '../api';
 import * as recs from '../recommendations';
 import * as plans from '../plans';
+import * as archera from '../archera';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -233,6 +242,36 @@ describe('handleExecutePurchase — single-record path', () => {
 
     expect(lastToastKind()).toBe('warning');
     expect(lastToastMessage()).toContain('no notification email configured');
+  });
+
+  // Issue #499 follow-up: offer timing moved from post-execution to the
+  // approval-submission success path (right after the user approves the
+  // pre-purchase confirmation).
+  test('opens Archera offer modal once the approval submission succeeds', async () => {
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-ok',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(archera.openArcheraOfferModal).toHaveBeenCalledTimes(1);
+    expect(archera.openArcheraOfferModal).toHaveBeenCalledWith('purchase');
+  });
+
+  test('does NOT open Archera offer modal when the approval submission throws', async () => {
+    (api.executePurchase as jest.Mock).mockRejectedValue(new Error('boom'));
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(lastToastKind()).toBe('error');
+    expect(archera.openArcheraOfferModal).not.toHaveBeenCalled();
   });
 });
 
@@ -408,5 +447,37 @@ describe('handleFanOutExecute — fan-out path', () => {
     const msg = lastToastMessage();
     expect(lastToastKind()).toBe('error');
     expect(msg).toContain('no SMTP config');
+    // Issue #499 follow-up: with zero successful submissions there is nothing
+    // to insure, so the offer must not fire.
+    expect(archera.openArcheraOfferModal).not.toHaveBeenCalled();
+  });
+
+  // Issue #499 follow-up: offer fires when at least one bucket's approval
+  // submission succeeds, immediately after the user approves the confirmation.
+  test('opens Archera offer modal when at least one bucket succeeds', async () => {
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([
+      buildBucket('a'),
+      buildBucket('b'),
+    ]);
+
+    (api.executePurchase as jest.Mock)
+      .mockResolvedValueOnce({
+        execution_id: 'exec-a',
+        status: 'queued',
+        email_sent: true,
+        approval_recipient: 'alice@example.com',
+      })
+      .mockResolvedValueOnce({
+        execution_id: 'exec-b',
+        status: 'failed',
+        email_reason: 'backend error',
+      });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(archera.openArcheraOfferModal).toHaveBeenCalledTimes(1);
+    expect(archera.openArcheraOfferModal).toHaveBeenCalledWith('purchase');
   });
 });

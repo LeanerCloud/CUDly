@@ -2,10 +2,11 @@
  * Archera Insurance integration: post-action offer modal + education page.
  *
  * This module provides:
- *   - openArcheraOfferModal(context): small modal shown AFTER a successful
- *     purchase-approval submission or plan creation. Offers "Sign up at
- *     Archera →" (opens archera.ai in a new tab) or "No thanks". Carries
- *     a "Learn more" link to the full education page below the buttons.
+ *   - openArcheraOfferModal(context): small modal shown immediately after
+ *     the user approves a purchase in the pre-purchase confirmation and the
+ *     approval-submission call succeeds. Offers "Sign up at Archera →"
+ *     (opens archera.ai in a new tab) or "No thanks". Carries a "Learn more"
+ *     link to the full education page below the buttons.
  *   - openArcheraPage(): the full education page rendered as a
  *     full-viewport overlay (#archera-page-container). Opened from the
  *     offer modal's "Learn more" link and from deep-linked email URLs.

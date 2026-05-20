@@ -385,14 +385,14 @@ async function handleExecutePurchase(): Promise<void> {
         timeout: 10_000,
       });
     }
-    await loadDashboard();
-    // Offer Archera Insurance after a successful approval submission.
-    // The actual cloud commitment isn't charged until the approver clicks
-    // the email link, but the user has now committed their intent — this
-    // is the natural moment to surface optional insurance coverage.
-    // Only fires on the success path; on email_sent=false we still opened
-    // a pending execution so the offer is still relevant.
+    // Offer Archera Insurance immediately after the user approves the
+    // pre-purchase confirmation and the approval-submission call succeeds
+    // (issue #499 follow-up). Firing here, rather than after the async
+    // email-link execution completes, surfaces the optional coverage at
+    // the moment the user has committed their intent. Gated on the
+    // executePurchase success path so a failed submission shows no offer.
     openArcheraOfferModal('purchase');
+    await loadDashboard();
   } catch (error) {
     const err = error as Error;
     showToast({ message: `Failed to send purchase for approval: ${err.message}`, kind: 'error' });
@@ -515,14 +515,17 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
       timeout: null,
     });
   }
-  await loadDashboard();
-
-  // Offer Archera Insurance when at least one bucket succeeded. Skipping
-  // the offer on the all-fail path keeps the modal from layering on top
-  // of an error toast for a user who has nothing to insure yet.
+  // Offer Archera Insurance when at least one bucket's approval submission
+  // succeeded (issue #499 follow-up). Fires right after the user approves
+  // the pre-purchase confirmation and the calls resolve, not after the
+  // async email-link execution completes. Skipping the all-fail path keeps
+  // the modal from layering on top of an error toast for a user who has
+  // nothing to insure yet.
   if (succeeded > 0) {
     openArcheraOfferModal('purchase');
   }
+
+  await loadDashboard();
 
   if (executeBtn) {
     executeBtn.disabled = false;
