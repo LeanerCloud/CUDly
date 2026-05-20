@@ -47,7 +47,36 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return fmt.Errorf("approval token has expired")
 	}
 
+	// Preflight guard (issue #609): reject non-AWS orphan executions before
+	// the cloud SDK is reached. See orphanExecutionError for the full rationale.
+	if err := orphanExecutionError(execution); err != nil {
+		return err
+	}
+
 	return m.ApproveAndExecute(ctx, executionID, actor)
+}
+
+// orphanExecutionError returns a descriptive error when the execution's
+// CloudAccountID is nil and the provider is explicitly non-AWS (issue #609).
+// AWS executions with a nil CloudAccountID are passed through because the
+// ambient-host-account fallback from PR #607/#604 handles them. Empty
+// provider is treated as AWS (legacy rows pre-dating multi-cloud support).
+//
+// Extracted from ApproveExecution to keep that function below the gocyclo
+// threshold — same pattern as loadCancelableExecution.
+func orphanExecutionError(execution *config.PurchaseExecution) error {
+	if execution.CloudAccountID != nil {
+		return nil
+	}
+	if len(execution.Recommendations) == 0 {
+		return nil
+	}
+	provider := execution.Recommendations[0].Provider
+	if provider == "" || provider == "aws" {
+		return nil
+	}
+	return fmt.Errorf("execution %s references an account that no longer exists (provider: %s): cancel this purchase — it cannot execute",
+		execution.ExecutionID, provider)
 }
 
 // ApproveAndExecute atomically flips a pending/notified execution to

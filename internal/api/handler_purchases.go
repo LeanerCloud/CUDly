@@ -263,18 +263,41 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	return &StatusResponse{Status: "cancelled"}, nil
 }
 
-// Purchase action handlers
-func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
-	if err := validateUUID(execID); err != nil {
-		return nil, err
-	}
-
+// loadApproveExecution fetches an execution by ID, returns a 404 ClientError
+// when not found, and then runs the issue-#609 orphan preflight check.
+// Extracted from approvePurchase to keep that function below the gocyclo
+// threshold — same pattern as loadCancelableExecution in the purchase package.
+func (h *Handler) loadApproveExecution(ctx context.Context, execID string) (*config.PurchaseExecution, error) {
 	execution, err := h.config.GetExecutionByID(ctx, execID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
 	}
 	if execution == nil {
 		return nil, NewClientError(404, "execution not found")
+	}
+	// Preflight (issue #609): reject non-AWS orphan executions before the
+	// cloud SDK is reached. AWS has the ambient-host-account fallback so
+	// only non-AWS providers are blocked. Empty provider = legacy AWS row.
+	if execution.CloudAccountID == nil && len(execution.Recommendations) > 0 {
+		if p := execution.Recommendations[0].Provider; p != "" && p != "aws" {
+			return nil, NewClientError(409, fmt.Sprintf(
+				"execution %s references an account that no longer exists (provider: %s). Cancel this purchase — it cannot execute.",
+				execution.ExecutionID, p,
+			))
+		}
+	}
+	return execution, nil
+}
+
+// Purchase action handlers
+func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
+	if err := validateUUID(execID); err != nil {
+		return nil, err
+	}
+
+	execution, err := h.loadApproveExecution(ctx, execID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Three-mode dispatch — same shape as cancelPurchase (issue #46) and
