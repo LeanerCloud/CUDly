@@ -7,9 +7,11 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -85,6 +87,15 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Get list of regions to check
 	regions, err := r.getRegions(ctx)
 	if err != nil {
+		// Permission errors (403 / missing compute.regions.list) mean the
+		// service account lacks Compute Viewer on this project. Log at Warn
+		// so it doesn't spam as ERROR in Lambda — the application-layer auth
+		// still works; only GCP recommendations for this account are skipped.
+		// See issue #247.
+		if isPermissionError(err) {
+			logging.Warnf("GCP account %s: skipping recommendations — insufficient Compute permission to list regions (grant roles/compute.viewer): %v", r.projectID, err)
+			return []common.Recommendation{}, nil
+		}
 		return nil, fmt.Errorf("failed to get regions: %w", err)
 	}
 
@@ -249,4 +260,50 @@ func shouldIncludeService(params common.RecommendationParams, service common.Ser
 
 	// Check if this is the requested service
 	return params.Service == service
+}
+
+// isPermissionError returns true when err is a GCP 403 "Required '...' permission"
+// error. These errors arise when the service account is missing an IAM role
+// (e.g. roles/compute.viewer for compute.regions.list). Callers can then log
+// at Warn rather than propagating an error that would be recorded as ERROR by
+// the Lambda handler — see issue #247.
+func isPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var gapiErr *googleapi.Error
+	if ok := errorAs(err, &gapiErr); ok && gapiErr.Code == 403 {
+		return true
+	}
+	// Fall back to string inspection for wrapped or non-googleapi 403s.
+	msg := err.Error()
+	return strings.Contains(msg, "403") && strings.Contains(msg, "permission")
+}
+
+// errorAs is a thin shim around errors.As so it can be stubbed in tests
+// without importing errors at the call site.
+var errorAs = func(err error, target interface{}) bool {
+	switch t := target.(type) {
+	case **googleapi.Error:
+		var gErr *googleapi.Error
+		if !isGoogleAPIError(err, &gErr) {
+			return false
+		}
+		*t = gErr
+		return true
+	}
+	return false
+}
+
+func isGoogleAPIError(err error, out **googleapi.Error) bool {
+	if gErr, ok := err.(*googleapi.Error); ok {
+		*out = gErr
+		return true
+	}
+	// Unwrap one level for fmt.Errorf("%w", ...) wrapping.
+	type unwrapper interface{ Unwrap() error }
+	if u, ok := err.(unwrapper); ok {
+		return isGoogleAPIError(u.Unwrap(), out)
+	}
+	return false
 }
