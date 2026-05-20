@@ -33,6 +33,14 @@ func TestNewCacheClient(t *testing.T) {
 	assert.Equal(t, "westus2", client.GetRegion())
 }
 
+func TestNewSearchClient(t *testing.T) {
+	client := NewSearchClient(nil, "test-subscription", "eastus")
+
+	require.NotNil(t, client)
+	assert.Equal(t, common.ServiceSearch, client.GetServiceType())
+	assert.Equal(t, "eastus", client.GetRegion())
+}
+
 func TestNewRecommendationsClient(t *testing.T) {
 	client, err := NewRecommendationsClient(nil, "test-subscription")
 	require.NoError(t, err)
