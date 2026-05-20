@@ -161,34 +161,67 @@ func TestDocsHandler_HEAD_ReturnsHeaders(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{}
 
-	getReq := &events.LambdaFunctionURLRequest{
-		RequestContext: events.LambdaFunctionURLRequestContext{
-			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
-				Method: "GET",
-				Path:   "/api/docs/",
-			},
-		},
-	}
-	headReq := &events.LambdaFunctionURLRequest{
-		RequestContext: events.LambdaFunctionURLRequestContext{
-			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
-				Method: "HEAD",
-				Path:   "/api/docs/",
-			},
-		},
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "api docs UI", path: "/api/docs/"},
+		{name: "root docs UI", path: "/docs/"},
+		{name: "openapi yaml", path: "/api/docs/openapi.yaml"},
 	}
 
-	getResp, err := handler.HandleRequest(ctx, getReq)
-	require.NoError(t, err)
-	require.Equal(t, 200, getResp.StatusCode)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getReq := &events.LambdaFunctionURLRequest{
+				RequestContext: events.LambdaFunctionURLRequestContext{
+					HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+						Method: "GET",
+						Path:   tt.path,
+					},
+				},
+			}
+			headReq := &events.LambdaFunctionURLRequest{
+				RequestContext: events.LambdaFunctionURLRequestContext{
+					HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+						Method: "HEAD",
+						Path:   tt.path,
+					},
+				},
+			}
 
-	headResp, err := handler.HandleRequest(ctx, headReq)
-	require.NoError(t, err)
-	assert.Equal(t, 200, headResp.StatusCode)
-	assert.Equal(t, getResp.Headers, headResp.Headers)
-	assert.Equal(t, getResp.Headers["Content-Security-Policy"], headResp.Headers["Content-Security-Policy"])
-	assert.Equal(t, docsPageCSP, headResp.Headers["Content-Security-Policy"])
-	assert.Empty(t, headResp.Body)
+			getResp, err := handler.HandleRequest(ctx, getReq)
+			require.NoError(t, err)
+			assert.Equal(t, 200, getResp.StatusCode)
+
+			headResp, err := handler.HandleRequest(ctx, headReq)
+			require.NoError(t, err)
+			assert.Equal(t, 200, headResp.StatusCode)
+			assert.Equal(t, getResp.Headers, headResp.Headers)
+			assert.Equal(t, getResp.Headers["Content-Security-Policy"], headResp.Headers["Content-Security-Policy"])
+			assert.Empty(t, headResp.Body)
+		})
+	}
+}
+
+func TestDocsRoutes_RegisterHEAD(t *testing.T) {
+	router := NewRouter(&Handler{})
+	expected := map[string]bool{
+		"/api/docs": false,
+		"/docs":     false,
+	}
+
+	for _, route := range router.routes {
+		if route.Method == "HEAD" {
+			if _, ok := expected[route.PathPrefix]; ok {
+				expected[route.PathPrefix] = true
+				assert.Equal(t, AuthPublic, route.Auth)
+			}
+		}
+	}
+
+	for path, found := range expected {
+		assert.True(t, found, "missing HEAD route for %s", path)
+	}
 }
 
 // TestServeDocsUI_RelaxedCSP_RootDocs verifies the same relaxed CSP is

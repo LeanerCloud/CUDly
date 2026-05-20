@@ -90,6 +90,7 @@ func (h *Handler) docsHandler(ctx context.Context, req *events.LambdaFunctionURL
 		return response, err
 	}
 	if raw, ok := response.(*rawResponse); ok {
+		// rawResponse currently contains only strings, so a shallow copy is safe.
 		head := *raw
 		head.body = ""
 		return &head, nil
