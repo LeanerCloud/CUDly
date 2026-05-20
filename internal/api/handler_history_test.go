@@ -415,6 +415,76 @@ func TestHandler_getHistory_IncludesInFlightApprovals(t *testing.T) {
 	assert.Equal(t, 50.0, resp.Summary.TotalMonthlySavings)
 }
 
+// TestHandler_getHistory_InProgressRowMapsRecFields is the issue #631
+// regression guard. A single-rec in-progress (approved/running/paused)
+// execution must project the recommendation's real service / resource_type /
+// region / term / count / costs onto its synthetic History row — the SAME
+// shape a completed purchase_history row carries. Before the fix the row left
+// Term=0 ("0 Years"), ResourceType="N commitment(s)" (rendered "multiple"-ish
+// and never the real type), and pulled costs from the execution aggregate, so
+// a valid 1yr t4g.nano RI rendered as "0 Years / 1 commitment(s) / $0" — the
+// user could not tell what they had approved on a financial action.
+func TestHandler_getHistory_InProgressRowMapsRecFields(t *testing.T) {
+	monthly := 2.117
+	rec := config.RecommendationRecord{
+		Provider:     "aws",
+		Service:      "ec2",
+		Region:       "eu-west-1",
+		ResourceType: "t4g.nano",
+		Term:         1,
+		Payment:      "no-upfront",
+		Count:        1,
+		UpfrontCost:  0,
+		MonthlyCost:  &monthly,
+		Savings:      1.2333,
+	}
+
+	for _, status := range []string{"approved", "running", "paused"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+
+			inProgress := []config.PurchaseExecution{
+				{
+					ExecutionID:   "ip-1",
+					Status:        status,
+					ScheduledDate: time.Now(),
+					// Execution aggregates intentionally differ from the rec so
+					// the test proves the row is sourced from the rec, not these.
+					TotalUpfrontCost: 12345.0,
+					EstimatedSavings: 99.0,
+					Recommendations:  []config.RecommendationRecord{rec},
+				},
+			}
+			approver := "ops@example.com"
+			mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+			mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(inProgress, nil)
+			mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+
+			mockAuth, req := adminHistoryReq(ctx)
+			handler := &Handler{auth: mockAuth, config: mockStore}
+
+			result, err := handler.getHistory(ctx, req, map[string]string{})
+			require.NoError(t, err)
+			resp := result.(HistoryResponse)
+			require.Len(t, resp.Purchases, 1)
+			row := resp.Purchases[0]
+
+			assert.Equal(t, status, row.Status)
+			assert.Equal(t, "ec2", row.Service, "service must come from the rec, not be left blank")
+			assert.Equal(t, "t4g.nano", row.ResourceType, "resource type must be the rec's, not 'N commitment(s)'/multiple")
+			assert.Equal(t, "eu-west-1", row.Region, "region must be the rec's, not 'multiple'")
+			assert.Equal(t, 1, row.Term, "term must be the rec's 1yr, not 0 ('0 Years')")
+			assert.Equal(t, 1, row.Count)
+			assert.Equal(t, 0.0, row.UpfrontCost, "upfront must come from the rec")
+			assert.Equal(t, 1.2333, row.EstimatedSavings, "savings must come from the rec")
+			assert.Equal(t, 2.117, row.MonthlyCost, "monthly cost must come from the rec")
+			assert.NotEmpty(t, row.StatusDescription,
+				"in-progress rows must carry a human-readable status description, not render as a finished purchase")
+		})
+	}
+}
+
 // TestHandler_getHistory_AuditGapCompletedVisible is the issue #621 secondary-
 // path regression guard. A "completed" execution whose purchase_history write
 // failed (carries a non-empty Error) MUST surface in the History list — the

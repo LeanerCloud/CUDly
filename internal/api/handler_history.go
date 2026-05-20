@@ -188,17 +188,14 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 		PurchaseID:       exec.ExecutionID,
 		Timestamp:        exec.ScheduledDate,
 		Provider:         collapseRecommendationProvider(exec.Recommendations),
-		Region:           "multiple",
-		ResourceType:     fmt.Sprintf("%d commitment(s)", len(exec.Recommendations)),
 		Count:            len(exec.Recommendations),
-		UpfrontCost:      exec.TotalUpfrontCost,
-		EstimatedSavings: exec.EstimatedSavings,
 		PlanID:           exec.PlanID,
 		Status:           exec.Status,
 		CreatedByUserID:  createdBy,
 		RetryExecutionID: retryExecID,
 		RetryAttemptN:    exec.RetryAttemptN,
 	}
+	projectRecommendationFields(&row, exec)
 	// Compute ops_hint at read time (issue #47, Q3) so updates to the
 	// persistent-failure map land instantly without a re-collect. Only
 	// failed rows can carry a hint — the resolver returns "" for empty
@@ -282,6 +279,79 @@ func annotateApproved(row *config.PurchaseHistoryRecord, exec config.PurchaseExe
 	if approver != "" {
 		row.Approver = approver
 	}
+}
+
+// projectRecommendationFields fills the row's resource/cost/term columns from
+// the execution's recommendations so an in-progress (approved/running/paused)
+// or audit-gap row renders with the SAME shape the completed purchase_history
+// row would (issue #631). The completed row carries per-commitment service /
+// resource_type / region / term / monthly_cost / upfront / savings; the
+// synthetic execution row must too, or a single valid 1yr t4g.nano RI shows up
+// as "0 Years / multiple / $0" because Term/MonthlyCost/ResourceType were never
+// mapped.
+//
+//   - Single-rec execution (the common single-RI case in #631): project that
+//     rec's fields verbatim — exactly what the completed row stores per
+//     commitment. Costs come from the rec itself (UpfrontCost / MonthlyCost /
+//     Savings), matching how purchase_history persists per-commitment dollars.
+//   - Multi-rec execution: keep the aggregate display — "N commitment(s)" /
+//     "multiple" region, term collapsed to the shared value (0 when recs
+//     disagree), and execution-level cost totals. A single row cannot honestly
+//     show one resource type or term for a heterogeneous basket.
+func projectRecommendationFields(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution) {
+	recs := exec.Recommendations
+	if len(recs) == 1 {
+		r := recs[0]
+		row.Service = r.Service
+		row.ResourceType = r.ResourceType
+		row.Region = r.Region
+		row.Term = r.Term
+		row.UpfrontCost = r.UpfrontCost
+		row.EstimatedSavings = r.Savings
+		if r.MonthlyCost != nil {
+			row.MonthlyCost = *r.MonthlyCost
+		}
+		return
+	}
+	row.Region = "multiple"
+	row.ResourceType = fmt.Sprintf("%d commitment(s)", len(recs))
+	row.Service = collapseRecommendationService(recs)
+	row.Term = collapseRecommendationTerm(recs)
+	row.UpfrontCost = exec.TotalUpfrontCost
+	row.EstimatedSavings = exec.EstimatedSavings
+}
+
+// collapseRecommendationService returns the single service shared by every
+// recommendation in a multi-rec execution, or "multiple" when they differ (or
+// the slice is empty).
+func collapseRecommendationService(recs []config.RecommendationRecord) string {
+	if len(recs) == 0 {
+		return "multiple"
+	}
+	s := recs[0].Service
+	for _, r := range recs[1:] {
+		if r.Service != s {
+			return "multiple"
+		}
+	}
+	return s
+}
+
+// collapseRecommendationTerm returns the term shared by every recommendation in
+// a multi-rec execution, or 0 when they differ (or the slice is empty). 0
+// renders as "" in the UI rather than a misleading single term for a basket
+// that spans 1yr and 3yr commitments.
+func collapseRecommendationTerm(recs []config.RecommendationRecord) int {
+	if len(recs) == 0 {
+		return 0
+	}
+	t := recs[0].Term
+	for _, r := range recs[1:] {
+		if r.Term != t {
+			return 0
+		}
+	}
+	return t
 }
 
 // collapseRecommendationProvider returns the single provider shared by every
