@@ -4,9 +4,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -37,6 +39,17 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 
 	response, err := h.auth.Login(ctx, loginReq)
 	if err != nil {
+		// Map MFA sentinels to machine-readable error codes so the
+		// frontend can detect "MFA required" / "invalid MFA code"
+		// without substring-matching the human message (issue #497).
+		// Both keep the 401 status — the password leg passed, but
+		// the request is not authorised until the MFA leg is too.
+		if errors.Is(err, auth.ErrMFARequired) {
+			return nil, NewClientError(401, "mfa_required")
+		}
+		if errors.Is(err, auth.ErrInvalidMFACode) {
+			return nil, NewClientError(401, "invalid_mfa_code")
+		}
 		return nil, NewClientError(401, err.Error())
 	}
 
@@ -344,6 +357,127 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 	}
 
 	return map[string]string{"status": "password changed"}, nil
+}
+
+// Local aliases for the auth-package MFA sentinels so test files in
+// this package can reference them without re-importing the auth
+// package. The login handler maps these via errors.Is() to the
+// machine-readable response codes "mfa_required" / "invalid_mfa_code".
+var (
+	mfaRequiredSentinel = auth.ErrMFARequired
+	mfaInvalidSentinel  = auth.ErrInvalidMFACode
+)
+
+// mapMFAServiceError maps a service-layer MFA error to the right
+// client-facing status + message. Service errors land here as plain
+// fmt.Errorf strings (the auth package doesn't export every shape as
+// a sentinel because the handler is the only consumer that needs
+// status-code-level discrimination). Substring matching is OK because
+// the auth package owns these strings and tests pin them.
+func mapMFAServiceError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "invalid password"),
+		strings.Contains(msg, "invalid MFA code"),
+		strings.Contains(msg, "MFA code or recovery code required"),
+		strings.Contains(msg, "no MFA enrollment in progress"),
+		strings.Contains(msg, "MFA enrollment expired"),
+		strings.Contains(msg, "MFA is not enabled"),
+		strings.Contains(msg, "MFA is enabled but not configured"):
+		return NewClientError(400, msg)
+	case strings.Contains(msg, "authentication failed"):
+		return NewClientError(401, msg)
+	}
+	return err
+}
+
+// mfaSetup handles POST /api/auth/mfa/setup. Begins a fresh MFA
+// enrollment for the current user. Requires the current password in
+// the body (base64-encoded, same convention as login). Returns the
+// generated secret + otpauth provisioning URI for QR display.
+func (h *Handler) mfaSetup(ctx context.Context, req *events.LambdaFunctionURLRequest) (*MFASetupResponse, error) {
+	session, err := h.requireSession(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	var body MFASetupRequest
+	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	password, err := decodeBase64Password(body.Password)
+	if err != nil {
+		return nil, err
+	}
+	secret, uri, err := h.auth.MFASetupAPI(ctx, session.UserID, password)
+	if err != nil {
+		return nil, mapMFAServiceError(err)
+	}
+	return &MFASetupResponse{Secret: secret, ProvisioningURI: uri}, nil
+}
+
+// mfaEnable handles POST /api/auth/mfa/enable. Validates the supplied
+// TOTP code against the pending secret + flips MFAEnabled=true on
+// success. Returns the plaintext recovery codes once.
+func (h *Handler) mfaEnable(ctx context.Context, req *events.LambdaFunctionURLRequest) (*MFAEnableResponse, error) {
+	session, err := h.requireSession(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	var body MFAEnableRequest
+	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	codes, err := h.auth.MFAEnableAPI(ctx, session.UserID, body.Code)
+	if err != nil {
+		return nil, mapMFAServiceError(err)
+	}
+	return &MFAEnableResponse{RecoveryCodes: codes}, nil
+}
+
+// mfaDisable handles POST /api/auth/mfa/disable. Requires both the
+// current password AND a fresh proof-of-possession (TOTP or recovery
+// code). On success: clears the secret + recovery codes, flips
+// MFAEnabled=false.
+func (h *Handler) mfaDisable(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	session, err := h.requireSession(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	var body MFADisableRequest
+	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	password, err := decodeBase64Password(body.Password)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.auth.MFADisableAPI(ctx, session.UserID, password, body.Code); err != nil {
+		return nil, mapMFAServiceError(err)
+	}
+	return &StatusResponse{Status: "mfa disabled"}, nil
+}
+
+// mfaRegenerateRecoveryCodes handles POST
+// /api/auth/mfa/regenerate-recovery-codes. Replaces all stored
+// recovery codes with a fresh batch. Requires a current TOTP code
+// (NOT a recovery code).
+func (h *Handler) mfaRegenerateRecoveryCodes(ctx context.Context, req *events.LambdaFunctionURLRequest) (*MFARegenerateResponse, error) {
+	session, err := h.requireSession(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	var body MFARegenerateRequest
+	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	codes, err := h.auth.MFARegenerateRecoveryCodesAPI(ctx, session.UserID, body.Code)
+	if err != nil {
+		return nil, mapMFAServiceError(err)
+	}
+	return &MFARegenerateResponse{RecoveryCodes: codes}, nil
 }
 
 // redactEmail returns a redacted version of an email address for safe logging.

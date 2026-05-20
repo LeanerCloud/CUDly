@@ -59,14 +59,16 @@ func (m *MockRow) Scan(dest ...interface{}) error {
 // Helper function to create a mock row that returns a user
 // The scan order matches scanUser() in store_postgres.go:
 // id, email, password_hash, salt, role, group_ids, active,
-// mfa_enabled, mfa_secret (NullString), reset_token (NullString), reset_expiry (NullTime),
+// mfa_enabled, mfa_secret (NullString), mfa_pending_secret (NullString),
+// mfa_pending_secret_expires_at (NullTime), mfa_recovery_codes ([]string),
+// reset_token (NullString), reset_expiry (NullTime),
 // failed_login_attempts, locked_until (NullTime), password_history,
 // created_at, updated_at, last_login_at (NullTime)
 func createMockRowWithUser(user *User) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
 			// Populate destination pointers with user data
-			if len(dest) >= 17 {
+			if len(dest) >= 20 {
 				*dest[0].(*string) = user.ID
 				*dest[1].(*string) = user.Email
 				*dest[2].(*string) = user.PasswordHash
@@ -81,33 +83,47 @@ func createMockRowWithUser(user *User) *MockRow {
 				} else {
 					*dest[8].(*sql.NullString) = sql.NullString{Valid: false}
 				}
-				// dest[9] is sql.NullString for PasswordResetToken
-				if user.PasswordResetToken != "" {
-					*dest[9].(*sql.NullString) = sql.NullString{String: user.PasswordResetToken, Valid: true}
+				// dest[9] is sql.NullString for MFAPendingSecret
+				if user.MFAPendingSecret != "" {
+					*dest[9].(*sql.NullString) = sql.NullString{String: user.MFAPendingSecret, Valid: true}
 				} else {
 					*dest[9].(*sql.NullString) = sql.NullString{Valid: false}
 				}
-				// dest[10] is sql.NullTime for PasswordResetExpiry
-				if user.PasswordResetExpiry != nil {
-					*dest[10].(*sql.NullTime) = sql.NullTime{Time: *user.PasswordResetExpiry, Valid: true}
+				// dest[10] is sql.NullTime for MFAPendingSecretExpiresAt
+				if user.MFAPendingSecretExpiresAt != nil {
+					*dest[10].(*sql.NullTime) = sql.NullTime{Time: *user.MFAPendingSecretExpiresAt, Valid: true}
 				} else {
 					*dest[10].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
-				*dest[11].(*int) = user.FailedLoginAttempts
-				// dest[12] is sql.NullTime for LockedUntil
-				if user.LockedUntil != nil {
-					*dest[12].(*sql.NullTime) = sql.NullTime{Time: *user.LockedUntil, Valid: true}
+				// dest[11] is []string for MFARecoveryCodes
+				*dest[11].(*[]string) = user.MFARecoveryCodes
+				// dest[12] is sql.NullString for PasswordResetToken
+				if user.PasswordResetToken != "" {
+					*dest[12].(*sql.NullString) = sql.NullString{String: user.PasswordResetToken, Valid: true}
 				} else {
-					*dest[12].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[12].(*sql.NullString) = sql.NullString{Valid: false}
 				}
-				*dest[13].(*[]string) = user.PasswordHistory
-				*dest[14].(*time.Time) = user.CreatedAt
-				*dest[15].(*time.Time) = user.UpdatedAt
-				// dest[16] is sql.NullTime for LastLoginAt
-				if user.LastLoginAt != nil {
-					*dest[16].(*sql.NullTime) = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
+				// dest[13] is sql.NullTime for PasswordResetExpiry
+				if user.PasswordResetExpiry != nil {
+					*dest[13].(*sql.NullTime) = sql.NullTime{Time: *user.PasswordResetExpiry, Valid: true}
 				} else {
-					*dest[16].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[13].(*sql.NullTime) = sql.NullTime{Valid: false}
+				}
+				*dest[14].(*int) = user.FailedLoginAttempts
+				// dest[15] is sql.NullTime for LockedUntil
+				if user.LockedUntil != nil {
+					*dest[15].(*sql.NullTime) = sql.NullTime{Time: *user.LockedUntil, Valid: true}
+				} else {
+					*dest[15].(*sql.NullTime) = sql.NullTime{Valid: false}
+				}
+				*dest[16].(*[]string) = user.PasswordHistory
+				*dest[17].(*time.Time) = user.CreatedAt
+				*dest[18].(*time.Time) = user.UpdatedAt
+				// dest[19] is sql.NullTime for LastLoginAt
+				if user.LastLoginAt != nil {
+					*dest[19].(*sql.NullTime) = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
+				} else {
+					*dest[19].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
 			}
 			return nil

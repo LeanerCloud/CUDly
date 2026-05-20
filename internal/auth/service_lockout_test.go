@@ -265,7 +265,7 @@ func TestLogin_AccountLockout_MFAFailure(t *testing.T) {
 
 	_, err := service.Login(ctx, req)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid MFA code")
+	assert.ErrorIs(t, err, ErrInvalidMFACode)
 
 	// Verify MFA failure incremented counter and locked account
 	require.NotNil(t, updatedUser)

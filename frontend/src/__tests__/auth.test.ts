@@ -4,15 +4,35 @@
 import { showLoginModal, showResetPasswordModal, updateUserUI, logout } from '../auth';
 
 // Mock the api module
-jest.mock('../api', () => ({
-  login: jest.fn(),
-  logout: jest.fn(),
-  requestPasswordReset: jest.fn(),
-  resetPassword: jest.fn(),
-  getResetTokenStatus: jest.fn(),
-  apiRequest: jest.fn(),
-  base64Encode: (s: string) => btoa(s)
-}));
+jest.mock('../api', () => {
+  // Mirror the real MFALoginError class shape so production code's
+  // `error instanceof api.MFALoginError` branch can be exercised by
+  // tests. Defined inside the factory so the inline `class`
+  // declaration isn't hoisted past the jest.mock factory boundary.
+  class MFALoginError extends Error {
+    code: string;
+    constructor(code: string) {
+      super(code);
+      this.name = 'MFALoginError';
+      this.code = code;
+      Object.setPrototypeOf(this, MFALoginError.prototype);
+    }
+  }
+  return {
+    login: jest.fn(),
+    logout: jest.fn(),
+    requestPasswordReset: jest.fn(),
+    resetPassword: jest.fn(),
+    getResetTokenStatus: jest.fn(),
+    apiRequest: jest.fn(),
+    base64Encode: (s: string) => btoa(s),
+    MFALoginError,
+    setupMFA: jest.fn(),
+    enableMFA: jest.fn(),
+    disableMFA: jest.fn(),
+    regenerateMFARecoveryCodes: jest.fn(),
+  };
+});
 
 // Mock the state module
 jest.mock('../state', () => ({

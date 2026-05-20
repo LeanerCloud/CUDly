@@ -12,12 +12,50 @@ export interface User {
   id: string;
   email: string;
   role: string;
+  // Whether two-factor authentication is enabled on this user
+  // account. Optional for backward compatibility — older login
+  // responses may not include it. The profile/MFA section in
+  // auth.ts treats `mfa_enabled === true` (strict) as "enabled".
+  mfa_enabled?: boolean;
 }
 
 export interface LoginResponse {
   token: string;
   user?: User;
 }
+
+// MFA enrollment / lifecycle response shapes (issue #497). All four
+// endpoints live under /api/auth/mfa/ and require an authenticated
+// session.
+
+/**
+ * Response from POST /api/auth/mfa/setup. The secret is also the
+ * payload inside the otpauth:// provisioning URI; we expose both
+ * separately so the UI can show the QR code AND a manual-entry
+ * fallback (some authenticator apps don't have a camera).
+ */
+export interface MFASetupResponse {
+  secret: string;
+  provisioning_uri: string;
+}
+
+/**
+ * Response from POST /api/auth/mfa/enable and POST
+ * /api/auth/mfa/regenerate-recovery-codes. Plaintext codes are
+ * returned exactly once; the backend stores only bcrypt hashes.
+ */
+export interface MFARecoveryCodesResponse {
+  recovery_codes: string[];
+}
+
+/**
+ * Discriminator returned by the login endpoint when MFA is required
+ * or when the supplied MFA code didn't match. The backend encodes
+ * these as the `error` field on the 401 response body so the
+ * frontend can branch on a machine-readable code rather than
+ * substring-matching a human message. See issue #497.
+ */
+export type MFALoginErrorCode = 'mfa_required' | 'invalid_mfa_code';
 
 // Dashboard types
 export interface DashboardSummary {

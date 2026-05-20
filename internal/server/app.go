@@ -953,6 +953,23 @@ func (a *authServiceAdapter) ChangePasswordAPI(ctx context.Context, userID, curr
 	return a.service.ChangePasswordAPI(ctx, userID, currentPassword, newPassword)
 }
 
+// MFA lifecycle (issue #497).
+func (a *authServiceAdapter) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) {
+	return a.service.MFASetupAPI(ctx, userID, password)
+}
+
+func (a *authServiceAdapter) MFAEnableAPI(ctx context.Context, userID, code string) ([]string, error) {
+	return a.service.MFAEnableAPI(ctx, userID, code)
+}
+
+func (a *authServiceAdapter) MFADisableAPI(ctx context.Context, userID, password, codeOrRecovery string) error {
+	return a.service.MFADisableAPI(ctx, userID, password, codeOrRecovery)
+}
+
+func (a *authServiceAdapter) MFARegenerateRecoveryCodesAPI(ctx context.Context, userID, code string) ([]string, error) {
+	return a.service.MFARegenerateRecoveryCodesAPI(ctx, userID, code)
+}
+
 // Group management methods - delegate to auth service API methods
 func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateGroupAPI(ctx, req)

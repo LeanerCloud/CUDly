@@ -43,7 +43,8 @@ var _ StoreInterface = (*PostgresStore)(nil)
 func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	query := `
 		SELECT id, email, password_hash, salt, role, group_ids, active,
-		       mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
+		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
+		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -57,7 +58,8 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, 
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	query := `
 		SELECT id, email, password_hash, salt, role, group_ids, active,
-		       mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
+		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
+		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -86,11 +88,21 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 	query := `
 		INSERT INTO users (
 			id, email, password_hash, salt, role, group_ids, active,
-			mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
+			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
+			mfa_recovery_codes, password_reset_token, password_reset_expiry,
 			failed_login_attempts, locked_until, password_history,
 			created_at, updated_at, last_login_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
+
+	// Substitute an empty slice for nil so the Postgres TEXT[] column
+	// stays at its default '{}' rather than NULL. The schema declares
+	// the column NOT NULL DEFAULT '{}' (migration 000052); passing a
+	// raw nil here triggers "violates not-null constraint" on insert.
+	recoveryCodes := user.MFARecoveryCodes
+	if recoveryCodes == nil {
+		recoveryCodes = []string{}
+	}
 
 	_, err := s.db.Exec(ctx, query,
 		user.ID,
@@ -102,6 +114,9 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 		user.Active,
 		user.MFAEnabled,
 		user.MFASecret,
+		user.MFAPendingSecret,
+		user.MFAPendingSecretExpiresAt,
+		recoveryCodes,
 		user.PasswordResetToken,
 		user.PasswordResetExpiry,
 		user.FailedLoginAttempts,
@@ -160,15 +175,24 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, user *User) error {
 			active = $7,
 			mfa_enabled = $8,
 			mfa_secret = $9,
-			password_reset_token = $10,
-			password_reset_expiry = $11,
-			failed_login_attempts = $12,
-			locked_until = $13,
-			password_history = $14,
-			updated_at = $15,
-			last_login_at = $16
+			mfa_pending_secret = $10,
+			mfa_pending_secret_expires_at = $11,
+			mfa_recovery_codes = $12,
+			password_reset_token = $13,
+			password_reset_expiry = $14,
+			failed_login_attempts = $15,
+			locked_until = $16,
+			password_history = $17,
+			updated_at = $18,
+			last_login_at = $19
 		WHERE id = $1
 	`
+
+	// See CreateUser for the nil-slice substitution rationale.
+	recoveryCodes := user.MFARecoveryCodes
+	if recoveryCodes == nil {
+		recoveryCodes = []string{}
+	}
 
 	result, err := s.db.Exec(ctx, query,
 		user.ID,
@@ -180,6 +204,9 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, user *User) error {
 		user.Active,
 		user.MFAEnabled,
 		user.MFASecret,
+		user.MFAPendingSecret,
+		user.MFAPendingSecretExpiresAt,
+		recoveryCodes,
 		user.PasswordResetToken,
 		user.PasswordResetExpiry,
 		user.FailedLoginAttempts,
@@ -222,7 +249,8 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 	// Pagination support should be added if this limit proves insufficient.
 	query := `
 		SELECT id, email, password_hash, salt, role, group_ids, active,
-		       mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
+		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
+		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -255,7 +283,8 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (*User, error) {
 	query := `
 		SELECT id, email, password_hash, salt, role, group_ids, active,
-		       mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
+		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
+		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
 		       created_at, updated_at, last_login_at
 		FROM users
@@ -315,17 +344,25 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 	query := `
 		INSERT INTO users (
 			id, email, password_hash, salt, role, group_ids, active,
-			mfa_enabled, mfa_secret, password_reset_token, password_reset_expiry,
+			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
+			mfa_recovery_codes, password_reset_token, password_reset_expiry,
 			failed_login_attempts, locked_until, password_history,
 			created_at, updated_at, last_login_at
 		)
-		SELECT $1, $2, $3, $4, 'admin', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+		SELECT $1, $2, $3, $4, 'admin', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 		WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND active = true)
 	`
+
+	// See CreateUser for the nil-slice substitution rationale.
+	recoveryCodes := user.MFARecoveryCodes
+	if recoveryCodes == nil {
+		recoveryCodes = []string{}
+	}
 
 	tag, err := s.db.Exec(ctx, query,
 		user.ID, user.Email, user.PasswordHash, user.Salt,
 		user.GroupIDs, user.Active, user.MFAEnabled, user.MFASecret,
+		user.MFAPendingSecret, user.MFAPendingSecretExpiresAt, recoveryCodes,
 		user.PasswordResetToken, user.PasswordResetExpiry,
 		user.FailedLoginAttempts, user.LockedUntil, user.PasswordHistory,
 		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
@@ -785,8 +822,9 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 	var user User
 	var groupIDs []string
 	var passwordHistory []string
-	var resetExpiry, lockedUntil, lastLoginAt sql.NullTime
-	var mfaSecret, resetToken sql.NullString
+	var recoveryCodes []string
+	var resetExpiry, lockedUntil, lastLoginAt, mfaPendingExpiry sql.NullTime
+	var mfaSecret, mfaPendingSecret, resetToken sql.NullString
 
 	err := scanner.Scan(
 		&user.ID,
@@ -798,6 +836,9 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 		&user.Active,
 		&user.MFAEnabled,
 		&mfaSecret,
+		&mfaPendingSecret,
+		&mfaPendingExpiry,
+		&recoveryCodes,
 		&resetToken,
 		&resetExpiry,
 		&user.FailedLoginAttempts,
@@ -817,16 +858,23 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 
 	user.GroupIDs = groupIDs
 	user.PasswordHistory = passwordHistory
+	user.MFARecoveryCodes = recoveryCodes
 
 	// Handle nullable strings
 	if mfaSecret.Valid {
 		user.MFASecret = mfaSecret.String
+	}
+	if mfaPendingSecret.Valid {
+		user.MFAPendingSecret = mfaPendingSecret.String
 	}
 	if resetToken.Valid {
 		user.PasswordResetToken = resetToken.String
 	}
 
 	// Handle nullable timestamps
+	if mfaPendingExpiry.Valid {
+		user.MFAPendingSecretExpiresAt = &mfaPendingExpiry.Time
+	}
 	if resetExpiry.Valid {
 		user.PasswordResetExpiry = &resetExpiry.Time
 	}
