@@ -344,10 +344,12 @@ describe('Settings → Purchasing grace inputs: inline range validation', () => 
 
     expect(api.updateConfig).not.toHaveBeenCalled();
     expect(alertSpy).not.toHaveBeenCalled();
-    // The save-time toast carries the same text the inline indicator renders.
+    // The save-time toast aggregates failed providers per #478 (one toast
+    // naming every affected provider in input order, AWS/Azure/GCP). The
+    // inline indicator still carries the per-input error separately.
     expect(mockShowToast).toHaveBeenCalled();
     const toastArg = mockShowToast.mock.calls[0]![0] as { message: string; kind: string };
-    expect(toastArg.message).toBe('AWS grace period: Must be a whole number between 0 and 30');
+    expect(toastArg.message).toBe('Grace period must be a whole number between 0 and 30 days (AWS).');
     expect(toastArg.kind).toBe('error');
   });
 });
