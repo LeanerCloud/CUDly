@@ -20,11 +20,17 @@ resource "aws_iam_role" "cudly_deploy" {
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*"
-          }
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            # Restrict to protected branches and named deployment environments.
+            # Any-branch wildcard (repo:org/repo:*) would let a developer push to
+            # an unprotected feature branch and mint valid deploy credentials.
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${var.github_repo}:ref:refs/heads/main",
+              "repo:${var.github_repo}:environment:dev",
+              "repo:${var.github_repo}:environment:staging",
+              "repo:${var.github_repo}:environment:prod",
+            ]
           }
         }
       }] : []

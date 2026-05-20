@@ -31,7 +31,6 @@ resource "aws_iam_policy" "data" {
           "iam:ListPolicyVersions",
           "iam:ListRolePolicies",
           "iam:ListRoleTags",
-          "iam:PassRole",
           "iam:PutRolePolicy",
           "iam:RemoveRoleFromInstanceProfile",
           "iam:TagInstanceProfile",
@@ -46,6 +45,29 @@ resource "aws_iam_policy" "data" {
           "arn:aws:iam::*:policy/cudly-*",
           "arn:aws:iam::*:instance-profile/cudly-*",
         ]
+      },
+      {
+        # iam:PassRole is split into its own statement so we can attach the
+        # iam:PassedToService condition without affecting the other IAM actions
+        # in IAMRolesAndPolicies. Without this condition an attacker who
+        # compromises the deploy role could pass any cudly-* role to any AWS
+        # service (Lambda, EC2, Glue, etc.) to escalate privileges beyond
+        # what Terraform deploy needs.
+        Sid    = "IAMPassRoleScopedByService"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          "arn:aws:iam::*:role/cudly-*",
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = [
+              "lambda.amazonaws.com",
+              "ecs-tasks.amazonaws.com",
+              "rds.amazonaws.com",
+            ]
+          }
+        }
       },
       {
         Sid    = "IAMReadForPassRole"
