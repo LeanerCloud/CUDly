@@ -273,6 +273,87 @@ describe('handleExecutePurchase — single-record path', () => {
     expect(lastToastKind()).toBe('error');
     expect(archera.openArcheraOfferModal).not.toHaveBeenCalled();
   });
+
+  // Issue #597: details must be preserved in the POST body on the single-rec path.
+  test('#597 single-rec — details blob preserved for EC2 Windows rec', async () => {
+    const windowsDetails = { platform: 'Windows', tenancy: 'dedicated', scope: 'Region' };
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([
+      {
+        id: 'rec-win-single',
+        provider: 'aws' as const,
+        service: 'ec2',
+        region: 'us-east-1',
+        resource_type: 'm5.xlarge',
+        engine: undefined,
+        details: windowsDetails,
+        count: 1,
+        term: 1,
+        payment: 'all-upfront',
+        upfront_cost: 400,
+        monthly_cost: 40,
+        savings: 80,
+      },
+    ]);
+
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-win-single',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    const [submittedRecs] = (api.executePurchase as jest.Mock).mock.calls[0] as [
+      Array<{ details?: unknown }>,
+      number,
+    ];
+    expect(submittedRecs[0]?.details).toEqual(windowsDetails);
+  });
+
+  // Issue #597: details must be preserved in the POST body on the single-rec path.
+  test('#597 single-rec — details blob preserved for RDS Postgres rec', async () => {
+    const rdsDetails = { engine: 'postgres', multi_az: false };
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([
+      {
+        id: 'rec-rds-single',
+        provider: 'aws' as const,
+        service: 'rds',
+        region: 'ap-southeast-1',
+        resource_type: 'db.r5.large',
+        engine: 'postgres',
+        details: rdsDetails,
+        count: 1,
+        term: 3,
+        payment: 'no-upfront',
+        upfront_cost: 0,
+        monthly_cost: 120,
+        savings: 90,
+      },
+    ]);
+
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-rds-single',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    const [submittedRecs] = (api.executePurchase as jest.Mock).mock.calls[0] as [
+      Array<{ details?: unknown; engine?: string }>,
+      number,
+    ];
+    expect(submittedRecs[0]?.details).toEqual(rdsDetails);
+    expect(submittedRecs[0]?.engine).toBe('postgres');
+  });
 });
 
 describe('handleFanOutExecute — fan-out path', () => {
@@ -479,5 +560,104 @@ describe('handleFanOutExecute — fan-out path', () => {
 
     expect(archera.openArcheraOfferModal).toHaveBeenCalledTimes(1);
     expect(archera.openArcheraOfferModal).toHaveBeenCalledWith('purchase');
+  });
+
+  // Issue #597: details must be preserved in the POST body on the fan-out path.
+  // Windows EC2 rec with a non-trivial details blob.
+  test('#597 fan-out — details blob preserved for EC2 Windows rec', async () => {
+    const windowsDetails = { platform: 'Windows', tenancy: 'default', scope: 'Region' };
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([
+      {
+        key: 'key-win',
+        label: 'Windows EC2',
+        payment: 'all-upfront' as const,
+        capacityPercent: 100,
+        recs: [
+          {
+            id: 'rec-win-1',
+            provider: 'aws' as const,
+            service: 'ec2',
+            region: 'us-east-1',
+            resource_type: 'm5.large',
+            engine: undefined,
+            details: windowsDetails,
+            count: 2,
+            term: 1,
+            payment: 'all-upfront',
+            upfront_cost: 500,
+            monthly_cost: 50,
+            savings: 100,
+          },
+        ],
+      },
+    ]);
+
+    (api.executePurchase as jest.Mock).mockResolvedValueOnce({
+      execution_id: 'exec-win',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    const [submittedRecs] = (api.executePurchase as jest.Mock).mock.calls[0] as [
+      Array<{ details?: unknown }>,
+      number,
+    ];
+    expect(submittedRecs[0]?.details).toEqual(windowsDetails);
+  });
+
+  // Issue #597: details must be preserved in the POST body on the fan-out path.
+  // RDS Postgres rec.
+  test('#597 fan-out — details blob preserved for RDS Postgres rec', async () => {
+    const postgresDetails = { engine: 'postgres', multi_az: true };
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([
+      {
+        key: 'key-rds',
+        label: 'RDS Postgres',
+        payment: 'partial-upfront' as const,
+        capacityPercent: 100,
+        recs: [
+          {
+            id: 'rec-rds-1',
+            provider: 'aws' as const,
+            service: 'rds',
+            region: 'eu-west-1',
+            resource_type: 'db.t3.medium',
+            engine: 'postgres',
+            details: postgresDetails,
+            count: 1,
+            term: 1,
+            payment: 'partial-upfront',
+            upfront_cost: 300,
+            monthly_cost: 80,
+            savings: 60,
+          },
+        ],
+      },
+    ]);
+
+    (api.executePurchase as jest.Mock).mockResolvedValueOnce({
+      execution_id: 'exec-rds',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    const [submittedRecs] = (api.executePurchase as jest.Mock).mock.calls[0] as [
+      Array<{ details?: unknown; engine?: string }>,
+      number,
+    ];
+    expect(submittedRecs[0]?.details).toEqual(postgresDetails);
+    expect(submittedRecs[0]?.engine).toBe('postgres');
   });
 });

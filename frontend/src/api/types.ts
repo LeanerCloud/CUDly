@@ -89,6 +89,14 @@ export interface Recommendation {
   region: string;
   resource_type: string;
   engine?: string;
+  // Opaque ServiceDetails payload from the backend (json.RawMessage).
+  // The frontend treats this as a pass-through blob: it is stashed when
+  // the GET /api/recommendations response is parsed and forwarded unchanged
+  // in the POST /api/purchases/execute body so the backend can reconstruct
+  // the correct typed *Details pointer (Platform, Tenancy, Scope, Engine
+  // etc.) for each cloud service client. Absent on pre-#597 cached rows;
+  // those fall back to zero-valued defaults on the backend. See #597, #453.
+  details?: unknown;
   count: number;
   term: number;
   payment: string;

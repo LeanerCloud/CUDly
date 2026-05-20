@@ -62,6 +62,12 @@ export interface LocalRecommendation {
   service: string;
   resource_type: string;
   engine?: string;
+  // Opaque ServiceDetails payload from the backend (json.RawMessage).
+  // Stashed when the GET /api/recommendations response is parsed and
+  // forwarded unchanged in the POST /api/purchases/execute body so the
+  // backend can reconstruct the correct typed *Details pointer. Absent
+  // on pre-#597 cached rows. See #597, #453.
+  details?: unknown;
   region: string;
   count: number;
   term: number;

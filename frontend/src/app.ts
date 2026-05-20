@@ -315,27 +315,21 @@ async function handleExecutePurchase(): Promise<void> {
   });
   if (!ok) return;
 
-  // Map LocalRecommendation to API Recommendation format. The counts +
-  // costs here are already scaled by the bulk-toolbar's capacity % so
-  // the backend records exactly what the user saw in the preview.
-  // Issue #111 (iii): payment now reads `r.payment` (set by
-  // `openPurchaseModal`'s per-row seed and live edits), replacing the
-  // historical hardcoded 'all-upfront' that silently dropped the
-  // toolbar's Payment for the single-bucket path. The `?? 'all-upfront'`
-  // is defensive only — direct test-harness callers that bypass the
-  // modal may not set `payment`; the production path always does.
+  // Build the POST body recs by spreading the server-provided rec so that
+  // all fields (including `details`, `engine`, `cloud_account_id`, and any
+  // future additions) flow through unchanged. Only `payment`, `selected`,
+  // and `purchased` are overridden: `payment` uses the user-edited value
+  // (issue #111), and `selected`/`purchased` are forced to the canonical
+  // purchase-intent values. The `?? 'all-upfront'` on payment is defensive
+  // only — direct test-harness callers that bypass the modal may not set
+  // `payment`; the production path always does. Passing `details` ensures
+  // Windows EC2, dedicated-tenancy, AZ-scoped RIs, and non-default-engine
+  // RDS/Cache recs reach the backend with the correct ServiceDetails payload
+  // instead of falling back to Linux/regional/default (issue #597).
   const apiRecs: api.Recommendation[] = localRecs.map((r) => ({
-    id: r.id,
-    provider: r.provider,
-    service: r.service,
-    region: r.region,
-    resource_type: r.resource_type,
-    count: r.count,
-    term: r.term,
-    payment: r.payment ?? 'all-upfront',
-    upfront_cost: r.upfront_cost,
+    ...r,
     monthly_cost: r.monthly_cost ?? null,
-    savings: r.savings,
+    payment: r.payment ?? 'all-upfront',
     selected: true,
     purchased: false,
   }));
@@ -433,21 +427,21 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
 
   // Fire all POSTs in parallel via allSettled so one failure doesn't
   // cascade. Each bucket's recs are already scaled by its capacity %;
-  // the POST body records capacity_percent for audit.
+  // the POST body records capacity_percent for audit. Spread the full
+  // server-provided rec so `details`, `engine`, `cloud_account_id`, and
+  // any future additions flow through unchanged. Only `payment`,
+  // `monthly_cost`, `selected`, and `purchased` are overridden: `payment`
+  // comes from the bucket (user's per-bucket choice), `monthly_cost` is
+  // coerced to null for absent values, and the purchase-intent flags are
+  // forced to their canonical values. Passing `details` ensures
+  // non-default platforms (Windows EC2, dedicated tenancy, AZ-scoped RIs,
+  // non-default-engine RDS/Cache) reach the backend correctly (issue #597).
   const promises = buckets.map((b) =>
     api.executePurchase(
       b.recs.map((r) => ({
-        id: r.id,
-        provider: r.provider,
-        service: r.service,
-        region: r.region,
-        resource_type: r.resource_type,
-        count: r.count,
-        term: r.term,
-        payment: b.payment,
-        upfront_cost: r.upfront_cost,
+        ...r,
         monthly_cost: r.monthly_cost ?? null,
-        savings: r.savings,
+        payment: b.payment,
         selected: true,
         purchased: false,
       })),
