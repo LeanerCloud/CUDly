@@ -41,6 +41,12 @@ type StoreInterface interface {
 	// this method's status filter) to avoid accidental double-processing of
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
+	// GetStaleApprovedExecutions returns executions stuck in the "approved"
+	// status with updated_at older than olderThan — strands left behind when a
+	// synchronous purchase run was interrupted before finalizing (issue #632).
+	// The recovery sweep in the purchase manager re-drives these into a
+	// terminal "failed" state so they can never sit permanently approved.
+	GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]PurchaseExecution, error)
 	GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error)
 	GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error)
 	// CountPendingExecutionsForAccount returns the number of purchase_executions
