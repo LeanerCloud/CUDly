@@ -8,6 +8,8 @@ github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.1 h1:FPKJS1T+clwv+OLGt13a8U
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.1/go.mod h1:j2chePtV91HrC22tGoRX3sGY42uF13WzmmV80/OdVAA=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/advisor/armadvisor v1.2.0 h1:3ddjPq/3A/oB2u7LdohEr900EGP5l1MnAiNc3EbY1E4=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/advisor/armadvisor v1.2.0/go.mod h1:oZ73p8dR7aZI+TJo5Ul92oCoVubMYPBo39eTsWa0AiQ=
+github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/billingbenefits/armbillingbenefits v1.0.0 h1:4JHm1qT4VKYZ8aGP1dJBg+wk/WgN/KitLNtQs6jFNfA=
+github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/billingbenefits/armbillingbenefits v1.0.0/go.mod h1:GBFVpPKOTooUG7VM93ip046AqLf4qubcIEsU3js4v3g=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5 v5.4.0 h1:QfV5XZt6iNa2aWMAt96CZEbfJ7kgG/qYIpq465Shr5E=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5 v5.4.0/go.mod h1:uYt4CfhkJA9o0FN7jfE5minm/i4nUE4MjGUJkzB6Zs8=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption v1.1.0 h1:pTIng5JZfGKPA4WT8QjEPGOD5KK2CoCBkecWgtq3Cuc=
