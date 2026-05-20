@@ -255,6 +255,11 @@ const PurchaseTagKey = "purchase-automation"
 // encoded in the commitment description).
 type PurchaseOptions struct {
 	Source string
+	// ReservationID, when set, is used as the provider-side commitment
+	// identifier (e.g. RDS ReservedDBInstanceId) so purchased commitments
+	// carry a descriptive, account/engine/region-aware name instead of a
+	// generic auto-generated one. Providers sanitize it to their ID rules.
+	ReservationID string
 }
 
 // NormalizeSource lowercases s and returns it when it matches an allowed

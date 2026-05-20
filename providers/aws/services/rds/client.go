@@ -139,8 +139,15 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	// Generate reservation ID (letters, digits, hyphens only; no leading/trailing/double hyphen)
-	reservationID := common.SanitizeReservationID(fmt.Sprintf("rds-%s-%d", rec.ResourceType, time.Now().Unix()), "rds-reserved-")
+	// Reservation ID (letters, digits, hyphens only; no leading/trailing/double
+	// hyphen). Prefer the caller-supplied descriptive ID (account/engine/region/
+	// size aware) so the reservation is identifiable in the console and billing;
+	// fall back to a generic one when the caller didn't supply it.
+	rawID := opts.ReservationID
+	if rawID == "" {
+		rawID = fmt.Sprintf("rds-%s-%d", rec.ResourceType, time.Now().Unix())
+	}
+	reservationID := common.SanitizeReservationID(rawID, "rds-reserved-")
 
 	// Create the purchase request
 	input := &rds.PurchaseReservedDBInstancesOfferingInput{
