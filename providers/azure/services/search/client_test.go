@@ -158,7 +158,7 @@ func TestNewClientWithHTTP(t *testing.T) {
 
 func TestSearchClient_GetServiceType(t *testing.T) {
 	client := NewClient(nil, "sub", "region")
-	assert.Equal(t, common.ServiceOther, client.GetServiceType())
+	assert.Equal(t, common.ServiceSearch, client.GetServiceType())
 }
 
 func TestSearchClient_GetRegion(t *testing.T) {
@@ -611,7 +611,7 @@ func TestSearchClient_ConvertAzureSearchRecommendation_PopulatesAllFields(t *tes
 	rec := client.convertAzureSearchRecommendation(context.Background(), azRec)
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderAzure, rec.Provider)
-	assert.Equal(t, common.ServiceOther, rec.Service)
+	assert.Equal(t, common.ServiceSearch, rec.Service)
 	assert.Equal(t, "test-subscription", rec.Account)
 	assert.Equal(t, "eastus", rec.Region)
 	assert.Equal(t, "standard2", rec.ResourceType)
