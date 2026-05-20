@@ -72,8 +72,16 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 		stepsToRollback := currentVersion - 26
 		require.Greater(t, stepsToRollback, 0, "there should be migrations above 000026")
 
-		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, stepsToRollback),
-			"rollback to 000026 should succeed")
+		// RollbackMigrations caps a single call at 10 steps; call in a loop.
+		const maxRollbackPerCall = 10
+		for remaining := stepsToRollback; remaining > 0; remaining -= maxRollbackPerCall {
+			batch := remaining
+			if batch > maxRollbackPerCall {
+				batch = maxRollbackPerCall
+			}
+			require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, batch),
+				"rollback to 000026 should succeed")
+		}
 
 		// Verify the constraint is gone (000027 was rolled back).
 		var constraintExists bool
