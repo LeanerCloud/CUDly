@@ -109,13 +109,15 @@ func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.Purchas
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate approval token: %w", err)
 	}
+	tokenExpiresAt := time.Now().Add(config.ApprovalTokenTTL)
 	execution := &config.PurchaseExecution{
-		PlanID:        plan.ID,
-		ExecutionID:   uuid.New().String(),
-		Status:        "pending",
-		StepNumber:    plan.RampSchedule.CurrentStep,
-		ScheduledDate: *plan.NextExecutionDate,
-		ApprovalToken: approvalToken,
+		PlanID:                 plan.ID,
+		ExecutionID:            uuid.New().String(),
+		Status:                 "pending",
+		StepNumber:             plan.RampSchedule.CurrentStep,
+		ScheduledDate:          *plan.NextExecutionDate,
+		ApprovalToken:          approvalToken,
+		ApprovalTokenExpiresAt: &tokenExpiresAt,
 	}
 
 	if err := m.config.SavePurchaseExecution(ctx, execution); err != nil {

@@ -99,10 +99,16 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
     return true;
   }
 
-  const endpoint = `/purchases/${dl.action}/${encodeURIComponent(dl.id)}?token=${encodeURIComponent(dl.token)}`;
+  // Issue #398: pass the token in the POST body rather than the query string
+  // so it does not appear in Lambda Function URL access logs (which record
+  // rawQueryString but not the request body).
+  const endpoint = `/purchases/${dl.action}/${encodeURIComponent(dl.id)}`;
   const actionPast = dl.action === 'approve' ? 'approved' : 'cancelled';
   try {
-    await apiRequest<{ status: string }>(endpoint, { method: 'POST' });
+    await apiRequest<{ status: string }>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify({ token: dl.token }),
+    });
     showToast({ message: `Purchase ${actionPast}.`, kind: 'success', timeout: 5_000 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -695,8 +695,9 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			notification_sent, approval_token, recommendations,
 			total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 			cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-			created_by_user_id, retry_execution_id, retry_attempt_n
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+			created_by_user_id, retry_execution_id, retry_attempt_n,
+			approval_token_expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -713,6 +714,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			cancelled_by = $17,
 			capacity_percent = $18,
 			retry_execution_id = $20,
+			approval_token_expires_at = $22,
 			updated_at = NOW()
 	`
 
@@ -758,6 +760,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.CreatedByUserID,
 		execution.RetryExecutionID,
 		execution.RetryAttemptN,
+		execution.ApprovalTokenExpiresAt,
 	)
 
 	if err != nil {
@@ -779,7 +782,8 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		          notification_sent, approval_token, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		          cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		          created_by_user_id, retry_execution_id, retry_attempt_n
+		          created_by_user_id, retry_execution_id, retry_attempt_n,
+		          approval_token_expires_at
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
@@ -818,7 +822,8 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id, retry_execution_id, retry_attempt_n
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date DESC
@@ -834,7 +839,8 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id, retry_execution_id, retry_attempt_n
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -852,7 +858,8 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id, retry_execution_id, retry_attempt_n
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -876,7 +883,8 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		       notification_sent, approval_token, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
-		       created_by_user_id, retry_execution_id, retry_attempt_n
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -905,7 +913,7 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 	for rows.Next() {
 		var exec PurchaseExecution
 		var recommendationsJSON []byte
-		var notifSent, completedAt, expiresAt sql.NullTime
+		var notifSent, completedAt, expiresAt, tokenExpiresAt sql.NullTime
 		// plan_id is nullable since migration 000033 (direct-execute
 		// rows from the Recommendations page have no originating plan).
 		var planID sql.NullString
@@ -932,6 +940,7 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 			&exec.CreatedByUserID,
 			&exec.RetryExecutionID,
 			&exec.RetryAttemptN,
+			&tokenExpiresAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
@@ -955,6 +964,9 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 		}
 		if expiresAt.Valid {
 			exec.TTL = ttlFromTime(expiresAt.Time)
+		}
+		if tokenExpiresAt.Valid {
+			exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
 		}
 
 		executions = append(executions, exec)

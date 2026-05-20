@@ -795,25 +795,36 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 	// "successor" is a footgun we want to remove at the source.
 	copiedRecs := append([]config.RecommendationRecord(nil), failedExec.Recommendations...)
 
+	// Generate a crypto/rand-backed approval token for the retry execution
+	// (issue #408). uuid.New().String() was used here previously, which only
+	// provides 122 bits of entropy in a known format; common.GenerateApprovalToken
+	// provides 256 bits of uniform randomness, matching every other creation site.
+	approvalToken, err := common.GenerateApprovalToken()
+	if err != nil {
+		return nil, fmt.Errorf("generate approval token for retry: %w", err)
+	}
+	tokenExpiresAt := time.Now().Add(config.ApprovalTokenTTL)
+
 	newExecutionID := uuid.New().String()
 	// PlanID + StepNumber propagate from the predecessor so a retried
 	// planned execution stays attributed to its plan + ramp step (CR
 	// #168 review). For ad-hoc executions PlanID is "" and StepNumber
 	// is 0, so propagation is a no-op for the non-plan case.
 	newExecution := &config.PurchaseExecution{
-		ExecutionID:      newExecutionID,
-		PlanID:           failedExec.PlanID,
-		StepNumber:       failedExec.StepNumber,
-		Status:           "pending",
-		ScheduledDate:    time.Now(),
-		Recommendations:  copiedRecs,
-		TotalUpfrontCost: totalUpfront,
-		EstimatedSavings: totalSavings,
-		ApprovalToken:    uuid.New().String(),
-		Source:           common.PurchaseSourceWeb,
-		CapacityPercent:  failedExec.CapacityPercent,
-		CreatedByUserID:  resolveCreatorUserID(session),
-		RetryAttemptN:    failedExec.RetryAttemptN + 1,
+		ExecutionID:            newExecutionID,
+		PlanID:                 failedExec.PlanID,
+		StepNumber:             failedExec.StepNumber,
+		Status:                 "pending",
+		ScheduledDate:          time.Now(),
+		Recommendations:        copiedRecs,
+		TotalUpfrontCost:       totalUpfront,
+		EstimatedSavings:       totalSavings,
+		ApprovalToken:          approvalToken,
+		ApprovalTokenExpiresAt: &tokenExpiresAt,
+		Source:                 common.PurchaseSourceWeb,
+		CapacityPercent:        failedExec.CapacityPercent,
+		CreatedByUserID:        resolveCreatorUserID(session),
+		RetryAttemptN:          failedExec.RetryAttemptN + 1,
 	}
 
 	// Stamp the original failed row with the linkage. This is a
@@ -1146,16 +1157,18 @@ func newPendingExecution(req *ExecutePurchaseRequest, totalUpfront, totalSavings
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate approval token: %w", err)
 	}
+	tokenExpiresAt := time.Now().Add(config.ApprovalTokenTTL)
 	return &config.PurchaseExecution{
-		ExecutionID:      uuid.New().String(),
-		Status:           "pending",
-		ScheduledDate:    time.Now(),
-		Recommendations:  req.Recommendations,
-		TotalUpfrontCost: totalUpfront,
-		EstimatedSavings: totalSavings,
-		ApprovalToken:    approvalToken,
-		Source:           common.PurchaseSourceWeb,
-		CapacityPercent:  req.CapacityPercent,
+		ExecutionID:            uuid.New().String(),
+		Status:                 "pending",
+		ScheduledDate:          time.Now(),
+		Recommendations:        req.Recommendations,
+		TotalUpfrontCost:       totalUpfront,
+		EstimatedSavings:       totalSavings,
+		ApprovalToken:          approvalToken,
+		ApprovalTokenExpiresAt: &tokenExpiresAt,
+		Source:                 common.PurchaseSourceWeb,
+		CapacityPercent:        req.CapacityPercent,
 	}, nil
 }
 
