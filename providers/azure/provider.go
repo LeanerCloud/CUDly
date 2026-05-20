@@ -421,6 +421,7 @@ func (p *AzureProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceMemoryDB,
 		common.ServiceSavingsPlans,
 		common.ServiceSearch,
+		common.ServiceDataWarehouse,
 	}
 }
 
@@ -480,6 +481,8 @@ func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceTy
 		return NewSavingsPlansClient(p.cred, subscriptionID, region), nil
 	case common.ServiceSearch:
 		return NewSearchClient(p.cred, subscriptionID, region), nil
+	case common.ServiceDataWarehouse:
+		return NewSynapseClient(p.cred, subscriptionID, region), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}

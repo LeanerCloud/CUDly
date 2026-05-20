@@ -11,6 +11,7 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/managedredis"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/savingsplans"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/search"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/synapse"
 )
 
 // NewComputeClient creates a new Azure Compute (VM) client
@@ -47,6 +48,11 @@ func NewSavingsPlansClient(cred azcore.TokenCredential, subscriptionID, region s
 // NewSearchClient creates a new Azure Cognitive Search client
 func NewSearchClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
 	return search.NewClient(cred, subscriptionID, region)
+}
+
+// NewSynapseClient creates a new Azure Synapse Analytics client
+func NewSynapseClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return synapse.NewClient(cred, subscriptionID, region)
 }
 
 // NewRecommendationsClient creates a new Azure recommendations client.
