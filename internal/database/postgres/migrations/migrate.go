@@ -68,7 +68,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 		return fmt.Errorf("database is in dirty state at version %d", version)
 	}
 
-	fmt.Printf("Database migrations completed successfully (version: %d)\n", version)
+	log.Printf("Database migrations completed successfully (version: %d)", version)
 
 	// Create admin user if email provided (after migrations complete)
 	if adminEmail != "" {
@@ -95,7 +95,7 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, pass
 		return ensureAdminUserWithPassword(ctx, pool, email, password)
 	}
 
-	fmt.Printf("Ensuring admin user exists: %s (user will need to reset password to login)\n", email)
+	log.Printf("Ensuring admin user exists: %s (user will need to reset password to login)", email)
 
 	// Create admin user with no password - account is inactive until password is set via reset flow.
 	// Use ON CONFLICT to prevent race conditions when multiple instances run migrations.
@@ -115,9 +115,9 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, pass
 	}
 
 	if result.RowsAffected() > 0 {
-		fmt.Printf("Admin user created: %s (password not set - user must reset)\n", email)
+		log.Printf("Admin user created: %s (password not set - user must reset)", email)
 	} else {
-		fmt.Printf("Admin user already exists: %s\n", email)
+		log.Printf("Admin user already exists: %s", email)
 	}
 
 	// Idempotent backfill + invariant check on any pre-existing admin
@@ -139,7 +139,7 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, pass
 // coupling that semantics to the password-empty WHERE clause. See
 // issue #351.
 func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email string, password string) error {
-	fmt.Printf("Ensuring admin user exists with password: %s\n", email)
+	log.Printf("Ensuring admin user exists with password: %s", email)
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
@@ -166,9 +166,9 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email 
 	}
 
 	if result.RowsAffected() > 0 {
-		fmt.Printf("Admin user created/activated with password: %s\n", email)
+		log.Printf("Admin user created/activated: %s", email)
 	} else {
-		fmt.Printf("Admin user already has a password set: %s (skipping)\n", email)
+		log.Printf("Admin user already has a password set: %s (skipping)", email)
 	}
 
 	// Idempotent backfill + invariant check on any pre-existing admin
@@ -290,7 +290,7 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 
 	// Log current version before rollback
 	currentVersion, _, _ := m.Version()
-	fmt.Printf("Rolling back %d migration(s) from version %d...\n", steps, currentVersion)
+	log.Printf("Rolling back %d migration(s) from version %d...", steps, currentVersion)
 
 	// Rollback steps
 	if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {
@@ -306,7 +306,7 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 		return fmt.Errorf("database is in dirty state at version %d", version)
 	}
 
-	fmt.Printf("Rolled back %d migration(s) (current version: %d)\n", steps, version)
+	log.Printf("Rolled back %d migration(s) (current version: %d)", steps, version)
 	return nil
 }
 
