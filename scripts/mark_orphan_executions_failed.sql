@@ -30,20 +30,18 @@ FROM purchase_executions
 WHERE cloud_account_id IS NULL
   AND status IN ('pending', 'notified');
 
-UPDATE purchase_executions
-   SET status = 'failed',
-       error  = COALESCE(
-                  NULLIF(error, ''),
-                  'account deleted, cannot execute (issue #606 cleanup)'
-                )
- WHERE cloud_account_id IS NULL
-   AND status IN ('pending', 'notified');
-
--- Confirm the row count for the operator.
-SELECT COUNT(*) AS rows_updated
-FROM purchase_executions
-WHERE cloud_account_id IS NULL
-  AND status = 'failed'
-  AND error = 'account deleted, cannot execute (issue #606 cleanup)';
+-- Unconditionally set the canonical error message — pending/notified rows
+-- shouldn't carry meaningful prior errors (the executor only sets error on
+-- terminal status transitions), and the RETURNING clause below gives us an
+-- accurate row count without a separate filter that could drift.
+WITH updated AS (
+    UPDATE purchase_executions
+       SET status = 'failed',
+           error  = 'account deleted, cannot execute (issue #606 cleanup)'
+     WHERE cloud_account_id IS NULL
+       AND status IN ('pending', 'notified')
+    RETURNING execution_id
+)
+SELECT COUNT(*) AS rows_updated FROM updated;
 
 COMMIT;

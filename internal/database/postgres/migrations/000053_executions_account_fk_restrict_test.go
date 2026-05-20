@@ -39,6 +39,20 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 	assert.Equal(t, "r", deleteAction,
 		"expected confdeltype 'r' (RESTRICT) after 000053, got %q", deleteAction)
 
+	// Negative-space guard: migration 000053 must only tighten the executions
+	// FK. The recommendations FK should stay ON DELETE SET NULL — orphaning a
+	// historical recommendation is fine (it's advisory data), unlike a pending
+	// execution (which represents money about to be spent).
+	var recsDeleteAction string
+	err = pool.QueryRow(ctx, `
+		SELECT confdeltype
+		FROM pg_constraint
+		WHERE conname = 'recommendations_cloud_account_id_fkey'
+	`).Scan(&recsDeleteAction)
+	require.NoError(t, err)
+	assert.Equal(t, "n", recsDeleteAction,
+		"recommendations FK must stay SET NULL after 000053, got %q", recsDeleteAction)
+
 	// Behavioural test: insert an account + a pending execution that
 	// references it, then attempt to delete the account. Postgres must
 	// raise a foreign-key-violation (SQLSTATE 23503).
@@ -100,4 +114,16 @@ func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "n", deleteAction,
 		"expected confdeltype 'n' (SET NULL) after rollback, got %q", deleteAction)
+
+	// Negative-space guard: rolling back 000053 must not touch the
+	// recommendations FK — it has always been SET NULL and should stay so.
+	var recsDeleteAction string
+	err = pool.QueryRow(ctx, `
+		SELECT confdeltype
+		FROM pg_constraint
+		WHERE conname = 'recommendations_cloud_account_id_fkey'
+	`).Scan(&recsDeleteAction)
+	require.NoError(t, err)
+	assert.Equal(t, "n", recsDeleteAction,
+		"recommendations FK must stay SET NULL after rollback, got %q", recsDeleteAction)
 }
