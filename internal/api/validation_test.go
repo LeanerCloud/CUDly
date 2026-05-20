@@ -331,3 +331,122 @@ func TestValidateRequestBodySize(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateGCPClientEmail covers issue #405: gcp_client_email must match the
+// GCP service-account email format so it cannot be used to inject path segments
+// into the SA impersonation URL.
+func TestValidateGCPClientEmail(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		email     string
+		wantError bool
+	}{
+		{"empty is allowed", "", false},
+		{"valid SA email", "my-sa@my-project.iam.gserviceaccount.com", false},
+		{"valid SA email with dots in name", "sa.name-123@proj.iam.gserviceaccount.com", false},
+		{"path traversal injection", "foo@bar.com/../../v1/projects/-/serviceAccounts/attacker@evil.com", true},
+		{"wrong domain", "sa@my-project.iam.googleapis.com", true},
+		{"missing @ sign", "my-project.iam.gserviceaccount.com", true},
+		{"arbitrary email", "user@example.com", true},
+		{"space in value", "sa @proj.iam.gserviceaccount.com", true},
+		{"newline injection", "sa@proj.iam.gserviceaccount.com\nX-Injected: header", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateGCPClientEmail(tt.email)
+			if tt.wantError {
+				assert.Error(t, err)
+				ce, ok := IsClientError(err)
+				if assert.True(t, ok, "expected ClientError") {
+					assert.Equal(t, 400, ce.code)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestValidateAWSRoleARN covers issue #413: aws_role_arn must be a valid IAM
+// role ARN so malformed strings are caught at the API boundary.
+func TestValidateAWSRoleARN(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		arn       string
+		wantError bool
+	}{
+		{"empty is allowed (ambient creds)", "", false},
+		{"valid commercial ARN", "arn:aws:iam::123456789012:role/MyRole", false},
+		{"valid govcloud ARN", "arn:aws-us-gov:iam::123456789012:role/MyRole", false},
+		{"valid china ARN", "arn:aws-cn:iam::123456789012:role/MyRole", false},
+		{"valid ARN with path", "arn:aws:iam::123456789012:role/path/to/MyRole", false},
+		{"valid ARN with IAM-allowed special chars", "arn:aws:iam::123456789012:role/My+Role=v1,name.test@example_role-A", false},
+		{"missing colons (common typo)", "arn:aws:iam:123456789012:role/Foo", true},
+		{"non-ARN string", "not-an-arn", true},
+		{"wrong service (sts)", "arn:aws:sts::123456789012:role/Foo", true},
+		{"account ID too short", "arn:aws:iam::12345:role/Foo", true},
+		{"unknown partition", "arn:aws-eu:iam::123456789012:role/Foo", true},
+		// The strict character class rejects anything outside the IAM-permitted
+		// set so attackers cannot smuggle whitespace, newlines, or HTML metachars
+		// past validation into downstream consumers.
+		{"whitespace in role name", "arn:aws:iam::123456789012:role/My Role", true},
+		{"newline in role name", "arn:aws:iam::123456789012:role/My\nRole", true},
+		{"angle-bracket injection", "arn:aws:iam::123456789012:role/<script>", true},
+		{"trailing slash (empty role name)", "arn:aws:iam::123456789012:role/", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAWSRoleARN(tt.arn)
+			if tt.wantError {
+				assert.Error(t, err)
+				ce, ok := IsClientError(err)
+				if assert.True(t, ok, "expected ClientError") {
+					assert.Equal(t, 400, ce.code)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestValidateAWSWebIdentityTokenFile covers issue #403: aws_web_identity_token_file
+// must be restricted to known-safe mount prefixes to prevent arbitrary host file reads.
+func TestValidateAWSWebIdentityTokenFile(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		path      string
+		wantError bool
+	}{
+		{"empty is allowed (env var fallback)", "", false},
+		{"EKS token file", "/var/run/secrets/eks.amazonaws.com/serviceaccount/token", false},
+		{"k8s service-account token", "/var/run/secrets/kubernetes.io/serviceaccount/token", false},
+		{"arbitrary host path", "/proc/self/environ", true},
+		{"etc passwd", "/etc/passwd", true},
+		{"docker secret", "/run/secrets/my-secret", true},
+		{"env file", "/var/run/.env", true},
+		{"traversal into allowed prefix", "/var/run/secrets/eks.amazonaws.com/serviceaccount/../../etc/passwd", true}, // path traversal blocked even when prefix matches
+		{"relative path", "secrets/token", true},
+		{"kubernetes prefix without trailing slash content", "/var/run/secrets/kubernetes.io/serviceaccount/", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAWSWebIdentityTokenFile(tt.path)
+			if tt.wantError {
+				assert.Error(t, err)
+				ce, ok := IsClientError(err)
+				if assert.True(t, ok, "expected ClientError") {
+					assert.Equal(t, 400, ce.code)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
