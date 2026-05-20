@@ -47,7 +47,49 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return fmt.Errorf("approval token has expired")
 	}
 
+	// Preflight guard (issue #609): reject non-AWS orphan executions before
+	// the cloud SDK is reached. See OrphanExecutionError for the full rationale.
+	if err := OrphanExecutionError(execution); err != nil {
+		return err
+	}
+
 	return m.ApproveAndExecute(ctx, executionID, actor)
+}
+
+// OrphanExecutionError returns a descriptive error when the execution has no
+// resolvable CloudAccountID and the provider is explicitly non-AWS (issue #609).
+// AWS executions with a nil CloudAccountID are passed through because the
+// ambient-host-account fallback from PR #607/#604 handles them. Empty
+// provider is treated as AWS (legacy rows pre-dating multi-cloud support).
+//
+// An execution is NOT considered orphan if any individual recommendation
+// carries its own non-nil CloudAccountID — multi-rec fan-out executions can
+// have a nil execution-level field while individual recs still name the
+// target account.
+//
+// Exported so the HTTP layer (internal/api) can call the same guard without
+// duplicating the predicate. Extracted from ApproveExecution to keep that
+// function below the gocyclo threshold — same pattern as loadCancelableExecution.
+func OrphanExecutionError(execution *config.PurchaseExecution) error {
+	if execution.CloudAccountID != nil {
+		return nil
+	}
+	if len(execution.Recommendations) == 0 {
+		return nil
+	}
+	provider := execution.Recommendations[0].Provider
+	if provider == "" || provider == "aws" {
+		return nil
+	}
+	// Any rec-level CloudAccountID means at least one recommendation has a
+	// concrete target account — the execution is not fully orphaned.
+	for i := range execution.Recommendations {
+		if execution.Recommendations[i].CloudAccountID != nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("execution %s references an account that no longer exists (provider: %s): cancel this purchase — it cannot execute",
+		execution.ExecutionID, provider)
 }
 
 // ApproveAndExecute atomically flips a pending/notified execution to

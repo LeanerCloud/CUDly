@@ -501,6 +501,89 @@ func TestManager_ApproveExecution_NilExpiresAt_LegacyRow(t *testing.T) {
 	store.AssertExpectations(t)
 }
 
+// --- Regression tests for issue #609 (orphan-account guard, ApproveExecution path) ---
+
+// TestManager_ApproveExecution_NonAWSOrphanReturnsError is the regression
+// guard for issue #609 on the token-authenticated ApproveExecution path (used
+// by the SQS approve worker and the legacy email-link flow). An execution
+// whose CloudAccountID is nil and whose provider is non-AWS must return a
+// descriptive error before the execute chain is entered, instead of surfacing
+// an opaque cloud-SDK credential error at runtime.
+func TestManager_ApproveExecution_NonAWSOrphanReturnsError(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _ := newApproveManager(t)
+
+	execution := &config.PurchaseExecution{
+		ExecutionID:   "exec-orphan",
+		Status:        "pending",
+		ApprovalToken: "valid-token",
+		// CloudAccountID nil — account was deleted.
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "azure"}},
+	}
+	store.On("GetExecutionByID", ctx, "exec-orphan").Return(execution, nil)
+
+	err := manager.ApproveExecution(ctx, "exec-orphan", "valid-token", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no longer exists")
+	assert.Contains(t, err.Error(), "azure")
+	// Execute chain must not run after the orphan guard fires.
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertExpectations(t)
+}
+
+// TestManager_ApproveExecution_AWSOrphanFallsThrough confirms the AWS
+// ambient-fallback carve-out: nil CloudAccountID + AWS provider must NOT be
+// blocked by the issue-#609 guard. The execution proceeds normally.
+func TestManager_ApproveExecution_AWSOrphanFallsThrough(t *testing.T) {
+	ctx := context.Background()
+	manager, store, sender := newApproveManager(t)
+
+	execution := &config.PurchaseExecution{
+		ExecutionID:   "exec-aws-ambient",
+		PlanID:        "plan-aws",
+		Status:        "pending",
+		ApprovalToken: "valid-token",
+		// CloudAccountID nil but provider is AWS — ambient fallback applies.
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "aws"}},
+	}
+	updated := &config.PurchaseExecution{
+		ExecutionID:   "exec-aws-ambient",
+		PlanID:        "plan-aws",
+		Status:        "approved",
+		ApprovalToken: "valid-token",
+	}
+	store.On("GetExecutionByID", ctx, "exec-aws-ambient").Return(execution, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "approved").Return(updated, nil)
+	stubExecuteChain(t, store, sender, "plan-aws")
+
+	err := manager.ApproveExecution(ctx, "exec-aws-ambient", "valid-token", "")
+	require.NoError(t, err)
+	store.AssertExpectations(t)
+	sender.AssertExpectations(t)
+}
+
+// TestOrphanExecutionError_RecLevelAccountIDPreventsOrphan is the regression
+// guard for CR pass-1 actionable 2: an execution with a nil execution-level
+// CloudAccountID and a non-AWS provider must NOT be treated as an orphan when
+// at least one recommendation carries its own non-nil CloudAccountID. The
+// multi-rec fan-out path stores account affinity at the rec level and leaves
+// the execution-level field nil.
+func TestOrphanExecutionError_RecLevelAccountIDPreventsOrphan(t *testing.T) {
+	accountID := "acct-azure-multi-001"
+	execution := &config.PurchaseExecution{
+		ExecutionID: "exec-multi-rec",
+		// Execution-level CloudAccountID is nil — fan-out shape.
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", Provider: "azure", CloudAccountID: &accountID},
+			{ID: "r2", Provider: "azure", CloudAccountID: &accountID},
+		},
+	}
+	// Despite execution-level nil + non-AWS provider, the rec-level account
+	// ID means the execution is NOT orphaned. OrphanExecutionError must return nil.
+	err := OrphanExecutionError(execution)
+	assert.NoError(t, err, "rec-level CloudAccountID must prevent orphan classification")
+}
+
 // TestManager_CancelExecution_ExpiredToken is the cancel-path regression
 // guard for issue #397.
 func TestManager_CancelExecution_ExpiredToken(t *testing.T) {

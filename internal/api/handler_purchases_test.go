@@ -359,6 +359,156 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 	assert.Contains(t, ce.Error(), "could not be approved")
 }
 
+// --- Regression tests for issue #609 (orphan-account guard) ---
+
+// TestHandler_approvePurchase_AzureOrphanRejects409 is the regression guard
+// for issue #609: an execution whose CloudAccountID is nil and whose provider
+// is Azure must be rejected with 409 and a descriptive message before the
+// cloud SDK is ever reached. Pre-fix this surfaced an opaque IMDS /
+// missing-env-var error.
+func TestHandler_approvePurchase_AzureOrphanRejects409(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		// CloudAccountID intentionally nil — account was deleted.
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "azure"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com", Role: "admin"}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.Error(), "no longer exists")
+	assert.Contains(t, ce.Error(), "azure")
+	// Guard fires before the purchase manager is touched.
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything)
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_approvePurchase_GCPOrphanRejects409 mirrors the Azure case for GCP.
+func TestHandler_approvePurchase_GCPOrphanRejects409(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "valid-token",
+		Status:          "pending",
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "gcp"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com", Role: "admin"}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.Error(), "no longer exists")
+	assert.Contains(t, ce.Error(), "gcp")
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything)
+	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_approvePurchase_AWSOrphanFallsThrough confirms that an AWS
+// execution with nil CloudAccountID is NOT blocked by the issue-#609 guard.
+// AWS has an ambient-host-account fallback (PR #607/#604) that handles it.
+func TestHandler_approvePurchase_AWSOrphanFallsThrough(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	adminEmail := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		// CloudAccountID nil — but provider is AWS, so fallback applies.
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "aws"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+	// Guard does not fire; ApproveAndExecute is called normally.
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", result.(map[string]string)["status"])
+	mockPurchase.AssertExpectations(t)
+}
+
+// TestHandler_approvePurchase_NonOrphanUnchanged confirms that an execution
+// with a populated CloudAccountID is not affected by the issue-#609 guard.
+func TestHandler_approvePurchase_NonOrphanUnchanged(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	adminEmail := "admin@example.com"
+	accountID := "acct-azure-001"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "valid-token",
+		Status:        "pending",
+		// CloudAccountID is set — normal case, guard must not fire.
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "azure", CloudAccountID: &accountID}},
+		CloudAccountID:  &accountID,
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+
+	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", result.(map[string]string)["status"])
+	mockPurchase.AssertExpectations(t)
+}
+
 func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T) {
 	// Regression: once an account has contact_email set, the global
 	// notification email is only CC'd — it should NOT be accepted as an

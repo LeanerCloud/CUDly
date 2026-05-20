@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
@@ -263,18 +264,36 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	return &StatusResponse{Status: "cancelled"}, nil
 }
 
-// Purchase action handlers
-func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
-	if err := validateUUID(execID); err != nil {
-		return nil, err
-	}
-
+// loadApproveExecution fetches an execution by ID, returns a 404 ClientError
+// when not found, and then runs the issue-#609 orphan preflight check.
+// Extracted from approvePurchase to keep that function below the gocyclo
+// threshold — same pattern as loadCancelableExecution in the purchase package.
+func (h *Handler) loadApproveExecution(ctx context.Context, execID string) (*config.PurchaseExecution, error) {
 	execution, err := h.config.GetExecutionByID(ctx, execID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
 	}
 	if execution == nil {
 		return nil, NewClientError(404, "execution not found")
+	}
+	// Preflight (issue #609): reject non-AWS orphan executions before the
+	// cloud SDK is reached. Delegates to the centralized predicate in the
+	// purchase package so the logic is maintained in one place.
+	if err := purchase.OrphanExecutionError(execution); err != nil {
+		return nil, NewClientError(409, err.Error())
+	}
+	return execution, nil
+}
+
+// Purchase action handlers
+func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
+	if err := validateUUID(execID); err != nil {
+		return nil, err
+	}
+
+	execution, err := h.loadApproveExecution(ctx, execID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Three-mode dispatch — same shape as cancelPurchase (issue #46) and
