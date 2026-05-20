@@ -3,6 +3,7 @@ package api
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,15 +26,18 @@ func TestValidateRegistrationRequest_AccountNameSanitized(t *testing.T) {
 		assert.NotContains(t, req.AccountName, "\n")
 	})
 
-	t.Run("length-capped", func(t *testing.T) {
+	t.Run("length-capped (rune-safe)", func(t *testing.T) {
+		// Use a multibyte rune so the cap is exercised by rune count, not byte
+		// length, and confirm truncation never splits a rune (valid UTF-8).
 		req := RegistrationRequest{
 			Provider:     "aws",
 			ExternalID:   "ext-123",
-			AccountName:  strings.Repeat("a", maxAccountNameLen+50),
+			AccountName:  strings.Repeat("é", maxAccountNameLen+50),
 			ContactEmail: "user@example.com",
 		}
 		require.NoError(t, validateRegistrationRequest(&req))
-		assert.LessOrEqual(t, len(req.AccountName), maxAccountNameLen)
+		assert.LessOrEqual(t, utf8.RuneCountInString(req.AccountName), maxAccountNameLen)
+		assert.True(t, utf8.ValidString(req.AccountName), "cap must not split a multibyte rune")
 	})
 
 	t.Run("CRLF-only name is rejected as empty", func(t *testing.T) {
