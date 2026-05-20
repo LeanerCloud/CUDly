@@ -399,10 +399,10 @@ func TestNewMultiSubscriptionRecommendationsClient_BuildsAdaptersPerAccount(t *t
 	assert.Equal(t, "sub-b", client.adapters[1].subscriptionID)
 }
 
-// TestMultiSubscriptionRecommendationsClient_AllFail verifies that when all
-// sub-adapters fail, an error is returned rather than silently returning an
-// empty slice.
-func TestMultiSubscriptionRecommendationsClient_AllFail(t *testing.T) {
+// TestMultiSubscriptionRecommendationsClient_CancelledContext verifies that when
+// the context is cancelled before invocation, GetAllRecommendations returns
+// a context.Canceled error.
+func TestMultiSubscriptionRecommendationsClient_CancelledContext(t *testing.T) {
 	// Use a pre-cancelled context to force all adapter calls to return an error.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
