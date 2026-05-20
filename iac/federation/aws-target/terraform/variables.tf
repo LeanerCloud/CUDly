@@ -26,9 +26,20 @@ variable "oidc_audience" {
 }
 
 variable "oidc_subject_claim" {
-  description = "Optional subject (sub) claim to restrict trust. Leave empty to allow any subject."
+  description = <<-EOT
+    Subject (sub) claim used to restrict OIDC trust to a specific identity.
+    Azure AD managed identity: the object ID of the managed identity.
+    GCP service account:       the service account email in the form
+                               system:serviceaccount:<project>:<sa-email>.
+    This variable is required and must not be empty. An empty value would
+    allow any principal in the same OIDC provider tenant to assume this role.
+  EOT
   type        = string
-  default     = ""
+
+  validation {
+    condition     = var.oidc_subject_claim != null && length(trimspace(var.oidc_subject_claim)) > 0
+    error_message = "oidc_subject_claim must be set to a non-empty subject claim. Leaving it empty would allow any principal in the OIDC provider tenant to assume this role."
+  }
 }
 
 variable "role_name" {
