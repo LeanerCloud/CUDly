@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
@@ -85,16 +86,21 @@ func (c *Client) parseEC2Details(rec *common.Recommendation, details *types.Rese
 	if ec2Details.Region != nil {
 		rec.Region = normalizeRegionName(*ec2Details.Region)
 	}
-	if ec2Details.Tenancy != nil {
-		ec2Info.Tenancy = *ec2Details.Tenancy
+	// Tenancy: CE returns "shared" for default tenancy; the EC2 RI filter API
+	// expects "default" (types.TenancyDefault). CE "dedicated" maps directly.
+	// Any nil or unrecognised value is treated as default.
+	if ec2Details.Tenancy != nil && *ec2Details.Tenancy == "dedicated" {
+		ec2Info.Tenancy = string(ec2types.TenancyDedicated)
 	} else {
-		ec2Info.Tenancy = "shared"
+		ec2Info.Tenancy = string(ec2types.TenancyDefault)
 	}
 
+	// Scope: the EC2 RI filter API expects "Region" (types.ScopeRegional) or
+	// "Availability Zone" (types.ScopeAvailabilityZone) - not lowercase/hyphenated.
 	if ec2Details.AvailabilityZone != nil && *ec2Details.AvailabilityZone != "" {
-		ec2Info.Scope = "availability-zone"
+		ec2Info.Scope = string(ec2types.ScopeAvailabilityZone)
 	} else {
-		ec2Info.Scope = "region"
+		ec2Info.Scope = string(ec2types.ScopeRegional)
 	}
 
 	rec.Details = ec2Info

@@ -197,19 +197,64 @@ func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec commo
 	})
 }
 
+// canonicalizeEC2Tenancy maps legacy lowercase/hyphenated tenancy values that
+// were written by parser versions before fix #598 to the canonical EC2 API enum
+// values. New parser output already carries the correct casing, so this is a
+// defensive shim for pre-fix-collected recommendations persisted in the DB.
+//
+// Canonical mappings (per types.Tenancy in the AWS SDK):
+//
+//	"shared"    -> "default"  (CE-to-EC2 mismatch that the old parser passed through)
+//	"default"   -> "default"  (already canonical; no-op)
+//	"dedicated" -> "dedicated" (already canonical; no-op)
+func canonicalizeEC2Tenancy(t string) string {
+	switch strings.ToLower(t) {
+	case "shared", "default":
+		return string(types.TenancyDefault)
+	case "dedicated":
+		return string(types.TenancyDedicated)
+	default:
+		return t
+	}
+}
+
+// canonicalizeEC2Scope maps legacy lowercase/hyphenated scope values that were
+// written by parser versions before fix #598 to the canonical EC2 API enum
+// values. New parser output already carries the correct casing.
+//
+// Canonical mappings (per types.Scope in the AWS SDK):
+//
+//	"region"            -> "Region"           (lowercase, old parser)
+//	"availability-zone" -> "Availability Zone" (hyphenated, old parser)
+//	"Region"            -> "Region"            (no-op)
+//	"Availability Zone" -> "Availability Zone" (no-op)
+func canonicalizeEC2Scope(s string) string {
+	switch strings.ToLower(s) {
+	case "region":
+		return string(types.ScopeRegional)
+	case "availability-zone", "availability zone":
+		return string(types.ScopeAvailabilityZone)
+	default:
+		return s
+	}
+}
+
 // buildOfferingFilters constructs the EC2 API filters for finding an RI offering.
 func (c *Client) buildOfferingFilters(rec common.Recommendation, details *common.ComputeDetails) []types.Filter {
 	platform := details.Platform
 	if platform == "" {
 		platform = "Linux/UNIX"
 	}
-	tenancy := details.Tenancy
+	// Canonicalize tenancy and scope: new recs from parser>=fix/598 already carry
+	// the correct casing; older persisted recs carry lowercase/hyphenated values
+	// that the AWS RI filter API rejects. The helpers are no-ops for canonical values.
+	tenancy := canonicalizeEC2Tenancy(details.Tenancy)
 	if tenancy == "" {
-		tenancy = "default"
+		tenancy = string(types.TenancyDefault)
 	}
-	scope := details.Scope
+	scope := canonicalizeEC2Scope(details.Scope)
 	if scope == "" {
-		scope = "Region"
+		scope = string(types.ScopeRegional)
 	}
 
 	return []types.Filter{
