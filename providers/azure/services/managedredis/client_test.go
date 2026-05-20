@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
 // -- mock helpers --
@@ -38,18 +39,18 @@ func (m *mockRecommendationsPager) NextPage(_ context.Context) (armconsumption.R
 }
 
 type mockReservationsPager struct {
-	pages []armconsumption.ReservationsDetailsClientListByReservationOrderResponse
+	pages []armconsumption.ReservationsDetailsClientListResponse
 	index int
 	err   error
 }
 
 func (m *mockReservationsPager) More() bool { return m.index < len(m.pages) }
-func (m *mockReservationsPager) NextPage(_ context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error) {
+func (m *mockReservationsPager) NextPage(_ context.Context) (armconsumption.ReservationsDetailsClientListResponse, error) {
 	if m.err != nil {
-		return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{}, m.err
+		return armconsumption.ReservationsDetailsClientListResponse{}, m.err
 	}
 	if m.index >= len(m.pages) {
-		return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{}, errors.New("no more pages")
+		return armconsumption.ReservationsDetailsClientListResponse{}, errors.New("no more pages")
 	}
 	p := m.pages[m.index]
 	m.index++
@@ -293,6 +294,7 @@ func TestGetRecommendations_MultiplePages(t *testing.T) {
 
 func TestGetExistingCommitments_Empty(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
+	c.SetReservationsPager(&mockReservationsPager{})
 	commitments, err := c.GetExistingCommitments(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, commitments)
@@ -303,7 +305,7 @@ func TestGetExistingCommitments_RedisSKUIncluded(t *testing.T) {
 	resID := "res-123"
 	sku := "redis-premium-p1"
 	c.SetReservationsPager(&mockReservationsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 				Value: []*armconsumption.ReservationDetail{
 					{Properties: &armconsumption.ReservationDetailProperties{ReservationID: &resID, SKUName: &sku}},
@@ -327,7 +329,7 @@ func TestGetExistingCommitments_NonRedisFiltered(t *testing.T) {
 	id1 := "res-1"
 	id2 := "res-2"
 	c.SetReservationsPager(&mockReservationsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 				Value: []*armconsumption.ReservationDetail{
 					{Properties: &armconsumption.ReservationDetailProperties{ReservationID: &id1, SKUName: &sqlSKU}},
@@ -345,7 +347,7 @@ func TestGetExistingCommitments_NonRedisFiltered(t *testing.T) {
 func TestGetExistingCommitments_NilProperties(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	c.SetReservationsPager(&mockReservationsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 				Value: []*armconsumption.ReservationDetail{{Properties: nil}},
 			}},
@@ -359,12 +361,12 @@ func TestGetExistingCommitments_NilProperties(t *testing.T) {
 func TestGetExistingCommitments_PagerError(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	c.SetReservationsPager(&mockReservationsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{{}},
+		pages: []armconsumption.ReservationsDetailsClientListResponse{{}},
 		err:   errors.New("api error"),
 	})
-	commitments, err := c.GetExistingCommitments(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	_, err := c.GetExistingCommitments(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to fetch reservations details page")
 }
 
 // -- GetOfferingDetails --
@@ -538,17 +540,36 @@ func TestCommonSKUs(t *testing.T) {
 
 // -- convertRecommendation --
 
-func TestConvertRecommendation(t *testing.T) {
+func TestConvertRecommendation_nil(t *testing.T) {
 	c := NewClient(nil, "sub-abc", "westeurope")
 	rec := c.convertRecommendation(context.Background(), nil)
+	assert.Nil(t, rec, "nil input should return nil")
+}
+
+func TestConvertRecommendation_legacy(t *testing.T) {
+	c := NewClient(nil, "sub-abc", "westeurope")
+	azRec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("westeurope"),
+		mocks.WithNormalizedSize("Premium_P1"),
+		mocks.WithQuantity(2),
+		mocks.WithCosts(1000.0, 700.0, 300.0),
+	)
+	rec := c.convertRecommendation(context.Background(), azRec)
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderAzure, rec.Provider)
 	assert.Equal(t, common.ServiceMemoryDB, rec.Service)
 	assert.Equal(t, "sub-abc", rec.Account)
 	assert.Equal(t, "westeurope", rec.Region)
+	assert.Equal(t, "Premium_P1", rec.ResourceType)
+	assert.Equal(t, 2, rec.Count)
 	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
 	assert.Equal(t, "1yr", rec.Term)
 	assert.Equal(t, "upfront", rec.PaymentOption)
+	assert.InDelta(t, 1000.0, rec.OnDemandCost, 0.01)
+	assert.InDelta(t, 700.0, rec.CommitmentCost, 0.01)
+	assert.InDelta(t, 300.0, rec.EstimatedSavings, 0.01)
+	require.NotNil(t, rec.RecurringMonthlyCost)
+	assert.Equal(t, 0.0, *rec.RecurringMonthlyCost)
 }
 
 // -- AzureRetailPrice struct --
