@@ -589,41 +589,58 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	return result, nil
 }
 
-// mapServiceType maps a service string to common.ServiceType.
-//
-// Returns the provider-neutral canonical types (ServiceCompute,
-// ServiceRelationalDB, ServiceCache, ServiceSearch, ServiceDataWarehouse)
-// rather than the legacy AWS-specific aliases (ServiceEC2, ServiceRDS,
-// ServiceElastiCache, ServiceOpenSearch, ServiceRedshift). Both the AWS
-// and Azure provider switches accept the canonical types; only the AWS
-// switch accepts the legacy aliases (see providers/aws/provider.go +
-// providers/azure/provider.go). Returning the AWS alias here caused
-// every Azure VM purchase to fail at provider.GetServiceClient with
-// "unsupported service: ec2" because rec.Service="compute" on an Azure
-// rec was mapped to ServiceEC2 and the Azure provider's switch only
-// accepts ServiceCompute.
-//
-// ServiceMemoryDB stays as-is because Azure has no MemoryDB equivalent.
+// mapServiceType maps a service string to common.ServiceType. Both the
+// canonical hyphenated slugs (compute, relational-db, cache, search,
+// data-warehouse) and the legacy AWS-only slugs (ec2, rds, elasticache,
+// opensearch, redshift, memorydb) are recognised; everything else passes
+// through verbatim. Savings Plans slugs are normalised by mapSavingsPlansSlug.
 func (m *Manager) mapServiceType(service string) common.ServiceType {
 	if svc, ok := mapSavingsPlansSlug(service); ok {
 		return svc
 	}
-	switch service {
-	case "ec2", "compute":
-		return common.ServiceCompute
-	case "rds", "relational-db":
-		return common.ServiceRelationalDB
-	case "elasticache", "cache":
-		return common.ServiceCache
-	case "opensearch", "search":
-		return common.ServiceSearch
-	case "redshift", "data-warehouse":
-		return common.ServiceDataWarehouse
-	case "memorydb":
-		return common.ServiceMemoryDB
-	default:
-		return common.ServiceType(service)
+	if svc, ok := mapServiceSlug(service); ok {
+		return svc
 	}
+	return common.ServiceType(service)
+}
+
+// mapServiceSlug returns the common.ServiceType for a canonical or legacy
+// service slug.
+//
+// Canonical slugs (compute, relational-db, cache, search, data-warehouse)
+// map to the canonical ServiceType constants. Legacy AWS-only slugs (ec2,
+// rds, elasticache, opensearch, redshift, memorydb) map to the AWS-legacy
+// constants for backward compat with rec rows persisted before the
+// canonical normalisation.
+//
+// The split matters because Azure and GCP providers' GetServiceClient
+// switches accept canonical-only; passing the AWS-legacy constants for a
+// canonical rec falls through to default and returns "unsupported
+// service: <legacy>". AWS provider accepts both legacy and canonical
+// forms (see providers/aws/provider.go), so the legacy slugs below are
+// still safe for AWS rec rows. Bug:
+// https://github.com/LeanerCloud/CUDly/issues/626.
+//
+// Pulled out of mapServiceType to keep that function under the gocyclo
+// budget (same pattern as mapSavingsPlansSlug).
+func mapServiceSlug(service string) (common.ServiceType, bool) {
+	slugs := map[string]common.ServiceType{
+		// Canonical slugs.
+		"compute":        common.ServiceCompute,
+		"relational-db":  common.ServiceRelationalDB,
+		"cache":          common.ServiceCache,
+		"search":         common.ServiceSearch,
+		"data-warehouse": common.ServiceDataWarehouse,
+		// Legacy AWS-only slugs.
+		"ec2":         common.ServiceEC2,
+		"rds":         common.ServiceRDS,
+		"elasticache": common.ServiceElastiCache,
+		"opensearch":  common.ServiceOpenSearch,
+		"redshift":    common.ServiceRedshift,
+		"memorydb":    common.ServiceMemoryDB,
+	}
+	svc, ok := slugs[service]
+	return svc, ok
 }
 
 // mapSavingsPlansSlug normalises both the canonical hyphenated SP slugs and
