@@ -9,7 +9,7 @@
 #   - DB_PASSWORD_AZURE: Database password for Azure Flexible Server
 #   - (AWS auth via OIDC: vars.AWS_ROLE_TO_ASSUME)
 #   - (GCP auth via WIF: vars.GCP_WORKLOAD_IDENTITY_PROVIDER + vars.GCP_SERVICE_ACCOUNT)
-#   - AZURE_CREDENTIALS: Azure credentials
+#   - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID (OIDC federation)
 #
 # Required GitHub Variables:
 #   - DB_HOST_AWS_DEV: Aurora endpoint (dev)
@@ -283,7 +283,9 @@ jobs:
       - name: Azure Login
         uses: azure/login@v3
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Get database endpoint from Terraform
         id: get-endpoint
