@@ -301,7 +301,9 @@ func (r *Router) registerRoutes() {
 
 		// API documentation (Swagger UI + raw spec)
 		{PathPrefix: "/api/docs", Method: "GET", Handler: r.docsHandler, Auth: AuthPublic},
+		{PathPrefix: "/api/docs", Method: "HEAD", Handler: r.docsHandler, Auth: AuthPublic},
 		{PathPrefix: "/docs", Method: "GET", Handler: r.docsHandler, Auth: AuthPublic},
+		{PathPrefix: "/docs", Method: "HEAD", Handler: r.docsHandler, Auth: AuthPublic},
 	}
 }
 

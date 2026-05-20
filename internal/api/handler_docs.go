@@ -77,8 +77,22 @@ func (h *Handler) serveOpenAPISpec(_ context.Context, _ *events.LambdaFunctionUR
 // Requests ending in /openapi.yaml serve the raw spec; everything else serves the UI.
 func (h *Handler) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	path := req.RequestContext.HTTP.Path
+	var (
+		response any
+		err      error
+	)
 	if strings.HasSuffix(path, "/openapi.yaml") {
-		return h.serveOpenAPISpec(ctx, req, params)
+		response, err = h.serveOpenAPISpec(ctx, req, params)
+	} else {
+		response, err = h.serveDocsUI(ctx, req, params)
 	}
-	return h.serveDocsUI(ctx, req, params)
+	if err != nil || req.RequestContext.HTTP.Method != "HEAD" {
+		return response, err
+	}
+	if raw, ok := response.(*rawResponse); ok {
+		head := *raw
+		head.body = ""
+		return &head, nil
+	}
+	return response, nil
 }

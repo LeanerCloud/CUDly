@@ -157,6 +157,40 @@ func TestServeDocsUI_RelaxedCSP(t *testing.T) {
 	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
 }
 
+func TestDocsHandler_HEAD_ReturnsHeaders(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{}
+
+	getReq := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/docs/",
+			},
+		},
+	}
+	headReq := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "HEAD",
+				Path:   "/api/docs/",
+			},
+		},
+	}
+
+	getResp, err := handler.HandleRequest(ctx, getReq)
+	require.NoError(t, err)
+	require.Equal(t, 200, getResp.StatusCode)
+
+	headResp, err := handler.HandleRequest(ctx, headReq)
+	require.NoError(t, err)
+	assert.Equal(t, 200, headResp.StatusCode)
+	assert.Equal(t, getResp.Headers, headResp.Headers)
+	assert.Equal(t, getResp.Headers["Content-Security-Policy"], headResp.Headers["Content-Security-Policy"])
+	assert.Equal(t, docsPageCSP, headResp.Headers["Content-Security-Policy"])
+	assert.Empty(t, headResp.Body)
+}
+
 // TestServeDocsUI_RelaxedCSP_RootDocs verifies the same relaxed CSP is
 // applied to the root /docs/ prefix path (no /api/ prefix). The router
 // dispatches both /docs and /api/docs to docsHandler, so both surfaces
