@@ -279,6 +279,11 @@ func (m *MockConfigStore) FailRIExchange(ctx context.Context, id string, errorMs
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+	args := m.Called(ctx, id, approverEmail)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
 	args := m.Called(ctx, date)
 	return args.String(0), args.Error(1)

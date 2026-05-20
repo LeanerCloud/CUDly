@@ -110,6 +110,10 @@ type StoreInterface interface {
 	GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error)
 	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*RIExchangeRecord, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
+	// StampRIExchangeApprovedBy sets the approved_by column on a completed
+	// exchange row (issue #300). Called after CompleteRIExchange when the
+	// approval came from a session-authed user rather than an email token.
+	StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error
 	FailRIExchange(ctx context.Context, id string, errorMsg string) error
 	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
 	CancelAllPendingExchanges(ctx context.Context) (int64, error)
