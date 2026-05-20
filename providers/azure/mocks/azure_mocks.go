@@ -12,6 +12,34 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// MockReservationsSummariesPager mocks the reservations summaries pager
+// returned by armconsumption.ReservationsSummariesClient.NewListPager.
+// Set Results + HasMore before use; Results are returned on the first
+// NextPage call and More() returns false on the second call.
+type MockReservationsSummariesPager struct {
+	Results   []*armconsumption.ReservationSummary
+	HasMore   bool
+	pageCount int
+}
+
+// More returns whether there are more pages.
+func (p *MockReservationsSummariesPager) More() bool {
+	if p.pageCount == 0 {
+		return p.HasMore
+	}
+	return false
+}
+
+// NextPage returns the next page of results.
+func (p *MockReservationsSummariesPager) NextPage(ctx context.Context) (armconsumption.ReservationsSummariesClientListResponse, error) {
+	p.pageCount++
+	return armconsumption.ReservationsSummariesClientListResponse{
+		ReservationSummariesListResult: armconsumption.ReservationSummariesListResult{
+			Value: p.Results,
+		},
+	}, nil
+}
+
 // MockRecommendationsPager mocks the recommendations pager
 type MockRecommendationsPager struct {
 	mock.Mock
