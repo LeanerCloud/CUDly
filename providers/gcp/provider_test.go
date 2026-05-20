@@ -294,10 +294,23 @@ func TestGCPProvider_GetServiceClient_UnsupportedService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewProviderWithProject(ctx, "test-project")
 
-	// ServiceCache is not supported in GCP provider
-	_, err := provider.GetServiceClient(ctx, common.ServiceCache, "us-central1")
+	// Use a service type that is genuinely not in the GCP provider's switch
+	// statement. The previous version of this test used ServiceCache, which
+	// is now supported (Memorystore) — see issue #251.
+	_, err := provider.GetServiceClient(ctx, common.ServiceType("unsupported-service-xyz"), "us-central1")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported service type")
+}
+
+func TestGCPProvider_GetServiceClient_ServiceCache(t *testing.T) {
+	ctx := context.Background()
+	provider := NewProviderWithProject(ctx, "test-project")
+
+	// ServiceCache is supported via Memorystore — verify NewClient succeeds
+	// (it only allocates a struct, no network call).
+	client, err := provider.GetServiceClient(ctx, common.ServiceCache, "us-central1")
+	require.NoError(t, err)
+	require.NotNil(t, client)
 }
 
 func TestGCPProvider_GetRecommendationsClient(t *testing.T) {
@@ -448,7 +461,9 @@ func TestGCPProvider_IsConfigured_WithMock(t *testing.T) {
 
 	result := p.IsConfigured()
 	assert.True(t, result)
-	assert.True(t, mockClient.closed)
+	// Injected clients are not closed by IsConfigured — the injector owns the
+	// lifecycle. See the IsConfigured godoc (issue #251).
+	assert.False(t, mockClient.closed)
 }
 
 func TestGCPProvider_IsConfigured_Error(t *testing.T) {
@@ -478,7 +493,9 @@ func TestGCPProvider_ValidateCredentials_WithMock(t *testing.T) {
 
 	err := p.ValidateCredentials(ctx)
 	assert.NoError(t, err)
-	assert.True(t, mockClient.closed)
+	// Injected clients are not closed by ValidateCredentials — the injector
+	// owns the lifecycle. See the ValidateCredentials godoc (issue #251).
+	assert.False(t, mockClient.closed)
 }
 
 func TestGCPProvider_ValidateCredentials_Error(t *testing.T) {
