@@ -136,6 +136,9 @@ func (m *mockConfigStoreForHealth) CreateCloudAccount(ctx context.Context, accou
 func (m *mockConfigStoreForHealth) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
 	return nil, nil
 }
+func (m *mockConfigStoreForHealth) GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*config.CloudAccount, error) {
+	return nil, nil
+}
 func (m *mockConfigStoreForHealth) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
 	return nil
 }

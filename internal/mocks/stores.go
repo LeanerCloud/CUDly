@@ -447,6 +447,14 @@ func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*conf
 	return args.Get(0).(*config.CloudAccount), args.Error(1)
 }
 
+func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*config.CloudAccount, error) {
+	args := m.Called(ctx, provider, externalID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.CloudAccount), args.Error(1)
+}
+
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
 	args := m.Called(ctx, account)
 	return args.Error(0)

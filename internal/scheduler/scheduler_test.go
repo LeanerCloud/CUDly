@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -256,6 +259,18 @@ func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *confi
 	return nil
 }
 func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	return nil, nil
+}
+func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*config.CloudAccount, error) {
+	// Default returns (nil, nil); tests that exercise the ambient
+	// host-account tagging path set an explicit expectation via .On().
+	if m.hasExpectation("GetCloudAccountByExternalID") {
+		args := m.Called(ctx, provider, externalID)
+		if args.Get(0) == nil {
+			return nil, args.Error(1)
+		}
+		return args.Get(0).(*config.CloudAccount), args.Error(1)
+	}
 	return nil, nil
 }
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
@@ -1897,3 +1912,187 @@ func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx,
 	return m.SavePurchaseExecution(ctx, e)
 }
 func (m *MockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }
+
+// fakeSTSClient is a minimal in-test STSClient implementation used by the
+// ambient host-account tagging tests (issue #604). The fakeAccountID + err
+// fields are set by each test case to drive the GetCallerIdentity response
+// shape (success with an account ID, or an error).
+type fakeSTSClient struct {
+	accountID string
+	err       error
+}
+
+func (f *fakeSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerIdentityInput, _ ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.accountID == "" {
+		return &sts.GetCallerIdentityOutput{}, nil
+	}
+	return &sts.GetCallerIdentityOutput{Account: aws.String(f.accountID)}, nil
+}
+
+// Issue #604: AWS ambient-path tagging fix — when the Lambda's STS
+// identity matches a registered cloud_accounts row (regardless of
+// enabled flag), rec rows should be tagged with that account's UUID
+// instead of nil so the approve modal shows the registered name
+// instead of `(ambient)`.
+func TestScheduler_CollectAWSRecommendations_AmbientTagging_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	globalCfg := &config.GlobalConfig{
+		DefaultTerm:    3,
+		DefaultPayment: "all-upfront",
+	}
+
+	// No enabled AWS accounts → ambient fallback fires.
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{
+			Provider:         common.ProviderAWS,
+			Service:          common.ServiceEC2,
+			Region:           "us-east-1",
+			ResourceType:     "t4g.nano",
+			Count:            1,
+			Term:             "1yr",
+			EstimatedSavings: 12.0,
+		},
+	}
+
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", ctx).Return(recommendations, nil)
+
+	// Registered host account (enabled=false on purpose — registration
+	// alone is the signal, not enabled state).
+	registered := &config.CloudAccount{
+		ID:         "abc-uuid",
+		Provider:   "aws",
+		ExternalID: "123456789012",
+		Enabled:    false,
+	}
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "aws", "123456789012").Return(registered, nil)
+
+	scheduler := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+		stsClient:       &fakeSTSClient{accountID: "123456789012"},
+	}
+
+	recs, acctIDs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.NotNil(t, recs[0].CloudAccountID, "rec must be tagged with registered account UUID, not nil")
+	assert.Equal(t, "abc-uuid", *recs[0].CloudAccountID)
+	assert.Equal(t, []string{"abc-uuid"}, acctIDs,
+		"eviction account-keys must be the registered UUID, not the ambient sentinel")
+}
+
+// Issue #604: when STS reports an account ID that is NOT in the
+// registered cloud_accounts table, the ambient path must keep
+// CloudAccountID = nil — preserving the truly-orphan deployment case.
+func TestScheduler_CollectAWSRecommendations_AmbientTagging_NoRegisteredAccount(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	globalCfg := &config.GlobalConfig{DefaultTerm: 3, DefaultPayment: "all-upfront"}
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{Provider: common.ProviderAWS, Service: common.ServiceEC2, Region: "us-east-1", ResourceType: "t4g.nano", Count: 1, Term: "1yr"},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", ctx).Return(recommendations, nil)
+
+	// Store has NO matching registered row.
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "aws", "999888777666").Return(nil, nil)
+
+	scheduler := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+		stsClient:       &fakeSTSClient{accountID: "999888777666"},
+	}
+
+	recs, acctIDs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Nil(t, recs[0].CloudAccountID, "truly-orphan ambient deployment must keep CloudAccountID = nil")
+	assert.Equal(t, []string{""}, acctIDs, "eviction account-keys must keep the ambient sentinel")
+}
+
+// Issue #604: an STS hiccup must NOT fail the collection — recs are
+// returned with the pre-fix nil tagging and the run succeeds.
+func TestScheduler_CollectAWSRecommendations_AmbientTagging_STSFailure(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	globalCfg := &config.GlobalConfig{DefaultTerm: 3, DefaultPayment: "all-upfront"}
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{Provider: common.ProviderAWS, Service: common.ServiceEC2, Region: "us-east-1", ResourceType: "t4g.nano", Count: 1, Term: "1yr"},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", ctx).Return(recommendations, nil)
+
+	scheduler := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+		stsClient:       &fakeSTSClient{err: errors.New("sts unreachable")},
+	}
+
+	recs, acctIDs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	require.NoError(t, err, "STS failure must NOT fail the collection")
+	require.Len(t, recs, 1)
+	assert.Nil(t, recs[0].CloudAccountID, "STS failure must leave the pre-fix nil tagging in place")
+	assert.Equal(t, []string{""}, acctIDs)
+
+	// Sanity: GetCloudAccountByExternalID must not be called when STS fails.
+	mockStore.AssertNotCalled(t, "GetCloudAccountByExternalID", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Issue #604: resolveAmbientHostAccountID must skip cleanly when no STS
+// client is wired (e.g. NewScheduler was given a nil STSClient — the
+// pre-fix construction path). Confirms the helper degrades gracefully
+// rather than panicking on nil deref.
+func TestScheduler_ResolveAmbientHostAccountID_NoSTSClient(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	scheduler := &Scheduler{
+		config:    mockStore,
+		stsClient: nil,
+	}
+	got := scheduler.resolveAmbientHostAccountID(context.Background())
+	assert.Empty(t, got, "must return empty when STS client is nil")
+	mockStore.AssertNotCalled(t, "GetCloudAccountByExternalID", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Issue #604: when GetCloudAccountByExternalID returns a non-nil store
+// error (DB blip), resolveAmbientHostAccountID must NOT propagate it —
+// it returns "" so the collection falls back to the pre-fix nil tagging.
+func TestScheduler_ResolveAmbientHostAccountID_StoreError(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "aws", "123456789012").
+		Return(nil, errors.New("db unreachable"))
+
+	scheduler := &Scheduler{
+		config:    mockStore,
+		stsClient: &fakeSTSClient{accountID: "123456789012"},
+	}
+	got := scheduler.resolveAmbientHostAccountID(context.Background())
+	assert.Empty(t, got, "store error must collapse to empty result (don't fail the collection)")
+}

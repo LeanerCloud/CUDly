@@ -24,9 +24,19 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	azureprovider "github.com/LeanerCloud/CUDly/providers/azure"
 	gcpprovider "github.com/LeanerCloud/CUDly/providers/gcp"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
+
+// STSClient is the minimal AWS STS surface the scheduler uses to discover
+// the Lambda's own AWS account ID for the ambient-path account-tagging fix
+// (issue #604). Mirrors purchase.STSClient deliberately — both packages
+// need the same single call, and cross-package imports would tangle the
+// purchase ↔ scheduler dependency.
+type STSClient interface {
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
+}
 
 // SchedulerConfig holds configuration for the scheduler
 type SchedulerConfig struct {
@@ -41,6 +51,16 @@ type SchedulerConfig struct {
 	OIDCSigner      oidc.Signer
 	OIDCIssuerURL   string
 	AssumeRoleSTS   credentials.STSClient
+
+	// STSClient is the runtime AWS STS client used to discover the
+	// Lambda's own AWS account ID on the ambient collection path. When
+	// the discovered ID matches a registered cloud_accounts row (by
+	// external_id), the ambient path stamps that account's UUID onto
+	// every rec it returns so the approve modal shows the registered
+	// name instead of `(ambient)`. Optional — when nil, the ambient
+	// path keeps its pre-fix behaviour (CloudAccountID = nil), which
+	// preserves the truly-orphan case.
+	STSClient STSClient
 
 	// IsLambda gates the stale-while-revalidate background goroutine.
 	// On Lambda, goroutines freeze between invocations — firing one from
@@ -80,6 +100,7 @@ type Scheduler struct {
 	oidcSigner      oidc.Signer
 	oidcIssuerURL   string
 	assumeRoleSTS   credentials.STSClient
+	stsClient       STSClient
 
 	// isLambda gates the stale-while-revalidate background goroutine. See
 	// SchedulerConfig.IsLambda for the rationale.
@@ -117,6 +138,7 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		oidcSigner:      cfg.OIDCSigner,
 		oidcIssuerURL:   cfg.OIDCIssuerURL,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		stsClient:       cfg.STSClient,
 		isLambda:        cfg.IsLambda,
 		cacheTTL:        cacheTTLFromEnv(),
 	}
@@ -442,6 +464,16 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		if err != nil {
 			return nil, nil, err
 		}
+		// Issue #604: if the Lambda's STS identity matches a registered
+		// (possibly disabled) cloud_accounts row, tag every rec with that
+		// account's UUID so the approve modal renders the account name
+		// instead of `(ambient)`. Best-effort — STS or store errors must
+		// NOT fail the collection; we just keep the pre-fix nil tagging
+		// in those cases.
+		if acctID := s.resolveAmbientHostAccountID(ctx); acctID != "" {
+			recs = s.tagAccount(recs, acctID)
+			return recs, []string{acctID}, nil
+		}
 		return recs, []string{""}, nil
 	}
 
@@ -572,6 +604,42 @@ func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.Glo
 		return nil, fmt.Errorf("failed to create AWS provider: %w", err)
 	}
 	return s.fetchAndConvert(ctx, prov, "aws", nil, globalCfg)
+}
+
+// resolveAmbientHostAccountID looks up the Lambda's own AWS account ID
+// (via STS GetCallerIdentity) and, if it matches a registered
+// cloud_accounts row by (provider="aws", external_id), returns that
+// row's UUID. Returns "" when STS is unavailable, the lookup fails, or
+// no registered account matches — callers fall back to the pre-fix
+// nil tagging in that case, preserving the truly-orphan deployment.
+//
+// All errors are intentionally swallowed (logged at debug/warn) — this
+// is a best-effort UX improvement on the ambient path and must not
+// break the collection.
+func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
+	if s.stsClient == nil {
+		return ""
+	}
+	out, err := s.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		logging.Warnf("ambient host-account lookup: STS GetCallerIdentity failed: %v", err)
+		return ""
+	}
+	if out == nil || out.Account == nil || *out.Account == "" {
+		return ""
+	}
+	hostAcctID := *out.Account
+
+	acct, err := s.config.GetCloudAccountByExternalID(ctx, "aws", hostAcctID)
+	if err != nil {
+		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(aws,%s) failed: %v", hostAcctID, err)
+		return ""
+	}
+	if acct == nil {
+		// Truly orphan deployment — preserve pre-fix nil tagging.
+		return ""
+	}
+	return acct.ID
 }
 
 func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) {

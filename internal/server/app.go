@@ -381,6 +381,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		ConfigStore:     deps.ConfigStore,
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
+		STSClient:       deps.STSClient,
 		IsLambda:        isLambdaRuntime(),
 	})
 
@@ -672,6 +673,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		OIDCSigner:      app.signer,
 		OIDCIssuerURL:   resolveOIDCIssuerURL(app.appConfig),
 		AssumeRoleSTS:   sts.NewFromConfig(awsCfg),
+		STSClient:       sts.NewFromConfig(awsCfg),
 		IsLambda:        app.appConfig.IsLambda,
 	})
 

@@ -791,6 +791,38 @@ func TestPGXMock_GetCloudAccount_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get cloud account")
 }
 
+// ─── GetCloudAccountByExternalID (issue #604) ─────────────────────────────────
+
+func TestPGXMock_GetCloudAccountByExternalID_Success(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	rows := pgxmock.NewRows(cloudAccountCols).AddRow(cloudAccountRow(now)...)
+	mock.ExpectQuery("SELECT").WithArgs("aws", "123456789012").WillReturnRows(rows)
+
+	acct, err := store.GetCloudAccountByExternalID(ctx, "aws", "123456789012")
+	require.NoError(t, err)
+	require.NotNil(t, acct)
+	assert.Equal(t, "acct-id", acct.ID)
+	assert.Equal(t, "123456789012", acct.ExternalID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_GetCloudAccountByExternalID_NotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT").WithArgs("aws", "missing").
+		WillReturnError(errNoRows())
+
+	acct, err := store.GetCloudAccountByExternalID(ctx, "aws", "missing")
+	require.NoError(t, err, "not-found must return (nil, nil), not an error")
+	assert.Nil(t, acct)
+}
+
 // ─── UpdateCloudAccount ───────────────────────────────────────────────────────
 
 func TestPGXMock_UpdateCloudAccount_Success(t *testing.T) {
