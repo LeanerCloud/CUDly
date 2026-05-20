@@ -18,7 +18,7 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
-import { handleArcheraDeeplink, maybeOfferArcheraAfterExecution } from './archera';
+import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
 
 /**
@@ -71,12 +71,6 @@ export async function init(): Promise<void> {
     // how-it-works) open the overlay panel on top of the dashboard. Normal
     // tab routing still runs underneath so the app is fully functional.
     handleArcheraDeeplink();
-    // Detect completed executions from the past 7 days and surface the
-    // Archera Insurance offer once per execution. Runs on every dashboard
-    // load so the offer fires after the approver clicks the email link
-    // (async approval flow) rather than when the approval request is sent.
-    // Errors are swallowed inside the function; app init is not blocked.
-    await maybeOfferArcheraAfterExecution();
     const target = applyTabFromPath();
     let url = '/' + target;
     if (target === 'admin') {
@@ -391,6 +385,13 @@ async function handleExecutePurchase(): Promise<void> {
         timeout: 10_000,
       });
     }
+    // Offer Archera Insurance immediately after the user approves the
+    // pre-purchase confirmation and the approval-submission call succeeds
+    // (issue #499 follow-up). Firing here, rather than after the async
+    // email-link execution completes, surfaces the optional coverage at
+    // the moment the user has committed their intent. Gated on the
+    // executePurchase success path so a failed submission shows no offer.
+    openArcheraOfferModal('purchase');
     await loadDashboard();
   } catch (error) {
     const err = error as Error;
@@ -514,6 +515,16 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
       timeout: null,
     });
   }
+  // Offer Archera Insurance when at least one bucket's approval submission
+  // succeeded (issue #499 follow-up). Fires right after the user approves
+  // the pre-purchase confirmation and the calls resolve, not after the
+  // async email-link execution completes. Skipping the all-fail path keeps
+  // the modal from layering on top of an error toast for a user who has
+  // nothing to insure yet.
+  if (succeeded > 0) {
+    openArcheraOfferModal('purchase');
+  }
+
   await loadDashboard();
 
   if (executeBtn) {
