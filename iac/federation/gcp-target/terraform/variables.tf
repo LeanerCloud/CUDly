@@ -55,13 +55,13 @@ variable "oidc_attribute_mapping" {
 }
 
 variable "aws_role_name" {
-  description = "AWS IAM role name to restrict trust to (e.g. 'CUDly-Execution'). Only used when provider_type is 'aws'. If empty, all roles in the AWS account are trusted."
+  description = "AWS IAM role name to restrict trust to (e.g. 'CUDly-Execution'). Required when provider_type is 'aws'. Without this the attribute_condition is null and any IAM role in the account can federate."
   type        = string
   default     = ""
 }
 
 variable "oidc_subject" {
-  description = "OIDC subject claim to restrict trust to. Only used when provider_type is 'oidc'. If empty, all subjects from the issuer are trusted."
+  description = "OIDC subject claim to restrict trust to. Required when provider_type is 'oidc'. Without this the attribute_condition is null and any subject from the issuer can federate."
   type        = string
   default     = ""
 }
