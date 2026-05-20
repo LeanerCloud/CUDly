@@ -1233,6 +1233,12 @@ func TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible(t *testing.T
 	assert.NotEmpty(t, exec.Error, "history-save failure must be recorded so the row stays visible in History (issue #621)")
 	assert.Contains(t, exec.Error, "ri-auditgap")
 	assert.Contains(t, exec.Error, "history record failed to save")
+	// The raw persistence error must NOT leak into exec.Error, which is
+	// surfaced to clients via the history status_description (CR on #623).
+	assert.NotContains(t, exec.Error, "insert failed",
+		"raw persistence error text must not reach the user-facing exec.Error")
+	assert.NotContains(t, exec.Error, "not-null constraint",
+		"raw persistence error text must not reach the user-facing exec.Error")
 
 	mockStore.AssertExpectations(t)
 	mockFactory.AssertExpectations(t)
