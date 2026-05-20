@@ -2,68 +2,83 @@ package migrations
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// newUnreachablePool returns a *pgxpool.Pool pointed at a port that will
+// immediately refuse connections. pgxpool v5 is lazy -- it does not dial
+// until the first Acquire/Exec call -- so construction succeeds and the
+// pool can be passed to functions whose logging fires before any DB access.
+func newUnreachablePool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig("postgres://user:pass@127.0.0.1:1/db?sslmode=disable")
+	require.NoError(t, err, "pgxpool.ParseConfig must succeed for unreachable DSN")
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	require.NoError(t, err, "pgxpool.NewWithConfig must succeed (lazy -- no dial yet)")
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// captureLogOutput redirects the standard logger output to a buffer for the
+// duration of the test, restoring the original flags and writer on cleanup.
+func captureLogOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	origFlags := log.Flags()
+	origOutput := log.Writer()
+	log.SetFlags(0)
+	log.SetOutput(&buf)
+	t.Cleanup(func() {
+		log.SetFlags(origFlags)
+		log.SetOutput(origOutput)
+	})
+	return &buf
+}
+
+// captureStdout redirects os.Stdout to a pipe and returns a function that
+// closes the pipe, restores stdout, and returns everything that was written.
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err, "os.Pipe must succeed")
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = origStdout })
+	return func() string {
+		w.Close()
+		os.Stdout = origStdout
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
+		r.Close()
+		return buf.String()
+	}
+}
 
 // TestEnsureAdminUserWithPassword_LogsToStderr_NotStdout is a regression test
 // for issue #440: admin password activity must not be echoed to stdout.
 // Previously the function used fmt.Printf which writes to stdout; it now uses
 // log.Printf which writes to stderr.
 func TestEnsureAdminUserWithPassword_LogsToStderr_NotStdout(t *testing.T) {
-	// Capture stdout by redirecting os.Stdout to a pipe.
-	origStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = w
+	readStdout := captureStdout(t)
+	logBuf := captureLogOutput(t)
 
-	// Capture log output (log.Printf writes to stderr by default, but the
-	// standard logger's output can be redirected for testing).
-	var logBuf bytes.Buffer
-	origLogFlags := log.Flags()
-	origLogOutput := log.Writer()
-	log.SetFlags(0)
-	log.SetOutput(&logBuf)
-	t.Cleanup(func() {
-		log.SetFlags(origLogFlags)
-		log.SetOutput(origLogOutput)
-	})
+	// Call the real function. It logs before touching the pool so the log
+	// assertions below are valid regardless of the subsequent Exec error.
+	pool := newUnreachablePool(t)
+	// The function returns an error (connection refused) but that is expected.
+	_ = ensureAdminUserWithPassword(context.Background(), pool, "admin@example.com", "supersecretpassword")
 
-	// Call the functions that previously wrote to stdout. They will fail with
-	// a nil-pool panic unless we guard, so exercise only the log path by
-	// triggering bcrypt and the log line before the DB call would happen.
-	// We check that the log output goes to our log buffer (stderr path) and
-	// NOT to the captured stdout pipe.
-
-	// Exercise ensureAdminUserWithPassword up to the bcrypt step by calling
-	// buildMigrateDSN indirectly; instead verify at the logging layer.
-	// The simplest regression-proof approach: assert the log message format
-	// matches and that stdout receives nothing password-related.
-
-	// Simulate the log call that the fixed code makes:
-	log.Printf("Ensuring admin user exists with password: %s", "admin@example.com")
-	log.Printf("Admin user created/activated: %s", "admin@example.com")
-
-	// Close the write-end of the pipe and restore stdout before reading.
-	w.Close()
-	os.Stdout = origStdout
-
-	// Read what (if anything) landed on stdout.
-	var stdoutBuf bytes.Buffer
-	if _, err := stdoutBuf.ReadFrom(r); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	r.Close()
+	stdoutContent := readStdout()
 
 	// Assertion: nothing about admin password activity on stdout.
-	stdoutContent := stdoutBuf.String()
 	assert.Empty(t, stdoutContent,
 		"log.Printf must not write to stdout; found on stdout: %q", stdoutContent)
 
@@ -71,8 +86,7 @@ func TestEnsureAdminUserWithPassword_LogsToStderr_NotStdout(t *testing.T) {
 	logContent := logBuf.String()
 	assert.Contains(t, logContent, "admin@example.com",
 		"admin email must appear in log output (stderr path)")
-	// The message describes the operation ("with password") but must NOT include
-	// the actual password value. The email is not a credential.
+	// The message describes the operation but must NOT include the actual password.
 	assert.NotContains(t, logContent, "supersecretpassword",
 		"log messages must never include the actual password value")
 }
@@ -80,35 +94,16 @@ func TestEnsureAdminUserWithPassword_LogsToStderr_NotStdout(t *testing.T) {
 // TestEnsureAdminUser_NoPasswordVariant_LogsToStderr is a companion regression
 // test for the no-password variant of ensureAdminUser (issue #440).
 func TestEnsureAdminUser_NoPasswordVariant_LogsToStderr(t *testing.T) {
-	origStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = w
+	readStdout := captureStdout(t)
+	logBuf := captureLogOutput(t)
 
-	var logBuf bytes.Buffer
-	origLogFlags := log.Flags()
-	origLogOutput := log.Writer()
-	log.SetFlags(0)
-	log.SetOutput(&logBuf)
-	t.Cleanup(func() {
-		log.SetFlags(origLogFlags)
-		log.SetOutput(origLogOutput)
-	})
+	// Call the real function with empty password (no-password path).
+	pool := newUnreachablePool(t)
+	_ = ensureAdminUser(context.Background(), pool, "admin@example.com", "")
 
-	log.Printf("Ensuring admin user exists: %s (user will need to reset password to login)", "admin@example.com")
+	stdoutContent := readStdout()
 
-	w.Close()
-	os.Stdout = origStdout
-
-	var stdoutBuf bytes.Buffer
-	if _, err := stdoutBuf.ReadFrom(r); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	r.Close()
-
-	assert.Empty(t, stdoutBuf.String(),
+	assert.Empty(t, stdoutContent,
 		"log.Printf must not write to stdout")
 	assert.Contains(t, logBuf.String(), "admin@example.com")
 }
@@ -117,69 +112,45 @@ func TestEnsureAdminUser_NoPasswordVariant_LogsToStderr(t *testing.T) {
 // the password only in the returned string and not in any log call, serving as
 // a structural guard against accidental log emission of the DSN.
 func TestBuildMigrateDSN_PasswordNotInLogs(t *testing.T) {
-	var logBuf bytes.Buffer
-	origLogFlags := log.Flags()
-	origLogOutput := log.Writer()
-	log.SetFlags(0)
-	log.SetOutput(&logBuf)
-	t.Cleanup(func() {
-		log.SetFlags(origLogFlags)
-		log.SetOutput(origLogOutput)
-	})
-
-	// buildMigrateDSN is a pure builder — it must not log anything.
-	// We call it with a recognisable sentinel password.
-	// If the implementation ever adds a log line with the DSN, this test catches it.
 	const sentinelPassword = "SUPER_SECRET_SENTINEL_XYZ"
 
-	// Build a minimal fake pgxpool.Config via pgxpool.ParseConfig so we have a
-	// *pgxpool.Config to pass. Use a URL that embeds the sentinel password.
-	dsn := fmt.Sprintf("postgres://user:%s@localhost:5432/db?sslmode=disable", sentinelPassword)
+	logBuf := captureLogOutput(t)
 
-	// We can't easily call pgxpool.ParseConfig here without importing pgxpool in the
-	// migrations package test (it's already imported in migrate.go). Instead verify
-	// that the function under test does not write to the log buffer indirectly.
-	// The real guard is the log.SetOutput capture above.
+	// Build a real *pgxpool.Config whose ConnConfig.Password holds the sentinel.
+	rawDSN := fmt.Sprintf("postgres://user:%s@localhost:5432/db?sslmode=disable", sentinelPassword)
+	poolCfg, err := pgxpool.ParseConfig(rawDSN)
+	require.NoError(t, err, "pgxpool.ParseConfig must accept the sentinel DSN")
 
-	// Construct the DSN the way buildMigrateDSN would and confirm it contains the password
-	// (in the return value) but does not show up in logs.
-	_ = dsn // DSN is intentionally constructed but not further asserted here
+	// Call the function under test.
+	result := buildMigrateDSN(poolCfg, "")
 
-	logContent := logBuf.String()
-	assert.NotContains(t, logContent, sentinelPassword,
+	// The sentinel must appear in the returned DSN (proves the function embeds it).
+	assert.Contains(t, result, sentinelPassword,
+		"buildMigrateDSN return value must contain the password")
+
+	// The sentinel must NOT have leaked into the log buffer.
+	assert.NotContains(t, logBuf.String(), sentinelPassword,
 		"buildMigrateDSN must not emit the database password to the log output")
 }
 
-// TestMaybeForceVersion_InvalidValue ensures a non-numeric
+// TestMaybeForceVersion_NonNumericError ensures a non-numeric
 // CUDLY_FORCE_MIGRATION_VERSION produces an error without logging the
 // bad value to stdout.
 func TestMaybeForceVersion_NonNumericError(t *testing.T) {
-	origStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = w
+	readStdout := captureStdout(t)
 
 	t.Setenv("CUDLY_FORCE_MIGRATION_VERSION", "not-a-number")
 
-	// maybeForceMigrationVersion takes a *migrate.Migrate, which we can't
-	// construct without a live DB. Test the value-parsing logic indirectly by
-	// simulating the Atoi + negative check branch.
-	value := os.Getenv("CUDLY_FORCE_MIGRATION_VERSION")
+	// maybeForceMigrationVersion returns an error from strconv.Atoi before it
+	// ever calls m.Force(), so nil is safe to pass for the non-numeric path.
+	err := maybeForceMigrationVersion(nil)
 
-	w.Close()
-	os.Stdout = origStdout
+	stdoutContent := readStdout()
 
-	var stdoutBuf bytes.Buffer
-	if _, err := stdoutBuf.ReadFrom(r); err != nil {
-		t.Fatalf("read from pipe: %v", err)
-	}
-	r.Close()
-
-	// The parsing path should have produced an error (Atoi fails for "not-a-number").
-	assert.True(t, strings.ContainsAny(value, "abcdefghijklmnopqrstuvwxyz"),
-		"sentinel value must be non-numeric so the code path is exercised")
-	assert.Empty(t, stdoutBuf.String(),
+	require.Error(t, err,
+		"non-numeric CUDLY_FORCE_MIGRATION_VERSION must return an error")
+	assert.Contains(t, err.Error(), "not-a-number",
+		"error message must echo back the bad value for operator clarity")
+	assert.Empty(t, stdoutContent,
 		"error handling must not write to stdout")
 }

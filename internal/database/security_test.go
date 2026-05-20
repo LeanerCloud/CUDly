@@ -146,13 +146,13 @@ func TestBuildPoolConfig_ParseError_NoPasswordLeak(t *testing.T) {
 	}
 
 	_, err := buildPoolConfig(cfg, realPassword)
-	// This may or may not error depending on pgx version — if it does error,
-	// the real password must not appear in the error message.
-	if err != nil {
-		assert.NotContains(t, err.Error(), realPassword,
-			"parse error must not expose the real DB password in the error chain")
-		// The placeholder "REDACTED" may appear, which is acceptable.
-	}
+	// pgx rejects an unknown sslmode during ParseConfig, so an error is
+	// guaranteed here. The real password must never surface in the error text.
+	require.Error(t, err,
+		"pgxpool.ParseConfig must reject sslmode=invalid-ssl-mode")
+	assert.NotContains(t, err.Error(), realPassword,
+		"parse error must not expose the real DB password in the error chain")
+	// The placeholder "REDACTED" may appear, which is acceptable.
 }
 
 // TestSanitizeLogData_ArgsKeyStrippedAtDebugByDefault is a regression test for
