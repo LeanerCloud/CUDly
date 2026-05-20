@@ -26,7 +26,8 @@ lambda_enable_function_url    = true
 lambda_function_url_auth_type = "NONE"
 # TODO(env-not-deployed): prod environment is not yet provisioned. Update this
 # to the actual prod origin (e.g. the customer-facing dashboard domain) when
-# the env exists. .invalid placeholder fails fast on accidental apply.
+# the env exists. .invalid placeholder ensures any accidental apply fails fast
+# on hostname resolution.
 lambda_allowed_origins = ["https://prod-not-yet-deployed.invalid"]
 
 # Fargate Configuration (when compute_platform = "fargate")
