@@ -11,7 +11,13 @@ jest.mock('../api', () => ({
 
 jest.mock('../state', () => ({
   setCurrentUser: jest.fn(),
-  setCurrentProvider: jest.fn()
+  setCurrentProvider: jest.fn(),
+  // initSavingsHistory (via setupEventListeners) subscribes to these as of
+  // issue #503; app.test.ts exercises the real savings-history module.
+  subscribeProvider: jest.fn(),
+  subscribeAccount: jest.fn(),
+  getCurrentProvider: jest.fn(() => ''),
+  getCurrentAccountIDs: jest.fn(() => [])
 }));
 
 jest.mock('../auth', () => ({
