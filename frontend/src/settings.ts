@@ -91,10 +91,12 @@ const SERVICE_FIELDS = [
   // (when present) overrides the SageMaker slot from PR #71's sagemaker
   // row. Lambda is intentionally NOT a separate card — Lambda has no
   // standalone SP product; its commitments roll up into Compute SP.
-  { provider: 'aws', service: 'savings-plans-compute',     termId: 'aws-savings-plans-compute-term',     paymentId: 'aws-savings-plans-compute-payment' },
-  { provider: 'aws', service: 'savings-plans-ec2instance', termId: 'aws-savings-plans-ec2instance-term', paymentId: 'aws-savings-plans-ec2instance-payment' },
-  { provider: 'aws', service: 'savings-plans-sagemaker',   termId: 'aws-savings-plans-sagemaker-term',   paymentId: 'aws-savings-plans-sagemaker-payment' },
-  { provider: 'aws', service: 'savings-plans-database',    termId: 'aws-savings-plans-database-term',    paymentId: 'aws-savings-plans-database-payment' },
+  // Issue #136: SP cards carry per-card coverageId and enabledId so users
+  // can set divergent coverage and toggle each plan type independently.
+  { provider: 'aws', service: 'savings-plans-compute',     termId: 'aws-savings-plans-compute-term',     paymentId: 'aws-savings-plans-compute-payment',     coverageId: 'aws-savings-plans-compute-coverage',     enabledId: 'aws-savings-plans-compute-enabled' },
+  { provider: 'aws', service: 'savings-plans-ec2instance', termId: 'aws-savings-plans-ec2instance-term', paymentId: 'aws-savings-plans-ec2instance-payment', coverageId: 'aws-savings-plans-ec2instance-coverage', enabledId: 'aws-savings-plans-ec2instance-enabled' },
+  { provider: 'aws', service: 'savings-plans-sagemaker',   termId: 'aws-savings-plans-sagemaker-term',   paymentId: 'aws-savings-plans-sagemaker-payment',   coverageId: 'aws-savings-plans-sagemaker-coverage',   enabledId: 'aws-savings-plans-sagemaker-enabled' },
+  { provider: 'aws', service: 'savings-plans-database',    termId: 'aws-savings-plans-database-term',    paymentId: 'aws-savings-plans-database-payment',    coverageId: 'aws-savings-plans-database-coverage',    enabledId: 'aws-savings-plans-database-enabled' },
   { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
   { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
   { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
@@ -120,6 +122,9 @@ const TRACKED_FIELDS = [
   // Per-service fields
   ...SERVICE_FIELDS.map(f => f.termId),
   ...SERVICE_FIELDS.filter(f => f.paymentId !== null).map(f => f.paymentId as string),
+  // Per-product SP fields (issue #136)
+  ...SERVICE_FIELDS.filter(f => 'coverageId' in f).map(f => (f as { coverageId: string }).coverageId),
+  ...SERVICE_FIELDS.filter(f => 'enabledId' in f).map(f => (f as { enabledId: string }).enabledId),
 ];
 
 // Snapshot of field values at last save (or initial load).
@@ -2814,6 +2819,12 @@ export async function loadGlobalSettings(): Promise<void> {
         if (termEl) termEl.value = String(svc.term);
         const paymentEl = document.getElementById(`${key}-payment`) as HTMLSelectElement | null;
         if (paymentEl) paymentEl.value = svc.payment;
+        // Issue #136: populate per-product SP coverage and enabled fields when
+        // the card exposes them. Other service cards fall through (IDs absent).
+        const coverageEl = document.getElementById(`${key}-coverage`) as HTMLInputElement | null;
+        if (coverageEl) coverageEl.value = String(svc.coverage ?? data.global?.default_coverage ?? 80);
+        const enabledEl = document.getElementById(`${key}-enabled`) as HTMLInputElement | null;
+        if (enabledEl) enabledEl.checked = svc.enabled !== false;
       }
     }
 
@@ -3043,7 +3054,8 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   try {
     await api.updateConfig(settings);
 
-    const serviceSaves = SERVICE_FIELDS.map(({ provider, service, termId, paymentId }) => {
+    const serviceSaves = SERVICE_FIELDS.map((field) => {
+      const { provider, service, termId, paymentId } = field;
       const term = parseInt(byId<HTMLSelectElement>(termId)?.value || '3', 10);
       const payment = paymentId
         ? (byId<HTMLSelectElement>(paymentId)?.value || 'all-upfront')
@@ -3053,14 +3065,31 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
       // include_engines, etc. can be set out-of-band (API, future UI, migration)
       // and a full UPSERT that only honoured the four term/payment/enabled/coverage
       // fields would silently wipe them every time the user clicked Save.
+
+      // Issue #136: per-product SP cards expose their own coverage and enabled
+      // controls. Read from the DOM when the card has the controls; fall back
+      // to the base row value (or the global default) otherwise so RI and
+      // Azure/GCP cards continue to inherit the global settings.
+      let coverage = base?.coverage ?? settings.default_coverage;
+      let enabled = base?.enabled ?? true;
+      if ('coverageId' in field && field.coverageId) {
+        const rawCov = byId<HTMLInputElement>(field.coverageId)?.value ?? '';
+        const parsed = Number(rawCov);
+        if (rawCov !== '' && Number.isFinite(parsed)) coverage = parsed;
+      }
+      if ('enabledId' in field && field.enabledId) {
+        const el = byId<HTMLInputElement>(field.enabledId);
+        if (el) enabled = el.checked;
+      }
+
       const cfg: api.ServiceConfig = {
         ...(base ?? {}),
         provider,
         service,
-        enabled: base?.enabled ?? true,
+        enabled,
         term,
         payment,
-        coverage: base?.coverage ?? settings.default_coverage,
+        coverage,
       };
       return api.updateServiceConfig(provider, service, cfg);
     });
