@@ -322,8 +322,11 @@ func (c *SynapseClient) doPurchaseRequest(ctx context.Context, rec common.Recomm
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
+		if readErr != nil {
+			return "", fmt.Errorf("reservation purchase failed with status %d (body read error: %v)", resp.StatusCode, readErr)
+		}
 		return "", fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
 	}
 	return reservationOrderID, nil
