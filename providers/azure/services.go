@@ -8,6 +8,8 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cosmosdb"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/savingsplans"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/search"
 )
 
 // NewComputeClient creates a new Azure Compute (VM) client
@@ -28,6 +30,16 @@ func NewCacheClient(cred azcore.TokenCredential, subscriptionID, region string) 
 // NewCosmosDBClient creates a new Azure Cosmos DB client
 func NewCosmosDBClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
 	return cosmosdb.NewClient(cred, subscriptionID, region)
+}
+
+// NewSavingsPlansClient creates a new Azure Savings Plans client
+func NewSavingsPlansClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return savingsplans.NewClient(cred, subscriptionID, region)
+}
+
+// NewSearchClient creates a new Azure Cognitive Search client
+func NewSearchClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return search.NewClient(cred, subscriptionID, region)
 }
 
 // NewRecommendationsClient creates a new Azure recommendations client.
