@@ -189,65 +189,26 @@ func (c *MemorystoreClient) GetExistingCommitments(ctx context.Context) ([]commo
 	return nil, nil
 }
 
-// PurchaseCommitment purchases a Memorystore Redis commitment
+// PurchaseCommitment is intentionally a no-op for Memorystore: GCP exposes no
+// standalone committed-use discount purchase API for Memorystore. Memorystore is
+// covered by spend-based CUDs bought via the Cloud Billing console / Cloud
+// Commerce Consumer Procurement API, not by creating an instance. The previous
+// implementation created a brand-new billable Redis instance (a reserved IP range
+// is networking config, not a commitment), so a "purchase" silently spun up a new
+// Redis instance that kept billing. Memorystore recommendations are therefore
+// advisory only; this returns a clear not-supported error and never calls any
+// resource-creation API (issue #640).
 func (c *MemorystoreClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
-	result := common.PurchaseResult{
+	return common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
-	}
-
-	redisSvc := c.redisService
-	if redisSvc == nil {
-		client, err := redis.NewCloudRedisClient(ctx, c.clientOpts...)
-		if err != nil {
-			result.Error = fmt.Errorf("failed to create redis client: %w", err)
-			return result, result.Error
-		}
-		redisSvc = &realRedisService{client: client}
-	}
-	defer redisSvc.Close()
-
-	// Create a new Memorystore Redis instance with committed pricing
-	instanceName := fmt.Sprintf("redis-committed-%d", time.Now().Unix())
-	parent := fmt.Sprintf("projects/%s/locations/%s", c.projectID, c.region)
-
-	instance := &redispb.Instance{
-		Name:         fmt.Sprintf("%s/instances/%s", parent, instanceName),
-		Tier:         redispb.Instance_STANDARD_HA,
-		MemorySizeGb: 1, // Minimum size
-		// Setting reserved IP range indicates committed use
-		ReservedIpRange: "10.0.0.0/29",
-	}
-	if opts.Source != "" {
-		instance.Labels = map[string]string{common.PurchaseTagKey: opts.Source}
-	}
-
-	insertReq := &redispb.CreateInstanceRequest{
-		Parent:     parent,
-		InstanceId: instanceName,
-		Instance:   instance,
-	}
-
-	op, err := redisSvc.CreateInstance(ctx, insertReq)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create redis instance with commitment: %w", err)
-		return result, result.Error
-	}
-
-	// Wait for operation to complete
-	_, err = op.Wait(ctx)
-	if err != nil {
-		result.Error = fmt.Errorf("instance creation failed: %w", err)
-		return result, result.Error
-	}
-
-	result.Success = true
-	result.CommitmentID = instanceName
-	result.Cost = rec.CommitmentCost
-
-	return result, nil
+		Error: fmt.Errorf("%w: GCP Memorystore has no standalone committed-use discount "+
+			"purchase API (spend-based CUDs are bought via the Cloud Billing console or "+
+			"Cloud Commerce Consumer Procurement API); this recommendation is advisory only",
+			common.ErrCommitmentPurchaseNotSupported),
+	}, fmt.Errorf("%w: Memorystore", common.ErrCommitmentPurchaseNotSupported)
 }
 
 // ValidateOffering validates that a Redis tier exists
