@@ -335,7 +335,29 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	lookup := purchaseRecLookupFromStore(h.config, cloudAccountID)
 	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, threshold, region, currencyCode, lookup)
 
-	return &ReshapeRecommendationsResponse{Recommendations: recs}, nil
+	resp := &ReshapeRecommendationsResponse{Recommendations: recs}
+	h.attachReshapeStaleness(ctx, resp)
+	return resp, nil
+}
+
+// attachReshapeStaleness populates the RecsStaleness and RecsCollectedAt
+// fields on resp from the recommendations_state table. Non-fatal: errors
+// are logged and the response ships without staleness metadata so the
+// reshape table itself is unaffected by a DB read-side failure.
+func (h *Handler) attachReshapeStaleness(ctx context.Context, resp *ReshapeRecommendationsResponse) {
+	freshness, err := h.config.GetRecommendationsFreshness(ctx)
+	if err != nil {
+		logging.Warnf("getReshapeRecommendations: could not check recs freshness (banner suppressed): %v", err)
+		return
+	}
+	resp.RecsCollectedAt = freshness.LastCollectedAt
+	if freshness.LastCollectedAt == nil {
+		// Cold start: cache was never populated — treat as hard-stale so the
+		// banner fires on a fresh deployment rather than silently hiding it.
+		resp.RecsStaleness = "hard"
+	} else {
+		resp.RecsStaleness = classifyRecsAge(time.Since(*freshness.LastCollectedAt))
+	}
 }
 
 // firstNonEmptyCurrency returns the CurrencyCode of the first RI that
@@ -480,8 +502,39 @@ type RIUtilizationResponse struct {
 }
 
 // ReshapeRecommendationsResponse holds reshape recommendations.
+//
+// RecsStaleness is empty when the underlying Cost Explorer cache is
+// fresh, "soft" when it is older than reshapeSoftStaleThreshold (12 h),
+// and "hard" when it is older than reshapeHardStaleThreshold (24 h).
+// RecsCollectedAt carries the raw timestamp so the frontend can build
+// its own relative-time label ("last collected 23h ago").
 type ReshapeRecommendationsResponse struct {
 	Recommendations []exchange.ReshapeRecommendation `json:"recommendations"`
+	RecsStaleness   string                           `json:"recs_staleness,omitempty"`
+	RecsCollectedAt *time.Time                       `json:"recs_collected_at,omitempty"`
+}
+
+// reshapeSoftStaleThreshold is the age at which the reshape recs banner
+// transitions to "soft" warning: data may be up to 12 h old.
+const reshapeSoftStaleThreshold = 12 * time.Hour
+
+// reshapeHardStaleThreshold is the age at which the reshape recs banner
+// transitions to "hard" warning: data is more than 24 h old.
+const reshapeHardStaleThreshold = 24 * time.Hour
+
+// classifyRecsAge maps a data age to the staleness label surfaced in
+// ReshapeRecommendationsResponse.RecsStaleness. The zero duration
+// (cold-cache path: no LastCollectedAt) is treated as "hard" so the
+// banner fires on a fresh deployment rather than silently hiding it.
+func classifyRecsAge(age time.Duration) string {
+	switch {
+	case age >= reshapeHardStaleThreshold:
+		return "hard"
+	case age >= reshapeSoftStaleThreshold:
+		return "soft"
+	default:
+		return ""
+	}
 }
 
 // ExchangeTargetBody is one entry in an ExchangeQuote/Execute request's

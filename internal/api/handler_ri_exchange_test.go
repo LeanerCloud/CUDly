@@ -670,3 +670,38 @@ func (m *mockAuthForExchange) MFADisableAPI(_ context.Context, _, _, _ string) e
 func (m *mockAuthForExchange) MFARegenerateRecoveryCodesAPI(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
+
+// TestClassifyRecsAge pins the staleness classification thresholds for
+// the reshape freshness banner. The three transitions are:
+//
+//   - < 12 h  → "" (fresh, no banner)
+//   - 12–24 h → "soft" (warning banner)
+//   - >= 24 h → "hard" (critical banner)
+func TestClassifyRecsAge(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		age  time.Duration
+		want string
+	}{
+		{"zero age is fresh", 0, ""},
+		{"30 minutes is fresh", 30 * time.Minute, ""},
+		{"just under soft threshold", reshapeSoftStaleThreshold - time.Minute, ""},
+		{"exactly soft threshold", reshapeSoftStaleThreshold, "soft"},
+		{"13 hours is soft", 13 * time.Hour, "soft"},
+		{"just under hard threshold", reshapeHardStaleThreshold - time.Minute, "soft"},
+		{"exactly hard threshold", reshapeHardStaleThreshold, "hard"},
+		{"25 hours is hard", 25 * time.Hour, "hard"},
+		{"48 hours is hard", 48 * time.Hour, "hard"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyRecsAge(tc.age)
+			if got != tc.want {
+				t.Errorf("classifyRecsAge(%v) = %q, want %q", tc.age, got, tc.want)
+			}
+		})
+	}
+}

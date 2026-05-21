@@ -75,7 +75,7 @@ describe('RI Exchange tables permission gating (issue #365)', () => {
     jest.clearAllMocks();
     setupDom();
     (api.listConvertibleRIs as jest.Mock).mockResolvedValue([sampleRI]);
-    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue([sampleReshape]);
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: [sampleReshape], recs_staleness: '', recs_collected_at: null });
   });
 
   describe('admin role', () => {

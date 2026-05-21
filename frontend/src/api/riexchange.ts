@@ -33,12 +33,26 @@ export async function getRIUtilization(lookbackDays?: number): Promise<RIUtiliza
 }
 
 /**
+ * Reshape recommendations response, including the Cost Explorer cache
+ * freshness fields populated by the backend.
+ *
+ * recs_staleness is "" when the underlying cache is fresh, "soft" when
+ * it is older than 12 h, and "hard" when it is older than 24 h.
+ * recs_collected_at carries the raw ISO-8601 timestamp so the banner
+ * can display a relative-time label ("last collected 23h ago").
+ */
+export interface ReshapeRecommendationsResponse {
+  recommendations: ReshapeRecommendation[];
+  recs_staleness?: string;
+  recs_collected_at?: string | null;
+}
+
+/**
  * Get automated reshape recommendations
  */
-export async function getReshapeRecommendations(threshold?: number): Promise<ReshapeRecommendation[]> {
+export async function getReshapeRecommendations(threshold?: number): Promise<ReshapeRecommendationsResponse> {
   const params = threshold !== undefined ? `?threshold=${threshold}` : '';
-  const resp = await apiRequest<{ recommendations: ReshapeRecommendation[] }>(`/ri-exchange/reshape-recommendations${params}`);
-  return resp.recommendations ?? [];
+  return apiRequest<ReshapeRecommendationsResponse>(`/ri-exchange/reshape-recommendations${params}`);
 }
 
 /**

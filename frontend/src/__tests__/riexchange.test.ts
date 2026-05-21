@@ -25,6 +25,7 @@ import {
   loadReshapeRecommendations,
   loadRIExchange,
   openExchangeModal,
+  renderReshapeStalenessBanner,
   setupRIExchangeHandlers,
 } from '../riexchange';
 import * as api from '../api';
@@ -325,15 +326,19 @@ describe('reshape recommendations table', () => {
 
   it('renders the Alternatives column with cost chips when the rec carries alternative_targets', async () => {
     const mockGet = api.getReshapeRecommendations as jest.Mock;
-    mockGet.mockResolvedValueOnce([
-      {
-        ...baseRec,
-        alternative_targets: [
-          { instance_type: 'm7g.large', offering_id: 'off-m7g', effective_monthly_cost: 30.0 },
-          { instance_type: 'm6i.large', offering_id: 'off-m6i', effective_monthly_cost: 35.0 },
-        ],
-      },
-    ]);
+    mockGet.mockResolvedValueOnce({
+      recommendations: [
+        {
+          ...baseRec,
+          alternative_targets: [
+            { instance_type: 'm7g.large', offering_id: 'off-m7g', effective_monthly_cost: 30.0 },
+            { instance_type: 'm6i.large', offering_id: 'off-m6i', effective_monthly_cost: 35.0 },
+          ],
+        },
+      ],
+      recs_staleness: '',
+      recs_collected_at: null,
+    });
 
     await loadReshapeRecommendations();
 
@@ -351,7 +356,7 @@ describe('reshape recommendations table', () => {
 
   it('renders an em-dash in the Alternatives column when the rec has no alternative_targets', async () => {
     const mockGet = api.getReshapeRecommendations as jest.Mock;
-    mockGet.mockResolvedValueOnce([{ ...baseRec }]); // no alternative_targets
+    mockGet.mockResolvedValueOnce({ recommendations: [{ ...baseRec }], recs_staleness: '', recs_collected_at: null }); // no alternative_targets
 
     await loadReshapeRecommendations();
 
@@ -399,7 +404,7 @@ describe('reshape recommendations empty state', () => {
 
     (api.getRIUtilization as jest.Mock).mockResolvedValue([]);
     (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([]);
-    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue([]);
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: [], recs_staleness: '', recs_collected_at: null });
   });
 
   afterEach(() => {
@@ -426,6 +431,59 @@ describe('reshape recommendations empty state', () => {
     expect(recsEl.textContent).toContain('meet your utilization threshold');
     expect(recsEl.textContent).toContain('1 convertible RI ');
     expect(recsEl.textContent).not.toContain('none are registered');
+  });
+});
+
+// Staleness banner tests for issue #150.
+describe('renderReshapeStalenessBanner', () => {
+  let listEl: HTMLDivElement;
+
+  beforeEach(() => {
+    const wrapper = document.createElement('div');
+    listEl = document.createElement('div');
+    listEl.id = 'ri-exchange-recommendations-list';
+    wrapper.appendChild(listEl);
+    document.body.appendChild(wrapper);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('renders no banner when staleness is empty', () => {
+    renderReshapeStalenessBanner('', null);
+    const banner = document.getElementById('ri-exchange-recommendations-freshness');
+    expect(banner?.textContent).toBe('');
+  });
+
+  it('renders a soft-warning banner for staleness=soft', () => {
+    renderReshapeStalenessBanner('soft', null);
+    const banner = document.getElementById('ri-exchange-recommendations-freshness');
+    expect(banner?.className).toContain('warning');
+    expect(banner?.textContent).toContain('may be up to 24h old');
+  });
+
+  it('renders a hard-warning banner for staleness=hard', () => {
+    renderReshapeStalenessBanner('hard', null);
+    const banner = document.getElementById('ri-exchange-recommendations-freshness');
+    expect(banner?.className).toContain('error');
+    expect(banner?.textContent).toContain('older than 24h');
+  });
+
+  it('includes an age label when recs_collected_at is provided', () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    renderReshapeStalenessBanner('soft', twoHoursAgo);
+    const banner = document.getElementById('ri-exchange-recommendations-freshness');
+    expect(banner?.textContent).toContain('last collected 2h');
+  });
+
+  it('clears an existing banner when staleness becomes empty', () => {
+    renderReshapeStalenessBanner('hard', null);
+    expect(document.getElementById('ri-exchange-recommendations-freshness')?.className).toContain('error');
+    renderReshapeStalenessBanner('', null);
+    const banner = document.getElementById('ri-exchange-recommendations-freshness');
+    expect(banner?.textContent).toBe('');
+    expect(banner?.className).toBe('');
   });
 });
 
