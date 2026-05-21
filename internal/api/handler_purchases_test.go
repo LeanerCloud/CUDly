@@ -1179,6 +1179,10 @@ func TestHandler_getPurchaseDetails_NotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "execution not found")
+	// Regression #431: must be a 404 ClientError, not a 500.
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 404, ce.code)
 }
 
 func TestHandler_getPurchaseDetails_NilExecution(t *testing.T) {
@@ -1206,6 +1210,43 @@ func TestHandler_getPurchaseDetails_NilExecution(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "execution not found")
+	// Regression #431: must be a 404 ClientError, not a 500.
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 404, ce.code)
+}
+
+// TestHandler_getPurchaseDetails_NotFound_IsClientError is a focused
+// regression for issue #431: a DB-level "not found" error from
+// GetExecutionByID must produce a 404 ClientError, never a 500, so that
+// unauthenticated callers cannot infer UUID existence by observing a
+// status-code difference.
+func TestHandler_getPurchaseDetails_NotFound_IsClientError(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+
+	const missingID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	// Simulate the DB returning a generic error (as pgx does on a missing row).
+	mockStore.On("GetExecutionByID", ctx, missingID).Return(nil, errors.New("no rows in result set"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+
+	_, err := handler.getPurchaseDetails(ctx, req, missingID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "getPurchaseDetails must return a ClientError on not-found, not wrap into a 500")
+	assert.Equal(t, 404, ce.code, "not-found from GetExecutionByID must produce HTTP 404")
 }
 
 func TestHandler_getPurchaseDetails_WithTimestamps(t *testing.T) {
