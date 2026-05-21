@@ -380,9 +380,14 @@ resource "aws_iam_role_policy" "ri_exchange" {
 # Scoped by var.cross_account_role_name_prefix (default "CUDly") so the
 # Lambda can only assume roles whose names start with that prefix. The
 # shipped federation templates (iac/federation/aws-*) create roles matching
-# this prefix. ExternalId validation still happens at the application layer
-# (resolver.go) — this IAM constraint is defence-in-depth so a single app-
-# layer bug can't pivot into arbitrary roles.
+# this prefix. ExternalId validation also happens at the application layer
+# (resolver.go); this IAM condition is defence-in-depth so a single app-
+# layer bug cannot pivot into arbitrary roles without a non-empty ExternalId.
+#
+# The StringLike "*" condition requires that sts:ExternalId is present and
+# non-empty in every AssumeRole call. Per-account ExternalId values are
+# validated at the application layer; IAM here enforces that the field is
+# present at all, closing the gap where an app-layer bug could omit it.
 resource "aws_iam_role_policy" "cross_account_sts" {
   count = var.enable_cross_account_sts ? 1 : 0
 
@@ -396,6 +401,11 @@ resource "aws_iam_role_policy" "cross_account_sts" {
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
         Resource = "arn:aws:iam::*:role/${var.cross_account_role_name_prefix}*"
+        Condition = {
+          StringLike = {
+            "sts:ExternalId" = "*"
+          }
+        }
       }
     ]
   })

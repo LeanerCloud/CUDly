@@ -215,10 +215,10 @@ resource "aws_iam_role_policy" "ses_access" {
 }
 
 # Cross-account role assumption for multi-account plan execution. Scoped by
-# var.cross_account_role_name_prefix (default "CUDly"). ExternalId is still
-# enforced at the app layer in the credentials resolver; this IAM constraint
-# is defence-in-depth so a single app-layer bug can't pivot into arbitrary
-# roles. Mirrors the Lambda module.
+# var.cross_account_role_name_prefix (default "CUDly"). ExternalId is also
+# enforced at the app layer in the credentials resolver; the IAM StringLike
+# "*" condition here is defence-in-depth that requires a non-empty ExternalId
+# to be supplied on every AssumeRole call. Mirrors the Lambda module.
 resource "aws_iam_role_policy" "cross_account_sts" {
   count = var.enable_cross_account_sts ? 1 : 0
 
@@ -232,6 +232,11 @@ resource "aws_iam_role_policy" "cross_account_sts" {
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
         Resource = "arn:aws:iam::*:role/${var.cross_account_role_name_prefix}*"
+        Condition = {
+          StringLike = {
+            "sts:ExternalId" = "*"
+          }
+        }
       }
     ]
   })
