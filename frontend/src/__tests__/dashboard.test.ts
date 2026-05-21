@@ -71,7 +71,7 @@ jest.mock('../api', () => ({
   // value don't need to be updated.
   getRecommendations: jest.fn().mockResolvedValue([]),
 }));
-import { loadSavingsTrendChart, setupSavingsTrendHandlers } from '../dashboard';
+import { loadSavingsTrendChart, setupSavingsTrendHandlers, setupDashboardHandlers } from '../dashboard';
 
 // Mock state module
 jest.mock('../state', () => ({
@@ -727,6 +727,203 @@ describe('Dashboard Module', () => {
       const call = (api.getSavingsAnalytics as jest.Mock).mock.calls[0]?.[0];
       const span = new Date(call.end).getTime() - new Date(call.start).getTime();
       expect(Math.round(span / 86400_000)).toBe(30);
+    });
+  });
+
+  // Issue #498: Home tab subscriber wiring. Chip changes must re-query
+  // the Savings-over-time chart with the new filter; inactive-tab guard
+  // and microtask coalescing mirror PR #488's recommendations.ts pattern.
+  describe('subscriber wiring (issue #498)', () => {
+    function makeDiv(id: string): HTMLDivElement {
+      const el = document.createElement('div');
+      el.id = id;
+      return el;
+    }
+
+    beforeEach(() => {
+      // Fresh DOM with the elements setupDashboardHandlers + loadDashboard
+      // + loadSavingsTrendChart touch. #home-tab is the active-tab guard
+      // target; the canvas and empty-state nodes are the chart targets;
+      // summary + upcoming-list are loadDashboard's render destinations.
+      while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
+      document.body.appendChild(makeDiv('home-tab'));
+      document.body.appendChild(makeDiv('summary'));
+      document.body.appendChild(makeDiv('upcoming-list'));
+      const canvas = document.createElement('canvas');
+      canvas.id = 'savings-trend-chart';
+      document.body.appendChild(canvas);
+      const empty = document.createElement('p');
+      empty.id = 'savings-trend-empty';
+      empty.className = 'hidden';
+      document.body.appendChild(empty);
+
+      // Default mock shape: getDashboardSummary returns a minimal payload
+      // so loadDashboard's render path doesn't throw. getSavingsAnalytics
+      // returns an empty data_points list (chart hides + early-returns).
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        by_service: {},
+        active_commitments: 0,
+        active_plans: 0,
+        upcoming_purchases: 0,
+        potential_monthly_savings: 0,
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getRecommendations as jest.Mock).mockResolvedValue([]);
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+    });
+
+    test('registers callbacks with state.subscribeProvider and state.subscribeAccount', () => {
+      setupDashboardHandlers();
+
+      expect(state.subscribeProvider).toHaveBeenCalledTimes(1);
+      expect(state.subscribeAccount).toHaveBeenCalledTimes(1);
+      expect(typeof (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+      expect(typeof (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+    });
+
+    test('account chip change re-queries the savings chart when home-tab is active', async () => {
+      const tab = document.getElementById('home-tab')!;
+      tab.classList.add('active');
+
+      setupDashboardHandlers();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+      expect(typeof accountCb).toBe('function');
+
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+      (api.getDashboardSummary as jest.Mock).mockClear();
+      accountCb();
+      // queueMicrotask + loadDashboard's awaited Promise.allSettled + the
+      // fire-and-forget loadSavingsTrendChart all need to settle. A pair
+      // of macrotask flushes covers the chain.
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getDashboardSummary).toHaveBeenCalledTimes(1);
+      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    });
+
+    test('provider chip change re-queries the savings chart when home-tab is active', async () => {
+      const tab = document.getElementById('home-tab')!;
+      tab.classList.add('active');
+
+      setupDashboardHandlers();
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      expect(typeof providerCb).toBe('function');
+
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+      providerCb();
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    });
+
+    test('does NOT re-query when home-tab is inactive (active-tab guard)', async () => {
+      // #home-tab present but no .active class: user is on another tab.
+      setupDashboardHandlers();
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+      (api.getDashboardSummary as jest.Mock).mockClear();
+      providerCb();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getDashboardSummary).not.toHaveBeenCalled();
+      expect(api.getSavingsAnalytics).not.toHaveBeenCalled();
+    });
+
+    test('coalesces back-to-back provider+account fires into a single reload', async () => {
+      const tab = document.getElementById('home-tab')!;
+      tab.classList.add('active');
+
+      setupDashboardHandlers();
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+      (api.getDashboardSummary as jest.Mock).mockClear();
+      // The topbar provider-change handler updates BOTH state slots in
+      // sequence (clear accounts then set provider, per the #185 ordering
+      // rule), so both subscribers fire synchronously from one user
+      // action. Without coalescing this would trigger two fetches.
+      providerCb();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getDashboardSummary).toHaveBeenCalledTimes(1);
+      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    });
+
+    test('cancels queued reload when Home becomes inactive before microtask flush', async () => {
+      // Covers the re-check inside the microtask: a chip change fires
+      // while Home is active, but the user switches tabs before the
+      // microtask runs. The deferred fetch should be cancelled.
+      const tab = document.getElementById('home-tab')!;
+      tab.classList.add('active');
+
+      setupDashboardHandlers();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (api.getDashboardSummary as jest.Mock).mockClear();
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+
+      // Queue the reload while Home is active.
+      accountCb();
+      // Synchronously deactivate Home before the microtask flushes.
+      tab.classList.remove('active');
+
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getDashboardSummary).not.toHaveBeenCalled();
+      expect(api.getSavingsAnalytics).not.toHaveBeenCalled();
+    });
+
+    test('bug-was-fixed: switching accounts triggers fetches with distinct account_ids and chart re-queries', async () => {
+      const tab = document.getElementById('home-tab')!;
+      tab.classList.add('active');
+
+      // Distinct response per account proves the chart isn't just re-firing
+      // with the same data: the new account flows through to the request
+      // and the response is fresh data.
+      const responseForA = { data_points: [{ timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100, total_savings: 100 }] };
+      const responseForB = { data_points: [{ timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 500, total_savings: 500 }] };
+      (api.getSavingsAnalytics as jest.Mock)
+        .mockResolvedValueOnce(responseForA)
+        .mockResolvedValueOnce(responseForB);
+      (state.getCurrentAccountIDs as jest.Mock)
+        .mockReturnValueOnce(['acct-A'])
+        .mockReturnValueOnce(['acct-A'])
+        .mockReturnValueOnce(['acct-A'])
+        .mockReturnValueOnce(['acct-B'])
+        .mockReturnValueOnce(['acct-B'])
+        .mockReturnValueOnce(['acct-B']);
+
+      setupDashboardHandlers();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      // First chip change: select acct-A.
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      // Second chip change: select acct-B. Microtask flag is reset inside
+      // the previous microtask so this fire schedules a fresh reload.
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Two distinct fetches, each carrying the account that was active
+      // at the time of the fetch. The chart loader passes account_ids
+      // only when exactly one account is selected, which matches the
+      // single-account chip semantics.
+      const calls = (api.getSavingsAnalytics as jest.Mock).mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[0]).toMatchObject({ account_ids: ['acct-A'] });
+      expect(calls[1]?.[0]).toMatchObject({ account_ids: ['acct-B'] });
     });
   });
 

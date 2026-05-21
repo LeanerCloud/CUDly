@@ -33,16 +33,56 @@ let savingsTrendRange: '7' | '30' | '90' | 'all' = '90';
 let upcomingPurchasesIndex: Map<string, UpcomingPurchase> = new Map();
 
 /**
- * Setup dashboard event handlers
+ * True when the Home tab is the currently-visible tab. The reload-on-
+ * filter-change subscriptions below skip the fetch when this is false so
+ * we don't burn an API call (and a skeleton flash) for a section the user
+ * isn't looking at: `switchTab('home')` runs loadDashboard() on next
+ * entry anyway, so the user always sees data matching the active filter.
+ */
+function isHomeTabActive(): boolean {
+  return document.getElementById('home-tab')?.classList.contains('active') === true;
+}
+
+/**
+ * Setup dashboard event handlers (issue #498).
+ *
+ * Filter source-of-truth lives in state.ts (mutated by the global topbar
+ * chips). Subscribe to filter changes and reload the dashboard; the issue
+ * #185 ordering rule (clear accounts before refetching for a new provider)
+ * is enforced by topbar-filters.ts at the source so loadDashboard() always
+ * sees consistent state.
+ *
+ * Mirrors the recommendations.ts pattern from PR #488 (closes #477):
+ *   - Active-tab guard: only fire loadDashboard() when home-tab is active.
+ *   - Coalesce duplicate reloads via queueMicrotask: the provider-change
+ *     handler in topbar-filters.ts updates BOTH state slots (clear
+ *     accounts then set provider, per the #185 ordering rule), firing
+ *     account- AND provider-subscribers from one user action. Without
+ *     coalescing we'd kick off two loadDashboard() calls back-to-back:
+ *     extra API load plus a stale-overwrite risk if the first response
+ *     lands after the second.
+ *
+ * Microtask scheduling: both subscriber fires are synchronous within the
+ * same setCurrentProvider/setCurrentAccountIDs call chain, so a microtask
+ * runs once after the chain settles. setTimeout(_, 0) would also work but
+ * adds a macrotask delay the user could perceive on slow machines.
  */
 export function setupDashboardHandlers(): void {
-  // Filter source-of-truth lives in state.ts (mutated by the global
-  // topbar chips). Subscribe to filter changes and reload the dashboard;
-  // the issue #185 ordering rule (clear accounts before refetching for a
-  // new provider) is enforced by topbar-filters.ts at the source so the
-  // dashboard's loadDashboard() always sees consistent state.
-  state.subscribeProvider(() => void loadDashboard());
-  state.subscribeAccount(() => void loadDashboard());
+  let reloadQueued = false;
+  const scheduleReload = (): void => {
+    if (!isHomeTabActive() || reloadQueued) return;
+    reloadQueued = true;
+    queueMicrotask(() => {
+      reloadQueued = false;
+      // Re-check active-tab inside the microtask: the user could have
+      // switched tabs between the chip change and the microtask flushing,
+      // in which case the fetch is now unneeded (switchTab on next entry
+      // will reload).
+      if (isHomeTabActive()) void loadDashboard();
+    });
+  };
+  state.subscribeProvider(scheduleReload);
+  state.subscribeAccount(scheduleReload);
 
   setupSavingsTrendHandlers();
 }
