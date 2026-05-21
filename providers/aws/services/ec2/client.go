@@ -112,6 +112,31 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Timestamp:      time.Now(),
 	}
 
+	// Idempotency dedupe guard (issue #636). EC2's
+	// PurchaseReservedInstancesOfferingInput has no ClientToken, so the API
+	// cannot dedupe a repeated purchase server-side. Instead, when an
+	// idempotency token is supplied, look for an RI already tagged with it
+	// before buying: if one exists, this is a re-drive of a purchase that
+	// already succeeded, so short-circuit and return the existing RI rather
+	// than buying a second one.
+	if opts.IdempotencyToken != "" {
+		existingID, found, lookupErr := c.findRIByIdempotencyToken(ctx, opts.IdempotencyToken)
+		if lookupErr != nil {
+			// A failed lookup must NOT fall through to a purchase: doing so
+			// would defeat the guard and risk a double-buy on a re-drive. Fail
+			// loudly so the recovery sweep treats it as not-yet-purchased and
+			// retries the whole guarded path, rather than silently buying.
+			result.Error = fmt.Errorf("idempotency lookup failed before EC2 RI purchase (refusing to purchase to avoid a possible double-buy): %w", lookupErr)
+			return result, result.Error
+		}
+		if found {
+			log.Printf("EC2 RI for idempotency token %s already exists (%s); skipping purchase (issue #636 re-drive)", opts.IdempotencyToken, existingID)
+			result.Success = true
+			result.CommitmentID = existingID
+			return result, nil
+		}
+	}
+
 	// Find the offering ID
 	offeringID, err := c.findOfferingID(ctx, rec)
 	if err != nil {
@@ -146,11 +171,51 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	// purchase: the RI is already bought, and failing here would leave the
 	// customer with a paid-for-but-untagged commitment and no way to retry
 	// without double-purchasing.
-	if err := c.tagReservedInstance(ctx, result.CommitmentID, rec, opts.Source); err != nil {
+	//
+	// The idempotency-token tag (issue #636) rides this same CreateTags call.
+	// It is load-bearing for the dedupe guard above: if this write fails the
+	// guard degrades for that one RI (a re-drive would not find the tag and
+	// could double-buy). That residual window is backstopped by the recovery
+	// sweep's safe-fail + operator-confirm Retry (PR #635), since EC2 offers no
+	// atomic alternative. The cosmetic tags and the idempotency tag share one
+	// call so they cannot drift apart.
+	if err := c.tagReservedInstance(ctx, result.CommitmentID, rec, opts.Source, opts.IdempotencyToken); err != nil {
 		log.Printf("WARNING: failed to tag EC2 RI %s after purchase (commitment is bought; tag missing): %v", result.CommitmentID, err)
 	}
 
 	return result, nil
+}
+
+// findRIByIdempotencyToken looks for an active or payment-pending Reserved
+// Instance tagged with the given idempotency token (issue #636). It returns the
+// RI ID and true when exactly such an RI exists, so a re-driven purchase can
+// short-circuit instead of buying a second commitment. Retired/cancelled RIs are
+// excluded (they carry the same state filter as GetExistingCommitments) so a
+// returned or expired commitment does not suppress a legitimate fresh purchase.
+func (c *Client) findRIByIdempotencyToken(ctx context.Context, token string) (string, bool, error) {
+	input := &ec2.DescribeReservedInstancesInput{
+		Filters: []types.Filter{
+			{
+				Name:   aws.String("tag:" + common.IdempotencyTagKey),
+				Values: []string{token},
+			},
+			{
+				Name:   aws.String("state"),
+				Values: []string{"active", "payment-pending"},
+			},
+		},
+	}
+
+	response, err := c.client.DescribeReservedInstances(ctx, input)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to describe reserved instances for idempotency check: %w", err)
+	}
+	for _, ri := range response.ReservedInstances {
+		if ri.ReservedInstancesId != nil {
+			return aws.ToString(ri.ReservedInstancesId), true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // tagReservedInstance applies the standard CUDly tag set (including the
@@ -160,7 +225,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 // Retries up to 4 attempts (1s/2s/4s backoff) on InvalidReservationID.NotFound,
 // since AWS sometimes needs a couple of seconds before the RI ID is visible
 // to CreateTags. Non-NotFound errors short-circuit immediately.
-func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec common.Recommendation, source string) error {
+func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec common.Recommendation, source, idempotencyToken string) error {
 	tags := []types.Tag{
 		{Key: aws.String("Purpose"), Value: aws.String("Reserved Instance Purchase")},
 		{Key: aws.String("ResourceType"), Value: aws.String(rec.ResourceType)},
@@ -172,6 +237,15 @@ func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec commo
 		tags = append(tags, types.Tag{
 			Key:   aws.String(common.PurchaseTagKey),
 			Value: aws.String(source),
+		})
+	}
+	// The idempotency tag is what findRIByIdempotencyToken matches on for the
+	// dedupe guard (issue #636); it must be written for a re-drive to recognise
+	// this RI as already-purchased.
+	if idempotencyToken != "" {
+		tags = append(tags, types.Tag{
+			Key:   aws.String(common.IdempotencyTagKey),
+			Value: aws.String(idempotencyToken),
 		})
 	}
 

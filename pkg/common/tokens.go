@@ -2,6 +2,7 @@ package common
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 )
@@ -21,4 +22,22 @@ func GenerateApprovalToken() (string, error) {
 		return "", fmt.Errorf("generate approval token: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// DeriveIdempotencyToken returns a deterministic token for a single purchase
+// recommendation, derived from the owning execution's ID and the recommendation's
+// index within that execution. The same (executionID, recIndex) pair always
+// yields the same token, so a re-driven purchase of a stranded execution (issue
+// #636) reuses the identical token: AWS Savings Plans dedupe on it natively via
+// CreateSavingsPlanInput.ClientToken, and the EC2 RI client uses it as a dedupe
+// tag (IdempotencyTagKey). The output is a 64-char hex SHA-256 digest, which fits
+// the AWS ClientToken 64-character limit exactly.
+//
+// Unlike GenerateApprovalToken this is intentionally NOT random: idempotency
+// requires the token be reproducible from durable inputs (execution_id + index),
+// which both survive a strand-and-re-drive. It is not a credential, so the lack
+// of unpredictability is by design.
+func DeriveIdempotencyToken(executionID string, recIndex int) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", executionID, recIndex)))
+	return hex.EncodeToString(sum[:])
 }

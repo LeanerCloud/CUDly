@@ -248,6 +248,14 @@ const (
 // so customers and CUDly itself can attribute commitments back to the tool.
 const PurchaseTagKey = "purchase-automation"
 
+// IdempotencyTagKey is the tag key under which the deterministic per-rec
+// idempotency token (see DeriveIdempotencyToken) is stamped on commitments that
+// the cloud API cannot dedupe natively. EC2 Reserved Instances have no
+// ClientToken on PurchaseReservedInstancesOffering, so the EC2 client checks for
+// an already-tagged RI before purchasing and tags the freshly-bought RI with
+// this key afterwards, making a re-driven purchase idempotent (issue #636).
+const IdempotencyTagKey = "cudly-idempotency-token"
+
 // PurchaseOptions carries per-execution metadata threaded through
 // ServiceClient.PurchaseCommitment. Source is the CUDly surface that triggered
 // the purchase (CLI vs web); every provider stamps it onto the commitment it
@@ -260,6 +268,15 @@ type PurchaseOptions struct {
 	// carry a descriptive, account/engine/region-aware name instead of a
 	// generic auto-generated one. Providers sanitize it to their ID rules.
 	ReservationID string
+	// IdempotencyToken, when non-empty, is a deterministic token (see
+	// DeriveIdempotencyToken) that makes commitment creation idempotent across
+	// re-drives of the same execution (issue #636). Savings Plans pass it as
+	// the native CreateSavingsPlan ClientToken; EC2 RIs (which have no native
+	// token) check for an existing RI tagged with it before purchasing and tag
+	// the new RI with it afterwards. Empty means no idempotency guard (the CLI
+	// purchase path, which has no owning execution, leaves it empty and keeps
+	// its prior non-idempotent behaviour).
+	IdempotencyToken string
 }
 
 // NormalizeSource lowercases s and returns it when it matches an allowed

@@ -194,6 +194,16 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Tags:                  buildSavingsPlanTags(opts.Source),
 	}
 
+	// Native server-side idempotency (issue #636): a repeated CreateSavingsPlan
+	// with the same ClientToken returns the original Savings Plan instead of
+	// creating a second one, so re-driving a stranded execution can never
+	// double-purchase. The token is deterministic across re-drives (derived from
+	// execution_id + rec index). Left unset for the CLI path, which carries no
+	// owning execution and keeps its prior non-idempotent behaviour.
+	if opts.IdempotencyToken != "" {
+		input.ClientToken = aws.String(opts.IdempotencyToken)
+	}
+
 	response, err := c.client.CreateSavingsPlan(ctx, input)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to purchase Savings Plan: %w", err)

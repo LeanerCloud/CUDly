@@ -129,9 +129,14 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 	}, nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	// The deterministic idempotency token (issue #636) is derived per-rec from
+	// the execution ID and the rec's index, so the web path now also carries it.
 	mockServiceClient.On("PurchaseCommitment", ctx,
 		mock.AnythingOfType("common.Recommendation"),
-		common.PurchaseOptions{Source: common.PurchaseSourceWeb},
+		common.PurchaseOptions{
+			Source:           common.PurchaseSourceWeb,
+			IdempotencyToken: common.DeriveIdempotencyToken("exec-web", 0),
+		},
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-web"}, nil)
 
 	manager := &Manager{
@@ -180,9 +185,13 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
 	// Expect EMPTY source, not "cudly-evil" — NormalizeSource must have wiped it.
+	// The idempotency token (issue #636) is still derived regardless of source.
 	mockServiceClient.On("PurchaseCommitment", ctx,
 		mock.AnythingOfType("common.Recommendation"),
-		common.PurchaseOptions{Source: ""},
+		common.PurchaseOptions{
+			Source:           "",
+			IdempotencyToken: common.DeriveIdempotencyToken("exec-bad", 0),
+		},
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-bad"}, nil)
 
 	manager := &Manager{

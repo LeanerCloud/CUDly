@@ -394,6 +394,86 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 	mockSP.AssertExpectations(t)
 }
 
+// TestClient_PurchaseCommitment_SetsClientTokenForIdempotency asserts that an
+// idempotency token supplied via PurchaseOptions is passed verbatim as the
+// CreateSavingsPlan ClientToken (issue #636). AWS dedupes on this token, so a
+// re-driven purchase with the same token returns the original Savings Plan
+// instead of creating a second one. The test captures the input and confirms
+// the same token would be sent again on a re-drive.
+func TestClient_PurchaseCommitment_SetsClientTokenForIdempotency(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	client := &Client{client: mockSP, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceSavingsPlans,
+		ResourceType:  "Compute",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 10.0},
+	}
+
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{{OfferingId: aws.String("offering-123")}},
+		}, nil)
+
+	var captured *savingsplans.CreateSavingsPlanInput
+	mockSP.On("CreateSavingsPlan", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*savingsplans.CreateSavingsPlanInput)
+		}).
+		Return(&savingsplans.CreateSavingsPlanOutput{SavingsPlanId: aws.String("sp-789")}, nil)
+
+	token := common.DeriveIdempotencyToken("exec-sp-1", 0)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{IdempotencyToken: token})
+
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.ClientToken, "CreateSavingsPlan must carry a ClientToken for idempotency")
+	assert.Equal(t, token, *captured.ClientToken)
+	// A re-drive of the same execution/rec derives the identical token, so AWS
+	// would dedupe the second CreateSavingsPlan onto the first.
+	assert.Equal(t, *captured.ClientToken, common.DeriveIdempotencyToken("exec-sp-1", 0))
+	mockSP.AssertExpectations(t)
+}
+
+// TestClient_PurchaseCommitment_NoClientTokenWhenUnset confirms the CLI path
+// (no owning execution, empty token) leaves ClientToken nil and keeps its prior
+// non-idempotent behaviour unchanged.
+func TestClient_PurchaseCommitment_NoClientTokenWhenUnset(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	client := &Client{client: mockSP, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceSavingsPlans,
+		ResourceType:  "Compute",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 10.0},
+	}
+
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{{OfferingId: aws.String("offering-123")}},
+		}, nil)
+
+	var captured *savingsplans.CreateSavingsPlanInput
+	mockSP.On("CreateSavingsPlan", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*savingsplans.CreateSavingsPlanInput)
+		}).
+		Return(&savingsplans.CreateSavingsPlanOutput{SavingsPlanId: aws.String("sp-789")}, nil)
+
+	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	assert.Nil(t, captured.ClientToken, "no idempotency token supplied -> ClientToken stays nil")
+	mockSP.AssertExpectations(t)
+}
+
 func TestClient_PurchaseCommitment_InvalidDetails(t *testing.T) {
 	client := &Client{region: "us-east-1"}
 
