@@ -12,6 +12,22 @@ terraform {
   }
 }
 
+# Origin Access Control for Lambda Function URL
+# Instructs CloudFront to SigV4-sign every forwarded request so the Lambda
+# Function URL (authorization_type = "AWS_IAM") only accepts traffic that
+# originates from this distribution. The signing happens at the CloudFront edge
+# -- the browser never sees an AWS credential.
+# Only created when enable_oac = true (Lambda + AWS_IAM deployments).
+resource "aws_cloudfront_origin_access_control" "lambda" {
+  count = var.enable_oac ? 1 : 0
+
+  name                              = "${var.project_name}-${var.environment}-lambda-oac"
+  description                       = "OAC for ${var.project_name} Lambda Function URL (${var.environment})"
+  origin_access_control_origin_type = "lambda"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
 # CloudFront distribution with single compute origin
 resource "aws_cloudfront_distribution" "frontend" {
   enabled         = true
@@ -25,6 +41,11 @@ resource "aws_cloudfront_distribution" "frontend" {
   origin {
     domain_name = var.origin_domain_name
     origin_id   = "compute"
+
+    # Attach OAC when Lambda Function URL uses authorization_type = "AWS_IAM".
+    # CloudFront will SigV4-sign every forwarded request. Null when enable_oac = false
+    # (Fargate ALB or Lambda with auth_type = "NONE").
+    origin_access_control_id = var.enable_oac ? aws_cloudfront_origin_access_control.lambda[0].id : null
 
     custom_origin_config {
       http_port              = 80

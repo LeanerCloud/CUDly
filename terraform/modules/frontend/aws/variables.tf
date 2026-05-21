@@ -69,6 +69,20 @@ variable "alarm_sns_topic_arn" {
   default     = ""
 }
 
+variable "enable_oac" {
+  description = <<-EOT
+    When true, create a CloudFront Origin Access Control (OAC) of type "lambda"
+    and attach it to the compute origin in the distribution. Required when the
+    Lambda Function URL uses authorization_type = "AWS_IAM": CloudFront will
+    SigV4-sign every forwarded request so the Function URL only accepts traffic
+    from this distribution.
+    Set to false when the origin is a Fargate ALB or when the Lambda uses
+    authorization_type = "NONE".
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Additional tags for resources"
   type        = map(string)

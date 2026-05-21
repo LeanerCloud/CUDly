@@ -30,6 +30,9 @@ module "frontend" {
   # Don't let module create DNS record if we're managing it in dns_records.tf
   route53_zone_id = var.subdomain_zone_name != "" ? null : var.frontend_route53_zone_id
 
+  # Enable OAC when Lambda is behind CloudFront with AWS_IAM auth
+  enable_oac = var.compute_platform == "lambda" && var.lambda_function_url_auth_type == "AWS_IAM"
+
   # CloudFront configuration
   price_class = var.frontend_price_class
 
