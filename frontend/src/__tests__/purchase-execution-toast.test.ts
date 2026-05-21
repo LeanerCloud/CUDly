@@ -111,6 +111,7 @@ import * as api from '../api';
 import * as recs from '../recommendations';
 import * as plans from '../plans';
 import * as archera from '../archera';
+import { confirmDialog } from '../confirmDialog';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -353,6 +354,37 @@ describe('handleExecutePurchase — single-record path', () => {
     ];
     expect(submittedRecs[0]?.details).toEqual(rdsDetails);
     expect(submittedRecs[0]?.engine).toBe('postgres');
+  });
+
+  // Issue #647: a scaled rec carries recommended_count (the pre-scaling count)
+  // so the backend can verify capacity_percent against the scaled count. The
+  // single-rec submit path must forward it unchanged in the POST body.
+  test('#647 single-rec — recommended_count preserved in POST body', async () => {
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([
+      {
+        ...buildMinimalRec(),
+        count: 5,
+        recommended_count: 10,
+      },
+    ]);
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-647',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    const [submittedRecs] = (api.executePurchase as jest.Mock).mock.calls[0] as [
+      Array<{ count?: number; recommended_count?: number }>,
+      number,
+    ];
+    expect(submittedRecs[0]?.count).toBe(5);
+    expect(submittedRecs[0]?.recommended_count).toBe(10);
   });
 });
 
@@ -659,5 +691,58 @@ describe('handleFanOutExecute — fan-out path', () => {
     ];
     expect(submittedRecs[0]?.details).toEqual(postgresDetails);
     expect(submittedRecs[0]?.engine).toBe('postgres');
+  });
+});
+
+// #644: the execute button must be disabled BEFORE the confirm dialog / network
+// call so a double-click can't fire a second POST (duplicate pending execution).
+describe('handleExecutePurchase — double-submit guard (#644)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([]);
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([buildMinimalRec()]);
+    (plans.closePurchaseModal as jest.Mock).mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    document.body.textContent = '';
+  });
+
+  test('button is disabled while the confirm dialog is pending (before any POST)', async () => {
+    let resolveConfirm: (v: boolean) => void = () => undefined;
+    (confirmDialog as jest.Mock).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveConfirm = resolve;
+      }),
+    );
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-1',
+      status: 'pending',
+      email_sent: true,
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Confirm dialog is still open: button disabled, no POST yet.
+    expect(btn.disabled).toBe(true);
+    expect(api.executePurchase).not.toHaveBeenCalled();
+
+    resolveConfirm(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+  });
+
+  test('button is re-enabled when the user cancels the confirm dialog', async () => {
+    (confirmDialog as jest.Mock).mockResolvedValueOnce(false);
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.executePurchase).not.toHaveBeenCalled();
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toBe('Send for Approval');
   });
 });

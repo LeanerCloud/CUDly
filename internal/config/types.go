@@ -292,11 +292,20 @@ type RecommendationRecord struct {
 	// Platform / Tenancy / Scope / AZConfig values). New rows always
 	// carry the full Details, so non-default platforms (Windows EC2,
 	// Postgres RDS, etc.) round-trip correctly.
-	Details     json.RawMessage `json:"details,omitempty" dynamodbav:"-"`
-	Count       int             `json:"count" dynamodbav:"count"`
-	Term        int             `json:"term" dynamodbav:"term"`
-	Payment     string          `json:"payment" dynamodbav:"payment"`
-	UpfrontCost float64         `json:"upfront_cost" dynamodbav:"upfront_cost"`
+	Details json.RawMessage `json:"details,omitempty" dynamodbav:"-"`
+	Count   int             `json:"count" dynamodbav:"count"`
+	// RecommendedCount is the pre-scaling count the collector originally
+	// recommended, before the bulk-purchase Capacity % slider scaled it down.
+	// The web execute path stamps it so the backend can verify the
+	// client-supplied capacity_percent against the scaled Count
+	// (floor(RecommendedCount*pct/100) must equal Count) rather than trusting
+	// a decorative audit field that could silently disagree (#647). Optional:
+	// 0 / absent means "not supplied" (legacy callers, scheduler/CLI rows,
+	// retry replays) and the consistency check is skipped for that rec.
+	RecommendedCount int     `json:"recommended_count,omitempty" dynamodbav:"recommended_count,omitempty"`
+	Term             int     `json:"term" dynamodbav:"term"`
+	Payment          string  `json:"payment" dynamodbav:"payment"`
+	UpfrontCost      float64 `json:"upfront_cost" dynamodbav:"upfront_cost"`
 	// MonthlyCost is nil when the provider API did not return a monthly
 	// recurring breakdown (rendered as "—" in the UI, not "$0").
 	// Backward-compatible with DynamoDB: existing items with a numeric 0

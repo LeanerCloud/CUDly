@@ -98,6 +98,13 @@ export interface Recommendation {
   // those fall back to zero-valued defaults on the backend. See #597, #453.
   details?: unknown;
   count: number;
+  // recommended_count is the pre-scaling count this rec carried before the
+  // bulk-purchase Capacity % slider scaled it down. Stamped onto the scaled
+  // copy at submit time so the backend can verify capacity_percent against the
+  // scaled count rather than trusting a decorative audit field (#647). Absent
+  // on un-scaled / full-capacity / legacy recs, in which case the backend
+  // skips the consistency check for that rec.
+  recommended_count?: number;
   term: number;
   payment: string;
   upfront_cost: number;

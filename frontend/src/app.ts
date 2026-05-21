@@ -301,6 +301,16 @@ async function handleExecutePurchase(): Promise<void> {
     return;
   }
 
+  // Disable the button BEFORE awaiting the confirm dialog and the network
+  // call so a double-click or rapid re-click can't fire a second POST and
+  // mint a duplicate pending execution (#644). The button is re-enabled on
+  // cancel below and in the finally block once the request settles.
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn) {
+    executeBtn.disabled = true;
+    executeBtn.textContent = 'Sending...';
+  }
+
   // Default approval-required path: clicking sends an approval request to
   // the configured approver(s) — it does NOT spend money. The actual
   // upfront charge fires only after an approver clicks the email link.
@@ -313,7 +323,13 @@ async function handleExecutePurchase(): Promise<void> {
     confirmLabel: 'Send for approval',
     destructive: false,
   });
-  if (!ok) return;
+  if (!ok) {
+    if (executeBtn) {
+      executeBtn.disabled = false;
+      executeBtn.textContent = 'Send for Approval';
+    }
+    return;
+  }
 
   // Build the POST body recs by spreading the server-provided rec so that
   // all fields (including `details`, `engine`, `cloud_account_id`, and any
@@ -341,12 +357,6 @@ async function handleExecutePurchase(): Promise<void> {
   const capacityPercent = capacityInput
     ? Math.max(1, Math.min(100, parseInt(capacityInput.value, 10) || 100))
     : 100;
-
-  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
-  if (executeBtn) {
-    executeBtn.disabled = true;
-    executeBtn.textContent = 'Sending...';
-  }
 
   try {
     const result = await api.executePurchase(apiRecs, capacityPercent);
@@ -408,6 +418,15 @@ async function handleExecutePurchase(): Promise<void> {
  * confirmDialog.
  */
 async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
+  // Disable the button BEFORE the confirm dialog and the parallel POSTs so a
+  // double-click can't fan out a second wave of duplicate executions (#644).
+  // Re-enabled on cancel below and after the calls settle at the end.
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn) {
+    executeBtn.disabled = true;
+    executeBtn.textContent = `Sending 0/${buckets.length}…`;
+  }
+
   // Same approval-required default as the single-purchase path: each
   // bucket POSTs a request that triggers an approval email; the actual
   // charges fire when each approver clicks the link in their email.
@@ -417,12 +436,12 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     confirmLabel: 'Send all for approval',
     destructive: false,
   });
-  if (!ok) return;
-
-  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
-  if (executeBtn) {
-    executeBtn.disabled = true;
-    executeBtn.textContent = `Sending 0/${buckets.length}…`;
+  if (!ok) {
+    if (executeBtn) {
+      executeBtn.disabled = false;
+      executeBtn.textContent = 'Send for Approval';
+    }
+    return;
   }
 
   // Fire all POSTs in parallel via allSettled so one failure doesn't
