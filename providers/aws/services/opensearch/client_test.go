@@ -706,3 +706,110 @@ func TestClient_GetTermMonthsFromDuration(t *testing.T) {
 		})
 	}
 }
+
+func osIdemRec() common.Recommendation {
+	return common.Recommendation{
+		Service:       common.ServiceSearch,
+		ResourceType:  "m5.xlarge.search",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "3yr",
+		Details:       common.SearchDetails{InstanceType: "m5.xlarge.search"},
+	}
+}
+
+func expectOSOffering(m *MockOpenSearchClient) {
+	m.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+			ReservedInstanceOfferings: []types.ReservedInstanceOffering{
+				{
+					ReservedInstanceOfferingId: aws.String("offering-1"),
+					InstanceType:               types.OpenSearchPartitionInstanceTypeM5XlargeSearch,
+					Duration:                   94608000,
+					PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+				},
+			},
+		}, nil)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	client := &Client{client: mockOS, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-1", 0)
+	derivedName := common.IdempotentReservationID("opensearch-id-", token)
+
+	expectOSOffering(mockOS)
+	mockOS.On("DescribeReservedInstances", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstancesOutput{
+			ReservedInstances: []types.ReservedInstance{
+				{ReservedInstanceId: aws.String("os-existing"), ReservationName: aws.String(derivedName), State: aws.String("active")},
+			},
+		}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "os-existing", result.CommitmentID)
+	mockOS.AssertNotCalled(t, "PurchaseReservedInstanceOffering", mock.Anything, mock.Anything)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_NotFoundProceeds(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	client := &Client{client: mockOS, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-2", 0)
+	derivedName := common.IdempotentReservationID("opensearch-id-", token)
+
+	expectOSOffering(mockOS)
+	mockOS.On("DescribeReservedInstances", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstancesOutput{}, nil)
+	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.MatchedBy(func(in *opensearch.PurchaseReservedInstanceOfferingInput) bool {
+		return aws.ToString(in.ReservationName) == derivedName
+	})).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{ReservedInstanceId: aws.String("os-new")}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "os-new", result.CommitmentID)
+	mockOS.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_AlreadyExistsRecovers(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	client := &Client{client: mockOS, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-3", 0)
+	derivedName := common.IdempotentReservationID("opensearch-id-", token)
+
+	expectOSOffering(mockOS)
+	// Guard misses, purchase rejected, recovery Describe finds it by name.
+	mockOS.On("DescribeReservedInstances", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstancesOutput{}, nil).Once()
+	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).
+		Return((*opensearch.PurchaseReservedInstanceOfferingOutput)(nil), &types.ResourceAlreadyExistsException{})
+	mockOS.On("DescribeReservedInstances", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstancesOutput{
+			ReservedInstances: []types.ReservedInstance{
+				{ReservedInstanceId: aws.String("os-recovered"), ReservationName: aws.String(derivedName), State: aws.String("payment-pending")},
+			},
+		}, nil).Once()
+
+	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "os-recovered", result.CommitmentID)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	client := &Client{client: mockOS, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-4", 0)
+
+	expectOSOffering(mockOS)
+	mockOS.On("DescribeReservedInstances", mock.Anything, mock.Anything).
+		Return((*opensearch.DescribeReservedInstancesOutput)(nil), fmt.Errorf("access denied"))
+
+	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "refusing to purchase")
+	mockOS.AssertNotCalled(t, "PurchaseReservedInstanceOffering", mock.Anything, mock.Anything)
+}

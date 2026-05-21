@@ -3,6 +3,7 @@ package opensearch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -149,16 +150,41 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	reservationID := common.SanitizeReservationID(fmt.Sprintf("opensearch-%s-%d", rec.ResourceType, time.Now().Unix()), "opensearch-reserved-")
+	// When an idempotency token is supplied (issue #641) the ReservationName is
+	// derived deterministically from it. ReservationName is unique per
+	// account+region, so a re-drive sends the identical name and OpenSearch
+	// rejects the duplicate server-side (ResourceAlreadyExistsException) — it
+	// cannot create a second reservation. Otherwise keep the prior timestamp-based
+	// name (non-idempotent path).
+	reservationName := common.IdempotentReservationID("opensearch-id-", opts.IdempotencyToken)
+	if reservationName == "" {
+		reservationName = common.SanitizeReservationID(fmt.Sprintf("opensearch-%s-%d", rec.ResourceType, time.Now().Unix()), "opensearch-reserved-")
+	}
+
+	// Idempotency dedupe guard (issue #641): short-circuit if a reservation with
+	// the derived name already exists; fail loud on lookup error.
+	if existingID, shortCircuit, guardErr := c.idempotencyGuard(ctx, opts.IdempotencyToken, reservationName); guardErr != nil {
+		result.Error = guardErr
+		return result, result.Error
+	} else if shortCircuit {
+		result.Success = true
+		result.CommitmentID = existingID
+		return result, nil
+	}
 
 	input := &opensearch.PurchaseReservedInstanceOfferingInput{
 		ReservedInstanceOfferingId: aws.String(offeringID),
-		ReservationName:            aws.String(reservationID),
+		ReservationName:            aws.String(reservationName),
 		InstanceCount:              aws.Int32(int32(rec.Count)),
 	}
 
 	response, err := c.client.PurchaseReservedInstanceOffering(ctx, input)
 	if err != nil {
+		if existingID, recovered := c.recoverAlreadyExists(ctx, opts.IdempotencyToken, reservationName, err); recovered {
+			result.Success = true
+			result.CommitmentID = existingID
+			return result, nil
+		}
 		result.Error = fmt.Errorf("failed to purchase OpenSearch RI: %w", err)
 		return result, result.Error
 	}
@@ -176,6 +202,81 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	return result, nil
+}
+
+// findReservationByName looks for an active or payment-pending OpenSearch
+// reserved instance whose ReservationName matches the given name (issue #641),
+// so a re-driven purchase can short-circuit. DescribeReservedInstances has no
+// name filter, so it pages through all reservations and matches client-side.
+// Retired/expired reservations are excluded (same state filter as
+// GetExistingCommitments).
+func (c *Client) findReservationByName(ctx context.Context, name string) (string, bool, error) {
+	var nextToken *string
+	for {
+		response, err := c.client.DescribeReservedInstances(ctx, &opensearch.DescribeReservedInstancesInput{
+			NextToken:  nextToken,
+			MaxResults: 100,
+		})
+		if err != nil {
+			return "", false, fmt.Errorf("failed to describe reserved instances for idempotency check: %w", err)
+		}
+		for _, ri := range response.ReservedInstances {
+			if aws.ToString(ri.ReservationName) != name {
+				continue
+			}
+			state := aws.ToString(ri.State)
+			if state != "active" && state != "payment-pending" {
+				continue
+			}
+			if ri.ReservedInstanceId != nil {
+				return aws.ToString(ri.ReservedInstanceId), true, nil
+			}
+		}
+		if response.NextToken == nil || aws.ToString(response.NextToken) == "" {
+			break
+		}
+		nextToken = response.NextToken
+	}
+	return "", false, nil
+}
+
+// idempotencyGuard short-circuits a re-drive (issue #641): when token is set, it
+// reports (existingID, true, nil) if a reservation with reservationName already
+// exists, ("", false, nil) for a first-time purchase, or a fail-loud error on
+// lookup failure. With an empty token it is a no-op.
+func (c *Client) idempotencyGuard(ctx context.Context, token, reservationName string) (string, bool, error) {
+	if token == "" {
+		return "", false, nil
+	}
+	existingID, found, lookupErr := c.findReservationByName(ctx, reservationName)
+	if lookupErr != nil {
+		return "", false, fmt.Errorf("idempotency lookup failed before OpenSearch RI purchase (refusing to purchase to avoid a possible double-buy): %w", lookupErr)
+	}
+	if found {
+		log.Printf("OpenSearch RI for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", token, existingID)
+		return existingID, true, nil
+	}
+	return "", false, nil
+}
+
+// recoverAlreadyExists handles the native server-side dedupe backstop (issue
+// #641): if the by-name guard missed the existing reservation but OpenSearch
+// rejected the duplicate name with ResourceAlreadyExistsException, it re-Describes
+// by name and returns (existingID, true) so the re-drive recovers it.
+func (c *Client) recoverAlreadyExists(ctx context.Context, token, reservationName string, purchaseErr error) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	var already *types.ResourceAlreadyExistsException
+	if !errors.As(purchaseErr, &already) {
+		return "", false
+	}
+	existingID, found, lookupErr := c.findReservationByName(ctx, reservationName)
+	if lookupErr == nil && found {
+		log.Printf("OpenSearch RI %s already existed at purchase time; treating as idempotent re-drive (issue #641)", existingID)
+		return existingID, true
+	}
+	return "", false
 }
 
 // resolveAccountID fetches the caller's AWS account ID via STS and caches it.
