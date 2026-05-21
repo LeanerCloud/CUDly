@@ -3,10 +3,19 @@ package common
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// ErrCommitmentPurchaseNotSupported is returned by ServiceClient.PurchaseCommitment
+// implementations for services that have no programmatic committed-use / commitment
+// purchase API. Their recommendations are advisory only: callers must surface them
+// for human action rather than auto-purchasing. Returning this sentinel (instead of
+// silently provisioning a billable resource) guarantees a "purchase" never creates
+// infrastructure. Callers can detect it with errors.Is(err, ErrCommitmentPurchaseNotSupported).
+var ErrCommitmentPurchaseNotSupported = errors.New("commitment purchase not supported for this service")
 
 // ProviderType identifies the cloud provider
 type ProviderType string

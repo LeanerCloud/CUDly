@@ -18,10 +18,11 @@ import (
 
 // MockStorageService mocks the StorageService interface
 type MockStorageService struct {
-	buckets    []*storage.BucketAttrs
-	listErr    error
-	bucketName string
-	createErr  error
+	buckets      []*storage.BucketAttrs
+	listErr      error
+	bucketName   string
+	createErr    error
+	createCalled *bool
 }
 
 func (m *MockStorageService) Buckets(ctx context.Context, projectID string) BucketIterator {
@@ -30,7 +31,7 @@ func (m *MockStorageService) Buckets(ctx context.Context, projectID string) Buck
 
 func (m *MockStorageService) Bucket(name string) BucketHandle {
 	m.bucketName = name
-	return &MockBucketHandle{createErr: m.createErr}
+	return &MockBucketHandle{createErr: m.createErr, createCalled: m.createCalled}
 }
 
 func (m *MockStorageService) Close() error {
@@ -58,10 +59,14 @@ func (m *MockBucketIterator) Next() (*storage.BucketAttrs, error) {
 
 // MockBucketHandle mocks the BucketHandle interface
 type MockBucketHandle struct {
-	createErr error
+	createErr    error
+	createCalled *bool
 }
 
 func (m *MockBucketHandle) Create(ctx context.Context, projectID string, attrs *storage.BucketAttrs) error {
+	if m.createCalled != nil {
+		*m.createCalled = true
+	}
 	return m.createErr
 }
 
@@ -361,13 +366,16 @@ func TestCloudStorageClient_GetExistingCommitments_Empty(t *testing.T) {
 	assert.Empty(t, commitments)
 }
 
-func TestCloudStorageClient_PurchaseCommitment_WithMock(t *testing.T) {
+// TestCloudStorageClient_PurchaseCommitment_NotSupported is the regression test for
+// issue #640: Cloud Storage has no CUD or commitment purchase API, so
+// PurchaseCommitment must return ErrCommitmentPurchaseNotSupported and MUST NOT call
+// any resource-creation API (it previously created a new empty billable bucket).
+func TestCloudStorageClient_PurchaseCommitment_NotSupported(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
-	mockService := &MockStorageService{
-		createErr: nil,
-	}
+	createCalled := false
+	mockService := &MockStorageService{createCalled: &createCalled}
 	client.SetStorageService(mockService)
 
 	rec := common.Recommendation{
@@ -376,29 +384,14 @@ func TestCloudStorageClient_PurchaseCommitment_WithMock(t *testing.T) {
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
-	require.NoError(t, err)
-	assert.True(t, result.Success)
-	assert.NotEmpty(t, result.CommitmentID)
-	assert.Equal(t, 100.0, result.Cost)
-}
 
-func TestCloudStorageClient_PurchaseCommitment_Error(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		createErr: errors.New("bucket creation failed"),
-	}
-	client.SetStorageService(mockService)
-
-	rec := common.Recommendation{
-		ResourceType: "STANDARD",
-	}
-
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "failed to create storage bucket")
+	assert.Empty(t, result.CommitmentID)
+	assert.ErrorIs(t, result.Error, common.ErrCommitmentPurchaseNotSupported)
+	// The critical guarantee: a "purchase" must never create infrastructure.
+	assert.False(t, createCalled, "PurchaseCommitment must not call bucket Create")
 }
 
 func TestCloudStorageClient_GetRecommendations_WithMock(t *testing.T) {

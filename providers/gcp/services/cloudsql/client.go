@@ -233,61 +233,25 @@ func (c *CloudSQLClient) GetExistingCommitments(ctx context.Context) ([]common.C
 	return commitments, nil
 }
 
-// PurchaseCommitment purchases a Cloud SQL commitment
+// PurchaseCommitment is intentionally a no-op for Cloud SQL: GCP exposes no
+// programmatic API to buy a Cloud SQL committed-use discount. CUD purchases are
+// spend-based and bought via the Cloud Billing console / Cloud Commerce
+// Consumer Procurement API, not via sqladmin.Instances.Insert. The previous
+// implementation created a brand-new billable SQL instance (the legacy
+// PricingPlan "PACKAGE" is a per-instance billing mode, not a commitment), so a
+// "purchase" silently spun up a new database that kept billing. Cloud SQL
+// recommendations are therefore advisory only; this returns a clear
+// not-supported error and never calls any resource-creation API (issue #640).
 func (c *CloudSQLClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
-	result := common.PurchaseResult{
+	return common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
-	}
-
-	// Use injected service if available (for testing)
-	var svc SQLAdminService
-	if c.sqlAdminService != nil {
-		svc = c.sqlAdminService
-	} else {
-		service, err := sqladmin.NewService(ctx, c.clientOpts...)
-		if err != nil {
-			result.Error = fmt.Errorf("failed to create SQL admin service: %w", err)
-			return result, result.Error
-		}
-		svc = &realSQLAdminService{service: service}
-	}
-
-	// Create a new Cloud SQL instance with commitment pricing
-	instanceName := fmt.Sprintf("sql-committed-%d", time.Now().Unix())
-
-	instance := &sqladmin.DatabaseInstance{
-		Name:            instanceName,
-		Region:          c.region,
-		DatabaseVersion: "MYSQL_8_0", // Default to MySQL 8.0
-		Settings: &sqladmin.Settings{
-			Tier:        rec.ResourceType,
-			PricingPlan: "PACKAGE", // This indicates a commitment
-		},
-	}
-	if opts.Source != "" {
-		instance.Settings.UserLabels = map[string]string{common.PurchaseTagKey: opts.Source}
-	}
-
-	op, err := svc.InsertInstance(c.projectID, instance)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create SQL instance with commitment: %w", err)
-		return result, result.Error
-	}
-
-	// Wait for operation to complete (in production, you'd poll this)
-	if op.Status != "DONE" {
-		result.Error = fmt.Errorf("instance creation in progress: %s", op.Status)
-		return result, result.Error
-	}
-
-	result.Success = true
-	result.CommitmentID = instanceName
-	result.Cost = rec.CommitmentCost
-
-	return result, nil
+		Error: fmt.Errorf("%w: GCP Cloud SQL committed-use discounts are spend-based and "+
+			"must be purchased via the Cloud Billing console or Cloud Commerce Consumer "+
+			"Procurement API; this recommendation is advisory only", common.ErrCommitmentPurchaseNotSupported),
+	}, fmt.Errorf("%w: Cloud SQL", common.ErrCommitmentPurchaseNotSupported)
 }
 
 // ValidateOffering validates that a Cloud SQL tier exists

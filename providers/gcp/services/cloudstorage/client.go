@@ -245,52 +245,22 @@ func (c *CloudStorageClient) GetExistingCommitments(ctx context.Context) ([]comm
 	return commitments, nil
 }
 
-// PurchaseCommitment purchases a Cloud Storage commitment
+// PurchaseCommitment is intentionally a no-op for Cloud Storage: GCP has no CUD
+// or commitment purchase API for GCS at all. The previous implementation created
+// a brand-new empty bucket, which is not a commitment and incurs ongoing cost, so
+// a "purchase" silently provisioned billable infrastructure. Cloud Storage
+// recommendations are therefore advisory only; this returns a clear not-supported
+// error and never calls any resource-creation API (issue #640).
 func (c *CloudStorageClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
-	result := common.PurchaseResult{
+	return common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
-	}
-
-	// Use injected service if available (for testing)
-	var svc StorageService
-	if c.storageService != nil {
-		svc = c.storageService
-	} else {
-		client, err := storage.NewClient(ctx, c.clientOpts...)
-		if err != nil {
-			result.Error = fmt.Errorf("failed to create storage client: %w", err)
-			return result, result.Error
-		}
-		svc = &realStorageService{client: client}
-	}
-	defer svc.Close()
-
-	// Create a new Cloud Storage bucket with committed storage class
-	bucketName := fmt.Sprintf("storage-committed-%d", time.Now().Unix())
-
-	bucket := svc.Bucket(bucketName)
-	attrs := &storage.BucketAttrs{
-		Location:     c.region,
-		StorageClass: rec.ResourceType,
-	}
-	if opts.Source != "" {
-		attrs.Labels = map[string]string{common.PurchaseTagKey: opts.Source}
-	}
-
-	err := bucket.Create(ctx, c.projectID, attrs)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create storage bucket with commitment: %w", err)
-		return result, result.Error
-	}
-
-	result.Success = true
-	result.CommitmentID = bucketName
-	result.Cost = rec.CommitmentCost
-
-	return result, nil
+		Error: fmt.Errorf("%w: GCP Cloud Storage offers no committed-use discount or "+
+			"commitment purchase API; this recommendation is advisory only",
+			common.ErrCommitmentPurchaseNotSupported),
+	}, fmt.Errorf("%w: Cloud Storage", common.ErrCommitmentPurchaseNotSupported)
 }
 
 // ValidateOffering validates that a storage class exists

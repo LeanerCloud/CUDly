@@ -24,6 +24,7 @@ type MockRedisService struct {
 	instancesErr error
 	createResult CreateInstanceOperation
 	createErr    error
+	createCalled bool
 	closeCalled  bool
 }
 
@@ -32,6 +33,7 @@ func (m *MockRedisService) ListInstances(ctx context.Context, req *redispb.ListI
 }
 
 func (m *MockRedisService) CreateInstance(ctx context.Context, req *redispb.CreateInstanceRequest) (CreateInstanceOperation, error) {
+	m.createCalled = true
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -372,73 +374,35 @@ func TestMemorystoreClient_GetExistingCommitments_WithMockService(t *testing.T) 
 	}
 }
 
-func TestMemorystoreClient_PurchaseCommitment_WithMockService(t *testing.T) {
-	tests := []struct {
-		name        string
-		createErr   error
-		waitErr     error
-		wantSuccess bool
-		errContains string
-	}{
-		{
-			name:        "successful purchase",
-			createErr:   nil,
-			waitErr:     nil,
-			wantSuccess: true,
-		},
-		{
-			name:        "create instance fails",
-			createErr:   errors.New("create failed"),
-			waitErr:     nil,
-			wantSuccess: false,
-			errContains: "failed to create redis instance",
-		},
-		{
-			name:        "wait operation fails",
-			createErr:   nil,
-			waitErr:     errors.New("operation failed"),
-			wantSuccess: false,
-			errContains: "instance creation failed",
-		},
+// TestMemorystoreClient_PurchaseCommitment_NotSupported is the regression test for
+// issue #640: Memorystore has no standalone CUD purchase API, so PurchaseCommitment
+// must return ErrCommitmentPurchaseNotSupported and MUST NOT call any
+// resource-creation API (it previously created a new billable Redis instance).
+func TestMemorystoreClient_PurchaseCommitment_NotSupported(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockService := &MockRedisService{
+		// If PurchaseCommitment ever calls CreateInstance, this would return a
+		// successful op; the assertions below ensure it is never invoked.
+		createResult: &MockCreateInstanceOperation{instance: &redispb.Instance{Name: "test-instance"}},
+	}
+	client.SetRedisService(mockService)
+
+	rec := common.Recommendation{
+		ResourceType:   "STANDARD_HA",
+		CommitmentCost: 100.0,
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			client, _ := NewClient(ctx, "test-project", "us-central1")
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 
-			mockOp := &MockCreateInstanceOperation{
-				instance: &redispb.Instance{Name: "test-instance"},
-				err:      tt.waitErr,
-			}
-
-			mockService := &MockRedisService{
-				createResult: mockOp,
-				createErr:    tt.createErr,
-			}
-			client.SetRedisService(mockService)
-
-			rec := common.Recommendation{
-				ResourceType:   "STANDARD_HA",
-				CommitmentCost: 100.0,
-			}
-
-			result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
-
-			if tt.wantSuccess {
-				require.NoError(t, err)
-				assert.True(t, result.Success)
-				assert.NotEmpty(t, result.CommitmentID)
-				assert.Equal(t, 100.0, result.Cost)
-			} else {
-				require.Error(t, err)
-				assert.False(t, result.Success)
-				assert.Contains(t, err.Error(), tt.errContains)
-			}
-
-			assert.True(t, mockService.closeCalled)
-		})
-	}
+	require.Error(t, err)
+	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported)
+	assert.False(t, result.Success)
+	assert.Empty(t, result.CommitmentID)
+	assert.ErrorIs(t, result.Error, common.ErrCommitmentPurchaseNotSupported)
+	// The critical guarantee: a "purchase" must never create infrastructure.
+	assert.False(t, mockService.createCalled, "PurchaseCommitment must not call CreateInstance")
 }
 
 func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
