@@ -233,3 +233,44 @@ func TestBuildDuplicatePurchaseResponse(t *testing.T) {
 	ex.NotificationSent = nil
 	assert.Equal(t, false, buildDuplicatePurchaseResponse(ex)["email_sent"])
 }
+
+// --- #647: capacity_percent consistency with scaled rec counts ---
+
+func TestValidateCapacityConsistency(t *testing.T) {
+	t.Parallel()
+	// recWith builds a rec carrying both the scaled count and the pre-scaling
+	// recommended count so the cross-check has something to verify.
+	recWith := func(count, recommended int) config.RecommendationRecord {
+		r := validRec()
+		r.Count = count
+		r.RecommendedCount = recommended
+		return r
+	}
+	tests := []struct {
+		name      string
+		recs      []config.RecommendationRecord
+		capacity  int
+		wantError bool
+	}{
+		{"full capacity matches", []config.RecommendationRecord{recWith(10, 10)}, 100, false},
+		{"50 percent floors to match", []config.RecommendationRecord{recWith(5, 10)}, 50, false},
+		{"50 percent of odd floors down", []config.RecommendationRecord{recWith(5, 11)}, 50, false}, // floor(11*50/100)=5
+		{"mismatch claims 50 but sent full", []config.RecommendationRecord{recWith(10, 10)}, 50, true},
+		{"mismatch claims full but scaled", []config.RecommendationRecord{recWith(5, 10)}, 100, true},
+		{"absent recommended_count is skipped", []config.RecommendationRecord{recWith(5, 0)}, 50, false},
+		{"one consistent one inconsistent rejects", []config.RecommendationRecord{recWith(5, 10), recWith(10, 10)}, 50, true},
+		{"empty recs ok", nil, 100, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateCapacityConsistency(tt.recs, tt.capacity)
+			if tt.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

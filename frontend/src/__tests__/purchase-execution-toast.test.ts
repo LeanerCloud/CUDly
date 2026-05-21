@@ -355,6 +355,37 @@ describe('handleExecutePurchase — single-record path', () => {
     expect(submittedRecs[0]?.details).toEqual(rdsDetails);
     expect(submittedRecs[0]?.engine).toBe('postgres');
   });
+
+  // Issue #647: a scaled rec carries recommended_count (the pre-scaling count)
+  // so the backend can verify capacity_percent against the scaled count. The
+  // single-rec submit path must forward it unchanged in the POST body.
+  test('#647 single-rec — recommended_count preserved in POST body', async () => {
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([
+      {
+        ...buildMinimalRec(),
+        count: 5,
+        recommended_count: 10,
+      },
+    ]);
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-647',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+    const [submittedRecs] = (api.executePurchase as jest.Mock).mock.calls[0] as [
+      Array<{ count?: number; recommended_count?: number }>,
+      number,
+    ];
+    expect(submittedRecs[0]?.count).toBe(5);
+    expect(submittedRecs[0]?.recommended_count).toBe(10);
+  });
 });
 
 describe('handleFanOutExecute — fan-out path', () => {

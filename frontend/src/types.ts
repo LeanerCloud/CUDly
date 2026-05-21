@@ -70,6 +70,12 @@ export interface LocalRecommendation {
   details?: unknown;
   region: string;
   count: number;
+  // recommended_count is the pre-scaling count this rec carried before the
+  // bulk-purchase Capacity % slider scaled it down. Stamped onto the scaled
+  // copy at purchase-submit time so the backend can verify capacity_percent
+  // against the scaled count instead of trusting a decorative audit field
+  // (#647). Absent on un-scaled recs (the rendered list) and on legacy rows.
+  recommended_count?: number;
   term: number;
   // The API stamps `payment` on every Recommendation row at collection
   // time, so runtime data carries it; surfacing it in the type lets the

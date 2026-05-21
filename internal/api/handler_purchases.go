@@ -1070,14 +1070,8 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	if len(execReq.Recommendations) > maxRecommendations {
 		return ExecutePurchaseRequest{}, nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
 	}
-	// capacity_percent is audit-only but we still bound it: a request
-	// with 0 / absent → default 100; anything outside [1, 100] is a
-	// client bug worth surfacing rather than silently clamping.
-	if execReq.CapacityPercent == 0 {
-		execReq.CapacityPercent = 100
-	}
-	if execReq.CapacityPercent < 1 || execReq.CapacityPercent > 100 {
-		return ExecutePurchaseRequest{}, nil, NewClientError(400, fmt.Sprintf("capacity_percent must be between 1 and 100, got %d", execReq.CapacityPercent))
+	if err := normalizeCapacityPercent(&execReq); err != nil {
+		return ExecutePurchaseRequest{}, nil, err
 	}
 	// Scope: reject the whole request if any recommendation targets an
 	// account outside the session's allowed_accounts. Safer than silently
@@ -1097,7 +1091,29 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	if err := validateExecutePurchaseRecommendations(execReq.Recommendations); err != nil {
 		return ExecutePurchaseRequest{}, nil, err
 	}
+	// Cross-check the audit-only capacity_percent against the scaled rec
+	// counts so the persisted execution can't claim a capacity that
+	// disagrees with what was actually purchased (#647). Skipped per-rec
+	// when the rec carries no recommended_count.
+	if err := validateCapacityConsistency(execReq.Recommendations, execReq.CapacityPercent); err != nil {
+		return ExecutePurchaseRequest{}, nil, err
+	}
 	return execReq, session, nil
+}
+
+// normalizeCapacityPercent defaults an absent/zero capacity_percent to 100
+// and rejects anything outside [1, 100]. capacity_percent is audit-only but
+// still bounded: a value outside the range is a client bug worth surfacing
+// rather than silently clamping. Extracted so validateExecutePurchaseRequest
+// stays under the gocyclo threshold.
+func normalizeCapacityPercent(execReq *ExecutePurchaseRequest) error {
+	if execReq.CapacityPercent == 0 {
+		execReq.CapacityPercent = 100
+	}
+	if execReq.CapacityPercent < 1 || execReq.CapacityPercent > 100 {
+		return NewClientError(400, fmt.Sprintf("capacity_percent must be between 1 and 100, got %d", execReq.CapacityPercent))
+	}
+	return nil
 }
 
 // validateExecutePurchaseRecommendations runs the per-rec #643 boundary

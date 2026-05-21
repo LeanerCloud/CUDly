@@ -529,6 +529,31 @@ func validatePurchaseRecommendation(rec config.RecommendationRecord, idx int) er
 	return nil
 }
 
+// validateCapacityConsistency cross-checks the client-supplied capacity_percent
+// against the scaled rec counts so the audit record can't claim a capacity that
+// disagrees with what was actually purchased (#647). The frontend scales each
+// rec as floor(RecommendedCount * pct / 100); this recomputes that and rejects
+// any rec where the scaled Count doesn't match. Recs that don't carry a
+// RecommendedCount (0 / absent: legacy callers, single-rec full-capacity
+// purchases, retry replays) are skipped — the field is opt-in, so its absence
+// means "no claim to verify" rather than a failure. capacityPercent is the
+// already-defaulted/bounded value (1..100) from validateExecutePurchaseRequest.
+func validateCapacityConsistency(recs []config.RecommendationRecord, capacityPercent int) error {
+	for i := range recs {
+		rec := recs[i]
+		if rec.RecommendedCount <= 0 {
+			continue
+		}
+		expected := rec.RecommendedCount * capacityPercent / 100
+		if expected != rec.Count {
+			return NewClientError(400, fmt.Sprintf(
+				"recommendation %d: count %d is inconsistent with capacity_percent %d%% of recommended_count %d (expected %d)",
+				i, rec.Count, capacityPercent, rec.RecommendedCount, expected))
+		}
+	}
+	return nil
+}
+
 // decodeBase64Password decodes a base64-encoded password.
 // Returns the decoded password or an error if decoding fails.
 // If the input is empty, returns empty string with no error.
