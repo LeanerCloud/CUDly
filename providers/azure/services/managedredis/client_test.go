@@ -111,6 +111,18 @@ func samplePricingJSON() string {
 			},
 			{
 				"currencyCode": "USD",
+				"retailPrice": 900.0,
+				"unitPrice": 900.0,
+				"armRegionName": "eastus",
+				"productName": "Azure Cache for Redis",
+				"serviceName": "Azure Cache for Redis",
+				"armSkuName": "Premium_P1",
+				"meterName": "P1 Instance",
+				"reservationTerm": "3 Years",
+				"type": "Reservation"
+			},
+			{
+				"currencyCode": "USD",
 				"retailPrice": 0.125,
 				"unitPrice": 0.125,
 				"armRegionName": "eastus",
@@ -252,7 +264,7 @@ func TestValidateOffering_ValidSKU(t *testing.T) {
 
 func TestValidateOffering_InvalidSKU(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
-	err := c.ValidateOffering(nil, common.Recommendation{ResourceType: "Bogus_Z99"})
+	err := c.ValidateOffering(context.Background(), common.Recommendation{ResourceType: "Bogus_Z99"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Azure Cache for Redis SKU")
 }
@@ -373,6 +385,7 @@ func TestGetExistingCommitments_PagerError(t *testing.T) {
 
 func TestGetOfferingDetails_1yr(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, samplePricingJSON()), nil)
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	details, err := c.GetOfferingDetails(context.Background(), common.Recommendation{
@@ -388,6 +401,7 @@ func TestGetOfferingDetails_1yr(t *testing.T) {
 
 func TestGetOfferingDetails_3yr(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, samplePricingJSON()), nil)
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	details, err := c.GetOfferingDetails(context.Background(), common.Recommendation{
@@ -396,11 +410,16 @@ func TestGetOfferingDetails_3yr(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "3yr", details.Term)
 	assert.Equal(t, float64(0), details.UpfrontCost)
-	assert.Greater(t, details.RecurringCost, float64(0))
+	// 3-year fixture: 900.0 reservation price over 36 months = 25.0/month.
+	// Asserting the exact value confirms the 3-year branch is selected and
+	// the term-specific pricing item is parsed, not the 1-year one.
+	assert.InDelta(t, 25.0, details.RecurringCost, 1e-9)
+	assert.InDelta(t, 900.0, details.TotalCost, 1e-9)
 }
 
 func TestGetOfferingDetails_NoUpfront(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, samplePricingJSON()), nil)
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	details, err := c.GetOfferingDetails(context.Background(), common.Recommendation{
@@ -413,6 +432,7 @@ func TestGetOfferingDetails_NoUpfront(t *testing.T) {
 
 func TestGetOfferingDetails_APIError(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusInternalServerError, "Internal Server Error"), nil)
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	_, err := c.GetOfferingDetails(context.Background(), common.Recommendation{ResourceType: "Premium_P1", Term: "1yr"})
@@ -422,6 +442,7 @@ func TestGetOfferingDetails_APIError(t *testing.T) {
 
 func TestGetOfferingDetails_NoPricing(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, `{"Items": []}`), nil)
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	_, err := c.GetOfferingDetails(context.Background(), common.Recommendation{ResourceType: "Premium_P1", Term: "1yr"})
@@ -484,6 +505,7 @@ func TestGetOfferingDetails_Paginated(t *testing.T) {
 
 func TestPurchaseCommitment_Success(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, `{"id":"res-123"}`), nil)
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
@@ -498,6 +520,7 @@ func TestPurchaseCommitment_Success(t *testing.T) {
 
 func TestPurchaseCommitment_3yr(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusCreated, `{"id":"res-456"}`), nil)
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
@@ -510,6 +533,7 @@ func TestPurchaseCommitment_3yr(t *testing.T) {
 
 func TestPurchaseCommitment_Accepted(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusAccepted, `{"id":"res-789"}`), nil)
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
@@ -522,6 +546,7 @@ func TestPurchaseCommitment_Accepted(t *testing.T) {
 
 func TestPurchaseCommitment_TokenError(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	cred := &mockTokenCredential{err: errors.New("token error")}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
@@ -534,6 +559,7 @@ func TestPurchaseCommitment_TokenError(t *testing.T) {
 
 func TestPurchaseCommitment_HTTPError(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(nil, errors.New("network error"))
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
@@ -547,6 +573,7 @@ func TestPurchaseCommitment_HTTPError(t *testing.T) {
 
 func TestPurchaseCommitment_BadStatus(t *testing.T) {
 	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
 	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusBadRequest, `{"error":"bad"}`), nil)
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
