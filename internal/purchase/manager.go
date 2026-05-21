@@ -3,6 +3,7 @@ package purchase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -126,13 +127,28 @@ func NewManager(cfg ManagerConfig) *Manager {
 
 // finalizeExecution sets the status and completion time on an execution based on the error.
 func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr error) {
-	if execErr != nil {
-		exec.Status = "failed"
-		exec.Error = execErr.Error()
-	} else {
+	var partial *partialPurchaseError
+	switch {
+	case execErr == nil:
 		completedAt := time.Now()
 		exec.Status = "completed"
 		exec.CompletedAt = &completedAt
+	case errors.As(execErr, &partial):
+		// #642: at least one rec committed a real purchase while others
+		// failed. Never mark such a row "failed" — the commitments are real
+		// and a re-approve would double-buy them. Record the partial outcome
+		// and stamp CompletedAt so the row reads as terminal (the successful
+		// recs are done), with the per-rec failures preserved in Error.
+		// Append rather than overwrite so any audit-gap note already stamped
+		// by aggregatePurchaseOutcomes (a successful rec whose history write
+		// failed, issue #621) is not lost.
+		completedAt := time.Now()
+		exec.Status = "partially_completed"
+		exec.Error = appendErrNote(exec.Error, execErr.Error())
+		exec.CompletedAt = &completedAt
+	default:
+		exec.Status = "failed"
+		exec.Error = execErr.Error()
 	}
 }
 
