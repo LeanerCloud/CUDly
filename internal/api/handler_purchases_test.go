@@ -1721,6 +1721,57 @@ func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
 	mockAuth.AssertExpectations(t)
 }
 
+// TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus is the
+// session-path companion to the token-path #645 regression guard: every
+// status outside pending/notified must be rejected with a 409 and no write,
+// for parity with purchase.Manager.CancelExecution. The admin session keeps
+// the focus on the status guard (which fires before authorizeSessionCancel)
+// rather than the RBAC matrix, already covered by the matrix tests above.
+func TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus(t *testing.T) {
+	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "cancelled"}
+	for _, status := range rejected {
+		t.Run(status, func(t *testing.T) {
+			creator := cancelCallerID
+			exec := &config.PurchaseExecution{
+				ExecutionID:     cancelExecID,
+				Status:          status,
+				CreatedByUserID: &creator,
+			}
+			session := &Session{UserID: cancelCallerID, Role: "admin"}
+
+			handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
+
+			_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "cannot be cancelled")
+			assert.Contains(t, err.Error(), status)
+			mockConfig.AssertNotCalled(t, "WithTx")
+			mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
+			mockAuth.AssertExpectations(t)
+		})
+	}
+}
+
+// TestHandler_cancelPurchase_Session_AllowsEachCancelableStatus confirms the
+// inverse: pending and notified rows remain cancelable on the session path,
+// guarding against an over-restriction that would break the dashboard cancel
+// of a row awaiting approval.
+func TestHandler_cancelPurchase_Session_AllowsEachCancelableStatus(t *testing.T) {
+	allowed := []string{"pending", "notified"}
+	for _, status := range allowed {
+		t.Run(status, func(t *testing.T) {
+			creator := cancelCallerID
+			exec := &config.PurchaseExecution{
+				ExecutionID:     cancelExecID,
+				Status:          status,
+				CreatedByUserID: &creator,
+			}
+			session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
+			runSessionCancelAllowed(t, exec, session, false, false)
+		})
+	}
+}
+
 func TestHandler_cancelPurchase_Session_LegacyNullCreator_NonAdminRejected(t *testing.T) {
 	// Pre-migration row: created_by_user_id is NULL. cancel-own can't
 	// match a NULL creator, so a non-admin must be rejected. The email

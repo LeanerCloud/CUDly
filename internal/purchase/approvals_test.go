@@ -374,6 +374,92 @@ func TestManager_CancelExecution_AlreadyCompleted(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
+// TestManager_CancelExecution_RejectsNonCancelableStatus is the regression
+// guard for issue #645: the token/email cancel path previously rejected only
+// completed/cancelled, so an email-link holder could cancel an
+// approved/running/paused/failed/expired execution that the dashboard
+// (session) path refuses. Each non-pending/notified status must now be
+// rejected with no write to the store — approved/running rows in particular
+// are mid-execution and cancelling them would desync the DB from the cloud.
+func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
+	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "cancelled"}
+	for _, status := range rejected {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockEmail := new(MockEmailSender)
+
+			execution := &config.PurchaseExecution{
+				ExecutionID:   "exec-123",
+				PlanID:        "plan-456",
+				Status:        status,
+				ApprovalToken: "valid-token",
+			}
+			mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
+
+			manager := &Manager{
+				config:       mockStore,
+				email:        mockEmail,
+				dashboardURL: "https://dashboard.example.com",
+			}
+
+			err := manager.CancelExecution(ctx, "exec-123", "valid-token", status)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "execution cannot be cancelled")
+			assert.Contains(t, err.Error(), status)
+			// Status guard must fire before any persistence — a rejected
+			// cancel must not flip the row or drop suppressions.
+			// SavePurchaseExecutionTx forwards to SavePurchaseExecution in
+			// the mock, so this single assertion covers both the tx and
+			// non-tx write paths.
+			mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+// TestManager_CancelExecution_AllowsCancelableStatus confirms the inverse of
+// the #645 guard: genuinely-pending and notified rows are still cancelable on
+// the token path, and the cancel commits (status flip + suppression cleanup)
+// in a single tx. Without this the alignment fix could silently over-restrict
+// and break the legitimate email-link cancel of a row awaiting approval.
+func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
+	allowed := []string{"pending", "notified"}
+	for _, status := range allowed {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockEmail := new(MockEmailSender)
+
+			execution := &config.PurchaseExecution{
+				ExecutionID:   "exec-123",
+				PlanID:        "plan-456",
+				Status:        status,
+				ApprovalToken: "valid-token",
+			}
+			mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
+			var saved *config.PurchaseExecution
+			mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+				Run(func(args mock.Arguments) {
+					saved = args.Get(1).(*config.PurchaseExecution)
+				}).
+				Return(nil)
+
+			manager := &Manager{
+				config:       mockStore,
+				email:        mockEmail,
+				dashboardURL: "https://dashboard.example.com",
+			}
+
+			err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
+			require.NoError(t, err)
+			require.NotNil(t, saved, "cancel should persist the execution")
+			assert.Equal(t, "cancelled", saved.Status)
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
 func TestManager_CancelExecution_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
