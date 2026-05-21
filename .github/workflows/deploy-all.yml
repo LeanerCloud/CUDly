@@ -122,7 +122,11 @@ jobs:
     uses: ./.github/workflows/deploy-aws-lambda.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
-    secrets: inherit
+    secrets:
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+      FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+      TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
 
   # Deploy to AWS Fargate
   deploy-aws-fargate:
@@ -132,7 +136,9 @@ jobs:
     uses: ./.github/workflows/deploy-aws-fargate.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
-    secrets: inherit
+    secrets:
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
 
   # Deploy to GCP Cloud Run
   deploy-gcp:
@@ -142,7 +148,9 @@ jobs:
     uses: ./.github/workflows/deploy-gcp.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
-    secrets: inherit
+    secrets:
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      TF_BACKEND_GCP: ${{ secrets.TF_BACKEND_GCP }}
 
   # Deploy to Azure Container Apps
   deploy-azure:
@@ -152,7 +160,12 @@ jobs:
     uses: ./.github/workflows/deploy-azure.yml
     with:
       environment: ${{ needs.determine-deployment.outputs.environment }}
-    secrets: inherit
+    secrets:
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      TF_BACKEND_AZURE: ${{ secrets.TF_BACKEND_AZURE }}
 
   # Aggregate results and notify
   notify:
