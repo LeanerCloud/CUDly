@@ -438,7 +438,8 @@ type RedisPricing struct {
 	SavingsPercentage float64
 }
 
-// getRedisPricing fetches pricing from the Azure Retail Prices API.
+// getRedisPricing fetches pricing from the Azure Retail Prices API, following
+// pagination via NextPageLink until all pages are consumed.
 func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region string, termYears int) (*RedisPricing, error) {
 	baseURL := "https://prices.azure.com/api/retail/prices"
 
@@ -449,34 +450,43 @@ func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region st
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	fullURL := baseURL + "?" + params.Encode()
+	nextURL := baseURL + "?" + params.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	var accumulated AzureRetailPrice
+
+	for nextURL != "" {
+		req, err := http.NewRequestWithContext(ctx, "GET", nextURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to call pricing API: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("pricing API returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		var page AzureRetailPrice
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode pricing response: %w", err)
+		}
+		resp.Body.Close()
+
+		accumulated.Items = append(accumulated.Items, page.Items...)
+		nextURL = page.NextPageLink
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call pricing API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("pricing API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var priceData AzureRetailPrice
-	if err := json.NewDecoder(resp.Body).Decode(&priceData); err != nil {
-		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
-	}
-
-	if len(priceData.Items) == 0 {
+	if len(accumulated.Items) == 0 {
 		return nil, fmt.Errorf("no pricing data found for Redis Cache SKU %s in region %s", sku, region)
 	}
 
-	onDemandPrice, reservationPrice, currency := parsePriceItems(priceData.Items, termYears)
+	onDemandPrice, reservationPrice, currency := parsePriceItems(accumulated.Items, termYears)
 
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no on-demand pricing found for Redis Cache SKU %s", sku)
