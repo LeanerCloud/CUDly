@@ -82,7 +82,14 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // purchase_history rows (no duplicate). The execution row's PurchaseID is
 // the ExecutionID while a purchase_history row's is the CommitmentID, so
 // the keys never collide even when both happen to render.
-var historyExecutionStatuses = []string{"pending", "notified", "approved", "running", "paused", "completed", "failed", "expired", "cancelled"}
+//
+// "partially_completed" (issue #642) is loaded and ALWAYS synthesised: a
+// partial run committed some recs to purchase_history (those render from the
+// DB rows) and failed others. The synthesised execution row carries the
+// partial-failure marker and is flagged IsAuditGap so its execution-level
+// dollars are excluded from the dashboard totals — the committed dollars are
+// already counted via the per-rec purchase_history rows that succeeded.
+var historyExecutionStatuses = []string{"pending", "notified", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "cancelled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -231,6 +238,16 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 	case "paused":
 		row.Approver = approver
 		row.StatusDescription = "purchase paused — resume or cancel from the plan"
+	case "partially_completed":
+		// #642: some recs committed, some failed. The committed recs are
+		// surfaced via their own purchase_history rows; this synthesised row
+		// is the audit flag for the failures. Flag IsAuditGap so the dashboard
+		// excludes its execution-level dollars (the committed dollars are
+		// counted on the per-rec purchase_history rows, not here) — same
+		// double-count guard as the audit-gap completed case below.
+		row.IsAuditGap = true
+		annotateApproved(row, exec, approver)
+		row.StatusDescription = "partially completed — some commitments succeeded, others failed: " + exec.Error
 	case "completed":
 		// Only audit-gap completed executions reach here (fetchExecutionsAsHistory
 		// skips clean completed rows). exec.Error carries why the history write

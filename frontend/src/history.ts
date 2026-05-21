@@ -277,6 +277,11 @@ function statusBadgeHTML(status: string): string {
       return '<span class="badge badge-warning">In Progress</span>';
     case 'cancelled':
       return '<span class="badge badge-muted">Cancelled</span>';
+    case 'partially_completed':
+      // #642: some commitments succeeded, some failed. Not a clean success
+      // and never "failed" (real commitments exist) — a distinct warning badge
+      // so the user knows to read the description and reconcile the failures.
+      return '<span class="badge badge-warning">Partial</span>';
     case 'failed':
       return '<span class="badge badge-danger">Failed</span>';
     case 'expired':

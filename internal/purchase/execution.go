@@ -63,23 +63,67 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	}
 
 	// Single-account (legacy) path.
-	accountID := m.getAWSAccountID(ctx)
-	provCfg, err := m.resolveSingleAccountProvider(ctx, exec)
+	return false, m.executeSingleAccount(ctx, exec, plan)
+}
+
+// executeSingleAccount runs the legacy single-account purchase path: resolve
+// per-account credentials + the target account id, execute the selected recs,
+// then notify and classify the outcome. Returns nil on full success, a
+// *partialPurchaseError when some recs committed and others failed (#642), or a
+// plain error when nothing committed. Split out of executePurchase to keep that
+// function under the gocyclo budget.
+func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan) error {
+	provCfg, targetAccountID, err := m.resolveSingleAccountProvider(ctx, exec)
 	if err != nil {
-		return false, err
+		return err
+	}
+	// #646: stamp the resolved target account on history, not the ambient
+	// AWS host account. resolveSingleAccountProvider returns the target's
+	// ExternalID (the provider-appropriate account identifier for AWS /
+	// Azure / GCP). Only fall back to the ambient AWS STS identity when no
+	// target account could be identified (truly-ambient AWS single-account
+	// execution where credentials are inherited from the host).
+	accountID := targetAccountID
+	if accountID == "" {
+		accountID = m.getAWSAccountID(ctx)
 	}
 
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
 
+	if len(purchaseErrors) > 0 && !anyRecPurchased(exec.Recommendations) {
+		// Nothing committed — a clean total failure.
+		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
+	}
+
+	// At least one rec committed (full or partial success): the confirmation
+	// must go out for the recs that purchased. buildPurchaseConfirmationData
+	// only lists Purchased recs, so a partial run notifies on exactly those.
+	if notifyErr := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); notifyErr != nil {
+		logging.Errorf("Failed to send confirmation: %v", notifyErr)
+	}
+
 	if len(purchaseErrors) > 0 {
-		return false, fmt.Errorf("some purchases failed: %v", purchaseErrors)
+		// #642: partial success. Real commitments were written to
+		// purchase_history with Purchased=true; never mark the row "failed"
+		// (it would invite a re-approve that double-buys the purchased recs).
+		// Return a sentinel so finalizeExecution records "partially_completed".
+		return &partialPurchaseError{errors: purchaseErrors}
 	}
+	return nil
+}
 
-	if err := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); err != nil {
-		logging.Errorf("Failed to send confirmation: %v", err)
+// anyRecPurchased reports whether at least one recommendation in the slice
+// was marked Purchased=true by the aggregator (a real commitment was created
+// on the cloud provider). It is the gate that distinguishes a partial success
+// (#642 — some recs committed, some failed) from a total failure (nothing
+// committed, e.g. credential resolution failed before any rec ran).
+func anyRecPurchased(recs []config.RecommendationRecord) bool {
+	for i := range recs {
+		if recs[i].Purchased {
+			return true
+		}
 	}
-
-	return false, nil
+	return false
 }
 
 // executeMultiAccount fans out executePurchase across all plan accounts in parallel.
@@ -126,10 +170,26 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	accountID := account.ExternalID
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
 
-	if len(purchaseErrors) > 0 {
+	// #642: a per-account run can be a partial success — some recs committed
+	// to purchase_history (Purchased=true) while others failed. Marking the
+	// row "failed" in that case is wrong (it hides the real commitments and
+	// invites a re-approve that double-buys). Record "partially_completed"
+	// instead so the row reflects reality, and still send the confirmation
+	// for the recs that did purchase.
+	partial := len(purchaseErrors) > 0 && anyRecPurchased(acctExec.Recommendations)
+	switch {
+	case partial:
+		now := time.Now()
+		acctExec.Status = "partially_completed"
+		// Append so any audit-gap note already stamped by
+		// aggregatePurchaseOutcomes (issue #621) survives alongside the
+		// per-rec failure list.
+		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
+		acctExec.CompletedAt = &now
+	case len(purchaseErrors) > 0:
 		acctExec.Status = "failed"
-		acctExec.Error = strings.Join(purchaseErrors, "; ")
-	} else {
+		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
+	default:
 		now := time.Now()
 		acctExec.Status = "completed"
 		acctExec.CompletedAt = &now
@@ -139,20 +199,35 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		return fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, err)
 	}
 
-	if len(purchaseErrors) > 0 {
-		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
+	// Send the confirmation whenever at least one rec committed (full or
+	// partial success). buildPurchaseConfirmationData only lists Purchased
+	// recs, so a partial run notifies on exactly the recs that fired.
+	if len(purchaseErrors) == 0 || partial {
+		if err := m.sendPurchaseNotification(ctx, &acctExec, plan, totalSavings, totalUpfront); err != nil {
+			logging.Errorf("Failed to send confirmation for account %s: %v", account.ID, err)
+		}
 	}
 
-	if err := m.sendPurchaseNotification(ctx, &acctExec, plan, totalSavings, totalUpfront); err != nil {
-		logging.Errorf("Failed to send confirmation for account %s: %v", account.ID, err)
+	// Surface the per-rec failures to the multi-account aggregator so the
+	// overall run reflects that not everything succeeded, even though the
+	// authoritative per-account row was already saved as partially_completed
+	// (not failed) and the confirmation already went out.
+	if len(purchaseErrors) > 0 {
+		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 	return nil
 }
 
 // resolveSingleAccountProvider derives per-account credentials for the
-// single-account execution path. Returns (nil, nil) when no account can be
+// single-account execution path. Returns (nil, "", nil) when no account can be
 // identified (ambient credentials are used in that case), or when no recs are
 // selected (approval-only flows where credentials are not needed).
+//
+// The second return value is the resolved target account's ExternalID — the
+// provider-appropriate account identifier (AWS account number, Azure
+// subscription, GCP project) that the caller stamps onto purchase_history
+// (#646). It is "" when no target account could be identified, signalling the
+// caller to fall back to the ambient AWS STS identity.
 //
 // The account is taken from exec.CloudAccountID when set (plan-with-single-
 // account executions), or derived from the shared cloud_account_id on the
@@ -161,13 +236,13 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 //
 // A non-nil error means credentials were found but could not be resolved; the
 // caller must NOT fall back to ambient credentials on error.
-func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, string, error) {
 	// Skip credential resolution when nothing is selected. Approval-only
 	// flows may carry an account ID on the recs solely for the contact-email
 	// gate; attempting resolution there would fail on accounts with no
 	// provider field set and add a pointless DB round-trip.
 	if len(selectedIndices(exec.Recommendations)) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
 
 	cloudAccountID := exec.CloudAccountID
@@ -175,21 +250,35 @@ func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config
 		cloudAccountID = singleCloudAccountIDFromRecs(exec.Recommendations)
 	}
 	if cloudAccountID == nil {
-		return nil, nil
+		return nil, "", nil
 	}
 
 	account, err := m.config.GetCloudAccount(ctx, *cloudAccountID)
 	if err != nil {
-		return nil, fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
+		return nil, "", fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
 	}
 	if account == nil {
-		return nil, nil
+		return nil, "", nil
 	}
 	provCfg, err := m.resolveAccountProvider(ctx, *account)
 	if err != nil {
-		return nil, fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
+		return nil, "", fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
 	}
-	return provCfg, nil
+	return provCfg, account.ExternalID, nil
+}
+
+// partialPurchaseError is the sentinel returned by the single-account
+// execution path when at least one rec purchased and at least one failed
+// (#642). finalizeExecution detects it via errors.As and records the row as
+// "partially_completed" rather than "failed", so the real commitments stay
+// visible and a re-approve can't double-buy them. The successful recs'
+// confirmation email has already been sent by the time this error surfaces.
+type partialPurchaseError struct {
+	errors []string
+}
+
+func (e *partialPurchaseError) Error() string {
+	return "some purchases failed (partial success): " + strings.Join(e.errors, "; ")
 }
 
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
@@ -392,11 +481,22 @@ func recordHistoryAuditGap(exec *config.PurchaseExecution, commitmentID string, 
 	// status_description. Only a generic, user-safe note reaches the UI.
 	logging.Errorf("history audit gap for commitment %s: %v", commitmentID, histErr)
 	note := fmt.Sprintf("commitment %s purchased but its history record failed to save", commitmentID)
-	if exec.Error == "" {
-		exec.Error = note
-	} else {
-		exec.Error += "; " + note
+	exec.Error = appendErrNote(exec.Error, note)
+}
+
+// appendErrNote joins note onto an existing error string with "; ",
+// returning note alone when existing is empty. Shared by the audit-gap and
+// partial-failure paths so a successful-rec audit gap (#621) and a per-rec
+// failure list (#642) within the same execution are both preserved on
+// exec.Error rather than one clobbering the other.
+func appendErrNote(existing, note string) string {
+	if existing == "" {
+		return note
 	}
+	if note == "" {
+		return existing
+	}
+	return existing + "; " + note
 }
 
 // normalizePurchaseSource canonicalizes exec.Source for downstream tag
