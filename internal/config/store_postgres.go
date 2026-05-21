@@ -832,6 +832,27 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 	return s.queryExecutions(ctx, query, statuses, limit)
 }
 
+// GetStaleApprovedExecutions returns executions stuck in the "approved" status
+// whose last update is older than olderThan. These are executions that were
+// flipped to "approved" by ApproveAndExecute but whose synchronous purchase run
+// never finalized (Lambda timeout, cold-start eviction, panic) — issue #632.
+// updated_at is stamped to NOW() at the moment of the approved transition (see
+// TransitionExecutionStatus) and is not touched again unless the run finalizes,
+// so it is the age of the strand. Mirrors GetStaleProcessingExchanges.
+func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]PurchaseExecution, error) {
+	query := `
+		SELECT plan_id, execution_id, status, step_number, scheduled_date,
+		       notification_sent, approval_token, recommendations,
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
+		FROM purchase_executions
+		WHERE status = 'approved' AND updated_at < NOW() - $1::interval
+	`
+	return s.queryExecutions(ctx, query, fmt.Sprintf("%d seconds", int(olderThan.Seconds())))
+}
+
 // GetPendingExecutions retrieves all pending purchase executions
 func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error) {
 	query := `

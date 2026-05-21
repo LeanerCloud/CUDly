@@ -140,6 +140,14 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
 }
 
+func (m *MockConfigStore) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, olderThan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
 func (m *MockConfigStore) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

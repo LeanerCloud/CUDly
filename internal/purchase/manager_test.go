@@ -60,6 +60,7 @@ func TestManager_ProcessScheduledPurchases_NoExecutions(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
 
 	manager := &Manager{
@@ -92,6 +93,7 @@ func TestManager_ProcessScheduledPurchases_FutureExecution(t *testing.T) {
 		},
 	}
 
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 
 	manager := &Manager{
@@ -124,6 +126,7 @@ func TestManager_ProcessScheduledPurchases_CompletedExecution(t *testing.T) {
 		},
 	}
 
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 
 	manager := &Manager{
@@ -148,6 +151,7 @@ func TestManager_ProcessScheduledPurchases_Error(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(nil, errors.New("database error"))
 
 	manager := &Manager{
@@ -200,6 +204,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 		},
 	}
 
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil).Twice()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
@@ -256,6 +261,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 		},
 	}
 
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 
 	manager := &Manager{
@@ -290,6 +296,7 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 		},
 	}
 
+	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(nil, errors.New("plan not found")).Once()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
@@ -308,4 +315,112 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 	assert.Equal(t, 0, result.Executed)
 
 	mockStore.AssertExpectations(t)
+}
+
+// TestManager_RecoverStrandedApprovals_FailsStrandedRow is the regression test
+// for issue #632: an execution flipped to "approved" whose synchronous purchase
+// run was interrupted (Lambda timeout / cold-start eviction / panic) before it
+// finalized must NOT stay permanently "approved". The recovery sweep drives it
+// into a terminal "failed" state with a clear error and — crucially — does NOT
+// re-run the purchase (no provider/service-client calls), so there is no
+// double-purchase even though commitment creation has no idempotency token.
+func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-stranded",
+		PlanID:      "plan-456",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 500.0, Selected: true, Purchased: false},
+		},
+	}
+	failedRow := stranded
+	failedRow.Status = "failed"
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// The atomic transition only flips rows still in "approved".
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-stranded", []string{"approved"}, "failed").
+		Return(&failedRow, nil)
+	// The explanatory error is stamped on the now-failed row.
+	var saved *config.PurchaseExecution
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
+		Return(nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, recovered)
+
+	require.NotNil(t, saved)
+	assert.Equal(t, "failed", saved.Status, "stranded approved row must become terminally failed, never stay approved")
+	assert.NotEmpty(t, saved.Error, "the failed row must carry a clear, operator-readable error")
+	assert.Contains(t, saved.Error, "interrupted")
+	assert.False(t, saved.Recommendations[0].Purchased, "recovery must not mark anything purchased")
+
+	mockStore.AssertExpectations(t)
+	// No provider was ever created: the sweep fails, it does not re-purchase.
+	// A double-purchase would require CreateAndValidateProvider here.
+	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestManager_RecoverStrandedApprovals_FreshRowUntouched verifies the sweep only
+// acts on rows the store returns as stale. A freshly-approved execution (still
+// within staleApprovedThreshold, hence excluded by GetStaleApprovedExecutions)
+// is never transitioned or saved, so an in-flight synchronous purchase is never
+// failed out from under itself.
+func TestManager_RecoverStrandedApprovals_FreshRowUntouched(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{}, nil)
+
+	manager := &Manager{config: mockStore, dashboardURL: "https://dashboard.example.com"}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, recovered)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}
+
+// TestManager_RecoverStrandedApprovals_LateCompletionNotClobbered covers the
+// race where the original interrupted run actually finalizes between the stale
+// SELECT and the recovery UPDATE. TransitionExecutionStatus's atomic
+// WHERE status='approved' returns an error (the row is no longer approved), so
+// the sweep skips it — the genuine "completed" status is preserved and the row
+// is not re-saved as failed.
+func TestManager_RecoverStrandedApprovals_LateCompletionNotClobbered(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	stranded := config.PurchaseExecution{ExecutionID: "exec-raced", Status: "approved"}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-raced", []string{"approved"}, "failed").
+		Return(nil, errors.New("execution exec-raced cannot transition from \"completed\" to \"failed\""))
+
+	manager := &Manager{config: mockStore, dashboardURL: "https://dashboard.example.com"}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, recovered, "a row that completed between SELECT and UPDATE is skipped, not failed")
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }

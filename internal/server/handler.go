@@ -113,7 +113,7 @@ func (app *Application) handleProcessScheduledPurchases(ctx context.Context) (*p
 		log.Printf("Failed to process scheduled purchases: %v", err)
 		return nil, err
 	}
-	log.Printf("Purchases processed: %d processed, %d executed", result.Processed, result.Executed)
+	log.Printf("Purchases processed: %d processed, %d executed, %d stranded-approvals recovered", result.Processed, result.Executed, result.Recovered)
 	return result, nil
 }
 

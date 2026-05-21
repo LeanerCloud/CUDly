@@ -73,11 +73,23 @@ type PurchaseDefaults struct {
 
 // ProcessResult holds the result of processing scheduled purchases
 type ProcessResult struct {
-	Processed int      `json:"processed"`
-	Executed  int      `json:"executed"`
-	Failed    int      `json:"failed"`
+	Processed int `json:"processed"`
+	Executed  int `json:"executed"`
+	Failed    int `json:"failed"`
+	// Recovered counts executions that were stuck in "approved" and were
+	// re-driven into a terminal "failed" state by the recovery sweep
+	// (issue #632).
+	Recovered int      `json:"recovered,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
 }
+
+// staleApprovedThreshold is how long an execution may sit in the "approved"
+// status before the recovery sweep treats it as stranded (issue #632). It must
+// be comfortably larger than the longest possible synchronous purchase run so a
+// legitimately in-flight execution is never failed out from under itself. The
+// purchase Lambda timeout is 60s; 15min (matching the RI-exchange stale-sweep
+// threshold in pkg/exchange) leaves a wide safety margin.
+const staleApprovedThreshold = 15 * time.Minute
 
 // NotificationResult holds the result of sending notifications
 type NotificationResult struct {
@@ -147,9 +159,78 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	return execErr
 }
 
+// RecoverStrandedApprovals finds executions stuck in the "approved" status past
+// staleApprovedThreshold and drives them into a terminal "failed" state so an
+// approved row can never sit permanently stranded with no owner (issue #632).
+//
+// It deliberately does NOT re-run the purchase: there is no idempotency token on
+// commitment creation (EC2 PurchaseReservedInstancesOffering sets no ClientToken;
+// CreateSavingsPlan has none), so an automatic re-drive of a row that was
+// interrupted *after* AWS created the commitment but *before* the row persisted
+// would double-purchase. Failing the row makes it visible in the History view
+// (which surfaces failed rows) and Retry-able by an operator who has confirmed
+// the AWS-side state, instead of requiring a manual DB edit.
+//
+// The transition is atomic: TransitionExecutionStatus only flips rows still in
+// "approved", so if the original run finally completes between the stale SELECT
+// and this UPDATE, the transition is a no-op and the genuine "completed" status
+// is preserved.
+func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
+	stranded, err := m.config.GetStaleApprovedExecutions(ctx, staleApprovedThreshold)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list stranded approved executions: %w", err)
+	}
+
+	recovered := 0
+	for i := range stranded {
+		exec := &stranded[i]
+		logging.Errorf("Recovering stranded approved execution %s (approved but never finalized; failing it for visibility)", exec.ExecutionID)
+
+		updated, txErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "failed")
+		if txErr != nil {
+			// Distinguish benign races (row already left the "approved"
+			// state — concurrent sweep handled it, or the original run
+			// finished after the LIST snapshot) from real store
+			// failures (DB unreachable, query syntax error). A real
+			// store failure must fail the sweep so a transient DB
+			// outage does not silently under-recover. We probe the
+			// current row state via GetExecutionByID: a clean read
+			// with Status != "approved" confirms the race; any other
+			// outcome (read error, still-approved row) is a real
+			// failure worth propagating.
+			current, getErr := m.config.GetExecutionByID(ctx, exec.ExecutionID)
+			if getErr == nil && current != nil && current.Status != "approved" {
+				logging.Warnf("Skipping recovery of %s (already transitioned out of approved): %v", exec.ExecutionID, txErr)
+				continue
+			}
+			return recovered, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
+		}
+
+		updated.Error = "execution was approved but its purchase run was interrupted before completing and never finalized; failed by the recovery sweep so it is not silently stuck (issue #632). Verify on the cloud provider that no commitment was created, then Retry."
+		if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {
+			// The atomic flip to "failed" already landed via TransitionExecutionStatus;
+			// only the explanatory error string failed to persist. Log loudly but
+			// still count the recovery — the row is no longer stranded in "approved".
+			logging.Errorf("AUDIT GAP: failed to stamp recovery error on %s: %v", exec.ExecutionID, saveErr)
+		}
+		recovered++
+	}
+
+	return recovered, nil
+}
+
 // ProcessScheduledPurchases checks for and executes scheduled purchases
 func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult, error) {
 	logging.Info("Processing scheduled purchases...")
+
+	// Recover any executions stranded in "approved" by an interrupted
+	// synchronous run before processing fresh pending work (issue #632).
+	recovered, err := m.RecoverStrandedApprovals(ctx)
+	if err != nil {
+		// A recovery failure must not block scheduled purchases — log and continue
+		// with the pending-execution pass; the next tick retries the sweep.
+		logging.Errorf("Failed to recover stranded approved executions: %v", err)
+	}
 
 	// Get all pending executions
 	executions, err := m.config.GetPendingExecutions(ctx)
@@ -192,6 +273,7 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 		Processed: processed,
 		Executed:  executed,
 		Failed:    failed,
+		Recovered: recovered,
 		Errors:    errors,
 	}, nil
 }

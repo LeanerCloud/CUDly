@@ -71,6 +71,10 @@ func (m *mockConfigStoreForHealth) GetExecutionsByStatuses(ctx context.Context, 
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) GetExecutionByID(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }
