@@ -170,7 +170,7 @@ func TestGetRegion(t *testing.T) {
 
 func TestGetValidResourceTypes_Fallback(t *testing.T) {
 	c := NewClient(nil, "invalid-sub", "eastus")
-	skus, err := c.GetValidResourceTypes(nil)
+	skus, err := c.GetValidResourceTypes(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, skus)
 	assert.Contains(t, skus, "Basic_C0")
@@ -427,6 +427,57 @@ func TestGetOfferingDetails_NoPricing(t *testing.T) {
 	_, err := c.GetOfferingDetails(context.Background(), common.Recommendation{ResourceType: "Premium_P1", Term: "1yr"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing data found")
+}
+
+func TestGetOfferingDetails_Paginated(t *testing.T) {
+	// Page 1: on-demand price only, with a NextPageLink pointing to page 2.
+	page1 := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.125,
+				"unitPrice": 0.125,
+				"armRegionName": "eastus",
+				"productName": "Azure Cache for Redis",
+				"serviceName": "Azure Cache for Redis",
+				"armSkuName": "Premium_P1",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": "https://prices.azure.com/api/retail/prices?page=2",
+		"Count": 1
+	}`
+	// Page 2: reservation price only, no further pages.
+	page2 := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 350.0,
+				"unitPrice": 350.0,
+				"armRegionName": "eastus",
+				"productName": "Azure Cache for Redis",
+				"serviceName": "Azure Cache for Redis",
+				"armSkuName": "Premium_P1",
+				"meterName": "P1 Instance",
+				"reservationTerm": "1 Years",
+				"type": "Reservation"
+			}
+		],
+		"NextPageLink": "",
+		"Count": 1
+	}`
+	h := &mockHTTPClient{}
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, page1), nil).Once()
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, page2), nil).Once()
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	details, err := c.GetOfferingDetails(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "1yr", PaymentOption: "upfront",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, details)
+	assert.Equal(t, "USD", details.Currency)
+	assert.Greater(t, details.TotalCost, float64(0))
+	h.AssertExpectations(t)
 }
 
 // -- PurchaseCommitment --
