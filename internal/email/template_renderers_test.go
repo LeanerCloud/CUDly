@@ -102,6 +102,7 @@ func TestRenderScheduledPurchaseEmail(t *testing.T) {
 	data := NotificationData{
 		DashboardURL:      "https://dashboard.example.com",
 		ApprovalToken:     "approval-token-xyz",
+		ExecutionID:       "exec-render-test-001",
 		TotalSavings:      2000.00,
 		TotalUpfrontCost:  8000.00,
 		PurchaseDate:      "March 15, 2024",
@@ -123,15 +124,17 @@ func TestRenderScheduledPurchaseEmail(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, result, data.DashboardURL)
-	assert.Contains(t, result, data.ApprovalToken)
 	assert.Contains(t, result, data.PurchaseDate)
 	assert.Contains(t, result, data.PlanName)
 	assert.Contains(t, result, "7")
 	assert.Contains(t, result, "db.r5.2xlarge")
 	assert.Contains(t, result, "mysql")
-	assert.Contains(t, result, "action=edit")
-	assert.Contains(t, result, "action=pause")
-	assert.Contains(t, result, "action=cancel")
+	// Cancel link must use the direct API path with execution ID and token.
+	assert.Contains(t, result, "/purchases/cancel/exec-render-test-001?token=approval-token-xyz")
+	// Token must not appear in any other URL (review/edit or pause).
+	assert.NotContains(t, result, "action=edit")
+	assert.NotContains(t, result, "action=pause")
+	assert.NotContains(t, result, "action=cancel")
 }
 
 func TestRenderPurchaseConfirmationEmail(t *testing.T) {

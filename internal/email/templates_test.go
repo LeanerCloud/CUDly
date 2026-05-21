@@ -536,3 +536,65 @@ func TestSender_SendPurchaseFailedNotification_MultipleFailures(t *testing.T) {
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
 }
+
+// TestRenderScheduledPurchaseEmail_TokenNotInReviewEditLinks is a regression
+// test for #406: the scheduled purchase notification must not embed the
+// approval token in the Review/Edit or Pause Plan URLs. These actions
+// require an authenticated dashboard session; only the Cancel link carries
+// the token, and it must use the direct API path (not the SPA root) to
+// avoid loading third-party scripts with the token in the Referer header.
+func TestRenderScheduledPurchaseEmail_TokenNotInReviewEditLinks(t *testing.T) {
+	data := NotificationData{
+		DashboardURL:      "https://dashboard.example.com",
+		ApprovalToken:     "super-secret-token",
+		ExecutionID:       "exec-abc-123",
+		TotalSavings:      500.00,
+		PurchaseDate:      "March 1, 2025",
+		DaysUntilPurchase: 7,
+		PlanName:          "Test Plan",
+	}
+
+	body, err := RenderScheduledPurchaseEmail(data)
+	require.NoError(t, err)
+
+	// The cancel link must use the direct API path with the execution ID and token.
+	assert.Contains(t, body, "/purchases/cancel/exec-abc-123?token=super-secret-token")
+
+	// The token must not appear in the review/edit or pause lines.
+	for _, line := range splitTestLines(body) {
+		if containsAnyStr(line, "Review", "Pause") {
+			assert.NotContains(t, line, "super-secret-token",
+				"line %q must not embed the approval token", line)
+		}
+	}
+}
+
+// splitTestLines splits s on newlines, returning non-empty lines.
+func splitTestLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			if line := s[start:i]; line != "" {
+				out = append(out, line)
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+// containsAnyStr reports whether s contains any of the provided substrings.
+func containsAnyStr(s string, subs ...string) bool {
+	for _, sub := range subs {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+	}
+	return false
+}
