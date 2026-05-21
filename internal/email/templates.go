@@ -805,7 +805,12 @@ func (s *Sender) SendRegistrationReceivedNotification(ctx context.Context, data 
 	if err != nil {
 		return fmt.Errorf("failed to render registration received email: %w", err)
 	}
-	subject := fmt.Sprintf("CUDly - New Account Registration: %s (%s)", data.AccountName, data.Provider)
+	// sanitizeHeader strips CR/LF from the attacker-controlled AccountName /
+	// Provider (sourced from the unauthenticated POST /api/register endpoint)
+	// before they are interpolated into the SES email subject, preventing
+	// email header injection (#544 / #401). Mirrors the SMTP path fix.
+	subject := fmt.Sprintf("CUDly - New Account Registration: %s (%s)",
+		sanitizeHeader(data.AccountName), sanitizeHeader(data.Provider))
 	if data.RecipientEmail == "" {
 		return s.SendNotification(ctx, subject, body)
 	}

@@ -64,7 +64,7 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	if err := validateRegistrationRequest(body); err != nil {
+	if err := validateRegistrationRequest(&body); err != nil {
 		return nil, err
 	}
 
@@ -394,8 +394,21 @@ func (h *Handler) deleteRegistration(ctx context.Context, id string) (any, error
 	return map[string]string{"status": "deleted"}, nil
 }
 
-// validateRegistrationRequest checks required fields for a registration submission.
-func validateRegistrationRequest(req RegistrationRequest) error {
+// maxAccountNameLen caps the persisted/displayed account name length as a
+// defense-in-depth measure against abuse of the unauthenticated registration
+// endpoint (#544 / #401).
+const maxAccountNameLen = 256
+
+// validateRegistrationRequest checks required fields for a registration
+// submission. It also normalizes account_name in place: CR/LF characters are
+// stripped (defense-in-depth against email header injection at the data
+// source, complementing sanitizeHeader on the email subject path) and the
+// result is length-capped.
+func validateRegistrationRequest(req *RegistrationRequest) error {
+	req.AccountName = strings.NewReplacer("\r", "", "\n", "").Replace(req.AccountName)
+	if r := []rune(req.AccountName); len(r) > maxAccountNameLen {
+		req.AccountName = string(r[:maxAccountNameLen])
+	}
 	if !validAccountProviders[req.Provider] {
 		return NewClientError(400, "provider must be one of: aws, azure, gcp")
 	}
