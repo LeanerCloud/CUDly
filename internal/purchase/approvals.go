@@ -188,7 +188,15 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 		return nil, fmt.Errorf("approval token has expired")
 	}
 
-	if execution.Status == "completed" || execution.Status == "cancelled" {
+	// Only pending/notified rows are cancelable — mirrors the session path
+	// in cancelPurchaseViaSession (issue #645). The previous predicate
+	// rejected only completed/cancelled, which let an email-link holder
+	// cancel an approved/running/paused/failed/expired execution that the
+	// dashboard user cannot. Restricting to the pre-purchase states is also
+	// the in-flight guard: approved/running rows are mid-execution (the AWS
+	// commitment is being or has been created), so cancelling them would
+	// leave the DB and the cloud out of sync.
+	if execution.Status != "pending" && execution.Status != "notified" {
 		return nil, fmt.Errorf("execution cannot be cancelled, current status: %s", execution.Status)
 	}
 	return execution, nil
