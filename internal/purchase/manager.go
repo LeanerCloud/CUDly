@@ -188,10 +188,22 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 
 		updated, txErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "failed")
 		if txErr != nil {
-			// The row is no longer "approved" (e.g. the original run finished, or
-			// a concurrent sweep handled it). Not an error for this row — skip it.
-			logging.Warnf("Skipping recovery of %s: %v", exec.ExecutionID, txErr)
-			continue
+			// Distinguish benign races (row already left the "approved"
+			// state — concurrent sweep handled it, or the original run
+			// finished after the LIST snapshot) from real store
+			// failures (DB unreachable, query syntax error). A real
+			// store failure must fail the sweep so a transient DB
+			// outage does not silently under-recover. We probe the
+			// current row state via GetExecutionByID: a clean read
+			// with Status != "approved" confirms the race; any other
+			// outcome (read error, still-approved row) is a real
+			// failure worth propagating.
+			current, getErr := m.config.GetExecutionByID(ctx, exec.ExecutionID)
+			if getErr == nil && current != nil && current.Status != "approved" {
+				logging.Warnf("Skipping recovery of %s (already transitioned out of approved): %v", exec.ExecutionID, txErr)
+				continue
+			}
+			return recovered, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
 		}
 
 		updated.Error = "execution was approved but its purchase run was interrupted before completing and never finalized; failed by the recovery sweep so it is not silently stuck (issue #632). Verify on the cloud provider that no commitment was created, then Retry."
