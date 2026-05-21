@@ -817,7 +817,11 @@ func extractCostImpactFromRecommendation(gcpRec *recommenderpb.Recommendation, r
 
 	cost := costProj.Cost
 	if cost.Units != 0 || cost.Nanos != 0 {
-		// Cost savings is negative of cost projection
+		// Cost savings is the negative of the cost projection impact.
+		// GCP Recommender sizes CUD recommendations for 100% coverage of
+		// the project's historical on-demand usage; this is the 100%-coverage
+		// baseline the dashboard scaler in summarizeRecommendationsWithCoverage
+		// depends on (issue #215 audit).
 		savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
 		rec.EstimatedSavings = savings
 	}

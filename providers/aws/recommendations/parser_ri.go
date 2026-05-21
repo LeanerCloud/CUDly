@@ -122,7 +122,12 @@ func (c *Client) parseRecommendedQuantity(details *types.ReservationPurchaseReco
 	return int(math.Round(count)), nil
 }
 
-// parseCostInformation extracts cost and savings information
+// parseCostInformation extracts cost and savings information.
+//
+// EstimatedMonthlySavingsAmount represents the savings from buying the full
+// recommended quantity, which AWS CE sizes for ~100% coverage of the account's
+// historical on-demand demand. This is the 100%-coverage baseline the dashboard
+// scaling in summarizeRecommendationsWithCoverage depends on (issue #215 audit).
 func (c *Client) parseCostInformation(details *types.ReservationPurchaseRecommendationDetail) (float64, float64, error) {
 	var estimatedSavings, savingsPercent float64
 
