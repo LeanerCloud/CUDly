@@ -295,10 +295,13 @@ resource "aws_iam_policy" "compute" {
         Resource = "*"
       },
       {
-        # KMS create + read-only actions don't accept a key ARN at API
-        # level (key ARNs are only known after CreateKey). Read-only
-        # actions are also broad because terraform plan needs to
-        # enumerate key state.
+        # kms:CreateKey and the list/describe actions that don't accept
+        # a key ARN at the API level (key ARN is only known after
+        # CreateKey; ListAliases lists all aliases account-wide).
+        # kms:GetKeyPolicy is intentionally NOT here — it exposes the
+        # full trust model of a key and is scoped to Project=CUDly keys
+        # in policy_compute_b.tf KMSReadTaggedOnly to prevent account-wide
+        # key-policy reconnaissance via a compromised deploy token.
         # kms:CreateAlias is NOT here — it moved to KMSMutateTaggedOnly
         # below (key-side check, tag-gated) and policy_compute_b.tf
         # KMSAliasMutate (alias-side check, ARN-scoped). KMS evaluates
@@ -308,7 +311,6 @@ resource "aws_iam_policy" "compute" {
         Action = [
           "kms:CreateKey",
           "kms:DescribeKey",
-          "kms:GetKeyPolicy",
           "kms:GetKeyRotationStatus",
           "kms:ListAliases",
           "kms:ListResourceTags",

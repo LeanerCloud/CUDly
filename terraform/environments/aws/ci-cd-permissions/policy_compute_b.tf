@@ -21,6 +21,13 @@
 #    against BOTH the alias and the target key, so the alias-side
 #    check lives here (ARN-scoped) and the key-side check lives in
 #    policy_compute.tf KMSMutateTaggedOnly (tag-gated to CUDly keys).
+#
+#  - KMSReadTaggedOnly: kms:GetKeyPolicy exposes the full trust model
+#    of a CMK (key policy document reveals all principals and conditions).
+#    Moving it here with aws:ResourceTag/Project=CUDly prevents the deploy
+#    SA from enumerating key policies of unrelated workloads sharing the
+#    account (account-wide key-policy reconnaissance). Split from the main
+#    policy because the 6144-char limit was reached.
 
 resource "aws_iam_policy" "compute_b" {
   name        = "cudly-deploy-compute-b"
@@ -61,6 +68,22 @@ resource "aws_iam_policy" "compute_b" {
           "kms:UpdateAlias",
         ]
         Resource = "arn:aws:kms:*:*:alias/cudly-*"
+      },
+      {
+        # kms:GetKeyPolicy reveals the full trust model of a CMK and is
+        # therefore gated on the key being tagged Project=CUDly. This
+        # prevents the deploy SA from reading key policies of unrelated
+        # workloads sharing the account. Split from policy_compute.tf
+        # because the 6144-char managed-policy limit was reached.
+        Sid      = "KMSReadTaggedOnly"
+        Effect   = "Allow"
+        Action   = ["kms:GetKeyPolicy"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/Project" = "CUDly"
+          }
+        }
       },
     ]
   })
