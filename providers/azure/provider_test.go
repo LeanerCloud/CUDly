@@ -409,6 +409,7 @@ func TestAzureProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 		{common.ServiceCompute},
 		{common.ServiceRelationalDB},
 		{common.ServiceCache},
+		{common.ServiceDataWarehouse},
 	}
 
 	for _, tc := range testCases {
