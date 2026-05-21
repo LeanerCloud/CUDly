@@ -126,6 +126,13 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, pass
 	if err := assignAdminGroupAndWarn(ctx, pool, defaultAdminGroupID); err != nil {
 		return fmt.Errorf("failed to assign admin group: %w", err)
 	}
+
+	// Idempotent backfill + invariant check on any pre-existing admin
+	// row whose group_ids drifted to empty after migration 000024's
+	// one-shot backfill already ran.
+	if err := assignAdminGroupAndWarn(ctx, pool, defaultAdminGroupID); err != nil {
+		return fmt.Errorf("failed to assign admin group: %w", err)
+	}
 	return nil
 }
 
@@ -169,6 +176,63 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email 
 		log.Printf("Admin user created/activated: %s", email)
 	} else {
 		log.Printf("Admin user already has a password set: %s (skipping)", email)
+	}
+
+	// Idempotent backfill + invariant check on any pre-existing admin
+	// row whose group_ids drifted to empty after migration 000024's
+	// one-shot backfill already ran.
+	if err := assignAdminGroupAndWarn(ctx, pool, defaultAdminGroupID); err != nil {
+		return fmt.Errorf("failed to assign admin group: %w", err)
+	}
+	return nil
+}
+
+// assignAdminGroupAndWarn runs an idempotent backfill that appends
+// groupID to any admin row whose group_ids is empty (NULL or
+// zero-length). The DISTINCT(unnest(...)) dedupe makes the UPDATE
+// safe to run repeatedly. After the backfill, a defensive SELECT
+// counts any admin rows still showing empty group_ids and logs a
+// WARN so operators see drift in container logs rather than only via
+// a broken UI. This is the "defence-in-depth invariant" described
+// in issue #351.
+//
+// The EXISTS guard on the groups table makes the backfill a no-op
+// when migration 000024 hasn't yet seeded the Administrators group -
+// defence-in-depth, since in practice this function is invoked
+// after RunMigrations -> m.Up() completes.
+func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID string) error {
+	res, err := pool.Exec(ctx, `
+		UPDATE users
+		SET group_ids = ARRAY(
+			SELECT DISTINCT unnest(
+				COALESCE(group_ids, '{}') || ARRAY[$1]::UUID[]
+			)
+		),
+			updated_at = NOW()
+		WHERE role = 'admin'
+		  AND (group_ids IS NULL OR cardinality(group_ids) = 0)
+		  AND EXISTS (SELECT 1 FROM groups WHERE id = $1::UUID)
+	`, groupID)
+	if err != nil {
+		return fmt.Errorf("failed to backfill admin group_ids: %w", err)
+	}
+	if n := res.RowsAffected(); n > 0 {
+		fmt.Printf("Backfilled group_ids for %d admin user(s) to include Administrators group\n", n)
+	}
+
+	// Invariant check: any admin still missing group_ids after the
+	// backfill (e.g. EXISTS guard failed because the Administrators
+	// group is missing) is logged loudly so operators notice.
+	var remaining int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM users
+		WHERE role = 'admin'
+		  AND (group_ids IS NULL OR cardinality(group_ids) = 0)
+	`).Scan(&remaining); err != nil {
+		return fmt.Errorf("failed to check admin group_ids invariant: %w", err)
+	}
+	if remaining > 0 {
+		log.Printf("WARN: %d admin user(s) have empty group_ids and the Administrators group could not be assigned. Permissions may not work as expected. Check that migration 000024_seed_default_groups has run successfully.", remaining)
 	}
 
 	// Idempotent backfill + invariant check on any pre-existing admin
