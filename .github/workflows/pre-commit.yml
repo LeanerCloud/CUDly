@@ -16,20 +16,20 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.25.4"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           # Cache the npm download cache keyed on the frontend lockfile.
@@ -49,7 +49,7 @@ jobs:
         # `.github/workflows/ci.yml` so both workflows resolve to the same
         # Terraform binary; otherwise a behavioural drift between the two
         # could pass one and fail the other.
-        uses: hashicorp/setup-terraform@v4
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.10.5"
           terraform_wrapper: false
@@ -78,7 +78,7 @@ jobs:
       # is worth the extra `if`).
       - name: Cache Go-installed tools (gosec, gocyclo)
         id: cache-go-tools
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/go/bin
           key: go-tools-${{ runner.os }}-gosec-v2.22.4-gocyclo-v0.6.0
@@ -143,7 +143,7 @@ jobs:
       # Saves ~30-60s per cache-hit run; safe because pre-commit verifies
       # env integrity on use.
       - name: Cache pre-commit environments
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -157,7 +157,7 @@ jobs:
       # step covers the latter. Keyed on go.sum so a dep upgrade still
       # invalidates the cache and gets clean builds.
       - name: Cache Go build cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/go-build
           key: go-build-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
