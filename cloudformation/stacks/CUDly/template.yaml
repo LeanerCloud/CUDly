@@ -596,12 +596,23 @@ Resources:
       AuthType: AWS_IAM
       TargetFunctionArn: !GetAtt LambdaFunction.Arn
       Cors:
+        # When a custom domain is configured, restrict CORS to that origin.
+        # Without a custom domain the wildcard is unavoidable for testing,
+        # but production deployments should always set DashboardDomainName.
+        # AllowMethods and AllowHeaders match the Terraform lambda module
+        # (terraform/modules/compute/aws/lambda/main.tf cors block).
         AllowOrigins:
-          - "*"
+          - !If [HasCustomDomain, !Sub "https://${DashboardDomainName}", "*"]
         AllowMethods:
-          - "*"
+          - GET
+          - POST
+          - PUT
+          - DELETE
         AllowHeaders:
-          - "*"
+          - Content-Type
+          - Authorization
+          - X-CSRF-Token
+          - X-Session-Token
 
   # Permission for CloudFront OAC to invoke Lambda - must be created AFTER the distribution
   LambdaFunctionUrlPermission:
