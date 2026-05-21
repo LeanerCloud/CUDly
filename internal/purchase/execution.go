@@ -379,7 +379,11 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 // Appends rather than overwrites so multiple failed history writes within one
 // execution are all recorded.
 func recordHistoryAuditGap(exec *config.PurchaseExecution, commitmentID string, histErr error) {
-	note := fmt.Sprintf("commitment %s purchased but its history record failed to save: %v", commitmentID, histErr)
+	// histErr is a raw persistence error: log it server-side for diagnosis but
+	// keep it out of exec.Error, which is surfaced to clients via the history
+	// status_description. Only a generic, user-safe note reaches the UI.
+	logging.Errorf("history audit gap for commitment %s: %v", commitmentID, histErr)
+	note := fmt.Sprintf("commitment %s purchased but its history record failed to save", commitmentID)
 	if exec.Error == "" {
 		exec.Error = note
 	} else {
