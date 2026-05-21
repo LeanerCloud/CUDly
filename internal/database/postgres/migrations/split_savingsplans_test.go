@@ -5,8 +5,6 @@ package migrations_test
 
 import (
 	"context"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/database/postgres/migrations"
@@ -15,12 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// getMigrationsPath resolves the migrations directory next to this test file.
-func getMigrationsPath() string {
-	_, filename, _, _ := runtime.Caller(0)
-	return filepath.Dir(filename)
-}
 
 // TestMigration_SplitSavingsPlans drives the 000040 migration through
 // the three scenarios from the plan §7: umbrella-only, umbrella + PR
