@@ -1274,6 +1274,9 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 	// window falls back to defaults and no suppression rows get
 	// written (the recs in this request have no CloudAccountID).
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	// The #644 idempotency lookup queries pending executions before creating.
+	// No prior pending row → not a duplicate → proceeds to create.
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1281,7 +1284,7 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "upfront_cost": 100.0, "savings": 50.0}, {"id": "rec-2", "upfront_cost": 200.0, "savings": 100.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}, {"id": "rec-2", "provider": "aws", "service": "ec2", "count": 2, "term": 1, "payment": "all-upfront", "upfront_cost": 200.0, "savings": 100.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	require.NoError(t, err)
@@ -1371,7 +1374,7 @@ func TestHandler_executePurchase_NegativeUpfrontCost(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "upfront_cost": -100.0, "savings": 50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": -100.0, "savings": 50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
@@ -1397,7 +1400,7 @@ func TestHandler_executePurchase_NegativeSavings(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "upfront_cost": 100.0, "savings": -50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": -50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
@@ -1460,7 +1463,7 @@ func TestHandler_executePurchase_ExceedsMaxAmount(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "upfront_cost": 15000000.0, "savings": 50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 15000000.0, "savings": 50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)
@@ -1482,6 +1485,7 @@ func TestHandler_executePurchase_SaveError(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("database error"))
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1489,7 +1493,7 @@ func TestHandler_executePurchase_SaveError(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
 		},
-		Body: `{"recommendations": [{"id": "rec-1", "upfront_cost": 100.0, "savings": 50.0}]}`,
+		Body: `{"recommendations": [{"id": "rec-1", "provider": "aws", "service": "ec2", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 100.0, "savings": 50.0}]}`,
 	}
 	result, err := handler.executePurchase(ctx, req)
 	assert.Error(t, err)

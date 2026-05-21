@@ -3,9 +3,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1080,10 +1083,34 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	// account outside the session's allowed_accounts. Safer than silently
 	// dropping the out-of-scope ones — the user explicitly chose those
 	// recommendations; a partial execution would misrepresent intent.
+	// Runs before per-rec content validation so an out-of-scope request is
+	// rejected as 403 regardless of the rec's Term/Payment/Count contents.
 	if err := h.validatePurchaseRecommendationScope(ctx, session, execReq.Recommendations); err != nil {
 		return ExecutePurchaseRequest{}, nil, err
 	}
+	// Per-rec Provider/Service/Term/Payment/Count validation at the API
+	// boundary so a malformed client-supplied rec (e.g. Term:7, Payment:"foo",
+	// negative Count) is rejected here rather than reaching the cloud SDK at
+	// execute time (#643). This is scoped to the web execute path only — the
+	// retry path replays recs from an already-validated execution and must
+	// not be re-gated by the same rules.
+	if err := validateExecutePurchaseRecommendations(execReq.Recommendations); err != nil {
+		return ExecutePurchaseRequest{}, nil, err
+	}
 	return execReq, session, nil
+}
+
+// validateExecutePurchaseRecommendations runs the per-rec #643 boundary
+// validation over every rec in a web execute request, returning the first
+// failure. Extracted so validateExecutePurchaseRequest stays under the
+// gocyclo threshold.
+func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) error {
+	for i := range recs {
+		if err := validatePurchaseRecommendation(recs[i], i); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // finalizePurchaseStatus flips an execution's stored status to "failed" if
@@ -1168,6 +1195,115 @@ func (h *Handler) persistExecutionAndSuppressions(ctx context.Context, execution
 	return nil
 }
 
+// purchaseIdempotencyWindow is how long a freshly-created pending execution
+// "absorbs" an identical resubmission. A double-click or a retried network
+// call within this window resolves to the original execution instead of
+// minting a second approvable row (double-spend). Sized to comfortably cover
+// a stuck request retry without masking a genuine intentional re-purchase.
+const purchaseIdempotencyWindow = 2 * time.Minute
+
+// purchaseIdempotencyKey derives a stable fingerprint of a submit so two
+// identical submissions (same actor, same scaled rec set, same capacity)
+// collapse to one execution. The recs are normalized and sorted so map/slice
+// ordering can't change the hash. Account scope is implicit: each rec carries
+// its CloudAccountID, so the same recs targeting a different account hash
+// differently. Closes issue #644.
+func purchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord, capacityPercent int) string {
+	tuples := make([]string, 0, len(recs))
+	for _, r := range recs {
+		acct := ""
+		if r.CloudAccountID != nil {
+			acct = *r.CloudAccountID
+		}
+		tuples = append(tuples, fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%d|%s",
+			strings.ToLower(strings.TrimSpace(r.Provider)),
+			r.Service, r.Region, r.ResourceType, r.Engine, acct,
+			r.Count, r.Term, strings.ToLower(strings.TrimSpace(r.Payment))))
+	}
+	sort.Strings(tuples)
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x1f%d\x1f%s", creatorID, capacityPercent, strings.Join(tuples, "\x1e"))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// findDuplicatePendingExecution returns an existing pending/notified execution
+// whose idempotency fingerprint matches key and whose creation falls inside
+// purchaseIdempotencyWindow of now, or (nil, nil) when there is no duplicate.
+// It recomputes each candidate's key from its persisted recs + creator +
+// capacity rather than relying on a stored column, so no schema change is
+// needed. Restricted to web-sourced executions to avoid colliding with
+// scheduler/CLI rows. A lookup error is non-fatal to the caller's decision
+// (returned so the caller can log and proceed with a fresh execution).
+func (h *Handler) findDuplicatePendingExecution(ctx context.Context, creatorID, key string, now time.Time) (*config.PurchaseExecution, error) {
+	pending, err := h.config.GetPendingExecutions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cutoff := now.Add(-purchaseIdempotencyWindow)
+	for i := range pending {
+		ex := &pending[i]
+		if ex.Source != common.PurchaseSourceWeb {
+			continue
+		}
+		if ex.ScheduledDate.Before(cutoff) {
+			continue
+		}
+		exCreator := ""
+		if ex.CreatedByUserID != nil {
+			exCreator = *ex.CreatedByUserID
+		}
+		if exCreator != creatorID {
+			continue
+		}
+		if purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent) == key {
+			return ex, nil
+		}
+	}
+	return nil, nil
+}
+
+// duplicatePurchaseResponse returns a ready-to-send response body when this
+// submit collapses onto an existing pending execution (#644), or nil when it
+// is a genuinely new submit that should proceed to create a fresh execution.
+// A lookup failure is logged and treated as "not a duplicate" so a transient
+// store error never blocks a legitimate purchase. Extracted from executePurchase
+// to keep that function under the gocyclo threshold.
+func (h *Handler) duplicatePurchaseResponse(ctx context.Context, creator *string, recs []config.RecommendationRecord, capacityPercent int) map[string]any {
+	creatorID := ""
+	if creator != nil {
+		creatorID = *creator
+	}
+	key := purchaseIdempotencyKey(creatorID, recs, capacityPercent)
+	dup, err := h.findDuplicatePendingExecution(ctx, creatorID, key, time.Now())
+	if err != nil {
+		logging.Errorf("idempotency lookup failed, proceeding with new execution: %v", err)
+		return nil
+	}
+	if dup == nil {
+		return nil
+	}
+	logging.Infof("duplicate purchase submit collapsed to existing execution %s", dup.ExecutionID)
+	return buildDuplicatePurchaseResponse(dup)
+}
+
+// buildDuplicatePurchaseResponse returns the executePurchase response body for
+// a submit that collapsed onto an existing pending execution (#644). It points
+// at the original row so the client lands on the same approvable execution
+// instead of a freshly-minted duplicate. duplicate=true lets the UI explain
+// why no new approval email was sent.
+func buildDuplicatePurchaseResponse(ex *config.PurchaseExecution) map[string]any {
+	return map[string]any{
+		"execution_id":         ex.ExecutionID,
+		"status":               ex.Status,
+		"recommendation_count": len(ex.Recommendations),
+		"total_upfront_cost":   ex.TotalUpfrontCost,
+		"estimated_savings":    ex.EstimatedSavings,
+		"email_sent":           ex.NotificationSent != nil,
+		"duplicate":            true,
+		"message":              "Duplicate submission collapsed onto the existing pending execution; no new approval request was created.",
+	}
+}
+
 // newPendingExecution builds a fresh pending PurchaseExecution with a
 // crypto/rand-backed approval token. Extracted from executePurchase to keep
 // that function under the gocyclo threshold.
@@ -1202,6 +1338,15 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 
+	// Submit-time idempotency (#644): a double-click or retried POST with an
+	// identical actor + scaled rec set + capacity within a short window must
+	// resolve to the original pending execution rather than minting a second
+	// approvable row (double-spend).
+	creator := resolveCreatorUserID(session)
+	if dupResp := h.duplicatePurchaseResponse(ctx, creator, execReq.Recommendations, execReq.CapacityPercent); dupResp != nil {
+		return dupResp, nil
+	}
+
 	execution, err := newPendingExecution(&execReq, totalUpfront, totalSavings)
 	if err != nil {
 		return nil, err
@@ -1211,7 +1356,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	// this stamp to identify the creator on later cancellation; legacy rows
 	// pre-dating issue #46 can carry NULL here, so always go through the
 	// resolveCreatorUserID helper rather than dereferencing the session.
-	execution.CreatedByUserID = resolveCreatorUserID(session)
+	execution.CreatedByUserID = creator
 	executionID := execution.ExecutionID
 
 	// Load the grace-period config once before entering the tx so a
