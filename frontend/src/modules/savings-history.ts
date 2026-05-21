@@ -4,6 +4,7 @@
 
 import { Chart, registerables } from 'chart.js';
 import { getSavingsAnalytics, type SavingsAnalyticsResponse, type SavingsDataPoint } from '../api';
+import * as state from '../state';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -25,11 +26,22 @@ export async function loadSavingsHistory(): Promise<void> {
     const period = periodSelect.value;
     const { start, end, interval } = getPeriodDates(period);
 
+    // Honour the global topbar filter chips (issue #503). The account chip
+    // is single-select, and the backend's /history/analytics takes a single
+    // account_id (see handler_analytics.go), so we forward the only selected
+    // ID, mirroring dashboard.ts loadSavingsTrendChart. The provider chip is
+    // forwarded too; the backend honours it once #502 lands (until then it is
+    // a harmless no-op param and account_ids does the filtering).
+    const currentProvider = state.getCurrentProvider();
+    const currentAccountIDs = state.getCurrentAccountIDs();
+
     try {
         const data = await getSavingsAnalytics({
             start: start.toISOString(),
             end: end.toISOString(),
             interval,
+            ...(currentProvider ? { provider: currentProvider } : {}),
+            ...(currentAccountIDs.length === 1 ? { account_ids: currentAccountIDs } : {}),
         });
 
         if (!data.data_points || data.data_points.length === 0) {
@@ -301,7 +313,36 @@ function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string): v
 }
 
 /**
- * Initialize savings history event listeners
+ * True when the Purchases tab is the currently-visible tab. The reload-on-
+ * filter-change subscriptions below skip the fetch when this is false so we
+ * don't burn an API call (and a skeleton flash) for a section the user isn't
+ * looking at: `switchTab('purchases')` runs loadSavingsHistory() on next
+ * entry anyway.
+ */
+function isPurchasesTabActive(): boolean {
+    return document.getElementById('purchases-tab')?.classList.contains('active') === true;
+}
+
+/**
+ * Initialize savings history event listeners (issue #503).
+ *
+ * Wires the period dropdown + refresh button, and subscribes to the global
+ * topbar filter chips so a provider/account change re-queries this chart.
+ * Previously only the local controls were wired, so changing the Account
+ * chip did nothing until the Purchases tab was left and re-entered.
+ *
+ * Mirrors the recommendations.ts pattern from PR #488:
+ *   - Active-tab guard: only fire loadSavingsHistory() when the Purchases
+ *     tab is active.
+ *   - Coalesce duplicate reloads via queueMicrotask: the provider-change
+ *     handler in topbar-filters.ts updates BOTH state slots (clear accounts
+ *     then set provider, per the #185 ordering rule), firing the account-
+ *     AND provider-subscribers from one user action. Without coalescing we'd
+ *     kick off two loadSavingsHistory() calls back-to-back: extra API load
+ *     plus a stale-overwrite risk if the first response lands after the
+ *     second.
+ *   - Re-check active-tab inside the microtask: a tab switch between the
+ *     chip change and the microtask flush cancels the now-unneeded fetch.
  */
 export function initSavingsHistory(): void {
     const periodSelect = document.getElementById('savings-period');
@@ -314,6 +355,18 @@ export function initSavingsHistory(): void {
     if (refreshBtn) {
         refreshBtn.addEventListener('click', loadSavingsHistory);
     }
+
+    let reloadQueued = false;
+    const scheduleReload = (): void => {
+        if (!isPurchasesTabActive() || reloadQueued) return;
+        reloadQueued = true;
+        queueMicrotask(() => {
+            reloadQueued = false;
+            if (isPurchasesTabActive()) void loadSavingsHistory();
+        });
+    };
+    state.subscribeProvider(scheduleReload);
+    state.subscribeAccount(scheduleReload);
 }
 
 // Export for use in other modules
