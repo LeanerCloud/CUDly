@@ -585,6 +585,29 @@ func TestPurchaseCommitment_BadStatus(t *testing.T) {
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
 }
 
+func TestPurchaseCommitment_InvalidTerm(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "5yr", Count: 1,
+	}, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "unsupported reservation term")
+}
+
+func TestGetOfferingDetails_InvalidTerm(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	_, err := c.GetOfferingDetails(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "5yr",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported reservation term")
+}
+
 // -- setter tests --
 
 func TestSetterMethods(t *testing.T) {

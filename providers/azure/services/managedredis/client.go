@@ -225,6 +225,20 @@ func (c *ManagedRedisClient) reservationDetailToCommitment(detail *armconsumptio
 	return cm
 }
 
+// parseTermYears maps a reservation term string to an integer year count.
+// Returns an error for any value outside the explicit allowlist so callers
+// fail closed rather than silently coercing to a 1-year purchase.
+func parseTermYears(term string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(term)) {
+	case "", "1", "1yr", "1y":
+		return 1, nil
+	case "3", "3yr", "3y":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("unsupported reservation term: %s", term)
+	}
+}
+
 // PurchaseCommitment purchases Azure Cache for Redis reserved capacity via the Azure Reservations API.
 func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, _ common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
@@ -234,15 +248,16 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		Timestamp:      time.Now(),
 	}
 
+	termYears, termErr := parseTermYears(rec.Term)
+	if termErr != nil {
+		result.Error = termErr
+		return result, result.Error
+	}
+
 	reservationOrderID := uuid.New().String()
 	apiVersion := "2022-11-01"
 	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
 		reservationOrderID, apiVersion)
-
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
-	}
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -322,9 +337,9 @@ func (c *ManagedRedisClient) ValidateOffering(ctx context.Context, rec common.Re
 
 // GetOfferingDetails retrieves reservation offering details from the Azure Retail Prices API.
 func (c *ManagedRedisClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := parseTermYears(rec.Term)
+	if err != nil {
+		return nil, err
 	}
 
 	pricing, err := c.getRedisPricing(ctx, rec.ResourceType, c.region, termYears)
@@ -506,8 +521,7 @@ func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region st
 
 	hoursInTerm := 8760.0 * float64(termYears)
 	if reservationPrice == 0 {
-		// Azure Redis Cache reservations typically offer ~55% savings
-		reservationPrice = onDemandPrice * hoursInTerm * 0.45
+		return nil, fmt.Errorf("no reservation pricing found for Redis Cache SKU %s (%d year) in region %s", sku, termYears, region)
 	}
 
 	savingsPct := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
