@@ -310,7 +310,15 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 			}
 			rec := exec.Recommendations[i]
 			logging.Infof("Purchasing: %dx %s in %s (%s/%s)", rec.Count, rec.ResourceType, rec.Region, rec.Provider, rec.Service)
-			purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, opts)
+			// Derive a deterministic per-rec idempotency token from the
+			// execution ID and this rec's index so a re-drive of a stranded
+			// execution (issue #636) reuses the identical token and the
+			// commitment is never created twice. opts is a value, so this
+			// per-rec copy is safe under the parallel fan-out (no shared
+			// mutation across goroutines).
+			recOpts := opts
+			recOpts.IdempotencyToken = common.DeriveIdempotencyToken(exec.ExecutionID, i)
+			purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, recOpts)
 			return recPurchaseOutcome{index: i, purchase: purchaseResult, err: err}, nil
 		}, getMaxAccountParallelism())
 
