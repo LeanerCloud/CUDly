@@ -14,13 +14,15 @@ import (
 
 // Tests for mapServiceType to hit all branches.
 //
-// As of the Azure-purchase regression fix, mapServiceType returns the
-// provider-neutral canonical types so both AWS and Azure providers can
-// resolve them in GetServiceClient. The legacy AWS aliases (ServiceEC2,
-// ServiceRDS, ServiceElastiCache, ServiceOpenSearch, ServiceRedshift)
-// are no longer produced by this function; the AWS provider still
-// accepts them as input via its case-list union for backward
-// compatibility with persisted rec.Service strings.
+// As of the Azure-purchase regression fix (issue #626), mapServiceType
+// applies a canonical/legacy split: canonical slugs (compute, relational-db,
+// cache, search, data-warehouse) map to the canonical ServiceType
+// constants so Azure (and pre-emptively GCP) providers can resolve them
+// in GetServiceClient; legacy AWS-only slugs (ec2, rds, elasticache,
+// opensearch, redshift, memorydb) keep mapping to the legacy AWS
+// constants for backward compat with rec rows persisted before the
+// canonical normalisation. The AWS provider accepts both forms via its
+// case-list union, so legacy spellings stay safe on AWS rec rows.
 func TestMapServiceType_AllBranches(t *testing.T) {
 	m := &Manager{}
 
@@ -28,16 +30,24 @@ func TestMapServiceType_AllBranches(t *testing.T) {
 		input    string
 		expected common.ServiceType
 	}{
-		{"ec2", common.ServiceCompute},
+		// Canonical slugs must map to canonical ServiceType constants.
+		// Issue #626: collapsing canonical onto AWS-legacy constants broke
+		// every Azure (and pre-emptively GCP) approve for these service
+		// families because their providers' GetServiceClient switches are
+		// canonical-only.
 		{"compute", common.ServiceCompute},
-		{"rds", common.ServiceRelationalDB},
 		{"relational-db", common.ServiceRelationalDB},
-		{"elasticache", common.ServiceCache},
 		{"cache", common.ServiceCache},
-		{"opensearch", common.ServiceSearch},
 		{"search", common.ServiceSearch},
-		{"redshift", common.ServiceDataWarehouse},
 		{"data-warehouse", common.ServiceDataWarehouse},
+		// Legacy AWS-only slugs preserved for backward compat (AWS provider
+		// accepts both forms; older rec rows persisted before normalisation
+		// still carry these spellings).
+		{"ec2", common.ServiceEC2},
+		{"rds", common.ServiceRDS},
+		{"elasticache", common.ServiceElastiCache},
+		{"opensearch", common.ServiceOpenSearch},
+		{"redshift", common.ServiceRedshift},
 		{"memorydb", common.ServiceMemoryDB},
 		{"savingsplans", common.ServiceSavingsPlans},
 		// Issue #85: the legacy hyphenated form is still accepted as a
@@ -614,7 +624,7 @@ func TestManager_ExecuteSinglePurchase_ServiceClientError(t *testing.T) {
 
 	mockStore.On("GetPurchasePlan", ctx, "plan-svc-err").Return(plan, nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceRelationalDB, "eu-west-1").Return(nil, errors.New("service client error"))
+	mockProvider.On("GetServiceClient", ctx, common.ServiceRDS, "eu-west-1").Return(nil, errors.New("service client error"))
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
 
 	manager := &Manager{
@@ -663,7 +673,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful(t *testing.T) {
 
 	mockStore.On("GetPurchasePlan", ctx, "plan-not-success").Return(plan, nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceCache, "ap-southeast-1").Return(mockServiceClient, nil)
+	mockProvider.On("GetServiceClient", ctx, common.ServiceElastiCache, "ap-southeast-1").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: false}, nil,
 	)
@@ -716,7 +726,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful_WithError(t *testin
 	specificErr := errors.New("capacity limit exceeded")
 	mockStore.On("GetPurchasePlan", ctx, "plan-err-result").Return(plan, nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceSearch, "us-west-2").Return(mockServiceClient, nil)
+	mockProvider.On("GetServiceClient", ctx, common.ServiceOpenSearch, "us-west-2").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: false, Error: specificErr}, nil,
 	)
@@ -772,7 +782,7 @@ func TestManager_ExecuteSinglePurchase_WithEngine(t *testing.T) {
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceRelationalDB, "us-east-1").Return(mockServiceClient, nil)
+	mockProvider.On("GetServiceClient", ctx, common.ServiceRDS, "us-east-1").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: true, CommitmentID: "ri-engine-001"}, nil,
 	)
@@ -829,7 +839,7 @@ func TestManager_SavePurchaseHistory_Error(t *testing.T) {
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(errors.New("history write error"))
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceCompute, "us-east-1").Return(mockServiceClient, nil)
+	mockProvider.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: true, CommitmentID: "ri-hist-001"}, nil,
 	)
@@ -886,7 +896,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 		{
 			name:        "ec2_windows",
 			service:     "ec2",
-			serviceType: common.ServiceCompute,
+			serviceType: common.ServiceEC2,
 			region:      "us-east-1",
 			resource:    "t4g.nano",
 			details:     &common.ComputeDetails{InstanceType: "t4g.nano", Platform: "Windows", Tenancy: "dedicated", Scope: "Region"},
@@ -905,7 +915,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 		{
 			name:        "rds_postgres",
 			service:     "rds",
-			serviceType: common.ServiceRelationalDB,
+			serviceType: common.ServiceRDS,
 			region:      "us-east-1",
 			resource:    "db.r5.large",
 			engine:      "postgres",
@@ -922,7 +932,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 		{
 			name:        "elasticache_redis",
 			service:     "elasticache",
-			serviceType: common.ServiceCache,
+			serviceType: common.ServiceElastiCache,
 			region:      "us-east-1",
 			resource:    "cache.r5.large",
 			engine:      "redis",
@@ -938,7 +948,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 		{
 			name:        "opensearch",
 			service:     "opensearch",
-			serviceType: common.ServiceSearch,
+			serviceType: common.ServiceOpenSearch,
 			region:      "us-west-2",
 			resource:    "r5.large.search",
 			details:     &common.SearchDetails{InstanceType: "r5.large.search"},
@@ -952,7 +962,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 		{
 			name:        "redshift",
 			service:     "redshift",
-			serviceType: common.ServiceDataWarehouse,
+			serviceType: common.ServiceRedshift,
 			region:      "us-east-1",
 			resource:    "ra3.xlplus",
 			details:     &common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 2, ClusterType: "multi-node"},
@@ -1120,7 +1130,7 @@ func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 		{
 			name:        "legacy_ec2",
 			service:     "ec2",
-			serviceType: common.ServiceCompute,
+			serviceType: common.ServiceEC2,
 			region:      "us-east-1",
 			resource:    "t4g.nano",
 			assertDetails: func(t *testing.T, d common.ServiceDetails) {
@@ -1136,7 +1146,7 @@ func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 		{
 			name:        "legacy_rds_postgres",
 			service:     "rds",
-			serviceType: common.ServiceRelationalDB,
+			serviceType: common.ServiceRDS,
 			region:      "us-east-1",
 			resource:    "db.r5.large",
 			engine:      "postgres",
@@ -1154,7 +1164,7 @@ func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 		{
 			name:        "legacy_elasticache_redis",
 			service:     "elasticache",
-			serviceType: common.ServiceCache,
+			serviceType: common.ServiceElastiCache,
 			region:      "us-east-1",
 			resource:    "cache.r5.large",
 			engine:      "redis",
