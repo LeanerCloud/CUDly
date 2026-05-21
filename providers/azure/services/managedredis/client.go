@@ -70,7 +70,12 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Mana
 }
 
 // NewClientWithHTTP creates a new ManagedRedisClient with a custom HTTP client (for testing).
+// When httpClient is nil, a default *http.Client with a 30s timeout is used to avoid
+// nil-deref panics on the first Do call.
 func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *ManagedRedisClient {
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
 	return &ManagedRedisClient{
 		cred:           cred,
 		subscriptionID: subscriptionID,
@@ -362,7 +367,12 @@ func (c *ManagedRedisClient) GetValidResourceTypes(ctx context.Context) ([]strin
 		return c.commonSKUs(), nil
 	}
 
-	skuSet := collectSKUsFromPager(ctx, pager)
+	skuSet, err := collectSKUsFromPager(ctx, pager)
+	if err != nil {
+		// Discard any partial results and fall back to the curated SKU list
+		// rather than risk false validation failures for valid SKUs.
+		return c.commonSKUs(), nil
+	}
 	if len(skuSet) > 0 {
 		skus := make([]string, 0, len(skuSet))
 		for sku := range skuSet {
@@ -388,12 +398,14 @@ func (c *ManagedRedisClient) redisCacheListPager() (RedisCachesPager, error) {
 
 // collectSKUsFromPager iterates the pager and returns the set of full SKU
 // names (e.g. "Premium_P1") built from each cache's Name/Family/Capacity.
-func collectSKUsFromPager(ctx context.Context, pager RedisCachesPager) map[string]bool {
+// On a pager error the caller is expected to discard any partial set and
+// fall back, so the returned set must be considered invalid when err != nil.
+func collectSKUsFromPager(ctx context.Context, pager RedisCachesPager) (map[string]bool, error) {
 	skuSet := make(map[string]bool)
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return nil, err
 		}
 		for _, cache := range page.Value {
 			if name := extractSKUName(cache); name != "" {
@@ -401,7 +413,7 @@ func collectSKUsFromPager(ctx context.Context, pager RedisCachesPager) map[strin
 			}
 		}
 	}
-	return skuSet
+	return skuSet, nil
 }
 
 // extractSKUName derives a full SKU string from a ResourceInfo entry.
@@ -545,10 +557,8 @@ func (c *ManagedRedisClient) convertRecommendation(_ context.Context, rec armcon
 	if f == nil {
 		return nil
 	}
-	var recurringCost float64
-	if f.RecurringMonthlyCost != nil {
-		recurringCost = *f.RecurringMonthlyCost
-	}
+	// Pass the converter's *float64 through directly so nil ("provider API did
+	// not return a monthly breakdown") stays distinct from an explicit 0.
 	return &common.Recommendation{
 		Provider:             common.ProviderAzure,
 		Service:              common.ServiceMemoryDB,
@@ -559,7 +569,7 @@ func (c *ManagedRedisClient) convertRecommendation(_ context.Context, rec armcon
 		OnDemandCost:         f.OnDemandCost,
 		CommitmentCost:       f.CommitmentCost,
 		EstimatedSavings:     f.EstimatedSavings,
-		RecurringMonthlyCost: &recurringCost,
+		RecurringMonthlyCost: f.RecurringMonthlyCost,
 		CommitmentType:       common.CommitmentReservedInstance,
 		Term:                 f.Term,
 		PaymentOption:        "upfront",
