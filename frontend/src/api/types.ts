@@ -605,6 +605,10 @@ export interface RIExchangeHistoryRecord {
   updated_at: string;
   completed_at?: string;
   expires_at?: string;
+  /** UUID of the session user who submitted this exchange (issue #300). */
+  created_by_user_id?: string;
+  /** Email of the session user who approved via the dashboard Approve button (issue #300). */
+  approved_by?: string;
 }
 
 // Inventory & Coverage types (issue #340 deferred sub-task — Active commitments)
