@@ -274,8 +274,11 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		Timestamp:      time.Now(),
 	}
 
-	// Build reservation purchase request
-	reservationOrderID := uuid.New().String()
+	// Build reservation purchase request. Derive a deterministic
+	// reservationOrderID from the idempotency token (issue #641) so a re-drive
+	// re-PUTs the same idempotent Azure reservation order instead of creating a
+	// second; fall back to a random GUID otherwise.
+	reservationOrderID := common.ReservationOrderID(opts.IdempotencyToken, uuid.New().String())
 
 	// Construct the Azure Reservations API request
 	apiVersion := "2022-11-01"
