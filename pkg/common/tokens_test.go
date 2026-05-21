@@ -64,3 +64,40 @@ func TestDeriveIdempotencyToken_FitsClientTokenLimit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, raw, 32)
 }
+
+func TestIdempotencyGUID_DeterministicCanonicalForm(t *testing.T) {
+	token := DeriveIdempotencyToken("exec-1", 0)
+
+	a := IdempotencyGUID(token)
+	b := IdempotencyGUID(token)
+	assert.Equal(t, a, b, "same token must yield the same GUID")
+
+	// Canonical 8-4-4-4-12 lowercase-hex GUID shape.
+	assert.Regexp(t, `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, a)
+	assert.Len(t, a, 36)
+}
+
+func TestIdempotencyGUID_DistinctTokensDistinctGUIDs(t *testing.T) {
+	g0 := IdempotencyGUID(DeriveIdempotencyToken("exec-1", 0))
+	g1 := IdempotencyGUID(DeriveIdempotencyToken("exec-1", 1))
+	assert.NotEqual(t, g0, g1, "different recs must get different order IDs")
+}
+
+func TestIdempotencyGUID_ShortTokenReturnsEmpty(t *testing.T) {
+	assert.Equal(t, "", IdempotencyGUID(""), "empty token must yield empty so callers keep their fallback")
+	assert.Equal(t, "", IdempotencyGUID("abc"), "sub-32-char token must yield empty")
+}
+
+func TestReservationOrderID(t *testing.T) {
+	token := DeriveIdempotencyToken("exec-1", 0)
+
+	// With a token: deterministic GUID, never the fallback.
+	got := ReservationOrderID(token, "fallback-id")
+	assert.Equal(t, IdempotencyGUID(token), got, "a supplied token must derive the GUID")
+	assert.Equal(t, got, ReservationOrderID(token, "other-fallback"),
+		"same token must yield the same order ID regardless of fallback")
+
+	// No usable token: caller's fallback is returned verbatim.
+	assert.Equal(t, "fallback-id", ReservationOrderID("", "fallback-id"))
+	assert.Equal(t, "fallback-id", ReservationOrderID("abc", "fallback-id"))
+}

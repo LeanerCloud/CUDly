@@ -273,7 +273,10 @@ func (c *CacheClient) PurchaseCommitment(ctx context.Context, rec common.Recomme
 		Timestamp:      time.Now(),
 	}
 
-	reservationOrderID := uuid.New().String()
+	// Derive a deterministic reservationOrderID from the idempotency token (issue
+	// #641) so a re-drive re-PUTs the same idempotent Azure reservation order
+	// instead of creating a second; fall back to a random GUID otherwise.
+	reservationOrderID := common.ReservationOrderID(opts.IdempotencyToken, uuid.New().String())
 	apiVersion := "2022-11-01"
 	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
 		reservationOrderID, apiVersion)
