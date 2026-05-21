@@ -36,3 +36,31 @@ func TestGenerateApprovalToken_NotZeroPrefix(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, "0000000000000000000000000000000000000000000000000000000000000000", tok)
 }
+
+func TestDeriveIdempotencyToken_StableAcrossReDrive(t *testing.T) {
+	// The core idempotency guarantee (issue #636): re-deriving the token for
+	// the SAME execution + rec index must yield the IDENTICAL value, so a
+	// re-driven purchase reuses it and AWS / the EC2 dedupe guard collapse it
+	// onto the original commitment instead of creating a second one.
+	first := DeriveIdempotencyToken("exec-abc-123", 2)
+	second := DeriveIdempotencyToken("exec-abc-123", 2)
+	assert.Equal(t, first, second, "re-drive of same execution/rec must produce the same token")
+}
+
+func TestDeriveIdempotencyToken_DiffersByExecutionAndIndex(t *testing.T) {
+	// Different recs within an execution, and the same rec index across
+	// executions, must NOT collide, or one purchase would suppress another.
+	base := DeriveIdempotencyToken("exec-abc-123", 0)
+	assert.NotEqual(t, base, DeriveIdempotencyToken("exec-abc-123", 1), "different rec index must differ")
+	assert.NotEqual(t, base, DeriveIdempotencyToken("exec-xyz-999", 0), "different execution must differ")
+}
+
+func TestDeriveIdempotencyToken_FitsClientTokenLimit(t *testing.T) {
+	// AWS ClientToken (and the SP ClientToken) cap at 64 chars; a SHA-256 hex
+	// digest is exactly 64, so the token can be used verbatim without truncation.
+	tok := DeriveIdempotencyToken("exec-abc-123", 7)
+	assert.Len(t, tok, 64)
+	raw, err := hex.DecodeString(tok)
+	require.NoError(t, err)
+	assert.Len(t, raw, 32)
+}
