@@ -566,6 +566,70 @@ func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
 }
 
+// purchaseURLFromMock returns the reservation PUT URL captured by the mock HTTP
+// client for the last successful PurchaseCommitment call. The Azure Reservations
+// API PUTs to .../reservationOrders/{id}; the {id} segment is the order ID that
+// makes the request idempotent.
+func purchaseURLFromMock(t *testing.T, m *mocks.MockHTTPClient) string {
+	t.Helper()
+	for i := len(m.Calls) - 1; i >= 0; i-- {
+		req, ok := m.Calls[i].Arguments.Get(0).(*http.Request)
+		if ok && req != nil {
+			return req.URL.String()
+		}
+	}
+	t.Fatalf("no HTTP request captured by mock")
+	return ""
+}
+
+// TestComputeClient_PurchaseCommitment_IdempotentReDrive is the issue #641
+// regression test: a re-drive with the *same* IdempotencyToken must not create a
+// second reservation. Because the Azure Reservations API PUTs to
+// reservationOrders/{id} and is idempotent on a stable order ID, "no second
+// reservation" is proven by the two re-drives PUTting to the *same*
+// reservationOrders/{id} URL (and yielding the same CommitmentID). A distinct
+// token must target a distinct order so unrelated purchases never collide.
+func TestComputeClient_PurchaseCommitment_IdempotentReDrive(t *testing.T) {
+	ctx := context.Background()
+	rec := common.Recommendation{
+		ResourceType:   "Standard_D2s_v3",
+		Term:           "1yr",
+		Count:          1,
+		CommitmentCost: 2000.0,
+	}
+	token := common.DeriveIdempotencyToken("exec-641", 0)
+
+	purchase := func(tok string) (common.PurchaseResult, string) {
+		mockHTTP := &mocks.MockHTTPClient{}
+		mockCred := &MockTokenCredential{token: "test-token"}
+		client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+		mockHTTP.On("Do", mock.Anything).Return(
+			mocks.CreateMockHTTPResponse(http.StatusOK, `{"id": "reservation-123"}`), nil)
+		result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{IdempotencyToken: tok})
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		return result, purchaseURLFromMock(t, mockHTTP)
+	}
+
+	first, firstURL := purchase(token)
+	second, secondURL := purchase(token)
+
+	// Same token => same idempotent order ID => same PUT URL => Azure re-PUTs the
+	// existing order rather than minting a second reservation.
+	assert.Equal(t, first.CommitmentID, second.CommitmentID,
+		"same idempotency token must reuse the same reservationOrderID")
+	assert.Equal(t, firstURL, secondURL,
+		"re-drive must PUT to the same reservationOrders/{id} URL")
+	assert.Contains(t, firstURL, common.IdempotencyGUID(token),
+		"order ID must be derived deterministically from the token")
+
+	// Distinct token => distinct order so independent purchases don't collide.
+	other, otherURL := purchase(common.DeriveIdempotencyToken("exec-641", 1))
+	assert.NotEqual(t, first.CommitmentID, other.CommitmentID,
+		"different recs must get different reservation orders")
+	assert.NotEqual(t, firstURL, otherURL)
+}
+
 // TestComputeClient_ConvertAzureVMRecommendation_NilGuards pins the new
 // contract: unusable SDK payloads (nil, wrong concrete type, nil Properties)
 // produce a nil *Recommendation so the caller can filter it out. Before
