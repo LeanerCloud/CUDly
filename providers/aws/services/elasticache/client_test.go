@@ -411,6 +411,112 @@ func TestClient_ConvertPaymentOption(t *testing.T) {
 	}
 }
 
+func idemRec() common.Recommendation {
+	return common.Recommendation{
+		Service:       common.ServiceCache,
+		ResourceType:  "cache.m6g.large",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       &common.CacheDetails{Engine: "redis", NodeType: "cache.m6g.large"},
+	}
+}
+
+func expectECOffering(m *MockElastiCacheClient) {
+	m.On("DescribeReservedCacheNodesOfferings", mock.Anything, mock.Anything).
+		Return(&elasticache.DescribeReservedCacheNodesOfferingsOutput{
+			ReservedCacheNodesOfferings: []types.ReservedCacheNodesOffering{
+				{
+					ReservedCacheNodesOfferingId: aws.String("offering-1"),
+					CacheNodeType:                aws.String("cache.m6g.large"),
+					ProductDescription:           aws.String("redis"),
+					OfferingType:                 aws.String("All Upfront"),
+					Duration:                     aws.Int32(31536000),
+				},
+			},
+		}, nil)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	client := &Client{client: mockEC, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-1", 0)
+	derivedID := common.IdempotentReservationID("elasticache-id-", token)
+
+	expectECOffering(mockEC)
+	mockEC.On("DescribeReservedCacheNodes", mock.Anything, mock.MatchedBy(func(in *elasticache.DescribeReservedCacheNodesInput) bool {
+		return aws.ToString(in.ReservedCacheNodeId) == derivedID
+	})).Return(&elasticache.DescribeReservedCacheNodesOutput{
+		ReservedCacheNodes: []types.ReservedCacheNode{{ReservedCacheNodeId: aws.String(derivedID), State: aws.String("active")}},
+	}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, derivedID, result.CommitmentID)
+	mockEC.AssertNotCalled(t, "PurchaseReservedCacheNodesOffering", mock.Anything, mock.Anything)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_NotFoundProceeds(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	client := &Client{client: mockEC, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-2", 0)
+	derivedID := common.IdempotentReservationID("elasticache-id-", token)
+
+	expectECOffering(mockEC)
+	mockEC.On("DescribeReservedCacheNodes", mock.Anything, mock.Anything).
+		Return((*elasticache.DescribeReservedCacheNodesOutput)(nil), &types.ReservedCacheNodeNotFoundFault{})
+	mockEC.On("PurchaseReservedCacheNodesOffering", mock.Anything, mock.MatchedBy(func(in *elasticache.PurchaseReservedCacheNodesOfferingInput) bool {
+		return aws.ToString(in.ReservedCacheNodeId) == derivedID
+	})).Return(&elasticache.PurchaseReservedCacheNodesOfferingOutput{
+		ReservedCacheNode: &types.ReservedCacheNode{ReservedCacheNodeId: aws.String(derivedID)},
+	}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, derivedID, result.CommitmentID)
+	mockEC.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_AlreadyExistsRecovers(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	client := &Client{client: mockEC, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-3", 0)
+	derivedID := common.IdempotentReservationID("elasticache-id-", token)
+
+	expectECOffering(mockEC)
+	mockEC.On("DescribeReservedCacheNodes", mock.Anything, mock.Anything).
+		Return((*elasticache.DescribeReservedCacheNodesOutput)(nil), &types.ReservedCacheNodeNotFoundFault{}).Once()
+	mockEC.On("PurchaseReservedCacheNodesOffering", mock.Anything, mock.Anything).
+		Return((*elasticache.PurchaseReservedCacheNodesOfferingOutput)(nil), &types.ReservedCacheNodeAlreadyExistsFault{})
+	mockEC.On("DescribeReservedCacheNodes", mock.Anything, mock.Anything).
+		Return(&elasticache.DescribeReservedCacheNodesOutput{
+			ReservedCacheNodes: []types.ReservedCacheNode{{ReservedCacheNodeId: aws.String(derivedID), State: aws.String("active")}},
+		}, nil).Once()
+
+	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, derivedID, result.CommitmentID)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	client := &Client{client: mockEC, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-4", 0)
+
+	expectECOffering(mockEC)
+	mockEC.On("DescribeReservedCacheNodes", mock.Anything, mock.Anything).
+		Return((*elasticache.DescribeReservedCacheNodesOutput)(nil), fmt.Errorf("access denied"))
+
+	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "refusing to purchase")
+	mockEC.AssertNotCalled(t, "PurchaseReservedCacheNodesOffering", mock.Anything, mock.Anything)
+}
+
 func TestCreatePurchaseTags_IncludesPurchaseAutomation(t *testing.T) {
 	c := &Client{}
 	rec := common.Recommendation{ResourceType: "cache.m5.large", Region: "us-east-1"}

@@ -679,6 +679,111 @@ func TestClient_GetTermMonthsFromDuration(t *testing.T) {
 	}
 }
 
+func mdbIdemRec() common.Recommendation {
+	return common.Recommendation{
+		Service:       common.ServiceCache,
+		ResourceType:  "db.r6gd.large",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       common.CacheDetails{Engine: "redis", NodeType: "db.r6gd.large"},
+	}
+}
+
+func expectMDBOffering(m *MockMemoryDBClient) {
+	m.On("DescribeReservedNodesOfferings", mock.Anything, mock.Anything).
+		Return(&memorydb.DescribeReservedNodesOfferingsOutput{
+			ReservedNodesOfferings: []types.ReservedNodesOffering{
+				{
+					ReservedNodesOfferingId: aws.String("offering-1"),
+					NodeType:                aws.String("db.r6gd.large"),
+					Duration:                31536000,
+					OfferingType:            aws.String("All Upfront"),
+				},
+			},
+		}, nil)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	client := &Client{client: mockMDB, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-1", 0)
+	derivedID := common.IdempotentReservationID("memorydb-id-", token)
+
+	expectMDBOffering(mockMDB)
+	mockMDB.On("DescribeReservedNodes", mock.Anything, mock.MatchedBy(func(in *memorydb.DescribeReservedNodesInput) bool {
+		return aws.ToString(in.ReservationId) == derivedID
+	})).Return(&memorydb.DescribeReservedNodesOutput{
+		ReservedNodes: []types.ReservedNode{{ReservationId: aws.String(derivedID), State: aws.String("active")}},
+	}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, derivedID, result.CommitmentID)
+	mockMDB.AssertNotCalled(t, "PurchaseReservedNodesOffering", mock.Anything, mock.Anything)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_NotFoundProceeds(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	client := &Client{client: mockMDB, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-2", 0)
+	derivedID := common.IdempotentReservationID("memorydb-id-", token)
+
+	expectMDBOffering(mockMDB)
+	mockMDB.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return((*memorydb.DescribeReservedNodesOutput)(nil), &types.ReservedNodeNotFoundFault{})
+	mockMDB.On("PurchaseReservedNodesOffering", mock.Anything, mock.MatchedBy(func(in *memorydb.PurchaseReservedNodesOfferingInput) bool {
+		return aws.ToString(in.ReservationId) == derivedID
+	})).Return(&memorydb.PurchaseReservedNodesOfferingOutput{
+		ReservedNode: &types.ReservedNode{ReservationId: aws.String(derivedID)},
+	}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, derivedID, result.CommitmentID)
+	mockMDB.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_AlreadyExistsRecovers(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	client := &Client{client: mockMDB, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-3", 0)
+	derivedID := common.IdempotentReservationID("memorydb-id-", token)
+
+	expectMDBOffering(mockMDB)
+	mockMDB.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return((*memorydb.DescribeReservedNodesOutput)(nil), &types.ReservedNodeNotFoundFault{}).Once()
+	mockMDB.On("PurchaseReservedNodesOffering", mock.Anything, mock.Anything).
+		Return((*memorydb.PurchaseReservedNodesOfferingOutput)(nil), &types.ReservedNodeAlreadyExistsFault{})
+	mockMDB.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return(&memorydb.DescribeReservedNodesOutput{
+			ReservedNodes: []types.ReservedNode{{ReservationId: aws.String(derivedID), State: aws.String("active")}},
+		}, nil).Once()
+
+	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, derivedID, result.CommitmentID)
+}
+
+func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	client := &Client{client: mockMDB, region: "eu-west-1"}
+	token := common.DeriveIdempotencyToken("exec-4", 0)
+
+	expectMDBOffering(mockMDB)
+	mockMDB.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return((*memorydb.DescribeReservedNodesOutput)(nil), fmt.Errorf("access denied"))
+
+	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "refusing to purchase")
+	mockMDB.AssertNotCalled(t, "PurchaseReservedNodesOffering", mock.Anything, mock.Anything)
+}
+
 func TestCreatePurchaseTags_IncludesPurchaseAutomation(t *testing.T) {
 	c := &Client{}
 	rec := common.Recommendation{ResourceType: "db.r6g.large", Region: "us-east-1"}

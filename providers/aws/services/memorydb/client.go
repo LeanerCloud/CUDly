@@ -3,7 +3,9 @@ package memorydb
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -120,7 +122,26 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	reservationID := common.SanitizeReservationID(fmt.Sprintf("memorydb-%s-%d", rec.ResourceType, time.Now().Unix()), "memorydb-reserved-")
+	// When an idempotency token is supplied (issue #641) the reservation ID is
+	// derived deterministically from it, so a re-drive sends the identical
+	// ReservationId and MemoryDB rejects the duplicate server-side
+	// (ReservedNodeAlreadyExistsFault). Otherwise keep the prior timestamp-based
+	// ID (non-idempotent path).
+	reservationID := common.IdempotentReservationID("memorydb-id-", opts.IdempotencyToken)
+	if reservationID == "" {
+		reservationID = common.SanitizeReservationID(fmt.Sprintf("memorydb-%s-%d", rec.ResourceType, time.Now().Unix()), "memorydb-reserved-")
+	}
+
+	// Idempotency dedupe guard (issue #641): short-circuit if a reserved node
+	// already exists under the derived ID; fail loud on lookup error.
+	if existingID, shortCircuit, guardErr := c.idempotencyGuard(ctx, opts.IdempotencyToken, reservationID); guardErr != nil {
+		result.Error = guardErr
+		return result, result.Error
+	} else if shortCircuit {
+		result.Success = true
+		result.CommitmentID = existingID
+		return result, nil
+	}
 
 	input := &memorydb.PurchaseReservedNodesOfferingInput{
 		ReservedNodesOfferingId: aws.String(offeringID),
@@ -131,6 +152,11 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 
 	response, err := c.client.PurchaseReservedNodesOffering(ctx, input)
 	if err != nil {
+		if existingID, recovered := c.recoverAlreadyExists(ctx, opts.IdempotencyToken, reservationID, err); recovered {
+			result.Success = true
+			result.CommitmentID = existingID
+			return result, nil
+		}
 		result.Error = fmt.Errorf("failed to purchase MemoryDB Reserved Nodes: %w", err)
 		return result, result.Error
 	}
@@ -145,6 +171,75 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	return result, nil
+}
+
+// findReservationByID looks for an active or payment-pending MemoryDB reserved
+// node with the given ReservationId (issue #641), so a re-driven purchase can
+// short-circuit instead of buying a second node. Retired/expired nodes are
+// excluded (same state filter as GetExistingCommitments).
+func (c *Client) findReservationByID(ctx context.Context, reservationID string) (string, bool, error) {
+	response, err := c.client.DescribeReservedNodes(ctx, &memorydb.DescribeReservedNodesInput{
+		ReservationId: aws.String(reservationID),
+	})
+	if err != nil {
+		// MemoryDB returns ReservedNodeNotFoundFault for an unknown reservation
+		// ID; treat that as "not found" (no existing reservation), not a lookup
+		// failure, so a first-time purchase is not blocked.
+		var notFound *types.ReservedNodeNotFoundFault
+		if errors.As(err, &notFound) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("failed to describe reserved nodes for idempotency check: %w", err)
+	}
+	for _, node := range response.ReservedNodes {
+		state := aws.ToString(node.State)
+		if state != "active" && state != "payment-pending" {
+			continue
+		}
+		if node.ReservationId != nil {
+			return aws.ToString(node.ReservationId), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// idempotencyGuard short-circuits a re-drive (issue #641): when token is set, it
+// reports (existingID, true, nil) if a reserved node already exists under
+// reservationID, ("", false, nil) for a first-time purchase, or a fail-loud
+// error on lookup failure. With an empty token it is a no-op.
+func (c *Client) idempotencyGuard(ctx context.Context, token, reservationID string) (string, bool, error) {
+	if token == "" {
+		return "", false, nil
+	}
+	existingID, found, lookupErr := c.findReservationByID(ctx, reservationID)
+	if lookupErr != nil {
+		return "", false, fmt.Errorf("idempotency lookup failed before MemoryDB purchase (refusing to purchase to avoid a possible double-buy): %w", lookupErr)
+	}
+	if found {
+		log.Printf("MemoryDB reservation for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", common.MaskToken(token), existingID)
+		return existingID, true, nil
+	}
+	return "", false, nil
+}
+
+// recoverAlreadyExists handles the native server-side dedupe backstop (issue
+// #641): if the by-ID guard missed the existing reservation but AWS rejected the
+// duplicate ID with ReservedNodeAlreadyExistsFault, it re-Describes by ID and
+// returns (existingID, true) so the re-drive recovers it instead of erroring.
+func (c *Client) recoverAlreadyExists(ctx context.Context, token, reservationID string, purchaseErr error) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	var already *types.ReservedNodeAlreadyExistsFault
+	if !errors.As(purchaseErr, &already) {
+		return "", false
+	}
+	existingID, found, lookupErr := c.findReservationByID(ctx, reservationID)
+	if lookupErr == nil && found {
+		log.Printf("MemoryDB reservation %s already existed at purchase time; treating as idempotent re-drive (issue #641)", existingID)
+		return existingID, true
+	}
+	return "", false
 }
 
 // findOfferingID finds the appropriate Reserved Node offering ID

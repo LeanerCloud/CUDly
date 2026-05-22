@@ -52,6 +52,14 @@ func (m *MockRedshiftClient) CreateTags(ctx context.Context, params *redshift.Cr
 	return args.Get(0).(*redshift.CreateTagsOutput), args.Error(1)
 }
 
+func (m *MockRedshiftClient) DescribeTags(ctx context.Context, params *redshift.DescribeTagsInput, optFns ...func(*redshift.Options)) (*redshift.DescribeTagsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*redshift.DescribeTagsOutput), args.Error(1)
+}
+
 // MockRedshiftSTSClient implements STSAPI for testing.
 type MockRedshiftSTSClient struct {
 	mock.Mock
@@ -934,4 +942,117 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no offerings found")
 	mockRS.AssertExpectations(t)
+}
+
+func rsIdemRec() common.Recommendation {
+	return common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.xlplus",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Region:        "eu-west-1",
+		Details:       common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 1},
+	}
+}
+
+func expectRSOffering(m *MockRedshiftClient) {
+	m.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("offering-1"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				},
+			},
+		}, nil)
+}
+
+func rsClientWithAccount(mockRS *MockRedshiftClient) *Client {
+	stsMock := &MockRedshiftSTSClient{}
+	stsMock.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil)
+	return &Client{client: mockRS, stsClient: stsMock, region: "eu-west-1"}
+}
+
+// TestClient_PurchaseCommitment_Idempotent_TagGuardShortCircuits asserts the
+// EC2-style tag-guard short-circuits when a reserved node already carries the
+// idempotency token tag (issue #641).
+func TestClient_PurchaseCommitment_Idempotent_TagGuardShortCircuits(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	client := rsClientWithAccount(mockRS)
+	token := common.DeriveIdempotencyToken("exec-1", 0)
+
+	expectRSOffering(mockRS)
+	mockRS.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodesOutput{
+			ReservedNodes: []types.ReservedNode{{ReservedNodeId: aws.String("rn-existing"), State: aws.String("active")}},
+		}, nil)
+	mockRS.On("DescribeTags", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeTagsOutput{
+			TaggedResources: []types.TaggedResource{
+				{Tag: &types.Tag{Key: aws.String(common.IdempotencyTagKey), Value: aws.String(token)}},
+			},
+		}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "rn-existing", result.CommitmentID)
+	mockRS.AssertNotCalled(t, "PurchaseReservedNodeOffering", mock.Anything, mock.Anything)
+}
+
+// TestClient_PurchaseCommitment_Idempotent_NoTagProceeds asserts a first-time
+// purchase proceeds when no node carries the token tag, and the new node is
+// tagged with the idempotency token afterwards.
+func TestClient_PurchaseCommitment_Idempotent_NoTagProceeds(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	client := rsClientWithAccount(mockRS)
+	token := common.DeriveIdempotencyToken("exec-2", 0)
+
+	expectRSOffering(mockRS)
+	mockRS.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodesOutput{}, nil)
+	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
+		Return(&redshift.PurchaseReservedNodeOfferingOutput{
+			ReservedNode: &types.ReservedNode{ReservedNodeId: aws.String("rn-new"), State: aws.String("payment-pending")},
+		}, nil)
+	mockRS.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *redshift.CreateTagsInput) bool {
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == common.IdempotencyTagKey && aws.ToString(tag.Value) == token {
+				return true
+			}
+		}
+		return false
+	})).Return(&redshift.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "rn-new", result.CommitmentID)
+	mockRS.AssertExpectations(t)
+}
+
+// TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError asserts a
+// DescribeTags failure during the guard fails loud and does NOT purchase.
+func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	client := rsClientWithAccount(mockRS)
+	token := common.DeriveIdempotencyToken("exec-3", 0)
+
+	expectRSOffering(mockRS)
+	mockRS.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodesOutput{
+			ReservedNodes: []types.ReservedNode{{ReservedNodeId: aws.String("rn-x"), State: aws.String("active")}},
+		}, nil)
+	mockRS.On("DescribeTags", mock.Anything, mock.Anything).
+		Return((*redshift.DescribeTagsOutput)(nil), fmt.Errorf("access denied"))
+
+	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "refusing to purchase")
+	mockRS.AssertNotCalled(t, "PurchaseReservedNodeOffering", mock.Anything, mock.Anything)
 }
