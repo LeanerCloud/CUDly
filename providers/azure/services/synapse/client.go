@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,12 +17,12 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
-	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
 // HTTPClient interface for HTTP operations (enables mocking).
@@ -242,14 +241,25 @@ func parseReservationTermYears(term string) (int, error) {
 }
 
 // PurchaseCommitment purchases Synapse reserved capacity via the Azure
-// Reservations API. The reserved resource type is "SqlDW" which covers
-// Dedicated SQL Pool DWU reservations.
+// Reservations API two-step flow (calculatePrice -> purchase). The reserved
+// resource type is "SqlDW" which covers Dedicated SQL Pool DWU reservations.
 func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
+	}
+
+	// Azure's reservation API mints the order ID server-side in calculatePrice,
+	// so the only stable dedupe signal we control is the purchase-automation tag
+	// derived from opts.Source. Without a non-empty Source the tag is dropped and
+	// a re-driven purchase cannot recognise the prior attempt, producing
+	// duplicate reservations. Fail fast at function entry rather than allowing
+	// an un-tagged, non-idempotent purchase to hit the cloud.
+	if opts.Source == "" {
+		result.Error = fmt.Errorf("purchase source is required for idempotent Azure reservation purchases")
+		return result, result.Error
 	}
 
 	if strings.TrimSpace(rec.ResourceType) == "" {
@@ -266,28 +276,6 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		result.Error = err
 		return result, result.Error
 	}
-
-	reservationOrderID := uuid.New().String()
-	commitmentID, err := c.doPurchaseRequest(ctx, rec, opts, reservationOrderID, termYears)
-	if err != nil {
-		result.Error = err
-		return result, result.Error
-	}
-
-	result.Success = true
-	result.CommitmentID = commitmentID
-	result.Cost = rec.CommitmentCost
-	return result, nil
-}
-
-// doPurchaseRequest marshals the reservation request body, signs it with a
-// bearer token, and executes the PUT against the Azure Reservations API.
-// It is extracted from PurchaseCommitment to keep that function's cyclomatic
-// complexity within the project limit.
-func (c *SynapseClient) doPurchaseRequest(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions, reservationOrderID string, termYears int) (string, error) {
-	apiVersion := "2022-11-01"
-	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
-		reservationOrderID, apiVersion)
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -308,38 +296,28 @@ func (c *SynapseClient) doPurchaseRequest(ctx context.Context, rec common.Recomm
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", purchaseURL, strings.NewReader(string(bodyBytes)))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		result.Error = fmt.Errorf("failed to marshal request: %w", err)
+		return result, result.Error
 	}
 
 	token, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: []string{"https://management.azure.com/.default"},
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to get access token: %w", err)
+		result.Error = fmt.Errorf("failed to get access token: %w", err)
+		return result, result.Error
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token.Token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
+	reservationOrderID, err := reservations.DoPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token)
 	if err != nil {
-		return "", fmt.Errorf("failed to purchase reservation: %w", err)
+		result.Error = err
+		return result, result.Error
 	}
-	defer resp.Body.Close()
 
-	body, readErr := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		if readErr != nil {
-			return "", fmt.Errorf("reservation purchase failed with status %d (body read error: %v)", resp.StatusCode, readErr)
-		}
-		return "", fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
-	}
-	return reservationOrderID, nil
+	result.Success = true
+	result.CommitmentID = reservationOrderID
+	result.Cost = rec.CommitmentCost
+	return result, nil
 }
 
 // ValidateOffering validates that a Synapse SKU is in the known set.

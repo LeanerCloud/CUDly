@@ -17,10 +17,10 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/redis/armredis/v3"
-	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
 // HTTPClient interface for HTTP operations (enables mocking)
@@ -239,8 +239,9 @@ func parseTermYears(term string) (int, error) {
 	}
 }
 
-// PurchaseCommitment purchases Azure Cache for Redis reserved capacity via the Azure Reservations API.
-func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, _ common.PurchaseOptions) (common.PurchaseResult, error) {
+// PurchaseCommitment purchases Azure Cache for Redis reserved capacity using the two-step
+// calculatePrice->purchase flow required by Azure's Reservations API (issue #677).
+func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
@@ -248,16 +249,22 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		Timestamp:      time.Now(),
 	}
 
+	// Azure's reservation API mints the order ID server-side in calculatePrice,
+	// so the only stable dedupe signal we control is the purchase-automation tag
+	// derived from opts.Source. Without a non-empty Source the tag is dropped and
+	// a re-driven purchase cannot recognise the prior attempt, producing
+	// duplicate reservations. Fail fast at function entry rather than allowing
+	// an un-tagged, non-idempotent purchase to hit the cloud.
+	if opts.Source == "" {
+		result.Error = fmt.Errorf("purchase source is required for idempotent Azure reservation purchases")
+		return result, result.Error
+	}
+
 	termYears, termErr := parseTermYears(rec.Term)
 	if termErr != nil {
 		result.Error = termErr
 		return result, result.Error
 	}
-
-	reservationOrderID := uuid.New().String()
-	apiVersion := "2022-11-01"
-	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
-		reservationOrderID, apiVersion)
 
 	requestBody := map[string]interface{}{
 		"sku": map[string]string{
@@ -274,16 +281,13 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 			"renew":                false,
 		},
 	}
+	if opts.Source != "" {
+		requestBody["tags"] = map[string]string{common.PurchaseTagKey: opts.Source}
+	}
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to marshal request: %w", err)
-		return result, result.Error
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", purchaseURL, strings.NewReader(string(bodyBytes)))
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create request: %w", err)
 		return result, result.Error
 	}
 
@@ -295,27 +299,15 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		return result, result.Error
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token.Token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
+	reservationOrderID, err := reservations.DoPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to purchase reservation: %w", err)
-		return result, result.Error
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		result.Error = fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
+		result.Error = err
 		return result, result.Error
 	}
 
 	result.Success = true
 	result.CommitmentID = reservationOrderID
 	result.Cost = rec.CommitmentCost
-
 	return result, nil
 }
 

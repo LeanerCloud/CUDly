@@ -1,11 +1,14 @@
 package compute
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -437,16 +440,45 @@ func (m *MockTokenCredential) GetToken(ctx context.Context, options policy.Token
 	}, nil
 }
 
+// calcPriceRespJSON returns a minimal valid calculatePrice JSON response with the
+// given reservationOrderId. Used by PurchaseCommitment tests that need the
+// two-step calculatePrice->purchase flow.
+func calcPriceRespJSON(orderID string) string {
+	return `{"properties":{"reservationOrderId":"` + orderID + `"}}`
+}
+
+// capacityProviderRegistered is the JSON response that satisfies
+// ensureCapacityProviderRegistered's GET check when the provider is already
+// registered. The compute client calls this once per client lifetime before any
+// purchase attempt, so tests that call PurchaseCommitment must expect it.
+const capacityProviderRegistered = `{"registrationState":"Registered"}`
+
+// mockCapacityProviderCheck adds a mock expectation for the capacity provider
+// registration GET request made by ensureCapacityProviderRegistered.
+func mockCapacityProviderCheck(m *mocks.MockHTTPClient) {
+	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path, "providers/Microsoft.Capacity") &&
+			!strings.Contains(r.URL.Path, "calculatePrice") &&
+			!strings.Contains(r.URL.Path, "reservationOrders")
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, capacityProviderRegistered), nil).Once()
+}
+
 func TestComputeClient_PurchaseCommitment_Success(t *testing.T) {
 	ctx := context.Background()
 	mockHTTP := &mocks.MockHTTPClient{}
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusOK, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockCapacityProviderCheck(mockHTTP)
+	// Step 1: calculatePrice returns a reservationOrderId.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-001")), nil).Once()
+	// Step 2: purchase with the Azure-minted order ID.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-vm-001/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{"id": "order-vm-001"}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_D2s_v3",
@@ -455,11 +487,12 @@ func TestComputeClient_PurchaseCommitment_Success(t *testing.T) {
 		CommitmentCost: 2000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
-	assert.NotEmpty(t, result.CommitmentID)
+	assert.Equal(t, "order-vm-001", result.CommitmentID)
 	assert.Equal(t, 2000.0, result.Cost)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestComputeClient_PurchaseCommitment_3YearTerm(t *testing.T) {
@@ -468,10 +501,13 @@ func TestComputeClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusCreated, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockCapacityProviderCheck(mockHTTP)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-3yr")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-vm-3yr/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusCreated, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_D2s_v3",
@@ -480,9 +516,11 @@ func TestComputeClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 		CommitmentCost: 5000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
+	assert.Equal(t, "order-vm-3yr", result.CommitmentID)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestComputeClient_PurchaseCommitment_Accepted(t *testing.T) {
@@ -491,10 +529,13 @@ func TestComputeClient_PurchaseCommitment_Accepted(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusAccepted, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockCapacityProviderCheck(mockHTTP)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-202")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-vm-202/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_D2s_v3",
@@ -503,9 +544,10 @@ func TestComputeClient_PurchaseCommitment_Accepted(t *testing.T) {
 		CommitmentCost: 2000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestComputeClient_PurchaseCommitment_TokenError(t *testing.T) {
@@ -519,7 +561,7 @@ func TestComputeClient_PurchaseCommitment_TokenError(t *testing.T) {
 		Term:         "1yr",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to get access token")
@@ -531,17 +573,21 @@ func TestComputeClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(nil, errors.New("network error"))
+	mockCapacityProviderCheck(mockHTTP)
+	// Network error on the calculatePrice call.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(nil, errors.New("network error")).Once()
 
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "failed to purchase reservation")
+	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
 }
 
 func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
@@ -550,84 +596,172 @@ func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`),
+	mockCapacityProviderCheck(mockHTTP)
+	// calculatePrice returns 200 with an order ID, but purchase returns 400.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-bad")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-bad/purchase"
+	})).Return(
+		mocks.CreateMockHTTPResponse(http.StatusBadRequest, `{"error":{"code":"InvalidScope","message":"invalid request"}}`),
 		nil,
-	)
+	).Once()
 
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
+	mockHTTP.AssertExpectations(t)
 }
 
-// purchaseURLFromMock returns the reservation PUT URL captured by the mock HTTP
-// client for the last successful PurchaseCommitment call. The Azure Reservations
-// API PUTs to .../reservationOrders/{id}; the {id} segment is the order ID that
-// makes the request idempotent.
-func purchaseURLFromMock(t *testing.T, m *mocks.MockHTTPClient) string {
-	t.Helper()
-	for i := len(m.Calls) - 1; i >= 0; i-- {
-		req, ok := m.Calls[i].Arguments.Get(0).(*http.Request)
-		if ok && req != nil {
-			return req.URL.String()
-		}
-	}
-	t.Fatalf("no HTTP request captured by mock")
-	return ""
-}
-
-// TestComputeClient_PurchaseCommitment_IdempotentReDrive is the issue #641
-// regression test: a re-drive with the *same* IdempotencyToken must not create a
-// second reservation. Because the Azure Reservations API PUTs to
-// reservationOrders/{id} and is idempotent on a stable order ID, "no second
-// reservation" is proven by the two re-drives PUTting to the *same*
-// reservationOrders/{id} URL (and yielding the same CommitmentID). A distinct
-// token must target a distinct order so unrelated purchases never collide.
-func TestComputeClient_PurchaseCommitment_IdempotentReDrive(t *testing.T) {
+// TestComputeClient_PurchaseCommitment_TwoStepFlow verifies that
+// PurchaseCommitment makes exactly two HTTP calls: POST calculatePrice then
+// POST purchase, and that the CommitmentID is the Azure-minted order ID (not a
+// client-generated GUID). This is the regression test for issue #677.
+func TestComputeClient_PurchaseCommitment_TwoStepFlow(t *testing.T) {
 	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	const azureMintedOrderID = "azure-minted-order-677"
+
+	mockCapacityProviderCheck(mockHTTP)
+	// Expect exactly one calculatePrice POST.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(azureMintedOrderID)), nil).Once()
+
+	// Expect exactly one purchase POST to the Azure-minted order path.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost &&
+			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+azureMintedOrderID+"/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
 	rec := common.Recommendation{
-		ResourceType:   "Standard_D2s_v3",
+		ResourceType:   "Standard_B2ats_v2", // The SKU that triggered issue #677.
 		Term:           "1yr",
 		Count:          1,
-		CommitmentCost: 2000.0,
-	}
-	token := common.DeriveIdempotencyToken("exec-641", 0)
-
-	purchase := func(tok string) (common.PurchaseResult, string) {
-		mockHTTP := &mocks.MockHTTPClient{}
-		mockCred := &MockTokenCredential{token: "test-token"}
-		client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
-		mockHTTP.On("Do", mock.Anything).Return(
-			mocks.CreateMockHTTPResponse(http.StatusOK, `{"id": "reservation-123"}`), nil)
-		result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{IdempotencyToken: tok})
-		require.NoError(t, err)
-		require.True(t, result.Success)
-		return result, purchaseURLFromMock(t, mockHTTP)
+		CommitmentCost: 500.0,
 	}
 
-	first, firstURL := purchase(token)
-	second, secondURL := purchase(token)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	// CommitmentID must be the Azure-minted ID, not a client-generated GUID.
+	assert.Equal(t, azureMintedOrderID, result.CommitmentID)
+	// Exactly 3 HTTP calls: capacity-provider-check + calculatePrice + purchase.
+	mockHTTP.AssertExpectations(t)
+	mockHTTP.AssertNumberOfCalls(t, "Do", 3)
+}
 
-	// Same token => same idempotent order ID => same PUT URL => Azure re-PUTs the
-	// existing order rather than minting a second reservation.
-	assert.Equal(t, first.CommitmentID, second.CommitmentID,
-		"same idempotency token must reuse the same reservationOrderID")
-	assert.Equal(t, firstURL, secondURL,
-		"re-drive must PUT to the same reservationOrders/{id} URL")
-	assert.Contains(t, firstURL, common.IdempotencyGUID(token),
-		"order ID must be derived deterministically from the token")
+// TestComputeClient_PurchaseCommitment_SessionTimeoutRetry verifies that a
+// "Session timed out" 400 on the purchase endpoint causes PurchaseCommitment to
+// re-run calculatePrice and retry the purchase (issue #677 regression test).
+func TestComputeClient_PurchaseCommitment_SessionTimeoutRetry(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	// Distinct token => distinct order so independent purchases don't collide.
-	other, otherURL := purchase(common.DeriveIdempotencyToken("exec-641", 1))
-	assert.NotEqual(t, first.CommitmentID, other.CommitmentID,
-		"different recs must get different reservation orders")
-	assert.NotEqual(t, firstURL, otherURL)
+	sessionTimeoutBody := `{"error":{"code":"BadRequest","message":"Session timed out - Call CalculatePrice again and provide the new Reservation Order ID for purchase"}}`
+
+	mockCapacityProviderCheck(mockHTTP)
+	// First calculatePrice: mints "order-first".
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-first")), nil).Once()
+	// First purchase: session timeout.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-first/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusBadRequest, sessionTimeoutBody), nil).Once()
+
+	// Second calculatePrice: mints "order-second".
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-second")), nil).Once()
+	// Second purchase: succeeds.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-second/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	rec := common.Recommendation{ResourceType: "Standard_B2ats_v2", Term: "1yr", Count: 1}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "order-second", result.CommitmentID)
+	mockHTTP.AssertExpectations(t)
+}
+
+// TestComputeClient_PurchaseCommitment_TagInjection verifies that the
+// purchase-automation tag carrying opts.Source is present in the
+// calculatePrice request body. Without this regression test the dedupe
+// guard introduced for the Azure two-step flow could regress silently:
+// the call would succeed without the tag and re-driven purchases would
+// duplicate reservations server-side.
+func TestComputeClient_PurchaseCommitment_TagInjection(t *testing.T) {
+	const orderID = "compute-tag-test"
+	const source = common.PurchaseSourceWeb
+
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	mockCapacityProviderCheck(mockHTTP)
+
+	var capturedBody []byte
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+			return false
+		}
+		capturedBody, _ = io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+		return true
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost &&
+			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 1, CommitmentCost: 2000.0}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(capturedBody, &body))
+	tags, hasTags := body["tags"].(map[string]interface{})
+	require.True(t, hasTags, "tags field must be present in calculatePrice body when Source is set")
+	assert.Equal(t, source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
+	mockHTTP.AssertExpectations(t)
+}
+
+// TestComputeClient_PurchaseCommitment_RequiresSource pins the dedupe guard:
+// PurchaseCommitment must reject an empty opts.Source before issuing any HTTP
+// call (including the cached Microsoft.Capacity provider-registration check).
+// Azure mints the reservation order ID server-side, so the
+// purchase-automation tag derived from Source is the only stable dedupe
+// signal CUDly controls -- proceeding without it would allow a re-driven
+// purchase to create a duplicate reservation.
+func TestComputeClient_PurchaseCommitment_RequiresSource(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 1}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "purchase source is required")
+	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }
 
 // TestComputeClient_ConvertAzureVMRecommendation_NilGuards pins the new
