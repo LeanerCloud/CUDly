@@ -714,16 +714,23 @@ func (m *MockTokenCredential) GetToken(ctx context.Context, options policy.Token
 	}, nil
 }
 
+// calcPriceRespJSON returns a minimal calculatePrice response JSON for tests.
+func calcPriceRespJSON(orderID string) string {
+	return `{"properties":{"reservationOrderId":"` + orderID + `"}}`
+}
+
 func TestCosmosDBClient_PurchaseCommitment_Success(t *testing.T) {
 	ctx := context.Background()
 	mockHTTP := &MockHTTPClient{}
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-001")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-001/purchase"
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -735,8 +742,9 @@ func TestCosmosDBClient_PurchaseCommitment_Success(t *testing.T) {
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
-	assert.NotEmpty(t, result.CommitmentID)
+	assert.Equal(t, "cosmos-order-001", result.CommitmentID)
 	assert.Equal(t, 5000.0, result.Cost)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestCosmosDBClient_PurchaseCommitment_3YearTerm(t *testing.T) {
@@ -745,10 +753,12 @@ func TestCosmosDBClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusCreated, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-3yr")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-3yr/purchase"
+	})).Return(createMockHTTPResponse(http.StatusCreated, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -760,6 +770,8 @@ func TestCosmosDBClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
+	assert.Equal(t, "cosmos-order-3yr", result.CommitmentID)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestCosmosDBClient_PurchaseCommitment_Accepted(t *testing.T) {
@@ -768,10 +780,12 @@ func TestCosmosDBClient_PurchaseCommitment_Accepted(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusAccepted, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-202")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-202/purchase"
+	})).Return(createMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -783,6 +797,7 @@ func TestCosmosDBClient_PurchaseCommitment_Accepted(t *testing.T) {
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestCosmosDBClient_PurchaseCommitment_TokenError(t *testing.T) {
@@ -808,7 +823,9 @@ func TestCosmosDBClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(nil, errors.New("network error"))
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(nil, errors.New("network error")).Once()
 
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
@@ -818,7 +835,7 @@ func TestCosmosDBClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "failed to purchase reservation")
+	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
 }
 
 func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
@@ -827,10 +844,12 @@ func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-bad")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-bad/purchase"
+	})).Return(createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
@@ -841,6 +860,7 @@ func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
+	mockHTTP.AssertExpectations(t)
 }
 
 // TestCosmosDBClient_ConvertAzureCosmosRecommendation_NilGuards pins the

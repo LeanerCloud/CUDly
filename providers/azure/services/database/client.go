@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,13 +16,13 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/sql/armsql"
-	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
 // sqlSKUEntry holds the SKU-catalogue-derived fields the converter
@@ -265,7 +264,8 @@ func (c *DatabaseClient) convertSQLReservation(detail *armconsumption.Reservatio
 	return commitment
 }
 
-// PurchaseCommitment purchases SQL Database reserved capacity via Azure Reservations API
+// PurchaseCommitment purchases SQL Database reserved capacity using the two-step
+// calculatePrice->purchase flow required by Azure's Reservations API (issue #677).
 func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -273,17 +273,6 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		Success:        false,
 		Timestamp:      time.Now(),
 	}
-
-	// Build reservation purchase request. Derive a deterministic
-	// reservationOrderID from the idempotency token (issue #641) so a re-drive
-	// re-PUTs the same idempotent Azure reservation order instead of creating a
-	// second; fall back to a random GUID otherwise.
-	reservationOrderID := common.ReservationOrderID(opts.IdempotencyToken, uuid.New().String())
-
-	// Construct the Azure Reservations API request
-	apiVersion := "2022-11-01"
-	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
-		reservationOrderID, apiVersion)
 
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
@@ -313,13 +302,6 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		return result, result.Error
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", purchaseURL, strings.NewReader(string(bodyBytes)))
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create request: %w", err)
-		return result, result.Error
-	}
-
-	// Get access token for Azure Management API
 	token, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: []string{"https://management.azure.com/.default"},
 	})
@@ -328,27 +310,15 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		return result, result.Error
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token.Token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
+	reservationOrderID, err := reservations.DoPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to purchase reservation: %w", err)
-		return result, result.Error
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		result.Error = fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
+		result.Error = err
 		return result, result.Error
 	}
 
 	result.Success = true
 	result.CommitmentID = reservationOrderID
 	result.Cost = rec.CommitmentCost
-
 	return result, nil
 }
 

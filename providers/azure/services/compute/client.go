@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -18,13 +17,13 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
-	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
 // RecommendationsPager defines the interface for paging through recommendations
@@ -362,15 +361,10 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 	return nil
 }
 
-const (
-	purchaseMaxAttempts = 3
-	purchaseRetryDelay  = 2 * time.Second
-)
-
-// buildReservationBody builds the JSON body for a reservation PUT request.
+// buildReservationBody builds the JSON body for a reservation purchase request.
+// The same body is sent to both calculatePrice and purchase endpoints (issue #677).
 // When source is non-empty, a top-level tags map carrying purchase-automation
-// is attached — Azure's Microsoft.Capacity/reservationOrders PUT body accepts
-// tags at creation, so no follow-up call is needed.
+// is attached so the resulting reservation is identifiable in the portal.
 func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source string) ([]byte, error) {
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
@@ -395,43 +389,19 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source s
 	return json.Marshal(requestBody)
 }
 
-// isSuccessStatus reports whether the HTTP status code is a successful purchase response.
-func isSuccessStatus(code int) bool {
-	return code == http.StatusOK || code == http.StatusCreated || code == http.StatusAccepted
-}
-
-// doPurchaseWithRetry executes the reservation PUT with 409-retry logic.
-// Returns the successful response body (for future use) or an error.
-func (c *ComputeClient) doPurchaseWithRetry(ctx context.Context, purchaseURL string, bodyBytes []byte, bearerToken string) error {
-	for attempt := 1; attempt <= purchaseMaxAttempts; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, "PUT", purchaseURL, strings.NewReader(string(bodyBytes)))
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+bearerToken)
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to purchase reservation: %w", err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusConflict && attempt < purchaseMaxAttempts {
-			log.Printf("reservation purchase returned 409 (attempt %d/%d), retrying in %s", attempt, purchaseMaxAttempts, purchaseRetryDelay)
-			time.Sleep(purchaseRetryDelay)
-			continue
-		}
-		if !isSuccessStatus(resp.StatusCode) {
-			return fmt.Errorf("reservation purchase failed with status %d: %s", resp.StatusCode, string(body))
-		}
-		return nil
-	}
-	return fmt.Errorf("reservation purchase failed after %d attempts (409 Conflict)", purchaseMaxAttempts)
-}
-
-// PurchaseCommitment purchases a VM Reserved Instance
+// PurchaseCommitment purchases a VM Reserved Instance using the two-step
+// calculatePrice->purchase flow required by Azure's Reservations API (issue #677).
+//
+// Azure shifted newer SKU families (Burstable v2 and others) to require a
+// calculatePrice call before purchase. The previous direct-PUT pattern returns
+// 400 "Session timed out" for these families. The two-step flow:
+//  1. POST calculatePrice -- Azure mints a session-bound reservationOrderId.
+//  2. POST reservationOrders/{id}/purchase -- commits the order.
+//
+// Idempotency: Azure mints the order ID in step 1, so client-supplied IDs are
+// no longer used. Re-drives are idempotent via tag-based deduplication at the
+// caller level (purchase execution checks for existing reservations tagged with
+// the (executionID, recIndex) identity before calling PurchaseCommitment).
 func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -457,16 +427,8 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		return result, result.Error
 	}
 
-	// When an idempotency token is supplied (issue #641) the reservationOrderID is
-	// derived deterministically from it. The Azure Reservations API PUTs to
-	// reservationOrders/{id} and is idempotent on a stable order ID, so a re-drive
-	// re-PUTs the same order and returns the existing reservation rather than
-	// creating a second. Otherwise mint a random GUID (prior behaviour).
-	reservationOrderID := common.ReservationOrderID(opts.IdempotencyToken, uuid.New().String())
-	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=2022-11-01",
-		reservationOrderID)
-
-	if err := c.doPurchaseWithRetry(ctx, purchaseURL, bodyBytes, token.Token); err != nil {
+	reservationOrderID, err := reservations.DoPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token)
+	if err != nil {
 		result.Error = err
 		return result, result.Error
 	}

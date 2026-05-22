@@ -489,11 +489,23 @@ func TestGetOfferingDetails_httpError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// calcPriceRespJSON returns a minimal calculatePrice JSON response with the
+// given Azure-minted reservationOrderId.
+func calcPriceRespJSON(orderID string) string {
+	return `{"properties":{"reservationOrderId":"` + orderID + `"}}`
+}
+
 // ---- PurchaseCommitment ---------------------------------------------------
 
 func TestPurchaseCommitment_success(t *testing.T) {
 	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, `{"id":"res-123"}`), nil)
+	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-001")), nil).Once()
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-001/purchase"
+	})).Return(newHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -507,13 +519,19 @@ func TestPurchaseCommitment_success(t *testing.T) {
 	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
-	assert.NotEmpty(t, result.CommitmentID)
+	assert.Equal(t, "syn-order-001", result.CommitmentID)
 	assert.InDelta(t, 5000.0, result.Cost, 0.01)
 }
 
 func TestPurchaseCommitment_3yrTerm(t *testing.T) {
 	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusAccepted, `{}`), nil)
+	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-3yr")), nil).Once()
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-3yr/purchase"
+	})).Return(newHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -525,21 +543,43 @@ func TestPurchaseCommitment_3yrTerm(t *testing.T) {
 }
 
 func TestPurchaseCommitment_withSource(t *testing.T) {
-	capHTTP := &captureHTTPClient{response: newHTTPResponse(http.StatusCreated, `{}`)}
+	// Capture the body sent to calculatePrice to verify the automation tag is present.
+	var capturedBody []byte
+	mHTTP := &mockHTTPClient{}
+	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Run(func(args mock.Arguments) {
+		req := args.Get(0).(*http.Request)
+		if req.Body != nil {
+			capturedBody, _ = io.ReadAll(req.Body)
+			req.Body = io.NopCloser(bytes.NewReader(capturedBody))
+		}
+	}).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-src")), nil).Once()
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-src/purchase"
+	})).Return(newHTTPResponse(http.StatusCreated, `{}`), nil).Once()
+
 	cred := &mockTokenCredential{token: "test-token"}
-	c := NewClientWithHTTP(cred, "sub-123", "eastus", capHTTP)
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW500c", Term: "1yr", Count: 1}
 	_, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: "automation"})
 	require.NoError(t, err)
-	assert.Contains(t, string(capHTTP.captured), "purchase-automation")
-	assert.Contains(t, string(capHTTP.captured), "automation")
+	assert.Contains(t, string(capturedBody), "purchase-automation")
+	assert.Contains(t, string(capturedBody), "automation")
 }
 
 func TestPurchaseCommitment_apiError(t *testing.T) {
+	// calculatePrice succeeds; purchase fails with a non-timeout 400.
 	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(
-		newHTTPResponse(http.StatusBadRequest, `{"error":"bad request"}`), nil)
+	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-err")), nil).Once()
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-err/purchase"
+	})).Return(newHTTPResponse(http.StatusBadRequest, `{"error":"bad request"}`), nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -548,6 +588,24 @@ func TestPurchaseCommitment_apiError(t *testing.T) {
 	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
+}
+
+func TestPurchaseCommitment_httpError(t *testing.T) {
+	// calculatePrice network failure.
+	mHTTP := &mockHTTPClient{}
+	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(nil, errors.New("network error")).Once()
+
+	cred := &mockTokenCredential{token: "test-token"}
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
+
+	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
 }
 
 func TestPurchaseCommitment_tokenError(t *testing.T) {
