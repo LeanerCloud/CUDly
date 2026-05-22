@@ -409,6 +409,87 @@ func TestBuildDisplayName_EmptyPaymentSegmentIsSkipped(t *testing.T) {
 	assert.Contains(t, got, "-1yr-20260522T190000-a1b2c3d4")
 }
 
+// TestBuildDisplayName_DropLoopActuallyDropsTimestamp is a regression guard
+// against a previously-broken progressive-drop loop. The old implementation
+// called SanitizeDisplayName(candidate) INSIDE the loop before the length
+// check, which short-circuited the cap (the sanitizer hard-truncates to 64)
+// and returned a mid-string-truncated full format instead of cleanly dropping
+// the random suffix and timestamp. The fixed loop must produce a string that
+// ends exactly at the payment segment with no partial timestamp bytes.
+//
+// Input: full format = 83 chars, requires dropping both the 8-char random
+// suffix AND the 15-char timestamp; the result must end with "-allup" and
+// contain NO trace of the timestamp digits.
+func TestBuildDisplayName_DropLoopActuallyDropsTimestamp(t *testing.T) {
+	got := BuildDisplayName(DisplayNameFields{
+		Service:      "vm",
+		Region:       "germanywestcentral", // 18 chars
+		ResourceType: "Standard_NV24ads_A10_v5",
+		Count:        1,
+		Term:         "1yr",
+		Payment:      "all-upfront",
+		Now:          fixedTime,
+	}.WithRandSource(fixedRand))
+
+	// With the fixed drop loop, both optional ts and random are dropped
+	// cleanly. The broken loop returned a 64-char mid-truncated value that
+	// happened to include "20260" (start of the timestamp).
+	want := "vm-germanywestcentral-Standard_NV24ads_A10_v5-1x-1yr-allup"
+	assert.Equal(t, want, got)
+	assert.LessOrEqual(t, len(got), 64)
+	// Defensive: any partial timestamp prefix would surface as digits after
+	// "allup-"; the fixed builder must not emit any of them.
+	assert.NotContains(t, got, "allup-20")
+	assert.NotContains(t, got, "20260")
+}
+
+// TestBuildDisplayName_DropLoopActuallyDropsPayment is a second regression
+// guard for the drop loop, this time forcing the loop to drop the payment
+// segment too (keep=0, required-only). The broken loop again would short-
+// circuit at iteration 1 and mid-truncate, leaving partial payment bytes.
+func TestBuildDisplayName_DropLoopActuallyDropsPayment(t *testing.T) {
+	got := BuildDisplayName(DisplayNameFields{
+		Service:      "vm",
+		Region:       "germanywestcentral",
+		ResourceType: strings.Repeat("X", 30), // forces required-only fallback
+		Count:        9999,
+		Term:         "1yr",
+		Payment:      "all-upfront",
+		Now:          fixedTime,
+	}.WithRandSource(fixedRand))
+
+	// With the fixed drop loop, all optional segments drop cleanly and the
+	// result is exactly the required segments joined by dashes.
+	want := "vm-germanywestcentral-" + strings.Repeat("X", 30) + "-9999x-1yr"
+	assert.Equal(t, want, got)
+	assert.LessOrEqual(t, len(got), 64)
+	// No payment fragment anywhere: the broken loop left "...1yr-a" at the
+	// 64-char boundary.
+	assert.NotContains(t, got, "allup")
+	assert.NotContains(t, got, "1yr-a")
+}
+
+// TestBuildDisplayName_ZeroNowReplacedByWallClock guards the zero-time guard:
+// a zero-value Now must not emit the placeholder "00010101T000000" segment.
+// The builder substitutes time.Now() so the timestamp is always meaningful.
+func TestBuildDisplayName_ZeroNowReplacedByWallClock(t *testing.T) {
+	got := BuildDisplayName(DisplayNameFields{
+		Service:      "vm",
+		Region:       "eastus",
+		ResourceType: "Standard_D2a_v4",
+		Count:        1,
+		Term:         "1yr",
+		Payment:      "all-upfront",
+		// Now intentionally left as zero value.
+	}.WithRandSource(fixedRand))
+
+	assert.NotContains(t, got, "00010101T000000",
+		"zero-value Now must be replaced by wall-clock time, not emitted as placeholder")
+	// Sanity: still allowlist-conformant and within length cap.
+	assert.LessOrEqual(t, len(got), 64)
+	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, got)
+}
+
 func TestBuildDisplayName_TimestampUTC(t *testing.T) {
 	// Even if the caller passes a local-zone time, the builder must
 	// normalize to UTC so identifiers are comparable across hosts.

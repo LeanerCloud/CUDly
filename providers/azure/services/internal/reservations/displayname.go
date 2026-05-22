@@ -13,8 +13,10 @@ import (
 // Azure rejects longer values with HTTP 400 DisplayNameInvalid.
 const azureDisplayNameMaxLen = 64
 
-// isAllowedDisplayNameChar reports whether r is in Azure's DisplayName allowlist
-// ([A-Za-z0-9-]). Underscores are emitted by the sanitizer, not passed through here.
+// isAllowedDisplayNameChar reports whether r is in Azure's base allowlist
+// [A-Za-z0-9-]. Underscores are handled separately by the caller
+// (SanitizeDisplayName passes '_' through verbatim alongside the chars
+// matched here).
 func isAllowedDisplayNameChar(r rune) bool {
 	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-'
 }
@@ -75,8 +77,10 @@ type DisplayNameFields struct {
 	// "monthly") so the segment stays under 8 chars.
 	Payment string
 
-	// Now is the timestamp baseline. Must be non-zero for production calls.
-	// Tests inject a fixed value for determinism.
+	// Now is the timestamp baseline. Tests inject a fixed value for
+	// determinism; production callers should pass time.Now(). A zero
+	// time.Time is replaced with time.Now() by the builder so the
+	// timestamp segment never emits the placeholder "00010101T000000".
 	Now time.Time
 
 	// randSource is an optional 4-byte source for the random suffix.
@@ -114,7 +118,14 @@ func BuildDisplayName(f DisplayNameFields) string {
 	count := fmt.Sprintf("%dx", f.Count)
 	term := normalizeTerm(f.Term)
 	paymt := normalizePayment(f.Payment)
-	ts := f.Now.UTC().Format("20060102T150405")
+	// Guard against a zero-value Now (which would emit the nonsensical
+	// "00010101T000000"). Tests that want determinism pin Now explicitly;
+	// production callers that forget get a real timestamp, not a placeholder.
+	now := f.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	ts := now.UTC().Format("20060102T150405")
 	randHex := generateRandSuffix(f.randSource)
 
 	// Required segments (order matters — never dropped, never reordered).
@@ -124,17 +135,18 @@ func BuildDisplayName(f DisplayNameFields) string {
 	// "keep" order; dropping happens from the right.
 	tail := []string{paymt, ts, randHex}
 
-	// Try full -> drop random -> drop timestamp -> drop payment.
+	// Try full -> drop random -> drop timestamp -> drop payment. Check the
+	// PRE-sanitized length so the cap actually gates segment-dropping; calling
+	// SanitizeDisplayName inside the loop would make the cap vacuously true
+	// (the sanitizer hard-truncates to 64) and short-circuit the drop logic.
+	// Each segment is already allowlist-conformant via normalizeSegment, so we
+	// only need to sanitize once on the exit path as a defensive invariant.
 	for keep := len(tail); keep >= 0; keep-- {
 		segments := append([]string{}, required...)
 		segments = append(segments, tail[:keep]...)
 		candidate := joinNonEmpty(segments, "-")
-		// Defensive sanitization: even though each segment is already
-		// allowlist-conformant, SanitizeDisplayName guarantees the
-		// invariant in one place rather than relying on every caller.
-		candidate = SanitizeDisplayName(candidate)
 		if len(candidate) <= azureDisplayNameMaxLen {
-			return candidate
+			return SanitizeDisplayName(candidate)
 		}
 	}
 
@@ -206,8 +218,11 @@ func joinNonEmpty(parts []string, sep string) string {
 }
 
 // generateRandSuffix returns 8 hex chars from src (test hook) or crypto/rand.
-// If randomness can't be obtained (extremely unlikely on supported platforms),
-// returns an empty string — the builder treats that as a dropped suffix.
+// If src is non-nil but shorter than 4 bytes it is treated as if nil and
+// crypto/rand is used as the fallback; callers that want deterministic output
+// must pass at least 4 bytes. If randomness can't be obtained (extremely
+// unlikely on supported platforms), returns an empty string, which the
+// builder treats as a dropped suffix.
 func generateRandSuffix(src []byte) string {
 	if len(src) >= 4 {
 		return hex.EncodeToString(src[:4])
