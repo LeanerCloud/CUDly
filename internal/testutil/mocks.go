@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
@@ -36,6 +37,7 @@ type MockPurchaseManager struct {
 	ApproveExecutionFunc                  func(ctx context.Context, execID, token, actor string) error
 	ApproveAndExecuteFunc                 func(ctx context.Context, execID, actor string) error
 	CancelExecutionFunc                   func(ctx context.Context, execID, token, actor string) error
+	ReapStuckExecutionsFunc               func(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error)
 }
 
 func (m *MockPurchaseManager) ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error) {
@@ -78,4 +80,11 @@ func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token
 		return m.CancelExecutionFunc(ctx, execID, token, actor)
 	}
 	return nil
+}
+
+func (m *MockPurchaseManager) ReapStuckExecutions(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error) {
+	if m.ReapStuckExecutionsFunc != nil {
+		return m.ReapStuckExecutionsFunc(ctx, reapAfter)
+	}
+	return &purchase.ReapResult{}, nil
 }

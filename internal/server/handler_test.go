@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
@@ -87,6 +88,31 @@ func TestHandleScheduledTask(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:     "reap_stuck_purchases success",
+			taskType: TaskReapStuckPurchases,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.ReapStuckExecutionsFunc = func(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error) {
+					// The wiring uses ParseReapAfterFromEnv; default is
+					// 10 min when env is unset (which it is in tests).
+					if reapAfter != 10*time.Minute {
+						return nil, errors.New("expected default 10m threshold when env unset")
+					}
+					return &purchase.ReapResult{Found: 2, Reaped: 2}, nil
+				}
+			},
+			expectError: false,
+		},
+		{
+			name:     "reap_stuck_purchases propagates store error",
+			taskType: TaskReapStuckPurchases,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.ReapStuckExecutionsFunc = func(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error) {
+					return nil, errors.New("db down")
+				}
+			},
+			expectError: true,
+		},
+		{
 			name:        "unknown task type",
 			taskType:    ScheduledTaskType("unknown"),
 			setupMocks:  func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {},
@@ -96,6 +122,14 @@ func TestHandleScheduledTask(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Clear PURCHASE_APPROVED_REAP_AFTER so the reap_stuck_purchases
+			// cases below see the deterministic default (10m) regardless of
+			// ambient env in CI/dev. The reap subtests assert reapAfter ==
+			// 10*time.Minute in their setupMocks; without this, an
+			// inherited env value would silently make them flaky (A5 CR).
+			// t.Setenv automatically restores the prior value at cleanup.
+			t.Setenv("PURCHASE_APPROVED_REAP_AFTER", "")
+
 			ctx := testutil.TestContext(t)
 
 			mockScheduler := &testutil.MockScheduler{}
@@ -139,6 +173,7 @@ func TestTaskLockID(t *testing.T) {
 			TaskCleanupExpiredRecords,
 			TaskRefreshAnalytics,
 			TaskRIExchangeReshape,
+			TaskReapStuckPurchases,
 		}
 		seen := make(map[int64]ScheduledTaskType)
 		for _, task := range tasks {
@@ -310,6 +345,11 @@ func TestParseScheduledEvent(t *testing.T) {
 			name:         "analytics_refresh event",
 			rawEvent:     `{"action": "analytics_refresh"}`,
 			expectedTask: TaskRefreshAnalytics,
+		},
+		{
+			name:         "reap_stuck_purchases event",
+			rawEvent:     `{"action": "reap_stuck_purchases"}`,
+			expectedTask: TaskReapStuckPurchases,
 		},
 		{
 			name:        "unknown action returns error",

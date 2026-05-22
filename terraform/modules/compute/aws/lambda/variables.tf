@@ -156,6 +156,24 @@ variable "ri_exchange_schedule" {
   default     = "rate(6 hours)"
 }
 
+variable "enable_reap_stuck_purchases_schedule" {
+  description = "Enable scheduled sweep of purchase_executions stuck in approved/running. Issue #678 backstop for synchronous-executor crashes."
+  type        = bool
+  default     = true
+}
+
+variable "reap_stuck_purchases_schedule" {
+  description = "EventBridge schedule for the stuck-purchase reaper. Should be more frequent than PURCHASE_APPROVED_REAP_AFTER (default 10m) so a stuck row is reaped within ~1 threshold-window. Default rate(5 minutes) gives the 10m threshold ~2 sweeps of headroom."
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "purchase_approved_reap_after" {
+  description = "Threshold age for the stuck-purchase reaper. Any execution sitting in approved/running longer than this gets flipped to failed on the next sweep. Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
+  type        = string
+  default     = ""
+}
+
 variable "additional_env_vars" {
   description = "Additional environment variables"
   type        = map(string)

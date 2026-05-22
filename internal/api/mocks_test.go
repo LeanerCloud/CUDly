@@ -241,6 +241,14 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
 }
 
+func (m *MockConfigStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, statuses, olderThan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

@@ -794,9 +794,15 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 	if len(records) == 0 {
 		existing, existErr := s.GetExecutionByID(ctx, executionID)
 		if existErr != nil || existing == nil {
-			return nil, fmt.Errorf("execution not found: %s", executionID)
+			// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
+			// use errors.Is to distinguish "row vanished mid-flight" — a
+			// legitimate CAS race-loss — from a hard DB error.
+			return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
 		}
-		return nil, fmt.Errorf("execution %s cannot transition from %q to %q", executionID, existing.Status, toStatus)
+		// Wrap ErrExecutionNotInExpectedStatus so callers can use
+		// errors.Is to recognise CAS rejection (status changed between
+		// SELECT and UPDATE) as race-lost rather than a real error.
+		return nil, fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
 	}
 
 	return &records[0], nil
@@ -908,6 +914,50 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		WHERE status = 'approved' AND updated_at < NOW() - $1::interval
 	`
 	return s.queryExecutions(ctx, query, fmt.Sprintf("%d seconds", int(olderThan.Seconds())))
+}
+
+// ListStuckExecutions returns purchase executions whose Status is any of the
+// supplied values and whose updated_at is older than the given duration. Used
+// by the reaper sweep (issue #678) to find executions stuck in
+// approved/running long enough that the synchronous executor has clearly
+// failed without flipping the row to a terminal state.
+//
+// Returns rows oldest-first (ORDER BY updated_at ASC) so the longest-stuck
+// rows are processed first within a single sweep, capped at MaxListLimit so
+// an unbounded backlog doesn't blow up the Lambda's memory budget. The reaper
+// invokes the sweep periodically; a backlog larger than MaxListLimit just
+// gets drained across successive invocations.
+//
+// olderThan must be > 0; a zero/negative value would invert the WHERE clause
+// into "updated_at < NOW() + |olderThan|" and reap fresh rows. Defense-in-
+// depth: the caller (ParseReapAfterFromEnv) also rejects non-positive env
+// values.
+//
+// olderThan is passed as a Postgres interval (seconds) so the comparison
+// happens server-side against NOW() — keeping the cutoff in the DB clock
+// avoids any drift between the API process and the database.
+func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]PurchaseExecution, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	if olderThan <= 0 {
+		return nil, fmt.Errorf("ListStuckExecutions: olderThan must be > 0, got %s", olderThan)
+	}
+	query := `
+		SELECT plan_id, execution_id, status, step_number, scheduled_date,
+		       notification_sent, approval_token, recommendations,
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
+		FROM purchase_executions
+		WHERE status = ANY($1)
+		  AND updated_at < NOW() - $2::interval
+		ORDER BY updated_at ASC
+		LIMIT $3
+	`
+	intervalArg := fmt.Sprintf("%d seconds", int(olderThan.Seconds()))
+	return s.queryExecutions(ctx, query, statuses, intervalArg, MaxListLimit)
 }
 
 // GetPendingExecutions retrieves all pending purchase executions

@@ -72,6 +72,13 @@ type StoreInterface interface {
 	// Must be called inside a WithTx block so the suppression cleanup and
 	// the status flip commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
+	// ListStuckExecutions returns executions in any of the given statuses
+	// whose updated_at is older than the given duration. Used by the
+	// reaper sweep (issue #678) to find rows stuck in approved/running
+	// after the synchronous executor failed mid-flight without flipping
+	// them to a terminal state. Oldest-stuck-first (ORDER BY updated_at
+	// ASC), capped at MaxListLimit per sweep.
+	ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]PurchaseExecution, error)
 
 	// Purchase history
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error

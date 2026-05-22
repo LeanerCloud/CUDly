@@ -216,6 +216,10 @@ func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 	return false, "", nil
 }
 
+func (m *mockConfigStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	return nil
 }
