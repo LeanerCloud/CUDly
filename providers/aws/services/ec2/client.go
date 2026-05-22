@@ -334,15 +334,23 @@ func convertEC2PaymentOption(option string) (types.OfferingTypeValues, error) {
 	}
 }
 
-// buildOfferingFilters constructs the EC2 API filters for finding an RI offering.
-func (c *Client) buildOfferingFilters(rec common.Recommendation, details *common.ComputeDetails) []types.Filter {
+// ec2OfferingQuery holds the typed lookup parameters for an EC2 RI offering.
+type ec2OfferingQuery struct {
+	instanceType     types.InstanceType
+	productDesc      types.RIProductDescription
+	tenancy          types.Tenancy
+	scope            string
+	duration         int64
+	wantOfferingType types.OfferingTypeValues
+}
+
+// buildEC2OfferingQuery resolves the typed lookup parameters from a rec,
+// canonicalising legacy tenancy/scope values and applying API defaults.
+func buildEC2OfferingQuery(rec common.Recommendation, details *common.ComputeDetails, duration int64) ec2OfferingQuery {
 	platform := details.Platform
 	if platform == "" {
 		platform = "Linux/UNIX"
 	}
-	// Canonicalize tenancy and scope: new recs from parser>=fix/598 already carry
-	// the correct casing; older persisted recs carry lowercase/hyphenated values
-	// that the AWS RI filter API rejects. The helpers are no-ops for canonical values.
 	tenancy := canonicalizeEC2Tenancy(details.Tenancy)
 	if tenancy == "" {
 		tenancy = string(types.TenancyDefault)
@@ -351,18 +359,46 @@ func (c *Client) buildOfferingFilters(rec common.Recommendation, details *common
 	if scope == "" {
 		scope = string(types.ScopeRegional)
 	}
-
-	return []types.Filter{
-		{Name: aws.String("instance-type"), Values: []string{rec.ResourceType}},
-		{Name: aws.String("product-description"), Values: []string{platform}},
-		{Name: aws.String("instance-tenancy"), Values: []string{tenancy}},
-		{Name: aws.String("scope"), Values: []string{scope}},
-		{Name: aws.String("duration"), Values: []string{fmt.Sprintf("%d", c.getDurationValue(rec.Term))}},
-		{Name: aws.String("offering-class"), Values: []string{c.getOfferingClass(rec.PaymentOption)}},
+	return ec2OfferingQuery{
+		instanceType: types.InstanceType(rec.ResourceType),
+		productDesc:  types.RIProductDescription(platform),
+		tenancy:      types.Tenancy(tenancy),
+		scope:        scope,
+		duration:     duration,
 	}
 }
 
-// findOfferingID finds the appropriate EC2 Reserved Instance offering ID
+// describeInputFromQuery builds the SDK request struct for one page of the
+// typed lookup. Typed fields land on AWS's primary indices; only scope has no
+// typed equivalent and stays in Filters[].
+func describeInputFromQuery(q ec2OfferingQuery, nextToken *string) *ec2.DescribeReservedInstancesOfferingsInput {
+	return &ec2.DescribeReservedInstancesOfferingsInput{
+		InstanceType:       q.instanceType,
+		ProductDescription: q.productDesc,
+		InstanceTenancy:    q.tenancy,
+		MinDuration:        aws.Int64(q.duration),
+		MaxDuration:        aws.Int64(q.duration),
+		OfferingClass:      types.OfferingClassTypeConvertible,
+		OfferingType:       q.wantOfferingType,
+		IncludeMarketplace: aws.Bool(false),
+		MaxResults:         aws.Int32(100),
+		NextToken:          nextToken,
+		Filters: []types.Filter{
+			{Name: aws.String("scope"), Values: []string{q.scope}},
+		},
+	}
+}
+
+// findOfferingID finds the appropriate EC2 Reserved Instance offering ID.
+//
+// The input is built from typed first-class fields on
+// DescribeReservedInstancesOfferingsInput (InstanceType, ProductDescription,
+// InstanceTenancy, MinDuration/MaxDuration, OfferingClass, OfferingType)
+// rather than packing everything into Filters[]. The typed shape was verified
+// against live AWS to return the exact matching offering immediately; the
+// Filter[]-heavy shape caused AWS to return empty pages with NextToken on
+// sparse offering sets, walking until the Lambda budget expired (issue #688).
+// Only scope has no typed equivalent on the input struct, so it stays in Filters[].
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
 	details, ok := rec.Details.(*common.ComputeDetails)
 	if !ok || details == nil {
@@ -372,13 +408,9 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	if err != nil {
 		return "", err
 	}
-	return c.paginateEC2Offerings(ctx, rec, details, c.buildOfferingFilters(rec, details), wantOfferingType)
-}
+	q := buildEC2OfferingQuery(rec, details, c.getDurationValue(rec.Term))
+	q.wantOfferingType = wantOfferingType
 
-// paginateEC2Offerings walks DescribeReservedInstancesOfferings pages and returns
-// the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
-// timeout exhaustion (issue #688).
-func (c *Client) paginateEC2Offerings(ctx context.Context, rec common.Recommendation, details *common.ComputeDetails, filters []types.Filter, wantType types.OfferingTypeValues) (string, error) {
 	var nextToken *string
 	page := 0
 	for {
@@ -390,23 +422,14 @@ func (c *Client) paginateEC2Offerings(ctx context.Context, rec common.Recommenda
 			return "", fmt.Errorf("pagination cap reached after %d pages for EC2 %s %s %s (issue #688)",
 				maxOfferingPages, rec.ResourceType, details.Platform, rec.PaymentOption)
 		}
-		input := &ec2.DescribeReservedInstancesOfferingsInput{
-			Filters:            filters,
-			OfferingType:       wantType,
-			IncludeMarketplace: aws.Bool(false),
-			MaxResults:         aws.Int32(100),
-			NextToken:          nextToken,
-		}
 		pageStart := time.Now()
-		result, err := c.client.DescribeReservedInstancesOfferings(ctx, input)
+		result, err := c.client.DescribeReservedInstancesOfferings(ctx, describeInputFromQuery(q, nextToken))
 		if err != nil {
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
 		log.Printf("EC2 findOfferingID page %d: %d offerings in %s",
 			page, len(result.ReservedInstancesOfferings), time.Since(pageStart))
-		if id, scanErr := scanEC2OfferingPage(result.ReservedInstancesOfferings, rec, wantType); scanErr != nil {
-			return "", scanErr
-		} else if id != "" {
+		if id := scanEC2OfferingPage(result.ReservedInstancesOfferings, wantOfferingType); id != "" {
 			return id, nil
 		}
 		if result.NextToken == nil {
@@ -418,18 +441,22 @@ func (c *Client) paginateEC2Offerings(ctx context.Context, rec common.Recommenda
 		rec.ResourceType, details.Platform, rec.PaymentOption, page)
 }
 
-// scanEC2OfferingPage finds a matching offering in a single page of results.
-// Returns ("", nil) when no match is found on the page so the caller can continue paginating.
-func scanEC2OfferingPage(offerings []types.ReservedInstancesOffering, rec common.Recommendation, wantType types.OfferingTypeValues) (string, error) {
+// scanEC2OfferingPage returns the first offering whose OfferingType matches
+// wantType. With the typed OfferingType field set on the request this should
+// always be the first offering, but the check is kept as defense in depth.
+// Mismatched offerings are skipped (logged), not treated as errors -- a
+// mismatch indicates an API-side anomaly worth observing, not a reason to fail
+// the rec while a valid offering may still be on a later page.
+func scanEC2OfferingPage(offerings []types.ReservedInstancesOffering, wantType types.OfferingTypeValues) string {
 	for _, o := range offerings {
 		if o.OfferingType != wantType {
-			return "", fmt.Errorf("EC2 offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
-				aws.ToString(o.ReservedInstancesOfferingId), o.OfferingType, wantType,
-				rec.ResourceType, rec.PaymentOption)
+			log.Printf("EC2 findOfferingID skipping mismatched variant %s (got %q want %q)",
+				aws.ToString(o.ReservedInstancesOfferingId), o.OfferingType, wantType)
+			continue
 		}
-		return aws.ToString(o.ReservedInstancesOfferingId), nil
+		return aws.ToString(o.ReservedInstancesOfferingId)
 	}
-	return "", nil
+	return ""
 }
 
 // ValidateOffering checks if an offering exists without purchasing
@@ -530,13 +557,6 @@ func (c *Client) getDurationValue(term string) int64 {
 		return ThreeYearSeconds
 	}
 	return OneYearSeconds
-}
-
-// getOfferingClass returns the EC2 offering class for RI queries.
-// Always returns "convertible" — standard RIs are legacy and all modern
-// RI purchases should use convertible for exchange flexibility.
-func (c *Client) getOfferingClass(_ string) string {
-	return "convertible"
 }
 
 // ConvertibleRI represents an active convertible Reserved Instance.

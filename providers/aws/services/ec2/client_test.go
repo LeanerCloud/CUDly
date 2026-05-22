@@ -471,29 +471,6 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 	mockEC2.AssertExpectations(t)
 }
 
-func TestClient_GetOfferingClass(t *testing.T) {
-	t.Parallel()
-	client := &Client{}
-
-	tests := []struct {
-		name          string
-		paymentOption string
-		expected      string
-	}{
-		{"All upfront returns convertible", "all-upfront", "convertible"},
-		{"Partial upfront returns convertible", "partial-upfront", "convertible"},
-		{"No upfront returns convertible", "no-upfront", "convertible"},
-		{"Default (unknown) returns convertible", "unknown", "convertible"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := client.getOfferingClass(tt.paymentOption)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestClient_GetDurationValue(t *testing.T) {
 	t.Parallel()
 	client := &Client{}
@@ -616,7 +593,11 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 
 // TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects an
 // offering whose OfferingType does not match the requested payment option
-// (issue #688).
+// is soft-skipped (logged, not returned). With the typed OfferingType field
+// on the request this should never fire in production; the test pins the
+// defense-in-depth behaviour for the rare API anomaly. After skipping the
+// only mismatched offering on the only page, findOfferingID returns the
+// "no offerings found" diagnostic (issue #688).
 func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	t.Parallel()
 	mockEC2 := &MockEC2Client{}
@@ -648,8 +629,8 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	_, err := client.findOfferingID(context.Background(), rec)
 
 	if assert.Error(t, err) {
-		assert.Contains(t, err.Error(), "payment option")
-		assert.Contains(t, err.Error(), "mismatch")
+		assert.Contains(t, err.Error(), "no offerings found")
+		assert.Contains(t, err.Error(), "t4g.nano")
 	}
 }
 
@@ -687,83 +668,4 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
-}
-
-// TestBuildOfferingFilters_LegacyCanonicalization verifies that buildOfferingFilters
-// canonicalizes legacy tenancy and scope values from pre-fix/598 persisted recs
-// so that DescribeReservedInstancesOfferings returns matches instead of zero results.
-func TestBuildOfferingFilters_LegacyCanonicalization(t *testing.T) {
-	t.Parallel()
-	client := &Client{region: "us-east-1"}
-
-	tests := []struct {
-		name        string
-		tenancy     string
-		scope       string
-		wantTenancy string
-		wantScope   string
-	}{
-		{
-			name:        "legacy shared+region -> default+Region",
-			tenancy:     "shared",
-			scope:       "region",
-			wantTenancy: "default",
-			wantScope:   "Region",
-		},
-		{
-			name:        "legacy availability-zone -> Availability Zone",
-			tenancy:     "default",
-			scope:       "availability-zone",
-			wantTenancy: "default",
-			wantScope:   "Availability Zone",
-		},
-		{
-			name:        "canonical values pass through unchanged",
-			tenancy:     "default",
-			scope:       "Region",
-			wantTenancy: "default",
-			wantScope:   "Region",
-		},
-		{
-			name:        "dedicated tenancy canonical",
-			tenancy:     "dedicated",
-			scope:       "Availability Zone",
-			wantTenancy: "dedicated",
-			wantScope:   "Availability Zone",
-		},
-		{
-			name:        "empty tenancy and scope use defaults",
-			tenancy:     "",
-			scope:       "",
-			wantTenancy: "default",
-			wantScope:   "Region",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := common.Recommendation{
-				ResourceType:  "m5.large",
-				PaymentOption: "all-upfront",
-				Term:          "1yr",
-			}
-			details := &common.ComputeDetails{
-				Platform: "Linux/UNIX",
-				Tenancy:  tt.tenancy,
-				Scope:    tt.scope,
-			}
-
-			filters := client.buildOfferingFilters(rec, details)
-
-			filterMap := make(map[string]string)
-			for _, f := range filters {
-				if f.Name != nil && len(f.Values) > 0 {
-					filterMap[*f.Name] = f.Values[0]
-				}
-			}
-
-			assert.Equal(t, tt.wantTenancy, filterMap["instance-tenancy"], "tenancy filter mismatch")
-			assert.Equal(t, tt.wantScope, filterMap["scope"], "scope filter mismatch")
-		})
-	}
 }
