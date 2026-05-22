@@ -115,6 +115,7 @@ func TestBuildReservationName_LengthFit_DropsPaymentLast(t *testing.T) {
 		"service and region must never drop")
 	assert.Contains(t, got, "12x", "count must never drop")
 	assert.Contains(t, got, "3yr", "term must never drop")
+	assert.NotContains(t, got, "allup", "payment should be the last optional segment to drop")
 	assert.NotContains(t, got, "20260521T002019", "ts should drop in this length regime")
 	assert.NotContains(t, got, "a1b2c3d4", "rand should drop in this length regime")
 }

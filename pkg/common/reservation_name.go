@@ -95,7 +95,11 @@ func BuildReservationName(f ReservationNameFields, fallbackPrefix string) string
 	count := fmt.Sprintf("%dx", f.Count)
 	term := normalizeReservationTerm(f.Term)
 	paymt := normalizeReservationPayment(f.Payment)
-	ts := f.Now.UTC().Format("20060102T150405")
+	tsTime := f.Now
+	if tsTime.IsZero() {
+		tsTime = time.Now()
+	}
+	ts := tsTime.UTC().Format("20060102T150405")
 	randHex := generateReservationRandSuffix(f.randSource)
 
 	// Required segments (order matters — never dropped, never reordered).
