@@ -286,6 +286,12 @@ type PurchaseOptions struct {
 	// purchase path, which has no owning execution, leaves it empty and keeps
 	// its prior non-idempotent behaviour).
 	IdempotencyToken string
+	// ExecutionID, when non-empty, is the purchase_executions row UUID that
+	// owns this purchase attempt. Carried so the purchase-execution flow can
+	// emit log lines tagged with the execution ID for correlation with the
+	// CloudWatch / DB execution row (issue #667). The CLI purchase path has
+	// no owning execution and leaves it empty.
+	ExecutionID string
 }
 
 // NormalizeSource lowercases s and returns it when it matches an allowed

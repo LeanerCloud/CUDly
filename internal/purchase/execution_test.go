@@ -136,6 +136,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 		common.PurchaseOptions{
 			Source:           common.PurchaseSourceWeb,
 			IdempotencyToken: common.DeriveIdempotencyToken("exec-web", 0),
+			ExecutionID:      "exec-web",
 		},
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-web"}, nil)
 
@@ -191,6 +192,7 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 		common.PurchaseOptions{
 			Source:           "",
 			IdempotencyToken: common.DeriveIdempotencyToken("exec-bad", 0),
+			ExecutionID:      "exec-bad",
 		},
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-bad"}, nil)
 
