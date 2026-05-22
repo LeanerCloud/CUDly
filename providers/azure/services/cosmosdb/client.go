@@ -292,9 +292,17 @@ func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
-			"displayName":          reservations.SanitizeDisplayName(fmt.Sprintf("Cosmos_DB_Reservation_%s", rec.ResourceType)),
-			"appliedScopeType":     "Shared",
-			"renew":                false,
+			"displayName": reservations.BuildDisplayName(reservations.DisplayNameFields{
+				Service:      "cosmos",
+				Region:       c.region,
+				ResourceType: rec.ResourceType,
+				Count:        rec.Count,
+				Term:         rec.Term,
+				Payment:      rec.PaymentOption,
+				Now:          time.Now(),
+			}),
+			"appliedScopeType": "Shared",
+			"renew":            false,
 		},
 	}
 	applyPurchaseAutomationTag(requestBody, opts.Source)

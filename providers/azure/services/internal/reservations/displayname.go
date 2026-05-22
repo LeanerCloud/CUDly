@@ -1,7 +1,17 @@
 // Package reservations provides shared helpers for Azure Reservations API operations.
 package reservations
 
-import "strings"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// azureDisplayNameMaxLen is Azure's hard cap on Reservation DisplayName length.
+// Azure rejects longer values with HTTP 400 DisplayNameInvalid.
+const azureDisplayNameMaxLen = 64
 
 // isAllowedDisplayNameChar reports whether r is in Azure's DisplayName allowlist
 // ([A-Za-z0-9-]). Underscores are emitted by the sanitizer, not passed through here.
@@ -27,9 +37,184 @@ func SanitizeDisplayName(s string) string {
 		}
 	}
 	result := b.String()
-	if len(result) > 64 {
+	if len(result) > azureDisplayNameMaxLen {
 		// All output chars are ASCII so byte index == rune index.
-		result = result[:64]
+		result = result[:azureDisplayNameMaxLen]
 	}
 	return result
+}
+
+// DisplayNameFields carries the inputs needed by BuildDisplayName.
+//
+// Now and randSource are exposed so tests can pin time and randomness for
+// deterministic assertions. Production callers leave randSource nil (the
+// builder then uses crypto/rand) and pass time.Now().
+type DisplayNameFields struct {
+	// Service is a short identifier for the Azure service, e.g. "vm",
+	// "redis", "cosmos", "sql", "search". Set per-call by the service
+	// client; the builder treats it as opaque and sanitizes it.
+	Service string
+
+	// Region is the Azure location string (e.g. "eastus", "westeurope").
+	Region string
+
+	// ResourceType is the Azure SKU name (e.g. "Standard_D2a_v4").
+	ResourceType string
+
+	// Count is the reservation quantity. Always rendered as "{N}x".
+	Count int
+
+	// Term is the commitment term, normalized to "1yr" / "3yr" by upstream
+	// recommendation parsers. Pass through as-is; the builder collapses
+	// it to "1yr"/"3yr" when possible, and sanitizes otherwise.
+	Term string
+
+	// Payment is the payment option string from the recommendation
+	// ("all-upfront", "upfront", "no-upfront", "monthly", "partial-upfront").
+	// The builder normalizes to a short form ("allup", "noup", "partup",
+	// "monthly") so the segment stays under 8 chars.
+	Payment string
+
+	// Now is the timestamp baseline. Must be non-zero for production calls.
+	// Tests inject a fixed value for determinism.
+	Now time.Time
+
+	// randSource is an optional 4-byte source for the random suffix.
+	// When nil (production), the builder reads from crypto/rand. Tests set
+	// it via WithRandSource to make output deterministic.
+	randSource []byte
+}
+
+// WithRandSource returns a copy of f with the given bytes used as the
+// random suffix source (test hook). Production code does not call this.
+func (f DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
+	f.randSource = b
+	return f
+}
+
+// BuildDisplayName composes a rich, parseable identifier for an Azure
+// reservation purchase. The format mirrors the AWS RI CSV's ReservationId
+// column shape:
+//
+//	{svc}-{region}-{sku}-{count}x-{term}-{paymt}-{ts}-{rand}
+//
+// e.g. "vm-eastus-Standard_D2a_v4-1x-1yr-allup-20260522T190000-a1b2c3d4".
+//
+// The result is always sanitized to [A-Za-z0-9_-] and never longer than
+// 64 characters. If the composed string would exceed 64, fields are
+// progressively dropped from the tail (random suffix first, then
+// timestamp, then payment-option) until it fits. The service code,
+// region, SKU, count, and term are NEVER dropped — those are the
+// high-signal segments operators rely on to identify the reservation in
+// the Azure portal.
+func BuildDisplayName(f DisplayNameFields) string {
+	svc := normalizeSegment(f.Service)
+	region := normalizeSegment(f.Region)
+	sku := normalizeSegment(f.ResourceType)
+	count := fmt.Sprintf("%dx", f.Count)
+	term := normalizeTerm(f.Term)
+	paymt := normalizePayment(f.Payment)
+	ts := f.Now.UTC().Format("20060102T150405")
+	randHex := generateRandSuffix(f.randSource)
+
+	// Required segments (order matters — never dropped, never reordered).
+	required := []string{svc, region, sku, count, term}
+
+	// Optional tail segments, in drop priority. The slice order here is
+	// "keep" order; dropping happens from the right.
+	tail := []string{paymt, ts, randHex}
+
+	// Try full -> drop random -> drop timestamp -> drop payment.
+	for keep := len(tail); keep >= 0; keep-- {
+		segments := append([]string{}, required...)
+		segments = append(segments, tail[:keep]...)
+		candidate := joinNonEmpty(segments, "-")
+		// Defensive sanitization: even though each segment is already
+		// allowlist-conformant, SanitizeDisplayName guarantees the
+		// invariant in one place rather than relying on every caller.
+		candidate = SanitizeDisplayName(candidate)
+		if len(candidate) <= azureDisplayNameMaxLen {
+			return candidate
+		}
+	}
+
+	// All optional segments dropped and we still bust the cap — fall back
+	// to truncating the joined required segments via SanitizeDisplayName.
+	// This path is reachable only with pathologically long inputs (e.g.
+	// an impossibly long SKU name) but the builder must never return >64.
+	return SanitizeDisplayName(joinNonEmpty(required, "-"))
+}
+
+// normalizeSegment strips disallowed characters from a single segment.
+// The dash separator is the only allowlist character we reserve for joins,
+// so embedded dashes inside a segment are converted to underscores to
+// avoid ambiguity at parse-time (consumers split on "-").
+func normalizeSegment(s string) string {
+	// Replace dashes with underscores first so they don't collide with
+	// the join separator, then sanitize the rest normally.
+	s = strings.ReplaceAll(s, "-", "_")
+	return SanitizeDisplayName(s)
+}
+
+// normalizeTerm maps "1"/"1yr"/"P1Y" -> "1yr" and "3"/"3yr"/"P3Y" -> "3yr".
+// Anything else falls back to a sanitized passthrough.
+func normalizeTerm(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "1yr", "1y", "p1y":
+		return "1yr"
+	case "3", "3yr", "3y", "p3y":
+		return "3yr"
+	default:
+		return normalizeSegment(s)
+	}
+}
+
+// normalizePayment maps known payment-option strings to short forms.
+// Unknown values are sanitized and truncated to keep the segment ≤6 chars.
+func normalizePayment(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "all-upfront", "allupfront", "upfront":
+		return "allup"
+	case "no-upfront", "noupfront":
+		return "noup"
+	case "partial-upfront", "partialupfront", "partial":
+		return "partup"
+	case "monthly":
+		return "monthly"
+	case "":
+		return ""
+	default:
+		out := normalizeSegment(s)
+		if len(out) > 6 {
+			out = out[:6]
+		}
+		return out
+	}
+}
+
+// joinNonEmpty joins parts with sep, skipping any empty strings so callers
+// don't produce double-separator artifacts ("svc--region") when an optional
+// segment is missing.
+func joinNonEmpty(parts []string, sep string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, sep)
+}
+
+// generateRandSuffix returns 8 hex chars from src (test hook) or crypto/rand.
+// If randomness can't be obtained (extremely unlikely on supported platforms),
+// returns an empty string — the builder treats that as a dropped suffix.
+func generateRandSuffix(src []byte) string {
+	if len(src) >= 4 {
+		return hex.EncodeToString(src[:4])
+	}
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b[:])
 }

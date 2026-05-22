@@ -272,9 +272,17 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
-			"displayName":          reservations.SanitizeDisplayName(fmt.Sprintf("Search_Service_Reservation_%s", rec.ResourceType)),
-			"appliedScopeType":     "Shared",
-			"renew":                false,
+			"displayName": reservations.BuildDisplayName(reservations.DisplayNameFields{
+				Service:      "search",
+				Region:       c.region,
+				ResourceType: rec.ResourceType,
+				Count:        rec.Count,
+				Term:         rec.Term,
+				Payment:      rec.PaymentOption,
+				Now:          time.Now(),
+			}),
+			"appliedScopeType": "Shared",
+			"renew":            false,
 		},
 	}
 	applyPurchaseAutomationTag(requestBody, opts.Source)

@@ -1191,4 +1191,8 @@ func TestCacheClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t *t
 	require.NoError(t, err)
 	assert.NotEmpty(t, capturedDisplayName)
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, capturedDisplayName)
+	// Rich-format guards: service code is correct and SKU is preserved
+	// (see providers/azure/services/internal/reservations/displayname.go).
+	assert.Regexp(t, `^redis-`, capturedDisplayName)
+	assert.Contains(t, capturedDisplayName, "Premium_P1")
 }

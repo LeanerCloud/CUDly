@@ -1187,4 +1187,8 @@ func TestDatabaseClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t
 	require.NoError(t, err)
 	assert.NotEmpty(t, capturedDisplayName)
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, capturedDisplayName)
+	// Rich-format guards: service code is correct and SKU is preserved
+	// (see providers/azure/services/internal/reservations/displayname.go).
+	assert.Regexp(t, `^sql-`, capturedDisplayName)
+	assert.Contains(t, capturedDisplayName, "GP_Gen5_2")
 }
