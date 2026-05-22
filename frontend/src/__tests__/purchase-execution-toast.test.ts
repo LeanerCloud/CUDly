@@ -361,6 +361,8 @@ describe('handleFanOutExecute — fan-out path', () => {
     return {
       key: `key-${id}`,
       label: `Bucket ${id}`,
+      provider: 'aws',
+      service: `svc-${id}`,
       recs: [buildMinimalRec()],
       payment: 'all-upfront',
       capacityPercent,
@@ -411,6 +413,38 @@ describe('handleFanOutExecute — fan-out path', () => {
     // bob's email_sent was false — must NOT appear as approved recipient
     expect(msg).not.toContain('bob@example.com');
     // Toast kind must reflect partial failure
+    expect(lastToastKind()).toBe('warning');
+  });
+
+  test('#642 — partial fan-out failure names the submitted (still-actionable) buckets', async () => {
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([
+      buildBucket('a'),
+      buildBucket('b'),
+    ]);
+
+    // Bucket a submits cleanly (creates a pending execution); bucket b fails.
+    (api.executePurchase as jest.Mock)
+      .mockResolvedValueOnce({
+        execution_id: 'exec-a',
+        status: 'queued',
+        email_sent: true,
+        approval_recipient: 'alice@example.com',
+      })
+      .mockRejectedValueOnce(new Error('network down'));
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const msg = lastToastMessage();
+    expect(msg).toContain('1 of 2');
+    expect(msg).toContain('failed');
+    // The orphaned-but-actionable pending execution must be surfaced by name so
+    // the user knows which request is live (issue #642).
+    expect(msg).toContain('Submitted (awaiting approval)');
+    expect(msg).toContain('AWS svc-a@100%');
+    // The failed bucket must NOT be listed as submitted.
+    expect(msg).not.toContain('svc-b');
     expect(lastToastKind()).toBe('warning');
   });
 

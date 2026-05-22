@@ -534,6 +534,51 @@ func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 	assert.Equal(t, 0.0, resp.Summary.TotalMonthlySavings)
 }
 
+// TestHandler_getHistory_PartiallyCompletedVisible is the issue #642 regression
+// guard. A "partially_completed" execution (some recs committed, some failed)
+// must be surfaced in History as a non-failed row carrying a clear description,
+// count as completed (money was committed), and have its execution-level
+// dollars excluded via IsAuditGap (the committed dollars are counted on the
+// per-rec purchase_history rows that actually saved, not here).
+func TestHandler_getHistory_PartiallyCompletedVisible(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	partial := []config.PurchaseExecution{
+		{
+			ExecutionID:      "partial-1",
+			Status:           "partially_completed",
+			Error:            "some purchases failed (partial success): c5.xlarge: offering not available",
+			ScheduledDate:    time.Now(),
+			TotalUpfrontCost: 900.0,
+			EstimatedSavings: 140.0,
+			Recommendations:  []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1"}},
+		},
+	}
+	approver := "ops@example.com"
+	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(partial, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	resp := result.(HistoryResponse)
+
+	require.Len(t, resp.Purchases, 1, "partially_completed execution must be surfaced in History (issue #642)")
+	row := resp.Purchases[0]
+	assert.Equal(t, "partial-1", row.PurchaseID)
+	assert.Equal(t, "partially_completed", row.Status)
+	assert.NotEqual(t, "failed", row.Status, "a partial run with real commitments must never read as failed (double-spend hazard)")
+	assert.Contains(t, row.StatusDescription, "partially completed", "the partial outcome must be surfaced to the user")
+	assert.True(t, row.IsAuditGap, "partial row must carry IsAuditGap so its execution-level dollars are excluded")
+	assert.Equal(t, 1, resp.Summary.TotalCompleted, "money was committed, so it counts as completed")
+	assert.Equal(t, 0.0, resp.Summary.TotalUpfront, "partial row must not contribute execution-level dollars (committed dollars come from purchase_history rows)")
+	assert.Equal(t, 0.0, resp.Summary.TotalMonthlySavings)
+}
+
 // TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts guards the
 // financial invariant that dollar exclusion keys off the explicit IsAuditGap
 // marker, NOT off StatusDescription being set. A real purchase_history row

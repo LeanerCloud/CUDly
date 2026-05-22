@@ -1241,6 +1241,49 @@ func TestExecutePurchase_SingleAccount_CredResolutionError(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
+// TestExecutePurchase_SingleAccount_AccountNotFound asserts that when a target
+// account ID is known but GetCloudAccount returns (nil, nil) (the account does
+// not exist), execution surfaces an error rather than silently falling back to
+// ambient credentials and purchasing/stamping against the wrong account (#646).
+func TestExecutePurchase_SingleAccount_AccountNotFound(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	acctID := "missing-acct"
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-acct-missing",
+		PlanID:      "",
+		Recommendations: []config.RecommendationRecord{
+			{
+				Provider:       "azure",
+				Service:        "compute",
+				ResourceType:   "Standard_B1ls",
+				Region:         "eastus",
+				Count:          1,
+				Selected:       true,
+				CloudAccountID: &acctID,
+			},
+		},
+	}
+
+	// GetCloudAccount returns no error but a nil account (not found).
+	mockStore.On("GetCloudAccount", ctx, acctID).Return(nil, nil)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	_, err := manager.executePurchase(ctx, exec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credential resolution failed for account "+acctID)
+	assert.Contains(t, err.Error(), "account not found")
+
+	mockStore.AssertExpectations(t)
+}
+
 // TestSingleCloudAccountIDFromRecs covers the helper that derives a shared
 // cloud_account_id from a recommendation slice.
 func TestSingleCloudAccountIDFromRecs(t *testing.T) {
@@ -1378,4 +1421,294 @@ func TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible(t *testing.T
 
 	mockStore.AssertExpectations(t)
 	mockFactory.AssertExpectations(t)
+}
+
+// TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess is the issue #642
+// regression guard for the single-account path. A two-rec direct purchase where
+// rec A succeeds and rec B fails must:
+//   - NOT be marked "failed" (rec A committed a real purchase; failing the row
+//     invites a re-approve that double-buys A).
+//   - be recorded as "partially_completed".
+//   - still SEND the confirmation email (for the rec that did purchase).
+//   - persist a purchase_history row only for the succeeded rec.
+func TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockSTS := new(MockSTSClient)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-partial-single",
+		PlanID:      "",
+		StepNumber:  1,
+		Source:      common.PurchaseSourceWeb,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300.0, Savings: 50.0, Selected: true},
+			{Provider: "aws", Service: "ec2", ResourceType: "c5.xlarge", Region: "us-east-1", Count: 1, UpfrontCost: 600.0, Savings: 90.0, Selected: true},
+		},
+	}
+
+	// History row must be saved ONLY for the rec that succeeded (m5.large).
+	mockStore.On("SavePurchaseHistory", ctx, mock.MatchedBy(func(r *config.PurchaseHistoryRecord) bool {
+		return r.ResourceType == "m5.large"
+	})).Return(nil).Once()
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	// Confirmation must still go out (the issue's core complaint).
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Once()
+	// Ambient STS only consulted as a fallback (no account resolved here).
+	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
+		Account: aws.String("123456789012"),
+	}, nil).Maybe()
+
+	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	// m5.large succeeds; c5.xlarge fails.
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "m5.large" }),
+		mock.AnythingOfType("common.PurchaseOptions"),
+	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Once()
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "c5.xlarge" }),
+		mock.AnythingOfType("common.PurchaseOptions"),
+	).Return(common.PurchaseResult{}, errors.New("offering not available")).Once()
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		stsClient:       mockSTS,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	err := manager.executeAndFinalize(ctx, exec)
+	require.Error(t, err, "a partial failure must surface an error so the run isn't reported as a clean success")
+
+	assert.Equal(t, "partially_completed", exec.Status, "partial success must never be 'failed' (double-spend hazard on the committed rec)")
+	require.NotNil(t, exec.CompletedAt, "a partial run is terminal for its committed recs")
+	assert.NotEmpty(t, exec.Error, "the per-rec failure must be recorded on the row")
+	assert.Contains(t, exec.Error, "offering not available")
+
+	// The succeeded rec must be flagged Purchased; the failed one carries its error.
+	assert.True(t, exec.Recommendations[0].Purchased, "m5.large committed")
+	assert.Equal(t, "ri-ok", exec.Recommendations[0].PurchaseID)
+	assert.False(t, exec.Recommendations[1].Purchased, "c5.xlarge did not commit")
+	assert.NotEmpty(t, exec.Recommendations[1].Error)
+
+	mockStore.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
+}
+
+// TestExecuteForAccount_PartialSuccess is the issue #642 regression guard for
+// the multi-account fan-out path: within a single account, one rec commits and
+// another fails. The per-account execution record must be saved as
+// "partially_completed" (NOT "failed"), carry the failure in Error, and the
+// confirmation must still go out for the committed rec.
+func TestExecuteForAccount_PartialSuccess(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	const acctID = "aaaaaaaa-0000-0000-0000-000000000001"
+	account := config.CloudAccount{ID: acctID, Name: "Prod", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"}
+
+	baseExec := &config.PurchaseExecution{
+		ExecutionID: "exec-base",
+		PlanID:      "plan-x",
+		Source:      common.PurchaseSourceWeb,
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300.0, Savings: 50.0, Selected: true},
+			{Provider: "aws", Service: "ec2", ResourceType: "c5.xlarge", Region: "us-east-1", Count: 1, UpfrontCost: 600.0, Savings: 90.0, Selected: true},
+		},
+	}
+	plan := &config.PurchasePlan{ID: "plan-x", Name: "Plan X"}
+
+	var savedExec *config.PurchaseExecution
+	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
+		c := *e
+		savedExec = &c
+		return nil
+	}
+	mockStore.On("SavePurchaseHistory", ctx, mock.MatchedBy(func(r *config.PurchaseHistoryRecord) bool {
+		return r.ResourceType == "m5.large"
+	})).Return(nil).Once()
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Once()
+
+	credStore := &MockCredentialStore{
+		LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
+			return []byte(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`), nil
+		},
+	}
+
+	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "m5.large" }),
+		mock.AnythingOfType("common.PurchaseOptions"),
+	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Once()
+	mockServiceClient.On("PurchaseCommitment", ctx,
+		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "c5.xlarge" }),
+		mock.AnythingOfType("common.PurchaseOptions"),
+	).Return(common.PurchaseResult{}, errors.New("offering not available")).Once()
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       credStore,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	err := manager.executeForAccount(ctx, baseExec, plan, account)
+	require.Error(t, err, "the per-rec failure must surface to the aggregator")
+
+	require.NotNil(t, savedExec, "per-account record must be saved")
+	assert.Equal(t, "partially_completed", savedExec.Status, "partial success must never be 'failed' (double-spend hazard)")
+	require.NotNil(t, savedExec.CompletedAt)
+	assert.Contains(t, savedExec.Error, "offering not available")
+
+	mockStore.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
+}
+
+// TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount is the issue
+// #646 regression guard: the single-account path must stamp the resolved
+// target account's ExternalID on purchase_history, not the ambient AWS host
+// account. Covers a managed AWS account (ExternalID is the target account
+// number, distinct from the host STS identity) and a direct-execute Azure
+// account (must NOT inherit the AWS host account or "unknown"). The fix uses
+// account.ExternalID regardless of auth mode, so access_keys exercises the
+// same single-account stamping path the assume-role case would.
+func TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount(t *testing.T) {
+	const hostAccount = "999999999999" // ambient AWS STS identity — must NOT be stamped
+
+	cases := []struct {
+		name         string
+		provider     string
+		externalID   string
+		service      string
+		expectedType common.ServiceType
+		region       string
+		resource     string
+	}{
+		{
+			name:         "assume-role AWS stamps target ExternalID not host",
+			provider:     "aws",
+			externalID:   "111111111111",
+			service:      "ec2",
+			expectedType: common.ServiceEC2,
+			region:       "us-east-1",
+			resource:     "m5.large",
+		},
+		{
+			name:         "direct-execute Azure stamps subscription not AWS host",
+			provider:     "azure",
+			externalID:   "azure-sub-222",
+			service:      "compute",
+			expectedType: common.ServiceCompute,
+			region:       "eastus",
+			resource:     "Standard_D2s_v3",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockEmail := new(MockEmailSender)
+			mockSTS := new(MockSTSClient)
+			mockFactory := new(MockProviderFactory)
+			mockProviderInst := new(MockProvider)
+			mockServiceClient := new(MockServiceClient)
+			mockCredStore := &MockCredentialStore{
+				LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
+					// AWS access_keys path reads stored key JSON; Azure
+					// managed_identity never reaches here.
+					if tc.provider == "aws" {
+						return []byte(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`), nil
+					}
+					return nil, nil
+				},
+			}
+
+			acctID := "acct-" + tc.name
+			exec := &config.PurchaseExecution{
+				ExecutionID: "exec-stamp-" + tc.name,
+				PlanID:      "",
+				Source:      common.PurchaseSourceWeb,
+				Recommendations: []config.RecommendationRecord{
+					{
+						Provider:       tc.provider,
+						Service:        tc.service,
+						ResourceType:   tc.resource,
+						Region:         tc.region,
+						Count:          1,
+						UpfrontCost:    100.0,
+						Savings:        20.0,
+						Selected:       true,
+						CloudAccountID: &acctID,
+					},
+				},
+			}
+
+			account := &config.CloudAccount{
+				ID:         acctID,
+				Provider:   tc.provider,
+				ExternalID: tc.externalID,
+			}
+			switch tc.provider {
+			case "aws":
+				account.AWSAuthMode = "access_keys"
+			case "azure":
+				account.AzureAuthMode = "managed_identity"
+				account.AzureSubscriptionID = "sub-internal"
+			}
+
+			mockStore.On("GetCloudAccount", ctx, acctID).Return(account, nil)
+
+			// Capture the stamped AccountID on the history row.
+			var stampedAccount string
+			mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).
+				Run(func(args mock.Arguments) {
+					stampedAccount = args.Get(1).(*config.PurchaseHistoryRecord).AccountID
+				}).Return(nil).Once()
+			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+			// Ambient STS — if the host account leaks onto history this is where
+			// it would come from; it must NOT be the stamped value.
+			mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).
+				Return(&sts.GetCallerIdentityOutput{Account: aws.String(hostAccount)}, nil).Maybe()
+
+			mockFactory.On("CreateAndValidateProvider", ctx, tc.provider, mock.Anything).Return(mockProviderInst, nil)
+			mockProviderInst.On("GetServiceClient", ctx, tc.expectedType, tc.region).Return(mockServiceClient, nil)
+			mockServiceClient.On("PurchaseCommitment", ctx,
+				mock.AnythingOfType("common.Recommendation"),
+				mock.AnythingOfType("common.PurchaseOptions"),
+			).Return(common.PurchaseResult{Success: true, CommitmentID: "commit-1"}, nil)
+
+			manager := &Manager{
+				config:          mockStore,
+				email:           mockEmail,
+				stsClient:       mockSTS,
+				providerFactory: mockFactory,
+				credStore:       mockCredStore,
+				dashboardURL:    "https://dashboard.example.com",
+			}
+
+			_, err := manager.executePurchase(ctx, exec)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.externalID, stampedAccount,
+				"history must be stamped with the target account ExternalID (#646)")
+			assert.NotEqual(t, hostAccount, stampedAccount,
+				"history must NOT be stamped with the ambient AWS host account")
+			assert.NotEqual(t, "unknown", stampedAccount)
+
+			mockStore.AssertExpectations(t)
+		})
+	}
 }

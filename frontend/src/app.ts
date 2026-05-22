@@ -399,6 +399,20 @@ async function handleExecutePurchase(): Promise<void> {
 }
 
 /**
+ * fanOutBucketLabel renders a short human identifier for a fan-out bucket so a
+ * partial-failure toast can name which buckets created pending executions
+ * (issue #642). Uses the (provider/service @ capacity%) tuple — the same
+ * fields the user chose in the modal — so the orphaned-but-actionable pending
+ * requests are identifiable rather than hidden behind a bare count.
+ */
+function fanOutBucketLabel(b: FanOutBucket): string {
+  const provider = (b.provider || '').toString().toUpperCase();
+  const service = b.service || 'commitment';
+  const cap = Number.isFinite(b.capacityPercent) ? `@${b.capacityPercent}%` : '';
+  return `${provider} ${service}${cap}`.trim();
+}
+
+/**
  * handleFanOutExecute submits one executePurchase POST per bucket.
  *
  * The backend API is a per-execution endpoint — a multi-bucket purchase
@@ -503,8 +517,28 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     ]
       .slice(0, 3)
       .join('; ');
+    // #642: on a partial fan-out failure the succeeded buckets created real
+    // pending executions an approver can still act on. Name them so the user
+    // knows which requests are live (and which to re-submit) rather than
+    // leaving them as silent orphans behind a bare count.
+    let submittedNote = '';
+    if (succeeded > 0 && succeeded < results.length) {
+      const submittedLabels: string[] = [];
+      results.forEach((r, i) => {
+        const ok =
+          r.status === 'fulfilled' &&
+          r.value.email_sent !== false &&
+          r.value.status !== 'failed';
+        if (ok && buckets[i]) submittedLabels.push(fanOutBucketLabel(buckets[i]));
+      });
+      if (submittedLabels.length > 0) {
+        submittedNote = ` Submitted (awaiting approval): ${submittedLabels.slice(0, 5).join(', ')}${
+          submittedLabels.length > 5 ? ` +${submittedLabels.length - 5} more` : ''
+        }.`;
+      }
+    }
     showToast({
-      message: `${succeeded} of ${results.length} submitted · ${failed} failed: ${failureMsgs}${failed > 3 ? ' (…)' : ''}`,
+      message: `${succeeded} of ${results.length} submitted · ${failed} failed: ${failureMsgs}${failed > 3 ? ' (…)' : ''}${submittedNote}`,
       kind: failed === results.length ? 'error' : 'warning',
       timeout: null,
     });
