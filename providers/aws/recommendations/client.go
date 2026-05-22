@@ -15,6 +15,12 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
+// maxRecommendationPages caps the number of pages fetched per Cost Explorer
+// GetReservationPurchaseRecommendation or GetSavingsPlansPurchaseRecommendation
+// call. 20 pages x ~100 items/page = ~2000 items, enough headroom for any
+// payer org we have seen. Exceeding the cap returns a diagnostic error (issue #692).
+const maxRecommendationPages = 20
+
 // CostExplorerAPI defines the interface for Cost Explorer operations
 type CostExplorerAPI interface {
 	GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error)
@@ -72,16 +78,65 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 		AccountScope:         types.AccountScopeLinked,
 	}
 
-	// Implement rate limiting with exponential backoff. The shared semaphore
-	// (if any) on ctx bounds aggregate concurrent Cost Explorer requests; we
-	// Acquire/Release around the SDK call itself rather than around the whole
-	// service sweep so a goroutine waiting on rate-limiter backoff or
-	// processing a response doesn't monopolise a permit while no request is
-	// in flight. See pkg/concurrency.
+	allRecs, err := c.fetchRIAllPages(ctx, input, params.Service)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.parseRecommendations(allRecs, params)
+}
+
+// fetchRIAllPages paginates over all pages of RI recommendations for a single
+// (service, term, payment) combination. ctx.Err() is checked at the top of
+// each iteration so cancellation is terminal (per feedback_ctx_cancel_terminal.md,
+// issue #692).
+func (c *Client) fetchRIAllPages(
+	ctx context.Context,
+	input *costexplorer.GetReservationPurchaseRecommendationInput,
+	service common.ServiceType,
+) ([]types.ReservationPurchaseRecommendation, error) {
+	var allRecs []types.ReservationPurchaseRecommendation
+	var nextPageToken *string
+
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if pageIdx >= maxRecommendationPages {
+			return nil, fmt.Errorf(
+				"pagination cap reached after %d pages for RI %s (issue #692)",
+				maxRecommendationPages, service,
+			)
+		}
+		input.NextPageToken = nextPageToken
+
+		result, err := c.fetchRIPageWithRetry(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+
+		allRecs = append(allRecs, result.Recommendations...)
+
+		if result.NextPageToken == nil || aws.ToString(result.NextPageToken) == "" {
+			break
+		}
+		nextPageToken = result.NextPageToken
+	}
+
+	return allRecs, nil
+}
+
+// fetchRIPageWithRetry executes a single GetReservationPurchaseRecommendation
+// call with rate-limiter exponential back-off. Extracted so the pagination loop
+// in fetchRIAllPages stays below the gocyclo cap.
+func (c *Client) fetchRIPageWithRetry(
+	ctx context.Context,
+	input *costexplorer.GetReservationPurchaseRecommendationInput,
+) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	c.rateLimiter.Reset()
 	var result *costexplorer.GetReservationPurchaseRecommendationOutput
 	var err error
 
-	c.rateLimiter.Reset()
 	for {
 		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
@@ -101,7 +156,7 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", c.rateLimiter.GetRetryCount(), err)
 	}
 
-	return c.parseRecommendations(result.Recommendations, params)
+	return result, nil
 }
 
 // defaultDiscoveryTerms enumerates the term lengths the discovery flow

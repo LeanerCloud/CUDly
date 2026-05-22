@@ -2,6 +2,7 @@ package recommendations
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -360,4 +361,176 @@ func TestParseSavingsPlanDetail_OnDemandCost(t *testing.T) {
 				"OnDemandCost should equal CurrentAverageHourlyOnDemandSpend × 730")
 		})
 	}
+}
+
+// spDetail returns a minimal SavingsPlansPurchaseRecommendationDetail for pagination tests.
+func spDetail(n int) []types.SavingsPlansPurchaseRecommendationDetail {
+	details := make([]types.SavingsPlansPurchaseRecommendationDetail, n)
+	for i := range details {
+		details[i] = types.SavingsPlansPurchaseRecommendationDetail{
+			HourlyCommitmentToPurchase:    aws.String("1.00"),
+			EstimatedMonthlySavingsAmount: aws.String("50.00"),
+			EstimatedSavingsPercentage:    aws.String("20.0"),
+		}
+	}
+	return details
+}
+
+func spOutput(n int, nextToken *string) *costexplorer.GetSavingsPlansPurchaseRecommendationOutput {
+	return &costexplorer.GetSavingsPlansPurchaseRecommendationOutput{
+		SavingsPlansPurchaseRecommendation: &types.SavingsPlansPurchaseRecommendation{
+			SavingsPlansPurchaseRecommendationDetails: spDetail(n),
+		},
+		NextPageToken: nextToken,
+	}
+}
+
+// multiPageSPMock returns distinct pages for GetSavingsPlansPurchaseRecommendation
+// based on the NextPageToken in the incoming request.
+type multiPageSPMock struct {
+	pages  []*costexplorer.GetSavingsPlansPurchaseRecommendationOutput
+	tokens []string // tokens[i] triggers pages[i+1]
+	calls  int
+}
+
+func (m *multiPageSPMock) GetReservationPurchaseRecommendation(
+	_ context.Context, _ *costexplorer.GetReservationPurchaseRecommendationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	return &costexplorer.GetReservationPurchaseRecommendationOutput{}, nil
+}
+
+func (m *multiPageSPMock) GetSavingsPlansPurchaseRecommendation(
+	_ context.Context,
+	params *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
+	_ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	idx := 0
+	incoming := aws.ToString(params.NextPageToken)
+	for i, tok := range m.tokens {
+		if tok == incoming {
+			idx = i + 1
+			break
+		}
+	}
+	if incoming == "" {
+		idx = 0
+	}
+	m.calls++
+	if idx >= len(m.pages) {
+		return nil, fmt.Errorf("unexpected SP page token %q", incoming)
+	}
+	return m.pages[idx], nil
+}
+
+func (m *multiPageSPMock) GetReservationUtilization(
+	_ context.Context, _ *costexplorer.GetReservationUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationUtilizationOutput, error) {
+	return &costexplorer.GetReservationUtilizationOutput{}, nil
+}
+
+func (m *multiPageSPMock) GetReservationCoverage(
+	_ context.Context, _ *costexplorer.GetReservationCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationCoverageOutput, error) {
+	return &costexplorer.GetReservationCoverageOutput{}, nil
+}
+
+// alwaysNextPageSPMock returns pages each carrying a non-nil non-empty NextPageToken.
+type alwaysNextPageSPMock struct {
+	calls int
+}
+
+func (m *alwaysNextPageSPMock) GetReservationPurchaseRecommendation(
+	_ context.Context, _ *costexplorer.GetReservationPurchaseRecommendationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	return &costexplorer.GetReservationPurchaseRecommendationOutput{}, nil
+}
+
+func (m *alwaysNextPageSPMock) GetSavingsPlansPurchaseRecommendation(
+	_ context.Context,
+	_ *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
+	_ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	m.calls++
+	return spOutput(1, aws.String(fmt.Sprintf("tok%d", m.calls))), nil
+}
+
+func (m *alwaysNextPageSPMock) GetReservationUtilization(
+	_ context.Context, _ *costexplorer.GetReservationUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationUtilizationOutput, error) {
+	return &costexplorer.GetReservationUtilizationOutput{}, nil
+}
+
+func (m *alwaysNextPageSPMock) GetReservationCoverage(
+	_ context.Context, _ *costexplorer.GetReservationCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationCoverageOutput, error) {
+	return &costexplorer.GetReservationCoverageOutput{}, nil
+}
+
+// TestGetSavingsPlansRecommendations_Paginates asserts multi-page accumulation (issue #692).
+func TestGetSavingsPlansRecommendations_Paginates(t *testing.T) {
+	mock := &multiPageSPMock{
+		pages: []*costexplorer.GetSavingsPlansPurchaseRecommendationOutput{
+			spOutput(2, aws.String("tok1")),
+			spOutput(3, aws.String("tok2")),
+			spOutput(4, nil),
+		},
+		tokens: []string{"tok1", "tok2"},
+	}
+
+	client := NewClientWithAPI(mock, "us-east-1")
+	params := common.RecommendationParams{
+		Service:        common.ServiceSavingsPlansCompute,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	require.NoError(t, err)
+	// 2 + 3 + 4 = 9 detail items
+	assert.Len(t, recs, 9, "must accumulate recs across all 3 SP pages")
+	assert.Equal(t, 3, mock.calls, "must call CE exactly once per page")
+}
+
+// TestGetSavingsPlansRecommendations_EmptyTokenTerminates asserts that an
+// empty-string NextPageToken is treated as terminal (parity with PR #690).
+func TestGetSavingsPlansRecommendations_EmptyTokenTerminates(t *testing.T) {
+	mock := &multiPageSPMock{
+		pages: []*costexplorer.GetSavingsPlansPurchaseRecommendationOutput{
+			spOutput(2, aws.String("")), // empty string -- must terminate
+		},
+		tokens: []string{},
+	}
+
+	client := NewClientWithAPI(mock, "us-east-1")
+	params := common.RecommendationParams{
+		Service:        common.ServiceSavingsPlansCompute,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	require.NoError(t, err)
+	assert.Len(t, recs, 2)
+	assert.Equal(t, 1, mock.calls, "empty-string token must terminate pagination after page 1")
+}
+
+// TestGetSavingsPlansRecommendations_PaginationCapError asserts that exceeding
+// maxRecommendationPages returns a diagnostic error (issue #692).
+func TestGetSavingsPlansRecommendations_PaginationCapError(t *testing.T) {
+	mock := &alwaysNextPageSPMock{}
+	client := NewClientWithAPI(mock, "us-east-1")
+	params := common.RecommendationParams{
+		Service:        common.ServiceSavingsPlansCompute,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	_, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pagination cap reached")
+	assert.Equal(t, maxRecommendationPages, mock.calls,
+		"must stop exactly at the cap")
 }
