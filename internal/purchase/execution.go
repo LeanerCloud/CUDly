@@ -372,14 +372,26 @@ type recPurchaseOutcome struct {
 }
 
 func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {
-	opts := common.PurchaseOptions{Source: m.normalizePurchaseSource(exec)}
+	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
+	// can tag every per-rec log line with the owning exec UUID. Without
+	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
+	// or failed execution (e.g. issue #667's context-deadline timeout)
+	// can't be correlated to the cloud SDK call that produced it.
+	opts := common.PurchaseOptions{
+		Source:      m.normalizePurchaseSource(exec),
+		ExecutionID: exec.ExecutionID,
+	}
 
 	// Build the list of selected indices once so the fan-out closure only
 	// has to look up rec[i] (no second pass over the full slice).
 	selected := selectedIndices(exec.Recommendations)
 	if len(selected) == 0 {
+		logging.Infof("purchase[%s]: no selected recommendations, nothing to execute (account=%s plan=%q)",
+			exec.ExecutionID, accountID, plan.Name)
 		return 0, 0, nil
 	}
+	logging.Infof("purchase[%s]: dispatching %d recommendation(s) for account=%s plan=%q",
+		exec.ExecutionID, len(selected), accountID, plan.Name)
 
 	// Each rec runs in its own goroutine so a multi-rec execution that
 	// spans providers (AWS RI + Azure reservation + GCP CUD) or services
@@ -639,20 +651,39 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 // opts carries execution-level metadata (the source surface) that providers stamp
 // onto the commitment they create.
 func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+	// Per-purchase Info logs tagged with the owning execution ID so a
+	// CloudWatch filter on the execution UUID surfaces every step of the
+	// purchase attempt — provider construction, service-client lookup,
+	// details decode, the cloud SDK call, and the result. Issue #667
+	// surfaced that the prior flow had ZERO observable signal between the
+	// approve handler and the final aggregated error toast; a timed-out
+	// SDK call left no trace in CloudWatch beyond the wrapped error.
+	logging.Infof("purchase[%s]: starting rec %s/%s/%s/%s (count=%d term=%dyr payment=%s)",
+		opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, rec.Count, rec.Term, rec.Payment)
+
 	// Create the provider
+	t0 := time.Now()
 	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(ctx, rec.Provider, provCfg)
 	if err != nil {
+		logging.Errorf("purchase[%s]: provider construction failed for %s after %s: %v",
+			opts.ExecutionID, rec.Provider, time.Since(t0), err)
 		return common.PurchaseResult{}, fmt.Errorf("failed to create %s provider: %w", rec.Provider, err)
 	}
+	logging.Infof("purchase[%s]: provider %s constructed in %s", opts.ExecutionID, rec.Provider, time.Since(t0))
 
 	// Map service string to ServiceType
 	serviceType := m.mapServiceType(rec.Service)
 
 	// Get the service client for this region
+	t0 = time.Now()
 	serviceClient, err := cloudProvider.GetServiceClient(ctx, serviceType, rec.Region)
 	if err != nil {
+		logging.Errorf("purchase[%s]: service client lookup failed for %s/%s in %s after %s: %v",
+			opts.ExecutionID, rec.Provider, serviceType, rec.Region, time.Since(t0), err)
 		return common.PurchaseResult{}, fmt.Errorf("failed to get service client: %w", err)
 	}
+	logging.Infof("purchase[%s]: service client %s/%s/%s ready in %s",
+		opts.ExecutionID, rec.Provider, serviceType, rec.Region, time.Since(t0))
 
 	// Build the recommendation in common format
 	recommendation := common.Recommendation{
@@ -684,27 +715,49 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// legacy non-default-engine rec as the default engine.
 	details, detailsErr := common.DecodeServiceDetailsFor(rec.Service, rec.Details)
 	if detailsErr != nil {
+		logging.Errorf("purchase[%s]: decode service details failed for %s rec %s: %v",
+			opts.ExecutionID, rec.Service, rec.ResourceType, detailsErr)
 		return common.PurchaseResult{}, fmt.Errorf("decode service details for %s rec %s: %w", rec.Service, rec.ResourceType, detailsErr)
 	}
 	if details != nil {
 		applyEngineFallback(details, rec.Engine)
 		recommendation.Details = details
 	}
+	// One log line capturing the details shape that's about to drive
+	// findOfferingID. detailsAbsent=true is the legacy-row fallback
+	// (issue #453) and a strong indicator that filters will fall back
+	// to defaults — surface it so a "no offerings found" failure is
+	// linkable to a stale rec rather than a transient AWS issue.
+	logging.Infof("purchase[%s]: details ready for %s/%s (detailsAbsent=%v engine=%q idempotencyToken=%q)",
+		opts.ExecutionID, rec.Provider, rec.Service, len(rec.Details) == 0, rec.Engine, opts.IdempotencyToken)
 
-	// Execute the purchase
+	// Execute the purchase. This is the call that hits the cloud SDK
+	// (and ultimately the AWS / Azure / GCP API). Time it explicitly so
+	// CloudWatch shows whether a failure came from the SDK call itself
+	// (which the AWS SDK retries up to 3× × 30s by default) versus
+	// something earlier in the flow — issue #667.
+	tCall := time.Now()
 	result, err := serviceClient.PurchaseCommitment(ctx, recommendation, opts)
+	elapsed := time.Since(tCall)
 	if err != nil {
+		logging.Errorf("purchase[%s]: %s/%s/%s/%s PurchaseCommitment failed after %s: %v",
+			opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, elapsed, err)
 		return result, fmt.Errorf("purchase failed: %w", err)
 	}
 
 	if !result.Success {
 		if result.Error != nil {
+			logging.Errorf("purchase[%s]: %s/%s/%s/%s PurchaseCommitment returned Success=false after %s: %v",
+				opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, elapsed, result.Error)
 			return result, result.Error
 		}
+		logging.Errorf("purchase[%s]: %s/%s/%s/%s PurchaseCommitment returned Success=false after %s (no error detail)",
+			opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, elapsed)
 		return result, fmt.Errorf("purchase was not successful")
 	}
 
-	logging.Infof("Successfully purchased %s: %s", rec.ResourceType, result.CommitmentID)
+	logging.Infof("purchase[%s]: %s/%s/%s/%s PurchaseCommitment succeeded in %s (commitmentID=%s, cost=%.2f)",
+		opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, elapsed, result.CommitmentID, result.Cost)
 	return result, nil
 }
 
