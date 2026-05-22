@@ -372,28 +372,52 @@ func (c *Client) tagReservedNode(ctx context.Context, nodeID string, rec common.
 	})
 }
 
-// findOfferingID finds the appropriate Reserved Node offering ID
+// maxOfferingPages is the maximum number of DescribeReservedNodeOfferings
+// pages to walk before giving up. At MaxRecords=100 per page this caps the
+// search at 500 offerings. Exceeding the cap returns a diagnostic error instead
+// of timing out the Lambda budget (issue #688).
+//
+// NOTE: DescribeReservedNodeOfferings has no NodeType or payment-option filter
+// fields -- all matching must be done client-side. The cap is the primary guard
+// against indefinite pagination on sparse offerings.
+const maxOfferingPages = 5
+
+// findOfferingID finds the appropriate Reserved Node offering ID.
+// Redshift's DescribeReservedNodeOfferings has no server-side node-type or
+// payment-option filter, so matching is done client-side with a pagination cap
+// to prevent indefinite runtime (issue #688).
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
 	var marker *string
+	page := 0
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+
+		page++
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for Redshift %s (issue #688)",
+				maxOfferingPages, rec.ResourceType)
+		}
+
 		input := &redshift.DescribeReservedNodeOfferingsInput{
 			MaxRecords: aws.Int32(100),
 			Marker:     marker,
 		}
 
+		pageStart := time.Now()
 		result, err := c.client.DescribeReservedNodeOfferings(ctx, input)
 		if err != nil {
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
+		log.Printf("Redshift findOfferingID page %d: %d offerings in %s",
+			page, len(result.ReservedNodeOfferings), time.Since(pageStart))
 
-		for _, offering := range result.ReservedNodeOfferings {
-			if offering.NodeType != nil && *offering.NodeType == rec.ResourceType {
-				if c.matchesDuration(offering.Duration, rec.Term) &&
-					c.matchesOfferingType(string(offering.ReservedNodeOfferingType), rec.PaymentOption) {
-					return aws.ToString(offering.ReservedNodeOfferingId), nil
-				}
-			}
+		if id, scanErr := c.scanRedshiftOfferingPage(result.ReservedNodeOfferings, rec); scanErr != nil {
+			return "", scanErr
+		} else if id != "" {
+			return id, nil
 		}
 
 		if result.Marker == nil || aws.ToString(result.Marker) == "" {
@@ -402,7 +426,31 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		marker = result.Marker
 	}
 
-	return "", fmt.Errorf("no offerings found for %s", rec.ResourceType)
+	return "", fmt.Errorf("no offerings found for Redshift %s after %d page(s) (issue #688)",
+		rec.ResourceType, page)
+}
+
+// scanRedshiftOfferingPage finds a matching offering in a single page of results.
+// Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+// Returns an error when an offering matches on node type and duration but carries an
+// unrecognised ReservedNodeOfferingType -- this surfaces unexpected enum values rather
+// than silently skipping them and potentially committing to the wrong offering.
+func (c *Client) scanRedshiftOfferingPage(offerings []redshifttypes.ReservedNodeOffering, rec common.Recommendation) (string, error) {
+	for _, offering := range offerings {
+		if offering.NodeType == nil || *offering.NodeType != rec.ResourceType {
+			continue
+		}
+		if !c.matchesDuration(offering.Duration, rec.Term) {
+			continue
+		}
+		offeringTypeStr := string(offering.ReservedNodeOfferingType)
+		if offeringTypeStr != "Regular" && offeringTypeStr != "Upgradable" {
+			return "", fmt.Errorf("Redshift offering %s has unexpected type %q (rec: %s)",
+				aws.ToString(offering.ReservedNodeOfferingId), offeringTypeStr, rec.ResourceType)
+		}
+		return aws.ToString(offering.ReservedNodeOfferingId), nil
+	}
+	return "", nil
 }
 
 // matchesDuration checks if the offering duration matches

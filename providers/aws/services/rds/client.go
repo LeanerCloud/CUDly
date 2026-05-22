@@ -277,24 +277,44 @@ func (c *Client) findReservationByID(ctx context.Context, reservationID string) 
 	return "", false, nil
 }
 
+// maxOfferingPages is the maximum number of DescribeReservedDBInstancesOfferings
+// pages to walk before giving up. At MaxRecords=100 per page this caps the
+// search at 500 offerings. Exceeding the cap returns a diagnostic error instead
+// of timing out the Lambda budget (issue #688).
+const maxOfferingPages = 5
+
 // findOfferingID finds the appropriate RDS Reserved Instance offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
 	details, ok := rec.Details.(*common.DatabaseDetails)
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for RDS")
 	}
-
-	multiAZ := details.AZConfig == "multi-az"
-	duration := c.getDurationString(rec.Term)
 	offeringType, err := c.convertPaymentOption(rec.PaymentOption)
 	if err != nil {
 		return "", fmt.Errorf("invalid payment option: %w", err)
 	}
+	return c.paginateRDSOfferings(ctx, rec, details, offeringType)
+}
 
+// paginateRDSOfferings walks DescribeReservedDBInstancesOfferings pages and returns
+// the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
+// timeout exhaustion (issue #688).
+func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommendation, details *common.DatabaseDetails, offeringType string) (string, error) {
+	multiAZ := details.AZConfig == "multi-az"
 	normalizedEngine := c.normalizeEngineName(details.Engine)
+	duration := c.getDurationString(rec.Term)
 
 	var marker *string
+	page := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		page++
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for RDS %s %s multi-az=%v %s (issue #688)",
+				maxOfferingPages, rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption)
+		}
 		input := &rds.DescribeReservedDBInstancesOfferingsInput{
 			DBInstanceClass:    aws.String(rec.ResourceType),
 			ProductDescription: aws.String(normalizedEngine),
@@ -304,24 +324,40 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 			MaxRecords:         aws.Int32(100),
 			Marker:             marker,
 		}
-
+		pageStart := time.Now()
 		result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, input)
 		if err != nil {
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-
-		if len(result.ReservedDBInstancesOfferings) > 0 {
-			return aws.ToString(result.ReservedDBInstancesOfferings[0].ReservedDBInstancesOfferingId), nil
+		log.Printf("RDS findOfferingID page %d: %d offerings in %s",
+			page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
+		if id, scanErr := scanRDSOfferingPage(result.ReservedDBInstancesOfferings, rec, offeringType); scanErr != nil {
+			return "", scanErr
+		} else if id != "" {
+			return id, nil
 		}
-
 		if result.Marker == nil || aws.ToString(result.Marker) == "" {
 			break
 		}
 		marker = result.Marker
 	}
+	return "", fmt.Errorf("no offerings found for RDS %s %s multi-az=%v %s after %d page(s) (issue #688)",
+		rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption, page)
+}
 
-	return "", fmt.Errorf("no offerings found for %s %s multi-az=%v %s",
-		rec.ResourceType, details.Engine, multiAZ, duration)
+// scanRDSOfferingPage finds a matching offering in a single page of results.
+// Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+func scanRDSOfferingPage(offerings []types.ReservedDBInstancesOffering, rec common.Recommendation, wantType string) (string, error) {
+	for _, o := range offerings {
+		got := aws.ToString(o.OfferingType)
+		if got != wantType {
+			return "", fmt.Errorf("RDS offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
+				aws.ToString(o.ReservedDBInstancesOfferingId), got, wantType,
+				rec.ResourceType, rec.PaymentOption)
+		}
+		return aws.ToString(o.ReservedDBInstancesOfferingId), nil
+	}
+	return "", nil
 }
 
 // ValidateOffering checks if an offering exists without purchasing

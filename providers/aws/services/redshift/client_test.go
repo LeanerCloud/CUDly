@@ -924,7 +924,10 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 		Term:          "1yr",
 	}
 
-	// Return offerings with unknown offering type
+	// Return an offering matching node type and duration but with an unknown
+	// ReservedNodeOfferingType. scanRedshiftOfferingPage runs the enum guard
+	// BEFORE matchesOfferingType so the explicit "unexpected type" error
+	// surfaces (issue #688 CodeRabbit feedback).
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(&redshift.DescribeReservedNodeOfferingsOutput{
 			ReservedNodeOfferings: []types.ReservedNodeOffering{
@@ -932,7 +935,7 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 					ReservedNodeOfferingId:   aws.String("offering-123"),
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
-					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"), // Invalid type
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"), // not Regular/Upgradable -- surfaces as error
 				},
 			},
 		}, nil).Once()
@@ -940,7 +943,7 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 	err := client.ValidateOffering(context.Background(), rec)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no offerings found")
+	assert.Contains(t, err.Error(), "unexpected type")
 	mockRS.AssertExpectations(t)
 }
 
@@ -1055,4 +1058,87 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "refusing to purchase")
 	mockRS.AssertNotCalled(t, "PurchaseReservedNodeOffering", mock.Anything, mock.Anything)
+}
+
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	for i := range maxOfferingPages {
+		mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+			Return(&redshift.DescribeReservedNodeOfferingsOutput{
+				ReservedNodeOfferings: []types.ReservedNodeOffering{},
+				Marker:                aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockRS.AssertNumberOfCalls(t, "DescribeReservedNodeOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID does not
+// return a Redshift offering whose type is not Regular or Upgradable.
+// matchesOfferingType filters unknown types client-side and the loop exhausts
+// with a "no offerings found" error rather than returning the wrong variant's
+// ID (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("bad-offering"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"),
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec)
+
+	assert.Error(t, err, "unknown offering type must not return success")
+	assert.Empty(t, id)
+}
+
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct
+// offering ID when a matching offering is returned on the first page (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("offering-ok"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
 }
