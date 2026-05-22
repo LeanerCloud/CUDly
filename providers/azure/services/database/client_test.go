@@ -1020,3 +1020,42 @@ func TestDatabaseClient_ValidateOffering_Invalid(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Azure SQL Database SKU")
 }
+
+func TestDatabaseClient_ValidateOffering_CaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+
+	skuName := "GP_Gen5_8"
+	mockCapabilities := &MockCapabilitiesClient{
+		response: armsql.CapabilitiesClientListByLocationResponse{
+			LocationCapabilities: armsql.LocationCapabilities{
+				SupportedServerVersions: []*armsql.ServerVersionCapability{
+					{
+						SupportedEditions: []*armsql.EditionCapability{
+							{
+								SupportedServiceLevelObjectives: []*armsql.ServiceObjectiveCapability{
+									{SKU: &armsql.SKU{Name: &skuName}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("case_insensitive", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetCapabilitiesClient(mockCapabilities)
+		rec := common.Recommendation{ResourceType: "gp_gen5_8"}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+
+	t.Run("whitespace_trimmed", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetCapabilitiesClient(mockCapabilities)
+		rec := common.Recommendation{ResourceType: "  GP_Gen5_8  "}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+}

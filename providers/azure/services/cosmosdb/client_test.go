@@ -679,6 +679,47 @@ func TestCosmosDBClient_ValidateOffering_Invalid(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid Azure Cosmos DB SKU")
 }
 
+func TestCosmosDBClient_ValidateOffering_CaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+
+	capability := "EnableCassandra"
+	mockPager := func() *MockCosmosAccountsPager {
+		return &MockCosmosAccountsPager{
+			pages: []armcosmos.DatabaseAccountsClientListResponse{
+				{
+					DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+						Value: []*armcosmos.DatabaseAccountGetResults{
+							{
+								Properties: &armcosmos.DatabaseAccountGetProperties{
+									Capabilities: []*armcosmos.Capability{
+										{Name: &capability},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("case_insensitive", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetCosmosAccountsPager(mockPager())
+		rec := common.Recommendation{ResourceType: "enablecassandra"}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+
+	t.Run("whitespace_trimmed", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetCosmosAccountsPager(mockPager())
+		rec := common.Recommendation{ResourceType: "  EnableCassandra  "}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+}
+
 func TestCosmosDBClient_SetterMethods(t *testing.T) {
 	client := NewClient(nil, "test-sub", "eastus")
 

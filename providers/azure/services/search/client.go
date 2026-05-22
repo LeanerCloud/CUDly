@@ -327,8 +327,9 @@ func (c *SearchClient) ValidateOffering(ctx context.Context, rec common.Recommen
 		return fmt.Errorf("failed to get valid SKUs: %w", err)
 	}
 
+	resourceType := strings.TrimSpace(rec.ResourceType)
 	for _, sku := range validSKUs {
-		if sku == rec.ResourceType {
+		if strings.EqualFold(sku, resourceType) {
 			return nil
 		}
 	}
