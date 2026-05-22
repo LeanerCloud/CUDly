@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
 // MockRecommendationsPager mocks the RecommendationsPager interface
@@ -587,16 +588,37 @@ func TestSearchClient_GetCommonSKUs(t *testing.T) {
 	assert.Contains(t, skus, "storage_optimized_l2")
 }
 
-func TestSearchClient_ConvertAzureSearchRecommendation(t *testing.T) {
-	ctx := context.Background()
+// TestSearchClient_ConvertAzureSearchRecommendation_NilGuards pins the contract:
+// unusable SDK payloads (nil or nil Properties) produce a nil *Recommendation.
+func TestSearchClient_ConvertAzureSearchRecommendation_NilGuards(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	assert.Nil(t, client.convertAzureSearchRecommendation(context.Background(), nil))
+}
+
+// TestSearchClient_ConvertAzureSearchRecommendation_PopulatesAllFields asserts
+// the converter forwards every helper-extracted field plus the Search-service
+// constants (Provider, Service, CommitmentType, PaymentOption).
+func TestSearchClient_ConvertAzureSearchRecommendation_PopulatesAllFields(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	rec := client.convertAzureSearchRecommendation(ctx, nil)
+	azRec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithTerm("P1Y"),
+		mocks.WithQuantity(2),
+		mocks.WithNormalizedSize("standard2"),
+		mocks.WithCosts(120, 80, 40),
+	)
+	rec := client.convertAzureSearchRecommendation(context.Background(), azRec)
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderAzure, rec.Provider)
 	assert.Equal(t, common.ServiceOther, rec.Service)
 	assert.Equal(t, "test-subscription", rec.Account)
 	assert.Equal(t, "eastus", rec.Region)
+	assert.Equal(t, "standard2", rec.ResourceType)
+	assert.Equal(t, 2, rec.Count)
+	assert.InDelta(t, 120.0, rec.OnDemandCost, 1e-9)
+	assert.InDelta(t, 80.0, rec.CommitmentCost, 1e-9)
+	assert.InDelta(t, 40.0, rec.EstimatedSavings, 1e-9)
 	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
 	assert.Equal(t, "1yr", rec.Term)
 	assert.Equal(t, "upfront", rec.PaymentOption)

@@ -21,7 +21,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
-	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
@@ -175,7 +175,7 @@ func (c *CacheClient) GetRecommendations(ctx context.Context, params common.Reco
 		for _, rec := range page.Value {
 			converted := c.convertAzureRedisRecommendation(ctx, rec)
 			if converted != nil {
-				recommendations = append(recommendations, *converted)
+				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*converted)...)
 			}
 		}
 	}
@@ -574,7 +574,7 @@ func extractRedisPricing(items []CacheRetailPriceItem, termYears int) (onDemand,
 // Premium-tier SKU; otherwise stays 0 (zero means "unknown", not
 // "definitely zero shards" — see the redisSKUEntry godoc).
 func (c *CacheClient) convertAzureRedisRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
-	f := recommendations.Extract(azureRec)
+	f := azrecs.Extract(azureRec)
 	if f == nil {
 		return nil
 	}

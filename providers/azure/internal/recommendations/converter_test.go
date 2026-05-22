@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
@@ -238,4 +239,127 @@ func TestExtract_Modern_RecurringMonthlyCostIsZeroPointer(t *testing.T) {
 	require.NotNil(t, f)
 	require.NotNil(t, f.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil for Azure reservations")
 	assert.InDelta(t, 0.0, *f.RecurringMonthlyCost, 1e-9)
+}
+
+// --- ExpandPaymentVariants --------------------------------------------------
+
+func baseRec(service common.ServiceType, term string, onDemand, commitment float64) common.Recommendation {
+	return common.Recommendation{
+		Provider:       common.ProviderAzure,
+		Service:        service,
+		Region:         "eastus",
+		ResourceType:   "Standard_D2s_v3",
+		CommitmentType: common.CommitmentReservedInstance,
+		Term:           term,
+		PaymentOption:  "upfront",
+		OnDemandCost:   onDemand,
+		CommitmentCost: commitment,
+	}
+}
+
+func TestExpandPaymentVariants_ReturnsTwoVariants(t *testing.T) {
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 70))
+	require.Len(t, variants, 2, "must return exactly two variants")
+}
+
+func TestExpandPaymentVariants_PaymentOptionValues(t *testing.T) {
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 70))
+	assert.Equal(t, "upfront", variants[0].PaymentOption)
+	assert.Equal(t, "monthly", variants[1].PaymentOption)
+}
+
+func TestExpandPaymentVariants_AllUpfrontCashflow(t *testing.T) {
+	// all-upfront: RecurringMonthlyCost must be a non-nil pointer to 0.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 70))
+	allUpfront := variants[0]
+	require.NotNil(t, allUpfront.RecurringMonthlyCost)
+	assert.InDelta(t, 0.0, *allUpfront.RecurringMonthlyCost, 1e-9)
+}
+
+func TestExpandPaymentVariants_NoUpfront1yrCashflow(t *testing.T) {
+	// no-upfront 1yr: RecurringMonthlyCost = CommitmentCost / 12.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 72))
+	noUpfront := variants[1]
+	require.NotNil(t, noUpfront.RecurringMonthlyCost)
+	assert.InDelta(t, 72.0/12.0, *noUpfront.RecurringMonthlyCost, 1e-9)
+}
+
+func TestExpandPaymentVariants_NoUpfront3yrCashflow(t *testing.T) {
+	// no-upfront 3yr: RecurringMonthlyCost = CommitmentCost / 36.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "3yr", 200, 120))
+	noUpfront := variants[1]
+	require.NotNil(t, noUpfront.RecurringMonthlyCost)
+	assert.InDelta(t, 120.0/36.0, *noUpfront.RecurringMonthlyCost, 1e-9)
+}
+
+func TestExpandPaymentVariants_SavingsIdenticalAcrossVariants(t *testing.T) {
+	// EstimatedSavings and SavingsPercentage must be the same for both
+	// variants — Azure's total reservation price is unchanged between billing
+	// plans; only cashflow splits.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 70))
+	assert.InDelta(t, variants[0].EstimatedSavings, variants[1].EstimatedSavings, 1e-9)
+	assert.InDelta(t, variants[0].SavingsPercentage, variants[1].SavingsPercentage, 1e-9)
+}
+
+func TestExpandPaymentVariants_SavingsValues(t *testing.T) {
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 70))
+	assert.InDelta(t, 30.0, variants[0].EstimatedSavings, 1e-9)
+	assert.InDelta(t, 30.0, variants[1].EstimatedSavings, 1e-9)
+	assert.InDelta(t, 30.0, variants[0].SavingsPercentage, 1e-9)
+	assert.InDelta(t, 30.0, variants[1].SavingsPercentage, 1e-9)
+}
+
+func TestExpandPaymentVariants_ZeroOnDemand_NoSavings(t *testing.T) {
+	// Guard: avoid divide-by-zero when OnDemandCost is 0.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 0, 0))
+	for _, v := range variants {
+		assert.InDelta(t, 0.0, v.EstimatedSavings, 1e-9)
+		assert.InDelta(t, 0.0, v.SavingsPercentage, 1e-9)
+	}
+}
+
+func TestExpandPaymentVariants_ZeroOnDemand_NonZeroCommitment(t *testing.T) {
+	// Regression: when OnDemandCost == 0 but CommitmentCost > 0, the guard
+	// must also force EstimatedSavings to 0. Without it, savings would be
+	// computed as 0 - CommitmentCost and emit negative savings.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 0, 10))
+	require.Len(t, variants, 2)
+	for _, v := range variants {
+		assert.InDelta(t, 0.0, v.EstimatedSavings, 1e-9)
+		assert.InDelta(t, 0.0, v.SavingsPercentage, 1e-9)
+	}
+}
+
+func TestExpandPaymentVariants_ZeroCommitmentCost(t *testing.T) {
+	// Zero reservation total: both variants still emitted; no-upfront monthly = 0.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 50, 0))
+	require.Len(t, variants, 2)
+	require.NotNil(t, variants[1].RecurringMonthlyCost)
+	assert.InDelta(t, 0.0, *variants[1].RecurringMonthlyCost, 1e-9)
+}
+
+func TestExpandPaymentVariants_SharedFieldsCarriedThrough(t *testing.T) {
+	// Service, Region, ResourceType, CommitmentType, Term, Account must be
+	// identical between the two returned variants (only payment schedule changes).
+	base := baseRec(common.ServiceRelationalDB, "3yr", 200, 140)
+	base.Account = "sub-123"
+	variants := ExpandPaymentVariants(base)
+	for _, v := range variants {
+		assert.Equal(t, common.ServiceRelationalDB, v.Service)
+		assert.Equal(t, "eastus", v.Region)
+		assert.Equal(t, "Standard_D2s_v3", v.ResourceType)
+		assert.Equal(t, common.CommitmentReservedInstance, v.CommitmentType)
+		assert.Equal(t, "3yr", v.Term)
+		assert.Equal(t, "sub-123", v.Account)
+	}
+}
+
+func TestExpandPaymentVariants_RecurringMonthlyCostPointersAreIndependent(t *testing.T) {
+	// The two variants must hold independent pointer values — mutating one
+	// must not affect the other.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 60))
+	require.NotNil(t, variants[0].RecurringMonthlyCost)
+	require.NotNil(t, variants[1].RecurringMonthlyCost)
+	assert.True(t, variants[0].RecurringMonthlyCost != variants[1].RecurringMonthlyCost,
+		"each variant must own an independent pointer to its RecurringMonthlyCost")
 }

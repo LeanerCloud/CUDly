@@ -22,7 +22,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
-	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
@@ -169,7 +169,7 @@ func (c *CosmosDBClient) GetRecommendations(ctx context.Context, params common.R
 		for _, rec := range page.Value {
 			converted := c.convertAzureCosmosRecommendation(ctx, rec)
 			if converted != nil {
-				recommendations = append(recommendations, *converted)
+				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*converted)...)
 			}
 		}
 	}
@@ -577,7 +577,7 @@ func calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPri
 // subscription has zero Cosmos accounts, multiple Cosmos accounts with
 // different API types (ambiguous), or the listing fails.
 func (c *CosmosDBClient) convertAzureCosmosRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
-	f := recommendations.Extract(azureRec)
+	f := azrecs.Extract(azureRec)
 	if f == nil {
 		return nil
 	}
