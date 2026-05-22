@@ -240,24 +240,12 @@ variable "lambda_enable_function_url" {
   default     = true
 }
 
-variable "lambda_function_url_auth_type" {
-  description = <<-EOT
-    Lambda Function URL auth type — must be "NONE" or "AWS_IAM". Default is
-    "NONE" because CUDly is a browser-served SPA that talks directly to the
-    Function URL; the browser cannot SigV4-sign requests. Auth is enforced at
-    the application layer (login session, JWT, API keys, CSRF) — see
-    internal/api/handler_login.go and middleware in router.go. Override to
-    AWS_IAM only when fronting the URL with a signed-request gateway
-    (CloudFront with Lambda@Edge, API Gateway, etc.).
-  EOT
-  type        = string
-  default     = "NONE"
-
-  validation {
-    condition     = contains(["AWS_IAM", "NONE"], var.lambda_function_url_auth_type)
-    error_message = "lambda_function_url_auth_type must be either \"AWS_IAM\" or \"NONE\"."
-  }
-}
+# Lambda Function URL auth type is derived from var.enable_cdn (see
+# local.lambda_function_url_auth_type in compute.tf). When enable_cdn = true
+# the Function URL is fronted by CloudFront with OAC + SigV4, so auth is
+# AWS_IAM; when enable_cdn = false the browser hits the Function URL directly
+# and the SPA cannot SigV4-sign, so auth is NONE and the application layer
+# (login session, CSRF, API keys) is the gate.
 
 variable "lambda_allowed_origins" {
   description = "CORS allowed origins"

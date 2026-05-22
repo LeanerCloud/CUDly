@@ -30,9 +30,8 @@ lambda_timeout          = 60       # Seconds
 lambda_reserved_concurrency = -1   # -1 = no limit
 lambda_log_retention_days   = 30
 
-# Lambda Function URL
+# Lambda Function URL (auth_type is derived from enable_cdn — see compute.tf)
 lambda_enable_function_url    = true
-lambda_function_url_auth_type = "NONE"
 lambda_allowed_origins        = ["*"]
 
 # Fargate settings (when compute_platform = "fargate")
