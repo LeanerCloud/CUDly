@@ -58,18 +58,14 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
-		// Determine how many migrations are above 000027 by counting
-		// migrations numbered higher, then rolling back that many plus one.
-		// Simpler: roll back until 000027 is gone, i.e. roll back enough
-		// steps that version 000027 is undone.
-		//
-		// We use a raw query to find the current version, roll back
-		// (current - 26) steps to land at 000026, then run Up again.
-		var currentVersion int
-		err = pool.QueryRow(ctx, `SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1`).Scan(&currentVersion)
+		// Count how many applied migrations are above version 26.
+		// Using COUNT from schema_migrations is correct even when migration
+		// numbering has gaps: Steps(-n) steps back through n applied
+		// migrations, so we need the actual row count, not an arithmetic
+		// difference between version numbers.
+		var stepsToRollback int
+		err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version > 26`).Scan(&stepsToRollback)
 		require.NoError(t, err)
-
-		stepsToRollback := currentVersion - 26
 		require.Greater(t, stepsToRollback, 0, "there should be migrations above 000026")
 
 		// RollbackMigrations caps a single call at 10 steps; call in a loop.
@@ -96,7 +92,9 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 		assert.False(t, constraintExists, "savings_snapshots_pkey should be gone after rollback past 000027")
 
 		// Re-apply all migrations — 000027 must succeed even though
-		// 000018 is still in effect (it was not rolled back).
+		// 000018's schema_migrations entry is still present (that migration
+		// was not rolled back, though its original constraint was superseded
+		// when 000027 ran and dropped/re-created savings_snapshots_pkey).
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""),
 			"re-applying 000027 over a DB where 000018 already ran must succeed")
 
