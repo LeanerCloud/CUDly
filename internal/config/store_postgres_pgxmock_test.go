@@ -387,6 +387,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
 		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+		"approval_token_expires_at",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -394,6 +395,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
 		nil, "", nil, nil, 100,
 		nil, nil, 0,
+		sql.NullTime{},
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -425,6 +427,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
 		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+		"approval_token_expires_at",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -436,6 +439,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		// Populated retry-linkage fields (CR #168 nit) — NON-zero
 		// values exercise the scan path for both new columns.
 		nil, &successorID, 2,
+		sql.NullTime{},
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
