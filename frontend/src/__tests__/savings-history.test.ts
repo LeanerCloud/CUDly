@@ -24,9 +24,21 @@ jest.mock('../api', () => ({
   getSavingsAnalytics: jest.fn()
 }));
 
+// Mock the state module. Defaults (empty provider, no accounts) keep the
+// existing loadSavingsHistory tests unchanged: with these defaults
+// loadSavingsHistory adds neither `provider` nor `account_ids` to the
+// request, so the `objectContaining({ interval })` assertions still hold.
+jest.mock('../state', () => ({
+  subscribeProvider: jest.fn(),
+  subscribeAccount: jest.fn(),
+  getCurrentProvider: jest.fn(() => ''),
+  getCurrentAccountIDs: jest.fn(() => [])
+}));
+
 // Now import after mocking
 import { loadSavingsHistory, initSavingsHistory, savingsChart } from '../modules/savings-history';
 import { getSavingsAnalytics } from '../api';
+import * as state from '../state';
 import { Chart } from 'chart.js';
 
 describe('Savings History Module', () => {
@@ -480,6 +492,127 @@ describe('Savings History Module', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(getSavingsAnalytics).toHaveBeenCalled();
+    });
+  });
+
+  // Issue #503: Purchases tab subscriber wiring. Chip changes must re-query
+  // the Savings History chart with the new filter; inactive-tab guard and
+  // microtask coalescing mirror PR #488's recommendations.ts pattern.
+  describe('subscriber wiring (issue #503)', () => {
+    function addPurchasesTab(active: boolean): void {
+      const tab = document.createElement('div');
+      tab.id = 'purchases-tab';
+      if (active) tab.classList.add('active');
+      document.body.appendChild(tab);
+    }
+
+    beforeEach(() => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+      // Reset filter getters to their defaults; individual tests override.
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+    });
+
+    test('registers callbacks with state.subscribeProvider and state.subscribeAccount', () => {
+      initSavingsHistory();
+
+      expect(state.subscribeProvider).toHaveBeenCalledTimes(1);
+      expect(state.subscribeAccount).toHaveBeenCalledTimes(1);
+      expect(typeof (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+      expect(typeof (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+    });
+
+    test('account chip change re-queries the chart when purchases-tab is active', async () => {
+      addPurchasesTab(true);
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-A']);
+
+      initSavingsHistory();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+      expect(typeof accountCb).toBe('function');
+
+      (getSavingsAnalytics as jest.Mock).mockClear();
+      accountCb();
+      // queueMicrotask + the awaited fetch settle within a macrotask flush.
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(getSavingsAnalytics).toHaveBeenCalledTimes(1);
+      expect(getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ account_ids: ['acct-A'] })
+      );
+    });
+
+    test('provider chip change re-queries the chart when purchases-tab is active', async () => {
+      addPurchasesTab(true);
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+
+      initSavingsHistory();
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      expect(typeof providerCb).toBe('function');
+
+      (getSavingsAnalytics as jest.Mock).mockClear();
+      providerCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(getSavingsAnalytics).toHaveBeenCalledTimes(1);
+      expect(getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'aws' })
+      );
+    });
+
+    test('does NOT re-query when purchases-tab is inactive (active-tab guard)', async () => {
+      // #purchases-tab present but no .active class: user is on another tab.
+      addPurchasesTab(false);
+
+      initSavingsHistory();
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (getSavingsAnalytics as jest.Mock).mockClear();
+      providerCb();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(getSavingsAnalytics).not.toHaveBeenCalled();
+    });
+
+    test('coalesces back-to-back provider+account fires into one reload', async () => {
+      addPurchasesTab(true);
+
+      initSavingsHistory();
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (getSavingsAnalytics as jest.Mock).mockClear();
+      // Simulate the topbar provider-change handler firing both subscribers
+      // synchronously (clear accounts, then set provider, per #185).
+      accountCb();
+      providerCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    });
+
+    test('two consecutive account changes produce two fetches with distinct account_ids', async () => {
+      addPurchasesTab(true);
+
+      initSavingsHistory();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (getSavingsAnalytics as jest.Mock).mockClear();
+
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-A']);
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-B']);
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(getSavingsAnalytics).toHaveBeenCalledTimes(2);
+      const firstCall = (getSavingsAnalytics as jest.Mock).mock.calls[0][0];
+      const secondCall = (getSavingsAnalytics as jest.Mock).mock.calls[1][0];
+      expect(firstCall.account_ids).toEqual(['acct-A']);
+      expect(secondCall.account_ids).toEqual(['acct-B']);
     });
   });
 
