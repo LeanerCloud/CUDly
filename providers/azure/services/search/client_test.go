@@ -618,7 +618,7 @@ func TestSearchClient_ConvertAzureSearchRecommendation_PopulatesAllFields(t *tes
 	assert.Equal(t, 2, rec.Count)
 	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
 	assert.Equal(t, "1yr", rec.Term)
-	assert.Equal(t, "all-upfront", rec.PaymentOption)
+	assert.Equal(t, "upfront", rec.PaymentOption)
 }
 
 // MockTokenCredential for testing PurchaseCommitment

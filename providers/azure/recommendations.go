@@ -298,7 +298,7 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		Account:        r.subscriptionID,
 		CommitmentType: common.CommitmentReservedInstance,
 		Term:           "1yr",
-		PaymentOption:  "all-upfront",
+		PaymentOption:  "upfront",
 	}
 
 	rec.Region = resolveAdvisorRegion(advisorRec)

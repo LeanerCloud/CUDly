@@ -2425,6 +2425,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
   'all-upfront':     'All Upfront',
   'partial-upfront': 'Partial Upfront',
   'no-upfront':      'No Upfront',
+  'upfront':         'Upfront',
   'monthly':         'Monthly',
 };
 

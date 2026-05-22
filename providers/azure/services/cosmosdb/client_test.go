@@ -1003,7 +1003,7 @@ func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields(t *t
 	assert.InDelta(t, 90.0, out.EstimatedSavings, 1e-9)
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "1yr", out.Term)
-	assert.Equal(t, "all-upfront", out.PaymentOption)
+	assert.Equal(t, "upfront", out.PaymentOption)
 
 	// Details carries Engine="cosmos". For this fixture the SKU doesn't
 	// start with digits, so ThroughputUnits is 0 — which correctly

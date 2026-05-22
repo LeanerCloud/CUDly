@@ -263,9 +263,9 @@ func termToMonths(term string) int {
 // ExpandPaymentVariants fans out a single Azure reservation recommendation
 // into two variants that differ only in payment schedule:
 //
-//   - "all-upfront"  — the full reservation cost is paid today; no monthly
+//   - "upfront"  — the full reservation cost is paid today; no monthly
 //     recurring charge (RecurringMonthlyCost = pointer to 0).
-//   - "no-upfront"   — nothing is paid today; the same total reservation cost
+//   - "monthly"  — nothing is paid today; the same total reservation cost
 //     is spread evenly across the term months (RecurringMonthlyCost =
 //     CommitmentCost / termMonths).
 //
@@ -274,7 +274,7 @@ func termToMonths(term string) int {
 // and SavingsPercentage vs on-demand are identical between the two variants;
 // only the cashflow split changes.
 //
-// The base recommendation must already have PaymentOption set to "all-upfront"
+// The base recommendation must already have PaymentOption set to "upfront"
 // and a valid CommitmentCost (total reservation price) and OnDemandCost (total
 // on-demand cost over the same period). If OnDemandCost is zero the savings
 // fields are forced to zero to avoid a divide-by-zero; if CommitmentCost is
@@ -294,13 +294,13 @@ func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation {
 	recurringMonthly := totalReservation / float64(months)
 
 	allUpfront := base
-	allUpfront.PaymentOption = "all-upfront"
+	allUpfront.PaymentOption = "upfront"
 	allUpfront.EstimatedSavings = savings
 	allUpfront.SavingsPercentage = savingsPct
 	allUpfront.RecurringMonthlyCost = float64Ptr(0)
 
 	noUpfront := base
-	noUpfront.PaymentOption = "no-upfront"
+	noUpfront.PaymentOption = "monthly"
 	noUpfront.EstimatedSavings = savings
 	noUpfront.SavingsPercentage = savingsPct
 	noUpfront.RecurringMonthlyCost = float64Ptr(recurringMonthly)

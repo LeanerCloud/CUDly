@@ -598,7 +598,7 @@ func (c *CacheClient) convertAzureRedisRecommendation(ctx context.Context, azure
 		RecurringMonthlyCost: f.RecurringMonthlyCost,
 		CommitmentType:       common.CommitmentReservedInstance,
 		Term:                 f.Term,
-		PaymentOption:        "all-upfront",
+		PaymentOption:        "upfront",
 		Timestamp:            time.Now(),
 		Details:              details,
 	}

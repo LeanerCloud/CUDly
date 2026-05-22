@@ -251,7 +251,7 @@ func baseRec(service common.ServiceType, term string, onDemand, commitment float
 		ResourceType:   "Standard_D2s_v3",
 		CommitmentType: common.CommitmentReservedInstance,
 		Term:           term,
-		PaymentOption:  "all-upfront",
+		PaymentOption:  "upfront",
 		OnDemandCost:   onDemand,
 		CommitmentCost: commitment,
 	}
@@ -264,8 +264,8 @@ func TestExpandPaymentVariants_ReturnsTwoVariants(t *testing.T) {
 
 func TestExpandPaymentVariants_PaymentOptionValues(t *testing.T) {
 	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 100, 70))
-	assert.Equal(t, "all-upfront", variants[0].PaymentOption)
-	assert.Equal(t, "no-upfront", variants[1].PaymentOption)
+	assert.Equal(t, "upfront", variants[0].PaymentOption)
+	assert.Equal(t, "monthly", variants[1].PaymentOption)
 }
 
 func TestExpandPaymentVariants_AllUpfrontCashflow(t *testing.T) {

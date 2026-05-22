@@ -596,7 +596,7 @@ func (c *DatabaseClient) convertAzureSQLRecommendation(ctx context.Context, azur
 		RecurringMonthlyCost: f.RecurringMonthlyCost,
 		CommitmentType:       common.CommitmentReservedInstance,
 		Term:                 f.Term,
-		PaymentOption:        "all-upfront",
+		PaymentOption:        "upfront",
 		Timestamp:            time.Now(),
 		Details:              details,
 	}

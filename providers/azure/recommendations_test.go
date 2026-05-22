@@ -344,7 +344,7 @@ func TestConvertAdvisorRecommendation(t *testing.T) {
 	assert.Equal(t, "test-subscription", result.Account)
 	assert.Equal(t, common.CommitmentReservedInstance, result.CommitmentType)
 	assert.Equal(t, "1yr", result.Term)
-	assert.Equal(t, "all-upfront", result.PaymentOption)
+	assert.Equal(t, "upfront", result.PaymentOption)
 }
 
 func TestConvertAdvisorRecommendation_NilProperties(t *testing.T) {

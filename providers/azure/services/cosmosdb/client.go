@@ -598,7 +598,7 @@ func (c *CosmosDBClient) convertAzureCosmosRecommendation(ctx context.Context, a
 		RecurringMonthlyCost: f.RecurringMonthlyCost,
 		CommitmentType:       common.CommitmentReservedInstance,
 		Term:                 f.Term,
-		PaymentOption:        "all-upfront",
+		PaymentOption:        "upfront",
 		Timestamp:            time.Now(),
 		Details:              details,
 	}

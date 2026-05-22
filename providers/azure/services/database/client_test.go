@@ -694,7 +694,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields(t *test
 	assert.InDelta(t, 60.0, out.EstimatedSavings, 1e-9)
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "1yr", out.Term)
-	assert.Equal(t, "all-upfront", out.PaymentOption)
+	assert.Equal(t, "upfront", out.PaymentOption)
 
 	// Details carries Engine=sqlserver + InstanceClass from the SKU
 	// string. EngineVersion stays empty when the catalogue has no
