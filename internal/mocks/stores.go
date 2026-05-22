@@ -117,6 +117,12 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
 }
 
+// CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
+func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	args := m.Called(ctx, tx, executionID, cancelledBy)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
 // GetPendingExecutions mocks the GetPendingExecutions operation
 func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.PurchaseExecution, error) {
 	args := m.Called(ctx)

@@ -111,6 +111,10 @@ func (m *mockConfigStoreForHealth) TransitionExecutionStatus(ctx context.Context
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStoreForHealth) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	return nil
 }

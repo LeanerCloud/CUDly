@@ -212,6 +212,10 @@ func (m *mockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	return nil, nil
 }
 
+func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	return nil
 }

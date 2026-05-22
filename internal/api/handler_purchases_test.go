@@ -1588,47 +1588,48 @@ func sessionCancelReq() *events.LambdaFunctionURLRequest {
 
 // runSessionCancelAllowed asserts the success path of the session-authed
 // branch given a permission-matrix cell that should be allowed. The
-// cancel commits in a single tx (SavePurchaseExecutionTx +
-// DeleteSuppressionsByExecutionTx via WithTx); the mock store's WithTx
-// default forwards fn(nil) and SavePurchaseExecutionTx default routes
-// through SavePurchaseExecution, which we wire here. The suppression
-// delete returns nil by default so we don't need to register it.
+// cancel commits in a single tx via CancelExecutionAtomic +
+// DeleteSuppressionsByExecutionTx; the mock store's WithTx default
+// forwards fn(nil) and CancelExecutionAtomic default returns
+// (true, "cancelled", nil) when no explicit expectation is registered.
 //
-// Captures the saved execution so the caller can assert the audit-stamp
-// invariants — primarily that CancelledBy is set to session.Email when
-// the session has a non-empty email. cancelPurchase relies on this stamp
-// for History UI attribution; if SavePurchaseExecution stops being
-// called with the email-bearing copy the matrix tests would otherwise
-// silently regress.
+// Asserts the audit-stamp invariant: when session.Email is non-empty
+// the cancelledBy pointer passed to CancelExecutionAtomic must carry
+// that email so the DB column is stamped correctly for History UI
+// attribution.
 func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, session *Session, hasAny, hasOwn bool) {
 	t.Helper()
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, hasAny, hasOwn)
-	var saved *config.PurchaseExecution
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
+
+	// Capture the cancelledBy pointer passed to CancelExecutionAtomic
+	// so we can assert attribution was stamped correctly.
+	var capturedCancelledBy *string
+	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
 		Run(func(args mock.Arguments) {
-			saved = args.Get(1).(*config.PurchaseExecution)
+			if v, ok := args.Get(3).(*string); ok {
+				capturedCancelledBy = v
+			}
 		}).
+		Return(true, "cancelled", nil)
+	// When cancel succeeds the transaction must also clean up suppressions.
+	mockConfig.On("DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, cancelExecID).
 		Return(nil)
 
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.NoError(t, err)
 	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
-	// Status flip + suppression cleanup are paired in one tx — the mock
-	// only sees the un-tx variants because of how MockConfigStore wires
-	// SavePurchaseExecutionTx → SavePurchaseExecution. Asserting the
-	// un-tx call ran is enough for the matrix tests; the atomicity
-	// itself is exercised by the live integration tests.
-	mockConfig.AssertCalled(t, "SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution"))
-	require.NotNil(t, saved, "SavePurchaseExecution should have captured the execution")
-	assert.Equal(t, "cancelled", saved.Status)
+	// Verify the atomic cancel was called — this is the primary guard against
+	// regressions that skip the conditional UPDATE.
+	mockConfig.AssertCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything)
+	// Verify suppression cleanup ran within the same transaction.
+	mockConfig.AssertCalled(t, "DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, cancelExecID)
 	if session != nil && session.Email != "" {
-		require.NotNil(t, saved.CancelledBy, "CancelledBy must be stamped when session has an email")
-		assert.Equal(t, session.Email, *saved.CancelledBy, "CancelledBy must equal session.Email for audit attribution")
+		require.NotNil(t, capturedCancelledBy, "cancelledBy must be stamped when session has an email")
+		assert.Equal(t, session.Email, *capturedCancelledBy, "cancelledBy must equal session.Email for audit attribution")
 	}
 	// Verify the session-auth boundary actually fired — without this a
 	// regression that bypassed ValidateSession (or stopped consulting
-	// HasPermissionAPI for non-admins) would silently still pass the
-	// status/audit assertions above.
+	// HasPermissionAPI for non-admins) would silently still pass.
 	mockAuth.AssertExpectations(t)
 }
 
@@ -1776,6 +1777,40 @@ func TestHandler_cancelPurchase_Session_AllowsEachCancelableStatus(t *testing.T)
 	}
 }
 
+// TestHandler_cancelPurchase_Session_RaceWithApprove is the regression
+// guard for issue #671 on the session-authed cancel path. When a concurrent
+// approve transitions the execution out of pending/notified before the
+// conditional UPDATE runs, CancelExecutionAtomic returns
+// (false, "approved", nil) and the handler must 409 with the racing status
+// rather than silently overwriting the approved row.
+func TestHandler_cancelPurchase_Session_RaceWithApprove(t *testing.T) {
+	creator := cancelCallerID
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "pending", // status at fetch time
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
+
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
+	// Simulate concurrent approve winning between IsCancelable check and
+	// the conditional UPDATE inside the tx.
+	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
+		Return(false, "approved", nil)
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.Error(t, err)
+	var ce *clientError
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.message, "approved", "409 body must surface the racing status")
+	assert.Contains(t, ce.message, "concurrent", "409 body must mention the concurrent operation")
+	// Suppression cleanup must NOT have been called because the atomic
+	// UPDATE returned zero rows — the approve path owns the execution now.
+	mockConfig.AssertNotCalled(t, "DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, mock.Anything)
+	mockAuth.AssertExpectations(t)
+}
+
 func TestHandler_cancelPurchase_Session_LegacyNullCreator_NonAdminRejected(t *testing.T) {
 	// Pre-migration row: created_by_user_id is NULL. cancel-own can't
 	// match a NULL creator, so a non-admin must be rejected. The email
@@ -1848,12 +1883,17 @@ func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testin
 	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
-	var saved *config.PurchaseExecution
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
+
+	// Capture cancelledBy to verify the audit-stamp is passed to the
+	// atomic UPDATE.
+	var capturedCancelledBy *string
+	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
 		Run(func(args mock.Arguments) {
-			saved = args.Get(1).(*config.PurchaseExecution)
+			if v, ok := args.Get(3).(*string); ok {
+				capturedCancelledBy = v
+			}
 		}).
-		Return(nil)
+		Return(true, "cancelled", nil)
 
 	// Token IS present in the URL — the deep-link flow always sends one.
 	// The fix's whole point is that the admin session takes the
@@ -1862,13 +1902,11 @@ func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testin
 	require.NoError(t, err, "admin clicking Cancel from notification email must succeed even when no contact_email is configured")
 	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
 
-	require.NotNil(t, saved, "session-authed branch must commit the status flip")
-	assert.Equal(t, "cancelled", saved.Status)
-	require.NotNil(t, saved.CancelledBy, "session-authed branch must stamp CancelledBy")
-	assert.Equal(t, session.Email, *saved.CancelledBy)
+	require.NotNil(t, capturedCancelledBy, "session-authed branch must stamp cancelledBy")
+	assert.Equal(t, session.Email, *capturedCancelledBy)
 
 	// Critical security assertion: the token branch's contact_email gate
-	// (authorizeApprovalAction → GetGlobalConfig → resolveApprovalRecipients)
+	// (authorizeApprovalAction -> GetGlobalConfig -> resolveApprovalRecipients)
 	// was NOT consulted. If a regression re-routed admins through the
 	// token path, GetGlobalConfig would fire because the gate fetches
 	// the global notification email; asserting it didn't is the cleanest
@@ -1895,7 +1933,9 @@ func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *te
 	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false /*hasAny*/, true /*hasOwn*/)
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	// CancelExecutionAtomic is called by the session-authed branch.
+	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
+		Return(true, "cancelled", nil)
 
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
 	require.NoError(t, err)

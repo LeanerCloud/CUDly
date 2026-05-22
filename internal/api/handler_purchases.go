@@ -520,24 +520,34 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, err
 	}
 
-	// Flip status + clear suppressions + stamp CancelledBy in one tx.
-	// An optimistic-locking guard inside the tx (status IN
-	// ('pending','notified')) prevents a concurrent approval from
-	// landing on top of us — if the status drifted, the UPDATE 0-rows
-	// the row count and we 409 cleanly without rolling back the entire
-	// flow into an inconsistent state.
-	execution.Status = "cancelled"
+	// Atomically flip status from pending/notified to cancelled + clear
+	// suppressions in one tx. CancelExecutionAtomic issues a conditional
+	// UPDATE WHERE status IN ('pending','notified'), so a concurrent approve
+	// that has already transitioned the row to 'approved' causes zero rows
+	// to be affected and we return a 409 with the current status rather
+	// than silently overwriting an approved purchase.
+	var cancelledBy *string
 	if session.Email != "" {
-		actor := session.Email
-		execution.CancelledBy = &actor
+		e := session.Email
+		cancelledBy = &e
 	}
+	var cancelled bool
+	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
+		var err error
+		cancelled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		if err != nil {
 			return err
+		}
+		if !cancelled {
+			return nil
 		}
 		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
 	}); err != nil {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", execution.ExecutionID, err))
+		return nil, fmt.Errorf("cancel execution %s: %w", execution.ExecutionID, err)
+	}
+	if !cancelled {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
 	}
 
 	return map[string]string{"status": "cancelled"}, nil
