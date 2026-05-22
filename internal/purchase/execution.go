@@ -234,8 +234,10 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 // recommendations when all selected recs agree on exactly one account (direct-
 // execute purchases where PlanID is empty and exec.CloudAccountID is nil).
 //
-// A non-nil error means credentials were found but could not be resolved; the
-// caller must NOT fall back to ambient credentials on error.
+// A non-nil error means a target account was identified but could not be
+// resolved (lookup failed, the account does not exist, or credentials could
+// not be derived); the caller must NOT fall back to ambient credentials on
+// error, as that would purchase/stamp against the wrong account (#646).
 func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, string, error) {
 	// Skip credential resolution when nothing is selected. Approval-only
 	// flows may carry an account ID on the recs solely for the contact-email
@@ -258,7 +260,12 @@ func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config
 		return nil, "", fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
 	}
 	if account == nil {
-		return nil, "", nil
+		// A target account was identified but does not exist in config.
+		// Returning ("") here would let the caller fall back to ambient AWS
+		// credentials and purchase/stamp against the wrong account (#646), so
+		// surface an error instead; the contract above forbids ambient
+		// fallback once a target account ID is known.
+		return nil, "", fmt.Errorf("credential resolution failed for account %s: account not found", *cloudAccountID)
 	}
 	provCfg, err := m.resolveAccountProvider(ctx, *account)
 	if err != nil {

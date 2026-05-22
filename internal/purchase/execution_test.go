@@ -1241,6 +1241,49 @@ func TestExecutePurchase_SingleAccount_CredResolutionError(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
+// TestExecutePurchase_SingleAccount_AccountNotFound asserts that when a target
+// account ID is known but GetCloudAccount returns (nil, nil) (the account does
+// not exist), execution surfaces an error rather than silently falling back to
+// ambient credentials and purchasing/stamping against the wrong account (#646).
+func TestExecutePurchase_SingleAccount_AccountNotFound(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	acctID := "missing-acct"
+	exec := &config.PurchaseExecution{
+		ExecutionID: "exec-acct-missing",
+		PlanID:      "",
+		Recommendations: []config.RecommendationRecord{
+			{
+				Provider:       "azure",
+				Service:        "compute",
+				ResourceType:   "Standard_B1ls",
+				Region:         "eastus",
+				Count:          1,
+				Selected:       true,
+				CloudAccountID: &acctID,
+			},
+		},
+	}
+
+	// GetCloudAccount returns no error but a nil account (not found).
+	mockStore.On("GetCloudAccount", ctx, acctID).Return(nil, nil)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	_, err := manager.executePurchase(ctx, exec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credential resolution failed for account "+acctID)
+	assert.Contains(t, err.Error(), "account not found")
+
+	mockStore.AssertExpectations(t)
+}
+
 // TestSingleCloudAccountIDFromRecs covers the helper that derives a shared
 // cloud_account_id from a recommendation slice.
 func TestSingleCloudAccountIDFromRecs(t *testing.T) {
