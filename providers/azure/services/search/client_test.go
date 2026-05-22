@@ -920,3 +920,38 @@ func TestSearchClient_PurchaseCommitment_RequiresSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "purchase source is required")
 	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }
+
+func TestSearchClient_ValidateOffering_CaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+
+	skuName := armsearch.SKUNameStandard
+	mockPager := func() *MockSearchServicesPager {
+		return &MockSearchServicesPager{
+			pages: []armsearch.ServicesClientListBySubscriptionResponse{
+				{
+					ServiceListResult: armsearch.ServiceListResult{
+						Value: []*armsearch.Service{
+							{SKU: &armsearch.SKU{Name: &skuName}},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("case_insensitive", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetSearchServicesPager(mockPager())
+		rec := common.Recommendation{ResourceType: "STANDARD"}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+
+	t.Run("whitespace_trimmed", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetSearchServicesPager(mockPager())
+		rec := common.Recommendation{ResourceType: "  standard  "}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+}

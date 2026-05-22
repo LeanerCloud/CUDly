@@ -400,6 +400,24 @@ func TestCacheClient_ValidateOffering_ValidSKU(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestCacheClient_ValidateOffering_CaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("case_insensitive", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		rec := common.Recommendation{ResourceType: "premium_p1"}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+
+	t.Run("whitespace_trimmed", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		rec := common.Recommendation{ResourceType: "  Premium_P1  "}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+}
+
 func TestCacheClient_GetRecommendations_WithMockPager(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")

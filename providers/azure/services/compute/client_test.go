@@ -327,6 +327,34 @@ func TestComputeClient_ValidateOffering_Invalid(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid Azure VM SKU")
 }
 
+func TestComputeClient_ValidateOffering_CaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("case_insensitive", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		mockPager := &mocks.MockResourceSKUsPager{
+			Results: mocks.CreateSampleResourceSKUs("eastus"),
+			HasMore: true,
+		}
+		client.SetResourceSKUsPager(mockPager)
+		rec := common.Recommendation{ResourceType: "standard_d2s_v3"}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+
+	t.Run("whitespace_trimmed", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		mockPager := &mocks.MockResourceSKUsPager{
+			Results: mocks.CreateSampleResourceSKUs("eastus"),
+			HasMore: true,
+		}
+		client.SetResourceSKUsPager(mockPager)
+		rec := common.Recommendation{ResourceType: "  Standard_D2s_v3  "}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+}
+
 func TestComputeClient_GetOfferingDetails_WithMock(t *testing.T) {
 	ctx := context.Background()
 
