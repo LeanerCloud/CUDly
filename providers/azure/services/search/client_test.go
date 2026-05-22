@@ -599,7 +599,7 @@ func TestSearchClient_ConvertAzureSearchRecommendation(t *testing.T) {
 	assert.Equal(t, "eastus", rec.Region)
 	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
 	assert.Equal(t, "1yr", rec.Term)
-	assert.Equal(t, "upfront", rec.PaymentOption)
+	assert.Equal(t, "all-upfront", rec.PaymentOption)
 }
 
 // MockTokenCredential for testing PurchaseCommitment

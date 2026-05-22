@@ -787,7 +787,7 @@ func TestCacheClient_ConvertAzureRedisRecommendation_PopulatesAllFields(t *testi
 	assert.InDelta(t, 15.0, out.EstimatedSavings, 1e-9)
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "3yr", out.Term)
-	assert.Equal(t, "upfront", out.PaymentOption)
+	assert.Equal(t, "all-upfront", out.PaymentOption)
 
 	// Details carries Engine=redis + NodeType from the SKU string. Shards
 	// stays 0 when no cache instance matches in the subscription (the

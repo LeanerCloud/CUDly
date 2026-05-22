@@ -21,7 +21,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
-	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
@@ -177,7 +177,7 @@ func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.R
 		for _, rec := range page.Value {
 			converted := c.convertAzureSQLRecommendation(ctx, rec)
 			if converted != nil {
-				recommendations = append(recommendations, *converted)
+				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*converted)...)
 			}
 		}
 	}
@@ -575,7 +575,7 @@ func extractSQLPricing(items []DatabaseRetailPriceItem, termYears int) (onDemand
 // otherwise stays empty. AZConfig/Deployment still need additional
 // signals (per-server config) and remain deferred.
 func (c *DatabaseClient) convertAzureSQLRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
-	f := recommendations.Extract(azureRec)
+	f := azrecs.Extract(azureRec)
 	if f == nil {
 		return nil
 	}
@@ -596,7 +596,7 @@ func (c *DatabaseClient) convertAzureSQLRecommendation(ctx context.Context, azur
 		RecurringMonthlyCost: f.RecurringMonthlyCost,
 		CommitmentType:       common.CommitmentReservedInstance,
 		Term:                 f.Term,
-		PaymentOption:        "upfront",
+		PaymentOption:        "all-upfront",
 		Timestamp:            time.Now(),
 		Details:              details,
 	}

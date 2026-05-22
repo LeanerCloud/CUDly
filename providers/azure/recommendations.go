@@ -14,6 +14,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cosmosdb"
@@ -233,7 +234,7 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 			// Convert Azure Advisor recommendation to our common format
 			rec := r.convertAdvisorRecommendation(advisorRec)
 			if rec != nil && shouldIncludeService(params, rec.Service) {
-				recommendations = append(recommendations, *rec)
+				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*rec)...)
 			}
 		}
 	}
@@ -277,7 +278,7 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		Account:        r.subscriptionID,
 		CommitmentType: common.CommitmentReservedInstance,
 		Term:           "1yr",
-		PaymentOption:  "upfront",
+		PaymentOption:  "all-upfront",
 	}
 
 	rec.Region = resolveAdvisorRegion(advisorRec)

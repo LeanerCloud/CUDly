@@ -25,6 +25,7 @@ package recommendations
 import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
@@ -245,4 +246,64 @@ func strDeref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// termToMonths maps a normalised term string ("1yr", "3yr") to the number of
+// months it spans. Unknown terms default to 12 so the monthly-cost arithmetic
+// stays valid rather than dividing by zero.
+func termToMonths(term string) int {
+	switch term {
+	case "3yr":
+		return 36
+	default:
+		return 12
+	}
+}
+
+// ExpandPaymentVariants fans out a single Azure reservation recommendation
+// into two variants that differ only in payment schedule:
+//
+//   - "all-upfront"  — the full reservation cost is paid today; no monthly
+//     recurring charge (RecurringMonthlyCost = pointer to 0).
+//   - "no-upfront"   — nothing is paid today; the same total reservation cost
+//     is spread evenly across the term months (RecurringMonthlyCost =
+//     CommitmentCost / termMonths).
+//
+// Azure charges the same total reservation price for both billing plans
+// (unlike AWS, which prices partial-upfront separately), so EstimatedSavings
+// and SavingsPercentage vs on-demand are identical between the two variants;
+// only the cashflow split changes.
+//
+// The base recommendation must already have PaymentOption set to "all-upfront"
+// and a valid CommitmentCost (total reservation price) and OnDemandCost (total
+// on-demand cost over the same period). If OnDemandCost is zero the savings
+// fields are forced to zero to avoid a divide-by-zero; if CommitmentCost is
+// zero both variants are still emitted with zero costs (caller's responsibility
+// to validate upstream).
+func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation {
+	totalReservation := base.CommitmentCost
+	totalOnDemand := base.OnDemandCost
+
+	var savingsPct float64
+	if totalOnDemand != 0 {
+		savingsPct = (totalOnDemand - totalReservation) / totalOnDemand * 100
+	}
+	savings := totalOnDemand - totalReservation
+
+	months := termToMonths(base.Term)
+	recurringMonthly := totalReservation / float64(months)
+
+	allUpfront := base
+	allUpfront.PaymentOption = "all-upfront"
+	allUpfront.EstimatedSavings = savings
+	allUpfront.SavingsPercentage = savingsPct
+	allUpfront.RecurringMonthlyCost = float64Ptr(0)
+
+	noUpfront := base
+	noUpfront.PaymentOption = "no-upfront"
+	noUpfront.EstimatedSavings = savings
+	noUpfront.SavingsPercentage = savingsPct
+	noUpfront.RecurringMonthlyCost = float64Ptr(recurringMonthly)
+
+	return []common.Recommendation{allUpfront, noUpfront}
 }

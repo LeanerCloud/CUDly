@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -216,6 +217,59 @@ func TestComputeClient_GetRecommendations_WithMock(t *testing.T) {
 	recommendations, err := client.GetRecommendations(ctx, params)
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
+}
+
+// TestComputeClient_GetRecommendations_EmitsBothPaymentVariants asserts that
+// a single Azure reservation recommendation from the API is expanded into two
+// entries — "all-upfront" and "no-upfront" — with correct cashflow split and
+// identical savings figures.
+func TestComputeClient_GetRecommendations_EmitsBothPaymentVariants(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient(nil, "test-subscription", "eastus")
+
+	// Inject a single recommendation via the mock pager.
+	apiRec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithScope("Shared"),
+		mocks.WithTerm("P1Y"),
+		mocks.WithQuantity(1),
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		mocks.WithCosts(120, 84, 36), // onDemand=120, commitment=84, savings=36
+	)
+	mockPager := &mocks.MockRecommendationsPager{
+		Results: []armconsumption.ReservationRecommendationClassification{apiRec},
+		HasMore: true,
+	}
+	client.SetRecommendationsPager(mockPager)
+
+	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	require.NoError(t, err)
+	require.Len(t, recs, 2, "one API rec must expand to two payment-variant entries")
+
+	payments := make(map[string]common.Recommendation)
+	for _, r := range recs {
+		payments[r.PaymentOption] = r
+	}
+	require.Contains(t, payments, "all-upfront", "all-upfront variant must be present")
+	require.Contains(t, payments, "no-upfront", "no-upfront variant must be present")
+
+	allUp := payments["all-upfront"]
+	noUp := payments["no-upfront"]
+
+	// Cashflow: all-upfront has zero recurring; no-upfront spreads over 12 months.
+	require.NotNil(t, allUp.RecurringMonthlyCost)
+	assert.InDelta(t, 0.0, *allUp.RecurringMonthlyCost, 1e-9)
+	require.NotNil(t, noUp.RecurringMonthlyCost)
+	assert.InDelta(t, 84.0/12.0, *noUp.RecurringMonthlyCost, 1e-9)
+
+	// Savings must be identical across variants.
+	assert.InDelta(t, allUp.EstimatedSavings, noUp.EstimatedSavings, 1e-9)
+	assert.InDelta(t, allUp.SavingsPercentage, noUp.SavingsPercentage, 1e-9)
+
+	// Shared fields.
+	assert.Equal(t, "test-subscription", allUp.Account)
+	assert.Equal(t, common.ServiceCompute, allUp.Service)
+	assert.Equal(t, "1yr", allUp.Term)
 }
 
 func TestComputeClient_GetExistingCommitments_WithMock(t *testing.T) {
@@ -829,7 +883,7 @@ func TestComputeClient_ConvertAzureVMRecommendation_PopulatesAllFields(t *testin
 	assert.InDelta(t, 30.0, out.EstimatedSavings, 1e-9)
 	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
 	assert.Equal(t, "3yr", out.Term)
-	assert.Equal(t, "upfront", out.PaymentOption)
+	assert.Equal(t, "all-upfront", out.PaymentOption)
 
 	// Azure reservations are all-upfront: RecurringMonthlyCost must be a
 	// non-nil pointer to 0 so the frontend shows "$0" not "—" (unknown).

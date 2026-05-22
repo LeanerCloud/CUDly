@@ -19,6 +19,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
@@ -149,7 +150,7 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 		for _, rec := range page.Value {
 			converted := c.convertAzureSearchRecommendation(ctx, rec)
 			if converted != nil {
-				recommendations = append(recommendations, *converted)
+				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*converted)...)
 			}
 		}
 	}
@@ -547,7 +548,7 @@ func (c *SearchClient) convertAzureSearchRecommendation(ctx context.Context, azu
 		CommitmentType: common.CommitmentReservedInstance,
 		Timestamp:      time.Now(),
 		Term:           "1yr",
-		PaymentOption:  "upfront",
+		PaymentOption:  "all-upfront",
 	}
 
 	return rec

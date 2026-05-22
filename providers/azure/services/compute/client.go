@@ -22,7 +22,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
-	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
+	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
@@ -194,7 +194,7 @@ func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.Re
 		for _, rec := range page.Value {
 			converted := c.convertAzureVMRecommendation(ctx, rec)
 			if converted != nil {
-				recommendations = append(recommendations, *converted)
+				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*converted)...)
 			}
 		}
 	}
@@ -698,7 +698,7 @@ func extractVMPricing(items []AzureRetailPriceItem, termYears int) (onDemand, re
 // sources (consumption usage records, dedicated-host inventory) and
 // remain unpopulated — out of scope for this issue.
 func (c *ComputeClient) convertAzureVMRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
-	f := recommendations.Extract(azureRec)
+	f := azrecs.Extract(azureRec)
 	if f == nil {
 		return nil
 	}
@@ -726,7 +726,7 @@ func (c *ComputeClient) convertAzureVMRecommendation(ctx context.Context, azureR
 		RecurringMonthlyCost: f.RecurringMonthlyCost,
 		CommitmentType:       common.CommitmentReservedInstance,
 		Term:                 f.Term,
-		PaymentOption:        "upfront",
+		PaymentOption:        "all-upfront",
 		Timestamp:            time.Now(),
 		Details:              details,
 	}
