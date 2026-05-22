@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -441,44 +442,7 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 	}
 	defer svc.Close()
 
-	// Determine plan based on term
-	plan := "TWELVE_MONTH"
-	if rec.Term == "3yr" || rec.Term == "3" {
-		plan = "THIRTY_SIX_MONTH"
-	}
-
-	// GCP's computepb.Commitment has no Labels field, and the RegionCommitments
-	// client exposes no SetLabels call — CUDs cannot be tagged or labeled via
-	// the API. Encode the source into Description so customers can still
-	// filter with `gcloud compute commitments list --filter="description:..."`.
-	description := fmt.Sprintf("CUD for %s", rec.ResourceType)
-	if opts.Source != "" {
-		description = fmt.Sprintf("%s [%s=%s]", description, common.PurchaseTagKey, opts.Source)
-	}
-
-	// GCP requires both VCPU and MEMORY_MB in a single commitment insert.
-	commitment := &computepb.Commitment{
-		Name:        stringPtr(fmt.Sprintf("cud-%d", time.Now().Unix())),
-		Plan:        stringPtr(plan),
-		Type:        stringPtr("GENERAL_PURPOSE"),
-		Description: stringPtr(description),
-		Resources: []*computepb.ResourceCommitment{
-			{
-				Type:   stringPtr("VCPU"),
-				Amount: int64Ptr(int64(rec.Count)),
-			},
-			{
-				Type:   stringPtr("MEMORY_MB"),
-				Amount: int64Ptr(int64(rec.Count) * 4096),
-			},
-		},
-	}
-
-	insertReq := &computepb.InsertRegionCommitmentRequest{
-		Project:            c.projectID,
-		Region:             c.region,
-		CommitmentResource: commitment,
-	}
+	insertReq, commitmentName := c.buildInsertRequest(rec, opts)
 
 	// Exponential backoff on RESOURCE_EXHAUSTED: BaseDelay 1s with 2× growth
 	// capped at MaxDelay 4s gives the same 1s/2s/4s sequence the open-coded
@@ -513,10 +477,80 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 	}
 
 	result.Success = true
-	result.CommitmentID = *commitment.Name
+	result.CommitmentID = commitmentName
 	result.Cost = rec.CommitmentCost
 
 	return result, nil
+}
+
+// buildInsertRequest assembles the RegionCommitments.Insert request for a
+// purchase, threading opts.IdempotencyToken into both GCP idempotency levers so
+// a re-drive of the same execution cannot create a second CUD (issue #654, the
+// financial double-buy). It returns the request and the commitment name (used as
+// the resulting CommitmentID).
+//
+//   - RequestId is GCP's native server-side idempotency key on Insert, which the
+//     API documents as preventing clients from accidentally creating duplicate
+//     commitments. It MUST be a valid non-zero UUID, so we format the token (a
+//     SHA-256 hex digest) into a deterministic canonical UUID via
+//     common.IdempotencyGUID — the same mechanism PR #653 used for the Azure
+//     reservationOrderID. The same token always yields the same RequestId, so a
+//     second Insert is a server-side no-op rather than a new purchase.
+//   - Name is also derived from the token as defense in depth: commitment names
+//     are unique per project+region, so a re-drive that somehow reached Insert
+//     (e.g. RequestId expired) collides on the name and GCP rejects it with
+//     ALREADY_EXISTS instead of creating a duplicate.
+//
+// An empty token preserves the prior non-idempotent timestamp-based name (the
+// CLI path, which has no owning execution). The token is masked in logs via
+// common.MaskToken and never logged verbatim.
+func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts common.PurchaseOptions) (*computepb.InsertRegionCommitmentRequest, string) {
+	plan := "TWELVE_MONTH"
+	if rec.Term == "3yr" || rec.Term == "3" {
+		plan = "THIRTY_SIX_MONTH"
+	}
+
+	// GCP's computepb.Commitment has no Labels field, and the RegionCommitments
+	// client exposes no SetLabels call — CUDs cannot be tagged or labeled via
+	// the API. Encode the source into Description so customers can still filter
+	// with `gcloud compute commitments list --filter="description:..."`.
+	description := fmt.Sprintf("CUD for %s", rec.ResourceType)
+	if opts.Source != "" {
+		description = fmt.Sprintf("%s [%s=%s]", description, common.PurchaseTagKey, opts.Source)
+	}
+
+	commitmentName := idempotentCommitmentName(opts.IdempotencyToken)
+
+	// GCP requires both VCPU and MEMORY_MB in a single commitment insert.
+	commitment := &computepb.Commitment{
+		Name:        stringPtr(commitmentName),
+		Plan:        stringPtr(plan),
+		Type:        stringPtr("GENERAL_PURPOSE"),
+		Description: stringPtr(description),
+		Resources: []*computepb.ResourceCommitment{
+			{
+				Type:   stringPtr("VCPU"),
+				Amount: int64Ptr(int64(rec.Count)),
+			},
+			{
+				Type:   stringPtr("MEMORY_MB"),
+				Amount: int64Ptr(int64(rec.Count) * 4096),
+			},
+		},
+	}
+
+	insertReq := &computepb.InsertRegionCommitmentRequest{
+		Project:            c.projectID,
+		Region:             c.region,
+		CommitmentResource: commitment,
+	}
+	if requestID := common.IdempotencyGUID(opts.IdempotencyToken); requestID != "" {
+		insertReq.RequestId = stringPtr(requestID)
+		log.Printf("GCP CUD purchase using idempotent request ID for token %s (commitment %s); a re-drive will not double-purchase (issue #654)",
+			common.MaskToken(opts.IdempotencyToken), commitmentName)
+	}
+
+	return insertReq, commitmentName
 }
 
 // ValidateOffering validates that a machine type exists
@@ -821,6 +855,33 @@ func extractCostImpactFromRecommendation(gcpRec *recommenderpb.Recommendation, r
 		savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
 		rec.EstimatedSavings = savings
 	}
+}
+
+// idempotentNameTokenLen is how many leading hex characters of the idempotency
+// token are folded into the derived commitment name. A GCP commitment name must
+// match RFC1035 (1-63 chars, lowercase [a-z]([-a-z0-9]*[a-z0-9])?); the "cud-"
+// prefix is 4 chars, so 32 hex chars (128 bits, collision-free at any realistic
+// volume) keeps the result at 36 chars, well under the 63-char limit.
+const idempotentNameTokenLen = 32
+
+// idempotentCommitmentName derives a deterministic, RFC1035-valid GCP commitment
+// name from an idempotency token (issue #654). The same token always yields the
+// same name, so a re-drive collides on the unique-per-project+region name and
+// GCP rejects the duplicate with ALREADY_EXISTS instead of creating a second
+// CUD. An empty token preserves the prior non-idempotent timestamp-based name
+// (the CLI path, which has no owning execution).
+//
+// The token is a lowercase SHA-256 hex digest, so the leading chars are already
+// valid RFC1035 name characters and need no further sanitisation.
+func idempotentCommitmentName(token string) string {
+	if token == "" {
+		return fmt.Sprintf("cud-%d", time.Now().Unix())
+	}
+	t := strings.ToLower(token)
+	if len(t) > idempotentNameTokenLen {
+		t = t[:idempotentNameTokenLen]
+	}
+	return "cud-" + t
 }
 
 // Helper functions

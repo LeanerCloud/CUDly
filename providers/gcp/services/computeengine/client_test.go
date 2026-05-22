@@ -24,7 +24,8 @@ type MockCommitmentsService struct {
 	listErr       error
 	insertErr     error
 	index         int
-	lastInsertReq *computepb.InsertRegionCommitmentRequest // captured for assertions
+	lastInsertReq *computepb.InsertRegionCommitmentRequest   // captured for assertions
+	insertReqs    []*computepb.InsertRegionCommitmentRequest // every Insert call (re-drive assertions)
 }
 
 func (m *MockCommitmentsService) List(ctx context.Context, req *computepb.ListRegionCommitmentsRequest) CommitmentsIterator {
@@ -33,6 +34,7 @@ func (m *MockCommitmentsService) List(ctx context.Context, req *computepb.ListRe
 
 func (m *MockCommitmentsService) Insert(ctx context.Context, req *computepb.InsertRegionCommitmentRequest) (CommitmentsOperation, error) {
 	m.lastInsertReq = req
+	m.insertReqs = append(m.insertReqs, req)
 	if m.insertErr != nil {
 		return nil, m.insertErr
 	}
@@ -509,6 +511,71 @@ func TestComputeEngineClient_PurchaseCommitment_OmitsTagWhenSourceEmpty(t *testi
 	require.NotNil(t, mockService.lastInsertReq)
 	desc := mockService.lastInsertReq.CommitmentResource.GetDescription()
 	assert.NotContains(t, desc, common.PurchaseTagKey)
+}
+
+// TestComputeEngineClient_PurchaseCommitment_IdempotentReDrive is the issue #654
+// regression: re-driving the same execution (identical IdempotencyToken) must
+// not create a second CUD. We assert the second Insert carries the *same*
+// deterministic RequestId (GCP's native server-side dedupe key) and the *same*
+// commitment Name (the defense-in-depth ALREADY_EXISTS guard) as the first, so
+// GCP treats the re-drive as a no-op rather than a double-purchase.
+func TestComputeEngineClient_PurchaseCommitment_IdempotentReDrive(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+	client.SetCommitmentsService(mockService)
+
+	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 5}
+	token := common.DeriveIdempotencyToken("exec-654", 0)
+	opts := common.PurchaseOptions{Source: common.PurchaseSourceWeb, IdempotencyToken: token}
+
+	r1, err := client.PurchaseCommitment(ctx, rec, opts)
+	require.NoError(t, err)
+	require.True(t, r1.Success)
+
+	r2, err := client.PurchaseCommitment(ctx, rec, opts)
+	require.NoError(t, err)
+	require.True(t, r2.Success)
+
+	require.Len(t, mockService.insertReqs, 2, "both calls reach Insert; GCP dedupes server-side on RequestId")
+
+	first, second := mockService.insertReqs[0], mockService.insertReqs[1]
+
+	// Native idempotency key: same token -> same non-empty valid UUID RequestId.
+	wantGUID := common.IdempotencyGUID(token)
+	require.NotEmpty(t, wantGUID, "token must yield a valid idempotency GUID")
+	assert.Equal(t, wantGUID, first.GetRequestId(), "first RequestId must be the derived GUID")
+	assert.Equal(t, first.GetRequestId(), second.GetRequestId(), "re-drive must reuse the same RequestId (no double-buy)")
+	assert.NotEqual(t, "00000000-0000-0000-0000-000000000000", first.GetRequestId(), "zero UUID is rejected by GCP")
+
+	// Defense in depth: same token -> same deterministic commitment name.
+	require.NotNil(t, first.CommitmentResource)
+	require.NotNil(t, second.CommitmentResource)
+	assert.Equal(t, first.CommitmentResource.GetName(), second.CommitmentResource.GetName(),
+		"re-drive must reuse the same commitment name (GCP rejects the duplicate with ALREADY_EXISTS)")
+	assert.Equal(t, r1.CommitmentID, r2.CommitmentID, "re-drive must report the same commitment ID")
+}
+
+// TestComputeEngineClient_PurchaseCommitment_EmptyTokenNoRequestID confirms the
+// CLI path (no owning execution, empty token) keeps its prior non-idempotent
+// behaviour: no RequestId is set and the name is the timestamp-based fallback.
+func TestComputeEngineClient_PurchaseCommitment_EmptyTokenNoRequestID(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
+	client.SetCommitmentsService(mockService)
+
+	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 1}
+
+	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, mockService.lastInsertReq)
+	assert.Empty(t, mockService.lastInsertReq.GetRequestId(), "empty token must not set a RequestId")
+	require.NotNil(t, mockService.lastInsertReq.CommitmentResource)
+	assert.Contains(t, mockService.lastInsertReq.CommitmentResource.GetName(), "cud-",
+		"empty token keeps the timestamp-based name")
 }
 
 func TestComputeEngineClient_PurchaseCommitment_3Year(t *testing.T) {
