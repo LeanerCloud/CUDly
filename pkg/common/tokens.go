@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // GenerateApprovalToken returns a 32-byte cryptographically secure random
@@ -73,7 +74,10 @@ func IdempotencyGUID(token string) string {
 	if len(token) < 32 {
 		return ""
 	}
-	h := token[:32]
+	h := strings.ToLower(token[:32])
+	if _, err := hex.DecodeString(h); err != nil {
+		return ""
+	}
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }
 
