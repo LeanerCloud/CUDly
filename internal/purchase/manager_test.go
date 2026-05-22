@@ -414,6 +414,12 @@ func TestManager_RecoverStrandedApprovals_LateCompletionNotClobbered(t *testing.
 		Return([]config.PurchaseExecution{stranded}, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-raced", []string{"approved"}, "failed").
 		Return(nil, errors.New("execution exec-raced cannot transition from \"completed\" to \"failed\""))
+	// When TransitionExecutionStatus fails the manager calls GetExecutionByID to
+	// distinguish a race (row already left "approved") from a real store error.
+	// Returning a "completed" row causes RecoverStrandedApprovals to skip the
+	// execution, which is the behaviour this test asserts.
+	mockStore.On("GetExecutionByID", ctx, "exec-raced").
+		Return(&config.PurchaseExecution{ExecutionID: "exec-raced", Status: "completed"}, nil)
 
 	manager := &Manager{config: mockStore, dashboardURL: "https://dashboard.example.com"}
 
