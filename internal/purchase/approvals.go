@@ -133,31 +133,53 @@ func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor stri
 // caller (HTTP path: authorizeApprovalAction; SQS path:
 // verifyAsyncApprovalActor) before reaching here. Same empty-actor
 // rationale as ApproveExecution.
+//
+// Concurrency: CancelExecutionAtomic uses a conditional UPDATE WHERE
+// status IN ('pending','notified') so a concurrent approve that wins
+// the race causes zero rows to be affected and the caller receives a
+// clean error with the current status rather than silently overwriting
+// the approved row. This is the token/email-link cancel analogue of
+// the atomic guard TransitionExecutionStatus provides for ApproveAndExecute.
 func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor string) error {
 	logging.Infof("Cancelling execution: %s", executionID)
 
-	execution, err := m.loadCancelableExecution(ctx, executionID, token)
-	if err != nil {
+	if _, err := m.loadCancelableExecution(ctx, executionID, token); err != nil {
 		return err
 	}
 
-	// Update status + attribution — see ApproveExecution for the empty-actor
-	// nil-vs-empty-string rationale. Paired with DeleteSuppressionsByExecution
-	// in the same transaction so the status flip and the un-suppression
-	// commit atomically — a crash between the two would otherwise leave the
-	// rec-list hiding capacity the user already cancelled.
-	execution.Status = "cancelled"
+	// Build the nullable cancelled_by pointer — see ApproveExecution for
+	// the nil-vs-empty-string rationale.
+	var cancelledBy *string
 	if actor != "" {
 		a := actor
-		execution.CancelledBy = &a
+		cancelledBy = &a
 	}
+
+	// Atomic conditional UPDATE + suppression cleanup in one transaction.
+	// CancelExecutionAtomic flips status only when status IN
+	// ('pending','notified') so a concurrent approve that has already
+	// transitioned the row causes zero rows affected and we surface a 409.
+	var cancelled bool
+	var currentStatus string
 	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := m.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
+		var err error
+		cancelled, currentStatus, err = m.config.CancelExecutionAtomic(ctx, tx, executionID, cancelledBy)
+		if err != nil {
 			return err
+		}
+		if !cancelled {
+			// Row already transitioned (concurrent approve/cancel won the
+			// race). Return early without touching suppressions — the other
+			// operation owns the execution state now.
+			return nil
 		}
 		return m.config.DeleteSuppressionsByExecutionTx(ctx, tx, executionID)
 	}); err != nil {
-		return fmt.Errorf("failed to save execution: %w", err)
+		return fmt.Errorf("failed to cancel execution: %w", err)
+	}
+
+	if !cancelled {
+		return fmt.Errorf("execution %s cannot be cancelled: concurrent operation already transitioned it to %q", executionID, currentStatus)
 	}
 
 	logging.Infof("Execution %s cancelled", executionID)

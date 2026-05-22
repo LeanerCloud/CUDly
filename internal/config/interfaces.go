@@ -65,6 +65,13 @@ type StoreInterface interface {
 	ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error)
 	CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error)
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*PurchaseExecution, error)
+	// CancelExecutionAtomic atomically flips status from pending/notified to
+	// cancelled, setting cancelled_by. Returns (true, "cancelled", nil) on
+	// success and (false, currentStatus, nil) when zero rows were affected
+	// (the execution had already been approved or otherwise transitioned).
+	// Must be called inside a WithTx block so the suppression cleanup and
+	// the status flip commit atomically.
+	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
 
 	// Purchase history
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error

@@ -802,6 +802,63 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 	return &records[0], nil
 }
 
+// CancelExecutionAtomic atomically transitions an execution from
+// pending or notified to cancelled, setting cancelled_by to the supplied
+// actor (NULL when actor is nil). The UPDATE is conditional on
+// status IN ('pending','notified') so a concurrent approve that has
+// already transitioned the row to 'approved' causes zero rows to be
+// affected and the method returns (false, currentStatus, nil) with the
+// live status fetched via a follow-up SELECT. Returns (true, "cancelled",
+// nil) on success and (false, "", err) on a real DB error.
+//
+// Callers must run the suppression cleanup in the same transaction; use
+// the WithTx + DeleteSuppressionsByExecutionTx pairing at the call site
+// exactly as the old SavePurchaseExecutionTx path did, except now the
+// status guard is inside the UPDATE rather than checked optimistically
+// before entering the tx.
+func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error) {
+	q := `
+		UPDATE purchase_executions
+		   SET status       = 'cancelled',
+		       cancelled_by = $2,
+		       updated_at   = NOW()
+		 WHERE execution_id = $1
+		   AND status IN ('pending', 'notified')
+		RETURNING status
+	`
+	rows, err := tx.Query(ctx, q, executionID, cancelledBy)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to cancel execution: %w", err)
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		var st string
+		if scanErr := rows.Scan(&st); scanErr != nil {
+			return false, "", fmt.Errorf("failed to scan cancel result: %w", scanErr)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return false, "", fmt.Errorf("failed to iterate cancel result: %w", rowsErr)
+		}
+		return true, st, nil
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return false, "", fmt.Errorf("failed to iterate cancel result: %w", rowsErr)
+	}
+
+	// Zero rows affected: execution either does not exist or has already
+	// transitioned out of pending/notified. Surface the current status so
+	// callers can return a meaningful 409 body.
+	existing, existErr := s.GetExecutionByID(ctx, executionID)
+	if existErr != nil {
+		return false, "", fmt.Errorf("execution not found or db error: %w", existErr)
+	}
+	if existing == nil {
+		return false, "", fmt.Errorf("execution not found: %s", executionID)
+	}
+	return false, existing.Status, nil
+}
+
 // GetExecutionsByStatuses returns executions whose Status is any of the
 // supplied values, newest-first, capped at `limit`. Used by the History
 // handler to merge pending/failed/expired rows alongside completed purchases

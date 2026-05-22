@@ -388,7 +388,11 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	// execution; mock returns it twice.
 	mockStore.On("GetExecutionByID", ctx, "exec-cancel").Return(exec, nil).Twice()
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in
+	// tests); actor_email is non-empty so cancelledBy is non-nil.
+	actor := "owner@example.com"
+	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-cancel", &actor).
+		Return(true, "cancelled", nil)
 
 	manager := &Manager{
 		config:       mockStore,

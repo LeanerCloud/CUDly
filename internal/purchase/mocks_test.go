@@ -505,6 +505,11 @@ func (m *MockConfigStore) CreateSuppression(_ context.Context, _ *config.Purchas
 func (m *MockConfigStore) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
 	return nil
 }
+func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	args := m.Called(ctx, tx, executionID, cancelledBy)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
 func (m *MockConfigStore) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
 	return nil
 }

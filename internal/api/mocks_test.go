@@ -548,6 +548,17 @@ func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.
 	return args.Get(0).([]config.PurchaseSuppression), args.Error(1)
 }
 
+func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	if !m.isExpected("CancelExecutionAtomic") {
+		// Default: succeed, returning "cancelled". Tests that exercise the
+		// race (zero-rows) path register an explicit expectation that
+		// returns (false, <racing status>, nil).
+		return true, "cancelled", nil
+	}
+	args := m.Called(ctx, tx, executionID, cancelledBy)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
 func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *config.PurchaseExecution) error {
 	if !m.isExpected("SavePurchaseExecutionTx") {
 		// Default to calling SavePurchaseExecution so tests that only

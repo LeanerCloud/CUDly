@@ -306,7 +306,9 @@ func TestManager_CancelExecution(t *testing.T) {
 	}
 
 	mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	// WithTx passes nil as the tx sentinel in tests; empty actor -> nil cancelledBy.
+	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
+		Return(true, "cancelled", nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -407,12 +409,9 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "execution cannot be cancelled")
 			assert.Contains(t, err.Error(), status)
-			// Status guard must fire before any persistence — a rejected
-			// cancel must not flip the row or drop suppressions.
-			// SavePurchaseExecutionTx forwards to SavePurchaseExecution in
-			// the mock, so this single assertion covers both the tx and
-			// non-tx write paths.
-			mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+			// Status guard fires before the atomic UPDATE — a rejected
+			// cancel must never reach CancelExecutionAtomic.
+			mockStore.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			mockStore.AssertExpectations(t)
 		})
 	}
@@ -438,12 +437,9 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 				ApprovalToken: "valid-token",
 			}
 			mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-			var saved *config.PurchaseExecution
-			mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
-				Run(func(args mock.Arguments) {
-					saved = args.Get(1).(*config.PurchaseExecution)
-				}).
-				Return(nil)
+			// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in tests).
+			mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
+				Return(true, "cancelled", nil)
 
 			manager := &Manager{
 				config:       mockStore,
@@ -453,8 +449,7 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 
 			err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
 			require.NoError(t, err)
-			require.NotNil(t, saved, "cancel should persist the execution")
-			assert.Equal(t, "cancelled", saved.Status)
+			mockStore.AssertCalled(t, "CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil))
 			mockStore.AssertExpectations(t)
 		})
 	}
@@ -670,6 +665,38 @@ func TestOrphanExecutionError_RecLevelAccountIDPreventsOrphan(t *testing.T) {
 	assert.NoError(t, err, "rec-level CloudAccountID must prevent orphan classification")
 }
 
+// TestManager_CancelExecution_RaceWithApprove is the regression guard for
+// issue #671: when a concurrent approve wins the race and transitions the
+// execution to 'approved' before the cancel's conditional UPDATE runs,
+// CancelExecutionAtomic returns (false, "approved", nil). CancelExecution
+// must surface a clean error containing the racing status rather than
+// silently overwriting the approved row.
+func TestManager_CancelExecution_RaceWithApprove(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _ := newApproveManager(t)
+
+	execution := &config.PurchaseExecution{
+		ExecutionID:   "exec-raced",
+		Status:        "pending", // status at load time
+		ApprovalToken: "valid-token",
+	}
+	store.On("GetExecutionByID", ctx, "exec-raced").Return(execution, nil)
+	// Simulate: concurrent approve won between our IsCancelable check and
+	// the atomic UPDATE. The DB row is now 'approved' so zero rows affected.
+	store.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-raced", (*string)(nil)).
+		Return(false, "approved", nil)
+
+	err := manager.CancelExecution(ctx, "exec-raced", "valid-token", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "approved", "error must surface the racing status")
+	assert.Contains(t, err.Error(), "concurrent", "error must mention the concurrent operation")
+	// The approve is already in flight — the DB row must not have been
+	// overwritten by the cancel. AssertExpectations verifies that
+	// CancelExecutionAtomic was called (confirming the guard reached the DB)
+	// and that no further writes landed.
+	store.AssertExpectations(t)
+}
+
 // TestManager_CancelExecution_ExpiredToken is the cancel-path regression
 // guard for issue #397.
 func TestManager_CancelExecution_ExpiredToken(t *testing.T) {
@@ -688,6 +715,6 @@ func TestManager_CancelExecution_ExpiredToken(t *testing.T) {
 	err := manager.CancelExecution(ctx, "exec-cancel-expired", "valid-token", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
-	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
