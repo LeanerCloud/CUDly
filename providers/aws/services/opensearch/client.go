@@ -253,7 +253,7 @@ func (c *Client) idempotencyGuard(ctx context.Context, token, reservationName st
 		return "", false, fmt.Errorf("idempotency lookup failed before OpenSearch RI purchase (refusing to purchase to avoid a possible double-buy): %w", lookupErr)
 	}
 	if found {
-		log.Printf("OpenSearch RI for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", token, existingID)
+		log.Printf("OpenSearch RI for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", common.MaskToken(token), existingID)
 		return existingID, true, nil
 	}
 	return "", false, nil

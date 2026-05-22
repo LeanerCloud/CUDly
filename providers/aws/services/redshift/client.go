@@ -176,7 +176,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 			return result, result.Error
 		}
 		if found {
-			log.Printf("Redshift reserved node for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", opts.IdempotencyToken, existingID)
+			log.Printf("Redshift reserved node for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", common.MaskToken(opts.IdempotencyToken), existingID)
 			result.Success = true
 			result.CommitmentID = existingID
 			return result, nil

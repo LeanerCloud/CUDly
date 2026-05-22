@@ -64,3 +64,24 @@ func TestDeriveIdempotencyToken_FitsClientTokenLimit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, raw, 32)
 }
+
+func TestMaskToken_NeverEmitsFullToken(t *testing.T) {
+	// CodeRabbit PR #652: the "already exists" skip-purchase log lines must not
+	// emit the raw idempotency token (a stable per-execution identifier). The
+	// masked form keeps only an 8-char prefix for log correlation.
+	full := DeriveIdempotencyToken("exec-abc-123", 0) // 64-char hex digest
+	masked := MaskToken(full)
+
+	assert.NotEqual(t, full, masked, "masked form must differ from the raw token")
+	assert.NotContains(t, masked, full, "masked output must not contain the full token")
+	assert.Less(t, len(masked), len(full), "masked output must be shorter than the raw token")
+	assert.Equal(t, full[:8]+"...", masked, "masked form is an 8-char prefix plus ellipsis")
+	assert.Len(t, masked, 11, "8 prefix chars + 3-char ellipsis")
+}
+
+func TestMaskToken_EmptyAndShort(t *testing.T) {
+	assert.Equal(t, "(none)", MaskToken(""), "empty token must be reported as (none)")
+	assert.Equal(t, "abc", MaskToken("abc"), "tokens of <=8 chars have nothing to redact")
+	assert.Equal(t, "12345678", MaskToken("12345678"), "exactly 8 chars is returned unchanged")
+	assert.Equal(t, "12345678...", MaskToken("123456789"), "9 chars is truncated to 8 + ellipsis")
+}

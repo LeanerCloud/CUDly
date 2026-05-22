@@ -216,7 +216,7 @@ func (c *Client) idempotencyGuard(ctx context.Context, token, reservationID stri
 		return "", false, fmt.Errorf("idempotency lookup failed before MemoryDB purchase (refusing to purchase to avoid a possible double-buy): %w", lookupErr)
 	}
 	if found {
-		log.Printf("MemoryDB reservation for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", token, existingID)
+		log.Printf("MemoryDB reservation for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", common.MaskToken(token), existingID)
 		return existingID, true, nil
 	}
 	return "", false, nil

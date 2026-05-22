@@ -41,3 +41,20 @@ func DeriveIdempotencyToken(executionID string, recIndex int) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", executionID, recIndex)))
 	return hex.EncodeToString(sum[:])
 }
+
+// MaskToken returns a log-safe representation of an idempotency/approval token:
+// the first 8 characters followed by an ellipsis, never the full value. This
+// keeps just enough of the prefix to correlate log lines for a single purchase
+// while avoiding emitting the whole caller-supplied token into persistent logs
+// (a stable per-execution identifier that should not leak verbatim). An empty
+// token yields "(none)"; a token of 8 chars or fewer is returned unchanged
+// since there is nothing left to redact.
+func MaskToken(token string) string {
+	if token == "" {
+		return "(none)"
+	}
+	if len(token) <= 8 {
+		return token
+	}
+	return token[:8] + "..."
+}
