@@ -389,6 +389,19 @@ func TestGetOfferingDetails_BadTerm(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported savings plan term")
 }
 
+func TestGetOfferingDetails_BadPaymentOption(t *testing.T) {
+	c := NewClient(nil, "sub", "eastus")
+	rec := common.Recommendation{
+		Term:          "1yr",
+		PaymentOption: "Quarterly",
+		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
+	}
+
+	_, err := c.GetOfferingDetails(context.Background(), rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported payment option")
+}
+
 func TestGetOfferingDetails_WrongDetails(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	rec := common.Recommendation{Term: "1yr", Details: nil}
