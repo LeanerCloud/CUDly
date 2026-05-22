@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
@@ -220,12 +221,15 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 		subClient = &realSubscriptionsClient{client: client}
 	}
 
+	t0 := time.Now()
+	logging.Infof("purchase[Azure]: subscriptions.NewListPager/NextPage starting (subscription=%s)", p.subscriptionID)
 	pager := subClient.NewListPager(nil)
 	_, err := pager.NextPage(ctx)
 	if err != nil {
+		logging.Errorf("purchase[Azure]: subscriptions.NextPage failed after %s: %v", time.Since(t0), err)
 		return fmt.Errorf("Azure credentials validation failed: %w", err)
 	}
-
+	logging.Infof("purchase[Azure]: subscriptions.NextPage returned in %s", time.Since(t0))
 	return nil
 }
 
