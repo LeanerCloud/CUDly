@@ -558,6 +558,20 @@ func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx
 	return args.Error(0)
 }
 
+// GetPendingExecutionsTx falls back to GetPendingExecutions when no explicit
+// expectation is registered so existing tests that run the WithTx path still
+// see the same pending-execution list without needing to set up a new mock.
+func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]config.PurchaseExecution, error) {
+	if !m.isExpected("GetPendingExecutionsTx") {
+		return m.GetPendingExecutions(ctx)
+	}
+	args := m.Called(ctx, tx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
 // WithTx invokes fn with a sentinel nil tx so callers get to exercise
 // their full tx callback (saving execution, creating suppressions, etc.)
 // and tests assert on the individual *Tx mock methods rather than on

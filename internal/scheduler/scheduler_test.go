@@ -1932,6 +1932,9 @@ func (m *MockConfigStore) ListActiveSuppressions(_ context.Context) ([]config.Pu
 func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
+	return m.GetPendingExecutions(ctx)
+}
 func (m *MockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }
 
 // fakeSTSClient is a minimal in-test STSClient implementation used by the

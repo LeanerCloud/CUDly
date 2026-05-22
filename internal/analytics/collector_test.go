@@ -885,4 +885,7 @@ func (m *mockConfigStore) ListActiveSuppressions(_ context.Context) ([]config.Pu
 func (m *mockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *mockConfigStore) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
+	return m.GetPendingExecutions(ctx)
+}
 func (m *mockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }

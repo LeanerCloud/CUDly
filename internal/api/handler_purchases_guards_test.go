@@ -63,7 +63,8 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validatePurchaseRecommendation(tt.rec, 0)
+			rec := tt.rec
+			err := validatePurchaseRecommendation(&rec, 0)
 			if tt.wantError {
 				require.Error(t, err)
 			} else {

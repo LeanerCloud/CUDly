@@ -507,13 +507,15 @@ var purchaseTermWhitelist = map[string]map[int]bool{
 // requires a concrete provider because each rec triggers a real provider
 // call. idx is the rec's position in the request slice, surfaced in the
 // error so the caller can point at the offending row. Closes issue #643.
-func validatePurchaseRecommendation(rec config.RecommendationRecord, idx int) error {
+func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) error {
 	provider := strings.ToLower(strings.TrimSpace(rec.Provider))
 	payments, providerOK := purchasePaymentWhitelist[provider]
 	if !providerOK {
 		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid provider %q: must be one of aws, azure, gcp", idx, rec.Provider))
 	}
-	if strings.TrimSpace(rec.Service) == "" {
+	rec.Provider = provider
+	rec.Service = strings.TrimSpace(rec.Service)
+	if rec.Service == "" {
 		return NewClientError(400, fmt.Sprintf("recommendation %d is missing a service", idx))
 	}
 	if rec.Count <= 0 {
@@ -526,6 +528,7 @@ func validatePurchaseRecommendation(rec config.RecommendationRecord, idx int) er
 	if !payments[payment] {
 		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid payment %q for provider %s", idx, rec.Payment, provider))
 	}
+	rec.Payment = payment
 	return nil
 }
 

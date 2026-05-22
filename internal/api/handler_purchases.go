@@ -1122,7 +1122,7 @@ func normalizeCapacityPercent(execReq *ExecutePurchaseRequest) error {
 // gocyclo threshold.
 func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) error {
 	for i := range recs {
-		if err := validatePurchaseRecommendation(recs[i], i); err != nil {
+		if err := validatePurchaseRecommendation(&recs[i], i); err != nil {
 			return err
 		}
 	}
@@ -1169,6 +1169,16 @@ func validateAndTotalRecommendations(recs []config.RecommendationRecord) (upfron
 	return upfront, savings, nil
 }
 
+// derefStringOrEmpty returns the string a pointer points to, or "" when nil.
+// Used to convert *string creator IDs to the bare string needed for hashing
+// without adding a branch to the caller.
+func derefStringOrEmpty(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
+}
+
 // resolveCreatorUserID returns a pointer to the session user's UUID for
 // stamping onto purchase_executions.created_by_user_id, or nil for
 // non-user sessions whose UserID isn't a real UUID. This keeps the
@@ -1191,11 +1201,57 @@ func resolveCreatorUserID(session *Session) *string {
 }
 
 // executePurchase handles direct purchase execution from recommendations
+// matchDuplicateInList scans a slice of pending executions for one that
+// matches creatorID + idempotencyKey within the idempotency window.
+// Returns the first match, or nil when there is no duplicate.
+// Extracted from persistExecutionAndSuppressions to keep cyclomatic
+// complexity under the project gocyclo threshold.
+func matchDuplicateInList(pending []config.PurchaseExecution, creatorID, idempotencyKey string, now time.Time) *config.PurchaseExecution {
+	cutoff := now.Add(-purchaseIdempotencyWindow)
+	for i := range pending {
+		ex := &pending[i]
+		if ex.Source != common.PurchaseSourceWeb || ex.ScheduledDate.Before(cutoff) {
+			continue
+		}
+		exCreator := ""
+		if ex.CreatedByUserID != nil {
+			exCreator = *ex.CreatedByUserID
+		}
+		if exCreator == creatorID && purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent) == idempotencyKey {
+			return ex
+		}
+	}
+	return nil
+}
+
 // persistExecutionAndSuppressions saves the execution + its suppression
-// records in a single transaction. Extracted from executePurchase to keep
-// that function under the gocyclo threshold.
-func (h *Handler) persistExecutionAndSuppressions(ctx context.Context, execution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
-	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+// records in a single transaction. It also performs the duplicate-execution
+// check inside the same transaction (using SELECT ... FOR UPDATE) so that the
+// read and the insert are atomic — closing the TOCTOU race that the pre-tx
+// duplicatePurchaseResponse call could not prevent (#643).
+//
+// Return values:
+//   - (nil, nil)          — no duplicate found; execution was inserted.
+//   - (existing, nil)     — duplicate found; execution was NOT inserted; caller
+//     should collapse onto existing.
+//   - (nil, err)          — store error; caller should surface it.
+func (h *Handler) persistExecutionAndSuppressions(
+	ctx context.Context,
+	execution *config.PurchaseExecution,
+	suppressions []config.PurchaseSuppression,
+	creatorID, idempotencyKey string,
+) (dup *config.PurchaseExecution, err error) {
+	txErr := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		// Duplicate check inside the tx (SELECT FOR UPDATE) — atomic with
+		// the insert below.
+		pending, err := h.config.GetPendingExecutionsTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if dup = matchDuplicateInList(pending, creatorID, idempotencyKey, time.Now()); dup != nil {
+			return nil // found duplicate — skip insert, commit tx (read-only)
+		}
+
 		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {
 			return err
 		}
@@ -1205,10 +1261,11 @@ func (h *Handler) persistExecutionAndSuppressions(ctx context.Context, execution
 			}
 		}
 		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to save execution: %w", err)
+	})
+	if txErr != nil {
+		return nil, fmt.Errorf("failed to save execution: %w", txErr)
 	}
-	return nil
+	return dup, nil
 }
 
 // purchaseIdempotencyWindow is how long a freshly-created pending execution
@@ -1354,14 +1411,15 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 
-	// Submit-time idempotency (#644): a double-click or retried POST with an
-	// identical actor + scaled rec set + capacity within a short window must
+	// Submit-time idempotency (#644/#643): a double-click or retried POST with
+	// an identical actor + scaled rec set + capacity within a short window must
 	// resolve to the original pending execution rather than minting a second
-	// approvable row (double-spend).
+	// approvable row (double-spend). The atomic guard lives inside
+	// persistExecutionAndSuppressions (SELECT FOR UPDATE + INSERT in one tx)
+	// which closes the TOCTOU race that a pre-tx read alone cannot prevent.
 	creator := resolveCreatorUserID(session)
-	if dupResp := h.duplicatePurchaseResponse(ctx, creator, execReq.Recommendations, execReq.CapacityPercent); dupResp != nil {
-		return dupResp, nil
-	}
+	creatorID := derefStringOrEmpty(creator)
+	idempotencyKey := purchaseIdempotencyKey(creatorID, execReq.Recommendations, execReq.CapacityPercent)
 
 	execution, err := newPendingExecution(&execReq, totalUpfront, totalSavings)
 	if err != nil {
@@ -1385,8 +1443,13 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	}
 
 	suppressions := buildSuppressions(execReq.Recommendations, executionID, gracePeriodCfg, time.Now())
-	if err := h.persistExecutionAndSuppressions(ctx, execution, suppressions); err != nil {
+	dupExec, err := h.persistExecutionAndSuppressions(ctx, execution, suppressions, creatorID, idempotencyKey)
+	if err != nil {
 		return nil, err
+	}
+	if dupExec != nil {
+		logging.Infof("concurrent duplicate purchase submit collapsed to existing execution %s", dupExec.ExecutionID)
+		return buildDuplicatePurchaseResponse(dupExec), nil
 	}
 
 	// Send approval email synchronously so the response can surface the
