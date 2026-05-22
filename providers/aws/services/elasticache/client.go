@@ -129,11 +129,21 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	// When an idempotency token is supplied (issue #641) the reservation ID is
 	// derived deterministically from it, so a re-drive sends the identical
 	// ReservedCacheNodeId and ElastiCache rejects the duplicate server-side
-	// (ReservedCacheNodeAlreadyExistsFault). Otherwise keep the prior
-	// timestamp-based ID (non-idempotent path).
+	// (ReservedCacheNodeAlreadyExistsFault). On the no-token CLI path
+	// (issue #687) compose a rich, self-describing identifier matching the
+	// Azure DisplayName format so operators can identify the reservation in
+	// the AWS console without cross-referencing CUDly's purchase audit log.
 	reservationID := common.IdempotentReservationID("elasticache-id-", opts.IdempotencyToken)
 	if reservationID == "" {
-		reservationID = common.SanitizeReservationID(fmt.Sprintf("elasticache-%s-%d", rec.ResourceType, time.Now().Unix()), "elasticache-reserved-")
+		reservationID = common.BuildReservationName(common.ReservationNameFields{
+			Service:      "cache",
+			Region:       rec.Region,
+			ResourceType: rec.ResourceType,
+			Count:        rec.Count,
+			Term:         rec.Term,
+			Payment:      rec.PaymentOption,
+			Now:          time.Now(),
+		}, "elasticache-reserved-")
 	}
 
 	// Idempotency dedupe guard (issue #641): short-circuit if a reservation

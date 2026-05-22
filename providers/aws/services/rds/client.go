@@ -192,17 +192,26 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 // idempotency token is supplied (issue #641) the ID is derived deterministically
 // from it, so a re-drive sends the identical ID and RDS rejects the duplicate
 // server-side (ReservedDBInstanceAlreadyExistsFault). Otherwise it prefers the
-// caller-supplied descriptive ID and falls back to a generic timestamped one
-// (prior non-idempotent behaviour).
+// caller-supplied descriptive ID; if absent (the no-token CLI path, issue #687)
+// it composes a rich, self-describing identifier matching the Azure DisplayName
+// format so operators can identify the reservation in the AWS console without
+// cross-referencing CUDly's purchase audit log.
 func (c *Client) deriveReservationID(rec common.Recommendation, opts common.PurchaseOptions) string {
 	if id := common.IdempotentReservationID("rds-id-", opts.IdempotencyToken); id != "" {
 		return id
 	}
-	rawID := opts.ReservationID
-	if rawID == "" {
-		rawID = fmt.Sprintf("rds-%s-%d", rec.ResourceType, time.Now().Unix())
+	if opts.ReservationID != "" {
+		return common.SanitizeReservationID(opts.ReservationID, "rds-reserved-")
 	}
-	return common.SanitizeReservationID(rawID, "rds-reserved-")
+	return common.BuildReservationName(common.ReservationNameFields{
+		Service:      "rds",
+		Region:       rec.Region,
+		ResourceType: rec.ResourceType,
+		Count:        rec.Count,
+		Term:         rec.Term,
+		Payment:      rec.PaymentOption,
+		Now:          time.Now(),
+	}, "rds-reserved-")
 }
 
 // idempotencyGuard short-circuits a re-drive (issue #641): when token is set, it

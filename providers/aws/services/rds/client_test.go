@@ -3,6 +3,7 @@ package rds
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -795,4 +796,43 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
+}
+
+// TestClient_PurchaseCommitment_NoToken_RichReservationName asserts the
+// no-token CLI path (issue #687) composes a self-describing
+// ReservedDBInstanceId carrying the service code, region, SKU, count, and
+// term. The token-based path is exercised by the Idempotent_* tests above.
+func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	client := &Client{client: mockRDS, region: "eu-west-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceRelationalDB,
+		ResourceType:  "db.t4g.medium",
+		Region:        "eu-west-1",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.DatabaseDetails{
+			Engine:   "mysql",
+			AZConfig: "single-az",
+		},
+	}
+
+	expectOffering(mockRDS)
+	var capturedID string
+	mockRDS.On("PurchaseReservedDBInstancesOffering", mock.Anything, mock.MatchedBy(func(in *rds.PurchaseReservedDBInstancesOfferingInput) bool {
+		capturedID = aws.ToString(in.ReservedDBInstanceId)
+		return true
+	})).Return(&rds.PurchaseReservedDBInstancesOfferingOutput{
+		ReservedDBInstance: &types.ReservedDBInstance{ReservedDBInstanceId: aws.String("ri-x")},
+	}, nil)
+
+	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	assert.NoError(t, err)
+	assert.True(t, strings.HasPrefix(capturedID, "rds-"), "name must lead with rds- service code: %q", capturedID)
+	assert.Contains(t, capturedID, "eu-west-1", "region must be embedded: %q", capturedID)
+	assert.Contains(t, capturedID, "db-t4g-medium", "SKU (dots->hyphens) must be embedded: %q", capturedID)
+	assert.Contains(t, capturedID, "1x-1yr", "count and term must be embedded: %q", capturedID)
+	assert.LessOrEqual(t, len(capturedID), 60, "must fit AWS reservation-ID cap")
 }
