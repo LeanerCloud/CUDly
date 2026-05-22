@@ -426,7 +426,20 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 			// mutation across goroutines).
 			recOpts := opts
 			recOpts.IdempotencyToken = common.DeriveIdempotencyToken(exec.ExecutionID, i)
-			purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, recOpts)
+			// Cap each individual rec at 30s so one hung rec (SDK retry storm,
+			// STS hang, pagination hang) cannot consume the Lambda budget and
+			// strand the other recs. 30s = 2 retries * 15s HTTP timeout, matching
+			// the purchasecfg hard limits from issue #683. The parent ctx governs
+			// the overall Lambda budget; this per-rec deadline governs a single
+			// cloud API call chain and is always the shorter of the two.
+			recCtx, recCancel := context.WithTimeout(ctx, 30*time.Second)
+			defer recCancel()
+			recTuple := fmt.Sprintf("%s/%s/%s/%s", rec.Provider, rec.Service, rec.Region, rec.ResourceType)
+			purchaseResult, err := m.executeSinglePurchase(recCtx, rec, provCfg, recOpts)
+			if recCtx.Err() != nil {
+				logging.Errorf("purchase[%s]: per-rec deadline 30s exceeded for %s",
+					opts.ExecutionID, recTuple)
+			}
 			return recPurchaseOutcome{index: i, purchase: purchaseResult, err: err}, nil
 		}, getMaxAccountParallelism())
 
