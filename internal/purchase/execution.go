@@ -464,20 +464,7 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 			// mutation across goroutines).
 			recOpts := opts
 			recOpts.IdempotencyToken = common.DeriveIdempotencyToken(exec.ExecutionID, i)
-			// Cap each individual rec at 30s so one hung rec (SDK retry storm,
-			// STS hang, pagination hang) cannot consume the Lambda budget and
-			// strand the other recs. 30s = 2 retries * 15s HTTP timeout, matching
-			// the purchasecfg hard limits from issue #683. The parent ctx governs
-			// the overall Lambda budget; this per-rec deadline governs a single
-			// cloud API call chain and is always the shorter of the two.
-			recCtx, recCancel := context.WithTimeout(ctx, 30*time.Second)
-			defer recCancel()
-			recTuple := fmt.Sprintf("%s/%s/%s/%s", rec.Provider, rec.Service, rec.Region, rec.ResourceType)
-			purchaseResult, err := m.executeSinglePurchase(recCtx, rec, provCfg, recOpts)
-			if recCtx.Err() != nil {
-				logging.Errorf("purchase[%s]: per-rec deadline 30s exceeded for %s",
-					opts.ExecutionID, recTuple)
-			}
+			purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, recOpts)
 			return recPurchaseOutcome{index: i, purchase: purchaseResult, err: err}, nil
 		}, getMaxAccountParallelism())
 
@@ -704,7 +691,7 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	// Per-purchase Info logs tagged with the owning execution ID so a
 	// CloudWatch filter on the execution UUID surfaces every step of the
-	// purchase attempt — provider construction, service-client lookup,
+	// purchase attempt -- provider construction, service-client lookup,
 	// details decode, the cloud SDK call, and the result. Issue #667
 	// surfaced that the prior flow had ZERO observable signal between the
 	// approve handler and the final aggregated error toast; a timed-out
@@ -712,9 +699,19 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	logging.Infof("purchase[%s]: starting rec %s/%s/%s/%s (count=%d term=%dyr payment=%s)",
 		opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, rec.Count, rec.Term, rec.Payment)
 
+	// Cap this individual rec at 30s so one hung rec (SDK retry storm, STS
+	// hang, pagination hang) cannot exhaust the Lambda budget and starve the
+	// other recs running in parallel in the same execution. 30s matches the
+	// purchasecfg hard limits (2 retries * 15s HTTP timeout) from issue #683.
+	// The parent ctx governs the overall Lambda budget; this per-rec deadline
+	// is always the shorter of the two.
+	recTuple := fmt.Sprintf("%s/%s/%s/%s", rec.Provider, rec.Service, rec.Region, rec.ResourceType)
+	recCtx, recCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer recCancel()
+
 	// Create the provider
 	t0 := time.Now()
-	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(ctx, rec.Provider, provCfg)
+	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(recCtx, rec.Provider, provCfg)
 	if err != nil {
 		logging.Errorf("purchase[%s]: provider construction failed for %s after %s: %v",
 			opts.ExecutionID, rec.Provider, time.Since(t0), err)
@@ -727,7 +724,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 
 	// Get the service client for this region
 	t0 = time.Now()
-	serviceClient, err := cloudProvider.GetServiceClient(ctx, serviceType, rec.Region)
+	serviceClient, err := cloudProvider.GetServiceClient(recCtx, serviceType, rec.Region)
 	if err != nil {
 		logging.Errorf("purchase[%s]: service client lookup failed for %s/%s in %s after %s: %v",
 			opts.ExecutionID, rec.Provider, serviceType, rec.Region, time.Since(t0), err)
@@ -788,9 +785,13 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// (which the AWS SDK retries up to 3× × 30s by default) versus
 	// something earlier in the flow — issue #667.
 	tCall := time.Now()
-	result, err := serviceClient.PurchaseCommitment(ctx, recommendation, opts)
+	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {
+		if recCtx.Err() != nil {
+			logging.Errorf("purchase[%s]: per-rec deadline 30s exceeded for %s (total elapsed %s)",
+				opts.ExecutionID, recTuple, elapsed)
+		}
 		logging.Errorf("purchase[%s]: %s/%s/%s/%s PurchaseCommitment failed after %s: %v",
 			opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, elapsed, err)
 		return result, fmt.Errorf("purchase failed: %w", err)

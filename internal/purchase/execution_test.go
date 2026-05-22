@@ -67,9 +67,9 @@ func TestManager_ExecutePurchase(t *testing.T) {
 	}, nil)
 
 	// Mock provider factory to return a mock provider
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
 	}, nil)
@@ -127,11 +127,11 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
 	// The deterministic idempotency token (issue #636) is derived per-rec from
 	// the execution ID and the rec's index, so the web path now also carries it.
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.AnythingOfType("common.Recommendation"),
 		common.PurchaseOptions{
 			Source:           common.PurchaseSourceWeb,
@@ -183,11 +183,11 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
 	// Expect EMPTY source, not "cudly-evil" — NormalizeSource must have wiped it.
 	// The idempotency token (issue #636) is still derived regardless of source.
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.AnythingOfType("common.Recommendation"),
 		common.PurchaseOptions{
 			Source:           "",
@@ -528,9 +528,9 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Times(2)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Times(2)
 
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success: true, CommitmentID: "ri-99999",
 	}, nil)
 
@@ -756,9 +756,9 @@ func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 
 	// Only account-V reaches the provider; account-I fails at credential resolution.
 	// Use .Once() so testify fails if the factory is called for account-I as well.
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil).Once()
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Once()
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Once()
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Once()
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.AnythingOfType("common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: commitmentV}, nil).Once()
@@ -921,13 +921,13 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 		return nil
 	}
 
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil).Twice()
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Twice()
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Twice()
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Twice()
 
 	// Each PurchaseCommitment call blocks for perCallDelay. Under serial
 	// execution the total elapsed time would exceed serialBoundary; under
 	// errgroup-style parallelism it stays close to perCallDelay.
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.AnythingOfType("common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-parallel"}, nil).
@@ -1039,7 +1039,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	// The core assertion: factory must receive a non-nil provCfg.
 	// Before the fix, nil was passed and Azure SDK fell back to DefaultAzureCredential.
 	// After the fix, resolveAzureProvider populates ProviderOverride on the config.
-	mockFactory.On("CreateAndValidateProvider", ctx, "azure",
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure",
 		mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
 			return cfg != nil && cfg.ProviderOverride != nil
 		}),
@@ -1049,8 +1049,8 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	// mapServiceType returned. The mock previously expected ServiceEC2 and
 	// silently encoded the production bug because mocks return success
 	// regardless of the ServiceType passed in.
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.AnythingOfType("common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "azure-res-1"}, nil)
@@ -1168,15 +1168,15 @@ func TestExecutePurchase_AzureCanonicalServiceTypes(t *testing.T) {
 				Account: aws.String("123456789012"),
 			}, nil)
 
-			mockFactory.On("CreateAndValidateProvider", ctx, "azure",
+			mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure",
 				mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
 					return cfg != nil && cfg.ProviderOverride != nil
 				}),
 			).Return(mockProviderInst, nil)
 			// The core assertion: GetServiceClient must be invoked with
 			// the canonical ServiceType — not an AWS-legacy constant.
-			mockProviderInst.On("GetServiceClient", ctx, tc.expectedType, "eastus").Return(mockServiceClient, nil)
-			mockServiceClient.On("PurchaseCommitment", ctx,
+			mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), tc.expectedType, "eastus").Return(mockServiceClient, nil)
+			mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 				mock.AnythingOfType("common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Return(common.PurchaseResult{Success: true, CommitmentID: "azure-res-" + tc.name}, nil)
@@ -1391,9 +1391,9 @@ func TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible(t *testing.T
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-auditgap",
 	}, nil)
@@ -1465,14 +1465,14 @@ func TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess(t *testing.T) {
 		Account: aws.String("123456789012"),
 	}, nil).Maybe()
 
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
 	// m5.large succeeds; c5.xlarge fails.
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "m5.large" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Once()
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "c5.xlarge" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{}, errors.New("offering not available")).Once()
@@ -1547,13 +1547,13 @@ func TestExecuteForAccount_PartialSuccess(t *testing.T) {
 		},
 	}
 
-	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(mockProviderInst, nil)
-	mockProviderInst.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "m5.large" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Once()
-	mockServiceClient.On("PurchaseCommitment", ctx,
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "c5.xlarge" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{}, errors.New("offering not available")).Once()
@@ -1685,9 +1685,9 @@ func TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount(t *testing.T)
 			mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).
 				Return(&sts.GetCallerIdentityOutput{Account: aws.String(hostAccount)}, nil).Maybe()
 
-			mockFactory.On("CreateAndValidateProvider", ctx, tc.provider, mock.Anything).Return(mockProviderInst, nil)
-			mockProviderInst.On("GetServiceClient", ctx, tc.expectedType, tc.region).Return(mockServiceClient, nil)
-			mockServiceClient.On("PurchaseCommitment", ctx,
+			mockFactory.On("CreateAndValidateProvider", mock.Anything, tc.provider, mock.Anything).Return(mockProviderInst, nil)
+			mockProviderInst.On("GetServiceClient", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }), tc.expectedType, tc.region).Return(mockServiceClient, nil)
+			mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(func(c context.Context) bool { _, ok := c.Deadline(); return ok }),
 				mock.AnythingOfType("common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Return(common.PurchaseResult{Success: true, CommitmentID: "commit-1"}, nil)
