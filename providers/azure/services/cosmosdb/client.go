@@ -292,7 +292,7 @@ func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
-			"displayName":          fmt.Sprintf("Cosmos DB Reservation - %s", rec.ResourceType),
+			"displayName":          reservations.SanitizeDisplayName(fmt.Sprintf("Cosmos_DB_Reservation_%s", rec.ResourceType)),
 			"appliedScopeType":     "Shared",
 			"renew":                false,
 		},

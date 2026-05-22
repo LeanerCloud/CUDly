@@ -1145,3 +1145,50 @@ func TestCacheClient_PurchaseCommitment_RequiresSource(t *testing.T) {
 	// No HTTP call may be issued when the guard rejects the request.
 	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }
+
+// TestCacheClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist guards
+// against regression: displayName in the calculatePrice body must match
+// [A-Za-z0-9_-]{1,64} (Azure rejects DisplayNameInvalid otherwise).
+func TestCacheClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	const orderID = "azure-cache-displayname"
+	var capturedDisplayName string
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+			return false
+		}
+		if r.Body == nil {
+			return true
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		var body map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &body); err == nil {
+			if props, ok := body["properties"].(map[string]interface{}); ok {
+				if dn, ok := props["displayName"].(string); ok {
+					capturedDisplayName = dn
+				}
+			}
+		}
+		return true
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost &&
+			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	rec := common.Recommendation{
+		ResourceType:   "Premium_P1",
+		Term:           "1yr",
+		Count:          1,
+		CommitmentCost: 1000.0,
+	}
+	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.NoError(t, err)
+	assert.NotEmpty(t, capturedDisplayName)
+	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, capturedDisplayName)
+}

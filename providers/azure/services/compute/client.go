@@ -378,7 +378,7 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source s
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
-			"displayName":          fmt.Sprintf("VM Reservation - %s", rec.ResourceType),
+			"displayName":          reservations.SanitizeDisplayName(fmt.Sprintf("VM_Reservation_%s", rec.ResourceType)),
 			"appliedScopeType":     "Shared",
 			"renew":                false,
 		},
