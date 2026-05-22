@@ -64,7 +64,11 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Syna
 }
 
 // NewClientWithHTTP creates a new Azure Synapse client with a custom HTTP client (for testing).
+// If httpClient is nil, http.DefaultClient is used.
 func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *SynapseClient {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	return &SynapseClient{
 		cred:           cred,
 		subscriptionID: subscriptionID,
