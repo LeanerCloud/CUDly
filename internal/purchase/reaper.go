@@ -67,10 +67,18 @@ type ReapResult struct {
 
 // ParseReapAfterFromEnv reads PURCHASE_APPROVED_REAP_AFTER from the
 // environment and parses it via time.ParseDuration. Falls back to
-// DefaultReapAfter on either an absent env var or a parse failure — and
-// logs a WARN on the parse failure so ops can spot a typo without the
-// reaper silently running at the default. Never panics: a misconfigured
-// env var must not crash the Lambda's other scheduled tasks.
+// DefaultReapAfter on either an absent env var, a parse failure, or a
+// non-positive duration (0s / negative) — each variant logs a WARN so ops
+// can spot a typo without the reaper silently running at the default.
+// Never panics: a misconfigured env var must not crash the Lambda's other
+// scheduled tasks.
+//
+// Non-positive values are explicitly rejected: time.ParseDuration accepts
+// "0s" and "-5m" as valid, but feeding them into ListStuckExecutions would
+// either match every row (0s) or invert the SELECT into "updated_at <
+// NOW() + |d|" (negative) and reap fresh executions. The store has its
+// own guard (defense-in-depth) but rejecting here keeps the misconfig
+// visible in the WARN log rather than as a confusing store error.
 func ParseReapAfterFromEnv() time.Duration {
 	raw := os.Getenv(reapAfterEnvVar)
 	if raw == "" {
@@ -80,6 +88,11 @@ func ParseReapAfterFromEnv() time.Duration {
 	if err != nil {
 		logging.Warnf("purchase reaper: failed to parse %s=%q as duration: %v — using default %s",
 			reapAfterEnvVar, raw, err, DefaultReapAfter)
+		return DefaultReapAfter
+	}
+	if d <= 0 {
+		logging.Warnf("purchase reaper: invalid %s=%q (must be > 0) — using default %s",
+			reapAfterEnvVar, raw, DefaultReapAfter)
 		return DefaultReapAfter
 	}
 	return d

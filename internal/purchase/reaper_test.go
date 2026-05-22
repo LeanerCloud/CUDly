@@ -353,6 +353,35 @@ func TestParseReapAfterFromEnv_InvalidFallsBackToDefault(t *testing.T) {
 	assert.Equal(t, DefaultReapAfter, got, "malformed env value must fall back to default, not crash")
 }
 
+func TestParseReapAfterFromEnv_GarbageFallsBackToDefault(t *testing.T) {
+	// Explicit garbage-input case named per the A4 CR finding so the
+	// regression intent is searchable. Complements
+	// _InvalidFallsBackToDefault above.
+	t.Setenv(reapAfterEnvVar, "garbage")
+	got := ParseReapAfterFromEnv()
+	assert.Equal(t, DefaultReapAfter, got)
+}
+
+func TestParseReapAfterFromEnv_ZeroFallsBackToDefault(t *testing.T) {
+	// "0s" is a syntactically valid Go duration but would make the SELECT
+	// match every approved/running row regardless of age — the reaper
+	// would flip in-flight executions. A2 rejects non-positive durations
+	// at parse time; this test is the regression guard.
+	t.Setenv(reapAfterEnvVar, "0s")
+	got := ParseReapAfterFromEnv()
+	assert.Equal(t, DefaultReapAfter, got, "0s must fall back to default — would otherwise reap fresh executions")
+}
+
+func TestParseReapAfterFromEnv_NegativeFallsBackToDefault(t *testing.T) {
+	// "-5m" parses cleanly as a negative duration. Passed unchanged into
+	// the store, it would invert the cutoff: "updated_at < NOW() - (-5m)"
+	// == "updated_at < NOW() + 5m" — reaping rows from 5 minutes in the
+	// future, i.e. effectively every row. A2 rejects this at parse time.
+	t.Setenv(reapAfterEnvVar, "-5m")
+	got := ParseReapAfterFromEnv()
+	assert.Equal(t, DefaultReapAfter, got, "negative duration must fall back to default — would otherwise reap fresh executions")
+}
+
 func TestParseReapAfterFromEnv_NonStandardButValidGoDuration(t *testing.T) {
 	// Sanity check Go's parser accepts non-minute units — ops may
 	// reasonably set e.g. "2h" for a relaxed cadence.

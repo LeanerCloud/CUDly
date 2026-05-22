@@ -122,6 +122,14 @@ func TestHandleScheduledTask(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Clear PURCHASE_APPROVED_REAP_AFTER so the reap_stuck_purchases
+			// cases below see the deterministic default (10m) regardless of
+			// ambient env in CI/dev. The reap subtests assert reapAfter ==
+			// 10*time.Minute in their setupMocks; without this, an
+			// inherited env value would silently make them flaky (A5 CR).
+			// t.Setenv automatically restores the prior value at cleanup.
+			t.Setenv("PURCHASE_APPROVED_REAP_AFTER", "")
+
 			ctx := testutil.TestContext(t)
 
 			mockScheduler := &testutil.MockScheduler{}
