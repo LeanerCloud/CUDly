@@ -689,8 +689,15 @@ describe('Settings Module', () => {
     });
 
     test('loadGlobalSettings populates SP coverage and enabled from service config (issue #136)', async () => {
+      // Seed a non-default initial DOM state on the fallback card so the test
+      // fails if the fallback assignment is skipped (it would otherwise pass on
+      // the HTML defaults, which happen to equal the asserted values).
+      (document.getElementById('aws-savings-plans-ec2instance-coverage') as HTMLInputElement).value = '12';
+      (document.getElementById('aws-savings-plans-ec2instance-enabled') as HTMLInputElement).checked = false;
+
       (api.getConfig as jest.Mock).mockResolvedValue({
-        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+        // Non-80 global default so the fallback writes an observably different value.
+        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront', default_coverage: 67 },
         services: [
           { provider: 'aws', service: 'savings-plans-compute', term: 1, payment: 'no-upfront', coverage: 65, enabled: false },
         ],
@@ -703,10 +710,11 @@ describe('Settings Module', () => {
       expect(coverageEl.value).toBe('65');
       expect(enabledEl.checked).toBe(false);
 
-      // Cards without an explicit service row fall back to global defaults.
+      // Cards without an explicit service row fall back to the global default
+      // (67, not the HTML default 80) and re-enable from the seeded false state.
       const ec2Coverage = document.getElementById('aws-savings-plans-ec2instance-coverage') as HTMLInputElement;
       const ec2Enabled = document.getElementById('aws-savings-plans-ec2instance-enabled') as HTMLInputElement;
-      expect(ec2Coverage.value).toBe('80');
+      expect(ec2Coverage.value).toBe('67');
       expect(ec2Enabled.checked).toBe(true);
     });
 

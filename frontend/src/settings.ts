@@ -2671,20 +2671,33 @@ export async function loadGlobalSettings(): Promise<void> {
       updateCollectionScheduleVisibility();
     }
 
-    if (data.services) {
-      loadedServiceConfigs = data.services;
-      for (const svc of data.services) {
-        const key = `${svc.provider}-${svc.service}`;
-        const termEl = document.getElementById(`${key}-term`) as HTMLSelectElement | null;
-        if (termEl) termEl.value = String(svc.term);
-        const paymentEl = document.getElementById(`${key}-payment`) as HTMLSelectElement | null;
-        if (paymentEl) paymentEl.value = svc.payment;
-        // Issue #136: populate per-product SP coverage and enabled fields when
-        // the card exposes them. Other service cards fall through (IDs absent).
-        const coverageEl = document.getElementById(`${key}-coverage`) as HTMLInputElement | null;
-        if (coverageEl) coverageEl.value = String(svc.coverage ?? data.global?.default_coverage ?? 80);
-        const enabledEl = document.getElementById(`${key}-enabled`) as HTMLInputElement | null;
-        if (enabledEl) enabledEl.checked = svc.enabled !== false;
+    const services = data.services ?? [];
+    loadedServiceConfigs = services;
+    for (const svc of services) {
+      const key = `${svc.provider}-${svc.service}`;
+      const termEl = document.getElementById(`${key}-term`) as HTMLSelectElement | null;
+      if (termEl) termEl.value = String(svc.term);
+      const paymentEl = document.getElementById(`${key}-payment`) as HTMLSelectElement | null;
+      if (paymentEl) paymentEl.value = svc.payment;
+    }
+
+    // Issue #136: populate per-product SP coverage and enabled fields for every
+    // SP card the DOM exposes, not just those with a service row. A card whose
+    // service row is absent from the response must still fall back to
+    // global.default_coverage (and enabled=true); leaving it at the HTML default
+    // (80) would persist an incorrect value on the user's next save. Iterate
+    // SERVICE_FIELDS (the source of truth for card IDs) and overlay any matching
+    // service-config values keyed by `${provider}-${service}`.
+    const svcByKey = new Map(services.map(s => [`${s.provider}-${s.service}`, s] as const));
+    for (const field of SERVICE_FIELDS) {
+      const svc = svcByKey.get(`${field.provider}-${field.service}`);
+      if ('coverageId' in field && field.coverageId) {
+        const el = byId<HTMLInputElement>(field.coverageId);
+        if (el) el.value = String(svc?.coverage ?? data.global?.default_coverage ?? 80);
+      }
+      if ('enabledId' in field && field.enabledId) {
+        const el = byId<HTMLInputElement>(field.enabledId);
+        if (el) el.checked = svc?.enabled !== false;
       }
     }
 
