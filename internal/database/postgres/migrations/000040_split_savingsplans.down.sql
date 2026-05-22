@@ -65,20 +65,24 @@ SET services = (
         -- created post-split with only sagemaker/database/ec2instance
         -- still gets a usable umbrella key on rollback.
         SELECT 'aws:savings-plans' AS new_key, v AS new_val
-        FROM jsonb_each(services) AS e(k, v)
-        WHERE k IN (
-            'aws:savings-plans-compute',
-            'aws:savings-plans-ec2instance',
-            'aws:savings-plans-sagemaker',
-            'aws:savings-plans-database'
-        )
-        ORDER BY CASE k
-            WHEN 'aws:savings-plans-compute'     THEN 1
-            WHEN 'aws:savings-plans-ec2instance' THEN 2
-            WHEN 'aws:savings-plans-sagemaker'   THEN 3
-            ELSE 4
-        END
-        LIMIT 1
+        FROM (
+            SELECT v,
+                CASE k
+                    WHEN 'aws:savings-plans-compute'     THEN 1
+                    WHEN 'aws:savings-plans-ec2instance' THEN 2
+                    WHEN 'aws:savings-plans-sagemaker'   THEN 3
+                    ELSE 4
+                END AS priority
+            FROM jsonb_each(services) AS e(k, v)
+            WHERE k IN (
+                'aws:savings-plans-compute',
+                'aws:savings-plans-ec2instance',
+                'aws:savings-plans-sagemaker',
+                'aws:savings-plans-database'
+            )
+            ORDER BY priority
+            LIMIT 1
+        ) sp_best
     ) merged
 )
 WHERE services ?| ARRAY[
